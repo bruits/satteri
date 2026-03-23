@@ -387,12 +387,22 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Save `remaining_space` here to avoid needing to backtrack `line_start` for HTML blocks
         let remaining_space = line_start.remaining_space();
 
-        let indent = line_start.scan_space_upto(4);
+        let mut indent = line_start.scan_space_upto(4);
         if indent == 4 {
-            self.finish_list(start_ix);
-            let ix = start_ix + line_start.bytes_scanned();
-            let remaining_space = line_start.remaining_space();
-            return self.parse_indented_code_block(ix, remaining_space);
+            if self.options.contains(Options::ENABLE_MDX) {
+                // MDX does not support indented code blocks.  Consume any
+                // remaining leading whitespace so that deeply-indented fenced
+                // code blocks (e.g. tab-indented inside list items) are still
+                // recognized.  Cap indent at 3 so that parse_fenced_code_block
+                // can still detect closing fences (it uses `4 - indent`).
+                line_start.scan_all_space();
+                indent = 3;
+            } else {
+                self.finish_list(start_ix);
+                let ix = start_ix + line_start.bytes_scanned();
+                let remaining_space = line_start.remaining_space();
+                return self.parse_indented_code_block(ix, remaining_space);
+            }
         }
 
         let ix = start_ix + line_start.bytes_scanned();
@@ -535,7 +545,22 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let mut line_start = LineStart::new(bytes);
         let tree_position = scan_containers(&self.tree, &mut line_start, self.options);
         let current_container = tree_position == self.tree.spine_len();
-        if (!line_start.scan_space(4)
+        if self.options.contains(Options::ENABLE_MDX) {
+            // MDX: indented code blocks are disabled, so consume all leading
+            // whitespace and always check for paragraph interrupts.  This
+            // ensures deeply-indented code fences interrupt paragraphs.
+            line_start.scan_all_space();
+            if self.scan_paragraph_interrupt(
+                &bytes[line_start.bytes_scanned()..],
+                current_container,
+                tree_position,
+            ) || scan_blank_line(&bytes[line_start.bytes_scanned()..]).is_some()
+            {
+                None
+            } else {
+                Some(line_start)
+            }
+        } else if (!line_start.scan_space(4)
             && self.scan_paragraph_interrupt(
                 &bytes[line_start.bytes_scanned()..],
                 current_container,
@@ -770,7 +795,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }) if bytes[start] == b'\\' => Some(start),
                 _ => None,
             };
-            if !line_start.scan_space(4) {
+            // In MDX mode, indented code blocks are disabled, so consume all
+            // leading whitespace and always check for paragraph interrupts.
+            let is_indented = if self.options.contains(Options::ENABLE_MDX) {
+                line_start.scan_all_space();
+                false
+            } else {
+                line_start.scan_space(4)
+            };
+            if !is_indented {
                 let ix_new = ix + line_start.bytes_scanned();
                 if current_container {
                     if let Some(ix_setext) =
@@ -1555,16 +1588,32 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.pop(ix);
                 return ix;
             }
-            line_start.scan_space(indent);
-            let mut close_line_start = line_start.clone();
-            if !close_line_start.scan_space(4 - indent) {
-                let close_ix = ix + close_line_start.bytes_scanned();
-                if let Some(n) = scan_closing_code_fence(&bytes[close_ix..], fence_ch, n_fence_char)
+            if self.options.contains(Options::ENABLE_MDX) {
+                // MDX: consume all leading whitespace before checking for the
+                // closing fence.  Indented code blocks don't exist in MDX so
+                // there is no ambiguity with deep indentation.
+                line_start.scan_all_space();
+                let close_ix = ix + line_start.bytes_scanned();
+                if let Some(n) =
+                    scan_closing_code_fence(&bytes[close_ix..], fence_ch, n_fence_char)
                 {
                     ix = close_ix + n;
                     self.pop(ix);
-                    // try to read trailing whitespace or it will register as a completely blank line
                     return ix + scan_blank_line(&bytes[ix..]).unwrap_or(0);
+                }
+            } else {
+                line_start.scan_space(indent);
+                let mut close_line_start = line_start.clone();
+                if !close_line_start.scan_space(4 - indent) {
+                    let close_ix = ix + close_line_start.bytes_scanned();
+                    if let Some(n) =
+                        scan_closing_code_fence(&bytes[close_ix..], fence_ch, n_fence_char)
+                    {
+                        ix = close_ix + n;
+                        self.pop(ix);
+                        // try to read trailing whitespace or it will register as a completely blank line
+                        return ix + scan_blank_line(&bytes[ix..]).unwrap_or(0);
+                    }
                 }
             }
             let remaining_space = line_start.remaining_space();

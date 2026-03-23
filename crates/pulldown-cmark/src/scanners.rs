@@ -1703,13 +1703,56 @@ fn scan_to_line_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// immediately after the closing `>`. Does NOT scan to EOL.
 fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
     let mut ix = 1; // skip `<`
-    let mut brace_depth: usize = 0;
 
     // Skip `/` for closing tags
     if ix < bytes.len() && bytes[ix] == b'/' {
         ix += 1;
     }
 
+    // Fragment `<>` / `</>`
+    if ix < bytes.len() && bytes[ix] == b'>' {
+        return Some(ix + 1);
+    }
+
+    // Validate tag name: must start with letter, `_`, or `$`
+    if ix >= bytes.len() {
+        return None;
+    }
+    let first = bytes[ix];
+    if !first.is_ascii_alphabetic() && first != b'_' && first != b'$' && first < 0x80 {
+        return None;
+    }
+    ix += 1;
+
+    // Scan tag name body
+    while ix < bytes.len() {
+        match bytes[ix] {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'$' => ix += 1,
+            b':' => {
+                ix += 1;
+                if ix >= bytes.len() {
+                    return None;
+                }
+                let ch = bytes[ix];
+                if !ch.is_ascii_alphabetic() && ch != b'_' && ch != b'$' && ch < 0x80 {
+                    return None;
+                }
+                ix += 1;
+            }
+            0x80.. => ix += 1,
+            _ => break,
+        }
+    }
+
+    // After tag name: must be whitespace, `>`, `/`, or `{`
+    if ix < bytes.len() {
+        match bytes[ix] {
+            b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r' | b'{' => {}
+            _ => return None,
+        }
+    }
+
+    let mut brace_depth: usize = 0;
     while ix < bytes.len() {
         match bytes[ix] {
             b'>' if brace_depth == 0 => {
@@ -1934,14 +1977,46 @@ pub(crate) fn scan_mdx_inline_jsx(bytes: &[u8]) -> Option<usize> {
         return Some(name_start + 1);
     }
 
-    // Must start with an ASCII letter or `_`
+    // Must start with an ASCII letter, `_`, or `$`
     let first = bytes[name_start];
     if !first.is_ascii_alphabetic() && first != b'_' && first != b'$' && first < 0x80 {
         return None;
     }
 
-    // Scan to closing `>` or `/>` handling balanced braces and strings
+    // Scan the tag name: letters, digits, `-`, `.` are valid name characters.
     let mut ix = name_start + 1;
+    while ix < bytes.len() {
+        match bytes[ix] {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'$' => ix += 1,
+            // Namespace separator (e.g. `xml:space`): must be followed by a
+            // valid name-start character.
+            b':' => {
+                ix += 1;
+                if ix >= bytes.len() {
+                    return None;
+                }
+                let ch = bytes[ix];
+                if !ch.is_ascii_alphabetic() && ch != b'_' && ch != b'$' && ch < 0x80 {
+                    return None;
+                }
+                ix += 1;
+            }
+            // Non-ASCII UTF-8 byte: allow (component names can use Unicode)
+            0x80.. => ix += 1,
+            _ => break,
+        }
+    }
+
+    // After the tag name: must be whitespace, `>`, `/`, or `{`.
+    // This rejects patterns like `<https://...>`.
+    if ix < bytes.len() {
+        match bytes[ix] {
+            b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r' | b'{' => {}
+            _ => return None,
+        }
+    }
+
+    // Scan to closing `>` or `/>` handling balanced braces and strings
     let mut brace_depth: usize = 0;
 
     while ix < bytes.len() {

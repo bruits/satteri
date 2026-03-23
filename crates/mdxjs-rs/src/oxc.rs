@@ -81,16 +81,48 @@ fn parse_expression_core<'a>(
         return Ok(None);
     }
 
-    // For attribute expression, a spread is needed, for which we have to prefix
-    // and suffix the input.
-    let (prefix, suffix) = if matches!(kind, MdxExpressionKind::AttributeExpression) {
-        ("({", "})")
-    } else {
-        ("", "")
-    };
+    let source_type = SourceType::mjs().with_jsx(true);
+
+    if !matches!(kind, MdxExpressionKind::AttributeExpression) {
+        // Use OXC's expression parser so that `{...}` is parsed as an object
+        // literal (not a block statement) and string literals like `"hello"`
+        // are not misclassified as directives.
+        let source = allocator.alloc_str(value);
+        let expr = Parser::new(allocator, source, source_type)
+            .with_options(ParseOptions::default())
+            .parse_expression()
+            .map_err(|errors| {
+                let error = &errors[0];
+                let span = error
+                    .labels
+                    .as_ref()
+                    .and_then(|labels| {
+                        labels
+                            .first()
+                            .map(|l| Span::new(l.offset() as u32, (l.offset() + l.len()) as u32))
+                    })
+                    .unwrap_or(SPAN);
+                (
+                    span,
+                    format!("Could not parse expression with oxc: {error}"),
+                )
+            })?;
+
+        // Check the expression ends at the right place.
+        let expression_end = expr.span().end as usize;
+        if let Err((span, reason)) = whitespace_and_comments(expression_end, value) {
+            return Err((span, reason));
+        }
+
+        return Ok(Some(expr));
+    }
+
+    // For attribute expressions, a spread is needed, for which we have to
+    // prefix and suffix the input.
+    let prefix = "({";
+    let suffix = "})";
 
     let full_value = format!("{prefix}{value}{suffix}");
-    let source_type = SourceType::mjs().with_jsx(true);
     let source = allocator.alloc_str(&full_value);
     let ret = Parser::new(allocator, source, source_type)
         .with_options(ParseOptions::default())
@@ -117,36 +149,34 @@ fn parse_expression_core<'a>(
 
     let program = ret.program;
 
-    // Get the first expression from the body.
-    if program.body.is_empty() {
+    let expr = if let Some(first) = program.body.into_iter().next() {
+        match first {
+            Statement::ExpressionStatement(stmt) => {
+                let stmt = stmt.unbox();
+                stmt.expression
+            }
+            _ => {
+                return Err((
+                    first.span(),
+                    "Could not parse expression with oxc: Expected an expression".into(),
+                ));
+            }
+        }
+    } else {
         return Err((
             SPAN,
             "Could not parse expression with oxc: Unexpected empty expression".into(),
         ));
-    }
-
-    let first = program.body.into_iter().next().unwrap();
-    let expr = match first {
-        Statement::ExpressionStatement(stmt) => {
-            let stmt = stmt.unbox();
-            stmt.expression
-        }
-        _ => {
-            return Err((
-                first.span(),
-                "Could not parse expression with oxc: Expected an expression".into(),
-            ));
-        }
     };
 
     // Check the expression ends at the right place.
     let expression_end = expr.span().end as usize;
-    // Adjust for the prefix
     let adj_end = expression_end.saturating_sub(prefix.len());
     if let Err((span, reason)) = whitespace_and_comments(adj_end, value) {
         return Err((span, reason));
     }
 
+    // AttributeExpression handling:
     if matches!(kind, MdxExpressionKind::AttributeExpression) {
         let expr_span = expr.span();
 

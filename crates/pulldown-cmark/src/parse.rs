@@ -226,6 +226,9 @@ struct ParserInner<'input> {
     // To prevent this, track how much it's expanded and limit it.
     link_ref_expansion_limit: usize,
 
+    /// MDX validation errors collected during inline parsing.
+    mdx_errors: Vec<(usize, String)>,
+
     // used by inline passes. store them here for reuse
     inline_stack: InlineStack,
     link_stack: LinkStack,
@@ -316,6 +319,7 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
                 html_scan_guard,
                 // always allow 100KiB
                 link_ref_expansion_limit: text.len().max(100_000),
+                mdx_errors: Vec::new(),
                 code_delims: CodeDelims::new(),
                 math_delims: MathDelims::new(),
             },
@@ -326,6 +330,12 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
     /// to the internal map of reference definitions.
     pub fn reference_definitions(&self) -> &RefDefs<'_> {
         &self.inner.allocs.refdefs
+    }
+
+    /// Returns MDX validation errors collected during parsing.
+    /// Only populated when [`Options::ENABLE_MDX`] is active.
+    pub fn mdx_errors(&self) -> &[(usize, String)] {
+        &self.inner.mdx_errors
     }
 
     /// Consumes the event iterator and produces an iterator that produces
@@ -453,9 +463,15 @@ impl<'input> ParserInner<'input> {
                     // MDX inline JSX: check before HTML
                     if self.options.contains(Options::ENABLE_MDX) {
                         let start = self.tree[cur_ix].item.start;
+                        let next_byte = block_text.as_bytes().get(start + 1).copied();
 
                         // In MDX, `<!` is not valid (no HTML comments).
-                        if block_text.as_bytes().get(start + 1) == Some(&b'!') {
+                        if next_byte == Some(b'!') {
+                            self.mdx_errors.push((start, format!(
+                                "Unexpected character `!` (U+0021) before name, expected a \
+                                 character that can start a name, such as a letter, `$`, or `_` \
+                                 (note: to create a comment in MDX, use `{{/* text */}}`)"
+                            )));
                             self.tree[cur_ix].item.body = ItemBody::Text {
                                 backslash_escaped: false,
                             };
@@ -483,7 +499,15 @@ impl<'input> ParserInner<'input> {
                             continue;
                         }
 
-                        // In MDX mode, if it's not JSX, it's just text (no HTML fallback).
+                        // In MDX, `<` followed by a letter, `/`, or `>` must be
+                        // valid JSX.  If the JSX scan failed, record an error.
+                        if matches!(next_byte, Some(b'a'..=b'z' | b'A'..=b'Z' | b'/' | b'>')) {
+                            self.mdx_errors.push((start, format!(
+                                "Unexpected character after `<`, expected a valid JSX tag \
+                                 (note: to create a link in MDX, use `[text](url)`)"
+                            )));
+                        }
+
                         self.tree[cur_ix].item.body = ItemBody::Text {
                             backslash_escaped: false,
                         };
@@ -2272,6 +2296,11 @@ impl<'a, CB: ParserCallbacks<'a>> OffsetIter<'a, CB> {
     /// Returns a reference to the internal reference definition tracker.
     pub fn reference_definitions(&self) -> &RefDefs<'_> {
         self.parser.reference_definitions()
+    }
+
+    /// Returns MDX validation errors collected during parsing.
+    pub fn mdx_errors(&self) -> &[(usize, String)] {
+        self.parser.mdx_errors()
     }
 }
 

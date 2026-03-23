@@ -75,6 +75,11 @@ where
             last_event: None,
         }
     }
+
+    /// Access the inner iterator (e.g. to retrieve parser state after iteration).
+    pub fn inner(&self) -> &I {
+        &self.iter
+    }
 }
 
 impl<'a, I> Iterator for TextMergeWithOffset<'a, I>

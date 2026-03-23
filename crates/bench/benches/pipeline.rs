@@ -40,7 +40,7 @@ fn parse(bencher: divan::Bencher) {
 fn parse_to_buffer(bencher: divan::Bencher) {
     let opts = parser::ParseOptions::default();
     bencher.bench(|| {
-        let arena = parser::parse(MARKDOWN, &opts);
+        let (arena, _) = parser::parse(MARKDOWN, &opts);
         arena.to_raw_buffer()
     });
 }
@@ -131,7 +131,7 @@ fn pulldown_mdx_parse(bencher: divan::Bencher) {
 fn full_pipeline_to_html(bencher: divan::Bencher) {
     let opts = parser::ParseOptions::default();
     bencher.bench(|| {
-        let arena = parser::parse(MARKDOWN, &opts);
+        let (arena, _) = parser::parse(MARKDOWN, &opts);
         tryckeri_hast::mdast_to_html(&arena)
     });
 }
@@ -139,7 +139,7 @@ fn full_pipeline_to_html(bencher: divan::Bencher) {
 /// Given a pre-serialised MDAST buffer, convert to HAST buffer.
 #[divan::bench]
 fn mdast_buffer_to_hast_buffer(bencher: divan::Bencher) {
-    let arena = parser::parse(MARKDOWN, &parser::ParseOptions::default());
+    let (arena, _) = parser::parse(MARKDOWN, &parser::ParseOptions::default());
     let mdast_buf = arena.to_raw_buffer();
 
     bencher.bench(|| tryckeri_hast::mdast_to_hast_buffer(&mdast_buf).unwrap());
@@ -148,7 +148,7 @@ fn mdast_buffer_to_hast_buffer(bencher: divan::Bencher) {
 /// Given a pre-built HAST binary buffer, emit an HTML string.
 #[divan::bench]
 fn hast_buffer_to_html(bencher: divan::Bencher) {
-    let arena = parser::parse(MARKDOWN, &parser::ParseOptions::default());
+    let (arena, _) = parser::parse(MARKDOWN, &parser::ParseOptions::default());
     let mdast_buf = arena.to_raw_buffer();
     let hast_buf = tryckeri_hast::mdast_to_hast_buffer(&mdast_buf).unwrap();
 
@@ -168,7 +168,7 @@ fn mdx_compile(bencher: divan::Bencher) {
 /// Compile from a pre-parsed MDAST binary buffer — skips the parse step.
 #[divan::bench]
 fn mdx_compile_from_buffer(bencher: divan::Bencher) {
-    let arena = parser::parse(MDX, &parser::ParseOptions::mdx());
+    let (arena, _) = parser::parse(MDX, &parser::ParseOptions::mdx());
     let mdast_buf = arena.to_raw_buffer();
 
     bencher.bench(|| mdxjs::compile_arena_bytes(&mdast_buf, &mdxjs::Options::default()).unwrap());
@@ -186,7 +186,7 @@ fn mdx_step1_parse(bencher: divan::Bencher) {
 /// Step 2 of MDX compile: Arena → boxed hast::Node tree.
 #[divan::bench]
 fn mdx_step2_mdast_to_hast(bencher: divan::Bencher) {
-    let arena = parser::parse(MDX, &parser::ParseOptions::mdx());
+    let (arena, _) = parser::parse(MDX, &parser::ParseOptions::mdx());
 
     bencher.bench(|| mdxjs::mdast_to_hast(&arena));
 }
@@ -198,7 +198,7 @@ fn mdx_step3_hast_to_js(bencher: divan::Bencher) {
     use oxc_allocator::Allocator;
     use rustc_hash::FxHashSet;
 
-    let arena = parser::parse(MDX, &parser::ParseOptions::mdx());
+    let (arena, _) = parser::parse(MDX, &parser::ParseOptions::mdx());
     let hast = mdxjs::mdast_to_hast(&arena);
     let opts = mdxjs::Options::default();
 

@@ -50,9 +50,12 @@ impl ParseOptions {
 }
 
 /// Parse markdown source into a MdastArena.
-pub fn parse(source: &str, opts: &ParseOptions) -> MdastArena {
+///
+/// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
+/// validation errors collected during parsing (empty for non-MDX input).
+pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, String)>) {
     let line_index = LineIndex::from_source(source);
-    let parser =
+    let mut parser =
         TextMergeWithOffset::new(Parser::new_ext(source, opts.pulldown).into_offset_iter());
     let mut builder = MdastBuilder::new(source.to_string());
 
@@ -73,11 +76,12 @@ pub fn parse(source: &str, opts: &ParseOptions) -> MdastArena {
     // JSX tag pairing: when we see an opening JSX tag (not self-closing),
     // keep the arena node open and make subsequent events children.
     // The stack tracks open JSX tag names so we can match closing tags.
-    let mut jsx_stack: Vec<String> = Vec::new();
+    let mut jsx_stack: Vec<(String, u32)> = Vec::new(); // (tag_name, start_offset)
     // Count of End events to skip (from nodes we closed early during JSX pairing).
     let mut skip_end_events: usize = 0;
+    let mut mdx_errors: Vec<(usize, String)> = Vec::new();
 
-    for (event, range) in parser {
+    while let Some((event, range)) = parser.next() {
         let start = range.start as u32;
         let end = range.end as u32;
         let (start_line, start_col) = line_index.offset_to_line_col(start);
@@ -262,11 +266,18 @@ pub fn parse(source: &str, opts: &ParseOptions) -> MdastArena {
                             if let Some(d) = data {
                                 builder.set_data_current(&d);
                             }
-                            jsx_stack.push(name);
+                            jsx_stack.push((name, start));
                             continue;
                         }
-                        JsxTagKind::Closing(_name) => {
-                            if let Some(_open_name) = jsx_stack.pop() {
+                        JsxTagKind::Closing(close_name) => {
+                            if let Some((open_name, open_offset)) = jsx_stack.pop() {
+                                if close_name != open_name {
+                                    let open_loc = byte_offset_to_line_col(source, open_offset as usize);
+                                    mdx_errors.push((start as usize, format!(
+                                        "Unexpected closing tag `</{close_name}>`, expected \
+                                         corresponding closing tag for `<{open_name}>` ({open_loc})"
+                                    )));
+                                }
                                 let target_depth = find_jsx_depth(&builder);
                                 let close_count = builder.stack_depth() - target_depth;
 
@@ -311,6 +322,10 @@ pub fn parse(source: &str, opts: &ParseOptions) -> MdastArena {
 
                                     builder.close_node();
                                 }
+                            } else {
+                                mdx_errors.push((start as usize, format!(
+                                    "Unexpected closing tag `</{close_name}>`, expected an open tag first"
+                                )));
                             }
                             continue;
                         }
@@ -523,9 +538,24 @@ pub fn parse(source: &str, opts: &ParseOptions) -> MdastArena {
         }
     }
 
+    // Check for unclosed JSX tags.
+    for (name, offset) in &jsx_stack {
+        let loc = byte_offset_to_line_col(source, *offset as usize);
+        mdx_errors.push((*offset as usize, format!(
+            "Expected a closing tag for `<{name}>` ({loc})"
+        )));
+    }
+
+    // Merge with pulldown-cmark parser-level MDX errors.
+    let parser_errors = parser.inner().mdx_errors();
+    if !parser_errors.is_empty() {
+        mdx_errors.extend_from_slice(parser_errors);
+        mdx_errors.sort_by_key(|(offset, _)| *offset);
+    }
+
     // Close root.
     builder.close_node();
-    builder.finish()
+    (builder.finish(), mdx_errors)
 }
 
 /// Convert a pulldown-cmark Tag to a NodeType + optional type data.
@@ -751,6 +781,24 @@ fn wrap_bare_text_in_paragraphs(builder: &mut MdastBuilder, _jsx_id: u32) {
     children.extend_from_slice(&new_children);
 }
 
+/// Convert byte offset to a "line:column" string for error messages.
+fn byte_offset_to_line_col(source: &str, offset: usize) -> String {
+    let mut line = 1usize;
+    let mut col = 1usize;
+    for (i, ch) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    format!("{line}:{col}")
+}
+
 /// Find the stack depth of the open JSX element.
 /// Scans from top of stack downward, returns the 1-based depth to close to.
 fn find_jsx_depth(builder: &MdastBuilder) -> usize {
@@ -776,18 +824,29 @@ enum JsxTagKind {
 
 fn classify_jsx_tag(raw: &str) -> JsxTagKind {
     let s = raw.trim();
-    // Self-closing: ends with `/>`
-    if s.ends_with("/>") {
-        return JsxTagKind::SelfClosing;
-    }
-    // Closing: starts with `</`
+    // Closing: starts with `</` (check before self-closing since `</>` ends with `/>`)
     if s.starts_with("</") {
         let name = extract_jsx_name(s);
         return JsxTagKind::Closing(name.to_string());
     }
-    // Opening: starts with `<`
+    // Self-closing: ends with `/>`
+    if s.ends_with("/>") {
+        return JsxTagKind::SelfClosing;
+    }
+    // Check for self-contained: `<Name ...>...</Name>` or `<>...</>`
+    // (flow JSX elements can contain open+close in a single event).
     let name = extract_jsx_name(s);
-    // Fragment `<>` is opening
+    if !name.is_empty() {
+        let close_tag = format!("</{name}>");
+        if s.contains(&close_tag) {
+            return JsxTagKind::SelfClosing;
+        }
+    } else {
+        // Fragment: check for `</>` closing
+        if s.contains("</>") {
+            return JsxTagKind::SelfClosing;
+        }
+    }
     JsxTagKind::Opening(name.to_string())
 }
 

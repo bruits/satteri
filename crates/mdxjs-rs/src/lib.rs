@@ -63,7 +63,16 @@ pub fn compile(value: &str, options: &Options) -> Result<String, message::Messag
     } else {
         value
     };
-    let arena = parser::parse(value, &parser::ParseOptions::mdx());
+    let (arena, mdx_errors) = parser::parse(value, &parser::ParseOptions::mdx());
+    if let Some((offset, msg)) = mdx_errors.first() {
+        let point = byte_offset_to_point(value, *offset);
+        return Err(message::Message {
+            place: Some(Box::new(message::Place::Point(point))),
+            reason: msg.clone(),
+            rule_id: Box::new("unexpected-character".into()),
+            source: Box::new("mdx-jsx".into()),
+        });
+    }
     compile_arena(&arena, options)
 }
 
@@ -197,6 +206,24 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
     }
 
     Ok(())
+}
+
+/// Convert a byte offset in source text to a `Point` (line, column, offset).
+fn byte_offset_to_point(value: &str, offset: usize) -> message::Point {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, ch) in value.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    message::Point::new(line, col, offset)
 }
 
 /// Expand tab characters to spaces for indentation purposes.
