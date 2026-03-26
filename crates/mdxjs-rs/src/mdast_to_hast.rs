@@ -20,8 +20,9 @@ use rustc_hash::FxHashMap;
 // ---------------------------------------------------------------------------
 
 /// Convert MDAST (node 0 = Root) to a `hast::Node`.
-pub fn mdast_to_hast(arena: &dyn ReadMdast) -> hast::Node {
-    let mut ctx = Context::new(arena);
+/// If `syntax_highlight_theme` is Some, code blocks are highlighted with syntect.
+pub fn mdast_to_hast(arena: &dyn ReadMdast, syntax_highlight_theme: Option<&str>) -> hast::Node {
+    let mut ctx = Context::new(arena, syntax_highlight_theme);
 
     // Pre-pass: collect definitions and footnote definitions.
     visit_all(arena, 0, &mut |node_id| {
@@ -270,15 +271,18 @@ struct Context<'a> {
     footnote_calls: Vec<(String, usize)>,
     /// identifier → arena `node_id` of the `FootnoteDefinition`.
     footnote_defs: FxHashMap<String, u32>,
+    /// Syntect theme name for syntax highlighting (None = no highlighting).
+    syntax_highlight_theme: Option<String>,
 }
 
 impl<'a> Context<'a> {
-    fn new(arena: &'a dyn ReadMdast) -> Self {
+    fn new(arena: &'a dyn ReadMdast, syntax_highlight_theme: Option<&str>) -> Self {
         Context {
             arena,
             definitions: FxHashMap::default(),
             footnote_calls: Vec::new(),
             footnote_defs: FxHashMap::default(),
+            syntax_highlight_theme: syntax_highlight_theme.map(String::from),
         }
     }
 }
@@ -811,6 +815,30 @@ fn transform_code(ctx: &mut Context<'_>, node_id: u32, position: Option<Position
         (value, lang)
     };
 
+    // Try syntect highlighting if a theme is configured
+    #[cfg(feature = "syntect")]
+    if let Some(theme_name) = &ctx.syntax_highlight_theme {
+        if let Some(ref lang_str) = lang {
+            if let Some(html) = highlight_with_syntect(&value, lang_str, theme_name) {
+                // Emit as a Fragment with set:html so the highlighted HTML passes through
+                return NodeResult::Node(hast::Node::MdxJsxElement(hast::MdxJsxElement {
+                    name: Some("Fragment".into()),
+                    attributes: vec![AttributeContent::Property(MdxJsxAttribute {
+                        name: "set:html".into(),
+                        value: Some(AttributeValue::Expression(
+                            AttributeValueExpression {
+                                value: js_string_literal(&html),
+                                stops: vec![],
+                            },
+                        )),
+                    })],
+                    children: vec![],
+                    position,
+                }));
+            }
+        }
+    }
+
     let mut code_value = value;
     if !code_value.ends_with('\n') {
         code_value.push('\n');
@@ -838,6 +866,44 @@ fn transform_code(ctx: &mut Context<'_>, node_id: u32, position: Option<Position
         })],
         position,
     }))
+}
+
+/// Escape a string for embedding as a JS string literal (with double quotes).
+#[cfg(feature = "syntect")]
+fn js_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(feature = "syntect")]
+fn highlight_with_syntect(code: &str, lang: &str, theme_name: &str) -> Option<String> {
+    use std::sync::OnceLock;
+    use syntect::highlighting::ThemeSet;
+    use syntect::html::highlighted_html_for_string;
+    use syntect::parsing::SyntaxSet;
+
+    static SS: OnceLock<SyntaxSet> = OnceLock::new();
+    static TS: OnceLock<ThemeSet> = OnceLock::new();
+
+    let ss = SS.get_or_init(SyntaxSet::load_defaults_newlines);
+    let ts = TS.get_or_init(ThemeSet::load_defaults);
+
+    let theme = ts.themes.get(theme_name)?;
+    let syntax = ss.find_syntax_by_token(lang)
+        .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+    highlighted_html_for_string(code, ss, syntax, theme).ok()
 }
 
 fn transform_text(ctx: &mut Context<'_>, node_id: u32, position: Option<Position>) -> NodeResult {

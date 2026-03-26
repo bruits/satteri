@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 [dependencies]
 mdast-arena = { path = "../mdast-arena" }
 tryckeri-hast = { path = "../hast" }
-mdxjs = { path = "../mdxjs-rs" }
+mdxjs = { path = "../mdxjs-rs", features = ["syntect"] }
 parser = { path = "../parser" }
 napi = { version = "3", features = ["napi8"] }
 napi-derive = "3"

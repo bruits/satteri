@@ -41,7 +41,7 @@ fn build_heading_paragraph_arena() -> mdast_arena::MdastArena {
 #[test]
 fn arena1_root_is_root() {
     let mdast = build_heading_paragraph_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let root = hast.get_node(0);
     assert_eq!(root.node_type, HastNodeType::Root);
 }
@@ -49,14 +49,14 @@ fn arena1_root_is_root() {
 #[test]
 fn arena1_two_children_of_root() {
     let mdast = build_heading_paragraph_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     assert_eq!(hast.get_children(0).len(), 2);
 }
 
 #[test]
 fn arena1_first_child_is_h1() {
     let mdast = build_heading_paragraph_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let children = hast.get_children(0);
     let h1_id = children[0];
     let h1 = hast.get_node(h1_id);
@@ -67,7 +67,7 @@ fn arena1_first_child_is_h1() {
 #[test]
 fn arena1_h1_has_text_hello() {
     let mdast = build_heading_paragraph_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let h1_id = hast.get_children(0)[0];
     let text_children = hast.get_children(h1_id);
     assert_eq!(text_children.len(), 1);
@@ -79,7 +79,7 @@ fn arena1_h1_has_text_hello() {
 #[test]
 fn arena1_second_child_is_p_with_world() {
     let mdast = build_heading_paragraph_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[1];
     let p = hast.get_node(p_id);
     assert_eq!(p.node_type, HastNodeType::Element);
@@ -123,7 +123,7 @@ fn build_link_arena() -> mdast_arena::MdastArena {
 #[test]
 fn arena2_link_becomes_a_element() {
     let mdast = build_link_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     // root → p → a
     let p_id = hast.get_children(0)[0];
     let a_id = hast.get_children(p_id)[0];
@@ -135,7 +135,7 @@ fn arena2_link_becomes_a_element() {
 #[test]
 fn arena2_a_has_href_property() {
     let mdast = build_link_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[0];
     let a_id = hast.get_children(p_id)[0];
     let props = hast.get_properties(a_id);
@@ -150,7 +150,7 @@ fn arena2_a_has_href_property() {
 #[test]
 fn arena2_a_has_text_child_click() {
     let mdast = build_link_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[0];
     let a_id = hast.get_children(p_id)[0];
     let text_children = hast.get_children(a_id);
@@ -186,7 +186,7 @@ fn build_image_arena() -> mdast_arena::MdastArena {
 #[test]
 fn arena3_image_becomes_img_element() {
     let mdast = build_image_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[0];
     let img_id = hast.get_children(p_id)[0];
     let img = hast.get_node(img_id);
@@ -197,7 +197,7 @@ fn arena3_image_becomes_img_element() {
 #[test]
 fn arena3_img_has_src_and_alt() {
     let mdast = build_image_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[0];
     let img_id = hast.get_children(p_id)[0];
     let props = hast.get_properties(img_id);
@@ -246,7 +246,7 @@ fn build_emphasis_strong_arena() -> mdast_arena::MdastArena {
 #[test]
 fn arena4_emphasis_becomes_em() {
     let mdast = build_emphasis_strong_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[0];
     let em_id = hast.get_children(p_id)[0];
     let em = hast.get_node(em_id);
@@ -257,7 +257,7 @@ fn arena4_emphasis_becomes_em() {
 #[test]
 fn arena4_strong_becomes_strong() {
     let mdast = build_emphasis_strong_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[0];
     let strong_id = hast.get_children(p_id)[1];
     let strong = hast.get_node(strong_id);
@@ -299,7 +299,7 @@ fn build_unordered_list_arena() -> mdast_arena::MdastArena {
 #[test]
 fn arena5_list_becomes_ul() {
     let mdast = build_unordered_list_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let ul_id = hast.get_children(0)[0];
     let ul = hast.get_node(ul_id);
     assert_eq!(ul.node_type, HastNodeType::Element);
@@ -309,7 +309,7 @@ fn arena5_list_becomes_ul() {
 #[test]
 fn arena5_list_items_become_li() {
     let mdast = build_unordered_list_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let ul_id = hast.get_children(0)[0];
     let li_children = hast.get_children(ul_id);
     for &li_id in li_children {
@@ -321,7 +321,7 @@ fn arena5_list_items_become_li() {
 #[test]
 fn arena5_two_li_children() {
     let mdast = build_unordered_list_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let ul_id = hast.get_children(0)[0];
     assert_eq!(hast.get_children(ul_id).len(), 2);
 }
@@ -352,7 +352,7 @@ fn build_ordered_list_arena() -> mdast_arena::MdastArena {
 #[test]
 fn arena6_ordered_list_becomes_ol() {
     let mdast = build_ordered_list_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let ol_id = hast.get_children(0)[0];
     let ol = hast.get_node(ol_id);
     assert_eq!(ol.tag_name.as_deref(), Some("ol"));
@@ -361,7 +361,7 @@ fn arena6_ordered_list_becomes_ol() {
 #[test]
 fn arena6_ol_has_start_3_property() {
     let mdast = build_ordered_list_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let ol_id = hast.get_children(0)[0];
     let props = hast.get_properties(ol_id);
     assert_eq!(props.len(), 1);
@@ -408,7 +408,7 @@ fn build_inline_and_block_code_arena() -> mdast_arena::MdastArena {
 #[test]
 fn arena7_inline_code_becomes_code_element() {
     let mdast = build_inline_and_block_code_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[0];
     let code_id = hast.get_children(p_id)[0];
     let code = hast.get_node(code_id);
@@ -423,7 +423,7 @@ fn arena7_inline_code_becomes_code_element() {
 #[test]
 fn arena7_code_block_becomes_pre_code_with_language_class() {
     let mdast = build_inline_and_block_code_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     // root children: p, pre
     let pre_id = hast.get_children(0)[1];
     let pre = hast.get_node(pre_id);
@@ -461,7 +461,7 @@ fn arena8_thematic_break_becomes_hr() {
     b.close_node();
     let mdast = b.finish();
 
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let hr_id = hast.get_children(0)[0];
     let hr = hast.get_node(hr_id);
     assert_eq!(hr.node_type, HastNodeType::Element);
@@ -517,7 +517,7 @@ fn build_table_arena() -> mdast_arena::MdastArena {
 #[test]
 fn arena9_table_has_thead_and_tbody() {
     let mdast = build_table_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let table_id = hast.get_children(0)[0];
     let table = hast.get_node(table_id);
     assert_eq!(table.tag_name.as_deref(), Some("table"));
@@ -533,7 +533,7 @@ fn arena9_table_has_thead_and_tbody() {
 #[test]
 fn arena9_header_row_uses_th_cells() {
     let mdast = build_table_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let table_id = hast.get_children(0)[0];
     let thead_id = hast.get_children(table_id)[0];
     let tr_id = hast.get_children(thead_id)[0];
@@ -548,7 +548,7 @@ fn arena9_header_row_uses_th_cells() {
 #[test]
 fn arena9_body_row_uses_td_cells() {
     let mdast = build_table_arena();
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let table_id = hast.get_children(0)[0];
     let tbody_id = hast.get_children(table_id)[1];
     let tr_id = hast.get_children(tbody_id)[0];
@@ -579,7 +579,7 @@ fn arena10_delete_becomes_del() {
     b.close_node(); // root
     let mdast = b.finish();
 
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let p_id = hast.get_children(0)[0];
     let del_id = hast.get_children(p_id)[0];
     let del = hast.get_node(del_id);
@@ -603,7 +603,7 @@ fn arena11_html_node_becomes_raw() {
     b.close_node(); // root
     let mdast = b.finish();
 
-    let hast = mdast_to_hast(&mdast);
+    let hast = mdast_to_hast(&mdast, None);
     let raw_id = hast.get_children(0)[0];
     let raw = hast.get_node(raw_id);
     assert_eq!(raw.node_type, HastNodeType::Raw);

@@ -188,7 +188,7 @@ fn mdx_step1_parse(bencher: divan::Bencher) {
 fn mdx_step2_mdast_to_hast(bencher: divan::Bencher) {
     let (arena, _) = parser::parse(MDX, &parser::ParseOptions::mdx());
 
-    bencher.bench(|| mdxjs::mdast_to_hast(&arena));
+    bencher.bench(|| mdxjs::mdast_to_hast(&arena, None));
 }
 
 /// Step 3 of MDX compile: hast::Node tree → OXC ES AST + recma plugins + serialize.
@@ -199,7 +199,7 @@ fn mdx_step3_hast_to_js(bencher: divan::Bencher) {
     use rustc_hash::FxHashSet;
 
     let (arena, _) = parser::parse(MDX, &parser::ParseOptions::mdx());
-    let hast = mdxjs::mdast_to_hast(&arena);
+    let hast = mdxjs::mdast_to_hast(&arena, None);
     let opts = mdxjs::Options::default();
 
     bencher.bench(|| {

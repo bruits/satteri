@@ -21,6 +21,27 @@ pub fn compile_mdx_from_buffer(buf: Buffer) -> Result<String> {
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
+/// Compile MDX source to JavaScript with syntax highlighting via syntect.
+/// `theme` is a syntect theme name (e.g. "base16-ocean.dark", "InspiredGitHub").
+#[napi]
+pub fn compile_mdx_highlighted(source: String, theme: String) -> Result<String> {
+    let opts = mdxjs::Options {
+        syntax_highlight_theme: Some(theme),
+        ..Default::default()
+    };
+    mdxjs::compile(&source, &opts).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Compile a pre-parsed MDAST binary buffer with syntax highlighting.
+#[napi]
+pub fn compile_mdx_from_buffer_highlighted(buf: Buffer, theme: String) -> Result<String> {
+    let opts = mdxjs::Options {
+        syntax_highlight_theme: Some(theme),
+        ..Default::default()
+    };
+    mdxjs::compile_arena_bytes(&buf, &opts).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // New parser (pulldown-cmark based)
 // ---------------------------------------------------------------------------
@@ -142,3 +163,4 @@ pub fn get_buffer_format() -> BufferFormat {
         magic: "MDAR".to_string(),
     }
 }
+

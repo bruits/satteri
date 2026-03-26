@@ -14,6 +14,8 @@ export {
   hastBufferToHtmlStr,
   compileMdx,
   compileMdxFromBuffer,
+  compileMdxHighlighted,
+  compileMdxFromBufferHighlighted,
   parseToHtml,
   parseMdxToHtml,
   applyMutations,

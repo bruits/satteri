@@ -238,6 +238,12 @@ pub struct Options {
     ///
     /// Used when `development: true` to improve error messages.
     pub filepath: Option<String>,
+
+    /// Syntax highlighting theme for code blocks (uses syntect).
+    /// Set to `Some("theme-name")` to enable, `None` to disable.
+    /// Default themes: "base16-ocean.dark", "base16-eighties.dark",
+    /// "InspiredGitHub", "Solarized (dark)", "Solarized (light)".
+    pub syntax_highlight_theme: Option<String>,
 }
 
 impl Default for Options {
@@ -255,6 +261,7 @@ impl Default for Options {
             pragma_frag: None,
             pragma_import_source: None,
             filepath: None,
+            syntax_highlight_theme: None,
         }
     }
 }

@@ -9,12 +9,14 @@ oxc_codegen = { workspace = true }
 oxc_parser = { workspace = true }
 oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
+syntect = { version = "5", default-features = false, features = ["default-fancy"], optional = true }
 
 [dev-dependencies]
 pretty_assertions = "1"
 
 [features]
 serializable = []
+syntect = ["dep:syntect"]
 
 [package]
 authors = ["Titus Wormer <tituswormer@gmail.com>"]

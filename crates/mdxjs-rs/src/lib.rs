@@ -88,7 +88,7 @@ pub fn compile_arena(
     options: &Options,
 ) -> Result<String, message::Message> {
     let allocator = Allocator::default();
-    let hast = mdast_to_hast(arena);
+    let hast = mdast_to_hast(arena, options.syntax_highlight_theme.as_deref());
     let location = Location::new(arena.source().as_bytes());
     let mut explicit_jsxs = FxHashSet::default();
     let mut program = hast_util_to_oxc(

@@ -59,7 +59,7 @@ fn build_heading_paragraph_arena() -> MdastArena {
 #[test]
 fn test_heading_and_paragraph() {
     let arena = build_heading_paragraph_arena();
-    let result = mdast_to_hast(&arena);
+    let result = mdast_to_hast(&arena, None);
 
     match &result {
         hast::Node::Root(root) => {
@@ -137,7 +137,7 @@ fn test_link_reference_unresolved_returns_children() {
     arena.set_children(para_id, &[link_ref_id]);
     arena.set_children(root_id, &[para_id]);
 
-    let result = mdast_to_hast(&arena);
+    let result = mdast_to_hast(&arena, None);
 
     // Since the definition has no identifier stored in the arena codec,
     // the lookup fails and LinkReference emits its children as a fragment.
@@ -195,7 +195,7 @@ fn test_unordered_list() {
     arena.set_children(list_id, &[item_a_id, item_b_id]);
     arena.set_children(root_id, &[list_id]);
 
-    let result = mdast_to_hast(&arena);
+    let result = mdast_to_hast(&arena, None);
 
     match &result {
         hast::Node::Root(root) => {
@@ -243,7 +243,7 @@ fn test_code_block_with_lang() {
 
     arena.set_children(root_id, &[code_id]);
 
-    let result = mdast_to_hast(&arena);
+    let result = mdast_to_hast(&arena, None);
 
     match &result {
         hast::Node::Root(root) => {
@@ -310,7 +310,7 @@ fn test_image() {
     arena.set_children(para_id, &[img_id]);
     arena.set_children(root_id, &[para_id]);
 
-    let result = mdast_to_hast(&arena);
+    let result = mdast_to_hast(&arena, None);
 
     match &result {
         hast::Node::Root(root) => {
@@ -367,7 +367,7 @@ fn test_emphasis() {
     arena.set_children(para_id, &[em_id]);
     arena.set_children(root_id, &[para_id]);
 
-    let result = mdast_to_hast(&arena);
+    let result = mdast_to_hast(&arena, None);
 
     match &result {
         hast::Node::Root(root) => {
