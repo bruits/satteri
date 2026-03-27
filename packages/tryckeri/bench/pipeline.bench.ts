@@ -125,3 +125,45 @@ try {
 } catch {
   // compileMdx not available in the current native binary; skip.
 }
+
+// ---------------------------------------------------------------------------
+// Async pipeline benchmarks (measure async overhead)
+// ---------------------------------------------------------------------------
+
+import {
+  compileMarkdownToHtml,
+  compileMdxToJs,
+  defineHastPlugin,
+} from "../src/index.js";
+import type { HastNode } from "../src/hast-materializer.js";
+import type { HastVisitorContext } from "../src/hast-visitor.js";
+
+describe("async pipeline", () => {
+  bench("compileMarkdownToHtml — no plugins (async overhead)", async () => {
+    await compileMarkdownToHtml(MARKDOWN);
+  });
+
+  bench("compileMarkdownToHtml — sync HAST plugin", async () => {
+    const plugin = defineHastPlugin({
+      name: "sync-noop",
+      createOnce: () => ({
+        element() {
+          // no-op sync
+        },
+      }),
+    });
+    await compileMarkdownToHtml(MARKDOWN, { hastPlugins: [plugin] });
+  });
+
+  bench("compileMarkdownToHtml — async HAST plugin", async () => {
+    const plugin = defineHastPlugin({
+      name: "async-noop",
+      createOnce: () => ({
+        async element(_node: HastNode, _ctx: HastVisitorContext) {
+          // no-op async (returns a resolved promise)
+        },
+      }),
+    });
+    await compileMarkdownToHtml(MARKDOWN, { hastPlugins: [plugin] });
+  });
+});

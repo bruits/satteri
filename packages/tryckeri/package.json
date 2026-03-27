@@ -1,6 +1,6 @@
 {
   "name": "tryckeri",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "High-performance Markdown processing with Rust arena backend",
   "type": "module",
   "main": "./dist/index.js",

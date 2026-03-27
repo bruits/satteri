@@ -27,18 +27,18 @@ function applyAndSerialize(uint8: Uint8Array, commandBuffer: Uint8Array): string
 // ---------------------------------------------------------------------------
 
 describe("visitHast — basic behaviour", () => {
-  test("visitor with no subscriptions produces no mutations, no diagnostics", () => {
+  test("visitor with no subscriptions produces no mutations, no diagnostics", async () => {
     const { reader, dataMap } = setup();
-    const result = visitHast(reader, {}, dataMap);
+    const result = await visitHast(reader, {}, dataMap);
     expect(result.commandBuffer.length).toBe(0);
     expect(result.diagnostics.length).toBe(0);
     expect(result.hasMutations).toBe(false);
   });
 
-  test("element() callback fires for each element node", () => {
+  test("element() callback fires for each element node", async () => {
     const { reader, dataMap } = setup();
     const tags: string[] = [];
-    visitHast(
+    await visitHast(
       reader,
       {
         element(node: HastNode) {
@@ -51,10 +51,10 @@ describe("visitHast — basic behaviour", () => {
     expect(tags).toContain("p");
   });
 
-  test("text() callback fires for each text node", () => {
+  test("text() callback fires for each text node", async () => {
     const { reader, dataMap } = setup();
     const texts: string[] = [];
-    visitHast(
+    await visitHast(
       reader,
       {
         text(node: HastNode) {
@@ -73,10 +73,10 @@ describe("visitHast — basic behaviour", () => {
 // ---------------------------------------------------------------------------
 
 describe("visitHast — lifecycle hooks", () => {
-  test("before() fires before visitor methods", () => {
+  test("before() fires before visitor methods", async () => {
     const { reader, dataMap } = setup();
     const order: string[] = [];
-    visitHast(
+    await visitHast(
       reader,
       {
         before() {
@@ -92,10 +92,10 @@ describe("visitHast — lifecycle hooks", () => {
     expect(order).toContain("element");
   });
 
-  test("after() fires after visitor methods", () => {
+  test("after() fires after visitor methods", async () => {
     const { reader, dataMap } = setup();
     const order: string[] = [];
-    visitHast(
+    await visitHast(
       reader,
       {
         element() {
@@ -110,10 +110,10 @@ describe("visitHast — lifecycle hooks", () => {
     expect(order[order.length - 1]).toBe("after");
   });
 
-  test("transformRoot() receives the full materialized root", () => {
+  test("transformRoot() receives the full materialized root", async () => {
     const { reader, dataMap } = setup();
     let rootType = "";
-    visitHast(
+    await visitHast(
       reader,
       {
         transformRoot(root: HastNode) {
@@ -131,9 +131,9 @@ describe("visitHast — lifecycle hooks", () => {
 // ---------------------------------------------------------------------------
 
 describe("visitHast — mutations", () => {
-  test("returning a node from element() creates a replace mutation", () => {
+  test("returning a node from element() creates a replace mutation", async () => {
     const { reader, dataMap, uint8 } = setup();
-    const result = visitHast(
+    const result = await visitHast(
       reader,
       {
         element(node: HastNode) {
@@ -157,9 +157,9 @@ describe("visitHast — mutations", () => {
     expect(html).not.toContain("<h1>");
   });
 
-  test("context.removeNode() removes a node", () => {
+  test("context.removeNode() removes a node", async () => {
     const { reader, dataMap, uint8 } = setup();
-    const result = visitHast(
+    const result = await visitHast(
       reader,
       {
         element(node: HastNode, ctx: HastVisitorContext) {
@@ -176,9 +176,9 @@ describe("visitHast — mutations", () => {
     expect(html).toContain("World");
   });
 
-  test("context.setProperty() modifies element attributes", () => {
+  test("context.setProperty() modifies element attributes", async () => {
     const { reader, dataMap, uint8 } = setup();
-    const result = visitHast(
+    const result = await visitHast(
       reader,
       {
         element(node: HastNode, ctx: HastVisitorContext) {
@@ -200,9 +200,9 @@ describe("visitHast — mutations", () => {
 // ---------------------------------------------------------------------------
 
 describe("visitHast — diagnostics", () => {
-  test("context.report() collects diagnostics", () => {
+  test("context.report() collects diagnostics", async () => {
     const { reader, dataMap } = setup();
-    const result = visitHast(
+    const result = await visitHast(
       reader,
       {
         element(node: HastNode, ctx: HastVisitorContext) {

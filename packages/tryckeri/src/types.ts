@@ -1,5 +1,19 @@
 // Shared MDAST types for the tryckeri JS layer.
 
+/** A value that may be synchronous or a Promise. */
+export type MaybePromise<T> = T | Promise<T>;
+
+/**
+ * Only awaits if the value is actually a thenable.
+ * Avoids microtask overhead for sync plugin returns.
+ */
+export function maybeAwait<T>(value: MaybePromise<T>): MaybePromise<T> {
+  if (value !== null && value !== undefined && typeof (value as { then?: unknown }).then === "function") {
+    return value as Promise<T>;
+  }
+  return value as T;
+}
+
 export interface Point {
   offset: number;
   line: number;

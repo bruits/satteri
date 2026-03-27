@@ -174,12 +174,7 @@ fn copy_position(node_id: u32, view: &MdastView, builder: &mut MdastBuilder) {
 // Node conversion
 // ---------------------------------------------------------------------------
 
-fn convert_node(
-    node_id: u32,
-    view: &MdastView,
-    builder: &mut MdastBuilder,
-    defs: &[Definition],
-) {
+fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs: &[Definition]) {
     let node = view.get_node(node_id);
     let raw_type = node.node_type;
 
@@ -596,9 +591,9 @@ fn convert_children_wrapped(
     for &child_id in children {
         // Check if this paragraph will be unraveled (fragment)
         let child_node = view.get_node(child_id);
-        let is_unraveled_paragraph =
-            NodeType::from_u8(child_node.node_type) == Some(NodeType::Paragraph)
-                && is_mdx_only_paragraph(child_id, view);
+        let is_unraveled_paragraph = NodeType::from_u8(child_node.node_type)
+            == Some(NodeType::Paragraph)
+            && is_mdx_only_paragraph(child_id, view);
 
         if is_unraveled_paragraph {
             // Paragraph unraveled — emit its children with \n between them

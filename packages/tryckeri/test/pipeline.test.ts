@@ -8,7 +8,7 @@ function makePlugin(instance: Record<string, unknown>, name = "test-plugin") {
   return { instance, name };
 }
 
-test("structuralMutationCount is 0 for a data-only plugin (heading-ids)", () => {
+test("structuralMutationCount is 0 for a data-only plugin (heading-ids)", async () => {
   const buffer = buildHelloWorldBuffer();
 
   const headingIdsPlugin = {
@@ -17,13 +17,13 @@ test("structuralMutationCount is 0 for a data-only plugin (heading-ids)", () => 
     },
   };
 
-  const result = runPluginsOnBuffer(buffer, [makePlugin(headingIdsPlugin)]);
+  const result = await runPluginsOnBuffer(buffer, [makePlugin(headingIdsPlugin)]);
 
   expect(result.structuralMutationCount).toBe(0);
   expect(result.mutationCount).toBeGreaterThanOrEqual(0);
 });
 
-test("structuralMutationCount is 1 for a plugin that returns a replacement node", () => {
+test("structuralMutationCount is 1 for a plugin that returns a replacement node", async () => {
   const buffer = buildHelloWorldBuffer();
 
   const replacePlugin = {
@@ -32,12 +32,12 @@ test("structuralMutationCount is 1 for a plugin that returns a replacement node"
     },
   };
 
-  const result = runPluginsOnBuffer(buffer, [makePlugin(replacePlugin)]);
+  const result = await runPluginsOnBuffer(buffer, [makePlugin(replacePlugin)]);
 
   expect(result.structuralMutationCount).toBe(1);
 });
 
-test("mutationCount tracks plugins that produce mutations", () => {
+test("mutationCount tracks plugins that produce mutations", async () => {
   const buffer = buildHelloWorldBuffer();
 
   // plugin1 replaces heading with paragraph — mutation applied
@@ -55,25 +55,25 @@ test("mutationCount tracks plugins that produce mutations", () => {
     },
   };
 
-  const result = runPluginsOnBuffer(buffer, [makePlugin(plugin1, "p1"), makePlugin(plugin2, "p2")]);
+  const result = await runPluginsOnBuffer(buffer, [makePlugin(plugin1, "p1"), makePlugin(plugin2, "p2")]);
 
   // Only plugin1 produces a mutation since the heading is gone by the time plugin2 runs
   expect(result.mutationCount).toBe(1);
   expect(result.structuralMutationCount).toBe(1);
 });
 
-test("same buffer reference returned when no structural mutations", () => {
+test("same buffer reference returned when no structural mutations", async () => {
   const buffer = buildHelloWorldBuffer();
 
   const noopPlugin = {};
 
-  const result = runPluginsOnBuffer(buffer, [makePlugin(noopPlugin)]);
+  const result = await runPluginsOnBuffer(buffer, [makePlugin(noopPlugin)]);
 
   expect(result.buffer).toBe(buffer);
   expect(result.structuralMutationCount).toBe(0);
 });
 
-test("DataMap entries are visible across plugin passes (plugin 1 sets, plugin 2 reads)", () => {
+test("DataMap entries are visible across plugin passes (plugin 1 sets, plugin 2 reads)", async () => {
   const buffer = buildHelloWorldBuffer();
   let seenIdInPlugin2: string | null = null;
 
@@ -89,7 +89,7 @@ test("DataMap entries are visible across plugin passes (plugin 1 sets, plugin 2 
     },
   };
 
-  const result = runPluginsOnBuffer(buffer, [makePlugin(plugin1, "p1"), makePlugin(plugin2, "p2")]);
+  const result = await runPluginsOnBuffer(buffer, [makePlugin(plugin1, "p1"), makePlugin(plugin2, "p2")]);
 
   expect(result.dataMap).toBeInstanceOf(DataMap);
   const nodeData = result.dataMap.get(1);
@@ -98,7 +98,7 @@ test("DataMap entries are visible across plugin passes (plugin 1 sets, plugin 2 
   expect(seenIdInPlugin2).toBe("my-heading");
 });
 
-test("filename option is available in plugin fileContext", () => {
+test("filename option is available in plugin fileContext", async () => {
   const buffer = buildHelloWorldBuffer();
   let capturedFilename: string | null = null;
 
@@ -108,14 +108,14 @@ test("filename option is available in plugin fileContext", () => {
     },
   };
 
-  runPluginsOnBuffer(buffer, [makePlugin(plugin)], { filename: "my-doc.md" });
+  await runPluginsOnBuffer(buffer, [makePlugin(plugin)], { filename: "my-doc.md" });
 
   expect(capturedFilename).toBe("my-doc.md");
 });
 
-test("empty plugin list returns original buffer and zero mutations", () => {
+test("empty plugin list returns original buffer and zero mutations", async () => {
   const buffer = buildHelloWorldBuffer();
-  const result = runPluginsOnBuffer(buffer, []);
+  const result = await runPluginsOnBuffer(buffer, []);
 
   expect(result.buffer).toBe(buffer);
   expect(result.mutationCount).toBe(0);
@@ -123,19 +123,19 @@ test("empty plugin list returns original buffer and zero mutations", () => {
   expect(result.diagnostics.length).toBe(0);
 });
 
-test("provided dataMap is used and returned in result", () => {
+test("provided dataMap is used and returned in result", async () => {
   const buffer = buildHelloWorldBuffer();
   const customDataMap = new DataMap();
   customDataMap.set(99, { "pre-existing": "yes" });
 
-  const result = runPluginsOnBuffer(buffer, [], { dataMap: customDataMap });
+  const result = await runPluginsOnBuffer(buffer, [], { dataMap: customDataMap });
 
   expect(result.dataMap).toBe(customDataMap);
   const nodeData = result.dataMap.get(99);
   expect(nodeData?.["pre-existing"]).toBe("yes");
 });
 
-test("diagnostics are collected from all plugins", () => {
+test("diagnostics are collected from all plugins", async () => {
   const buffer = buildHelloWorldBuffer();
 
   const plugin1 = {
@@ -149,7 +149,7 @@ test("diagnostics are collected from all plugins", () => {
     },
   };
 
-  const result = runPluginsOnBuffer(buffer, [makePlugin(plugin1, "p1"), makePlugin(plugin2, "p2")]);
+  const result = await runPluginsOnBuffer(buffer, [makePlugin(plugin1, "p1"), makePlugin(plugin2, "p2")]);
 
   expect(result.diagnostics.length).toBe(2);
   expect(result.diagnostics.some((d) => d.message === "warning from plugin 1")).toBe(true);

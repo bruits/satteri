@@ -59,6 +59,7 @@ export { compileMarkdownToHtml, compileMdxToJs } from "./compile.js";
 export type { CompileOptions, OptimizeStaticConfig } from "./compile.js";
 
 export type {
+  MaybePromise,
   MdastNode,
   Position,
   Point,

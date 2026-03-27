@@ -14,32 +14,32 @@ import type { MdastNode } from "../src/types.js";
 // ---------------------------------------------------------------------------
 
 describe("compileMarkdownToHtml", () => {
-  test("basic markdown to HTML", () => {
-    const html = compileMarkdownToHtml("# Hello\n\nWorld");
+  test("basic markdown to HTML", async () => {
+    const html = await compileMarkdownToHtml("# Hello\n\nWorld");
     expect(html).toContain("<h1>");
     expect(html).toContain("Hello");
     expect(html).toContain("<p>");
     expect(html).toContain("World");
   });
 
-  test("empty string produces empty output", () => {
-    const html = compileMarkdownToHtml("");
+  test("empty string produces empty output", async () => {
+    const html = await compileMarkdownToHtml("");
     expect(html).toBe("");
   });
 
-  test("inline formatting", () => {
-    const html = compileMarkdownToHtml("**bold** and *italic*");
+  test("inline formatting", async () => {
+    const html = await compileMarkdownToHtml("**bold** and *italic*");
     expect(html).toContain("<strong>bold</strong>");
     expect(html).toContain("<em>italic</em>");
   });
 
-  test("link renders as anchor", () => {
-    const html = compileMarkdownToHtml("[click](https://example.com)");
+  test("link renders as anchor", async () => {
+    const html = await compileMarkdownToHtml("[click](https://example.com)");
     expect(html).toContain('<a href="https://example.com">click</a>');
   });
 
-  test("code block with language", () => {
-    const html = compileMarkdownToHtml("```js\nconsole.log(1)\n```");
+  test("code block with language", async () => {
+    const html = await compileMarkdownToHtml("```js\nconsole.log(1)\n```");
     expect(html).toContain('<code class="language-js">');
     expect(html).toContain("console.log(1)");
   });
@@ -48,7 +48,7 @@ describe("compileMarkdownToHtml", () => {
   // with MDAST plugins only
   // ---------------------------------------------------------------------------
 
-  test("MDAST plugin removes headings", () => {
+  test("MDAST plugin removes headings", async () => {
     const removeHeadings = defineMdastPlugin({
       name: "remove-headings",
       createOnce: () => ({
@@ -58,7 +58,7 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Title\n\nKeep this", {
+    const html = await compileMarkdownToHtml("# Title\n\nKeep this", {
       mdastPlugins: [removeHeadings],
     });
     expect(html).not.toContain("<h1>");
@@ -66,7 +66,7 @@ describe("compileMarkdownToHtml", () => {
     expect(html).toContain("Keep this");
   });
 
-  test("MDAST plugin replaces text with raw markdown", () => {
+  test("MDAST plugin replaces text with raw markdown", async () => {
     const uppercaseHeadings = defineMdastPlugin({
       name: "uppercase-headings",
       createOnce: () => ({
@@ -76,7 +76,7 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Original\n\npara", {
+    const html = await compileMarkdownToHtml("# Original\n\npara", {
       mdastPlugins: [uppercaseHeadings],
     });
     expect(html).toContain("REPLACED");
@@ -87,7 +87,7 @@ describe("compileMarkdownToHtml", () => {
   // with HAST plugins only
   // ---------------------------------------------------------------------------
 
-  test("HAST plugin adds class to all elements", () => {
+  test("HAST plugin adds class to all elements", async () => {
     const addClasses = defineHastPlugin({
       name: "add-classes",
       createOnce: () => ({
@@ -97,14 +97,14 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Hello\n\nWorld", {
+    const html = await compileMarkdownToHtml("# Hello\n\nWorld", {
       hastPlugins: [addClasses],
     });
     expect(html).toContain('<h1 class="styled">');
     expect(html).toContain('<p class="styled">');
   });
 
-  test("HAST plugin removes elements", () => {
+  test("HAST plugin removes elements", async () => {
     const removeHeadings = defineHastPlugin({
       name: "remove-h1",
       createOnce: () => ({
@@ -116,7 +116,7 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Gone\n\nStays", {
+    const html = await compileMarkdownToHtml("# Gone\n\nStays", {
       hastPlugins: [removeHeadings],
     });
     expect(html).not.toContain("<h1>");
@@ -124,7 +124,7 @@ describe("compileMarkdownToHtml", () => {
     expect(html).toContain("Stays");
   });
 
-  test("HAST plugin replaces element via return value", () => {
+  test("HAST plugin replaces element via return value", async () => {
     const replaceH1 = defineHastPlugin({
       name: "demote-h1",
       createOnce: () => ({
@@ -143,7 +143,7 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Title", {
+    const html = await compileMarkdownToHtml("# Title", {
       hastPlugins: [replaceH1],
     });
     expect(html).toContain("<h2");
@@ -152,7 +152,7 @@ describe("compileMarkdownToHtml", () => {
     expect(html).not.toContain("<h1");
   });
 
-  test("HAST plugin sets id on heading", () => {
+  test("HAST plugin sets id on heading", async () => {
     const addIds = defineHastPlugin({
       name: "add-ids",
       createOnce: () => ({
@@ -164,13 +164,13 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Hello", {
+    const html = await compileMarkdownToHtml("# Hello", {
       hastPlugins: [addIds],
     });
     expect(html).toContain('id="main-title"');
   });
 
-  test("HAST plugin wraps text in span via transformRoot", () => {
+  test("HAST plugin wraps text in span via transformRoot", async () => {
     const wrapTexts = defineHastPlugin({
       name: "wrap-texts",
       createOnce: () => ({
@@ -196,13 +196,13 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("Hello", {
+    const html = await compileMarkdownToHtml("Hello", {
       hastPlugins: [wrapTexts],
     });
     expect(html).toContain('<span class="text-wrap">Hello</span>');
   });
 
-  test("no mutations — fast Rust path still works", () => {
+  test("no mutations — fast Rust path still works", async () => {
     const noopPlugin = defineHastPlugin({
       name: "noop",
       createOnce: () => ({
@@ -212,7 +212,7 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Test\n\nParagraph", {
+    const html = await compileMarkdownToHtml("# Test\n\nParagraph", {
       hastPlugins: [noopPlugin],
     });
     expect(html).toContain("<h1>");
@@ -224,7 +224,7 @@ describe("compileMarkdownToHtml", () => {
   // with both MDAST and HAST plugins
   // ---------------------------------------------------------------------------
 
-  test("MDAST plugin removes headings, HAST plugin adds class", () => {
+  test("MDAST plugin removes headings, HAST plugin adds class", async () => {
     const removeHeadings = defineMdastPlugin({
       name: "remove-headings",
       createOnce: () => ({
@@ -243,7 +243,7 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Gone\n\nKeep", {
+    const html = await compileMarkdownToHtml("# Gone\n\nKeep", {
       mdastPlugins: [removeHeadings],
       hastPlugins: [addClasses],
     });
@@ -252,7 +252,7 @@ describe("compileMarkdownToHtml", () => {
     expect(html).toContain("Keep");
   });
 
-  test("multiple HAST plugins compose", () => {
+  test("multiple HAST plugins compose", async () => {
     const addIds = defineHastPlugin({
       name: "add-ids",
       createOnce: () => ({
@@ -273,7 +273,7 @@ describe("compileMarkdownToHtml", () => {
       }),
     });
 
-    const html = compileMarkdownToHtml("# Hello", {
+    const html = await compileMarkdownToHtml("# Hello", {
       hastPlugins: [addIds, addClasses],
     });
     expect(html).toContain('id="title"');
@@ -286,18 +286,18 @@ describe("compileMarkdownToHtml", () => {
 // ---------------------------------------------------------------------------
 
 describe("compileMdxToJs", () => {
-  test("basic MDX compilation", () => {
-    const js = compileMdxToJs("# Hello\n\nWorld");
+  test("basic MDX compilation", async () => {
+    const js = await compileMdxToJs("# Hello\n\nWorld");
     expect(js).toContain("function");
     expect(js).toContain("Hello");
   });
 
-  test("MDX with JSX element", () => {
-    const js = compileMdxToJs("<MyComponent />", {});
+  test("MDX with JSX element", async () => {
+    const js = await compileMdxToJs("<MyComponent />", {});
     expect(js).toContain("MyComponent");
   });
 
-  test("MDAST plugin affects MDX output", () => {
+  test("MDAST plugin affects MDX output", async () => {
     const removeHeadings = defineMdastPlugin({
       name: "remove-headings",
       createOnce: () => ({
@@ -307,14 +307,14 @@ describe("compileMdxToJs", () => {
       }),
     });
 
-    const js = compileMdxToJs("# Gone\n\nKept", {
+    const js = await compileMdxToJs("# Gone\n\nKept", {
       mdastPlugins: [removeHeadings],
     });
     expect(js).not.toContain("Gone");
     expect(js).toContain("Kept");
   });
 
-  test("MDAST plugin can read JSX attributes", () => {
+  test("MDAST plugin can read JSX attributes", async () => {
     const collected: unknown[] = [];
     const readAttrs = defineMdastPlugin({
       name: "read-attrs",
@@ -328,7 +328,7 @@ describe("compileMdxToJs", () => {
       }),
     });
 
-    compileMdxToJs('<Component foo="bar" disabled count={42} />', {
+    await compileMdxToJs('<Component foo="bar" disabled count={42} />', {
       mdastPlugins: [readAttrs],
     });
 
@@ -353,7 +353,7 @@ describe("compileMdxToJs", () => {
     });
   });
 
-  test("MDAST plugin can replace JSX element with modified attributes", () => {
+  test("MDAST plugin can replace JSX element with modified attributes", async () => {
     const addAttr = defineMdastPlugin({
       name: "add-attr",
       createOnce: () => ({
@@ -372,7 +372,7 @@ describe("compileMdxToJs", () => {
       }),
     });
 
-    const js = compileMdxToJs("<Component />\n", {
+    const js = await compileMdxToJs("<Component />\n", {
       mdastPlugins: [addAttr],
     });
     // The compiled output should reference the "added" attribute
@@ -380,7 +380,7 @@ describe("compileMdxToJs", () => {
     expect(js).toContain("yes");
   });
 
-  test("MDAST plugin can replace JSX element removing all attributes", () => {
+  test("MDAST plugin can replace JSX element removing all attributes", async () => {
     const stripAttrs = defineMdastPlugin({
       name: "strip-attrs",
       createOnce: () => ({
@@ -397,7 +397,7 @@ describe("compileMdxToJs", () => {
       }),
     });
 
-    const js = compileMdxToJs('<Component foo="bar" />\n', {
+    const js = await compileMdxToJs('<Component foo="bar" />\n', {
       mdastPlugins: [stripAttrs],
     });
     expect(js).toContain("Component");
@@ -405,7 +405,7 @@ describe("compileMdxToJs", () => {
     expect(js).not.toContain("bar");
   });
 
-  test("HAST plugin setProperty on MDX JSX element preserves existing attributes", () => {
+  test("HAST plugin setProperty on MDX JSX element preserves existing attributes", async () => {
     const injectMeta = defineHastPlugin({
       name: "inject-meta",
       createOnce: () => ({
@@ -417,7 +417,7 @@ describe("compileMdxToJs", () => {
       }),
     });
 
-    const js = compileMdxToJs(
+    const js = await compileMdxToJs(
       'import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>',
       { hastPlugins: [injectMeta] },
     );
@@ -431,7 +431,7 @@ describe("compileMdxToJs", () => {
     expect(js).toContain('"client:component-hydration": ""');
   });
 
-  test("HAST plugin setProperty on MDX JSX element — no-op plugin preserves all attributes", () => {
+  test("HAST plugin setProperty on MDX JSX element — no-op plugin preserves all attributes", async () => {
     const noop = defineHastPlugin({
       name: "noop",
       createOnce: () => ({
@@ -441,18 +441,18 @@ describe("compileMdxToJs", () => {
       }),
     });
 
-    const withPlugin = compileMdxToJs(
+    const withPlugin = await compileMdxToJs(
       'import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>',
       { hastPlugins: [noop] },
     );
-    const without = compileMdxToJs(
+    const without = await compileMdxToJs(
       'import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>',
     );
 
     expect(withPlugin).toBe(without);
   });
 
-  test("HAST plugin setProperty overwrites existing MDX JSX attribute", () => {
+  test("HAST plugin setProperty overwrites existing MDX JSX attribute", async () => {
     const overwrite = defineHastPlugin({
       name: "overwrite-attr",
       createOnce: () => ({
@@ -462,7 +462,7 @@ describe("compileMdxToJs", () => {
       }),
     });
 
-    const js = compileMdxToJs(
+    const js = await compileMdxToJs(
       'import B from "./B.jsx"\n\n<B foo="bar">hi</B>',
       { hastPlugins: [overwrite] },
     );
@@ -475,8 +475,8 @@ describe("compileMdxToJs", () => {
   // optimizeStatic
   // ---------------------------------------------------------------------------
 
-  test("optimizeStatic collapses static subtrees (Astro-style)", () => {
-    const js = compileMdxToJs("# Hello\n\nWorld", {
+  test("optimizeStatic collapses static subtrees (Astro-style)", async () => {
+    const js = await compileMdxToJs("# Hello\n\nWorld", {
       optimizeStatic: {
         component: "Fragment",
         prop: "set:html",
@@ -489,8 +489,8 @@ describe("compileMdxToJs", () => {
     expect(js).not.toMatch(/"h1"/);
   });
 
-  test("optimizeStatic React-style with wrapPropValue", () => {
-    const js = compileMdxToJs("# Hello", {
+  test("optimizeStatic React-style with wrapPropValue", async () => {
+    const js = await compileMdxToJs("# Hello", {
       optimizeStatic: {
         component: "div",
         prop: "dangerouslySetInnerHTML",
@@ -501,8 +501,8 @@ describe("compileMdxToJs", () => {
     expect(js).toContain("__html");
   });
 
-  test("optimizeStatic preserves dynamic MDX components", () => {
-    const js = compileMdxToJs("# Static\n\n<Dynamic />\n\nAlso static", {
+  test("optimizeStatic preserves dynamic MDX components", async () => {
+    const js = await compileMdxToJs("# Static\n\n<Dynamic />\n\nAlso static", {
       optimizeStatic: {
         component: "Fragment",
         prop: "set:html",
@@ -512,9 +512,27 @@ describe("compileMdxToJs", () => {
     expect(js).toContain("Dynamic");
   });
 
-  test("optimizeStatic off by default", () => {
-    const js = compileMdxToJs("# Hello\n\nWorld");
+  test("optimizeStatic off by default", async () => {
+    const js = await compileMdxToJs("# Hello\n\nWorld");
     expect(js).not.toContain("set:html");
     expect(js).toContain('"h1"');
+  });
+
+  test("async HAST plugin works", async () => {
+    const asyncPlugin = defineHastPlugin({
+      name: "async-class-adder",
+      createOnce: () => ({
+        async element(node: HastNode, ctx: HastVisitorContext) {
+          // Simulate async work
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          ctx.setProperty(node, "class", "async-added");
+        },
+      }),
+    });
+
+    const html = await compileMarkdownToHtml("# Hello", {
+      hastPlugins: [asyncPlugin],
+    });
+    expect(html).toContain('class="async-added"');
   });
 });

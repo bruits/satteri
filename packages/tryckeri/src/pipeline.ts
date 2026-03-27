@@ -39,11 +39,11 @@ export interface RunResult {
 /**
  * Process one arena buffer through an ordered list of initialized plugin instances.
  */
-export function runPluginsOnBuffer(
+export async function runPluginsOnBuffer(
   buffer: ArrayBuffer | Uint8Array,
   pluginInstances: { instance: ReturnType<MdastPluginDefinition["createOnce"]>; name: string }[],
   { filename = "<unknown>", dataMap }: { filename?: string; dataMap?: DataMap } = {},
-): RunResult {
+): Promise<RunResult> {
   const dm = dataMap ?? new DataMap();
   const allDiagnostics: Diagnostic[] = [];
   let totalMutations = 0;
@@ -62,13 +62,12 @@ export function runPluginsOnBuffer(
     };
 
     const wrappedPlugin = wrapInstance(instance, fileContext);
-    const result = visitMdast(reader, wrappedPlugin, dm);
+    const result = await visitMdast(reader, wrappedPlugin, dm);
     allDiagnostics.push(...result.diagnostics);
 
     if (result.hasMutations) {
       totalMutations += 1;
       structuralMutations += 1;
-
 
       // Send the binary command buffer to Rust for application
       const arenaBuf =
@@ -106,15 +105,15 @@ function wrapInstance(
   const inst = instance as Record<string, unknown>;
   if (typeof inst.before === "function") {
     wrapped.before = (visitorContext: unknown) =>
-      (inst.before as (fc: FileContext, vc: unknown) => void)(fileContext, visitorContext);
+      (inst.before as (fc: FileContext, vc: unknown) => unknown)(fileContext, visitorContext);
   }
   if (typeof inst.after === "function") {
     wrapped.after = (visitorContext: unknown) =>
-      (inst.after as (fc: FileContext, vc: unknown) => void)(fileContext, visitorContext);
+      (inst.after as (fc: FileContext, vc: unknown) => unknown)(fileContext, visitorContext);
   }
   if (typeof inst.transformRoot === "function") {
     wrapped.transformRoot = (root: MdastNode, visitorContext: unknown) =>
-      (inst.transformRoot as (r: MdastNode, fc: FileContext, vc: unknown) => MdastNode | undefined)(
+      (inst.transformRoot as (r: MdastNode, fc: FileContext, vc: unknown) => unknown)(
         root,
         fileContext,
         visitorContext,

@@ -28,12 +28,12 @@ function markdownToHtml(source: string): string {
 }
 
 /** Pipeline with MDAST plugins applied before HAST conversion */
-function markdownToHtmlWithMdastPlugins(
+async function markdownToHtmlWithMdastPlugins(
   source: string,
   plugins: { instance: Record<string, unknown>; name: string }[],
-): string {
+): Promise<string> {
   const mdastBuf = parseToBuffer(source);
-  const result = runPluginsOnBuffer(mdastBuf, plugins);
+  const result = await runPluginsOnBuffer(mdastBuf, plugins);
   const hastBuf = mdastBufferToHastBuffer(
     result.buffer instanceof Uint8Array ? result.buffer : new Uint8Array(result.buffer),
   );
@@ -53,13 +53,13 @@ describe("MDAST plugins affecting HTML output", () => {
     expect(html).toContain("World");
   });
 
-  test("MDAST plugin that removes headings — heading disappears from HTML", () => {
+  test("MDAST plugin that removes headings — heading disappears from HTML", async () => {
     const removeHeadings = {
       heading(_node: MdastNode, ctx: { removeNode(n: MdastNode): void }) {
         ctx.removeNode(_node);
       },
     };
-    const html = markdownToHtmlWithMdastPlugins("# Title\n\nKeep this paragraph", [
+    const html = await markdownToHtmlWithMdastPlugins("# Title\n\nKeep this paragraph", [
       { instance: removeHeadings, name: "remove-headings" },
     ]);
     expect(html).not.toContain("<h1>");
@@ -68,13 +68,13 @@ describe("MDAST plugins affecting HTML output", () => {
     expect(html).toContain("Keep this paragraph");
   });
 
-  test("MDAST plugin that replaces heading with paragraph — h1 becomes p in HTML", () => {
+  test("MDAST plugin that replaces heading with paragraph — h1 becomes p in HTML", async () => {
     const replaceHeading = {
       heading(node: MdastNode) {
         return { type: "paragraph", children: node.children } as unknown as MdastNode;
       },
     };
-    const html = markdownToHtmlWithMdastPlugins("# Hello\n\nWorld", [
+    const html = await markdownToHtmlWithMdastPlugins("# Hello\n\nWorld", [
       { instance: replaceHeading, name: "heading-to-paragraph" },
     ]);
     expect(html).not.toContain("<h1>");
@@ -83,7 +83,7 @@ describe("MDAST plugins affecting HTML output", () => {
     expect(html).toContain("Hello");
   });
 
-  test("MDAST plugin chain: plugin 1 sets data, plugin 2 reads it (data persists)", () => {
+  test("MDAST plugin chain: plugin 1 sets data, plugin 2 reads it (data persists)", async () => {
     let seenIdInPlugin2: string | null = null;
     const setId = {
       heading(node: MdastNode) {
@@ -95,20 +95,20 @@ describe("MDAST plugins affecting HTML output", () => {
         seenIdInPlugin2 = (node.data as { id?: string } | null)?.id ?? null;
       },
     };
-    markdownToHtmlWithMdastPlugins("# Test\n\nBody", [
+    await markdownToHtmlWithMdastPlugins("# Test\n\nBody", [
       { instance: setId, name: "set-id" },
       { instance: readId, name: "read-id" },
     ]);
     expect(seenIdInPlugin2).toBe("custom-id");
   });
 
-  test("MDAST plugin removing a link — anchor disappears from HTML", () => {
+  test("MDAST plugin removing a link — anchor disappears from HTML", async () => {
     const removeLinks = {
       link(_node: MdastNode, ctx: { removeNode(n: MdastNode): void }) {
         ctx.removeNode(_node);
       },
     };
-    const html = markdownToHtmlWithMdastPlugins("Visit [example](https://example.com) today", [
+    const html = await markdownToHtmlWithMdastPlugins("Visit [example](https://example.com) today", [
       { instance: removeLinks, name: "remove-links" },
     ]);
     expect(html).not.toContain("<a");
@@ -130,12 +130,12 @@ describe("HAST plugins affecting HTML output", () => {
     expect(html).toContain("italic");
   });
 
-  test("HAST visitor sees all element nodes", () => {
+  test("HAST visitor sees all element nodes", async () => {
     const uint8 = parseToHastBuffer("# Title\n\n- one\n- two\n\n> quote");
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
     const tags: string[] = [];
-    visitHast(
+    await visitHast(
       reader,
       {
         element(node: HastNode) {
@@ -150,12 +150,12 @@ describe("HAST plugins affecting HTML output", () => {
     expect(tags).toContain("blockquote");
   });
 
-  test("HAST visitor can inspect link properties (href)", () => {
+  test("HAST visitor can inspect link properties (href)", async () => {
     const uint8 = parseToHastBuffer("[click](https://example.com)");
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
     const hrefs: string[] = [];
-    visitHast(
+    await visitHast(
       reader,
       {
         element(node: HastNode) {
@@ -169,12 +169,12 @@ describe("HAST plugins affecting HTML output", () => {
     expect(hrefs).toContain("https://example.com");
   });
 
-  test("HAST visitor can identify images and their attributes", () => {
+  test("HAST visitor can identify images and their attributes", async () => {
     const uint8 = parseToHastBuffer('![alt text](image.png "my title")');
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
     let imgNode: HastNode | null = null;
-    visitHast(
+    await visitHast(
       reader,
       {
         element(node: HastNode) {
@@ -191,12 +191,12 @@ describe("HAST plugins affecting HTML output", () => {
     expect(imgNode!.properties!.title).toBe("my title");
   });
 
-  test("HAST visitor text() sees all text content", () => {
+  test("HAST visitor text() sees all text content", async () => {
     const uint8 = parseToHastBuffer("Hello **world**");
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
     const texts: string[] = [];
-    visitHast(
+    await visitHast(
       reader,
       {
         text(node: HastNode) {
@@ -209,11 +209,11 @@ describe("HAST plugins affecting HTML output", () => {
     expect(texts).toContain("world");
   });
 
-  test("HAST visitor: setProperty mutation is recorded for elements", () => {
+  test("HAST visitor: setProperty mutation is recorded for elements", async () => {
     const uint8 = parseToHastBuffer("# Hello");
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
-    const result = visitHast(
+    const result = await visitHast(
       reader,
       {
         element(node: HastNode, ctx: HastVisitorContext) {
@@ -231,11 +231,11 @@ describe("HAST plugins affecting HTML output", () => {
     expect(html).toContain('id="my-title"');
   });
 
-  test("HAST visitor: remove mutation removes element from result", () => {
+  test("HAST visitor: remove mutation removes element from result", async () => {
     const uint8 = parseToHastBuffer("# Keep\n\nRemove this");
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
-    const result = visitHast(
+    const result = await visitHast(
       reader,
       {
         element(node: HastNode, ctx: HastVisitorContext) {
@@ -253,11 +253,11 @@ describe("HAST plugins affecting HTML output", () => {
     expect(html).toContain("Keep");
   });
 
-  test("HAST visitor: replace mutation swaps an element", () => {
+  test("HAST visitor: replace mutation swaps an element", async () => {
     const uint8 = parseToHastBuffer("# Hello");
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
-    const result = visitHast(
+    const result = await visitHast(
       reader,
       {
         element(node: HastNode) {
@@ -282,13 +282,13 @@ describe("HAST plugins affecting HTML output", () => {
     expect(html).not.toContain("<h1>");
   });
 
-  test("HAST visitor: transformRoot receives complete tree with deep structure", () => {
+  test("HAST visitor: transformRoot receives complete tree with deep structure", async () => {
     const source = "# Title\n\n- item 1\n- item 2\n\n```js\ncode\n```";
     const uint8 = parseToHastBuffer(source);
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
     let rootChildren = 0;
-    visitHast(
+    await visitHast(
       reader,
       {
         transformRoot(root: HastNode) {
@@ -301,11 +301,11 @@ describe("HAST plugins affecting HTML output", () => {
     expect(rootChildren).toBeGreaterThanOrEqual(3);
   });
 
-  test("HAST visitor: diagnostics from HAST plugins are collected", () => {
+  test("HAST visitor: diagnostics from HAST plugins are collected", async () => {
     const uint8 = parseToHastBuffer("# Hello");
     const reader = new HastReader(uint8);
     const dataMap = new DataMap();
-    const result = visitHast(
+    const result = await visitHast(
       reader,
       {
         element(node: HastNode, ctx: HastVisitorContext) {
@@ -401,7 +401,7 @@ describe("NAPI HAST pipeline functions", () => {
 // =========================================================================
 
 describe("combined MDAST + HAST plugin scenarios", () => {
-  test("MDAST plugin removes heading, HAST tree reflects the removal", () => {
+  test("MDAST plugin removes heading, HAST tree reflects the removal", async () => {
     const removeHeadings = {
       heading(_node: MdastNode, ctx: { removeNode(n: MdastNode): void }) {
         ctx.removeNode(_node);
@@ -409,7 +409,7 @@ describe("combined MDAST + HAST plugin scenarios", () => {
     };
     // Run MDAST plugins
     const mdastBuf = parseToBuffer("# Gone\n\nStays");
-    const result = runPluginsOnBuffer(mdastBuf, [
+    const result = await runPluginsOnBuffer(mdastBuf, [
       { instance: removeHeadings, name: "remove-headings" },
     ]);
     // Convert to HAST and inspect
@@ -427,14 +427,14 @@ describe("combined MDAST + HAST plugin scenarios", () => {
     expect(hasP).toBe(true);
   });
 
-  test("MDAST plugin replaces heading → HAST sees paragraph instead of h1", () => {
+  test("MDAST plugin replaces heading → HAST sees paragraph instead of h1", async () => {
     const replaceHeading = {
       heading(node: MdastNode) {
         return { type: "paragraph", children: node.children } as unknown as MdastNode;
       },
     };
     const mdastBuf = parseToBuffer("# Was Heading\n\nParagraph");
-    const result = runPluginsOnBuffer(mdastBuf, [
+    const result = await runPluginsOnBuffer(mdastBuf, [
       { instance: replaceHeading, name: "heading-to-paragraph" },
     ]);
     const hastBuf = mdastBufferToHastBuffer(
@@ -446,7 +446,7 @@ describe("combined MDAST + HAST plugin scenarios", () => {
     expect(html).toContain("Was Heading");
   });
 
-  test("HAST visitor can inspect the result of MDAST plugin transforms", () => {
+  test("HAST visitor can inspect the result of MDAST plugin transforms", async () => {
     // MDAST plugin removes all links
     const removeLinks = {
       link(_node: MdastNode, ctx: { removeNode(n: MdastNode): void }) {
@@ -454,7 +454,7 @@ describe("combined MDAST + HAST plugin scenarios", () => {
       },
     };
     const mdastBuf = parseToBuffer("See [link](https://example.com) here");
-    const result = runPluginsOnBuffer(mdastBuf, [
+    const result = await runPluginsOnBuffer(mdastBuf, [
       { instance: removeLinks, name: "remove-links" },
     ]);
     const hastBuf = mdastBufferToHastBuffer(
@@ -464,7 +464,7 @@ describe("combined MDAST + HAST plugin scenarios", () => {
     const dataMap = new DataMap();
     // HAST visitor should not find any <a> elements
     const tags: string[] = [];
-    visitHast(
+    await visitHast(
       reader,
       {
         element(node: HastNode) {

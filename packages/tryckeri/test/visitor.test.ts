@@ -12,18 +12,18 @@ function setup() {
   return { reader, dataMap };
 }
 
-test("visitor with no subscriptions produces no mutations, no diagnostics", () => {
+test("visitor with no subscriptions produces no mutations, no diagnostics", async () => {
   const { reader, dataMap } = setup();
-  const result = visitMdast(reader, {}, dataMap);
+  const result = await visitMdast(reader, {}, dataMap);
   expect(result.commandBuffer.length).toBe(0);
   expect(result.diagnostics.length).toBe(0);
   expect(result.hasMutations).toBe(false);
 });
 
-test("visiting heading nodes — callback fires once for the test doc", () => {
+test("visiting heading nodes — callback fires once for the test doc", async () => {
   const { reader, dataMap } = setup();
   let callCount = 0;
-  visitMdast(
+  await visitMdast(
     reader,
     {
       heading(_node: MdastNode) {
@@ -35,10 +35,10 @@ test("visiting heading nodes — callback fires once for the test doc", () => {
   expect(callCount).toBe(1);
 });
 
-test('visitor callback receives correct MDAST node (type="heading", depth=1)', () => {
+test('visitor callback receives correct MDAST node (type="heading", depth=1)', async () => {
   const { reader, dataMap } = setup();
   let capturedNode: MdastNode | null = null;
-  visitMdast(
+  await visitMdast(
     reader,
     {
       heading(node: MdastNode) {
@@ -52,10 +52,10 @@ test('visitor callback receives correct MDAST node (type="heading", depth=1)', (
   expect(capturedNode!.depth).toBe(1);
 });
 
-test("return value from visitor creates a Replace command in the buffer", () => {
+test("return value from visitor creates a Replace command in the buffer", async () => {
   const { reader, dataMap } = setup();
   const newNode = { type: "paragraph", children: [] } as unknown as MdastNode;
-  const result = visitMdast(
+  const result = await visitMdast(
     reader,
     {
       heading(_node: MdastNode) {
@@ -70,9 +70,9 @@ test("return value from visitor creates a Replace command in the buffer", () => 
   expect(result.hasMutations).toBe(true);
 });
 
-test("context.removeNode creates a Remove command in the buffer", () => {
+test("context.removeNode creates a Remove command in the buffer", async () => {
   const { reader, dataMap } = setup();
-  const result = visitMdast(
+  const result = await visitMdast(
     reader,
     {
       heading(node: MdastNode, context: VisitorContext) {
@@ -90,9 +90,9 @@ test("context.removeNode creates a Remove command in the buffer", () => {
   expect(result.hasMutations).toBe(true);
 });
 
-test("context.report creates a diagnostic entry", () => {
+test("context.report creates a diagnostic entry", async () => {
   const { reader, dataMap } = setup();
-  const result = visitMdast(
+  const result = await visitMdast(
     reader,
     {
       heading(node: MdastNode, context: VisitorContext) {
@@ -107,10 +107,10 @@ test("context.report creates a diagnostic entry", () => {
   expect(result.diagnostics[0]!.nodeId).toBe(1);
 });
 
-test("plugin.before is called before traversal", () => {
+test("plugin.before is called before traversal", async () => {
   const { reader, dataMap } = setup();
   const order: string[] = [];
-  visitMdast(
+  await visitMdast(
     reader,
     {
       before(_context) {
@@ -126,10 +126,10 @@ test("plugin.before is called before traversal", () => {
   expect(order[1]!).toBe("heading");
 });
 
-test("plugin.after is called after traversal", () => {
+test("plugin.after is called after traversal", async () => {
   const { reader, dataMap } = setup();
   const order: string[] = [];
-  visitMdast(
+  await visitMdast(
     reader,
     {
       heading(_node: MdastNode) {
@@ -145,10 +145,10 @@ test("plugin.after is called after traversal", () => {
   expect(order[1]!).toBe("after");
 });
 
-test("transformRoot gets the full materialized root", () => {
+test("transformRoot gets the full materialized root", async () => {
   const { reader, dataMap } = setup();
   let capturedRoot: MdastNode | null = null;
-  visitMdast(
+  await visitMdast(
     reader,
     {
       transformRoot(root, _context) {
@@ -163,10 +163,10 @@ test("transformRoot gets the full materialized root", () => {
   expect(capturedRoot!._nodeId).toBe(0);
 });
 
-test("multiple subscribed types — all fire", () => {
+test("multiple subscribed types — all fire", async () => {
   const { reader, dataMap } = setup();
   const fired: string[] = [];
-  visitMdast(
+  await visitMdast(
     reader,
     {
       heading(_node: MdastNode) {
@@ -186,7 +186,7 @@ test("multiple subscribed types — all fire", () => {
   expect(fired.filter((x) => x === "text").length).toBe(2);
 });
 
-test("non-subscribed types are not materialized via getNode", () => {
+test("non-subscribed types are not materialized via getNode", async () => {
   const { reader, dataMap } = setup();
   let getNodeCalls = 0;
   const proxyReader = new Proxy(reader, {
@@ -201,14 +201,14 @@ test("non-subscribed types are not materialized via getNode", () => {
       return typeof val === "function" ? val.bind(target) : val;
     },
   });
-  visitMdast(proxyReader as MdastReader, { heading(_node: MdastNode) {} }, dataMap);
+  await visitMdast(proxyReader as MdastReader, { heading(_node: MdastNode) {} }, dataMap);
   expect(getNodeCalls).toBe(1);
 });
 
-test("context.source returns the source text", () => {
+test("context.source returns the source text", async () => {
   const { reader, dataMap } = setup();
   let capturedSource: string | null = null;
-  visitMdast(
+  await visitMdast(
     reader,
     {
       before(context) {
@@ -220,13 +220,13 @@ test("context.source returns the source text", () => {
   expect(capturedSource).toBe("# Hello\n\nWorld");
 });
 
-test("hasMutations is false when no mutations, true when there are mutations", () => {
+test("hasMutations is false when no mutations, true when there are mutations", async () => {
   const { reader, dataMap } = setup();
 
-  const noMutResult = visitMdast(reader, { heading(_node: MdastNode) {} }, dataMap);
+  const noMutResult = await visitMdast(reader, { heading(_node: MdastNode) {} }, dataMap);
   expect(noMutResult.hasMutations).toBe(false);
 
-  const mutResult = visitMdast(
+  const mutResult = await visitMdast(
     reader,
     {
       heading(node: MdastNode, context: VisitorContext) {

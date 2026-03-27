@@ -1,5 +1,8 @@
 /**
  * Top-level compile functions — the primary public API.
+ *
+ * When no plugins are provided, these functions use the fast pure-Rust path
+ * (single NAPI call, zero JS overhead). Plugins trigger the full JS pipeline.
  */
 
 import { DataMap } from "./data-map.js";
@@ -9,9 +12,11 @@ import { runPluginsOnBuffer, ProcessorContext } from "./pipeline.js";
 import type { MdastPluginDefinition, HastPluginDefinition } from "./plugin.js";
 import {
   parseToBuffer,
+  parseToHtml,
   parseMdxToBuffer,
   mdastBufferToHastBuffer,
   hastBufferToHtmlStr,
+  compileMdx,
   compileHastBufferToJs,
   applyMutations,
 } from "../index.js";
@@ -34,10 +39,10 @@ function initPlugins<T>(
 // HAST plugin runner
 // ---------------------------------------------------------------------------
 
-function runHastPlugins(
+async function runHastPlugins(
   hastBuf: Uint8Array,
   plugins: HastPluginDefinition[],
-): Uint8Array {
+): Promise<Uint8Array> {
   if (plugins.length === 0) return hastBuf;
 
   const instances = initPlugins(plugins);
@@ -46,7 +51,7 @@ function runHastPlugins(
   for (const { instance } of instances) {
     const reader = new HastReader(currentBuffer);
     const dataMap = new DataMap();
-    const result = visitHast(reader, instance, dataMap);
+    const result = await visitHast(reader, instance, dataMap);
 
     if (result.hasMutations) {
       currentBuffer = applyMutations(currentBuffer, result.commandBuffer);
@@ -82,17 +87,22 @@ export interface CompileOptions {
   optimizeStatic?: OptimizeStaticConfig;
 }
 
-export function compileMarkdownToHtml(
+export async function compileMarkdownToHtml(
   source: string,
   options: CompileOptions = {},
-): string {
+): Promise<string> {
   const { mdastPlugins = [], hastPlugins = [] } = options;
+
+  // Fast path: no plugins → single NAPI call, zero JS overhead
+  if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
+    return parseToHtml(source);
+  }
 
   let mdastBuf: Uint8Array = parseToBuffer(source);
 
   if (mdastPlugins.length > 0) {
     const instances = initPlugins(mdastPlugins);
-    const result = runPluginsOnBuffer(mdastBuf, instances);
+    const result = await runPluginsOnBuffer(mdastBuf, instances);
     mdastBuf =
       result.buffer instanceof Uint8Array
         ? result.buffer
@@ -100,22 +110,30 @@ export function compileMarkdownToHtml(
   }
 
   let hastBuf = mdastBufferToHastBuffer(mdastBuf);
-  hastBuf = runHastPlugins(hastBuf, hastPlugins);
+  hastBuf = await runHastPlugins(hastBuf, hastPlugins);
 
   return hastBufferToHtmlStr(hastBuf);
 }
 
-export function compileMdxToJs(
+export async function compileMdxToJs(
   source: string,
   options: CompileOptions = {},
-): string {
+): Promise<string> {
   const { mdastPlugins = [], hastPlugins = [], optimizeStatic } = options;
+
+  // Fast path: no plugins → single NAPI call, zero JS overhead
+  if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
+    const mdxOptions = optimizeStatic
+      ? { optimizeStatic }
+      : undefined;
+    return compileMdx(source, mdxOptions);
+  }
 
   let mdastBuf: Uint8Array = parseMdxToBuffer(source);
 
   if (mdastPlugins.length > 0) {
     const instances = initPlugins(mdastPlugins);
-    const result = runPluginsOnBuffer(mdastBuf, instances);
+    const result = await runPluginsOnBuffer(mdastBuf, instances);
     mdastBuf =
       result.buffer instanceof Uint8Array
         ? result.buffer
@@ -123,7 +141,7 @@ export function compileMdxToJs(
   }
 
   let hastBuf = mdastBufferToHastBuffer(mdastBuf);
-  hastBuf = runHastPlugins(hastBuf, hastPlugins);
+  hastBuf = await runHastPlugins(hastBuf, hastPlugins);
 
   const mdxOptions = optimizeStatic
     ? { optimizeStatic }

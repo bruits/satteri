@@ -1,6 +1,6 @@
 import { materializeNode, TYPE_NAMES } from "./materializer.js";
 import { CommandBuffer, classifyReturn } from "./command-buffer.js";
-import type { MdastNode } from "./types.js";
+import type { MdastNode, MaybePromise } from "./types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import type { DataMap } from "./data-map.js";
 
@@ -149,9 +149,9 @@ export class VisitorContext {
 }
 
 export interface PluginInstance {
-  before?(context: VisitorContext): void;
-  after?(context: VisitorContext): void;
-  transformRoot?(root: MdastNode, context: VisitorContext): MdastNode | undefined | null;
+  before?(context: VisitorContext): MaybePromise<void>;
+  after?(context: VisitorContext): MaybePromise<void>;
+  transformRoot?(root: MdastNode, context: VisitorContext): MaybePromise<MdastNode | undefined | null>;
   [nodeTypeName: string]: unknown;
 }
 
@@ -169,14 +169,17 @@ export interface VisitResult {
  * visitor functions are classified (raw/rawHtml/structured) and encoded
  * as REPLACE commands in the buffer.
  */
-export function visitMdast(
+export async function visitMdast(
   reader: MdastReader,
   plugin: PluginInstance,
   dataMap: DataMap,
-): VisitResult {
+): Promise<VisitResult> {
   const context = new VisitorContext(reader, dataMap);
 
-  plugin.before?.(context);
+  {
+    const v = plugin.before?.(context);
+    if (v instanceof Promise) await v;
+  }
 
   // Separate CommandBuffer for return-value mutations (replace commands from
   // visitor return values). These are merged with the context's buffer at the end.
@@ -185,7 +188,8 @@ export function visitMdast(
   if (typeof plugin.transformRoot === "function") {
     // Full materialization path
     const root = materializeNode(reader, 0, dataMap);
-    const result = plugin.transformRoot(root, context);
+    let result = plugin.transformRoot(root, context);
+    if (result instanceof Promise) result = await result;
     if (result !== undefined && result !== null) {
       const cls = classifyReturn(result);
       switch (cls) {
@@ -232,7 +236,8 @@ export function visitMdast(
       const visitor = TYPE_TO_VISITOR.get(nodeType);
       if (visitor) {
         const node = materializeNode(reader, nodeId, dataMap);
-        const result = visitor.call(plugin, node, context);
+        let result = visitor.call(plugin, node, context);
+        if (result instanceof Promise) result = await result;
         if (result !== undefined && result !== null) {
           const cls = classifyReturn(result);
           switch (cls) {
@@ -257,7 +262,10 @@ export function visitMdast(
     }
   }
 
-  plugin.after?.(context);
+  {
+    const v = plugin.after?.(context);
+    if (v instanceof Promise) await v;
+  }
 
   // Merge: return-value commands first, then context commands
   const ctxBuf = context.getCommandBuffer().getBuffer();

@@ -1,3 +1,4 @@
+import type { MaybePromise } from "./types.js";
 import { materializeHastNode, type HastNode } from "./hast-materializer.js";
 import {
   HastReader,
@@ -10,6 +11,7 @@ import {
   HAST_MDX_JSX_TEXT_ELEMENT,
   HAST_MDX_EXPRESSION,
   HAST_MDX_ESM,
+  type HastProperty,
 } from "./hast-reader.js";
 import { CommandBuffer } from "./command-buffer.js";
 import type { DataMap } from "./data-map.js";
@@ -62,6 +64,13 @@ class HastVisitorContextImpl implements HastVisitorContext {
   setProperty(node: HastNode, key: string, value: unknown): void {
     // Use pending state if we've already modified this node in this visitor pass
     const current = this.#pendingNodes.get(node._nodeId) ?? node;
+    // Force lazy getters to materialize before spreading (class-based nodes
+    // have lazy getters on the prototype that spread doesn't trigger)
+    if (current.type === "element") {
+      void current.tagName;
+      void current.properties;
+      void current.children;
+    }
     const updated = { ...current };
     if (current.type === "mdxJsxElement" || current.type === "mdxJsxTextElement") {
       // MDX JSX nodes use `attributes`, not `properties`
@@ -110,18 +119,18 @@ class HastVisitorContextImpl implements HastVisitorContext {
 }
 
 export interface HastVisitorInstance {
-  before?(ctx: HastVisitorContext): void;
-  after?(ctx: HastVisitorContext): void;
-  transformRoot?(root: HastNode, ctx: HastVisitorContext): HastNode | void;
-  element?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  text?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  comment?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  raw?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  doctype?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  mdxJsxElement?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  mdxJsxTextElement?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  mdxExpression?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  mdxjsEsm?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  before?(ctx: HastVisitorContext): MaybePromise<void>;
+  after?(ctx: HastVisitorContext): MaybePromise<void>;
+  transformRoot?(root: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  element?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  text?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  comment?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  raw?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  doctype?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  mdxJsxElement?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  mdxJsxTextElement?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  mdxExpression?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  mdxjsEsm?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
 }
 
 export interface VisitResult {
@@ -129,6 +138,151 @@ export interface VisitResult {
   diagnostics: Diagnostic[];
   hasMutations: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Lightweight node materializer for the visitor hot path.
+//
+// Avoids per-node Object.defineProperty calls by using class prototypes
+// with lazy getters that cache on first access.
+// ---------------------------------------------------------------------------
+
+function propsToRecord(props: HastProperty[]): Record<string, string | boolean | string[]> {
+  const result: Record<string, string | boolean | string[]> = {};
+  for (const p of props) {
+    result[p.name] = p.value;
+  }
+  return result;
+}
+
+class LazyElementNode {
+  type = "element" as const;
+  _nodeId: number;
+  declare _reader: HastReader;
+  declare _dataMap: DataMap;
+  declare tagName: string;
+  declare properties: Record<string, string | boolean | string[]>;
+  declare children: HastNode[];
+  declare data: Record<string, unknown> | null;
+
+  constructor(nodeId: number, reader: HastReader, dataMap: DataMap) {
+    this._nodeId = nodeId;
+    // Store reader/dataMap as non-enumerable to avoid serialization
+    Object.defineProperty(this, "_reader", { value: reader, enumerable: false });
+    Object.defineProperty(this, "_dataMap", { value: dataMap, enumerable: false });
+  }
+}
+
+// Define lazy getters on prototype — one-time cost at module load
+Object.defineProperty(LazyElementNode.prototype, "tagName", {
+  get(this: LazyElementNode) {
+    const val = this._reader.getElementData(this._nodeId).tagName;
+    Object.defineProperty(this, "tagName", { value: val, writable: true, enumerable: true, configurable: true });
+    return val;
+  },
+  configurable: true,
+  enumerable: true,
+});
+
+Object.defineProperty(LazyElementNode.prototype, "properties", {
+  get(this: LazyElementNode) {
+    const val = propsToRecord(this._reader.getElementData(this._nodeId).properties);
+    Object.defineProperty(this, "properties", { value: val, writable: true, enumerable: true, configurable: true });
+    return val;
+  },
+  configurable: true,
+  enumerable: true,
+});
+
+Object.defineProperty(LazyElementNode.prototype, "children", {
+  get(this: LazyElementNode) {
+    const ids = this._reader.getChildIds(this._nodeId);
+    const val = ids.map((id) => materializeHastNode(this._reader, id, this._dataMap));
+    Object.defineProperty(this, "children", { value: val, writable: true, enumerable: true, configurable: true });
+    return val;
+  },
+  configurable: true,
+  enumerable: true,
+});
+
+Object.defineProperty(LazyElementNode.prototype, "data", {
+  get(this: LazyElementNode) {
+    return this._dataMap.get(this._nodeId);
+  },
+  set(this: LazyElementNode, value: Record<string, unknown>) {
+    this._dataMap.set(this._nodeId, value);
+  },
+  configurable: true,
+  enumerable: true,
+});
+
+class LazyTextNode {
+  _nodeId: number;
+  declare _reader: HastReader;
+  declare _dataMap: DataMap;
+  declare value: string;
+  declare data: Record<string, unknown> | null;
+
+  type: string;
+  constructor(type: string, nodeId: number, reader: HastReader, dataMap: DataMap) {
+    this.type = type;
+    this._nodeId = nodeId;
+    Object.defineProperty(this, "_reader", { value: reader, enumerable: false });
+    Object.defineProperty(this, "_dataMap", { value: dataMap, enumerable: false });
+  }
+}
+
+Object.defineProperty(LazyTextNode.prototype, "value", {
+  get(this: LazyTextNode) {
+    const val = this._reader.getTextValue(this._nodeId);
+    Object.defineProperty(this, "value", { value: val, writable: true, enumerable: true, configurable: true });
+    return val;
+  },
+  configurable: true,
+  enumerable: true,
+});
+
+Object.defineProperty(LazyTextNode.prototype, "data", {
+  get(this: LazyTextNode) {
+    return this._dataMap.get(this._nodeId);
+  },
+  set(this: LazyTextNode, value: Record<string, unknown>) {
+    this._dataMap.set(this._nodeId, value);
+  },
+  configurable: true,
+  enumerable: true,
+});
+
+/** Fast materializer for the visitor — avoids per-node Object.defineProperty overhead. */
+function materializeForVisitor(
+  nodeType: number,
+  nodeId: number,
+  reader: HastReader,
+  dataMap: DataMap,
+): HastNode {
+  switch (nodeType) {
+    case HAST_ELEMENT:
+      return new LazyElementNode(nodeId, reader, dataMap) as unknown as HastNode;
+    case HAST_TEXT:
+    case HAST_COMMENT:
+    case HAST_RAW:
+    case HAST_MDX_EXPRESSION:
+    case HAST_MDX_ESM: {
+      const typeNames: Record<number, string> = {
+        [HAST_TEXT]: "text",
+        [HAST_COMMENT]: "comment",
+        [HAST_RAW]: "raw",
+        [HAST_MDX_EXPRESSION]: "mdxExpression",
+        [HAST_MDX_ESM]: "mdxjsEsm",
+      };
+      return new LazyTextNode(typeNames[nodeType]!, nodeId, reader, dataMap) as unknown as HastNode;
+    }
+    default:
+      // For root, mdxJsx*, doctype — fall back to full materializer
+      return materializeHastNode(reader, nodeId, dataMap);
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 // Map from node_type number to visitor method name
 const TYPE_TO_METHOD: Record<number, keyof HastVisitorInstance> = {
@@ -148,20 +302,24 @@ const TYPE_TO_METHOD: Record<number, keyof HastVisitorInstance> = {
  *
  * Mutations are collected into a binary CommandBuffer (same as MDAST plugins).
  */
-export function visitHast(
+export async function visitHast(
   reader: HastReader,
   plugin: HastVisitorInstance,
   dataMap: DataMap,
-): VisitResult {
+): Promise<VisitResult> {
   const ctx = new HastVisitorContextImpl();
   const returnBuffer = new CommandBuffer();
 
-  plugin.before?.(ctx);
+  {
+    const v = plugin.before?.(ctx);
+    if (v instanceof Promise) await v;
+  }
 
   if (typeof plugin.transformRoot === "function") {
     // Full materialization path via transformRoot
     const root = materializeHastNode(reader, 0, dataMap);
-    const result = plugin.transformRoot(root, ctx);
+    let result = plugin.transformRoot(root, ctx);
+    if (result instanceof Promise) result = await result;
     if (result != null) {
       returnBuffer.replaceRawJson(0, JSON.stringify(markHast(result)));
     }
@@ -176,11 +334,12 @@ export function visitHast(
 
       if (methodName && methodName !== "transformRoot") {
         const fn = plugin[methodName] as
-          | ((node: HastNode, ctx: HastVisitorContext) => HastNode | void)
+          | ((node: HastNode, ctx: HastVisitorContext) => MaybePromise<HastNode | void>)
           | undefined;
         if (typeof fn === "function") {
-          const node = materializeHastNode(reader, nodeId, dataMap);
-          const result = fn.call(plugin, node, ctx);
+          const node = materializeForVisitor(nodeType, nodeId, reader, dataMap);
+          let result = fn.call(plugin, node, ctx);
+          if (result instanceof Promise) result = await result;
           if (result != null) {
             returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
           }
@@ -194,7 +353,10 @@ export function visitHast(
     }
   }
 
-  plugin.after?.(ctx);
+  {
+    const v = plugin.after?.(ctx);
+    if (v instanceof Promise) await v;
+  }
 
   // Merge: return-value commands first, then context commands
   const ctxBuf = ctx.getCommandBuffer().getBuffer();
