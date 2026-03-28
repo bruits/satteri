@@ -1,26 +1,26 @@
 //! Integration tests for raw buffer export/import.
 
-use mdast_arena::{
-    decode_heading_data, encode_heading_data, BufferError, MdastArena, MdastBuilder, NodeType,
+use tryckeri_mdast::{
+    decode_heading_data, encode_heading_data, BufferError, MdastArena, MdastBuilder, MdastNodeType,
     BUFFER_MAGIC, BUFFER_VERSION, NODE_STRUCT_SIZE,
 };
 
 fn build_test_arena() -> MdastArena {
     let mut builder = MdastBuilder::new("# Hello\n\nParagraph.".to_string());
 
-    builder.open_node(NodeType::Root);
+    builder.open_node(MdastNodeType::Root);
     builder.set_position_current(0, 20, 1, 1, 3, 11);
 
-    let heading = builder.open_node(NodeType::Heading);
+    let heading = builder.open_node(MdastNodeType::Heading);
     builder.set_position_current(0, 7, 1, 1, 1, 8);
     builder.set_data_current(&encode_heading_data(1));
 
-    builder.add_leaf(NodeType::Text); // "Hello"
+    builder.add_leaf(MdastNodeType::Text); // "Hello"
     builder.close_node(); // heading
 
-    let _para = builder.open_node(NodeType::Paragraph);
+    let _para = builder.open_node(MdastNodeType::Paragraph);
     builder.set_position_current(9, 19, 3, 1, 3, 11);
-    builder.add_leaf(NodeType::Text); // "Paragraph."
+    builder.add_leaf(MdastNodeType::Text); // "Paragraph."
     builder.close_node(); // paragraph
 
     builder.close_node(); // root
@@ -107,7 +107,7 @@ fn type_data_round_trip() {
 
     // Node 1 is the Heading with HeadingData.
     let heading_node = arena.get_node(1);
-    assert_eq!(heading_node.node_type, NodeType::Heading as u8);
+    assert_eq!(heading_node.node_type, MdastNodeType::Heading as u8);
 
     let orig_data = &arena.arena_type_data()[heading_node.data_offset as usize..]
         [..heading_node.data_len as usize];

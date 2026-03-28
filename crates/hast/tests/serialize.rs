@@ -1,14 +1,10 @@
 //! Integration tests for HAST → HTML serialization and end-to-end conversion.
 
-use mdast_arena::{
-    encode_code_data, encode_heading_data, encode_image_data, encode_link_data,
-    encode_string_ref_data, MdastBuilder, NodeType, StringRef,
-};
 use tryckeri_hast::{hast_to_html, mdast_to_html, HastBuilder, Property, PropertyValue};
-
-// ---------------------------------------------------------------------------
-// Serialization tests (HAST builder → HTML string)
-// ---------------------------------------------------------------------------
+use tryckeri_mdast::{
+    encode_code_data, encode_heading_data, encode_image_data, encode_link_data,
+    encode_string_ref_data, MdastBuilder, MdastNodeType, StringRef,
+};
 
 #[test]
 fn serialize_simple_paragraph() {
@@ -213,22 +209,18 @@ fn serialize_space_separated_class_property() {
     assert_eq!(hast_to_html(&hast), "<span class=\"foo bar\">text</span>");
 }
 
-// ---------------------------------------------------------------------------
-// End-to-end tests: MDAST arena → HTML string
-// ---------------------------------------------------------------------------
-
-fn build_h1_paragraph_mdast() -> mdast_arena::MdastArena {
+fn build_h1_paragraph_mdast() -> tryckeri_mdast::MdastArena {
     let source = "# Hello\n\nWorld".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Heading);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Heading);
     b.set_data_current(&encode_heading_data(1));
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5))); // "Hello"
     b.close_node();
     b.close_node(); // heading
-    b.open_node(NodeType::Paragraph);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Paragraph);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5))); // "World"
     b.close_node();
     b.close_node(); // paragraph
@@ -248,14 +240,14 @@ fn e2e_link() {
     // "[click](https://example.com)"
     let source = "[click](https://example.com)".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Paragraph);
-    let link = b.open_node(NodeType::Link);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Paragraph);
+    let link = b.open_node(MdastNodeType::Link);
     b.set_data_current(&encode_link_data(
         StringRef::new(8, 19), // "https://example.com"
         StringRef::empty(),
     ));
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(1, 5))); // "click"
     b.close_node();
     let _ = link;
@@ -272,10 +264,10 @@ fn e2e_link() {
 fn e2e_emphasis() {
     let source = "em".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Paragraph);
-    b.open_node(NodeType::Emphasis);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Paragraph);
+    b.open_node(MdastNodeType::Emphasis);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(0, 2))); // "em"
     b.close_node();
     b.close_node(); // emphasis
@@ -292,8 +284,8 @@ fn e2e_code_block_with_language() {
     // Code block: lang="rust", value="fn main() {}"
     let source = "rust\nfn main() {}".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Code);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Code);
     b.set_data_current(&encode_code_data(
         StringRef::new(0, 4),  // lang: "rust"
         StringRef::empty(),    // meta: empty
@@ -315,9 +307,9 @@ fn e2e_code_block_with_language() {
 fn e2e_image() {
     let source = "![alt](img.png)".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Paragraph);
-    b.open_node(NodeType::Image);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Paragraph);
+    b.open_node(MdastNodeType::Image);
     b.set_data_current(&encode_image_data(
         StringRef::new(7, 7), // "img.png"
         StringRef::new(2, 3), // "alt"

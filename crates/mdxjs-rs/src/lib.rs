@@ -25,10 +25,10 @@ use crate::{
     oxc::serialize,
     oxc_util_build_jsx::{Options as BuildOptions, oxc_util_build_jsx},
 };
-use mdast_arena::mdx_types::{self as message, Location};
 use oxc_allocator::Allocator;
 use oxc_span::Span;
 use rustc_hash::FxHashSet;
+use tryckeri_mdast::mdx_types::{self as message, Location};
 
 pub use crate::configuration::{MdxConstructs, MdxParseOptions, OptimizeStaticConfig, Options};
 pub use crate::mdx_plugin_recma_document::JsxRuntime;
@@ -39,7 +39,7 @@ pub use crate::mdx_plugin_recma_document::JsxRuntime;
 ///
 /// ```
 /// use mdxjs::compile;
-/// # fn main() -> Result<(), mdast_arena::mdx_types::Message> {
+/// # fn main() -> Result<(), tryckeri_mdast::mdx_types::Message> {
 ///
 /// let result = compile("# Hi!", &Default::default())?;
 /// assert!(result.contains("function _createMdxContent"));
@@ -84,7 +84,7 @@ pub fn compile(value: &str, options: &Options) -> Result<String, message::Messag
 pub fn compile_arena_bytes(buf: &[u8], options: &Options) -> Result<String, message::Message> {
     // Extract source text from MDAST buffer for position resolution.
     let mdast_view =
-        mdast_arena::MdastArena::from_raw_buffer(buf).map_err(|e| message::Message {
+        tryckeri_mdast::MdastArena::from_raw_buffer(buf).map_err(|e| message::Message {
             reason: format!("invalid MDAST buffer: {e:?}"),
             place: None,
             rule_id: Box::new(String::new()),
@@ -123,7 +123,7 @@ pub fn compile_hast_buffer_with_source(
     options: &Options,
     source: &[u8],
 ) -> Result<String, message::Message> {
-    let view = mdast_arena::MdastArena::from_raw_buffer(buf).map_err(|e| message::Message {
+    let view = tryckeri_mdast::MdastArena::from_raw_buffer(buf).map_err(|e| message::Message {
         reason: format!("invalid HAST buffer: {e:?}"),
         place: None,
         rule_id: Box::new(String::new()),

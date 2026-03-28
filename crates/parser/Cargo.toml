@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-mdast-arena = { path = "../mdast-arena" }
+tryckeri-mdast = { path = "../mdast" }
 pulldown-cmark = { path = "../pulldown-cmark", package = "tryckeri-pulldown-cmark" }
 
 [dev-dependencies]

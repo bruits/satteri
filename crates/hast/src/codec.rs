@@ -7,11 +7,7 @@
 //!
 //! Text/Comment/Raw type_data: just StringRef (8 bytes).
 
-use mdast_arena::StringRef;
-
-// ---------------------------------------------------------------------------
-// StringRef encode/decode
-// ---------------------------------------------------------------------------
+use tryckeri_mdast::StringRef;
 
 pub fn encode_string_ref(sr: StringRef) -> [u8; 8] {
     let mut out = [0u8; 8];
@@ -27,43 +23,33 @@ pub fn decode_string_ref(data: &[u8]) -> StringRef {
     StringRef::new(offset, len)
 }
 
-// ---------------------------------------------------------------------------
-// Element encode/decode
-// ---------------------------------------------------------------------------
-
-/// Encode element type_data.
-/// props: slice of (name: StringRef, value_type: u8, value: StringRef)
+/// Props tuple: (name, value_type, value).
 pub fn encode_element_data(tag_name: StringRef, props: &[(StringRef, u8, StringRef)]) -> Vec<u8> {
-    // 16-byte header: tag_name(8) + prop_count(4) + _pad(4)
     let mut out = Vec::with_capacity(16 + props.len() * 20);
 
     out.extend_from_slice(&encode_string_ref(tag_name));
     out.extend_from_slice(&(props.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes()); // _pad
+    out.extend_from_slice(&0u32.to_le_bytes());
 
-    // Property entries: 20 bytes each
     for &(name, value_type, value) in props {
         out.extend_from_slice(&encode_string_ref(name));
         out.push(value_type);
-        out.extend_from_slice(&[0u8; 3]); // _pad
+        out.extend_from_slice(&[0u8; 3]);
         out.extend_from_slice(&encode_string_ref(value));
     }
 
     out
 }
 
-/// Decode the tag name StringRef from element type_data.
 pub fn decode_element_tag(data: &[u8]) -> StringRef {
     decode_string_ref(&data[0..8])
 }
 
-/// Decode the property count from element type_data.
 pub fn decode_element_prop_count(data: &[u8]) -> u32 {
     u32::from_le_bytes(data[8..12].try_into().unwrap())
 }
 
-/// Decode a property entry by index from element type_data.
-/// Returns (name: StringRef, value_type: u8, value: StringRef).
+/// Returns (name, value_type, value).
 pub fn decode_element_prop(data: &[u8], index: u32) -> (StringRef, u8, StringRef) {
     let base = 16 + index as usize * 20;
     let name = decode_string_ref(&data[base..base + 8]);
@@ -72,12 +58,6 @@ pub fn decode_element_prop(data: &[u8], index: u32) -> (StringRef, u8, StringRef
     (name, value_type, value)
 }
 
-// ---------------------------------------------------------------------------
-// MDX JSX Element encode/decode
-// ---------------------------------------------------------------------------
-
-/// Encode MDX JSX element type_data.
-///
 /// Layout:
 ///   [name: StringRef(8B)][attr_count: u32(4B)][_pad: u32(4B)] = 16-byte header
 ///   then attr_count * MdxAttrEntry (20 bytes each):
@@ -96,11 +76,11 @@ pub fn encode_mdx_jsx_element_data(
 
     out.extend_from_slice(&encode_string_ref(name));
     out.extend_from_slice(&(attrs.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes()); // _pad
+    out.extend_from_slice(&0u32.to_le_bytes());
 
     for &(kind, attr_name, attr_value) in attrs {
         out.push(kind);
-        out.extend_from_slice(&[0u8; 3]); // _pad
+        out.extend_from_slice(&[0u8; 3]);
         out.extend_from_slice(&encode_string_ref(attr_name));
         out.extend_from_slice(&encode_string_ref(attr_value));
     }
@@ -108,18 +88,15 @@ pub fn encode_mdx_jsx_element_data(
     out
 }
 
-/// Decode the element name StringRef from MDX JSX element type_data.
 pub fn decode_mdx_jsx_element_name(data: &[u8]) -> StringRef {
     decode_string_ref(&data[0..8])
 }
 
-/// Decode the attribute count from MDX JSX element type_data.
 pub fn decode_mdx_jsx_attr_count(data: &[u8]) -> u32 {
     u32::from_le_bytes(data[8..12].try_into().unwrap())
 }
 
-/// Decode an attribute entry by index from MDX JSX element type_data.
-/// Returns (kind: u8, name: StringRef, value: StringRef).
+/// Returns (kind, name, value).
 pub fn decode_mdx_jsx_attr(data: &[u8], index: u32) -> (u8, StringRef, StringRef) {
     let base = 16 + index as usize * 20;
     let kind = data[base];
@@ -127,10 +104,6 @@ pub fn decode_mdx_jsx_attr(data: &[u8], index: u32) -> (u8, StringRef, StringRef
     let value = decode_string_ref(&data[base + 12..base + 20]);
     (kind, name, value)
 }
-
-// ---------------------------------------------------------------------------
-// Text/Comment/Raw encode/decode — just a StringRef
-// ---------------------------------------------------------------------------
 
 pub fn encode_text_data(sr: StringRef) -> Vec<u8> {
     encode_string_ref(sr).to_vec()
@@ -196,8 +169,16 @@ mod tests {
         let attr_name = StringRef::new(10, 5);
         let attr_value = StringRef::new(20, 8);
         let attrs = vec![
-            (crate::node_types::MDX_ATTR_LITERAL_PROP, attr_name, attr_value),
-            (crate::node_types::MDX_ATTR_SPREAD, StringRef::empty(), StringRef::new(30, 10)),
+            (
+                crate::node_types::MDX_ATTR_LITERAL_PROP,
+                attr_name,
+                attr_value,
+            ),
+            (
+                crate::node_types::MDX_ATTR_SPREAD,
+                StringRef::empty(),
+                StringRef::new(30, 10),
+            ),
         ];
         let data = encode_mdx_jsx_element_data(name, &attrs);
         assert_eq!(data.len(), 56); // 16 + 2*20

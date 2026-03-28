@@ -1,30 +1,30 @@
 //! Integration tests verifying that PluginRunner actually applies arena rebuild
 //! when structural commands are issued.
 
-use mdast_arena::{codec::*, MdastArena, MdastBuilder, NodeType, StringRef};
+use tryckeri_mdast::{codec::*, MdastArena, MdastBuilder, MdastNodeType, StringRef};
 use tryckeri_plugin_api::*;
 
 fn build_test_arena() -> MdastArena {
     let source = "# Hello\n\nWorld".to_string();
     let mut b = MdastBuilder::new(source);
 
-    b.open_node(NodeType::Root);
+    b.open_node(MdastNodeType::Root);
 
-    b.open_node(NodeType::Heading);
+    b.open_node(MdastNodeType::Heading);
     b.set_position_current(0, 7, 1, 1, 1, 8);
     b.set_data_current(&encode_heading_data(1));
 
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_position_current(2, 7, 1, 3, 1, 8);
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
     b.close_node();
 
     b.close_node(); // heading
 
-    b.open_node(NodeType::Paragraph);
+    b.open_node(MdastNodeType::Paragraph);
     b.set_position_current(9, 14, 2, 1, 2, 6);
 
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_position_current(9, 14, 2, 1, 2, 6);
     b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
     b.close_node();
@@ -77,7 +77,7 @@ fn remove_text_via_visit_result_removes_from_arena() {
         let node_type = result.arena.get_node(id).node_type;
         assert_ne!(
             node_type,
-            NodeType::Text as u8,
+            MdastNodeType::Text as u8,
             "no Text nodes should remain after remove, found one at id={}",
             id
         );
@@ -112,7 +112,7 @@ fn replace_heading_via_visit_result_updates_arena() {
 
     // No Heading should remain in the rebuilt arena
     let has_heading = (0..result.arena.len() as u32)
-        .any(|id| result.arena.get_node(id).node_type == NodeType::Heading as u8);
+        .any(|id| result.arena.get_node(id).node_type == MdastNodeType::Heading as u8);
     assert!(!has_heading, "no headings should remain after replacement");
 
     // Root should still have children
@@ -247,7 +247,7 @@ fn explicit_remove_command_rebuilds_arena() {
 
     // Heading (and its Text child) should be gone
     let has_heading = (0..result.arena.len() as u32)
-        .any(|id| result.arena.get_node(id).node_type == NodeType::Heading as u8);
+        .any(|id| result.arena.get_node(id).node_type == MdastNodeType::Heading as u8);
     assert!(!has_heading, "heading should be removed from arena");
 
     // Should have 3 nodes: Root + Paragraph + Text(World)

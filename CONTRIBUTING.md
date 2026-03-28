@@ -42,9 +42,9 @@ Tryckeri is a Rust + TypeScript monorepo. The Rust workspace lives at the reposi
 
 ### Project Structure
 
-#### mdast-arena
+#### tryckeri-mdast
 
-`mdast-arena` is the foundational data structure crate. It defines `ArenaNode`, `NodeType`, `StringRef` for zero-copy source references, `MdastArena` for owning all nodes, `MdastBuilder` for incremental tree construction, and the raw binary buffer format used to transfer trees between Rust and JavaScript with zero serialization overhead.
+`tryckeri-mdast` is the foundational data structure crate. It defines `MdastNode`, `MdastNodeType`, `StringRef` for zero-copy source references, `MdastArena` for owning all nodes, `MdastBuilder` for incremental tree construction, and the raw binary buffer format used to transfer trees between Rust and JavaScript with zero serialization overhead.
 
 #### parser
 

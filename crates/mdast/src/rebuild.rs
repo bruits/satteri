@@ -1,46 +1,48 @@
-//! MdastArena rebuild: apply a list of structural patches to an MdastArena, producing a new one.
+//! MdastArena rebuild: apply structural patches to produce a new arena.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{MdastArena, MdastBuilder, NodeType};
+use crate::{MdastArena, MdastBuilder, MdastNodeType};
 
-/// A patch to apply during arena rebuild.
 #[derive(Debug, Clone)]
 pub enum Patch {
-    /// Replace a node with a new subtree (built externally)
-    Replace { node_id: u32, new_tree: MdastArena },
-    /// Remove a node (and its entire subtree)
-    Remove { node_id: u32 },
-    /// Insert a new subtree before the target node (as a sibling)
-    InsertBefore { node_id: u32, new_tree: MdastArena },
-    /// Insert a new subtree after the target node (as a sibling)
-    InsertAfter { node_id: u32, new_tree: MdastArena },
-    /// Wrap a node in a new parent (new_tree is the parent; the original node becomes its child)
+    Replace {
+        node_id: u32,
+        new_tree: MdastArena,
+    },
+    /// Removes the entire subtree rooted at this node
+    Remove {
+        node_id: u32,
+    },
+    /// Inserted as a preceding sibling
+    InsertBefore {
+        node_id: u32,
+        new_tree: MdastArena,
+    },
+    /// Inserted as a following sibling
+    InsertAfter {
+        node_id: u32,
+        new_tree: MdastArena,
+    },
+    /// The original node becomes a child of the new parent
     Wrap {
         node_id: u32,
         parent_tree: MdastArena,
     },
-    /// Prepend a new subtree as the first child of the target node
     PrependChild {
         node_id: u32,
         child_tree: MdastArena,
     },
-    /// Append a new subtree as the last child of the target node
     AppendChild {
         node_id: u32,
         child_tree: MdastArena,
     },
 }
 
-/// Apply patches to an arena, producing a new arena.
-///
 /// Node IDs in the new arena are assigned fresh (monotonically increasing)
-/// but the structure is preserved. The source string from the original arena
-/// is preserved; new nodes from patch sub-arenas reference type_data bytes
-/// verbatim (a known limitation for Phase 6 — full StringRef remapping is
-/// Phase 8 work).
+/// but the structure is preserved. Sub-arena type_data bytes are copied
+/// verbatim — full StringRef remapping is deferred to Phase 8.
 pub fn rebuild(arena: &MdastArena, patches: &[Patch]) -> MdastArena {
-    // Index patches by target node_id for O(1) lookup
     let mut patch_map: HashMap<u32, &Patch> = HashMap::new();
     for patch in patches {
         let node_id = match patch {
@@ -55,7 +57,7 @@ pub fn rebuild(arena: &MdastArena, patches: &[Patch]) -> MdastArena {
         patch_map.insert(node_id, patch);
     }
 
-    // Collect set of "replaced or removed" node IDs — these are skipped in normal traversal
+    // Replaced or removed nodes are skipped during normal traversal
     let mut deleted: HashSet<u32> = HashSet::new();
     for patch in patches {
         match patch {
@@ -69,23 +71,16 @@ pub fn rebuild(arena: &MdastArena, patches: &[Patch]) -> MdastArena {
         }
     }
 
-    // New arena — we keep the original source. Sub-arena type_data bytes are
-    // copied verbatim (they may reference a different source; this is the Phase 6
-    // known limitation — full StringRef remapping is deferred to Phase 8).
     let new_source = arena.source().to_string();
     let mut builder = MdastBuilder::new(new_source);
 
-    // Recursively copy the original arena starting from the root (node 0),
-    // applying patches as we go.
     copy_node(0, arena, &mut builder, &patch_map, &deleted);
 
     builder.finish()
 }
 
-/// Recursively copy a node from `orig` into `builder`, applying patches.
-///
 /// Returns `true` if the node was emitted (or a replacement was emitted),
-/// `false` if the node was silently skipped (e.g. Remove).
+/// `false` if skipped (Remove).
 fn copy_node(
     node_id: u32,
     orig: &MdastArena,
@@ -93,39 +88,24 @@ fn copy_node(
     patch_map: &HashMap<u32, &Patch>,
     deleted: &HashSet<u32>,
 ) -> bool {
-    // If this node is in the deleted set (Remove or Replace), skip it here.
-    // For Remove: nothing emitted.
-    // For Replace: the replacement is emitted by the *parent* when iterating children
-    //   (or at root level, handled below). If node_id == 0 (root), we must handle here.
+    // For Replace patches, the replacement is emitted here (not by the parent)
+    // when this is the root node or when copy_children delegates to copy_node.
     if deleted.contains(&node_id) {
-        // Emit replacement if it's a Replace patch (when called for a node that
-        // is being replaced — this path is hit for the root node or when
-        // copy_children iterates and finds a replaced child).
         if let Some(Patch::Replace { new_tree, .. }) = patch_map.get(&node_id) {
             emit_subtree(new_tree, builder);
             return true;
         }
-        // Remove: nothing to emit
         return false;
     }
 
-    // InsertBefore: emit the new sibling *before* emitting this node
     if let Some(Patch::InsertBefore { new_tree, .. }) = patch_map.get(&node_id) {
         emit_subtree(new_tree, builder);
     }
 
-    // Handle Wrap: the patch node becomes the parent, and the original node
-    // becomes a child inside it.
+    // Wrap: parent_tree's root becomes the wrapper; the original node becomes
+    // its only child. Any existing children in parent_tree are ignored (Phase 6
+    // simplification).
     if let Some(Patch::Wrap { parent_tree, .. }) = patch_map.get(&node_id) {
-        // Emit wrapper: we need to open the wrapper's root, emit original as
-        // a child, then close. We do this by:
-        // 1. Copy the parent_tree structure except its leaf nodes are replaced
-        //    by our node.
-        // Because parent_tree may have its own structure, we emit the whole
-        // parent_tree but then the original node needs to be inserted as a child.
-        // For Phase 6, we implement a simpler version: the parent_tree is assumed
-        // to be a single node (wrapper) with no children. The original node
-        // becomes its only child.
         emit_wrap_node(parent_tree, node_id, orig, builder, patch_map, deleted);
 
         // InsertAfter (after the wrapped group)
@@ -135,14 +115,12 @@ fn copy_node(
         return true;
     }
 
-    // Open this node in the new arena
     let node = orig.get_node(node_id);
     let node_type =
-        NodeType::from_u8(node.node_type).expect("unknown node type in arena — corrupt data");
+        MdastNodeType::from_u8(node.node_type).expect("unknown node type in arena — corrupt data");
 
     builder.open_node(node_type);
 
-    // Copy position data
     builder.set_position_current(
         node.start_offset,
         node.end_offset,
@@ -152,40 +130,32 @@ fn copy_node(
         node.end_column,
     );
 
-    // Copy type-specific data bytes verbatim
     let type_data = orig.get_type_data(node_id);
     if !type_data.is_empty() {
         builder.set_data_current(type_data);
     }
 
-    // PrependChild: emit a new child *before* original children
     if let Some(Patch::PrependChild { child_tree, .. }) = patch_map.get(&node_id) {
         emit_subtree(child_tree, builder);
     }
 
-    // Children: iterate, handling per-child patches
     let child_ids: Vec<u32> = orig.get_children(node_id).to_vec();
     for child_id in child_ids {
         if deleted.contains(&child_id) {
-            // This child is Replace or Remove
             if let Some(Patch::Replace { new_tree, .. }) = patch_map.get(&child_id) {
                 emit_subtree(new_tree, builder);
             }
-            // Remove: nothing emitted
         } else {
-            // InsertBefore for this child (handled in copy_node recursion)
             copy_node(child_id, orig, builder, patch_map, deleted);
         }
     }
 
-    // AppendChild: emit a new child *after* original children
     if let Some(Patch::AppendChild { child_tree, .. }) = patch_map.get(&node_id) {
         emit_subtree(child_tree, builder);
     }
 
     builder.close_node();
 
-    // InsertAfter: emit new sibling *after* this node
     if let Some(Patch::InsertAfter { new_tree, .. }) = patch_map.get(&node_id) {
         emit_subtree(new_tree, builder);
     }
@@ -193,18 +163,12 @@ fn copy_node(
     true
 }
 
-/// Emit all nodes from a sub-arena into the builder.
-/// Starts from the sub-arena root (node 0) and recursively copies structure.
-///
-/// The sub-arena's source is appended to the builder's source, and all
-/// StringRef offsets in type_data are remapped so they point into the
-/// merged source buffer.
+/// Sub-arena source is appended to the builder's source, and StringRef
+/// offsets in type_data are remapped into the merged buffer.
 fn emit_subtree(sub_arena: &MdastArena, builder: &mut MdastBuilder) {
     if sub_arena.is_empty() {
         return;
     }
-    // Append the sub-arena's source to the builder and record the base offset
-    // so we can remap StringRefs in type_data.
     let sub_source = sub_arena.source();
     let source_base = if sub_source.is_empty() {
         0u32
@@ -215,9 +179,8 @@ fn emit_subtree(sub_arena: &MdastArena, builder: &mut MdastBuilder) {
     emit_subtree_node(0, sub_arena, builder, source_base);
 }
 
-/// Recursively emit nodes from sub_arena starting at `node_id`.
-/// `source_base` is the offset added to all StringRef offsets to remap
-/// them into the merged source buffer.
+/// `source_base` is the offset added to StringRef offsets to remap them
+/// into the merged source buffer.
 fn emit_subtree_node(
     node_id: u32,
     sub_arena: &MdastArena,
@@ -225,12 +188,11 @@ fn emit_subtree_node(
     source_base: u32,
 ) {
     let node = sub_arena.get_node(node_id);
-    let node_type =
-        NodeType::from_u8(node.node_type).expect("unknown node type in sub-arena — corrupt data");
+    let node_type = MdastNodeType::from_u8(node.node_type)
+        .expect("unknown node type in sub-arena — corrupt data");
 
     builder.open_node(node_type);
 
-    // Remap source offsets so they point into the merged source buffer
     builder.set_position_current(
         node.start_offset + source_base,
         node.end_offset + source_base,
@@ -243,7 +205,6 @@ fn emit_subtree_node(
     let type_data = sub_arena.get_type_data(node_id);
     if !type_data.is_empty() {
         if source_base != 0 {
-            // Remap StringRef offsets in type_data by adding source_base
             let mut remapped = type_data.to_vec();
             remap_string_refs(&mut remapped, node.node_type, source_base);
             builder.set_data_current(&remapped);
@@ -264,8 +225,7 @@ fn emit_subtree_node(
 /// StringRefs are `(offset: u32 LE, len: u32 LE)` pairs at known positions
 /// depending on the node type.
 fn remap_string_refs(data: &mut [u8], node_type: u8, base: u32) {
-    // Positions of StringRef offset fields (byte offset within type_data)
-    // Each StringRef is 8 bytes: u32 offset + u32 len. We only adjust the offset.
+    // StringRef positions depend on node type; each is (offset: u32 LE, len: u32 LE)
     let ref_offsets: &[usize] = match node_type {
         // Text, InlineCode, Html, Yaml, Toml, InlineMath: single StringRef at 0
         10 | 13 | 7 | 25 | 26 | 28 => &[0],
@@ -315,8 +275,7 @@ fn remap_string_refs(data: &mut [u8], node_type: u8, base: u32) {
         // MDX JSX elements: MDAST(100,101) and HAST(10,11): name(0), then attrs
         10 | 11 | 100 | 101 if data.len() >= 16 => {
             remap_one_ref(data, 0, base);
-            let attr_count =
-                u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+            let attr_count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
             for i in 0..attr_count {
                 let attr_base = 16 + i * 20;
                 remap_one_ref(data, attr_base + 4, base); // name
@@ -335,8 +294,7 @@ fn remap_string_refs(data: &mut [u8], node_type: u8, base: u32) {
 fn remap_one_ref(data: &mut [u8], off: usize, base: u32) {
     if off + 8 <= data.len() {
         let current = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
-        let len =
-            u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
+        let len = u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
         if len > 0 {
             let new_offset = current + base;
             data[off..off + 4].copy_from_slice(&new_offset.to_le_bytes());
@@ -344,12 +302,9 @@ fn remap_one_ref(data: &mut [u8], off: usize, base: u32) {
     }
 }
 
-/// Emit a Wrap: open the wrapper node (first node from parent_tree's root),
-/// then emit the original node as a child, then close the wrapper.
-///
-/// This assumes parent_tree's root is the single wrapper. Any children already
-/// in parent_tree's root are ignored in favor of the original node becoming the
-/// sole child. This is the Phase 6 Wrap implementation.
+/// Assumes parent_tree's root is the single wrapper node. Any children
+/// already present in parent_tree are ignored — the original node becomes
+/// the sole child (Phase 6 simplification).
 fn emit_wrap_node(
     parent_tree: &MdastArena,
     original_node_id: u32,
@@ -366,7 +321,7 @@ fn emit_wrap_node(
 
     let wrapper = parent_tree.get_node(0);
     let node_type =
-        NodeType::from_u8(wrapper.node_type).expect("unknown node type in wrapper arena");
+        MdastNodeType::from_u8(wrapper.node_type).expect("unknown node type in wrapper arena");
 
     builder.open_node(node_type);
     builder.set_position_current(
@@ -382,7 +337,7 @@ fn emit_wrap_node(
         builder.set_data_current(wrapper_data);
     }
 
-    // Emit the original node as the child (ignoring any children in parent_tree)
+    // Emit the original node as the child
     copy_node(original_node_id, orig, builder, patch_map, deleted);
 
     builder.close_node();
@@ -391,7 +346,7 @@ fn emit_wrap_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MdastBuilder, NodeType};
+    use crate::{MdastBuilder, MdastNodeType};
 
     /// Build the "# Hello\n\nWorld" arena for testing.
     fn build_hello_world() -> MdastArena {
@@ -401,24 +356,24 @@ mod tests {
         let source = "# Hello\n\nWorld".to_string();
         let mut b = MdastBuilder::new(source);
 
-        b.open_node(NodeType::Root);
+        b.open_node(MdastNodeType::Root);
         b.set_position_current(0, 14, 1, 1, 2, 6);
 
-        b.open_node(NodeType::Heading);
+        b.open_node(MdastNodeType::Heading);
         b.set_position_current(0, 7, 1, 1, 1, 8);
         b.set_data_current(&encode_heading_data(1));
 
-        b.open_node(NodeType::Text);
+        b.open_node(MdastNodeType::Text);
         b.set_position_current(2, 7, 1, 3, 1, 8);
         b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
         b.close_node(); // text
 
         b.close_node(); // heading
 
-        b.open_node(NodeType::Paragraph);
+        b.open_node(MdastNodeType::Paragraph);
         b.set_position_current(9, 14, 2, 1, 2, 6);
 
-        b.open_node(NodeType::Text);
+        b.open_node(MdastNodeType::Text);
         b.set_position_current(9, 14, 2, 1, 2, 6);
         b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
         b.close_node(); // text
@@ -461,7 +416,7 @@ mod tests {
         let new_heading_id = new_root_children[0];
         assert_eq!(
             rebuilt.get_node(new_heading_id).node_type,
-            NodeType::Heading as u8
+            MdastNodeType::Heading as u8
         );
         assert_eq!(
             rebuilt.get_children(new_heading_id).len(),
@@ -486,7 +441,7 @@ mod tests {
         assert_eq!(new_root_children.len(), 1);
         assert_eq!(
             rebuilt.get_node(new_root_children[0]).node_type,
-            NodeType::Paragraph as u8
+            MdastNodeType::Paragraph as u8
         );
     }
 
@@ -498,7 +453,7 @@ mod tests {
 
         // Build a replacement: a ThematicBreak (no children, no data)
         let mut replacement_builder = MdastBuilder::new(orig.source().to_string());
-        replacement_builder.open_node(NodeType::ThematicBreak);
+        replacement_builder.open_node(MdastNodeType::ThematicBreak);
         replacement_builder.close_node();
         let replacement = replacement_builder.finish();
 
@@ -515,7 +470,7 @@ mod tests {
         let child_of_heading = rebuilt.get_children(new_heading_id)[0];
         assert_eq!(
             rebuilt.get_node(child_of_heading).node_type,
-            NodeType::ThematicBreak as u8
+            MdastNodeType::ThematicBreak as u8
         );
     }
 
@@ -526,7 +481,7 @@ mod tests {
 
         // Replace Heading with a Paragraph
         let mut replacement_builder = MdastBuilder::new(orig.source().to_string());
-        replacement_builder.open_node(NodeType::Paragraph);
+        replacement_builder.open_node(MdastNodeType::Paragraph);
         replacement_builder.close_node();
         let replacement = replacement_builder.finish();
 
@@ -541,12 +496,12 @@ mod tests {
         assert_eq!(root_children.len(), 2);
         assert_eq!(
             rebuilt.get_node(root_children[0]).node_type,
-            NodeType::Paragraph as u8
+            MdastNodeType::Paragraph as u8
         );
         // Second child should still be the original Paragraph
         assert_eq!(
             rebuilt.get_node(root_children[1]).node_type,
-            NodeType::Paragraph as u8
+            MdastNodeType::Paragraph as u8
         );
     }
 
@@ -557,7 +512,7 @@ mod tests {
 
         // Insert a ThematicBreak before the Paragraph
         let mut new_tree_builder = MdastBuilder::new(orig.source().to_string());
-        new_tree_builder.open_node(NodeType::ThematicBreak);
+        new_tree_builder.open_node(MdastNodeType::ThematicBreak);
         new_tree_builder.close_node();
         let new_tree = new_tree_builder.finish();
 
@@ -572,15 +527,15 @@ mod tests {
         assert_eq!(root_children.len(), 3);
         assert_eq!(
             rebuilt.get_node(root_children[0]).node_type,
-            NodeType::Heading as u8
+            MdastNodeType::Heading as u8
         );
         assert_eq!(
             rebuilt.get_node(root_children[1]).node_type,
-            NodeType::ThematicBreak as u8
+            MdastNodeType::ThematicBreak as u8
         );
         assert_eq!(
             rebuilt.get_node(root_children[2]).node_type,
-            NodeType::Paragraph as u8
+            MdastNodeType::Paragraph as u8
         );
     }
 
@@ -590,7 +545,7 @@ mod tests {
         let heading_id = orig.get_children(0)[0]; // Heading node
 
         let mut new_tree_builder = MdastBuilder::new(orig.source().to_string());
-        new_tree_builder.open_node(NodeType::ThematicBreak);
+        new_tree_builder.open_node(MdastNodeType::ThematicBreak);
         new_tree_builder.close_node();
         let new_tree = new_tree_builder.finish();
 
@@ -605,15 +560,15 @@ mod tests {
         assert_eq!(root_children.len(), 3);
         assert_eq!(
             rebuilt.get_node(root_children[0]).node_type,
-            NodeType::Heading as u8
+            MdastNodeType::Heading as u8
         );
         assert_eq!(
             rebuilt.get_node(root_children[1]).node_type,
-            NodeType::ThematicBreak as u8
+            MdastNodeType::ThematicBreak as u8
         );
         assert_eq!(
             rebuilt.get_node(root_children[2]).node_type,
-            NodeType::Paragraph as u8
+            MdastNodeType::Paragraph as u8
         );
     }
 
@@ -623,7 +578,7 @@ mod tests {
         let heading_id = orig.get_children(0)[0];
 
         let mut child_builder = MdastBuilder::new(orig.source().to_string());
-        child_builder.open_node(NodeType::Break);
+        child_builder.open_node(MdastNodeType::Break);
         child_builder.close_node();
         let child_tree = child_builder.finish();
 
@@ -639,11 +594,11 @@ mod tests {
         assert_eq!(heading_children.len(), 2);
         assert_eq!(
             rebuilt.get_node(heading_children[0]).node_type,
-            NodeType::Text as u8
+            MdastNodeType::Text as u8
         );
         assert_eq!(
             rebuilt.get_node(heading_children[1]).node_type,
-            NodeType::Break as u8
+            MdastNodeType::Break as u8
         );
     }
 
@@ -653,7 +608,7 @@ mod tests {
         let heading_id = orig.get_children(0)[0];
 
         let mut child_builder = MdastBuilder::new(orig.source().to_string());
-        child_builder.open_node(NodeType::Break);
+        child_builder.open_node(MdastNodeType::Break);
         child_builder.close_node();
         let child_tree = child_builder.finish();
 
@@ -669,11 +624,11 @@ mod tests {
         assert_eq!(heading_children.len(), 2);
         assert_eq!(
             rebuilt.get_node(heading_children[0]).node_type,
-            NodeType::Break as u8
+            MdastNodeType::Break as u8
         );
         assert_eq!(
             rebuilt.get_node(heading_children[1]).node_type,
-            NodeType::Text as u8
+            MdastNodeType::Text as u8
         );
     }
 
@@ -685,7 +640,7 @@ mod tests {
 
         // Remove the heading AND insert a ThematicBreak after paragraph
         let mut new_tree_builder = MdastBuilder::new(orig.source().to_string());
-        new_tree_builder.open_node(NodeType::ThematicBreak);
+        new_tree_builder.open_node(MdastNodeType::ThematicBreak);
         new_tree_builder.close_node();
         let new_tree = new_tree_builder.finish();
 
@@ -705,11 +660,11 @@ mod tests {
         assert_eq!(root_children.len(), 2);
         assert_eq!(
             rebuilt.get_node(root_children[0]).node_type,
-            NodeType::Paragraph as u8
+            MdastNodeType::Paragraph as u8
         );
         assert_eq!(
             rebuilt.get_node(root_children[1]).node_type,
-            NodeType::ThematicBreak as u8
+            MdastNodeType::ThematicBreak as u8
         );
     }
 }

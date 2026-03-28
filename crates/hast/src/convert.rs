@@ -1,16 +1,15 @@
 //! MDAST → HAST conversion.
 
-use mdast_arena::codec::{
+use tryckeri_mdast::codec::{
     decode_code_data, decode_expression_data, decode_heading_data, decode_image_data,
     decode_link_data, decode_list_data, decode_list_item_data, decode_mdx_jsx_element_name,
     decode_string_ref_data,
 };
-use mdast_arena::MdastArena;
-use mdast_arena::NodeType;
+use tryckeri_mdast::MdastArena;
+use tryckeri_mdast::MdastNodeType;
 
 use crate::node::{HastArena, HastBuilder, HastNodeType, Property, PropertyValue};
 
-/// Convert an MDAST arena to a HAST arena.
 pub fn mdast_to_hast(arena: &MdastArena) -> HastArena {
     let mut builder = HastBuilder::new();
     builder.open_root();
@@ -21,7 +20,8 @@ pub fn mdast_to_hast(arena: &MdastArena) -> HastArena {
     let mut first = true;
     for &child_id in root_children {
         let child = arena.get_node(child_id);
-        let is_unraveled = NodeType::from_u8(child.node_type) == Some(NodeType::Paragraph)
+        let is_unraveled = MdastNodeType::from_u8(child.node_type)
+            == Some(MdastNodeType::Paragraph)
             && is_mdx_only_paragraph(child_id, arena);
 
         if is_unraveled {
@@ -47,13 +47,13 @@ pub fn mdast_to_hast(arena: &MdastArena) -> HastArena {
 
 fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
     let node = arena.get_node(node_id);
-    let node_type = match NodeType::from_u8(node.node_type) {
+    let node_type = match MdastNodeType::from_u8(node.node_type) {
         Some(t) => t,
         None => return,
     };
 
     match node_type {
-        NodeType::Paragraph => {
+        MdastNodeType::Paragraph => {
             // MDX paragraph unraveling: if all children are MDX nodes or
             // whitespace text, output children directly without <p>.
             if is_mdx_only_paragraph(node_id, arena) {
@@ -65,7 +65,7 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             }
         }
 
-        NodeType::Heading => {
+        MdastNodeType::Heading => {
             let data = arena.get_type_data(node_id);
             let depth = if data.is_empty() {
                 1
@@ -85,18 +85,18 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             builder.close();
         }
 
-        NodeType::ThematicBreak => {
+        MdastNodeType::ThematicBreak => {
             builder.open_element("hr");
             builder.close();
         }
 
-        NodeType::Blockquote => {
+        MdastNodeType::Blockquote => {
             builder.open_element("blockquote");
             convert_children(node_id, arena, builder);
             builder.close();
         }
 
-        NodeType::List => {
+        MdastNodeType::List => {
             let data = arena.get_type_data(node_id);
             let list_data = decode_list_data(data);
             let tag = if list_data.ordered { "ol" } else { "ul" };
@@ -119,13 +119,12 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             builder.close();
         }
 
-        NodeType::ListItem => {
+        MdastNodeType::ListItem => {
             builder.open_element("li");
             let data = arena.get_type_data(node_id);
             if !data.is_empty() {
                 let item_data = decode_list_item_data(data);
                 if item_data.checked != 2 {
-                    // Task list item — add checkbox
                     let checkbox_id = builder.open_element("input");
                     let type_name = builder.alloc_string("type");
                     let type_val = builder.alloc_string("checkbox");
@@ -172,14 +171,14 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             builder.close();
         }
 
-        NodeType::Html => {
+        MdastNodeType::Html => {
             let data = arena.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
             let html = arena.get_str(string_ref);
             builder.add_raw(html);
         }
 
-        NodeType::Code => {
+        MdastNodeType::Code => {
             let data = arena.get_type_data(node_id);
             let code_data = decode_code_data(data);
 
@@ -206,30 +205,30 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             builder.close(); // pre
         }
 
-        NodeType::Definition => {
+        MdastNodeType::Definition => {
             // Definitions don't produce HAST output
         }
 
-        NodeType::Text => {
+        MdastNodeType::Text => {
             let data = arena.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
             let text = arena.get_str(string_ref);
             builder.add_text(text);
         }
 
-        NodeType::Emphasis => {
+        MdastNodeType::Emphasis => {
             builder.open_element("em");
             convert_children(node_id, arena, builder);
             builder.close();
         }
 
-        NodeType::Strong => {
+        MdastNodeType::Strong => {
             builder.open_element("strong");
             convert_children(node_id, arena, builder);
             builder.close();
         }
 
-        NodeType::InlineCode => {
+        MdastNodeType::InlineCode => {
             let data = arena.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
             let code = arena.get_str(string_ref);
@@ -238,12 +237,12 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             builder.close();
         }
 
-        NodeType::Break => {
+        MdastNodeType::Break => {
             builder.open_element("br");
             builder.close();
         }
 
-        NodeType::Link => {
+        MdastNodeType::Link => {
             let data = arena.get_type_data(node_id);
             let link_data = decode_link_data(data);
             let url = arena.get_str(link_data.url);
@@ -282,7 +281,7 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             builder.close();
         }
 
-        NodeType::Image => {
+        MdastNodeType::Image => {
             let data = arena.get_type_data(node_id);
             let img_data = decode_image_data(data);
             let url = arena.get_str(img_data.url);
@@ -333,7 +332,7 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             builder.close();
         }
 
-        NodeType::Table => {
+        MdastNodeType::Table => {
             builder.open_element("table");
             let child_ids = arena.get_children(node_id);
             let child_count = child_ids.len();
@@ -361,29 +360,27 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             builder.close(); // table
         }
 
-        NodeType::Delete => {
+        MdastNodeType::Delete => {
             builder.open_element("del");
             convert_children(node_id, arena, builder);
             builder.close();
         }
 
-        NodeType::FootnoteDefinition
-        | NodeType::FootnoteReference
-        | NodeType::LinkReference
-        | NodeType::ImageReference => {
+        MdastNodeType::FootnoteDefinition
+        | MdastNodeType::FootnoteReference
+        | MdastNodeType::LinkReference
+        | MdastNodeType::ImageReference => {
             // Skip for Phase 7 — reference resolution requires a pre-pass
         }
 
-        // MDX: JSX elements
-        NodeType::MdxJsxFlowElement => {
+        MdastNodeType::MdxJsxFlowElement => {
             convert_mdx_jsx_element(node_id, arena, builder, HastNodeType::MdxJsxElement);
         }
-        NodeType::MdxJsxTextElement => {
+        MdastNodeType::MdxJsxTextElement => {
             convert_mdx_jsx_element(node_id, arena, builder, HastNodeType::MdxJsxTextElement);
         }
 
-        // MDX: expressions — store as value nodes
-        NodeType::MdxFlowExpression | NodeType::MdxTextExpression => {
+        MdastNodeType::MdxFlowExpression | MdastNodeType::MdxTextExpression => {
             let data = arena.get_type_data(node_id);
             let value = if data.is_empty() {
                 ""
@@ -395,8 +392,7 @@ fn convert_node(node_id: u32, arena: &MdastArena, builder: &mut HastBuilder) {
             let _ = id;
         }
 
-        // MDX: ESM (import/export)
-        NodeType::MdxjsEsm => {
+        MdastNodeType::MdxjsEsm => {
             let data = arena.get_type_data(node_id);
             let value = if data.is_empty() {
                 ""
@@ -448,16 +444,16 @@ fn is_mdx_only_paragraph(node_id: u32, arena: &MdastArena) -> bool {
     let mut has_mdx = false;
     for &child_id in children {
         let child = arena.get_node(child_id);
-        match NodeType::from_u8(child.node_type) {
+        match MdastNodeType::from_u8(child.node_type) {
             Some(
-                NodeType::MdxJsxFlowElement
-                | NodeType::MdxJsxTextElement
-                | NodeType::MdxFlowExpression
-                | NodeType::MdxTextExpression,
+                MdastNodeType::MdxJsxFlowElement
+                | MdastNodeType::MdxJsxTextElement
+                | MdastNodeType::MdxFlowExpression
+                | MdastNodeType::MdxTextExpression,
             ) => {
                 has_mdx = true;
             }
-            Some(NodeType::Text) => {
+            Some(MdastNodeType::Text) => {
                 let data = arena.get_type_data(child_id);
                 if !data.is_empty() {
                     let sr = decode_string_ref_data(data);

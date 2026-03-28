@@ -1,27 +1,27 @@
-use mdast_arena::{codec::*, MdastArena, MdastBuilder, NodeType, StringRef};
+use tryckeri_mdast::{codec::*, MdastArena, MdastBuilder, MdastNodeType, StringRef};
 use tryckeri_plugin_api::*;
 
 fn build_test_arena() -> MdastArena {
     let source = "# Hello\n\nWorld".to_string();
     let mut b = MdastBuilder::new(source);
 
-    b.open_node(NodeType::Root);
+    b.open_node(MdastNodeType::Root);
 
-    b.open_node(NodeType::Heading);
+    b.open_node(MdastNodeType::Heading);
     b.set_position_current(0, 7, 1, 1, 1, 8);
     b.set_data_current(&encode_heading_data(1));
 
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_position_current(2, 7, 1, 3, 1, 8);
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
     b.close_node();
 
     b.close_node();
 
-    b.open_node(NodeType::Paragraph);
+    b.open_node(MdastNodeType::Paragraph);
     b.set_position_current(9, 14, 3, 1, 3, 6);
 
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_position_current(9, 14, 3, 1, 3, 6);
     b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
     b.close_node();

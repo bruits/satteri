@@ -1,21 +1,21 @@
-//! Fast markdown parser: pulldown-cmark → `mdast-arena::MdastArena`.
+//! Fast markdown parser: pulldown-cmark → `tryckeri-mdast::MdastArena`.
 //!
 //! This crate bridges pulldown-cmark's event stream into the flat MdastArena
 //! representation used by the rest of the pipeline (HAST, plugins, MDX compile).
 
-use mdast_arena::{
-    encode_code_data, encode_expression_data, encode_footnote_definition_data, encode_heading_data,
-    encode_image_data, encode_link_data, encode_list_data, encode_list_item_data, encode_math_data,
-    encode_mdx_jsx_element_data, encode_string_ref_data, encode_table_data, ColumnAlign, LineIndex,
-    MdastArena, MdastBuilder, NodeType, StringRef,
-    parse_jsx_attributes_from_tag, JsxAttr,
-    MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_SPREAD,
-};
 use pulldown_cmark::{
     CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, TextMergeWithOffset,
 };
+use tryckeri_mdast::{
+    encode_code_data, encode_expression_data, encode_footnote_definition_data, encode_heading_data,
+    encode_image_data, encode_link_data, encode_list_data, encode_list_item_data, encode_math_data,
+    encode_mdx_jsx_element_data, encode_string_ref_data, encode_table_data,
+    parse_jsx_attributes_from_tag, ColumnAlign, JsxAttr, LineIndex, MdastArena, MdastBuilder,
+    MdastNodeType, StringRef, MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP,
+    MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
+};
 
-pub use mdast_arena;
+pub use tryckeri_mdast;
 
 /// Parse options controlling which extensions are enabled.
 #[derive(Debug, Clone)]
@@ -62,7 +62,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
     let mut builder = MdastBuilder::new(source.to_string());
 
     // Open root node.
-    builder.open_node(NodeType::Root);
+    builder.open_node(MdastNodeType::Root);
     let (end_line, end_col) = line_index.offset_to_line_col(source.len() as u32);
     builder.set_position_current(0, source.len() as u32, 1, 1, end_line, end_col);
 
@@ -204,7 +204,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
                 // but leaves with content in MDAST.
                 match tag {
                     Tag::HtmlBlock => {
-                        let _id = builder.open_node(NodeType::Html);
+                        let _id = builder.open_node(MdastNodeType::Html);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
@@ -225,7 +225,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
                     }
                     Tag::MetadataBlock(_) => {
                         // Metadata blocks are also containers → leaf.
-                        let _id = builder.open_node(NodeType::Yaml);
+                        let _id = builder.open_node(MdastNodeType::Yaml);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
@@ -319,10 +319,11 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
 
                                     // Before closing the JSX node, check if it's
                                     // multi-line and should be promoted to flow.
-                                    if nt == NodeType::MdxJsxTextElement as u8
+                                    if nt == MdastNodeType::MdxJsxTextElement as u8
                                         && node_start_line != end_line
                                     {
-                                        builder.change_node_type(id, NodeType::MdxJsxFlowElement);
+                                        builder
+                                            .change_node_type(id, MdastNodeType::MdxJsxFlowElement);
                                         wrap_bare_text_in_paragraphs(&mut builder, id);
                                     }
 
@@ -411,7 +412,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             }
             Event::Text(text) => {
                 let sr = source_ref_or_alloc(source, &text, range.start, &mut builder);
-                let id = builder.add_leaf(NodeType::Text);
+                let id = builder.add_leaf(MdastNodeType::Text);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -421,7 +422,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             }
             Event::Code(code) => {
                 let sr = builder.alloc_string(&code);
-                let id = builder.add_leaf(NodeType::InlineCode);
+                let id = builder.add_leaf(MdastNodeType::InlineCode);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -432,7 +433,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             Event::Html(html) => {
                 // Standalone Html event (outside HtmlBlock).
                 let sr = source_ref_or_alloc(source, &html, range.start, &mut builder);
-                let id = builder.add_leaf(NodeType::Html);
+                let id = builder.add_leaf(MdastNodeType::Html);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -442,7 +443,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             }
             Event::InlineHtml(html) => {
                 let sr = source_ref_or_alloc(source, &html, range.start, &mut builder);
-                let id = builder.add_leaf(NodeType::Html);
+                let id = builder.add_leaf(MdastNodeType::Html);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -451,7 +452,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
                     .set_type_data(id, &encode_string_ref_data(sr));
             }
             Event::SoftBreak => {
-                let id = builder.add_leaf(NodeType::Text);
+                let id = builder.add_leaf(MdastNodeType::Text);
                 let sr = builder.alloc_string("\n");
                 builder
                     .arena_mut()
@@ -461,13 +462,13 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
                     .set_type_data(id, &encode_string_ref_data(sr));
             }
             Event::HardBreak => {
-                let id = builder.add_leaf(NodeType::Break);
+                let id = builder.add_leaf(MdastNodeType::Break);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
             }
             Event::Rule => {
-                let id = builder.add_leaf(NodeType::ThematicBreak);
+                let id = builder.add_leaf(MdastNodeType::ThematicBreak);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -483,7 +484,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
                 for i in (0..depth).rev() {
                     if let Some(node_id) = builder.stack_node_id(i) {
                         if builder.arena_ref().get_node(node_id).node_type
-                            == NodeType::ListItem as u8
+                            == MdastNodeType::ListItem as u8
                         {
                             builder.arena_mut().set_type_data(node_id, &data);
                             break;
@@ -493,16 +494,16 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             }
             Event::FootnoteReference(label) => {
                 let sr = builder.alloc_string(&label);
-                let id = builder.add_leaf(NodeType::FootnoteReference);
+                let id = builder.add_leaf(MdastNodeType::FootnoteReference);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
-                let data = mdast_arena::encode_reference_data(sr, sr, 0);
+                let data = tryckeri_mdast::encode_reference_data(sr, sr, 0);
                 builder.arena_mut().set_type_data(id, &data);
             }
             Event::InlineMath(math) => {
                 let sr = builder.alloc_string(&math);
-                let id = builder.add_leaf(NodeType::InlineMath);
+                let id = builder.add_leaf(MdastNodeType::InlineMath);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -512,7 +513,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             }
             Event::DisplayMath(math) => {
                 let sr = builder.alloc_string(&math);
-                let id = builder.add_leaf(NodeType::Math);
+                let id = builder.add_leaf(MdastNodeType::Math);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -522,7 +523,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             }
             Event::MdxFlowExpression(expr) => {
                 let sr = builder.alloc_string(&expr);
-                let id = builder.add_leaf(NodeType::MdxFlowExpression);
+                let id = builder.add_leaf(MdastNodeType::MdxFlowExpression);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -532,7 +533,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             }
             Event::MdxTextExpression(expr) => {
                 let sr = builder.alloc_string(&expr);
-                let id = builder.add_leaf(NodeType::MdxTextExpression);
+                let id = builder.add_leaf(MdastNodeType::MdxTextExpression);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -542,7 +543,7 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
             }
             Event::MdxEsm(code) => {
                 let sr = builder.alloc_string(&code);
-                let id = builder.add_leaf(NodeType::MdxjsEsm);
+                let id = builder.add_leaf(MdastNodeType::MdxjsEsm);
                 builder
                     .arena_mut()
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
@@ -574,19 +575,19 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
     (builder.finish(), mdx_errors)
 }
 
-/// Convert a pulldown-cmark Tag to a NodeType + optional type data.
+/// Convert a pulldown-cmark Tag to a MdastNodeType + optional type data.
 fn tag_to_node_type(
     tag: &Tag<'_>,
     builder: &mut MdastBuilder,
     _source: &str,
-) -> (NodeType, Option<Vec<u8>>) {
+) -> (MdastNodeType, Option<Vec<u8>>) {
     match tag {
-        Tag::Paragraph => (NodeType::Paragraph, None),
+        Tag::Paragraph => (MdastNodeType::Paragraph, None),
         Tag::Heading { level, .. } => {
             let depth = heading_level_to_u8(*level);
-            (NodeType::Heading, Some(encode_heading_data(depth)))
+            (MdastNodeType::Heading, Some(encode_heading_data(depth)))
         }
-        Tag::BlockQuote(_) => (NodeType::Blockquote, None),
+        Tag::BlockQuote(_) => (MdastNodeType::Blockquote, None),
         Tag::CodeBlock(kind) => {
             let (lang, meta) = match kind {
                 CodeBlockKind::Fenced(info) => {
@@ -611,7 +612,7 @@ fn tag_to_node_type(
             };
             // Value will be filled by child Text events; for now store empty.
             (
-                NodeType::Code,
+                MdastNodeType::Code,
                 Some(encode_code_data(lang, meta, StringRef::empty(), b'`')),
             )
         }
@@ -619,18 +620,18 @@ fn tag_to_node_type(
             let ordered = first_item.is_some();
             let start_num = first_item.unwrap_or(0) as u32;
             (
-                NodeType::List,
+                MdastNodeType::List,
                 Some(encode_list_data(ordered, start_num, !is_tight)),
             )
         }
         Tag::Item => (
-            NodeType::ListItem,
+            MdastNodeType::ListItem,
             Some(encode_list_item_data(2, false)), // 2 = not a task item
         ),
         Tag::FootnoteDefinition(label) => {
             let sr = builder.alloc_string(label);
             (
-                NodeType::FootnoteDefinition,
+                MdastNodeType::FootnoteDefinition,
                 Some(encode_footnote_definition_data(sr, sr)),
             )
         }
@@ -644,14 +645,14 @@ fn tag_to_node_type(
                     pulldown_cmark::Alignment::Right => ColumnAlign::Right,
                 })
                 .collect();
-            (NodeType::Table, Some(encode_table_data(&aligns)))
+            (MdastNodeType::Table, Some(encode_table_data(&aligns)))
         }
-        Tag::TableHead => (NodeType::TableRow, None),
-        Tag::TableRow => (NodeType::TableRow, None),
-        Tag::TableCell => (NodeType::TableCell, None),
-        Tag::Emphasis => (NodeType::Emphasis, None),
-        Tag::Strong => (NodeType::Strong, None),
-        Tag::Strikethrough => (NodeType::Delete, None),
+        Tag::TableHead => (MdastNodeType::TableRow, None),
+        Tag::TableRow => (MdastNodeType::TableRow, None),
+        Tag::TableCell => (MdastNodeType::TableCell, None),
+        Tag::Emphasis => (MdastNodeType::Emphasis, None),
+        Tag::Strong => (MdastNodeType::Strong, None),
+        Tag::Strikethrough => (MdastNodeType::Delete, None),
         Tag::Link {
             dest_url, title, ..
         } => {
@@ -661,7 +662,10 @@ fn tag_to_node_type(
             } else {
                 builder.alloc_string(title)
             };
-            (NodeType::Link, Some(encode_link_data(url_ref, title_ref)))
+            (
+                MdastNodeType::Link,
+                Some(encode_link_data(url_ref, title_ref)),
+            )
         }
         Tag::Image {
             dest_url, title, ..
@@ -674,25 +678,25 @@ fn tag_to_node_type(
             };
             let alt_ref = StringRef::empty(); // alt is filled by child text
             (
-                NodeType::Image,
+                MdastNodeType::Image,
                 Some(encode_image_data(url_ref, alt_ref, title_ref)),
             )
         }
-        Tag::HtmlBlock => (NodeType::Html, None),
-        Tag::MetadataBlock(_) => (NodeType::Yaml, None),
+        Tag::HtmlBlock => (MdastNodeType::Html, None),
+        Tag::MetadataBlock(_) => (MdastNodeType::Yaml, None),
         Tag::DefinitionList | Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
             // Map definition lists to paragraphs for now.
-            (NodeType::Paragraph, None)
+            (MdastNodeType::Paragraph, None)
         }
-        Tag::Superscript | Tag::Subscript => (NodeType::Emphasis, None),
-        Tag::ContainerBlock(_, _) => (NodeType::Blockquote, None),
+        Tag::Superscript | Tag::Subscript => (MdastNodeType::Emphasis, None),
+        Tag::ContainerBlock(_, _) => (MdastNodeType::Blockquote, None),
         Tag::MdxJsxFlowElement(raw) => {
             let data = encode_jsx_element(raw, builder);
-            (NodeType::MdxJsxFlowElement, Some(data))
+            (MdastNodeType::MdxJsxFlowElement, Some(data))
         }
         Tag::MdxJsxTextElement(raw) => {
             let data = encode_jsx_element(raw, builder);
-            (NodeType::MdxJsxTextElement, Some(data))
+            (MdastNodeType::MdxJsxTextElement, Some(data))
         }
     }
 }
@@ -710,10 +714,10 @@ fn wrap_bare_text_in_paragraphs(builder: &mut MdastBuilder, _jsx_id: u32) {
 
     for &child_id in &old_children {
         let node = builder.arena_ref().get_node(child_id);
-        let newline = if node.node_type == NodeType::Text as u8 {
+        let newline = if node.node_type == MdastNodeType::Text as u8 {
             let data = builder.arena_ref().get_type_data(child_id);
             if data.len() >= 8 {
-                let sr = mdast_arena::decode_string_ref_data(data);
+                let sr = tryckeri_mdast::decode_string_ref_data(data);
                 let text = builder.arena_ref().get_str(sr);
                 text.chars().all(|c| c == '\n' || c == '\r')
             } else {
@@ -764,7 +768,7 @@ fn wrap_bare_text_in_paragraphs(builder: &mut MdastBuilder, _jsx_id: u32) {
             last.end_column,
         );
 
-        let para_id = builder.arena_mut().alloc_node(NodeType::Paragraph);
+        let para_id = builder.arena_mut().alloc_node(MdastNodeType::Paragraph);
         builder.arena_mut().set_children(para_id, &run_child_ids);
         for &c in &run_child_ids {
             builder.arena_mut().set_parent(c, para_id);
@@ -806,7 +810,9 @@ fn find_jsx_depth(builder: &MdastBuilder) -> usize {
     for i in (0..depth).rev() {
         if let Some(node_id) = builder.stack_node_id(i) {
             let nt = builder.arena_ref().get_node(node_id).node_type;
-            if nt == NodeType::MdxJsxFlowElement as u8 || nt == NodeType::MdxJsxTextElement as u8 {
+            if nt == MdastNodeType::MdxJsxFlowElement as u8
+                || nt == MdastNodeType::MdxJsxTextElement as u8
+            {
                 return i;
             }
         }
@@ -928,14 +934,14 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mdast_arena::{decode_heading_data, decode_list_item_data};
+    use tryckeri_mdast::{decode_heading_data, decode_list_item_data};
 
     #[test]
     fn parse_simple_paragraph() {
         let (arena, _) = parse("hello world", &ParseOptions::default());
         assert!(arena.len() >= 2); // root + paragraph + text
         let root = arena.get_node(0);
-        assert_eq!(root.node_type, NodeType::Root as u8);
+        assert_eq!(root.node_type, MdastNodeType::Root as u8);
     }
 
     #[test]
@@ -944,7 +950,7 @@ mod tests {
         // Find the heading node.
         let heading = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::Heading as u8)
+            .find(|n| n.node_type == MdastNodeType::Heading as u8)
             .expect("should have a heading");
         let hd = decode_heading_data(arena.get_type_data(heading.id));
         assert_eq!(hd.depth, 1);
@@ -954,7 +960,7 @@ mod tests {
     fn parse_emphasis() {
         let (arena, _) = parse("*hello*", &ParseOptions::default());
         let has_em = (0..arena.len() as u32)
-            .any(|i| arena.get_node(i).node_type == NodeType::Emphasis as u8);
+            .any(|i| arena.get_node(i).node_type == MdastNodeType::Emphasis as u8);
         assert!(has_em);
     }
 
@@ -963,9 +969,9 @@ mod tests {
         let (arena, _) = parse("[text](https://example.com)", &ParseOptions::default());
         let link = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::Link as u8)
+            .find(|n| n.node_type == MdastNodeType::Link as u8)
             .expect("should have a link");
-        let data = mdast_arena::decode_link_data(arena.get_type_data(link.id));
+        let data = tryckeri_mdast::decode_link_data(arena.get_type_data(link.id));
         assert_eq!(arena.get_str(data.url), "https://example.com");
     }
 
@@ -974,9 +980,9 @@ mod tests {
         let (arena, _) = parse("```rust\nfn main() {}\n```\n", &ParseOptions::default());
         let code = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::Code as u8)
+            .find(|n| n.node_type == MdastNodeType::Code as u8)
             .expect("should have a code block");
-        let data = mdast_arena::decode_code_data(arena.get_type_data(code.id));
+        let data = tryckeri_mdast::decode_code_data(arena.get_type_data(code.id));
         assert_eq!(arena.get_str(data.lang), "rust");
     }
 
@@ -985,9 +991,9 @@ mod tests {
         let (arena, _) = parse("- a\n- b\n", &ParseOptions::default());
         let list = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::List as u8)
+            .find(|n| n.node_type == MdastNodeType::List as u8)
             .expect("should have a list");
-        let data = mdast_arena::decode_list_data(arena.get_type_data(list.id));
+        let data = tryckeri_mdast::decode_list_data(arena.get_type_data(list.id));
         assert!(!data.ordered);
     }
 
@@ -996,9 +1002,9 @@ mod tests {
         let (arena, _) = parse("{1 + 1}\n", &ParseOptions::mdx());
         let expr = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::MdxFlowExpression as u8)
+            .find(|n| n.node_type == MdastNodeType::MdxFlowExpression as u8)
             .expect("should have an MDX expression");
-        let data = mdast_arena::decode_expression_data(arena.get_type_data(expr.id));
+        let data = tryckeri_mdast::decode_expression_data(arena.get_type_data(expr.id));
         assert_eq!(arena.get_str(data.value), "1 + 1");
     }
 
@@ -1007,12 +1013,12 @@ mod tests {
         let (arena, _) = parse("<Component />\n", &ParseOptions::mdx());
         let jsx = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::MdxJsxFlowElement as u8)
+            .find(|n| n.node_type == MdastNodeType::MdxJsxFlowElement as u8)
             .expect("should have an MDX JSX element");
         let data = arena.get_type_data(jsx.id);
-        let name_ref = mdast_arena::decode_mdx_jsx_element_name(data);
+        let name_ref = tryckeri_mdast::decode_mdx_jsx_element_name(data);
         assert_eq!(arena.get_str(name_ref), "Component");
-        assert_eq!(mdast_arena::decode_mdx_jsx_attr_count(data), 0);
+        assert_eq!(tryckeri_mdast::decode_mdx_jsx_attr_count(data), 0);
     }
 
     #[test]
@@ -1020,9 +1026,9 @@ mod tests {
         let (arena, _) = parse("import a from 'b'\n\nc\n", &ParseOptions::mdx());
         let esm = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::MdxjsEsm as u8)
+            .find(|n| n.node_type == MdastNodeType::MdxjsEsm as u8)
             .expect("should have an MDX ESM node");
-        let data = mdast_arena::decode_expression_data(arena.get_type_data(esm.id));
+        let data = tryckeri_mdast::decode_expression_data(arena.get_type_data(esm.id));
         assert!(arena.get_str(data.value).contains("import"));
     }
 
@@ -1033,7 +1039,7 @@ mod tests {
 
         let heading = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::Heading as u8)
+            .find(|n| n.node_type == MdastNodeType::Heading as u8)
             .expect("should have a heading");
 
         let children = arena.get_children(heading.id);
@@ -1045,9 +1051,9 @@ mod tests {
         let expr = children
             .iter()
             .map(|&id| arena.get_node(id))
-            .find(|n| n.node_type == NodeType::MdxTextExpression as u8)
+            .find(|n| n.node_type == MdastNodeType::MdxTextExpression as u8)
             .expect("heading should have MdxTextExpression child");
-        let data = mdast_arena::decode_expression_data(arena.get_type_data(expr.id));
+        let data = tryckeri_mdast::decode_expression_data(arena.get_type_data(expr.id));
         assert_eq!(arena.get_str(data.value), "title");
     }
 
@@ -1058,7 +1064,7 @@ mod tests {
 
         let heading = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
-            .find(|n| n.node_type == NodeType::Heading as u8)
+            .find(|n| n.node_type == MdastNodeType::Heading as u8)
             .expect("should have a heading");
 
         let children = arena.get_children(heading.id);
@@ -1071,10 +1077,10 @@ mod tests {
         // Should have a text child and an expression child
         let has_text = children
             .iter()
-            .any(|&id| arena.get_node(id).node_type == NodeType::Text as u8);
+            .any(|&id| arena.get_node(id).node_type == MdastNodeType::Text as u8);
         let has_expr = children
             .iter()
-            .any(|&id| arena.get_node(id).node_type == NodeType::MdxTextExpression as u8);
+            .any(|&id| arena.get_node(id).node_type == MdastNodeType::MdxTextExpression as u8);
         assert!(has_text, "heading should have text child");
         assert!(has_expr, "heading should have expression child");
     }
@@ -1083,7 +1089,7 @@ mod tests {
     fn parse_task_list() {
         let (arena, _) = parse("- [ ] unchecked\n- [x] checked\n", &ParseOptions::default());
         let items: Vec<_> = (0..arena.len() as u32)
-            .filter(|&i| arena.get_node(i).node_type == NodeType::ListItem as u8)
+            .filter(|&i| arena.get_node(i).node_type == MdastNodeType::ListItem as u8)
             .collect();
         assert_eq!(items.len(), 2);
 
@@ -1098,10 +1104,13 @@ mod tests {
     fn parse_regular_list_not_task() {
         let (arena, _) = parse("- plain item\n", &ParseOptions::default());
         let item = (0..arena.len() as u32)
-            .find(|&i| arena.get_node(i).node_type == NodeType::ListItem as u8)
+            .find(|&i| arena.get_node(i).node_type == MdastNodeType::ListItem as u8)
             .expect("should have a list item");
         let data = decode_list_item_data(arena.get_type_data(item));
-        assert_eq!(data.checked, 2, "regular list item should not be a task item");
+        assert_eq!(
+            data.checked, 2,
+            "regular list item should not be a task item"
+        );
     }
 
     #[test]

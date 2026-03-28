@@ -1,7 +1,8 @@
 //! Integration tests for StringRef and get_str.
 
-use mdast_arena::{
-    decode_string_ref_data, encode_string_ref_data, MdastArena, MdastBuilder, NodeType, StringRef,
+use tryckeri_mdast::{
+    decode_string_ref_data, encode_string_ref_data, MdastArena, MdastBuilder, MdastNodeType,
+    StringRef,
 };
 
 #[test]
@@ -48,9 +49,8 @@ fn string_ref_encoded_as_type_data() {
     // Text nodes store their content as a StringRef in type_data.
     let source = "hello world";
     let mut builder = MdastBuilder::new(source.to_string());
-    builder.open_node(NodeType::Root);
-    let text_id = builder.open_node(NodeType::Text);
-    // "world" is at offset 6, len 5
+    builder.open_node(MdastNodeType::Root);
+    let text_id = builder.open_node(MdastNodeType::Text);
     let sr = StringRef::new(6, 5);
     builder.set_data_current(&encode_string_ref_data(sr));
     builder.close_node(); // text
@@ -67,13 +67,10 @@ fn string_ref_encoded_as_type_data() {
 
 #[test]
 fn string_ref_pointing_to_different_substrings() {
-    // Simulate a document with multiple text spans.
     let source = "**bold** and _italic_";
     let arena = MdastArena::new(source.to_string());
 
-    // "bold" starts at offset 2, len 4
     let bold_ref = StringRef::new(2, 4);
-    // "italic" starts at offset 14, len 6
     let italic_ref = StringRef::new(14, 6);
 
     assert_eq!(arena.get_str(bold_ref), "bold");
@@ -83,6 +80,6 @@ fn string_ref_pointing_to_different_substrings() {
 #[test]
 fn string_ref_is_copy() {
     let sr1 = StringRef::new(0, 10);
-    let sr2 = sr1; // Copy
+    let sr2 = sr1;
     assert_eq!(sr1, sr2);
 }

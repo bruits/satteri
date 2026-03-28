@@ -1,6 +1,4 @@
-//! Core MdastArena struct and methods.
-
-use crate::node::{ArenaNode, NodeType, StringRef};
+use crate::node::{MdastNode, MdastNodeType, StringRef};
 
 /// The central arena that owns all nodes and associated data for one parse.
 ///
@@ -9,12 +7,11 @@ use crate::node::{ArenaNode, NodeType, StringRef};
 #[derive(Debug, Clone)]
 pub struct MdastArena {
     /// All nodes in order of creation.
-    pub(crate) nodes: Vec<ArenaNode>,
+    pub(crate) nodes: Vec<MdastNode>,
     /// Flat array of child node IDs, indexed by node.children_start..+children_count.
     pub(crate) children: Vec<u32>,
     /// Variable-length type-specific data, packed.
     pub(crate) type_data: Vec<u8>,
-    /// The source Markdown text.
     pub(crate) source: String,
 }
 
@@ -28,29 +25,27 @@ impl MdastArena {
         }
     }
 
-    /// Allocate a new node and return its ID (== index in `nodes`).
-    pub fn alloc_node(&mut self, node_type: NodeType) -> u32 {
+    /// The returned ID equals the node's index in `self.nodes`.
+    pub fn alloc_node(&mut self, node_type: MdastNodeType) -> u32 {
         let id = self.nodes.len() as u32;
-        self.nodes.push(ArenaNode::new(id, node_type));
+        self.nodes.push(MdastNode::new(id, node_type));
         id
     }
 
-    /// Allocate a new node using a raw u8 type byte (bypasses NodeType enum).
-    /// Use this when building HAST or other non-MDAST arenas in the same binary format.
+    /// For building HAST or other non-MDAST arenas that share the binary
+    /// format, bypassing `MdastNodeType` validation.
     pub fn alloc_node_raw(&mut self, node_type_byte: u8) -> u32 {
         let id = self.nodes.len() as u32;
-        let mut node = ArenaNode::new(id, NodeType::Root); // placeholder
+        let mut node = MdastNode::new(id, MdastNodeType::Root); // placeholder
         node.node_type = node_type_byte;
         self.nodes.push(node);
         id
     }
 
-    /// Set the parent of a node.
     pub fn set_parent(&mut self, node_id: u32, parent_id: u32) {
         self.nodes[node_id as usize].parent = parent_id;
     }
 
-    /// Set position data on a node.
     #[allow(clippy::too_many_arguments)]
     pub fn set_position(
         &mut self,
@@ -71,32 +66,26 @@ impl MdastArena {
         node.end_column = end_column;
     }
 
-    /// Set children for a node — appends the slice to the flat children array
-    /// and records the start index and count on the node.
+    /// Appends to the shared flat children array — calling this more than
+    /// once on the same node orphans the previous entries.
     pub fn set_children(&mut self, node_id: u32, child_ids: &[u32]) {
         let start = self.children.len() as u32;
         self.children.extend_from_slice(child_ids);
         let node = &mut self.nodes[node_id as usize];
         node.children_start = start;
         node.children_count = child_ids.len() as u32;
-        // Update parent references
         for &child_id in child_ids {
             self.nodes[child_id as usize].parent = node_id;
         }
     }
 
-    /// Add a single child during incremental building.
-    ///
-    /// NOTE: This appends to the end of the children flat array each time it
-    /// is called.  It is meant to be called once per child when finalising a
-    /// node (i.e. from `MdastArenaBuilder::close_node`), NOT one-by-one during
-    /// open construction.  The builder accumulates children in its stack and
-    /// calls `set_children` when closing a node.
+    /// Only for finalising a node (from `MdastArenaBuilder::close_node`) —
+    /// each call appends to the shared flat children array, so interleaving
+    /// calls for different parents would corrupt child ranges.
     pub fn add_child(&mut self, parent_id: u32, child_id: u32) {
         let start = self.children.len() as u32;
         self.children.push(child_id);
         let parent = &mut self.nodes[parent_id as usize];
-        // If this node has no children yet, initialise children_start.
         if parent.children_count == 0 {
             parent.children_start = start;
         }
@@ -104,8 +93,6 @@ impl MdastArena {
         self.nodes[child_id as usize].parent = parent_id;
     }
 
-    /// Write type-specific data bytes into type_data, update node's
-    /// `data_offset`/`data_len`.
     pub fn set_type_data(&mut self, node_id: u32, data: &[u8]) {
         let offset = self.type_data.len() as u32;
         self.type_data.extend_from_slice(data);
@@ -114,17 +101,14 @@ impl MdastArena {
         node.data_len = data.len() as u32;
     }
 
-    /// Get a node by ID.
-    pub fn get_node(&self, node_id: u32) -> &ArenaNode {
+    pub fn get_node(&self, node_id: u32) -> &MdastNode {
         &self.nodes[node_id as usize]
     }
 
-    /// Get a node mutably.
-    pub fn get_node_mut(&mut self, node_id: u32) -> &mut ArenaNode {
+    pub fn get_node_mut(&mut self, node_id: u32) -> &mut MdastNode {
         &mut self.nodes[node_id as usize]
     }
 
-    /// Get all child IDs for a node.
     pub fn get_children(&self, node_id: u32) -> &[u32] {
         let node = &self.nodes[node_id as usize];
         let start = node.children_start as usize;
@@ -132,19 +116,16 @@ impl MdastArena {
         &self.children[start..end]
     }
 
-    /// Read a string from the source by StringRef.
     pub fn get_str(&self, string_ref: StringRef) -> &str {
         let start = string_ref.offset as usize;
         let end = start + string_ref.len as usize;
         &self.source[start..end]
     }
 
-    /// Get the source text.
     pub fn source(&self) -> &str {
         &self.source
     }
 
-    /// Number of nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
@@ -153,10 +134,8 @@ impl MdastArena {
         self.nodes.is_empty()
     }
 
-    /// Append a computed string to the source buffer and return a `StringRef`
-    /// pointing to it.  Use this for strings that don't map directly to the
-    /// original source (e.g. decoded character references, normalised
-    /// identifiers, alt text built from label children).
+    /// For computed strings not present verbatim in the source (e.g. decoded
+    /// character references, normalised identifiers, synthesised alt text).
     pub fn alloc_string(&mut self, s: &str) -> StringRef {
         let offset = self.source.len() as u32;
         let len = s.len() as u32;
@@ -164,18 +143,17 @@ impl MdastArena {
         StringRef::new(offset, len)
     }
 
-    /// Change the node type of an already-allocated node (used when we
-    /// discover at close time that a Link/Image is actually a reference).
-    pub fn change_node_type(&mut self, node_id: u32, new_type: NodeType) {
+    /// Used when we discover at close time that a Link/Image is actually
+    /// a reference.
+    pub fn change_node_type(&mut self, node_id: u32, new_type: MdastNodeType) {
         self.nodes[node_id as usize].node_type = new_type as u8;
     }
 
-    /// Access the raw type_data bytes (for tests and the raw buffer layer).
+    /// Exposed for tests and the raw buffer layer.
     pub fn arena_type_data(&self) -> &[u8] {
         &self.type_data
     }
 
-    /// Get the type-specific data bytes for a given node.
     pub fn get_type_data(&self, node_id: u32) -> &[u8] {
         let node = &self.nodes[node_id as usize];
         let start = node.data_offset as usize;
@@ -191,17 +169,17 @@ mod tests {
     #[test]
     fn alloc_and_retrieve() {
         let mut arena = MdastArena::new("hello world".to_string());
-        let id = arena.alloc_node(NodeType::Text);
+        let id = arena.alloc_node(MdastNodeType::Text);
         assert_eq!(id, 0);
         assert_eq!(arena.len(), 1);
         let node = arena.get_node(id);
-        assert_eq!(node.node_type, NodeType::Text as u8);
+        assert_eq!(node.node_type, MdastNodeType::Text as u8);
     }
 
     #[test]
     fn set_position_roundtrip() {
         let mut arena = MdastArena::new(String::new());
-        let id = arena.alloc_node(NodeType::Paragraph);
+        let id = arena.alloc_node(MdastNodeType::Paragraph);
         arena.set_position(id, 0, 10, 1, 1, 1, 11);
         let node = arena.get_node(id);
         assert_eq!(node.start_offset, 0);
@@ -213,9 +191,9 @@ mod tests {
     #[test]
     fn set_children_updates_parent() {
         let mut arena = MdastArena::new(String::new());
-        let parent = arena.alloc_node(NodeType::Paragraph);
-        let child1 = arena.alloc_node(NodeType::Text);
-        let child2 = arena.alloc_node(NodeType::Text);
+        let parent = arena.alloc_node(MdastNodeType::Paragraph);
+        let child1 = arena.alloc_node(MdastNodeType::Text);
+        let child2 = arena.alloc_node(MdastNodeType::Text);
         arena.set_children(parent, &[child1, child2]);
         assert_eq!(arena.get_children(parent), &[child1, child2]);
         assert_eq!(arena.get_node(child1).parent, parent);
@@ -233,7 +211,7 @@ mod tests {
     #[test]
     fn type_data_roundtrip() {
         let mut arena = MdastArena::new(String::new());
-        let id = arena.alloc_node(NodeType::Heading);
+        let id = arena.alloc_node(MdastNodeType::Heading);
         arena.set_type_data(id, &[2u8]);
         let node = arena.get_node(id);
         assert_eq!(node.data_len, 1);

@@ -51,16 +51,14 @@ fn js_options_to_rust(opts: Option<JsMdxOptions>) -> mdxjs::Options {
 #[napi]
 pub fn compile_mdx(source: String, options: Option<JsMdxOptions>) -> Result<String> {
     let opts = js_options_to_rust(options);
-    mdxjs::compile(&source, &opts)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+    mdxjs::compile(&source, &opts).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 /// Compile a pre-parsed MDAST binary buffer to MDX JavaScript output.
 #[napi]
 pub fn compile_mdx_from_buffer(buf: Uint8Array, options: Option<JsMdxOptions>) -> Result<String> {
     let opts = js_options_to_rust(options);
-    mdxjs::compile_arena_bytes(&buf, &opts)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+    mdxjs::compile_arena_bytes(&buf, &opts).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -138,8 +136,7 @@ pub fn hast_buffer_to_html_str(buf: Uint8Array) -> Result<String> {
 #[napi]
 pub fn compile_hast_buffer_to_js(buf: Uint8Array, options: Option<JsMdxOptions>) -> Result<String> {
     let opts = js_options_to_rust(options);
-    mdxjs::compile_hast_buffer(&buf, &opts)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+    mdxjs::compile_hast_buffer(&buf, &opts).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -156,17 +153,17 @@ pub fn compile_hast_buffer_to_js(buf: Uint8Array, options: Option<JsMdxOptions>)
 #[napi]
 pub fn apply_mutations(arena_buf: Uint8Array, command_buf: Uint8Array) -> Result<Uint8Array> {
     // Deserialize the arena from its binary buffer
-    let view = mdast_arena::MdastArena::from_raw_buffer(&arena_buf)
+    let view = tryckeri_mdast::MdastArena::from_raw_buffer(&arena_buf)
         .map_err(|e| napi::Error::from_reason(format!("invalid arena buffer: {e:?}")))?;
     let arena = view.to_arena();
 
     // Provide the real parser as the markdown parsing callback
-    let parse_markdown = |source: &str| -> mdast_arena::MdastArena {
+    let parse_markdown = |source: &str| -> tryckeri_mdast::MdastArena {
         let (parsed, _errors) = parser::parse(source, &parser::ParseOptions::mdx());
         parsed
     };
 
-    let new_arena = mdast_arena::apply_commands(&arena, &command_buf, &parse_markdown)
+    let new_arena = tryckeri_mdast::apply_commands(&arena, &command_buf, &parse_markdown)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
 
     Ok(Uint8Array::new(new_arena.to_raw_buffer()))
@@ -176,7 +173,7 @@ pub fn apply_mutations(arena_buf: Uint8Array, command_buf: Uint8Array) -> Result
 // Buffer metadata
 // ---------------------------------------------------------------------------
 
-/// Return metadata about the ArenaNode struct size and buffer format version.
+/// Return metadata about the MdastNode struct size and buffer format version.
 #[napi(object)]
 pub struct BufferFormat {
     pub node_struct_size: u32,
@@ -187,7 +184,7 @@ pub struct BufferFormat {
 #[napi]
 pub fn get_buffer_format() -> BufferFormat {
     BufferFormat {
-        node_struct_size: mdast_arena::NODE_STRUCT_SIZE as u32,
+        node_struct_size: tryckeri_mdast::NODE_STRUCT_SIZE as u32,
         version: 1,
         magic: "MDAR".to_string(),
     }

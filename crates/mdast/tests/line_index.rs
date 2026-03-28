@@ -1,6 +1,6 @@
 //! Integration tests for LineIndex.
 
-use mdast_arena::LineIndex;
+use tryckeri_mdast::LineIndex;
 
 #[test]
 fn single_line_offset_zero_is_line1_col1() {
@@ -11,7 +11,6 @@ fn single_line_offset_zero_is_line1_col1() {
 #[test]
 fn single_line_last_char() {
     let idx = LineIndex::from_source("hello");
-    // 'o' is at offset 4 → line 1, col 5
     assert_eq!(idx.offset_to_line_col(4), (1, 5));
     assert_eq!(idx.line_count(), 1);
 }

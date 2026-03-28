@@ -1,7 +1,7 @@
 //! Lots of helpers for dealing with OXC, particularly from unist, and for
 //! building its ES AST.
 
-use mdast_arena::mdx_types::{Location, Point, Position, id_cont, id_start};
+use tryckeri_mdast::mdx_types::{Location, Point, Position, id_cont, id_start};
 
 use std::cell::Cell;
 

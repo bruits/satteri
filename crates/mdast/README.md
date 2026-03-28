@@ -1,4 +1,4 @@
-# mdast-arena
+# tryckeri-mdast
 
 Arena-allocated MDAST nodes, binary buffer format, and zero-copy references for Tryckeri, a high-performance Markdown and MDX processor.
 

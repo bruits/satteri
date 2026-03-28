@@ -4,10 +4,10 @@
 //! over a raw buffer). Code that only needs to read the tree (e.g. HAST
 //! conversion, HTML serialization) can be generic over this trait.
 
-use crate::node::{ArenaNode, StringRef};
+use crate::node::{MdastNode, StringRef};
 
 pub trait ReadMdast {
-    fn get_node(&self, node_id: u32) -> &ArenaNode;
+    fn get_node(&self, node_id: u32) -> &MdastNode;
     fn get_children(&self, node_id: u32) -> &[u32];
     fn get_type_data(&self, node_id: u32) -> &[u8];
     fn get_str(&self, string_ref: StringRef) -> &str;
@@ -19,7 +19,7 @@ pub trait ReadMdast {
 }
 
 impl ReadMdast for crate::arena::MdastArena {
-    fn get_node(&self, node_id: u32) -> &ArenaNode {
+    fn get_node(&self, node_id: u32) -> &MdastNode {
         self.get_node(node_id)
     }
     fn get_children(&self, node_id: u32) -> &[u32] {
@@ -40,7 +40,7 @@ impl ReadMdast for crate::arena::MdastArena {
 }
 
 impl ReadMdast for crate::raw_buffer::MdastView<'_> {
-    fn get_node(&self, node_id: u32) -> &ArenaNode {
+    fn get_node(&self, node_id: u32) -> &MdastNode {
         self.get_node(node_id)
     }
     fn get_children(&self, node_id: u32) -> &[u32] {

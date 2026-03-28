@@ -2,13 +2,11 @@
 //!
 //! Tests apply patches to the "# Hello\n\nWorld" arena and verify the resulting structure.
 
-use mdast_arena::{
+use tryckeri_mdast::{
     rebuild::{rebuild, Patch},
-    MdastArena, MdastBuilder, NodeType,
+    MdastArena, MdastBuilder, MdastNodeType,
 };
 
-/// Build the standard "# Hello\n\nWorld" test arena.
-///
 /// Tree structure:
 ///   Root (0)
 ///     Heading depth=1 (1)
@@ -16,30 +14,30 @@ use mdast_arena::{
 ///     Paragraph (3)
 ///       Text "World" (4)
 fn build_hello_world() -> MdastArena {
-    use mdast_arena::codec::{encode_heading_data, encode_string_ref_data};
-    use mdast_arena::StringRef;
+    use tryckeri_mdast::codec::{encode_heading_data, encode_string_ref_data};
+    use tryckeri_mdast::StringRef;
 
     let source = "# Hello\n\nWorld".to_string();
     let mut b = MdastBuilder::new(source);
 
-    b.open_node(NodeType::Root);
+    b.open_node(MdastNodeType::Root);
     b.set_position_current(0, 14, 1, 1, 2, 6);
 
-    b.open_node(NodeType::Heading);
+    b.open_node(MdastNodeType::Heading);
     b.set_position_current(0, 7, 1, 1, 1, 8);
     b.set_data_current(&encode_heading_data(1));
 
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_position_current(2, 7, 1, 3, 1, 8);
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
     b.close_node();
 
     b.close_node(); // heading
 
-    b.open_node(NodeType::Paragraph);
+    b.open_node(MdastNodeType::Paragraph);
     b.set_position_current(9, 14, 2, 1, 2, 6);
 
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_position_current(9, 14, 2, 1, 2, 6);
     b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
     b.close_node();
@@ -50,15 +48,12 @@ fn build_hello_world() -> MdastArena {
     b.finish()
 }
 
-/// Helper: make a small single-node sub-arena for use in patches.
-fn single_node_arena(node_type: NodeType) -> MdastArena {
+fn single_node_arena(node_type: MdastNodeType) -> MdastArena {
     let mut b = MdastBuilder::new(String::new());
     b.open_node(node_type);
     b.close_node();
     b.finish()
 }
-
-// ── Test 1: Empty patches ────────────────────────────────────────────────────
 
 /// Empty patches → same structure (all nodes preserved, just fresh IDs).
 #[test]
@@ -68,19 +63,18 @@ fn empty_patches_preserves_all_nodes() {
 
     assert_eq!(rebuilt.len(), orig.len(), "node count unchanged");
 
-    // Tree shape: Root → [Heading → [Text], Paragraph → [Text]]
     assert_eq!(rebuilt.get_children(0).len(), 2);
     let h = rebuilt.get_children(0)[0];
     let p = rebuilt.get_children(0)[1];
-    assert_eq!(rebuilt.get_node(h).node_type, NodeType::Heading as u8);
-    assert_eq!(rebuilt.get_node(p).node_type, NodeType::Paragraph as u8);
+    assert_eq!(rebuilt.get_node(h).node_type, MdastNodeType::Heading as u8);
+    assert_eq!(
+        rebuilt.get_node(p).node_type,
+        MdastNodeType::Paragraph as u8
+    );
     assert_eq!(rebuilt.get_children(h).len(), 1);
     assert_eq!(rebuilt.get_children(p).len(), 1);
 }
 
-// ── Test 2: Remove a leaf node ───────────────────────────────────────────────
-
-/// Remove the Text inside Heading → heading becomes childless, 4 nodes total.
 #[test]
 fn remove_leaf_node() {
     let orig = build_hello_world();
@@ -96,7 +90,10 @@ fn remove_leaf_node() {
 
     assert_eq!(rebuilt.len(), 4, "one node removed");
     let new_h = rebuilt.get_children(0)[0];
-    assert_eq!(rebuilt.get_node(new_h).node_type, NodeType::Heading as u8);
+    assert_eq!(
+        rebuilt.get_node(new_h).node_type,
+        MdastNodeType::Heading as u8
+    );
     assert_eq!(
         rebuilt.get_children(new_h).len(),
         0,
@@ -105,13 +102,13 @@ fn remove_leaf_node() {
 
     // Paragraph + its Text are still present
     let new_p = rebuilt.get_children(0)[1];
-    assert_eq!(rebuilt.get_node(new_p).node_type, NodeType::Paragraph as u8);
+    assert_eq!(
+        rebuilt.get_node(new_p).node_type,
+        MdastNodeType::Paragraph as u8
+    );
     assert_eq!(rebuilt.get_children(new_p).len(), 1);
 }
 
-// ── Test 3: Remove a non-leaf node ───────────────────────────────────────────
-
-/// Remove the Heading (and its subtree) → Root + Paragraph + Text = 3 nodes.
 #[test]
 fn remove_non_leaf_removes_subtree() {
     let orig = build_hello_world();
@@ -129,20 +126,17 @@ fn remove_non_leaf_removes_subtree() {
     assert_eq!(root_children.len(), 1);
     assert_eq!(
         rebuilt.get_node(root_children[0]).node_type,
-        NodeType::Paragraph as u8
+        MdastNodeType::Paragraph as u8
     );
 }
 
-// ── Test 4: Replace a leaf node ──────────────────────────────────────────────
-
-/// Replace Text under Heading with ThematicBreak.
 #[test]
 fn replace_leaf_node() {
     let orig = build_hello_world();
     let heading_id = orig.get_children(0)[0];
     let text_id = orig.get_children(heading_id)[0];
 
-    let replacement = single_node_arena(NodeType::ThematicBreak);
+    let replacement = single_node_arena(MdastNodeType::ThematicBreak);
     let rebuilt = rebuild(
         &orig,
         &[Patch::Replace {
@@ -160,19 +154,16 @@ fn replace_leaf_node() {
     let child_of_h = rebuilt.get_children(new_h)[0];
     assert_eq!(
         rebuilt.get_node(child_of_h).node_type,
-        NodeType::ThematicBreak as u8
+        MdastNodeType::ThematicBreak as u8
     );
 }
 
-// ── Test 5: Replace root's child with a different node type ──────────────────
-
-/// Replace Heading (and its subtree) with a new Paragraph (no children).
 #[test]
 fn replace_root_child_with_different_type() {
     let orig = build_hello_world();
     let heading_id = orig.get_children(0)[0];
 
-    let replacement = single_node_arena(NodeType::Paragraph);
+    let replacement = single_node_arena(MdastNodeType::Paragraph);
     let rebuilt = rebuild(
         &orig,
         &[Patch::Replace {
@@ -186,27 +177,22 @@ fn replace_root_child_with_different_type() {
     assert_eq!(rebuilt.len(), 4);
     let root_children = rebuilt.get_children(0);
     assert_eq!(root_children.len(), 2);
-    // First child is now a Paragraph (the replacement)
     assert_eq!(
         rebuilt.get_node(root_children[0]).node_type,
-        NodeType::Paragraph as u8
+        MdastNodeType::Paragraph as u8
     );
-    // Second child is still the original Paragraph
     assert_eq!(
         rebuilt.get_node(root_children[1]).node_type,
-        NodeType::Paragraph as u8
+        MdastNodeType::Paragraph as u8
     );
 }
 
-// ── Test 6: Insert before a node ─────────────────────────────────────────────
-
-/// Insert ThematicBreak before Paragraph → Root has 3 children.
 #[test]
 fn insert_before_node() {
     let orig = build_hello_world();
     let para_id = orig.get_children(0)[1];
 
-    let new_tree = single_node_arena(NodeType::ThematicBreak);
+    let new_tree = single_node_arena(MdastNodeType::ThematicBreak);
     let rebuilt = rebuild(
         &orig,
         &[Patch::InsertBefore {
@@ -219,27 +205,24 @@ fn insert_before_node() {
     assert_eq!(root_children.len(), 3);
     assert_eq!(
         rebuilt.get_node(root_children[0]).node_type,
-        NodeType::Heading as u8
+        MdastNodeType::Heading as u8
     );
     assert_eq!(
         rebuilt.get_node(root_children[1]).node_type,
-        NodeType::ThematicBreak as u8
+        MdastNodeType::ThematicBreak as u8
     );
     assert_eq!(
         rebuilt.get_node(root_children[2]).node_type,
-        NodeType::Paragraph as u8
+        MdastNodeType::Paragraph as u8
     );
 }
 
-// ── Test 7: Insert after a node ──────────────────────────────────────────────
-
-/// Insert ThematicBreak after Heading → Root has 3 children.
 #[test]
 fn insert_after_node() {
     let orig = build_hello_world();
     let heading_id = orig.get_children(0)[0];
 
-    let new_tree = single_node_arena(NodeType::ThematicBreak);
+    let new_tree = single_node_arena(MdastNodeType::ThematicBreak);
     let rebuilt = rebuild(
         &orig,
         &[Patch::InsertAfter {
@@ -252,27 +235,24 @@ fn insert_after_node() {
     assert_eq!(root_children.len(), 3);
     assert_eq!(
         rebuilt.get_node(root_children[0]).node_type,
-        NodeType::Heading as u8
+        MdastNodeType::Heading as u8
     );
     assert_eq!(
         rebuilt.get_node(root_children[1]).node_type,
-        NodeType::ThematicBreak as u8
+        MdastNodeType::ThematicBreak as u8
     );
     assert_eq!(
         rebuilt.get_node(root_children[2]).node_type,
-        NodeType::Paragraph as u8
+        MdastNodeType::Paragraph as u8
     );
 }
 
-// ── Test 8: Append child ─────────────────────────────────────────────────────
-
-/// Append a Break node to Heading → Heading now has 2 children.
 #[test]
 fn append_child() {
     let orig = build_hello_world();
     let heading_id = orig.get_children(0)[0];
 
-    let child_tree = single_node_arena(NodeType::Break);
+    let child_tree = single_node_arena(MdastNodeType::Break);
     let rebuilt = rebuild(
         &orig,
         &[Patch::AppendChild {
@@ -286,23 +266,20 @@ fn append_child() {
     assert_eq!(h_children.len(), 2);
     assert_eq!(
         rebuilt.get_node(h_children[0]).node_type,
-        NodeType::Text as u8
+        MdastNodeType::Text as u8
     );
     assert_eq!(
         rebuilt.get_node(h_children[1]).node_type,
-        NodeType::Break as u8
+        MdastNodeType::Break as u8
     );
 }
 
-// ── Test 9: Prepend child ────────────────────────────────────────────────────
-
-/// Prepend a Break node to Heading → Heading now has 2 children (Break first).
 #[test]
 fn prepend_child() {
     let orig = build_hello_world();
     let heading_id = orig.get_children(0)[0];
 
-    let child_tree = single_node_arena(NodeType::Break);
+    let child_tree = single_node_arena(MdastNodeType::Break);
     let rebuilt = rebuild(
         &orig,
         &[Patch::PrependChild {
@@ -316,24 +293,21 @@ fn prepend_child() {
     assert_eq!(h_children.len(), 2);
     assert_eq!(
         rebuilt.get_node(h_children[0]).node_type,
-        NodeType::Break as u8
+        MdastNodeType::Break as u8
     );
     assert_eq!(
         rebuilt.get_node(h_children[1]).node_type,
-        NodeType::Text as u8
+        MdastNodeType::Text as u8
     );
 }
 
-// ── Test 10: Multiple patches in one rebuild ──────────────────────────────────
-
-/// Remove heading AND insert ThematicBreak after paragraph.
 #[test]
 fn multiple_patches_applied_together() {
     let orig = build_hello_world();
     let heading_id = orig.get_children(0)[0];
     let para_id = orig.get_children(0)[1];
 
-    let new_tree = single_node_arena(NodeType::ThematicBreak);
+    let new_tree = single_node_arena(MdastNodeType::ThematicBreak);
 
     let patches = vec![
         Patch::Remove {
@@ -346,31 +320,27 @@ fn multiple_patches_applied_together() {
     ];
     let rebuilt = rebuild(&orig, &patches);
 
-    // Root → [Paragraph → [Text(World)], ThematicBreak]
     let root_children = rebuilt.get_children(0);
     assert_eq!(root_children.len(), 2);
     assert_eq!(
         rebuilt.get_node(root_children[0]).node_type,
-        NodeType::Paragraph as u8
+        MdastNodeType::Paragraph as u8
     );
     assert_eq!(
         rebuilt.get_node(root_children[1]).node_type,
-        NodeType::ThematicBreak as u8
+        MdastNodeType::ThematicBreak as u8
     );
 
     // Total: Root + Paragraph + Text(World) + ThematicBreak = 4 nodes
     assert_eq!(rebuilt.len(), 4);
 }
 
-// ── Extra: parent-child integrity ────────────────────────────────────────────
-
-/// After rebuild, all parent references must be consistent.
 #[test]
 fn parent_references_consistent_after_rebuild() {
     let orig = build_hello_world();
     let para_id = orig.get_children(0)[1];
 
-    let new_tree = single_node_arena(NodeType::ThematicBreak);
+    let new_tree = single_node_arena(MdastNodeType::ThematicBreak);
     let rebuilt = rebuild(
         &orig,
         &[Patch::InsertAfter {
@@ -379,7 +349,6 @@ fn parent_references_consistent_after_rebuild() {
         }],
     );
 
-    // Verify parent references for all non-root nodes
     let root = 0u32;
     for child_id in rebuilt.get_children(root) {
         let child = rebuilt.get_node(*child_id);

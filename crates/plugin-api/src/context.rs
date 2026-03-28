@@ -1,6 +1,6 @@
 use crate::commands::{Command, NewNode};
 use crate::data::{DataMap, DataValue, TypedDataMap};
-use mdast_arena::MdastArena;
+use tryckeri_mdast::MdastArena;
 
 /// Context passed to Rust plugin visitor methods and before/after hooks.
 pub struct PluginContext<'a> {
@@ -48,10 +48,12 @@ impl<'a> PluginContext<'a> {
 
     /// Extract all text content from a subtree (depth-first concatenation)
     pub fn extract_text(&self, node_id: u32) -> String {
-        use mdast_arena::codec::decode_string_ref_data;
-        use mdast_arena::NodeType;
+        use tryckeri_mdast::codec::decode_string_ref_data;
+        use tryckeri_mdast::MdastNodeType;
         let node = self.arena.get_node(node_id);
-        if node.node_type == NodeType::Text as u8 || node.node_type == NodeType::InlineCode as u8 {
+        if node.node_type == MdastNodeType::Text as u8
+            || node.node_type == MdastNodeType::InlineCode as u8
+        {
             let data = self.arena.get_type_data(node_id);
             if !data.is_empty() {
                 let string_ref = decode_string_ref_data(data);

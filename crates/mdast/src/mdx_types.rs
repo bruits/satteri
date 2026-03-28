@@ -6,10 +6,6 @@
 use core::fmt;
 use unicode_id::UnicodeID;
 
-// ---------------------------------------------------------------------------
-// Unist types
-// ---------------------------------------------------------------------------
-
 /// One place in a source file.
 #[derive(Clone, Eq, PartialEq)]
 pub struct Point {
@@ -74,10 +70,6 @@ impl fmt::Debug for Position {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Message types
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
     pub place: Option<Box<Place>>,
@@ -113,10 +105,6 @@ impl fmt::Display for Place {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Location (byte offset → line/col mapper)
-// ---------------------------------------------------------------------------
 
 /// Each stop represents a new slice: (relative_offset, absolute_offset).
 pub type Stop = (usize, usize);
@@ -190,10 +178,6 @@ impl Location {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MDX signal types
-// ---------------------------------------------------------------------------
-
 /// Signal used as feedback when parsing MDX ESM/expressions.
 #[derive(Clone, Debug)]
 pub enum MdxSignal {
@@ -202,17 +186,12 @@ pub enum MdxSignal {
     Ok,
 }
 
-/// Expression kind.
 #[derive(Clone, Debug)]
 pub enum MdxExpressionKind {
     Expression,
     AttributeExpression,
     AttributeValueExpression,
 }
-
-// ---------------------------------------------------------------------------
-// MDX attribute types
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AttributeContent {
@@ -244,27 +223,17 @@ pub struct MdxJsxExpressionAttribute {
     pub stops: Vec<Stop>,
 }
 
-// ---------------------------------------------------------------------------
-// JS identifier helpers
-// ---------------------------------------------------------------------------
-
-/// Check if a character can start a JS identifier.
 #[must_use]
 pub fn id_start(char: char) -> bool {
     UnicodeID::is_id_start(char) || matches!(char, '$' | '_')
 }
 
-/// Check if a character can continue a JS (or JSX) identifier.
 #[must_use]
 pub fn id_cont(char: char, jsx: bool) -> bool {
     UnicodeID::is_id_continue(char)
         || matches!(char, '\u{200c}' | '\u{200d}')
         || (jsx && char == '-')
 }
-
-// ---------------------------------------------------------------------------
-// URI sanitization
-// ---------------------------------------------------------------------------
 
 /// Make a value safe for injection as a URL.
 #[must_use]

@@ -12,7 +12,7 @@
 import type { MdastNode } from "./types.js";
 
 // ---------------------------------------------------------------------------
-// Field IDs — must match crates/mdast-arena/src/commands.rs
+// Field IDs — must match crates/mdast/src/commands.rs
 // ---------------------------------------------------------------------------
 
 export const FIELD_DEPTH = 0x0001;

@@ -10,15 +10,15 @@ Tryckeri is a Rust + TypeScript monorepo, that contains the following crates (Ru
 
 | Name                    | Description                                                                            | Registry | README                                             |
 | ----------------------- | -------------------------------------------------------------------------------------- | -------- | -------------------------------------------------- |
-| `mdast-arena`           | Arena-allocated MDAST with zero-copy string references and binary buffer format        | _WIP_    | [README](./crates/mdast-arena/README.md)           |
-| `parser`                | Bridges pulldown-cmark events into an `MdastArena` (tables, footnotes, math, MDX, …)   | _WIP_    | [README](./crates/parser/README.md)                |
-| `tryckeri-hast`         | MDAST → HAST conversion and HTML serialization, with binary HAST buffer support        | _WIP_    | [README](./crates/hast/README.md)                  |
-| `tryckeri-plugin-api`   | Rust `Plugin` trait, typed visitors, `PluginRunner`, and command/patch mutation system | _WIP_    | [README](./crates/plugin-api/README.md)            |
-| `tryckeri-napi`         | NAPI bindings exposing the Rust pipeline to Node.js                                    | _WIP_    | [README](./crates/napi-binding/README.md)          |
-| `mdxjs`                 | MDX → JavaScript compiler — fork of [mdxjs-rs] adapted for pulldown-cmark and [OXC]    | _WIP_    | [README](./crates/mdxjs-rs/readme.md)              |
-| `pulldown-cmark`        | Vendored CommonMark parser with MDX extension support                                  | _WIP_    | _—_                                                |
-| `pulldown-cmark-escape` | Vendored HTML escape utilities from the pulldown-cmark project                         | _WIP_    | [README](./crates/pulldown-cmark-escape/README.md) |
-| `tryckeri-bench`        | Benchmarks and profiling harnesses for the pipeline                                    | _WIP_    | [README](./crates/bench/README.md)                 |
+| `tryckeri-mdast`        | Arena-allocated MDAST with zero-copy string references and binary buffer format        | *WIP*    | [README](./crates/mdast/README.md)                 |
+| `parser`                | Bridges pulldown-cmark events into an `MdastArena` (tables, footnotes, math, MDX, …)   | *WIP*    | [README](./crates/parser/README.md)                |
+| `tryckeri-hast`         | MDAST → HAST conversion and HTML serialization, with binary HAST buffer support        | *WIP*    | [README](./crates/hast/README.md)                  |
+| `tryckeri-plugin-api`   | Rust `Plugin` trait, typed visitors, `PluginRunner`, and command/patch mutation system | *WIP*    | [README](./crates/plugin-api/README.md)            |
+| `tryckeri-napi`         | NAPI bindings exposing the Rust pipeline to Node.js                                    | *WIP*    | [README](./crates/napi-binding/README.md)          |
+| `mdxjs`                 | MDX → JavaScript compiler — fork of [mdxjs-rs] adapted for pulldown-cmark and [OXC]    | *WIP*    | [README](./crates/mdxjs-rs/readme.md)              |
+| `pulldown-cmark`        | Vendored CommonMark parser with MDX extension support                                  | *WIP*    | *—*                                                |
+| `pulldown-cmark-escape` | Vendored HTML escape utilities from the pulldown-cmark project                         | *WIP*    | [README](./crates/pulldown-cmark-escape/README.md) |
+| `tryckeri-bench`        | Benchmarks and profiling harnesses for the pipeline                                    | *WIP*    | [README](./crates/bench/README.md)                 |
 
 Tryckeri also includes the following npm package:
 

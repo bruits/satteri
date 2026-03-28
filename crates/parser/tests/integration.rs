@@ -176,7 +176,7 @@ fn jsx_inline_with_children() {
     let (arena, _) = parse("a <b>c</b> d", &ParseOptions::mdx());
     let jsx = (0..arena.len() as u32)
         .map(|i| arena.get_node(i))
-        .find(|n| n.node_type == mdast_arena::NodeType::MdxJsxTextElement as u8)
+        .find(|n| n.node_type == tryckeri_mdast::MdastNodeType::MdxJsxTextElement as u8)
         .expect("should have MdxJsxTextElement");
     // The JSX element should have children (the text "c").
     assert!(
@@ -191,7 +191,7 @@ fn jsx_fragment_with_children() {
     let (arena, _) = parse("<>a</>", &ParseOptions::mdx());
     let jsx = (0..arena.len() as u32)
         .map(|i| arena.get_node(i))
-        .find(|n| n.node_type == mdast_arena::NodeType::MdxJsxTextElement as u8)
+        .find(|n| n.node_type == tryckeri_mdast::MdastNodeType::MdxJsxTextElement as u8)
         .expect("should have MdxJsxTextElement for fragment");
     assert!(
         jsx.children_count > 0,
@@ -206,8 +206,8 @@ fn jsx_self_closing_no_children() {
     let jsx = (0..arena.len() as u32)
         .map(|i| arena.get_node(i))
         .find(|n| {
-            n.node_type == mdast_arena::NodeType::MdxJsxFlowElement as u8
-                || n.node_type == mdast_arena::NodeType::MdxJsxTextElement as u8
+            n.node_type == tryckeri_mdast::MdastNodeType::MdxJsxFlowElement as u8
+                || n.node_type == tryckeri_mdast::MdastNodeType::MdxJsxTextElement as u8
         })
         .expect("should have MDX JSX");
     assert_eq!(
@@ -223,7 +223,7 @@ fn jsx_flow_with_children() {
     let (arena, _) = parse("<x>\n  b\n</x>", &ParseOptions::mdx());
     let jsx = (0..arena.len() as u32)
         .map(|i| arena.get_node(i))
-        .find(|n| n.node_type == mdast_arena::NodeType::MdxJsxFlowElement as u8)
+        .find(|n| n.node_type == tryckeri_mdast::MdastNodeType::MdxJsxFlowElement as u8)
         .expect("should have MdxJsxFlowElement");
     assert!(
         jsx.children_count > 0,
@@ -238,7 +238,10 @@ fn jsx_flow_with_children_html() {
     let html = tryckeri_hast::mdast_to_html(&arena);
     // MDX JSX elements have no HTML representation — they're only used in the
     // MDX→JS compilation path. The markdown heading should still be present.
-    assert!(!html.contains("asd"), "MDX JSX should not render as HTML, got: {html}");
+    assert!(
+        !html.contains("asd"),
+        "MDX JSX should not render as HTML, got: {html}"
+    );
     assert!(html.contains("qwe"), "expected qwe in: {html}");
 }
 
@@ -259,11 +262,12 @@ Some {expression} here.
     let (arena, _) = parse(md, &ParseOptions::mdx());
     // Verify the arena has MDX nodes.
     let has_esm = (0..arena.len() as u32)
-        .any(|i| arena.get_node(i).node_type == mdast_arena::NodeType::MdxjsEsm as u8);
+        .any(|i| arena.get_node(i).node_type == tryckeri_mdast::MdastNodeType::MdxjsEsm as u8);
     assert!(has_esm, "should have ESM node");
 
-    let has_jsx = (0..arena.len() as u32)
-        .any(|i| arena.get_node(i).node_type == mdast_arena::NodeType::MdxJsxFlowElement as u8);
+    let has_jsx = (0..arena.len() as u32).any(|i| {
+        arena.get_node(i).node_type == tryckeri_mdast::MdastNodeType::MdxJsxFlowElement as u8
+    });
     assert!(has_jsx, "should have JSX flow node");
 }
 
@@ -272,14 +276,26 @@ fn task_list_to_html() {
     let (arena, _) = parse("- [ ] unchecked\n- [x] checked\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     eprintln!("HTML output: {html}");
-    assert!(html.contains("type=\"checkbox\""), "expected checkbox input, got: {html}");
-    assert!(html.contains("checked"), "expected checked attribute, got: {html}");
+    assert!(
+        html.contains("type=\"checkbox\""),
+        "expected checkbox input, got: {html}"
+    );
+    assert!(
+        html.contains("checked"),
+        "expected checked attribute, got: {html}"
+    );
 }
 
 #[test]
 fn task_list_loose_to_html() {
-    let (arena, _) = parse("- [ ] unchecked\n\n- [x] checked\n", &ParseOptions::default());
+    let (arena, _) = parse(
+        "- [ ] unchecked\n\n- [x] checked\n",
+        &ParseOptions::default(),
+    );
     let html = tryckeri_hast::mdast_to_html(&arena);
     eprintln!("HTML output (loose): {html}");
-    assert!(html.contains("type=\"checkbox\""), "expected checkbox input, got: {html}");
+    assert!(
+        html.contains("type=\"checkbox\""),
+        "expected checkbox input, got: {html}"
+    );
 }

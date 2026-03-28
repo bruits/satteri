@@ -12,8 +12,6 @@ use crate::oxc_utils::{
 use core::str;
 use std::cell::Cell;
 
-use mdast_arena::MdastView;
-use mdast_arena::mdx_types::{self as message, Location, MdxExpressionKind};
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{
     Expression, ExpressionStatement, JSXAttribute, JSXAttributeItem, JSXAttributeValue, JSXChild,
@@ -34,6 +32,8 @@ use tryckeri_hast::node_types::{
     MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD, PROP_BOOL_TRUE,
     PROP_COMMA_SEP, PROP_SPACE_SEP, PROP_STRING,
 };
+use tryckeri_mdast::MdastView;
+use tryckeri_mdast::mdx_types::{self as message, Location, MdxExpressionKind};
 
 /// Get a Span from a HAST binary node's position data.
 /// Uses offset+1 convention so that (0,0) remains SPAN (dummy).
@@ -334,11 +334,7 @@ fn all<'a>(
                     i += 1;
                 }
                 if !html_buf.is_empty() {
-                    result.push(create_raw_html_jsx(
-                        context.allocator,
-                        &html_buf,
-                        config,
-                    ));
+                    result.push(create_raw_html_jsx(context.allocator, &html_buf, config));
                 }
             } else {
                 if let Some(child) = one(context, child_id, explicit_jsxs)? {

@@ -1,9 +1,9 @@
 //! Integration tests for type-specific data codec.
 
-use mdast_arena::{
+use tryckeri_mdast::{
     decode_code_data, decode_heading_data, decode_link_data, decode_list_data, decode_table_data,
     encode_code_data, encode_heading_data, encode_link_data, encode_list_data, encode_table_data,
-    ColumnAlign, MdastBuilder, NodeType, StringRef,
+    ColumnAlign, MdastBuilder, MdastNodeType, StringRef,
 };
 
 #[test]
@@ -18,8 +18,6 @@ fn encode_decode_heading_data() {
 #[test]
 fn encode_decode_link_data_with_url() {
     let _source = "https://example.com title text";
-    // url: "https://example.com" = offset 0, len 19
-    // title: "title text" = offset 20, len 10
     let url = StringRef::new(0, 19);
     let title = StringRef::new(20, 10);
     let bytes = encode_link_data(url, title);
@@ -41,7 +39,6 @@ fn encode_decode_link_data_no_title() {
 
 #[test]
 fn encode_decode_code_data() {
-    // lang: offset 0, len 2 ("rs"); meta: offset 3, len 8
     let lang = StringRef::new(0, 2);
     let meta = StringRef::new(3, 8);
     let bytes = encode_code_data(lang, meta, StringRef::empty(), b'`');
@@ -91,14 +88,13 @@ fn encode_decode_table_data_empty() {
     assert!(decoded.is_empty());
 }
 
-/// Store type data via MdastBuilder and read it back through the arena.
 #[test]
 fn type_data_stored_in_arena() {
     let mut builder = MdastBuilder::new("# Title".to_string());
-    builder.open_node(NodeType::Root);
-    let heading = builder.open_node(NodeType::Heading);
+    builder.open_node(MdastNodeType::Root);
+    let heading = builder.open_node(MdastNodeType::Heading);
     builder.set_data_current(&encode_heading_data(2));
-    builder.add_leaf(NodeType::Text);
+    builder.add_leaf(MdastNodeType::Text);
     builder.close_node();
     builder.close_node();
     let arena = builder.finish();

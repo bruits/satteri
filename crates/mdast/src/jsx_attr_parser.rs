@@ -12,27 +12,22 @@ pub enum JsxAttr {
     Spread(String),                 // {...expr}
 }
 
-/// Parse JSX attributes from the raw source text of an MDX JSX element.
 pub fn parse_jsx_attributes_from_tag(text: &str) -> Vec<JsxAttr> {
-    // Extract just the opening tag
     let tag = extract_opening_tag(text);
     let bytes = tag.as_bytes();
     let len = bytes.len();
 
     let mut attrs = Vec::new();
-    let mut i = 1; // skip '<'
+    let mut i = 1;
 
-    // Skip optional '/'
     if i < len && bytes[i] == b'/' {
         i += 1;
     }
 
-    // Skip whitespace
     while i < len && bytes[i].is_ascii_whitespace() {
         i += 1;
     }
 
-    // Skip tag name
     while i < len
         && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'.' | b'-' | b':' | b'_'))
     {
@@ -40,7 +35,6 @@ pub fn parse_jsx_attributes_from_tag(text: &str) -> Vec<JsxAttr> {
     }
 
     loop {
-        // Skip whitespace
         while i < len && bytes[i].is_ascii_whitespace() {
             i += 1;
         }
@@ -51,9 +45,9 @@ pub fn parse_jsx_attributes_from_tag(text: &str) -> Vec<JsxAttr> {
             break;
         }
 
-        // Spread expression: {...expr}
+        // Spread expression
         if bytes[i] == b'{' {
-            i += 1; // skip '{'
+            i += 1;
             let start = i;
             let mut depth = 1i32;
             while i < len && depth > 0 {
@@ -79,7 +73,6 @@ pub fn parse_jsx_attributes_from_tag(text: &str) -> Vec<JsxAttr> {
             continue;
         }
 
-        // Named attribute
         let name_start = i;
         while i < len
             && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b':' | b'_'))
@@ -92,7 +85,6 @@ pub fn parse_jsx_attributes_from_tag(text: &str) -> Vec<JsxAttr> {
         }
         let name = tag[name_start..i].to_string();
 
-        // Skip whitespace
         while i < len && bytes[i].is_ascii_whitespace() {
             i += 1;
         }
@@ -107,7 +99,6 @@ pub fn parse_jsx_attributes_from_tag(text: &str) -> Vec<JsxAttr> {
                 continue;
             }
             if bytes[i] == b'"' || bytes[i] == b'\'' {
-                // String literal
                 let q = bytes[i];
                 i += 1;
                 let val_start = i;
@@ -123,7 +114,6 @@ pub fn parse_jsx_attributes_from_tag(text: &str) -> Vec<JsxAttr> {
                 }
                 attrs.push(JsxAttr::LiteralProp(name, value));
             } else if bytes[i] == b'{' {
-                // Expression value
                 i += 1;
                 let val_start = i;
                 let mut depth = 1i32;
@@ -195,7 +185,6 @@ pub fn extract_opening_tag(text: &str) -> &str {
     text
 }
 
-/// Attribute kind constants for binary encoding.
 pub const MDX_ATTR_BOOLEAN_PROP: u8 = 0;
 pub const MDX_ATTR_LITERAL_PROP: u8 = 1;
 pub const MDX_ATTR_EXPRESSION_PROP: u8 = 2;
@@ -243,8 +232,7 @@ mod tests {
 
     #[test]
     fn parse_mixed_attrs() {
-        let attrs =
-            parse_jsx_attributes_from_tag(r#"<C a="1" b={2} c {...d} />"#);
+        let attrs = parse_jsx_attributes_from_tag(r#"<C a="1" b={2} c {...d} />"#);
         assert_eq!(
             attrs,
             vec![

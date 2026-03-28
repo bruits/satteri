@@ -11,8 +11,6 @@ use crate::oxc_utils::{
 };
 use std::cell::Cell;
 
-use mdast_arena::mdx_types as message;
-use mdast_arena::mdx_types::{Location, Point, Position};
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{
     Argument, AssignmentPattern, BindingPattern, ConditionalExpression, Declaration,
@@ -25,6 +23,8 @@ use oxc_ast::ast::{
 };
 use oxc_span::SPAN;
 use oxc_syntax::node::NodeId;
+use tryckeri_mdast::mdx_types as message;
+use tryckeri_mdast::mdx_types::{Location, Point, Position};
 
 /// JSX runtimes (default: `JsxRuntime::Automatic`).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

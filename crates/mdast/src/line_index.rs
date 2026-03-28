@@ -1,5 +1,3 @@
-//! LineIndex — maps byte offsets to (line, column) pairs.
-
 /// Maps byte offsets in the source to 1-based (line, column) pairs.
 ///
 /// Built once from the source text; lookups are O(log n) via binary search.
@@ -11,7 +9,6 @@ pub struct LineIndex {
 }
 
 impl LineIndex {
-    /// Build a LineIndex from the source text.
     pub fn from_source(source: &str) -> Self {
         let mut offsets = vec![0u32];
         for (i, b) in source.bytes().enumerate() {
@@ -24,12 +21,9 @@ impl LineIndex {
         }
     }
 
-    /// Convert a byte offset to a 1-based `(line, column)` pair.
     pub fn offset_to_line_col(&self, offset: u32) -> (u32, u32) {
-        // Binary search for the last line start <= offset.
         match self.line_offsets.binary_search(&offset) {
             Ok(idx) => {
-                // Exact match: offset is the start of a line.
                 let line = idx as u32 + 1;
                 (line, 1)
             }

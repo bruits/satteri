@@ -3,8 +3,8 @@ use crate::context::{Diagnostic, PluginContext};
 use crate::data::{DataMap, TypedDataMap};
 use crate::plugin::{NodeView, Plugin, VisitResult};
 use crate::typed_nodes::*;
-use mdast_arena::rebuild::{rebuild, Patch};
-use mdast_arena::{MdastArena, MdastBuilder, NodeType};
+use tryckeri_mdast::rebuild::{rebuild, Patch};
+use tryckeri_mdast::{MdastArena, MdastBuilder, MdastNodeType};
 
 /// Result of running plugins against an arena.
 pub struct PluginRunResult {
@@ -196,21 +196,25 @@ fn dispatch_visitor(
     arena: &MdastArena,
     ctx: &mut PluginContext,
 ) -> VisitResult {
-    match NodeType::from_u8(node_type_byte) {
-        Some(NodeType::Heading) => plugin.visit_heading(&Heading { node_id, arena }, ctx),
-        Some(NodeType::Paragraph) => plugin.visit_paragraph(&Paragraph { node_id, arena }, ctx),
-        Some(NodeType::Text) => plugin.visit_text(&Text { node_id, arena }, ctx),
-        Some(NodeType::Link) => plugin.visit_link(&Link { node_id, arena }, ctx),
-        Some(NodeType::Image) => plugin.visit_image(&Image { node_id, arena }, ctx),
-        Some(NodeType::Code) => plugin.visit_code(&Code { node_id, arena }, ctx),
-        Some(NodeType::List) => plugin.visit_list(&NodeView { node_id, arena }, ctx),
-        Some(NodeType::ListItem) => plugin.visit_list_item(&NodeView { node_id, arena }, ctx),
-        Some(NodeType::Blockquote) => plugin.visit_blockquote(&NodeView { node_id, arena }, ctx),
-        Some(NodeType::Emphasis) => plugin.visit_emphasis(&NodeView { node_id, arena }, ctx),
-        Some(NodeType::Strong) => plugin.visit_strong(&NodeView { node_id, arena }, ctx),
-        Some(NodeType::InlineCode) => plugin.visit_inline_code(&Text { node_id, arena }, ctx),
-        Some(NodeType::Html) => plugin.visit_html(&Text { node_id, arena }, ctx),
-        Some(NodeType::Table) => plugin.visit_table(&NodeView { node_id, arena }, ctx),
+    match MdastNodeType::from_u8(node_type_byte) {
+        Some(MdastNodeType::Heading) => plugin.visit_heading(&Heading { node_id, arena }, ctx),
+        Some(MdastNodeType::Paragraph) => {
+            plugin.visit_paragraph(&Paragraph { node_id, arena }, ctx)
+        }
+        Some(MdastNodeType::Text) => plugin.visit_text(&Text { node_id, arena }, ctx),
+        Some(MdastNodeType::Link) => plugin.visit_link(&Link { node_id, arena }, ctx),
+        Some(MdastNodeType::Image) => plugin.visit_image(&Image { node_id, arena }, ctx),
+        Some(MdastNodeType::Code) => plugin.visit_code(&Code { node_id, arena }, ctx),
+        Some(MdastNodeType::List) => plugin.visit_list(&NodeView { node_id, arena }, ctx),
+        Some(MdastNodeType::ListItem) => plugin.visit_list_item(&NodeView { node_id, arena }, ctx),
+        Some(MdastNodeType::Blockquote) => {
+            plugin.visit_blockquote(&NodeView { node_id, arena }, ctx)
+        }
+        Some(MdastNodeType::Emphasis) => plugin.visit_emphasis(&NodeView { node_id, arena }, ctx),
+        Some(MdastNodeType::Strong) => plugin.visit_strong(&NodeView { node_id, arena }, ctx),
+        Some(MdastNodeType::InlineCode) => plugin.visit_inline_code(&Text { node_id, arena }, ctx),
+        Some(MdastNodeType::Html) => plugin.visit_html(&Text { node_id, arena }, ctx),
+        Some(MdastNodeType::Table) => plugin.visit_table(&NodeView { node_id, arena }, ctx),
         _ => VisitResult::NoChange,
     }
 }

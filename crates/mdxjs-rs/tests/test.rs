@@ -3,7 +3,7 @@ use mdxjs::{JsxRuntime, OptimizeStaticConfig, Options, compile};
 use pretty_assertions::assert_eq;
 
 #[test]
-fn simple() -> Result<(), mdast_arena::mdx_types::Message> {
+fn simple() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile("", &Options::default())?,
         "import { Fragment as _Fragment, jsx as _jsx } from \"react/jsx-runtime\";
@@ -23,7 +23,7 @@ export default MDXContent;
 }
 
 #[test]
-fn development() -> Result<(), mdast_arena::mdx_types::Message> {
+fn development() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile("<A />", &Options {
             development: true,
@@ -56,7 +56,7 @@ function _missingMdxReference(id, component, place) {
 }
 
 #[test]
-fn provider() -> Result<(), mdast_arena::mdx_types::Message> {
+fn provider() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile("<A />",  &Options {
             provider_import_source: Some("@mdx-js/react".into()),
@@ -85,7 +85,7 @@ function _missingMdxReference(id, component) {
 }
 
 #[test]
-fn jsx() -> Result<(), mdast_arena::mdx_types::Message> {
+fn jsx() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile("", &Options {
             jsx: true,
@@ -107,7 +107,7 @@ export default MDXContent;
 }
 
 #[test]
-fn classic() -> Result<(), mdast_arena::mdx_types::Message> {
+fn classic() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile("", &Options {
             jsx_runtime: Some(JsxRuntime::Classic),
@@ -130,7 +130,7 @@ export default MDXContent;
 }
 
 #[test]
-fn import_source() -> Result<(), mdast_arena::mdx_types::Message> {
+fn import_source() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile(
             "",
@@ -156,7 +156,7 @@ export default MDXContent;
 }
 
 #[test]
-fn pragmas() -> Result<(), mdast_arena::mdx_types::Message> {
+fn pragmas() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile("", &Options {
             jsx_runtime: Some(JsxRuntime::Classic),
@@ -182,7 +182,7 @@ export default MDXContent;
 }
 
 #[test]
-fn unravel_elements() -> Result<(), mdast_arena::mdx_types::Message> {
+fn unravel_elements() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     let result = compile("<x>a</x>\n<x>\n  b\n</x>\n", &Default::default())?;
     // Must produce valid JS with both <x> elements.
     assert!(
@@ -199,7 +199,7 @@ fn unravel_elements() -> Result<(), mdast_arena::mdx_types::Message> {
 }
 
 #[test]
-fn unravel_expressions() -> Result<(), mdast_arena::mdx_types::Message> {
+fn unravel_expressions() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile("{1} {2}", &Default::default())?,
         "import { Fragment as _Fragment, jsx as _jsx, jsxs as _jsxs } from \"react/jsx-runtime\";
@@ -225,7 +225,7 @@ export default MDXContent;
 }
 
 #[test]
-fn explicit_jsx() -> Result<(), mdast_arena::mdx_types::Message> {
+fn explicit_jsx() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     assert_eq!(
         compile(
             "<h1>asd</h1>
@@ -259,7 +259,7 @@ export default MDXContent;
 // ---------------------------------------------------------------------------
 
 #[test]
-fn optimize_static_default_off() -> Result<(), mdast_arena::mdx_types::Message> {
+fn optimize_static_default_off() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     // With no optimize_static, output should contain _jsx("h1", ...) calls.
     let result = compile("# Hello\n\nWorld", &Options::default())?;
     assert!(
@@ -274,7 +274,7 @@ fn optimize_static_default_off() -> Result<(), mdast_arena::mdx_types::Message> 
 }
 
 #[test]
-fn optimize_static_astro_style() -> Result<(), mdast_arena::mdx_types::Message> {
+fn optimize_static_astro_style() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     let result = compile(
         "# Hello\n\nWorld",
         &Options {
@@ -304,7 +304,7 @@ fn optimize_static_astro_style() -> Result<(), mdast_arena::mdx_types::Message> 
 }
 
 #[test]
-fn optimize_static_react_style() -> Result<(), mdast_arena::mdx_types::Message> {
+fn optimize_static_react_style() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     let result = compile(
         "# Hello\n\nWorld",
         &Options {
@@ -329,7 +329,7 @@ fn optimize_static_react_style() -> Result<(), mdast_arena::mdx_types::Message> 
 }
 
 #[test]
-fn optimize_static_mixed_dynamic() -> Result<(), mdast_arena::mdx_types::Message> {
+fn optimize_static_mixed_dynamic() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     // Static content + dynamic MDX component — static parts should be collapsed,
     // dynamic parts should remain as JSX.
     let result = compile(
@@ -352,7 +352,7 @@ fn optimize_static_mixed_dynamic() -> Result<(), mdast_arena::mdx_types::Message
 }
 
 #[test]
-fn optimize_static_ignore_elements() -> Result<(), mdast_arena::mdx_types::Message> {
+fn optimize_static_ignore_elements() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     let result = compile(
         "# Hello\n\nWorld",
         &Options {
@@ -377,7 +377,7 @@ fn optimize_static_ignore_elements() -> Result<(), mdast_arena::mdx_types::Messa
 }
 
 #[test]
-fn optimize_static_sibling_grouping() -> Result<(), mdast_arena::mdx_types::Message> {
+fn optimize_static_sibling_grouping() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     // Multiple consecutive static elements should be grouped into one set:html
     let result = compile(
         "# A\n\n## B\n\n### C",
@@ -387,18 +387,9 @@ fn optimize_static_sibling_grouping() -> Result<(), mdast_arena::mdx_types::Mess
         },
     )?;
     // All three headings should be in a single set:html
-    assert!(
-        result.contains("<h1>A</h1>"),
-        "should contain h1: {result}"
-    );
-    assert!(
-        result.contains("<h2>B</h2>"),
-        "should contain h2: {result}"
-    );
-    assert!(
-        result.contains("<h3>C</h3>"),
-        "should contain h3: {result}"
-    );
+    assert!(result.contains("<h1>A</h1>"), "should contain h1: {result}");
+    assert!(result.contains("<h2>B</h2>"), "should contain h2: {result}");
+    assert!(result.contains("<h3>C</h3>"), "should contain h3: {result}");
     // Count occurrences of set:html — should be exactly 1 for fully static content
     let count = result.matches("set:html").count();
     assert_eq!(count, 1, "should have exactly one set:html group: {result}");
@@ -406,8 +397,8 @@ fn optimize_static_sibling_grouping() -> Result<(), mdast_arena::mdx_types::Mess
 }
 
 #[test]
-fn optimize_static_nested_dynamic_prevents_collapse() -> Result<(), mdast_arena::mdx_types::Message>
-{
+fn optimize_static_nested_dynamic_prevents_collapse()
+-> Result<(), tryckeri_mdast::mdx_types::Message> {
     // A paragraph with an inline expression cannot be collapsed
     let result = compile(
         "# Static\n\nHello {name} world",

@@ -2,7 +2,6 @@
 
 use crate::node::{HastArena, HastNodeType, PropertyValue};
 
-/// Serialize a HAST arena to an HTML string.
 pub fn hast_to_html(hast: &HastArena) -> String {
     let mut out = String::with_capacity(hast.strings.len());
     serialize_node(0, hast, &mut out);
@@ -98,7 +97,6 @@ fn serialize_node(node_id: u32, hast: &HastArena, out: &mut String) {
     }
 }
 
-/// HTML void elements (self-closing, no children)
 fn is_void_element(tag: &str) -> bool {
     matches!(
         tag,

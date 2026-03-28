@@ -1,6 +1,6 @@
 //! Convert a HAST binary buffer to an HTML string.
 
-use mdast_arena::{BufferError, MdastArena, MdastView};
+use tryckeri_mdast::{BufferError, MdastArena, MdastView};
 
 use crate::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
@@ -27,7 +27,6 @@ fn is_void(tag: &str) -> bool {
     )
 }
 
-/// Convert a HAST binary buffer to an HTML string.
 pub fn hast_buffer_to_html(buf: &[u8]) -> Result<String, BufferError> {
     let view = MdastArena::from_raw_buffer(buf)?;
     // Pre-allocate: source len is a reasonable lower bound for HTML output size
@@ -36,9 +35,7 @@ pub fn hast_buffer_to_html(buf: &[u8]) -> Result<String, BufferError> {
     Ok(out)
 }
 
-/// Render a single HAST binary node (and its children) to an HTML string.
-///
-/// This is also used by the MDX compiler's static optimization pass to
+/// Also used by the MDX compiler's static optimization pass to
 /// serialize static subtrees into raw HTML.
 pub fn render_node(node_id: u32, view: &MdastView, out: &mut String) {
     let node = view.get_node(node_id);
@@ -63,7 +60,6 @@ pub fn render_node(node_id: u32, view: &MdastView, out: &mut String) {
             out.push('<');
             out.push_str(tag);
 
-            // Render properties
             let prop_count = decode_element_prop_count(data);
             for i in 0..prop_count {
                 let (name_ref, value_kind, value_ref) = decode_element_prop(data, i);
@@ -73,9 +69,7 @@ pub fn render_node(node_id: u32, view: &MdastView, out: &mut String) {
                         out.push(' ');
                         out.push_str(name);
                     }
-                    PROP_BOOL_FALSE => {
-                        // skip
-                    }
+                    PROP_BOOL_FALSE => {}
                     PROP_STRING | PROP_SPACE_SEP | PROP_COMMA_SEP => {
                         let value = view.get_str(value_ref);
                         out.push(' ');
@@ -90,7 +84,6 @@ pub fn render_node(node_id: u32, view: &MdastView, out: &mut String) {
 
             if is_void(tag) {
                 out.push('>');
-                // No closing tag, no children
             } else {
                 out.push('>');
                 for &child_id in view.get_children(node_id) {

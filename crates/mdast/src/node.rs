@@ -1,9 +1,8 @@
 use std::mem::size_of;
 
-/// All MDAST node types, represented as a u8 discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum NodeType {
+pub enum MdastNodeType {
     Root = 0,
     Paragraph = 1,
     Heading = 2,
@@ -41,44 +40,43 @@ pub enum NodeType {
     MdxjsEsm = 104,
 }
 
-impl NodeType {
-    /// Convert a u8 to a NodeType, returning None for unknown values.
+impl MdastNodeType {
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
-            0 => Some(NodeType::Root),
-            1 => Some(NodeType::Paragraph),
-            2 => Some(NodeType::Heading),
-            3 => Some(NodeType::ThematicBreak),
-            4 => Some(NodeType::Blockquote),
-            5 => Some(NodeType::List),
-            6 => Some(NodeType::ListItem),
-            7 => Some(NodeType::Html),
-            8 => Some(NodeType::Code),
-            9 => Some(NodeType::Definition),
-            10 => Some(NodeType::Text),
-            11 => Some(NodeType::Emphasis),
-            12 => Some(NodeType::Strong),
-            13 => Some(NodeType::InlineCode),
-            14 => Some(NodeType::Break),
-            15 => Some(NodeType::Link),
-            16 => Some(NodeType::Image),
-            17 => Some(NodeType::LinkReference),
-            18 => Some(NodeType::ImageReference),
-            19 => Some(NodeType::FootnoteDefinition),
-            20 => Some(NodeType::FootnoteReference),
-            21 => Some(NodeType::Table),
-            22 => Some(NodeType::TableRow),
-            23 => Some(NodeType::TableCell),
-            24 => Some(NodeType::Delete),
-            25 => Some(NodeType::Yaml),
-            26 => Some(NodeType::Toml),
-            27 => Some(NodeType::Math),
-            28 => Some(NodeType::InlineMath),
-            100 => Some(NodeType::MdxJsxFlowElement),
-            101 => Some(NodeType::MdxJsxTextElement),
-            102 => Some(NodeType::MdxFlowExpression),
-            103 => Some(NodeType::MdxTextExpression),
-            104 => Some(NodeType::MdxjsEsm),
+            0 => Some(MdastNodeType::Root),
+            1 => Some(MdastNodeType::Paragraph),
+            2 => Some(MdastNodeType::Heading),
+            3 => Some(MdastNodeType::ThematicBreak),
+            4 => Some(MdastNodeType::Blockquote),
+            5 => Some(MdastNodeType::List),
+            6 => Some(MdastNodeType::ListItem),
+            7 => Some(MdastNodeType::Html),
+            8 => Some(MdastNodeType::Code),
+            9 => Some(MdastNodeType::Definition),
+            10 => Some(MdastNodeType::Text),
+            11 => Some(MdastNodeType::Emphasis),
+            12 => Some(MdastNodeType::Strong),
+            13 => Some(MdastNodeType::InlineCode),
+            14 => Some(MdastNodeType::Break),
+            15 => Some(MdastNodeType::Link),
+            16 => Some(MdastNodeType::Image),
+            17 => Some(MdastNodeType::LinkReference),
+            18 => Some(MdastNodeType::ImageReference),
+            19 => Some(MdastNodeType::FootnoteDefinition),
+            20 => Some(MdastNodeType::FootnoteReference),
+            21 => Some(MdastNodeType::Table),
+            22 => Some(MdastNodeType::TableRow),
+            23 => Some(MdastNodeType::TableCell),
+            24 => Some(MdastNodeType::Delete),
+            25 => Some(MdastNodeType::Yaml),
+            26 => Some(MdastNodeType::Toml),
+            27 => Some(MdastNodeType::Math),
+            28 => Some(MdastNodeType::InlineMath),
+            100 => Some(MdastNodeType::MdxJsxFlowElement),
+            101 => Some(MdastNodeType::MdxJsxTextElement),
+            102 => Some(MdastNodeType::MdxFlowExpression),
+            103 => Some(MdastNodeType::MdxTextExpression),
+            104 => Some(MdastNodeType::MdxjsEsm),
             _ => None,
         }
     }
@@ -97,7 +95,6 @@ impl StringRef {
         Self { offset, len }
     }
 
-    /// A StringRef representing an absent/empty string (len == 0).
     pub fn empty() -> Self {
         Self { offset: 0, len: 0 }
     }
@@ -107,13 +104,11 @@ impl StringRef {
     }
 }
 
-/// A node in the arena. Exactly 56 bytes.
-///
 /// All positions use byte offsets and 1-based line/column numbers from the
 /// source text.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
-pub struct ArenaNode {
+pub struct MdastNode {
     pub id: u32,
     pub node_type: u8,
     pub _pad: [u8; 3],
@@ -132,12 +127,11 @@ pub struct ArenaNode {
     pub data_len: u32,
 }
 
-/// Exported constant for the size of an ArenaNode.
-pub const NODE_STRUCT_SIZE: usize = size_of::<ArenaNode>();
+pub const NODE_STRUCT_SIZE: usize = size_of::<MdastNode>();
 
-impl ArenaNode {
-    pub fn new(id: u32, node_type: NodeType) -> Self {
-        ArenaNode {
+impl MdastNode {
+    pub fn new(id: u32, node_type: MdastNodeType) -> Self {
+        MdastNode {
             id,
             node_type: node_type as u8,
             _pad: [0u8; 3],
@@ -155,8 +149,8 @@ impl ArenaNode {
         }
     }
 
-    pub fn node_type(&self) -> Option<NodeType> {
-        NodeType::from_u8(self.node_type)
+    pub fn node_type(&self) -> Option<MdastNodeType> {
+        MdastNodeType::from_u8(self.node_type)
     }
 }
 
@@ -170,9 +164,9 @@ mod tests {
         // = 52 bytes total (with #[repr(C)] no trailing padding is added).
         // This test pins the size so accidental field additions are caught.
         assert_eq!(
-            size_of::<ArenaNode>(),
+            size_of::<MdastNode>(),
             52,
-            "ArenaNode size changed — update NODE_STRUCT_SIZE callers"
+            "MdastNode size changed — update NODE_STRUCT_SIZE callers"
         );
     }
 
@@ -187,14 +181,14 @@ mod tests {
             0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
             24, 25, 26, 27, 28, 100, 101, 102, 103, 104,
         ] {
-            let nt = NodeType::from_u8(raw).expect("known discriminant");
+            let nt = MdastNodeType::from_u8(raw).expect("known discriminant");
             assert_eq!(nt as u8, raw);
         }
     }
 
     #[test]
     fn unknown_node_type_returns_none() {
-        assert!(NodeType::from_u8(99).is_none());
-        assert!(NodeType::from_u8(29).is_none());
+        assert!(MdastNodeType::from_u8(99).is_none());
+        assert!(MdastNodeType::from_u8(29).is_none());
     }
 }

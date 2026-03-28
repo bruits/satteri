@@ -1,35 +1,26 @@
 //! Integration tests for MDAST → HAST conversion.
 
-use mdast_arena::{
-    encode_code_data, encode_heading_data, encode_image_data, encode_link_data, encode_list_data,
-    encode_string_ref_data, encode_table_data, ColumnAlign, MdastBuilder, NodeType, StringRef,
-};
 use tryckeri_hast::{mdast_to_hast, HastNodeType};
+use tryckeri_mdast::{
+    encode_code_data, encode_heading_data, encode_image_data, encode_link_data, encode_list_data,
+    encode_string_ref_data, encode_table_data, ColumnAlign, MdastBuilder, MdastNodeType, StringRef,
+};
 
-// ---------------------------------------------------------------------------
-// Arena 1: Heading + Paragraph
-// ---------------------------------------------------------------------------
-
-fn build_heading_paragraph_arena() -> mdast_arena::MdastArena {
-    // source: "# Hello\n\nWorld"
+fn build_heading_paragraph_arena() -> tryckeri_mdast::MdastArena {
     let source = "# Hello\n\nWorld".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
+    b.open_node(MdastNodeType::Root);
 
-    // Heading depth=1
-    let heading = b.open_node(NodeType::Heading);
+    let heading = b.open_node(MdastNodeType::Heading);
     b.set_data_current(&encode_heading_data(1));
-    // Text "Hello" — offset 2..7
-    let text_hello = b.open_node(NodeType::Text);
+    let text_hello = b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
     b.close_node(); // text
     let _ = (heading, text_hello);
     b.close_node(); // heading
 
-    // Paragraph
-    b.open_node(NodeType::Paragraph);
-    // Text "World" — offset 9..14
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Paragraph);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
     b.close_node(); // text
     b.close_node(); // paragraph
@@ -93,22 +84,18 @@ fn arena1_second_child_is_p_with_world() {
     assert_eq!(hast.get_str(text_node.value), "World");
 }
 
-// ---------------------------------------------------------------------------
-// Arena 2: Link
-// ---------------------------------------------------------------------------
-
-fn build_link_arena() -> mdast_arena::MdastArena {
+fn build_link_arena() -> tryckeri_mdast::MdastArena {
     let source = "[click](https://example.com)".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Paragraph);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Paragraph);
 
-    let link = b.open_node(NodeType::Link);
+    let link = b.open_node(MdastNodeType::Link);
     b.set_data_current(&encode_link_data(
         StringRef::new(8, 19), // "https://example.com"
         StringRef::empty(),
     ));
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(1, 5))); // "click"
     b.close_node(); // text
     let _ = link;
@@ -157,16 +144,12 @@ fn arena2_a_has_text_child_click() {
     assert_eq!(hast.get_str(text.value), "click");
 }
 
-// ---------------------------------------------------------------------------
-// Arena 3: Image
-// ---------------------------------------------------------------------------
-
-fn build_image_arena() -> mdast_arena::MdastArena {
+fn build_image_arena() -> tryckeri_mdast::MdastArena {
     let source = "![alt text](img.png)".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Paragraph);
-    b.open_node(NodeType::Image);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Paragraph);
+    b.open_node(MdastNodeType::Image);
     b.set_data_current(&encode_image_data(
         StringRef::new(12, 7), // "img.png"
         StringRef::new(2, 8),  // "alt text"
@@ -203,26 +186,20 @@ fn arena3_img_has_src_and_alt() {
     assert_eq!(hast.get_str(props[1].value.as_string_ref()), "alt text");
 }
 
-// ---------------------------------------------------------------------------
-// Arena 4: Emphasis + Strong
-// ---------------------------------------------------------------------------
-
-fn build_emphasis_strong_arena() -> mdast_arena::MdastArena {
+fn build_emphasis_strong_arena() -> tryckeri_mdast::MdastArena {
     let source = "emstrongtext".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Paragraph);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Paragraph);
 
-    // Emphasis → Text("em")
-    b.open_node(NodeType::Emphasis);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Emphasis);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(0, 2)));
     b.close_node();
     b.close_node(); // emphasis
 
-    // Strong → Text("strong")
-    b.open_node(NodeType::Strong);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Strong);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 6)));
     b.close_node();
     b.close_node(); // strong
@@ -254,28 +231,22 @@ fn arena4_strong_becomes_strong() {
     assert_eq!(hast.get_str(strong.tag_name), "strong");
 }
 
-// ---------------------------------------------------------------------------
-// Arena 5: Unordered list
-// ---------------------------------------------------------------------------
-
-fn build_unordered_list_arena() -> mdast_arena::MdastArena {
+fn build_unordered_list_arena() -> tryckeri_mdast::MdastArena {
     let source = "- item 1\n- item 2".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
+    b.open_node(MdastNodeType::Root);
 
-    b.open_node(NodeType::List);
+    b.open_node(MdastNodeType::List);
     b.set_data_current(&encode_list_data(false, 1, false));
 
-    // ListItem 1 → Text("item 1")
-    b.open_node(NodeType::ListItem);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::ListItem);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 6)));
     b.close_node();
     b.close_node();
 
-    // ListItem 2 → Text("item 2")
-    b.open_node(NodeType::ListItem);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::ListItem);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(11, 6)));
     b.close_node();
     b.close_node();
@@ -315,20 +286,16 @@ fn arena5_two_li_children() {
     assert_eq!(hast.get_children(ul_id).len(), 2);
 }
 
-// ---------------------------------------------------------------------------
-// Arena 6: Ordered list with start=3
-// ---------------------------------------------------------------------------
-
-fn build_ordered_list_arena() -> mdast_arena::MdastArena {
+fn build_ordered_list_arena() -> tryckeri_mdast::MdastArena {
     let source = "3. item".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
+    b.open_node(MdastNodeType::Root);
 
-    b.open_node(NodeType::List);
+    b.open_node(MdastNodeType::List);
     b.set_data_current(&encode_list_data(true, 3, false));
 
-    b.open_node(NodeType::ListItem);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::ListItem);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(3, 4)));
     b.close_node();
     b.close_node();
@@ -358,24 +325,18 @@ fn arena6_ol_has_start_3_property() {
     assert_eq!(hast.get_str(props[0].value.as_string_ref()), "3");
 }
 
-// ---------------------------------------------------------------------------
-// Arena 7: Inline code + code block
-// ---------------------------------------------------------------------------
-
-fn build_inline_and_block_code_arena() -> mdast_arena::MdastArena {
+fn build_inline_and_block_code_arena() -> tryckeri_mdast::MdastArena {
     let source = "foo\nrust\nfn main() {}".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
+    b.open_node(MdastNodeType::Root);
 
-    // Paragraph with InlineCode
-    b.open_node(NodeType::Paragraph);
-    b.open_node(NodeType::InlineCode);
+    b.open_node(MdastNodeType::Paragraph);
+    b.open_node(MdastNodeType::InlineCode);
     b.set_data_current(&encode_string_ref_data(StringRef::new(0, 3))); // "foo"
     b.close_node();
     b.close_node();
 
-    // Code block with lang="rust"
-    b.open_node(NodeType::Code);
+    b.open_node(MdastNodeType::Code);
     b.set_data_current(&encode_code_data(
         StringRef::new(4, 4),  // lang: "rust"
         StringRef::empty(),    // meta: empty
@@ -416,7 +377,6 @@ fn arena7_code_block_becomes_pre_code_with_language_class() {
     let code = hast.get_node(code_id);
     assert_eq!(hast.get_str(code.tag_name), "code");
 
-    // class="language-rust"
     let props = hast.get_properties(code_id);
     assert_eq!(props.len(), 1);
     assert_eq!(hast.get_str(props[0].name), "class");
@@ -425,22 +385,17 @@ fn arena7_code_block_becomes_pre_code_with_language_class() {
         "language-rust"
     );
 
-    // text content
     let text_id = hast.get_children(code_id)[0];
     let text = hast.get_node(text_id);
     assert_eq!(hast.get_str(text.value), "fn main() {}");
 }
 
-// ---------------------------------------------------------------------------
-// Arena 8: ThematicBreak
-// ---------------------------------------------------------------------------
-
 #[test]
 fn arena8_thematic_break_becomes_hr() {
     let source = "---".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.add_leaf(NodeType::ThematicBreak);
+    b.open_node(MdastNodeType::Root);
+    b.add_leaf(MdastNodeType::ThematicBreak);
     b.close_node();
     let mdast = b.finish();
 
@@ -451,40 +406,34 @@ fn arena8_thematic_break_becomes_hr() {
     assert_eq!(hast.get_str(hr.tag_name), "hr");
 }
 
-// ---------------------------------------------------------------------------
-// Arena 9: Table
-// ---------------------------------------------------------------------------
-
-fn build_table_arena() -> mdast_arena::MdastArena {
+fn build_table_arena() -> tryckeri_mdast::MdastArena {
     let source = "Name|Age\nAlice|30".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Table);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Table);
     b.set_data_current(&encode_table_data(&[ColumnAlign::None, ColumnAlign::None]));
 
-    // Header row
-    b.open_node(NodeType::TableRow);
-    b.open_node(NodeType::TableCell);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::TableRow);
+    b.open_node(MdastNodeType::TableCell);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(0, 4)));
     b.close_node();
     b.close_node();
-    b.open_node(NodeType::TableCell);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::TableCell);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(5, 3)));
     b.close_node();
     b.close_node();
     b.close_node(); // header row
 
-    // Body row
-    b.open_node(NodeType::TableRow);
-    b.open_node(NodeType::TableCell);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::TableRow);
+    b.open_node(MdastNodeType::TableCell);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
     b.close_node();
     b.close_node();
-    b.open_node(NodeType::TableCell);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::TableCell);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(15, 2)));
     b.close_node();
     b.close_node();
@@ -541,18 +490,14 @@ fn arena9_body_row_uses_td_cells() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Arena 10: Delete (strikethrough)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn arena10_delete_becomes_del() {
     let source = "deleted".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Paragraph);
-    b.open_node(NodeType::Delete);
-    b.open_node(NodeType::Text);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Paragraph);
+    b.open_node(MdastNodeType::Delete);
+    b.open_node(MdastNodeType::Text);
     b.set_data_current(&encode_string_ref_data(StringRef::new(0, 7)));
     b.close_node();
     b.close_node(); // delete
@@ -568,16 +513,12 @@ fn arena10_delete_becomes_del() {
     assert_eq!(hast.get_str(del.tag_name), "del");
 }
 
-// ---------------------------------------------------------------------------
-// Arena 11: Raw HTML
-// ---------------------------------------------------------------------------
-
 #[test]
 fn arena11_html_node_becomes_raw() {
     let source = "<div>raw</div>".to_string();
     let mut b = MdastBuilder::new(source);
-    b.open_node(NodeType::Root);
-    b.open_node(NodeType::Html);
+    b.open_node(MdastNodeType::Root);
+    b.open_node(MdastNodeType::Html);
     b.set_data_current(&encode_string_ref_data(StringRef::new(0, 14)));
     b.close_node();
     b.close_node(); // root

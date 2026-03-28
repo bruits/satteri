@@ -1,4 +1,4 @@
-use mdast_arena::NodeType;
+use tryckeri_mdast::MdastNodeType;
 
 /// A structural mutation command queued during plugin execution.
 /// Applied after the plugin finishes (same as JS).
@@ -40,7 +40,7 @@ pub enum NewNode {
 /// A node specification built with NodeBuilder
 #[derive(Debug, Clone)]
 pub struct BuiltNode {
-    pub node_type: NodeType,
+    pub node_type: MdastNodeType,
     pub children: Vec<NewNode>,
     /// Type-specific data bytes (same format as arena type_data)
     pub data_bytes: Vec<u8>,
@@ -50,13 +50,13 @@ pub struct BuiltNode {
 
 /// Builder for constructing new nodes to pass to commands.
 pub struct NodeBuilder {
-    node_type: NodeType,
+    node_type: MdastNodeType,
     children: Vec<NewNode>,
     data_bytes: Vec<u8>,
 }
 
 impl NodeBuilder {
-    pub fn new(node_type: NodeType) -> Self {
+    pub fn new(node_type: MdastNodeType) -> Self {
         Self {
             node_type,
             children: Vec::new(),
@@ -96,21 +96,21 @@ impl NodeBuilder {
 /// Convenience constructors
 impl NodeBuilder {
     pub fn heading(depth: u8) -> Self {
-        use mdast_arena::codec::encode_heading_data;
-        Self::new(NodeType::Heading).data_bytes(encode_heading_data(depth))
+        use tryckeri_mdast::codec::encode_heading_data;
+        Self::new(MdastNodeType::Heading).data_bytes(encode_heading_data(depth))
     }
 
     pub fn paragraph() -> Self {
-        Self::new(NodeType::Paragraph)
+        Self::new(MdastNodeType::Paragraph)
     }
 
     pub fn text(value_offset: u32, value_len: u32) -> Self {
-        use mdast_arena::{codec::encode_string_ref_data, StringRef};
+        use tryckeri_mdast::{codec::encode_string_ref_data, StringRef};
         let string_ref = StringRef {
             offset: value_offset,
             len: value_len,
         };
-        Self::new(NodeType::Text).data_bytes(encode_string_ref_data(string_ref))
+        Self::new(MdastNodeType::Text).data_bytes(encode_string_ref_data(string_ref))
     }
 
     /// Create a text node with a raw string (for when we don't have source offsets)

@@ -3,11 +3,7 @@
 //! Wire format: `[BufferHeader][nodes...][children u32s][type_data bytes][source UTF-8]`
 
 use crate::arena::MdastArena;
-use crate::node::{ArenaNode, StringRef, NODE_STRUCT_SIZE};
-
-// ---------------------------------------------------------------------------
-// BufferError
-// ---------------------------------------------------------------------------
+use crate::node::{MdastNode, StringRef, NODE_STRUCT_SIZE};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BufferError {
@@ -25,7 +21,7 @@ impl std::fmt::Display for BufferError {
             BufferError::TooShort => write!(f, "buffer too short"),
             BufferError::BadMagic => write!(f, "bad magic bytes"),
             BufferError::VersionMismatch => write!(f, "version mismatch"),
-            BufferError::NodeSizeMismatch => write!(f, "ArenaNode size mismatch"),
+            BufferError::NodeSizeMismatch => write!(f, "MdastNode size mismatch"),
             BufferError::InvalidUtf8 => write!(f, "source is not valid UTF-8"),
             BufferError::OutOfBounds => write!(f, "offset out of bounds"),
         }
@@ -33,10 +29,6 @@ impl std::fmt::Display for BufferError {
 }
 
 impl std::error::Error for BufferError {}
-
-// ---------------------------------------------------------------------------
-// BufferHeader
-// ---------------------------------------------------------------------------
 
 pub const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
 pub const BUFFER_VERSION: u32 = 1;
@@ -59,10 +51,6 @@ pub struct BufferHeader {
 }
 
 const HEADER_SIZE: usize = std::mem::size_of::<BufferHeader>();
-
-// ---------------------------------------------------------------------------
-// to_raw_buffer / from_raw_buffer on MdastArena
-// ---------------------------------------------------------------------------
 
 impl MdastArena {
     /// Serialize to a flat byte buffer:
@@ -95,27 +83,22 @@ impl MdastArena {
         let total = source_offset as usize + source_bytes;
         let mut buf = Vec::with_capacity(total);
 
-        // Header
         let header_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(&header as *const BufferHeader as *const u8, HEADER_SIZE)
         };
         buf.extend_from_slice(header_bytes);
 
-        // Nodes
         let nodes_slice: &[u8] =
             unsafe { std::slice::from_raw_parts(self.nodes.as_ptr() as *const u8, nodes_bytes) };
         buf.extend_from_slice(nodes_slice);
 
-        // Children (u32 array)
         let children_slice: &[u8] = unsafe {
             std::slice::from_raw_parts(self.children.as_ptr() as *const u8, children_bytes)
         };
         buf.extend_from_slice(children_slice);
 
-        // Type data
         buf.extend_from_slice(&self.type_data);
 
-        // Source
         buf.extend_from_slice(self.source.as_bytes());
 
         buf
@@ -144,7 +127,6 @@ impl MdastArena {
             return Err(BufferError::NodeSizeMismatch);
         }
 
-        // Validate offsets are within buffer bounds.
         let nodes_end =
             header.nodes_offset as usize + header.node_count as usize * NODE_STRUCT_SIZE;
         let children_end = header.children_offset as usize + header.children_count as usize * 4;
@@ -159,17 +141,12 @@ impl MdastArena {
             return Err(BufferError::OutOfBounds);
         }
 
-        // Validate source is valid UTF-8.
         let source_bytes = &buf[header.source_offset as usize..source_end];
         std::str::from_utf8(source_bytes).map_err(|_| BufferError::InvalidUtf8)?;
 
         Ok(MdastView { header, buf })
     }
 }
-
-// ---------------------------------------------------------------------------
-// MdastView — read-only zero-copy view
-// ---------------------------------------------------------------------------
 
 /// A read-only view over a raw buffer produced by `MdastArena::to_raw_buffer`.
 pub struct MdastView<'a> {
@@ -187,14 +164,13 @@ impl std::fmt::Debug for MdastView<'_> {
 }
 
 impl<'a> MdastView<'a> {
-    /// Get a node by ID.
-    pub fn get_node(&self, node_id: u32) -> &ArenaNode {
+    pub fn get_node(&self, node_id: u32) -> &MdastNode {
         assert!(
             (node_id as usize) < self.header.node_count as usize,
             "node_id out of range"
         );
         let offset = self.header.nodes_offset as usize + node_id as usize * NODE_STRUCT_SIZE;
-        unsafe { &*(self.buf[offset..].as_ptr() as *const ArenaNode) }
+        unsafe { &*(self.buf[offset..].as_ptr() as *const MdastNode) }
     }
 
     /// Get all child IDs for a node as a `&[u32]`.
@@ -211,7 +187,6 @@ impl<'a> MdastView<'a> {
         unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const u32, count) }
     }
 
-    /// Get the raw type data bytes for a node.
     pub fn get_type_data(&self, node_id: u32) -> &[u8] {
         let node = self.get_node(node_id);
         let start = self.header.type_data_offset as usize + node.data_offset as usize;
@@ -219,7 +194,6 @@ impl<'a> MdastView<'a> {
         &self.buf[start..end]
     }
 
-    /// Get the source text.
     pub fn get_source(&self) -> &str {
         let start = self.header.source_offset as usize;
         let end = start + self.header.source_len as usize;
@@ -227,7 +201,6 @@ impl<'a> MdastView<'a> {
         unsafe { std::str::from_utf8_unchecked(&self.buf[start..end]) }
     }
 
-    /// Get a string from the source via a StringRef.
     pub fn get_str(&self, string_ref: StringRef) -> &str {
         let source = self.get_source();
         let start = string_ref.offset as usize;
@@ -243,10 +216,10 @@ impl<'a> MdastView<'a> {
     pub fn to_arena(&self) -> MdastArena {
         let node_count = self.header.node_count as usize;
         let nodes_start = self.header.nodes_offset as usize;
-        let nodes: Vec<ArenaNode> = (0..node_count)
+        let nodes: Vec<MdastNode> = (0..node_count)
             .map(|i| {
                 let offset = nodes_start + i * NODE_STRUCT_SIZE;
-                let mut node = std::mem::MaybeUninit::<ArenaNode>::uninit();
+                let mut node = std::mem::MaybeUninit::<MdastNode>::uninit();
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         self.buf[offset..].as_ptr(),
@@ -286,13 +259,13 @@ impl<'a> MdastView<'a> {
 mod tests {
     use super::*;
     use crate::builder::MdastBuilder;
-    use crate::node::NodeType;
+    use crate::node::MdastNodeType;
 
     fn simple_arena() -> MdastArena {
         let mut builder = MdastBuilder::new("Hello, world!".to_string());
-        builder.open_node(NodeType::Root);
-        builder.open_node(NodeType::Paragraph);
-        builder.add_leaf(NodeType::Text);
+        builder.open_node(MdastNodeType::Root);
+        builder.open_node(MdastNodeType::Paragraph);
+        builder.add_leaf(MdastNodeType::Text);
         builder.close_node();
         builder.close_node();
         builder.finish()

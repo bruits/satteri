@@ -1,17 +1,16 @@
 //! Convert an MDAST binary buffer to a HAST binary buffer.
 
-use mdast_arena::{
+use tryckeri_mdast::{
     decode_code_data, decode_definition_data, decode_expression_data, decode_heading_data,
     decode_image_data, decode_link_data, decode_list_data, decode_list_item_data, decode_math_data,
     decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
     decode_reference_data, decode_string_ref_data, BufferError, MdastArena, MdastBuilder,
-    MdastView, NodeType, StringRef,
+    MdastNodeType, MdastView, StringRef,
 };
 
 use crate::codec::{encode_mdx_jsx_element_data, encode_text_data};
 use crate::node_types::*;
 
-/// Convert an MDAST binary buffer to a HAST binary buffer.
 pub fn mdast_to_hast_buffer(mdast_buf: &[u8]) -> Result<Vec<u8>, BufferError> {
     let view = MdastArena::from_raw_buffer(mdast_buf)?;
     let mut builder = MdastBuilder::new(String::new());
@@ -19,16 +18,11 @@ pub fn mdast_to_hast_buffer(mdast_buf: &[u8]) -> Result<Vec<u8>, BufferError> {
     // Pre-pass: collect definitions for link/image reference resolution.
     let defs = collect_definitions(&view);
 
-    // Convert starting from root (node 0).
     convert_node(0, &view, &mut builder, &defs);
 
     let hast_arena = builder.finish();
     Ok(hast_arena.to_raw_buffer())
 }
-
-// ---------------------------------------------------------------------------
-// Definition collection (pre-pass)
-// ---------------------------------------------------------------------------
 
 struct Definition {
     identifier: String,
@@ -40,7 +34,7 @@ fn collect_definitions(view: &MdastView) -> Vec<Definition> {
     let mut defs = Vec::new();
     for id in 0..view.node_count() {
         let node = view.get_node(id);
-        if node.node_type == NodeType::Definition as u8 {
+        if node.node_type == MdastNodeType::Definition as u8 {
             let data = view.get_type_data(id);
             if data.len() >= 32 {
                 let dd = decode_definition_data(data);
@@ -66,10 +60,6 @@ fn find_def<'a>(defs: &'a [Definition], identifier: &str) -> Option<&'a Definiti
     defs.iter().find(|d| d.identifier == identifier)
 }
 
-// ---------------------------------------------------------------------------
-// Prop helper types
-// ---------------------------------------------------------------------------
-
 /// Pre-built property data: refs already interned in the builder's string pool.
 struct PropData {
     name_ref: StringRef,
@@ -91,11 +81,6 @@ fn build_props(builder: &mut MdastBuilder, specs: &[(&str, u8, StringRef)]) -> V
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Element open/leaf helpers
-// ---------------------------------------------------------------------------
-
-/// Open a HAST_ELEMENT node with the given tag and no properties.
 fn open_element(builder: &mut MdastBuilder, tag: &str) {
     builder.open_node_raw(HAST_ELEMENT);
     let tag_ref = builder.alloc_string(tag);
@@ -103,7 +88,6 @@ fn open_element(builder: &mut MdastBuilder, tag: &str) {
     builder.set_data_current(&encoded);
 }
 
-/// Open a HAST_ELEMENT node with the given tag and pre-built properties.
 fn open_element_with_props(builder: &mut MdastBuilder, tag: &str, props: &[PropData]) {
     builder.open_node_raw(HAST_ELEMENT);
     let tag_ref = builder.alloc_string(tag);
@@ -115,7 +99,6 @@ fn open_element_with_props(builder: &mut MdastBuilder, tag: &str, props: &[PropD
     builder.set_data_current(&encoded);
 }
 
-/// Add a void (self-closing) HAST_ELEMENT with no properties.
 fn add_void_element(builder: &mut MdastBuilder, tag: &str) {
     builder.open_node_raw(HAST_ELEMENT);
     let tag_ref = builder.alloc_string(tag);
@@ -124,7 +107,6 @@ fn add_void_element(builder: &mut MdastBuilder, tag: &str) {
     builder.close_node();
 }
 
-/// Add a void (self-closing) HAST_ELEMENT with pre-built properties.
 fn add_void_element_with_props(builder: &mut MdastBuilder, tag: &str, props: &[PropData]) {
     builder.open_node_raw(HAST_ELEMENT);
     let tag_ref = builder.alloc_string(tag);
@@ -137,7 +119,6 @@ fn add_void_element_with_props(builder: &mut MdastBuilder, tag: &str, props: &[P
     builder.close_node();
 }
 
-/// Add a HAST_TEXT leaf node with the given string.
 fn add_text_node(builder: &mut MdastBuilder, text: &str) {
     let text_ref = builder.alloc_string(text);
     let leaf_id = builder.add_leaf_raw(HAST_TEXT);
@@ -146,7 +127,6 @@ fn add_text_node(builder: &mut MdastBuilder, text: &str) {
         .set_type_data(leaf_id, &encode_text_data(text_ref));
 }
 
-/// Add a HAST_RAW leaf node with the given string.
 fn add_raw_node(builder: &mut MdastBuilder, html: &str) {
     let html_ref = builder.alloc_string(html);
     let leaf_id = builder.add_leaf_raw(HAST_RAW);
@@ -155,7 +135,6 @@ fn add_raw_node(builder: &mut MdastBuilder, html: &str) {
         .set_type_data(leaf_id, &encode_text_data(html_ref));
 }
 
-/// Copy position from an MDAST node to the current HAST node being built.
 fn copy_position(node_id: u32, view: &MdastView, builder: &mut MdastBuilder) {
     let node = view.get_node(node_id);
     if node.start_line > 0 || node.start_offset > 0 {
@@ -170,22 +149,18 @@ fn copy_position(node_id: u32, view: &MdastView, builder: &mut MdastBuilder) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Node conversion
-// ---------------------------------------------------------------------------
-
 fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs: &[Definition]) {
     let node = view.get_node(node_id);
     let raw_type = node.node_type;
 
-    match NodeType::from_u8(raw_type) {
-        Some(NodeType::Root) => {
+    match MdastNodeType::from_u8(raw_type) {
+        Some(MdastNodeType::Root) => {
             builder.open_node_raw(HAST_ROOT);
             convert_children_wrapped(node_id, view, builder, defs);
             builder.close_node();
         }
 
-        Some(NodeType::Paragraph) => {
+        Some(MdastNodeType::Paragraph) => {
             // Note: MDX paragraph unraveling is handled by convert_children_wrapped
             // at the parent level, so by the time we get here it's a normal <p>.
             open_element(builder, "p");
@@ -194,7 +169,7 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node();
         }
 
-        Some(NodeType::Heading) => {
+        Some(MdastNodeType::Heading) => {
             let data = view.get_type_data(node_id);
             let depth = if data.is_empty() {
                 1
@@ -214,17 +189,17 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node();
         }
 
-        Some(NodeType::ThematicBreak) => {
+        Some(MdastNodeType::ThematicBreak) => {
             add_void_element(builder, "hr");
         }
 
-        Some(NodeType::Blockquote) => {
+        Some(MdastNodeType::Blockquote) => {
             open_element(builder, "blockquote");
             convert_children(node_id, view, builder, defs);
             builder.close_node();
         }
 
-        Some(NodeType::List) => {
+        Some(MdastNodeType::List) => {
             let data = view.get_type_data(node_id);
             let list_data = decode_list_data(data);
             let tag = if list_data.ordered { "ol" } else { "ul" };
@@ -240,7 +215,7 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node();
         }
 
-        Some(NodeType::ListItem) => {
+        Some(MdastNodeType::ListItem) => {
             open_element(builder, "li");
             let data = view.get_type_data(node_id);
             if !data.is_empty() {
@@ -274,13 +249,13 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node();
         }
 
-        Some(NodeType::Html) => {
+        Some(MdastNodeType::Html) => {
             let data = view.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
             add_raw_node(builder, view.get_str(string_ref));
         }
 
-        Some(NodeType::Code) => {
+        Some(MdastNodeType::Code) => {
             let data = view.get_type_data(node_id);
             let code_data = decode_code_data(data);
             let value = view.get_str(code_data.value);
@@ -300,25 +275,25 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node(); // pre
         }
 
-        Some(NodeType::Text) => {
+        Some(MdastNodeType::Text) => {
             let data = view.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
             add_text_node(builder, view.get_str(string_ref));
         }
 
-        Some(NodeType::Emphasis) => {
+        Some(MdastNodeType::Emphasis) => {
             open_element(builder, "em");
             convert_children(node_id, view, builder, defs);
             builder.close_node();
         }
 
-        Some(NodeType::Strong) => {
+        Some(MdastNodeType::Strong) => {
             open_element(builder, "strong");
             convert_children(node_id, view, builder, defs);
             builder.close_node();
         }
 
-        Some(NodeType::InlineCode) => {
+        Some(MdastNodeType::InlineCode) => {
             let data = view.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
             open_element(builder, "code");
@@ -326,11 +301,11 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node();
         }
 
-        Some(NodeType::Break) => {
+        Some(MdastNodeType::Break) => {
             add_void_element(builder, "br");
         }
 
-        Some(NodeType::Link) => {
+        Some(MdastNodeType::Link) => {
             let data = view.get_type_data(node_id);
             let link_data = decode_link_data(data);
             let url_ref = builder.alloc_string(view.get_str(link_data.url));
@@ -352,7 +327,7 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node();
         }
 
-        Some(NodeType::Image) => {
+        Some(MdastNodeType::Image) => {
             let data = view.get_type_data(node_id);
             let img_data = decode_image_data(data);
             let url_ref = builder.alloc_string(view.get_str(img_data.url));
@@ -377,13 +352,13 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             }
         }
 
-        Some(NodeType::Delete) => {
+        Some(MdastNodeType::Delete) => {
             open_element(builder, "del");
             convert_children(node_id, view, builder, defs);
             builder.close_node();
         }
 
-        Some(NodeType::Table) => {
+        Some(MdastNodeType::Table) => {
             open_element(builder, "table");
             let child_ids = view.get_children(node_id);
             if !child_ids.is_empty() {
@@ -402,7 +377,7 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node(); // table
         }
 
-        Some(NodeType::Math) => {
+        Some(MdastNodeType::Math) => {
             let data = view.get_type_data(node_id);
             let math_data = decode_math_data(data);
             let value = view.get_str(math_data.value);
@@ -415,7 +390,7 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node(); // pre
         }
 
-        Some(NodeType::InlineMath) => {
+        Some(MdastNodeType::InlineMath) => {
             let data = view.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
             let value = view.get_str(string_ref);
@@ -426,14 +401,14 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             builder.close_node();
         }
 
-        Some(NodeType::Definition)
-        | Some(NodeType::Yaml)
-        | Some(NodeType::Toml)
-        | Some(NodeType::FootnoteDefinition) => {
+        Some(MdastNodeType::Definition)
+        | Some(MdastNodeType::Yaml)
+        | Some(MdastNodeType::Toml)
+        | Some(MdastNodeType::FootnoteDefinition) => {
             // No HAST output
         }
 
-        Some(NodeType::LinkReference) => {
+        Some(MdastNodeType::LinkReference) => {
             let data = view.get_type_data(node_id);
             if data.len() >= 20 {
                 let rd = decode_reference_data(data);
@@ -463,7 +438,7 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             }
         }
 
-        Some(NodeType::ImageReference) => {
+        Some(MdastNodeType::ImageReference) => {
             let data = view.get_type_data(node_id);
             if data.len() >= 20 {
                 let rd = decode_reference_data(data);
@@ -494,20 +469,18 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             }
         }
 
-        Some(NodeType::FootnoteReference) => {
+        Some(MdastNodeType::FootnoteReference) => {
             // Skip for now
         }
 
-        // MDX: JSX elements
-        Some(NodeType::MdxJsxFlowElement) => {
+        Some(MdastNodeType::MdxJsxFlowElement) => {
             convert_mdx_jsx_element(node_id, view, builder, defs, HAST_MDX_JSX_ELEMENT);
         }
-        Some(NodeType::MdxJsxTextElement) => {
+        Some(MdastNodeType::MdxJsxTextElement) => {
             convert_mdx_jsx_element(node_id, view, builder, defs, HAST_MDX_JSX_TEXT_ELEMENT);
         }
 
-        // MDX: expressions
-        Some(NodeType::MdxFlowExpression) | Some(NodeType::MdxTextExpression) => {
+        Some(MdastNodeType::MdxFlowExpression) | Some(MdastNodeType::MdxTextExpression) => {
             let data = view.get_type_data(node_id);
             let value = if data.is_empty() {
                 ""
@@ -532,8 +505,7 @@ fn convert_node(node_id: u32, view: &MdastView, builder: &mut MdastBuilder, defs
             );
         }
 
-        // MDX: ESM (import/export)
-        Some(NodeType::MdxjsEsm) => {
+        Some(MdastNodeType::MdxjsEsm) => {
             let data = view.get_type_data(node_id);
             let value = if data.is_empty() {
                 ""
@@ -589,10 +561,9 @@ fn convert_children_wrapped(
     let children = view.get_children(node_id);
     let mut first = true;
     for &child_id in children {
-        // Check if this paragraph will be unraveled (fragment)
         let child_node = view.get_node(child_id);
-        let is_unraveled_paragraph = NodeType::from_u8(child_node.node_type)
-            == Some(NodeType::Paragraph)
+        let is_unraveled_paragraph = MdastNodeType::from_u8(child_node.node_type)
+            == Some(MdastNodeType::Paragraph)
             && is_mdx_only_paragraph(child_id, view);
 
         if is_unraveled_paragraph {
@@ -633,10 +604,6 @@ fn convert_table_row(
     builder.close_node(); // tr
 }
 
-// ---------------------------------------------------------------------------
-// MDX paragraph unraveling
-// ---------------------------------------------------------------------------
-
 /// Check if a paragraph contains only MDX nodes and/or whitespace text.
 /// If so, the paragraph should be "unraveled" (children output without `<p>`).
 fn is_mdx_only_paragraph(node_id: u32, view: &MdastView) -> bool {
@@ -648,16 +615,16 @@ fn is_mdx_only_paragraph(node_id: u32, view: &MdastView) -> bool {
     let mut has_mdx = false;
     for &child_id in children {
         let child = view.get_node(child_id);
-        match NodeType::from_u8(child.node_type) {
+        match MdastNodeType::from_u8(child.node_type) {
             Some(
-                NodeType::MdxJsxFlowElement
-                | NodeType::MdxJsxTextElement
-                | NodeType::MdxFlowExpression
-                | NodeType::MdxTextExpression,
+                MdastNodeType::MdxJsxFlowElement
+                | MdastNodeType::MdxJsxTextElement
+                | MdastNodeType::MdxFlowExpression
+                | MdastNodeType::MdxTextExpression,
             ) => {
                 has_mdx = true;
             }
-            Some(NodeType::Text) => {
+            Some(MdastNodeType::Text) => {
                 // Only allow whitespace-only text
                 let data = view.get_type_data(child_id);
                 if !data.is_empty() {
@@ -675,10 +642,6 @@ fn is_mdx_only_paragraph(node_id: u32, view: &MdastView) -> bool {
     has_mdx
 }
 
-// ---------------------------------------------------------------------------
-// MDX JSX element conversion
-// ---------------------------------------------------------------------------
-
 fn convert_mdx_jsx_element(
     node_id: u32,
     view: &MdastView,
@@ -688,7 +651,6 @@ fn convert_mdx_jsx_element(
 ) {
     let mdast_data = view.get_type_data(node_id);
 
-    // Read name from MDAST binary
     let name_ref_mdast = if mdast_data.len() >= 8 {
         decode_mdx_jsx_element_name(mdast_data)
     } else {
@@ -701,7 +663,7 @@ fn convert_mdx_jsx_element(
     };
     let name_ref = builder.alloc_string(name_str);
 
-    // Read attributes from MDAST binary (same layout as HAST)
+    // MDAST and HAST share the same attribute binary layout
     let attr_count = if mdast_data.len() >= 12 {
         decode_mdx_jsx_attr_count(mdast_data)
     } else {
@@ -732,15 +694,6 @@ fn convert_mdx_jsx_element(
     builder.close_node();
 }
 
-// ---------------------------------------------------------------------------
-// JSX attribute parser (from raw source text)
-// ---------------------------------------------------------------------------
-
-/// Parsed JSX attribute — intermediate representation before binary encoding.
-// ---------------------------------------------------------------------------
-// Text extraction
-// ---------------------------------------------------------------------------
-
 fn extract_text_content(node_id: u32, view: &MdastView) -> String {
     let mut out = String::new();
     extract_text_recursive(node_id, view, &mut out);
@@ -749,7 +702,7 @@ fn extract_text_content(node_id: u32, view: &MdastView) -> String {
 
 fn extract_text_recursive(node_id: u32, view: &MdastView, out: &mut String) {
     let node = view.get_node(node_id);
-    if node.node_type == NodeType::Text as u8 {
+    if node.node_type == MdastNodeType::Text as u8 {
         let data = view.get_type_data(node_id);
         if !data.is_empty() {
             let sr = decode_string_ref_data(data);

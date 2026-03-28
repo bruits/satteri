@@ -343,19 +343,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
-name = "mdast-arena"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "unicode-id",
-]
-
-[[package]]
 name = "mdxjs"
 version = "1.0.4"
 dependencies = [
- "mdast-arena",
  "oxc_allocator",
  "oxc_ast",
  "oxc_codegen",
@@ -367,6 +357,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "tryckeri-hast",
+ "tryckeri-mdast",
 ]
 
 [[package]]
@@ -754,8 +745,8 @@ dependencies = [
 name = "parser"
 version = "0.1.0"
 dependencies = [
- "mdast-arena",
  "tryckeri-hast",
+ "tryckeri-mdast",
  "tryckeri-pulldown-cmark",
 ]
 
@@ -1039,30 +1030,39 @@ dependencies = [
 name = "tryckeri-hast"
 version = "0.1.0"
 dependencies = [
- "mdast-arena",
  "parser",
  "pulldown-cmark-escape",
+ "tryckeri-mdast",
+]
+
+[[package]]
+name = "tryckeri-mdast"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "unicode-id",
 ]
 
 [[package]]
 name = "tryckeri-napi"
 version = "0.1.0"
 dependencies = [
- "mdast-arena",
  "mdxjs",
  "napi",
  "napi-build",
  "napi-derive",
  "parser",
  "tryckeri-hast",
+ "tryckeri-mdast",
 ]
 
 [[package]]
 name = "tryckeri-plugin-api"
 version = "0.1.0"
 dependencies = [
- "mdast-arena",
  "rustc-hash",
+ "tryckeri-mdast",
 ]
 
 [[package]]

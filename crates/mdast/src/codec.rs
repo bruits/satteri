@@ -1,23 +1,14 @@
-//! Codec helpers: type-specific data structs and encode/decode functions.
-//!
-//! These structs are serialized into `MdastArena::type_data` as raw bytes using
-//! `#[repr(C)]` layout. Each `encode_*` function returns the bytes to store,
-//! and each `decode_*` function reads them back.
+//! Type-specific data structs for `MdastArena::type_data`, serialized as raw
+//! bytes via `#[repr(C)]` layout.
 
 use crate::node::StringRef;
 
-// ---------------------------------------------------------------------------
-// Type-specific data structs
-// ---------------------------------------------------------------------------
-
-/// Data for Heading nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct HeadingData {
     pub depth: u8,
 }
 
-/// Data for Link and Definition nodes.
 /// `title.len == 0` means no title.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -26,7 +17,6 @@ pub struct LinkData {
     pub title: StringRef,
 }
 
-/// Data for Image nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct ImageData {
@@ -35,9 +25,7 @@ pub struct ImageData {
     pub title: StringRef,
 }
 
-/// Data for Code nodes.
 /// `fence_char`: e.g. b'`' or b'~'.
-/// `value`: points to the code content in the source string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct CodeData {
@@ -48,10 +36,9 @@ pub struct CodeData {
     pub _pad: [u8; 3],
 }
 
-/// Data for List nodes.
 /// `start` is the starting number for ordered lists (ignored for unordered).
 ///
-/// Field order is chosen to avoid implicit padding:
+/// Field order chosen to avoid implicit padding:
 ///   start(u32) @ 0, ordered(bool) @ 4, spread(bool) @ 5, _pad(2) @ 6 → 8 bytes total.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -62,7 +49,6 @@ pub struct ListData {
     pub _pad: [u8; 2],
 }
 
-/// Data for ListItem nodes.
 /// `checked`: 0 = unchecked, 1 = checked, 2 = not a task item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -71,16 +57,13 @@ pub struct ListItemData {
     pub spread: bool,
 }
 
-/// Data for Table nodes.
-/// Immediately followed in type_data by `align_count` bytes:
-///   0=None, 1=Left, 2=Right, 3=Center
+/// Immediately followed in type_data by `align_count` [`ColumnAlign`] bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct TableData {
     pub align_count: u32,
 }
 
-/// Alignment values for table columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ColumnAlign {
@@ -115,7 +98,6 @@ pub struct ReferenceData {
     pub _pad: [u8; 3],
 }
 
-/// Data for FootnoteDefinition nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct FootnoteDefinitionData {
@@ -123,7 +105,6 @@ pub struct FootnoteDefinitionData {
     pub label: StringRef,
 }
 
-/// Data for Definition nodes: url, optional title, identifier, label.
 /// `title.len == 0` means no title.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -134,7 +115,6 @@ pub struct DefinitionData {
     pub label: StringRef,
 }
 
-/// Data for Math (flow) nodes.
 /// `meta.len == 0` means no meta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -169,10 +149,6 @@ pub struct ExpressionData {
     pub value: StringRef,
 }
 
-// ---------------------------------------------------------------------------
-// Generic byte-cast helpers
-// ---------------------------------------------------------------------------
-
 /// Safety: T must be #[repr(C)] and contain no padding with undefined bytes.
 unsafe fn struct_to_bytes<T: Copy>(val: &T) -> &[u8] {
     std::slice::from_raw_parts(val as *const T as *const u8, std::mem::size_of::<T>())
@@ -196,10 +172,6 @@ unsafe fn bytes_to_struct<T: Copy>(bytes: &[u8]) -> T {
     val.assume_init()
 }
 
-// ---------------------------------------------------------------------------
-// HeadingData
-// ---------------------------------------------------------------------------
-
 pub fn encode_heading_data(depth: u8) -> Vec<u8> {
     let d = HeadingData { depth };
     unsafe { struct_to_bytes(&d) }.to_vec()
@@ -208,10 +180,6 @@ pub fn encode_heading_data(depth: u8) -> Vec<u8> {
 pub fn decode_heading_data(bytes: &[u8]) -> HeadingData {
     unsafe { bytes_to_struct(bytes) }
 }
-
-// ---------------------------------------------------------------------------
-// LinkData
-// ---------------------------------------------------------------------------
 
 pub fn encode_link_data(url: StringRef, title: StringRef) -> Vec<u8> {
     let d = LinkData { url, title };
@@ -222,10 +190,6 @@ pub fn decode_link_data(bytes: &[u8]) -> LinkData {
     unsafe { bytes_to_struct(bytes) }
 }
 
-// ---------------------------------------------------------------------------
-// ImageData
-// ---------------------------------------------------------------------------
-
 pub fn encode_image_data(url: StringRef, alt: StringRef, title: StringRef) -> Vec<u8> {
     let d = ImageData { url, alt, title };
     unsafe { struct_to_bytes(&d) }.to_vec()
@@ -234,10 +198,6 @@ pub fn encode_image_data(url: StringRef, alt: StringRef, title: StringRef) -> Ve
 pub fn decode_image_data(bytes: &[u8]) -> ImageData {
     unsafe { bytes_to_struct(bytes) }
 }
-
-// ---------------------------------------------------------------------------
-// CodeData
-// ---------------------------------------------------------------------------
 
 pub fn encode_code_data(
     lang: StringRef,
@@ -259,10 +219,6 @@ pub fn decode_code_data(bytes: &[u8]) -> CodeData {
     unsafe { bytes_to_struct(bytes) }
 }
 
-// ---------------------------------------------------------------------------
-// ListData
-// ---------------------------------------------------------------------------
-
 pub fn encode_list_data(ordered: bool, start: u32, spread: bool) -> Vec<u8> {
     let d = ListData {
         start,
@@ -277,10 +233,6 @@ pub fn decode_list_data(bytes: &[u8]) -> ListData {
     unsafe { bytes_to_struct(bytes) }
 }
 
-// ---------------------------------------------------------------------------
-// ListItemData
-// ---------------------------------------------------------------------------
-
 pub fn encode_list_item_data(checked: u8, spread: bool) -> Vec<u8> {
     let d = ListItemData { checked, spread };
     unsafe { struct_to_bytes(&d) }.to_vec()
@@ -289,10 +241,6 @@ pub fn encode_list_item_data(checked: u8, spread: bool) -> Vec<u8> {
 pub fn decode_list_item_data(bytes: &[u8]) -> ListItemData {
     unsafe { bytes_to_struct(bytes) }
 }
-
-// ---------------------------------------------------------------------------
-// TableData (header + alignment bytes)
-// ---------------------------------------------------------------------------
 
 pub fn encode_table_data(alignments: &[ColumnAlign]) -> Vec<u8> {
     let header = TableData {
@@ -317,10 +265,6 @@ pub fn decode_table_data(bytes: &[u8]) -> (TableData, Vec<ColumnAlign>) {
     (header, alignments)
 }
 
-// ---------------------------------------------------------------------------
-// ReferenceData
-// ---------------------------------------------------------------------------
-
 pub fn encode_reference_data(
     identifier: StringRef,
     label: StringRef,
@@ -339,10 +283,6 @@ pub fn decode_reference_data(bytes: &[u8]) -> ReferenceData {
     unsafe { bytes_to_struct(bytes) }
 }
 
-// ---------------------------------------------------------------------------
-// FootnoteDefinitionData
-// ---------------------------------------------------------------------------
-
 pub fn encode_footnote_definition_data(identifier: StringRef, label: StringRef) -> Vec<u8> {
     let d = FootnoteDefinitionData { identifier, label };
     unsafe { struct_to_bytes(&d) }.to_vec()
@@ -352,12 +292,6 @@ pub fn decode_footnote_definition_data(bytes: &[u8]) -> FootnoteDefinitionData {
     unsafe { bytes_to_struct(bytes) }
 }
 
-// ---------------------------------------------------------------------------
-// MdxJsxElementData
-// ---------------------------------------------------------------------------
-
-/// Encode MDX JSX element type_data with attributes.
-/// `attrs`: slice of (kind, attr_name, attr_value) tuples.
 pub fn encode_mdx_jsx_element_data(
     name: StringRef,
     attrs: &[(u8, StringRef, StringRef)],
@@ -380,19 +314,15 @@ pub fn encode_mdx_jsx_element_data(
     out
 }
 
-/// Decode just the element name from MDX JSX element type_data.
 pub fn decode_mdx_jsx_element_name(bytes: &[u8]) -> StringRef {
     unsafe { bytes_to_struct(bytes) }
 }
 
-/// Decode the attribute count from MDX JSX element type_data.
 pub fn decode_mdx_jsx_attr_count(bytes: &[u8]) -> u32 {
     assert!(bytes.len() >= 12);
     u32::from_le_bytes(bytes[8..12].try_into().unwrap())
 }
 
-/// Decode an attribute entry by index from MDX JSX element type_data.
-/// Returns (kind, attr_name, attr_value).
 pub fn decode_mdx_jsx_attr(bytes: &[u8], index: u32) -> (u8, StringRef, StringRef) {
     let base = 16 + index as usize * 20;
     let kind = bytes[base];
@@ -406,10 +336,6 @@ pub fn decode_mdx_jsx_element_data(bytes: &[u8]) -> MdxJsxElementData {
     unsafe { bytes_to_struct(bytes) }
 }
 
-// ---------------------------------------------------------------------------
-// ExpressionData
-// ---------------------------------------------------------------------------
-
 pub fn encode_expression_data(value: StringRef) -> Vec<u8> {
     let d = ExpressionData { value };
     unsafe { struct_to_bytes(&d) }.to_vec()
@@ -418,10 +344,6 @@ pub fn encode_expression_data(value: StringRef) -> Vec<u8> {
 pub fn decode_expression_data(bytes: &[u8]) -> ExpressionData {
     unsafe { bytes_to_struct(bytes) }
 }
-
-// ---------------------------------------------------------------------------
-// DefinitionData
-// ---------------------------------------------------------------------------
 
 pub fn encode_definition_data(
     url: StringRef,
@@ -442,10 +364,6 @@ pub fn decode_definition_data(bytes: &[u8]) -> DefinitionData {
     unsafe { bytes_to_struct(bytes) }
 }
 
-// ---------------------------------------------------------------------------
-// MathData
-// ---------------------------------------------------------------------------
-
 pub fn encode_math_data(meta: StringRef, value: StringRef) -> Vec<u8> {
     let d = MathData { meta, value };
     unsafe { struct_to_bytes(&d) }.to_vec()
@@ -455,11 +373,7 @@ pub fn decode_math_data(bytes: &[u8]) -> MathData {
     unsafe { bytes_to_struct(bytes) }
 }
 
-// ---------------------------------------------------------------------------
-// StringRef as data (for Text, InlineCode, Html, Yaml, Toml, InlineMath)
-// ---------------------------------------------------------------------------
-
-/// Encode a StringRef directly as the type data (for Text, InlineCode, Html).
+/// Used by Text, InlineCode, Html, Yaml, Toml, and InlineMath nodes.
 pub fn encode_string_ref_data(sr: StringRef) -> Vec<u8> {
     unsafe { struct_to_bytes(&sr) }.to_vec()
 }

@@ -1,5 +1,5 @@
 [dependencies]
-mdast-arena = { path = "../mdast-arena" }
+tryckeri-mdast = { path = "../mdast" }
 parser = { path = "../parser" }
 tryckeri-hast = { path = "../hast" }
 rustc-hash = "2"

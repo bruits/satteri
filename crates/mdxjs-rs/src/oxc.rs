@@ -1,11 +1,11 @@
 //! Bridge between `markdown-rs` and OXC.
 
-use mdast_arena::mdx_types::{self as message, Location, MdxExpressionKind, Stop};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{Expression, ObjectPropertyKind, Program, Statement};
 use oxc_codegen::Codegen;
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{GetSpan, SPAN, SourceType, Span};
+use tryckeri_mdast::mdx_types::{self as message, Location, MdxExpressionKind, Stop};
 
 /// Parse ESM in MDX with OXC.
 pub fn parse_esm_to_tree<'a>(

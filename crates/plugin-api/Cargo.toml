@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-mdast-arena = { path = "../mdast-arena" }
+tryckeri-mdast = { path = "../mdast" }
 rustc-hash = "2"

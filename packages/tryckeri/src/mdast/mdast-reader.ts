@@ -1,4 +1,4 @@
-import type { ArenaNodeRaw, BufferHeader, StringRefRaw, MdxJsxAttributeUnion } from "../types.js";
+import type { MdastNodeRaw, BufferHeader, StringRefRaw, MdxJsxAttributeUnion } from "../types.js";
 
 // Node type discriminant values (must match NodeType enum in node.rs)
 export const NodeType = Object.freeze({
@@ -46,8 +46,8 @@ export const NodeTypeName: Record<number, string> = Object.fromEntries(
   Object.entries(NodeType).map(([k, v]) => [v, k]),
 );
 
-// ArenaNode field offsets within NODE_STRUCT_SIZE bytes.
-// Must match ArenaNode #[repr(C)] layout in node.rs:
+// MdastNode field offsets within NODE_STRUCT_SIZE bytes.
+// Must match MdastNode #[repr(C)] layout in node.rs:
 //   id: u32          @ 0
 //   node_type: u8    @ 4
 //   _pad: [u8; 3]    @ 5
@@ -168,7 +168,7 @@ export class MdastReader {
     return this.#textDecoder.decode(bytes);
   }
 
-  getNode(nodeId: number): ArenaNodeRaw {
+  getNode(nodeId: number): MdastNodeRaw {
     const { nodesOffset, nodeStructSize, nodeCount } = this.#header;
     if (nodeId >= nodeCount) {
       throw new RangeError(`Node ID ${nodeId} out of range (count: ${nodeCount})`);
@@ -524,7 +524,7 @@ export class MdastReader {
   }
 
   /** Walk depth-first with full node objects (slower, but convenient). */
-  walkFull(visitor: (node: ArenaNodeRaw) => boolean | void, rootId = 0): void {
+  walkFull(visitor: (node: MdastNodeRaw) => boolean | void, rootId = 0): void {
     this.walk((nodeId) => visitor(this.getNode(nodeId)), rootId);
   }
 }

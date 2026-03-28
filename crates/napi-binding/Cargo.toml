@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-mdast-arena = { path = "../mdast-arena" }
+tryckeri-mdast = { path = "../mdast" }
 tryckeri-hast = { path = "../hast" }
 mdxjs = { path = "../mdxjs-rs" }
 parser = { path = "../parser" }

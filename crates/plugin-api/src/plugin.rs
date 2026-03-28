@@ -1,6 +1,6 @@
 use crate::context::PluginContext;
 use crate::typed_nodes::*;
-use mdast_arena::{MdastArena, NodeType};
+use tryckeri_mdast::{MdastArena, MdastNodeType};
 
 /// Metadata about a plugin.
 #[derive(Debug, Clone)]
@@ -129,8 +129,8 @@ impl<'a> NodeView<'a> {
     pub fn position(&self) -> NodePosition {
         NodePosition::from_node(self.arena.get_node(self.node_id))
     }
-    pub fn node_type(&self) -> NodeType {
+    pub fn node_type(&self) -> MdastNodeType {
         let raw = self.arena.get_node(self.node_id).node_type;
-        NodeType::from_u8(raw).unwrap_or(NodeType::Root)
+        MdastNodeType::from_u8(raw).unwrap_or(MdastNodeType::Root)
     }
 }

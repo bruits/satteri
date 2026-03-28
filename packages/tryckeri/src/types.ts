@@ -107,7 +107,7 @@ export interface StringRefRaw {
   len: number;
 }
 
-export interface ArenaNodeRaw {
+export interface MdastNodeRaw {
   id: number;
   type: number;
   typeName: string;

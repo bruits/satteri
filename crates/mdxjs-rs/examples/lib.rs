@@ -2,7 +2,7 @@ extern crate mdxjs;
 
 /// Example that compiles the example MDX document from <https://mdxjs.com>
 /// to JavaScript.
-fn main() -> Result<(), mdast_arena::mdx_types::Message> {
+fn main() -> Result<(), tryckeri_mdast::mdx_types::Message> {
     println!(
         "{}",
         mdxjs::compile(

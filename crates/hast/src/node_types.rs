@@ -1,5 +1,3 @@
-//! HAST node type constants and property kind constants.
-
 pub const HAST_ROOT: u8 = 0;
 pub const HAST_ELEMENT: u8 = 1;
 pub const HAST_TEXT: u8 = 2;

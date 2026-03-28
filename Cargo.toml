@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "crates/mdast-arena",
+  "crates/mdast",
   "crates/bench",
   "crates/hast",
   "crates/parser",

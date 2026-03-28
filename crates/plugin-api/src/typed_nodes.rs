@@ -1,7 +1,7 @@
-use mdast_arena::codec::*;
-use mdast_arena::{ArenaNode, MdastArena, NodeType};
+use tryckeri_mdast::codec::*;
+use tryckeri_mdast::{MdastArena, MdastNode, MdastNodeType};
 
-/// Position info extracted from an ArenaNode
+/// Position info extracted from an MdastNode
 #[derive(Debug, Clone, Copy)]
 pub struct NodePosition {
     pub start_offset: u32,
@@ -13,7 +13,7 @@ pub struct NodePosition {
 }
 
 impl NodePosition {
-    pub fn from_node(node: &ArenaNode) -> Self {
+    pub fn from_node(node: &MdastNode) -> Self {
         Self {
             start_offset: node.start_offset,
             end_offset: node.end_offset,
@@ -207,7 +207,7 @@ impl<'a> Code<'a> {
         let children = self.arena.get_children(self.node_id);
         if let Some(&child_id) = children.first() {
             let child_node = self.arena.get_node(child_id);
-            if child_node.node_type == NodeType::Text as u8 {
+            if child_node.node_type == MdastNodeType::Text as u8 {
                 let data = self.arena.get_type_data(child_id);
                 if !data.is_empty() {
                     let string_ref = decode_string_ref_data(data);

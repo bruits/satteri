@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-mdast-arena = { path = "../mdast-arena" }
+tryckeri-mdast = { path = "../mdast" }
 pulldown-cmark-escape = "0.11"
 
 [dev-dependencies]

@@ -29,16 +29,13 @@ use crate::codec::*;
 use crate::jsx_attr_parser::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
 };
-use crate::node::{NodeType, StringRef};
+use crate::node::{MdastNodeType, StringRef};
 use crate::rebuild::Patch;
 use crate::{MdastArena, MdastBuilder};
 
 use serde::Deserialize;
 
-// ---------------------------------------------------------------------------
-// Constants — must match packages/tryckeri/src/command-buffer.ts
-// ---------------------------------------------------------------------------
-
+// Must match packages/tryckeri/src/command-buffer.ts
 pub const CMD_REMOVE: u8 = 0x01;
 pub const CMD_SET_INT: u8 = 0x02;
 pub const CMD_SET_STRING: u8 = 0x03;
@@ -55,7 +52,6 @@ pub const PAYLOAD_RAW_MARKDOWN: u8 = 0x10;
 pub const PAYLOAD_RAW_HTML: u8 = 0x11;
 pub const PAYLOAD_SERDE_JSON: u8 = 0x12;
 
-// Field IDs
 pub const FIELD_DEPTH: u16 = 0x0001;
 pub const FIELD_URL: u16 = 0x0010;
 pub const FIELD_TITLE: u16 = 0x0011;
@@ -72,17 +68,12 @@ pub const FIELD_LABEL: u16 = 0x0061;
 pub const FIELD_REFERENCE_TYPE: u16 = 0x0062;
 pub const FIELD_NAME: u16 = 0x0070;
 
-// ---------------------------------------------------------------------------
-// JSON deserialization types for structured node payloads
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
 pub struct JsNode {
     #[serde(rename = "type")]
     pub node_type: String,
     #[serde(default)]
     pub children: Option<Vec<JsNode>>,
-    // MDAST type-specific fields (all optional)
     pub depth: Option<u8>,
     pub value: Option<String>,
     pub url: Option<String>,
@@ -111,7 +102,6 @@ pub struct JsNode {
     pub is_hast: bool,
 }
 
-/// A single MDX JSX attribute from a JS node.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum JsNodeAttribute {
@@ -140,15 +130,10 @@ const HAST_MDX_JSX_TEXT_ELEMENT_TYPE: u8 = 11;
 const HAST_MDX_EXPRESSION_TYPE: u8 = 12;
 const HAST_MDX_ESM_TYPE: u8 = 13;
 
-// HAST property value type bytes
 const HAST_PROP_STRING: u8 = 0;
 const HAST_PROP_BOOL_TRUE: u8 = 1;
 const HAST_PROP_BOOL_FALSE: u8 = 2;
 const HAST_PROP_SPACE_SEP: u8 = 3;
-
-// ---------------------------------------------------------------------------
-// Command parsing error
-// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub enum CommandError {
@@ -176,10 +161,6 @@ impl std::fmt::Display for CommandError {
 }
 
 impl std::error::Error for CommandError {}
-
-// ---------------------------------------------------------------------------
-// Buffer reader helper
-// ---------------------------------------------------------------------------
 
 struct BufReader<'a> {
     data: &'a [u8],
@@ -252,14 +233,8 @@ impl<'a> BufReader<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// SetProperty application (modifies arena in-place)
-// ---------------------------------------------------------------------------
-
-/// Apply a setProperty mutation directly to the arena's type_data.
-///
-/// For string fields, allocates the new string in the arena's source buffer and
-/// updates the StringRef. For fixed-size fields, modifies bytes in-place.
+/// String fields are allocated in the arena's source buffer with the StringRef
+/// updated; fixed-size fields are modified in-place.
 fn apply_set_int(
     arena: &mut MdastArena,
     node_id: u32,
@@ -364,7 +339,6 @@ fn apply_set_null(arena: &mut MdastArena, node_id: u32, field_id: u16) -> Result
     Ok(())
 }
 
-/// Write a StringRef into the type_data for a given (node_type, field_id).
 fn set_string_ref(
     arena: &mut MdastArena,
     node_id: u32,
@@ -375,7 +349,6 @@ fn set_string_ref(
     let node_type = node.node_type;
     let data_offset = node.data_offset as usize;
 
-    // Byte offset within type_data where this StringRef lives
     let ref_offset = match (node_type, field_id) {
         // Text/InlineCode/Html/Yaml/Toml/InlineMath: StringRef at 0
         (10 | 13 | 7 | 25 | 26 | 28, FIELD_VALUE) => 0,
@@ -420,11 +393,6 @@ fn set_string_ref(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Payload → MdastArena conversion
-// ---------------------------------------------------------------------------
-
-/// Parse a raw Markdown string payload into a sub-arena using the provided parser.
 fn parse_raw_markdown(markdown: &str, parse_markdown: &dyn Fn(&str) -> MdastArena) -> MdastArena {
     parse_markdown(markdown)
 }
@@ -473,7 +441,6 @@ fn escape_braces_in_html_text(html: &str) -> String {
     result
 }
 
-/// Convert a JSON-deserialized JsNode tree into a sub-arena.
 fn js_node_to_arena(js_node: &JsNode) -> Result<MdastArena, CommandError> {
     let mut builder = MdastBuilder::new(String::new());
     emit_js_node(js_node, &mut builder)?;
@@ -481,7 +448,6 @@ fn js_node_to_arena(js_node: &JsNode) -> Result<MdastArena, CommandError> {
 }
 
 fn emit_js_node(js_node: &JsNode, builder: &mut MdastBuilder) -> Result<(), CommandError> {
-    // Dispatch: HAST nodes use raw u8 types, MDAST uses NodeType enum
     if js_node.is_hast {
         return emit_hast_js_node(js_node, builder);
     }
@@ -489,13 +455,11 @@ fn emit_js_node(js_node: &JsNode, builder: &mut MdastBuilder) -> Result<(), Comm
     let node_type = name_to_node_type(&js_node.node_type)?;
     builder.open_node(node_type);
 
-    // Encode type-specific data
     let type_data = encode_js_node_data(js_node, node_type, builder);
     if !type_data.is_empty() {
         builder.set_data_current(&type_data);
     }
 
-    // Recurse into children
     if let Some(children) = &js_node.children {
         for child in children {
             emit_js_node(child, builder)?;
@@ -579,8 +543,8 @@ fn encode_hast_js_node_data(js_node: &JsNode, raw_type: u8, builder: &mut MdastB
                 }
             }
 
-            // Element data layout: [tag: StringRef(8)][prop_count: u32(4)][pad: u32(4)]
-            // + prop_count * [name: StringRef(8)][kind: u8][pad: 3][value: StringRef(8)]
+            // Layout: [tag: StringRef(8)][prop_count: u32(4)][pad: u32(4)]
+            //   + prop_count * [name: StringRef(8)][kind: u8][pad: 3][value: StringRef(8)]
             let mut out = Vec::with_capacity(16 + props.len() * 20);
             out.extend_from_slice(&tag_ref.offset.to_le_bytes());
             out.extend_from_slice(&tag_ref.len.to_le_bytes());
@@ -633,60 +597,60 @@ fn encode_hast_js_node_data(js_node: &JsNode, raw_type: u8, builder: &mut MdastB
 
 fn encode_js_node_data(
     js_node: &JsNode,
-    node_type: NodeType,
+    node_type: MdastNodeType,
     builder: &mut MdastBuilder,
 ) -> Vec<u8> {
     match node_type {
-        NodeType::Heading => {
+        MdastNodeType::Heading => {
             let depth = js_node.depth.unwrap_or(1);
             encode_heading_data(depth)
         }
-        NodeType::Text
-        | NodeType::InlineCode
-        | NodeType::Html
-        | NodeType::Yaml
-        | NodeType::Toml
-        | NodeType::InlineMath => {
+        MdastNodeType::Text
+        | MdastNodeType::InlineCode
+        | MdastNodeType::Html
+        | MdastNodeType::Yaml
+        | MdastNodeType::Toml
+        | MdastNodeType::InlineMath => {
             let value = js_node.value.as_deref().unwrap_or("");
             let sref = builder.alloc_string(value);
             encode_string_ref_data(sref)
         }
-        NodeType::Code => {
+        MdastNodeType::Code => {
             let lang_ref = alloc_opt_str(builder, js_node.lang.as_deref());
             let meta_ref = alloc_opt_str(builder, js_node.meta.as_deref());
             let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
             encode_code_data(lang_ref, meta_ref, value_ref, b'`')
         }
-        NodeType::Math => {
+        MdastNodeType::Math => {
             let meta_ref = alloc_opt_str(builder, js_node.meta.as_deref());
             let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
             encode_math_data(meta_ref, value_ref)
         }
-        NodeType::Link => {
+        MdastNodeType::Link => {
             let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
             let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
             encode_link_data(url_ref, title_ref)
         }
-        NodeType::Image => {
+        MdastNodeType::Image => {
             let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
             let alt_ref = alloc_opt_str(builder, js_node.alt.as_deref());
             let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
             encode_image_data(url_ref, alt_ref, title_ref)
         }
-        NodeType::Definition => {
+        MdastNodeType::Definition => {
             let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
             let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
             let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
             let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
             encode_definition_data(url_ref, title_ref, id_ref, label_ref)
         }
-        NodeType::List => {
+        MdastNodeType::List => {
             let ordered = js_node.ordered.unwrap_or(false);
             let start = js_node.start.unwrap_or(1);
             let spread = js_node.spread.unwrap_or(false);
             encode_list_data(ordered, start, spread)
         }
-        NodeType::ListItem => {
+        MdastNodeType::ListItem => {
             let checked = match js_node.checked {
                 Some(true) => 1u8,
                 Some(false) => 0u8,
@@ -695,7 +659,9 @@ fn encode_js_node_data(
             let spread = js_node.spread.unwrap_or(false);
             encode_list_item_data(checked, spread)
         }
-        NodeType::LinkReference | NodeType::ImageReference | NodeType::FootnoteReference => {
+        MdastNodeType::LinkReference
+        | MdastNodeType::ImageReference
+        | MdastNodeType::FootnoteReference => {
             let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
             let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
             let kind = match js_node.reference_type.as_deref() {
@@ -705,17 +671,19 @@ fn encode_js_node_data(
             };
             encode_reference_data(id_ref, label_ref, kind)
         }
-        NodeType::FootnoteDefinition => {
+        MdastNodeType::FootnoteDefinition => {
             let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
             let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
             encode_footnote_definition_data(id_ref, label_ref)
         }
-        NodeType::MdxJsxFlowElement | NodeType::MdxJsxTextElement => {
+        MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement => {
             let name_ref = alloc_opt_str(builder, js_node.name.as_deref());
             let attr_tuples = encode_js_jsx_attrs(builder, js_node.attributes.as_deref());
             encode_mdx_jsx_element_data(name_ref, &attr_tuples)
         }
-        NodeType::MdxFlowExpression | NodeType::MdxTextExpression | NodeType::MdxjsEsm => {
+        MdastNodeType::MdxFlowExpression
+        | MdastNodeType::MdxTextExpression
+        | MdastNodeType::MdxjsEsm => {
             let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
             encode_expression_data(value_ref)
         }
@@ -743,10 +711,7 @@ fn encode_js_jsx_attrs(
                         (MDX_ATTR_LITERAL_PROP, n, v)
                     }
                     Some(serde_json::Value::Object(obj)) => {
-                        let expr = obj
-                            .get("value")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let expr = obj.get("value").and_then(|v| v.as_str()).unwrap_or("");
                         let v = builder.alloc_string(expr);
                         (MDX_ATTR_EXPRESSION_PROP, n, v)
                     }
@@ -768,49 +733,45 @@ fn alloc_opt_str(builder: &mut MdastBuilder, s: Option<&str>) -> StringRef {
     }
 }
 
-fn name_to_node_type(name: &str) -> Result<NodeType, CommandError> {
+fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
     match name {
-        "root" => Ok(NodeType::Root),
-        "paragraph" => Ok(NodeType::Paragraph),
-        "heading" => Ok(NodeType::Heading),
-        "thematicBreak" => Ok(NodeType::ThematicBreak),
-        "blockquote" => Ok(NodeType::Blockquote),
-        "list" => Ok(NodeType::List),
-        "listItem" => Ok(NodeType::ListItem),
-        "html" => Ok(NodeType::Html),
-        "code" => Ok(NodeType::Code),
-        "definition" => Ok(NodeType::Definition),
-        "text" => Ok(NodeType::Text),
-        "emphasis" => Ok(NodeType::Emphasis),
-        "strong" => Ok(NodeType::Strong),
-        "inlineCode" => Ok(NodeType::InlineCode),
-        "break" => Ok(NodeType::Break),
-        "link" => Ok(NodeType::Link),
-        "image" => Ok(NodeType::Image),
-        "linkReference" => Ok(NodeType::LinkReference),
-        "imageReference" => Ok(NodeType::ImageReference),
-        "footnoteDefinition" => Ok(NodeType::FootnoteDefinition),
-        "footnoteReference" => Ok(NodeType::FootnoteReference),
-        "table" => Ok(NodeType::Table),
-        "tableRow" => Ok(NodeType::TableRow),
-        "tableCell" => Ok(NodeType::TableCell),
-        "delete" => Ok(NodeType::Delete),
-        "yaml" => Ok(NodeType::Yaml),
-        "toml" => Ok(NodeType::Toml),
-        "math" => Ok(NodeType::Math),
-        "inlineMath" => Ok(NodeType::InlineMath),
-        "mdxJsxFlowElement" => Ok(NodeType::MdxJsxFlowElement),
-        "mdxJsxTextElement" => Ok(NodeType::MdxJsxTextElement),
-        "mdxFlowExpression" => Ok(NodeType::MdxFlowExpression),
-        "mdxTextExpression" => Ok(NodeType::MdxTextExpression),
-        "mdxjsEsm" => Ok(NodeType::MdxjsEsm),
+        "root" => Ok(MdastNodeType::Root),
+        "paragraph" => Ok(MdastNodeType::Paragraph),
+        "heading" => Ok(MdastNodeType::Heading),
+        "thematicBreak" => Ok(MdastNodeType::ThematicBreak),
+        "blockquote" => Ok(MdastNodeType::Blockquote),
+        "list" => Ok(MdastNodeType::List),
+        "listItem" => Ok(MdastNodeType::ListItem),
+        "html" => Ok(MdastNodeType::Html),
+        "code" => Ok(MdastNodeType::Code),
+        "definition" => Ok(MdastNodeType::Definition),
+        "text" => Ok(MdastNodeType::Text),
+        "emphasis" => Ok(MdastNodeType::Emphasis),
+        "strong" => Ok(MdastNodeType::Strong),
+        "inlineCode" => Ok(MdastNodeType::InlineCode),
+        "break" => Ok(MdastNodeType::Break),
+        "link" => Ok(MdastNodeType::Link),
+        "image" => Ok(MdastNodeType::Image),
+        "linkReference" => Ok(MdastNodeType::LinkReference),
+        "imageReference" => Ok(MdastNodeType::ImageReference),
+        "footnoteDefinition" => Ok(MdastNodeType::FootnoteDefinition),
+        "footnoteReference" => Ok(MdastNodeType::FootnoteReference),
+        "table" => Ok(MdastNodeType::Table),
+        "tableRow" => Ok(MdastNodeType::TableRow),
+        "tableCell" => Ok(MdastNodeType::TableCell),
+        "delete" => Ok(MdastNodeType::Delete),
+        "yaml" => Ok(MdastNodeType::Yaml),
+        "toml" => Ok(MdastNodeType::Toml),
+        "math" => Ok(MdastNodeType::Math),
+        "inlineMath" => Ok(MdastNodeType::InlineMath),
+        "mdxJsxFlowElement" => Ok(MdastNodeType::MdxJsxFlowElement),
+        "mdxJsxTextElement" => Ok(MdastNodeType::MdxJsxTextElement),
+        "mdxFlowExpression" => Ok(MdastNodeType::MdxFlowExpression),
+        "mdxTextExpression" => Ok(MdastNodeType::MdxTextExpression),
+        "mdxjsEsm" => Ok(MdastNodeType::MdxjsEsm),
         other => Err(CommandError::UnknownNodeType(other.to_string())),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Payload reader
-// ---------------------------------------------------------------------------
 
 fn read_payload(
     reader: &mut BufReader<'_>,
@@ -843,21 +804,9 @@ fn read_payload(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Main entry point
-// ---------------------------------------------------------------------------
-
-/// Parse a command buffer and apply all mutations to the arena, returning a new arena.
-///
-/// The `parse_markdown` callback is used for `RAW_MARKDOWN` payloads — it should
-/// parse a Markdown string and return an `MdastArena`. This avoids a circular
-/// dependency on the `parser` crate.
-///
-/// The process is:
-/// 1. Clone the arena (so we can apply setProperty in-place).
-/// 2. Walk the command buffer, applying setProperty mutations directly.
-/// 3. Collect structural mutations (remove, insert, replace, etc.) as `Patch` objects.
-/// 4. Call `rebuild()` with the structural patches.
+/// The `parse_markdown` callback avoids a circular dependency on the `parser`
+/// crate. Set-property mutations are applied in-place on a cloned arena first;
+/// structural mutations are collected as `Patch` objects and applied via `rebuild()`.
 pub fn apply_commands(
     arena: &MdastArena,
     command_buf: &[u8],
@@ -957,7 +906,6 @@ pub fn apply_commands(
         }
     }
 
-    // Apply structural patches via rebuild
     if patches.is_empty() {
         Ok(arena)
     } else {
@@ -965,22 +913,15 @@ pub fn apply_commands(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Stub parser for tests. Creates a Root with a single Text child containing
-    /// the source as its value. Real parsing is done by the `parser` crate at the
-    /// NAPI layer.
     fn test_parse_markdown(source: &str) -> MdastArena {
         let mut b = MdastBuilder::new(String::new());
-        b.open_node(NodeType::Root);
-        b.open_node(NodeType::Paragraph);
-        b.open_node(NodeType::Text);
+        b.open_node(MdastNodeType::Root);
+        b.open_node(MdastNodeType::Paragraph);
+        b.open_node(MdastNodeType::Text);
         let sref = b.alloc_string(source);
         b.set_data_current(&crate::codec::encode_string_ref_data(sref));
         b.close_node();
@@ -989,7 +930,6 @@ mod tests {
         b.finish()
     }
 
-    /// Write a little-endian u32 into a byte vec.
     fn push_u32(buf: &mut Vec<u8>, v: u32) {
         buf.extend_from_slice(&v.to_le_bytes());
     }
@@ -1009,24 +949,24 @@ mod tests {
         let source = "# Hello\n\nWorld".to_string();
         let mut b = MdastBuilder::new(source);
 
-        b.open_node(NodeType::Root);
+        b.open_node(MdastNodeType::Root);
         b.set_position_current(0, 14, 1, 1, 2, 6);
 
-        b.open_node(NodeType::Heading);
+        b.open_node(MdastNodeType::Heading);
         b.set_position_current(0, 7, 1, 1, 1, 8);
         b.set_data_current(&encode_heading_data(1));
 
-        b.open_node(NodeType::Text);
+        b.open_node(MdastNodeType::Text);
         b.set_position_current(2, 7, 1, 3, 1, 8);
         b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
         b.close_node();
 
         b.close_node();
 
-        b.open_node(NodeType::Paragraph);
+        b.open_node(MdastNodeType::Paragraph);
         b.set_position_current(9, 14, 2, 1, 2, 6);
 
-        b.open_node(NodeType::Text);
+        b.open_node(MdastNodeType::Text);
         b.set_position_current(9, 14, 2, 1, 2, 6);
         b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
         b.close_node();
@@ -1058,7 +998,7 @@ mod tests {
         assert_eq!(result.get_children(0).len(), 1);
         assert_eq!(
             result.get_node(result.get_children(0)[0]).node_type,
-            NodeType::Paragraph as u8
+            MdastNodeType::Paragraph as u8
         );
     }
 
@@ -1141,7 +1081,7 @@ mod tests {
         let new_heading = root_children[0];
         assert_eq!(
             result.get_node(new_heading).node_type,
-            NodeType::Heading as u8
+            MdastNodeType::Heading as u8
         );
         let heading_data = result.get_type_data(new_heading);
         assert_eq!(decode_heading_data(heading_data).depth, 2);
@@ -1229,10 +1169,10 @@ mod tests {
 
         let arena = js_node_to_arena(&js).unwrap();
         assert_eq!(arena.len(), 2); // heading + text
-        assert_eq!(arena.get_node(0).node_type, NodeType::Heading as u8);
+        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Heading as u8);
         assert_eq!(arena.get_children(0).len(), 1);
         let text_id = arena.get_children(0)[0];
-        assert_eq!(arena.get_node(text_id).node_type, NodeType::Text as u8);
+        assert_eq!(arena.get_node(text_id).node_type, MdastNodeType::Text as u8);
     }
 
     #[test]
@@ -1253,7 +1193,10 @@ mod tests {
         );
         // More direct test
         let result = escape_braces_in_html_text(r#"<span data-x="{a}">{b}</span>"#);
-        assert!(result.contains(r#"data-x="{a}""#), "attribute braces preserved");
+        assert!(
+            result.contains(r#"data-x="{a}""#),
+            "attribute braces preserved"
+        );
         assert!(result.contains("{'{'}"), "text braces escaped");
     }
 
@@ -1269,8 +1212,14 @@ mod tests {
         let html = r#"<pre class="shiki"><code><span style="color:#E1E4E8">const x = </span><span style="color:#B392F0">{</span><span style="color:#E1E4E8">foo: 1</span><span style="color:#B392F0">}</span></code></pre>"#;
         let escaped = escape_braces_in_html_text(html);
         // The lone { and } between spans should be escaped
-        assert!(!escaped.contains(">{<"), "bare braces in text should be escaped");
-        assert!(!escaped.contains(">}<"), "bare braces in text should be escaped");
+        assert!(
+            !escaped.contains(">{<"),
+            "bare braces in text should be escaped"
+        );
+        assert!(
+            !escaped.contains(">}<"),
+            "bare braces in text should be escaped"
+        );
         // Attributes should be untouched
         assert!(escaped.contains(r#"class="shiki""#));
         assert!(escaped.contains(r#"style="color:#E1E4E8""#));

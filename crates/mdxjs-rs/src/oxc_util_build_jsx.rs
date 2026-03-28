@@ -10,7 +10,6 @@ use crate::oxc_utils::{
     u32_to_point,
 };
 use core::str;
-use mdast_arena::mdx_types::{self as message, Location, Message};
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{
     Argument, ArrayExpression, ArrayExpressionElement, CallExpression, Declaration,
@@ -22,6 +21,7 @@ use oxc_ast::ast::{
 use oxc_span::{SPAN, Span};
 use oxc_syntax::node::NodeId;
 use std::cell::Cell;
+use tryckeri_mdast::mdx_types::{self as message, Location, Message};
 
 /// Configuration.
 #[derive(Debug, Default, Clone)]

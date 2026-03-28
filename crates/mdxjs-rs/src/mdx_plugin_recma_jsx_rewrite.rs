@@ -9,7 +9,7 @@ use crate::oxc_utils::{
     create_ident_name, create_member, create_object_expression, create_str_expression,
     create_string_literal, is_literal_name, jsx_member_to_parts, span_to_position,
 };
-use mdast_arena::mdx_types::Location;
+use tryckeri_mdast::mdx_types::Location;
 
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{

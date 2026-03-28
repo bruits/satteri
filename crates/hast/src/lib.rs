@@ -15,7 +15,7 @@ pub use serialize::hast_to_html;
 pub use to_binary::mdast_to_hast_buffer;
 
 /// Convert an mdast arena directly to an HTML string.
-pub fn mdast_to_html(arena: &mdast_arena::MdastArena) -> String {
+pub fn mdast_to_html(arena: &tryckeri_mdast::MdastArena) -> String {
     let hast = mdast_to_hast(arena);
     hast_to_html(&hast)
 }

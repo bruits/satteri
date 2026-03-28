@@ -1,10 +1,6 @@
 //! HAST node types, arena, and builder.
 
-use mdast_arena::StringRef;
-
-// ---------------------------------------------------------------------------
-// HastNodeType
-// ---------------------------------------------------------------------------
+use tryckeri_mdast::StringRef;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -14,11 +10,11 @@ pub enum HastNodeType {
     Text = 2,
     Comment = 3,
     Doctype = 4,
-    Raw = 5,               // raw HTML passthrough (from MDAST Html nodes)
-    MdxJsxElement = 10,    // MDX JSX flow element (<Component>)
+    Raw = 5,                // raw HTML passthrough (from MDAST Html nodes)
+    MdxJsxElement = 10,     // MDX JSX flow element (<Component>)
     MdxJsxTextElement = 11, // MDX JSX text element (inline <Component />)
-    MdxExpression = 12,    // MDX expression ({expr})
-    MdxEsm = 13,          // MDX ESM (import/export)
+    MdxExpression = 12,     // MDX expression ({expr})
+    MdxEsm = 13,            // MDX ESM (import/export)
 }
 
 impl HastNodeType {
@@ -38,10 +34,6 @@ impl HastNodeType {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Property / PropertyValue
-// ---------------------------------------------------------------------------
 
 /// An HTML attribute (property) on an element.
 #[derive(Debug, Clone, Copy)]
@@ -77,11 +69,6 @@ impl PropertyValue {
     }
 }
 
-// ---------------------------------------------------------------------------
-// HastNode
-// ---------------------------------------------------------------------------
-
-/// A node in the HAST (HTML AST).
 /// All strings are `StringRef` into `HastArena::strings` — zero per-node heap allocations.
 #[derive(Debug, Clone, Copy)]
 pub struct HastNode {
@@ -106,10 +93,6 @@ pub struct HastNode {
     pub end_line: u32,   // 0 = not set
 }
 
-// ---------------------------------------------------------------------------
-// HastArena
-// ---------------------------------------------------------------------------
-
 pub struct HastArena {
     pub nodes: Vec<HastNode>,
     pub children: Vec<u32>,
@@ -128,7 +111,6 @@ impl HastArena {
         }
     }
 
-    /// Allocate a string in the pool and return a `StringRef`.
     pub fn alloc_string(&mut self, s: &str) -> StringRef {
         let offset = self.strings.len() as u32;
         let len = s.len() as u32;
@@ -136,7 +118,6 @@ impl HastArena {
         StringRef::new(offset, len)
     }
 
-    /// Read a string from the pool by `StringRef`.
     pub fn get_str(&self, r: StringRef) -> &str {
         if r.is_empty() {
             return "";
@@ -218,10 +199,6 @@ impl Default for HastArena {
     }
 }
 
-// ---------------------------------------------------------------------------
-// HastBuilder
-// ---------------------------------------------------------------------------
-
 pub struct HastBuilder {
     arena: HastArena,
     stack: Vec<(u32, Vec<u32>)>, // (node_id, children_so_far)
@@ -239,7 +216,6 @@ impl HastBuilder {
         &self.arena
     }
 
-    /// Allocate a string in the arena's string pool.
     pub fn alloc_string(&mut self, s: &str) -> StringRef {
         self.arena.alloc_string(s)
     }
