@@ -6,6 +6,7 @@
     "crates/**/*",
     "node_modules",
     "tryckeri_napi.*",
+    "packages/tryckeri/index.d.ts",
     "packages/tryckeri/browser.js",
     "packages/tryckeri/index.js",
     "packages/tryckeri/browser.d.ts",

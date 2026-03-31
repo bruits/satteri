@@ -2,16 +2,13 @@
 /* eslint-disable */
 
 export declare class ExternalObject<T> {
-  readonly "": {
-    readonly "": unique symbol;
-    [K: symbol]: T;
-  };
+  readonly '': {
+    readonly '': unique symbol
+    [K: symbol]: T
+  }
 }
 /** Apply a command buffer to a handle's arena in-place. No serialize/deserialize. */
-export declare function applyCommandsToHandle(
-  handle: ExternalObject<MdastArena>,
-  commandBuf: Uint8Array,
-): void;
+export declare function applyCommandsToHandle(handle: ExternalObject<MdastArena>, commandBuf: Uint8Array): void
 
 /**
  * Apply a binary command buffer of mutations to an MDAST arena buffer.
@@ -22,78 +19,56 @@ export declare function applyCommandsToHandle(
  *
  * Returns a new MDAST arena buffer with all mutations applied.
  */
-export declare function applyMutations(arenaBuf: Uint8Array, commandBuf: Uint8Array): Uint8Array;
+export declare function applyMutations(arenaBuf: Uint8Array, commandBuf: Uint8Array): Uint8Array
 
 /** Apply mutations and compile to MDX JS in one step — no serialize→deserialize round-trip. */
-export declare function applyMutationsAndCompileJs(
-  arenaBuf: Uint8Array,
-  commandBuf: Uint8Array,
-  options?: JsMdxOptions | undefined | null,
-): string;
+export declare function applyMutationsAndCompileJs(arenaBuf: Uint8Array, commandBuf: Uint8Array, options?: JsMdxOptions | undefined | null): string
 
 /** Apply MDAST mutations and convert to HAST buffer in one step. */
-export declare function applyMutationsAndConvertToHast(
-  arenaBuf: Uint8Array,
-  commandBuf: Uint8Array,
-): Uint8Array;
+export declare function applyMutationsAndConvertToHast(arenaBuf: Uint8Array, commandBuf: Uint8Array): Uint8Array
 
 /** Apply mutations and render to HTML in one step — no serialize→deserialize round-trip. */
-export declare function applyMutationsAndRenderHtml(
-  arenaBuf: Uint8Array,
-  commandBuf: Uint8Array,
-): string;
+export declare function applyMutationsAndRenderHtml(arenaBuf: Uint8Array, commandBuf: Uint8Array): string
 
 /** Return metadata about the MdastNode struct size and buffer format version. */
 export interface BufferFormat {
-  nodeStructSize: number;
-  version: number;
-  magic: string;
+  nodeStructSize: number
+  version: number
+  magic: string
 }
 
 /** Compile a handle's HAST arena to MDX JavaScript. Does not consume the handle. */
-export declare function compileHandle(
-  handle: ExternalObject<MdastArena>,
-  options?: JsMdxOptions | undefined | null,
-): string;
+export declare function compileHandle(handle: ExternalObject<MdastArena>, options?: JsMdxOptions | undefined | null): string
 
 /**
  * Compile a HAST binary buffer (with MDX node types) to JavaScript.
  * This is the split-pipeline entry point for MDX: after MDAST→HAST conversion
  * and any HAST plugin mutations, this function does the final hast→JS step.
  */
-export declare function compileHastBufferToJs(
-  buf: Uint8Array,
-  options?: JsMdxOptions | undefined | null,
-): string;
+export declare function compileHastBufferToJs(buf: Uint8Array, options?: JsMdxOptions | undefined | null): string
 
 /** Compile MDX source directly to JavaScript. */
-export declare function compileMdx(
-  source: string,
-  options?: JsMdxOptions | undefined | null,
-): string;
+export declare function compileMdx(source: string, options?: JsMdxOptions | undefined | null): string
 
 /** Compile a pre-parsed MDAST binary buffer to MDX JavaScript output. */
-export declare function compileMdxFromBuffer(
-  buf: Uint8Array,
-  options?: JsMdxOptions | undefined | null,
-): string;
+export declare function compileMdxFromBuffer(buf: Uint8Array, options?: JsMdxOptions | undefined | null): string
 
 /**
  * Parse markdown source and convert to HAST. Returns an opaque handle.
  * The arena stays in Rust memory — no buffer is copied to JS.
  */
-export declare function createHastHandle(source: string): ExternalObject<MdastArena>;
+export declare function createHastHandle(source: string): ExternalObject<MdastArena>
 
 /** Wrap an existing HAST binary buffer as an opaque handle. */
-export declare function createHastHandleFromBuffer(buf: Uint8Array): ExternalObject<MdastArena>;
+export declare function createHastHandleFromBuffer(buf: Uint8Array): ExternalObject<MdastArena>
 
 /** Parse MDX source and convert to HAST. Returns an opaque handle. */
-export declare function createMdxHastHandle(source: string): ExternalObject<MdastArena>;
+export declare function createMdxHastHandle(source: string): ExternalObject<MdastArena>
 
-export declare function getBufferFormat(): BufferFormat;
+export declare function getBufferFormat(): BufferFormat
 
 /** Convert a HAST binary buffer to an HTML string. */
-export declare function hastBufferToHtmlStr(buf: Uint8Array): string;
+export declare function hastBufferToHtmlStr(buf: Uint8Array): string
 
 /** MDX compile options passed from JavaScript. */
 export interface JsMdxOptions {
@@ -101,68 +76,62 @@ export interface JsMdxOptions {
    * Static subtree optimization. If provided, static subtrees are collapsed
    * into raw HTML strings using the specified component and prop.
    */
-  optimizeStatic?: JsOptimizeStaticConfig;
+  optimizeStatic?: JsOptimizeStaticConfig
 }
 
 /** Static optimization config passed from JavaScript. */
 export interface JsOptimizeStaticConfig {
   /** Component/element name to wrap collapsed HTML in (e.g. "Fragment", "div"). */
-  component: string;
+  component: string
   /** Prop name for the HTML string (e.g. "set:html", "dangerouslySetInnerHTML"). */
-  prop: string;
+  prop: string
   /** If true, prop value is wrapped as `{ __html: "..." }` (React-style). */
-  wrapPropValue?: boolean;
+  wrapPropValue?: boolean
   /** Element tag names to exclude from collapsing. */
-  ignoreElements?: Array<string>;
+  ignoreElements?: Array<string>
 }
 
 /** A subscription passed from JS. */
 export interface JsSubscription {
-  nodeType: number;
-  tagFilter: Array<string>;
+  nodeType: number
+  tagFilter: Array<string>
 }
 
 /**
  * Convert an existing MDAST binary buffer to a HAST binary buffer.
  * Works for both Markdown and MDX — MDX nodes are converted to MDX HAST types.
  */
-export declare function mdastBufferToHastBuffer(buf: Uint8Array): Uint8Array;
+export declare function mdastBufferToHastBuffer(buf: Uint8Array): Uint8Array
 
 /** Parse MDX source and return a raw binary MdastArena buffer (MDX mode). */
-export declare function parseMdxToBuffer(source: string): Uint8Array;
+export declare function parseMdxToBuffer(source: string): Uint8Array
 
 /** Parse MDX source and return a HAST binary buffer (MDX mode). */
-export declare function parseMdxToHastBuffer(source: string): Uint8Array;
+export declare function parseMdxToHastBuffer(source: string): Uint8Array
 
 /** Parse MDX source and return HTML string directly. */
-export declare function parseMdxToHtml(source: string): string;
+export declare function parseMdxToHtml(source: string): string
 
 /** Parse Markdown/MDX source and return a raw binary MdastArena buffer. */
-export declare function parseToBuffer(source: string): Uint8Array;
+export declare function parseToBuffer(source: string): Uint8Array
 
 /** Parse Markdown source and return a HAST binary buffer. */
-export declare function parseToHastBuffer(source: string): Uint8Array;
+export declare function parseToHastBuffer(source: string): Uint8Array
 
 /** Parse Markdown source and return HTML string directly. */
-export declare function parseToHtml(source: string): string;
+export declare function parseToHtml(source: string): string
 
 /** Render a handle's HAST arena to HTML. Does not consume the handle. */
-export declare function renderHandle(handle: ExternalObject<MdastArena>): string;
+export declare function renderHandle(handle: ExternalObject<MdastArena>): string
 
 /** Serialize a handle's arena to a binary buffer (for fallback paths like transformRoot). */
-export declare function serializeHandle(handle: ExternalObject<MdastArena>): Uint8Array;
+export declare function serializeHandle(handle: ExternalObject<MdastArena>): Uint8Array
 
 /**
  * Walk the arena and return matched nodes as a flat binary buffer.
  * Returns a single Uint8Array — JS reads it with DataView, no per-node allocation.
  */
-export declare function walkAndCollect(
-  arenaBuf: Uint8Array,
-  subscriptions: Array<JsSubscription>,
-): Uint8Array;
+export declare function walkAndCollect(arenaBuf: Uint8Array, subscriptions: Array<JsSubscription>): Uint8Array
 
 /** Walk a handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkHandle(
-  handle: ExternalObject<MdastArena>,
-  subscriptions: Array<JsSubscription>,
-): Uint8Array;
+export declare function walkHandle(handle: ExternalObject<MdastArena>, subscriptions: Array<JsSubscription>): Uint8Array
