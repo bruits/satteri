@@ -10,7 +10,7 @@ use crate::node_types::*;
 
 pub fn hast_buffer_to_html(buf: &[u8]) -> Result<String, BufferError> {
     let view = MdastArena::from_raw_buffer(buf)?;
-    let mut out = String::with_capacity(view.get_source().len());
+    let mut out = String::with_capacity(view.source().len());
     render_node(0, &view, &mut out);
     Ok(out)
 }
@@ -24,7 +24,7 @@ pub fn hast_arena_to_html(arena: &MdastArena) -> String {
 
 /// Render a HAST node subtree to HTML. Works with both `MdastView` (zero-copy)
 /// and `MdastArena` (owned) via the `ReadMdast` trait.
-pub fn render_node<R: ReadMdast>(node_id: u32, view: &R, out: &mut String) {
+pub fn render_node<R: ReadMdast + ?Sized>(node_id: u32, view: &R, out: &mut String) {
     let node = view.get_node(node_id);
     let raw_type = node.node_type;
 

@@ -34,7 +34,7 @@ fn export_and_import_basic() {
     let arena = build_test_arena();
     let buf = arena.to_raw_buffer();
     let view = MdastArena::from_raw_buffer(&buf).expect("should parse successfully");
-    assert_eq!(view.node_count(), arena.len() as u32);
+    assert_eq!(view.len(), arena.len());
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn source_round_trip() {
     let arena = build_test_arena();
     let buf = arena.to_raw_buffer();
     let view = MdastArena::from_raw_buffer(&buf).unwrap();
-    assert_eq!(view.get_source(), arena.source());
+    assert_eq!(view.source(), arena.source());
 }
 
 #[test]
@@ -146,6 +146,6 @@ fn empty_arena_round_trips() {
     let arena = MdastArena::new(String::new());
     let buf = arena.to_raw_buffer();
     let view = MdastArena::from_raw_buffer(&buf).unwrap();
-    assert_eq!(view.node_count(), 0);
-    assert_eq!(view.get_source(), "");
+    assert_eq!(view.len(), 0);
+    assert_eq!(view.source(), "");
 }

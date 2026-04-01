@@ -1,6 +1,13 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": ["crates/**"],
+  "ignoreDependencies": [
+    "rehype-stringify",
+    "remark-parse",
+    "remark-rehype",
+    "remark-frontmatter",
+    "unified"
+  ],
   "workspaces": {
     "packages/tryckeri": {
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],

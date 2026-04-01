@@ -4,7 +4,7 @@ import { DataMap } from "../src/data-map.js";
 import { materializeTree } from "../src/mdast/mdast-materializer.js";
 import type { MdastNodeInternal } from "../src/types.js";
 import { buildHelloWorldBuffer } from "./fixtures.js";
-import { parseMdxToBuffer } from "../index.js";
+import { createMdxMdastHandle, serializeMdastHandle } from "../index.js";
 
 function setup() {
   const buf = buildHelloWorldBuffer();
@@ -122,7 +122,7 @@ test("children are lazily evaluated (getter replaced by plain array after access
 // ---------------------------------------------------------------------------
 
 function mdxSetup(source: string) {
-  const buf = parseMdxToBuffer(source) as Uint8Array;
+  const buf = serializeMdastHandle(createMdxMdastHandle(source)) as Uint8Array;
   const reader = new MdastReader(buf);
   const dataMap = new DataMap();
   return { reader, dataMap, tree: materializeTree(reader, dataMap) };

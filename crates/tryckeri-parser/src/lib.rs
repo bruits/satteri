@@ -1120,6 +1120,6 @@ mod tests {
         let (arena, _) = parse("# Hello\n\nworld\n", &ParseOptions::default());
         let buf = arena.to_raw_buffer();
         let view = MdastArena::from_raw_buffer(&buf).expect("valid buffer");
-        assert_eq!(view.node_count() as usize, arena.len());
+        assert_eq!(view.len(), arena.len());
     }
 }

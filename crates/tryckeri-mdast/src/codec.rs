@@ -336,11 +336,6 @@ pub fn decode_mdx_jsx_attr(bytes: &[u8], index: u32) -> (u8, StringRef, StringRe
     (kind, attr_name, attr_value)
 }
 
-/// Legacy decode — returns just the header struct. Use decode_mdx_jsx_element_name instead.
-pub fn decode_mdx_jsx_element_data(bytes: &[u8]) -> MdxJsxElementData {
-    unsafe { bytes_to_struct(bytes) }
-}
-
 pub fn encode_expression_data(value: StringRef) -> Vec<u8> {
     let d = ExpressionData { value };
     unsafe { struct_to_bytes(&d) }.to_vec()

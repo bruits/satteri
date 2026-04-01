@@ -241,6 +241,30 @@ interface MdastVisitResult {
   hasMutations: boolean;
 }
 
+/** Merge return-value + context command buffers and release internals. */
+function mergeAndReset(
+  returnBuffer: CommandBuffer,
+  ctx: MdastVisitorContext,
+): { merged: Uint8Array; hasMutations: boolean } {
+  const ctxCmdBuf = ctx.getCommandBuffer();
+  const ctxBuf = ctxCmdBuf.getBuffer();
+  const retBuf = returnBuffer.getBuffer();
+  const totalLen = retBuf.length + ctxBuf.length;
+
+  let merged: Uint8Array;
+  if (totalLen === 0) {
+    merged = new Uint8Array(0);
+  } else {
+    merged = new Uint8Array(totalLen);
+    merged.set(retBuf, 0);
+    merged.set(ctxBuf, retBuf.length);
+  }
+
+  returnBuffer.reset();
+  ctxCmdBuf.reset();
+  return { merged, hasMutations: totalLen > 0 };
+}
+
 /**
  * Walk the MDAST and dispatch to plugin visitor functions.
  *
@@ -335,29 +359,11 @@ export function visitMdast(
 
   plugin.after?.(context);
 
-  // Merge: return-value commands first, then context commands
-  const ctxCmdBuf = context.getCommandBuffer();
-  const ctxBuf = ctxCmdBuf.getBuffer();
-  const retBuf = returnBuffer.getBuffer();
-  const totalLen = retBuf.length + ctxBuf.length;
-
-  let merged: Uint8Array;
-  if (totalLen === 0) {
-    merged = new Uint8Array(0);
-  } else {
-    merged = new Uint8Array(totalLen);
-    merged.set(retBuf, 0);
-    merged.set(ctxBuf, retBuf.length);
-  }
-
-  // Release internal ArrayBuffers now that we've copied into merged
-  returnBuffer.reset();
-  ctxCmdBuf.reset();
-
+  const { merged, hasMutations } = mergeAndReset(returnBuffer, context);
   return {
     commandBuffer: merged,
     diagnostics: context.getDiagnostics(),
-    hasMutations: totalLen > 0,
+    hasMutations,
   };
 }
 
@@ -761,25 +767,10 @@ export function visitMdastHandle(
     setNodeData(handle, id, encoder.encode(json));
   }
 
-  const ctxCmdBuf = context.getCommandBuffer();
-  const ctxBuf = ctxCmdBuf.getBuffer();
-  const retBuf = returnBuffer.getBuffer();
-  const totalLen = retBuf.length + ctxBuf.length;
-
-  let merged: Uint8Array;
-  if (totalLen === 0) {
-    merged = new Uint8Array(0);
-  } else {
-    merged = new Uint8Array(totalLen);
-    merged.set(retBuf, 0);
-    merged.set(ctxBuf, retBuf.length);
-  }
-  returnBuffer.reset();
-  ctxCmdBuf.reset();
-
+  const { merged, hasMutations } = mergeAndReset(returnBuffer, context);
   return {
     commandBuffer: merged,
     diagnostics: context.getDiagnostics(),
-    hasMutations: totalLen > 0,
+    hasMutations,
   };
 }

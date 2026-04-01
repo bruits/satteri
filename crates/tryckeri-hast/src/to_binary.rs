@@ -8,8 +8,9 @@ use tryckeri_mdast::{
     MdastNodeType, ReadMdast, StringRef,
 };
 
-use crate::codec::{encode_mdx_jsx_element_data, encode_text_data};
+use crate::codec::encode_text_data;
 use crate::node_types::*;
+use tryckeri_mdast::encode_mdx_jsx_element_data;
 
 pub fn mdast_to_hast_buffer(mdast_buf: &[u8]) -> Result<Vec<u8>, BufferError> {
     let view = MdastArena::from_raw_buffer(mdast_buf)?;

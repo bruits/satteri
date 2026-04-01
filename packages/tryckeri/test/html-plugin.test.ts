@@ -1,16 +1,17 @@
 import { describe, test, expect } from "vitest";
 import {
-  parseToBuffer,
-  parseToHastBuffer,
-  mdastBufferToHastBuffer,
-  hastBufferToHtmlStr,
   parseToHtml,
-  applyMutations,
+  createHastHandle,
+  createMdastHandle,
+  serializeHandle,
+  renderHandle,
+  applyCommandsToHandle,
+  dropHandle,
+  convertMdastToHastHandle,
 } from "../index.js";
 import { HastReader } from "../src/hast/hast-reader.js";
 import { DataMap } from "../src/data-map.js";
 import { visitHast } from "../src/hast/hast-visitor.js";
-import { materializeHastTree } from "../src/hast/hast-materializer.js";
 import { compileMarkdownToHtml, defineMdastPlugin } from "../src/index.js";
 import type { MdastNode } from "../src/types.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
@@ -21,9 +22,19 @@ import type { MdastPluginInstance } from "../src/mdast/mdast-visitor.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Full pipeline: markdown → MDAST plugins → HAST → HTML string */
+/** Full pipeline: markdown → HAST → HTML string (handle-based) */
 function markdownToHtml(source: string): string {
-  return hastBufferToHtmlStr(parseToHastBuffer(source));
+  return parseToHtml(source);
+}
+
+/** Create a HAST reader from source (handle-based) */
+function makeHastReader(source: string): {
+  reader: HastReader;
+  handle: ReturnType<typeof createHastHandle>;
+} {
+  const handle = createHastHandle(source);
+  const buf = serializeHandle(handle);
+  return { reader: new HastReader(buf), handle };
 }
 
 /** Pipeline with MDAST plugins applied before HAST conversion */
@@ -155,8 +166,7 @@ describe("HAST plugins affecting HTML output", () => {
   });
 
   test("HAST visitor sees all element nodes", () => {
-    const uint8 = parseToHastBuffer("# Title\n\n- one\n- two\n\n> quote");
-    const reader = new HastReader(uint8);
+    const { reader, handle } = makeHastReader("# Title\n\n- one\n- two\n\n> quote");
     const dataMap = new DataMap();
     const tags: string[] = [];
     visitHast(
@@ -171,6 +181,7 @@ describe("HAST plugins affecting HTML output", () => {
       },
       dataMap,
     );
+    dropHandle(handle);
     expect(tags).toContain("h1");
     expect(tags).toContain("ul");
     expect(tags).toContain("li");
@@ -178,8 +189,7 @@ describe("HAST plugins affecting HTML output", () => {
   });
 
   test("HAST visitor can inspect link properties (href)", () => {
-    const uint8 = parseToHastBuffer("[click](https://example.com)");
-    const reader = new HastReader(uint8);
+    const { reader, handle } = makeHastReader("[click](https://example.com)");
     const dataMap = new DataMap();
     const hrefs: string[] = [];
     visitHast(
@@ -196,12 +206,12 @@ describe("HAST plugins affecting HTML output", () => {
       },
       dataMap,
     );
+    dropHandle(handle);
     expect(hrefs).toContain("https://example.com");
   });
 
   test("HAST visitor can identify images and their attributes", () => {
-    const uint8 = parseToHastBuffer('![alt text](image.png "my title")');
-    const reader = new HastReader(uint8);
+    const { reader, handle } = makeHastReader('![alt text](image.png "my title")');
     const dataMap = new DataMap();
     let imgNode: HastNode | null = null;
     visitHast(
@@ -218,6 +228,7 @@ describe("HAST plugins affecting HTML output", () => {
       },
       dataMap,
     );
+    dropHandle(handle);
     expect(imgNode).not.toBeNull();
     const img = imgNode!;
     if (img.type !== "element") throw new Error("expected element");
@@ -227,8 +238,7 @@ describe("HAST plugins affecting HTML output", () => {
   });
 
   test("HAST visitor text() sees all text content", () => {
-    const uint8 = parseToHastBuffer("Hello **world**");
-    const reader = new HastReader(uint8);
+    const { reader, handle } = makeHastReader("Hello **world**");
     const dataMap = new DataMap();
     const texts: string[] = [];
     visitHast(
@@ -240,13 +250,15 @@ describe("HAST plugins affecting HTML output", () => {
       },
       dataMap,
     );
+    dropHandle(handle);
     expect(texts).toContain("Hello ");
     expect(texts).toContain("world");
   });
 
   test("HAST visitor: setProperty mutation is recorded for elements", () => {
-    const uint8 = parseToHastBuffer("# Hello");
-    const reader = new HastReader(uint8);
+    const handle = createHastHandle("# Hello");
+    const buf = serializeHandle(handle);
+    const reader = new HastReader(buf);
     const dataMap = new DataMap();
     const result = visitHast(
       reader,
@@ -263,15 +275,16 @@ describe("HAST plugins affecting HTML output", () => {
       dataMap,
     );
     expect(result.hasMutations).toBe(true);
-    // Apply mutations and verify HTML output
-    const newBuf = applyMutations(uint8, result.commandBuffer);
-    const html = hastBufferToHtmlStr(newBuf);
+    applyCommandsToHandle(handle, result.commandBuffer);
+    const html = renderHandle(handle);
+    dropHandle(handle);
     expect(html).toContain('id="my-title"');
   });
 
   test("HAST visitor: remove mutation removes element from result", () => {
-    const uint8 = parseToHastBuffer("# Keep\n\nRemove this");
-    const reader = new HastReader(uint8);
+    const handle = createHastHandle("# Keep\n\nRemove this");
+    const buf = serializeHandle(handle);
+    const reader = new HastReader(buf);
     const dataMap = new DataMap();
     const result = visitHast(
       reader,
@@ -288,15 +301,17 @@ describe("HAST plugins affecting HTML output", () => {
       dataMap,
     );
     expect(result.hasMutations).toBe(true);
-    const newBuf = applyMutations(uint8, result.commandBuffer);
-    const html = hastBufferToHtmlStr(newBuf);
+    applyCommandsToHandle(handle, result.commandBuffer);
+    const html = renderHandle(handle);
+    dropHandle(handle);
     expect(html).not.toContain("Remove this");
     expect(html).toContain("Keep");
   });
 
   test("HAST visitor: replace mutation swaps an element", () => {
-    const uint8 = parseToHastBuffer("# Hello");
-    const reader = new HastReader(uint8);
+    const handle = createHastHandle("# Hello");
+    const buf = serializeHandle(handle);
+    const reader = new HastReader(buf);
     const dataMap = new DataMap();
     const result = visitHast(
       reader,
@@ -320,16 +335,16 @@ describe("HAST plugins affecting HTML output", () => {
       dataMap,
     );
     expect(result.hasMutations).toBe(true);
-    const newBuf = applyMutations(uint8, result.commandBuffer);
-    const html = hastBufferToHtmlStr(newBuf);
+    applyCommandsToHandle(handle, result.commandBuffer);
+    const html = renderHandle(handle);
+    dropHandle(handle);
     expect(html).toContain("<h2>");
     expect(html).not.toContain("<h1>");
   });
 
   test("HAST visitor: transformRoot receives complete tree with deep structure", () => {
     const source = "# Title\n\n- item 1\n- item 2\n\n```js\ncode\n```";
-    const uint8 = parseToHastBuffer(source);
-    const reader = new HastReader(uint8);
+    const { reader, handle } = makeHastReader(source);
     const dataMap = new DataMap();
     let rootChildren = 0;
     visitHast(
@@ -341,13 +356,13 @@ describe("HAST plugins affecting HTML output", () => {
       },
       dataMap,
     );
+    dropHandle(handle);
     // Should have h1, ul, and pre elements at the root level
     expect(rootChildren).toBeGreaterThanOrEqual(3);
   });
 
   test("HAST visitor: diagnostics from HAST plugins are collected", () => {
-    const uint8 = parseToHastBuffer("# Hello");
-    const reader = new HastReader(uint8);
+    const { reader, handle } = makeHastReader("# Hello");
     const dataMap = new DataMap();
     const result = visitHast(
       reader,
@@ -367,6 +382,7 @@ describe("HAST plugins affecting HTML output", () => {
       },
       dataMap,
     );
+    dropHandle(handle);
     expect(result.diagnostics.length).toBe(1);
     expect(result.diagnostics[0]!.message).toBe("headings should have IDs");
     expect(result.diagnostics[0]!.severity).toBe("warning");
@@ -374,40 +390,46 @@ describe("HAST plugins affecting HTML output", () => {
 });
 
 // =========================================================================
-// PART 3: NAPI HAST functions (end-to-end binary pipeline)
+// PART 3: Handle-based HAST pipeline
 // =========================================================================
 
-describe("NAPI HAST pipeline functions", () => {
-  test("parseToHastBuffer returns valid HAST binary", () => {
-    const uint8 = parseToHastBuffer("Hello");
-    expect(uint8).toBeInstanceOf(Uint8Array);
-    expect(uint8.length).toBeGreaterThan(44); // at least header
+describe("Handle-based HAST pipeline", () => {
+  test("serializeHandle returns valid HAST binary", () => {
+    const handle = createHastHandle("Hello");
+    const buf = serializeHandle(handle);
+    expect(buf).toBeInstanceOf(Uint8Array);
+    expect(buf.length).toBeGreaterThan(44); // at least header
     // Verify magic bytes (MDAR as LE u32)
-    const view = new DataView(uint8.buffer, uint8.byteOffset);
+    const view = new DataView(buf.buffer, buf.byteOffset);
     expect(view.getUint32(0, true)).toBe(0x5241444d);
+    dropHandle(handle);
   });
 
-  test("mdastBufferToHastBuffer converts MDAST → HAST", () => {
-    const mdast = parseToBuffer("# Test\n\nParagraph");
-    const hast = mdastBufferToHastBuffer(mdast);
-    expect(hast).toBeInstanceOf(Uint8Array);
-    const reader = new HastReader(hast);
+  test("convertMdastToHastHandle produces valid HAST", () => {
+    const mdastHandle = createMdastHandle("# Test\n\nParagraph");
+    const hastHandle = convertMdastToHastHandle(mdastHandle);
+    const buf = serializeHandle(hastHandle);
+    const reader = new HastReader(buf);
     expect(reader.nodeCount).toBeGreaterThan(0);
+    dropHandle(hastHandle);
   });
 
-  test("hastBufferToHtmlStr produces valid HTML from HAST buffer", () => {
-    const hast = parseToHastBuffer("**bold**");
-    const html = hastBufferToHtmlStr(hast);
+  test("renderHandle produces valid HTML", () => {
+    const handle = createHastHandle("**bold**");
+    const html = renderHandle(handle);
+    dropHandle(handle);
     expect(html).toContain("<strong>");
     expect(html).toContain("bold");
     expect(html).toContain("</strong>");
   });
 
-  test("parseToHtml produces same result as the 3-step pipeline", () => {
+  test("parseToHtml produces same result as handle pipeline", () => {
     const source = "# Hello\n\nA [link](https://example.com) here.\n\n> blockquote";
     const singleCall = parseToHtml(source);
-    const threeStep = hastBufferToHtmlStr(mdastBufferToHastBuffer(parseToBuffer(source)));
-    expect(singleCall).toBe(threeStep);
+    const handle = createHastHandle(source);
+    const handleResult = renderHandle(handle);
+    dropHandle(handle);
+    expect(singleCall).toBe(handleResult);
   });
 
   test("full pipeline handles HTML entities and special characters", () => {
@@ -434,8 +456,8 @@ describe("NAPI HAST pipeline functions", () => {
   });
 
   test("HastReader reads correct node count", () => {
-    const uint8 = parseToHastBuffer("# Hello\n\nWorld");
-    const reader = new HastReader(uint8);
+    const { reader, handle } = makeHastReader("# Hello\n\nWorld");
+    dropHandle(handle);
     // root + h1 + text("Hello") + p + text("World") + possible newlines
     expect(reader.nodeCount).toBeGreaterThanOrEqual(5);
   });

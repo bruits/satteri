@@ -1,0 +1,241 @@
+import { Chart } from "./components/Chart.js";
+import { Callout } from "./components/Callout.js";
+import { CodeBlock } from "./components/CodeBlock.js";
+import { Tabs, TabItem } from "./components/Tabs.js";
+
+# Building a Markdown Pipeline
+
+[![Build][badge-build-image]][badge-build-url]
+[![Coverage][badge-coverage-image]][badge-coverage-url]
+
+A high-performance Markdown and MDX processing library written in Rust with
+JavaScript bindings. This guide covers architecture, usage, and extension.
+
+## Feature highlights
+
+- [x] **compliant** (100% to CommonMark)
+- [x] **extensions** (100% GFM, 100% MDX, frontmatter, math)
+- [x] **safe** (100% safe Rust, also 100% safe HTML by default)
+- [x] **robust** (2300+ tests, 100% coverage, fuzz testing)
+- [x] **ast** (mdast and hast)
+
+## Quick Start
+
+<Callout type="info">
+  Make sure you have **Node.js 18+** and **Rust 1.75+** installed before proceeding with the setup
+  steps below.
+</Callout>
+
+Install the package from npm:
+
+```sh
+npm install tryckeri
+```
+
+Then use it in your project:
+
+```js
+import { compileMarkdownToHtml, compileMdxToJs } from "tryckeri";
+
+const html = compileMarkdownToHtml("# Hello, world!");
+console.log(html);
+```
+
+## Architecture
+
+The pipeline has several stages, each optimized for minimal allocations:
+
+1. **Parsing** — pulldown-cmark tokenizes the source into events
+2. **MDAST construction** — events are collected into an arena-allocated AST
+3. **HAST conversion** — the MDAST is transformed into an HTML AST
+4. **Rendering** — the HAST is serialized to an HTML string
+
+<Chart
+  data={[
+    { stage: "Parse", ms: 0.13 },
+    { stage: "MDAST", ms: 0.02 },
+    { stage: "HAST", ms: 0.05 },
+    { stage: "Render", ms: 0.04 },
+  ]}
+  title="Pipeline Stage Timing (11KB document)"
+/>
+
+### Arena Allocation
+
+All AST nodes live in a contiguous arena. This gives us:
+
+- **Cache locality** — nodes are packed together in memory
+- **Zero-copy references** — string data uses offset+length into the source
+- **Cheap serialization** — the arena can be dumped as a binary buffer
+
+> The arena approach means we never call `malloc` per-node.
+> A 10KB document with ~500 nodes uses a single 26KB allocation.
+
+### Binary Format
+
+The binary wire format uses a fixed-size node struct:
+
+| Field            | Type      | Size |
+| ---------------- | --------- | ---- |
+| `id`             | `u32`     | 4B   |
+| `node_type`      | `u8`      | 1B   |
+| `_pad`           | `[u8; 3]` | 3B   |
+| `parent`         | `u32`     | 4B   |
+| `start_offset`   | `u32`     | 4B   |
+| `end_offset`     | `u32`     | 4B   |
+| `start_line`     | `u32`     | 4B   |
+| `start_column`   | `u32`     | 4B   |
+| `end_line`       | `u32`     | 4B   |
+| `end_column`     | `u32`     | 4B   |
+| `children_start` | `u32`     | 4B   |
+| `children_count` | `u32`     | 4B   |
+| `data_offset`    | `u32`     | 4B   |
+| `data_len`       | `u32`     | 4B   |
+
+**Total: 52 bytes per node.**
+
+## Plugin System
+
+<Tabs>
+  <TabItem label="MDAST Plugins">
+    MDAST plugins run before the HAST conversion step. They can inspect and
+    mutate the Markdown AST — removing nodes, replacing content, or injecting
+    new structure.
+
+    ```js
+    import { defineMdastPlugin } from 'tryckeri'
+
+    const removeHeadings = defineMdastPlugin({
+      name: 'remove-headings',
+      createOnce: () => ({
+        heading(node, ctx) {
+          ctx.removeNode(node)
+        },
+      }),
+    })
+    ```
+
+  </TabItem>
+  <TabItem label="HAST Plugins">
+    HAST plugins run after conversion. They operate on the HTML AST and can
+    modify elements, add attributes, or transform the tree.
+
+    ```js
+    import { defineHastPlugin } from 'tryckeri'
+
+    const addIds = defineHastPlugin({
+      name: 'add-heading-ids',
+      createOnce: () => ({
+        element: {
+          filter: ['h1', 'h2', 'h3'],
+          visit(node, ctx) {
+            const text = node.children
+              .filter(c => c.type === 'text')
+              .map(c => c.value)
+              .join('')
+            ctx.setProperty(node, 'id', text.toLowerCase().replace(/\s+/g, '-'))
+          },
+        },
+      }),
+    })
+    ```
+
+  </TabItem>
+</Tabs>
+
+### Mutation Commands
+
+Plugins don't modify the AST directly. Instead, they record **mutation commands**
+in a binary command buffer. This has several benefits:
+
+- Mutations are batched and applied in Rust (fast)
+- The JS visitor never copies the full tree
+- Multiple plugins can run in sequence without intermediate serialization
+
+Available mutations:
+
+- `removeNode(node)` — delete a node and its children
+- `replaceNode(node, replacement)` — swap a node for a new subtree
+- `setProperty(node, key, value)` — change a node property
+- `insertBefore(node, newNode)` — insert a sibling before
+- `insertAfter(node, newNode)` — insert a sibling after
+
+## Performance
+
+<Callout type="tip">
+  For best performance, prefer **filtered visitors** over unfiltered ones.
+  A filtered visitor like `element: { filter: ['a'], visit(node) { ... } }`
+  only materializes matching nodes, skipping the rest entirely.
+</Callout>
+
+Benchmarks on an 11KB Markdown document (M2 MacBook Pro):
+
+| Scenario                     | ops/sec | ms/op |
+| ---------------------------- | ------- | ----- |
+| Pure Rust (no plugins)       | 6,200   | 0.16  |
+| No-op HAST plugin            | 1,900   | 0.53  |
+| Filtered HAST plugin (`[a]`) | 4,900   | 0.20  |
+| Mutating HAST plugin         | 1,500   | 0.67  |
+| MDAST + HAST plugins         | 1,200   | 0.83  |
+
+### Memory Usage
+
+The handle-based API keeps arenas in Rust memory. Only matched nodes cross
+the NAPI boundary, minimizing JS heap pressure:
+
+- **No plugins**: ~0 JS heap growth (everything stays in Rust)
+- **Filtered plugin**: ~50KB heap per 100 iterations
+- **Mutating plugin**: ~200KB heap per 100 iterations (command buffers)
+
+## MDX Support
+
+MDX extends Markdown with JSX and JavaScript imports. The pipeline handles
+MDX constructs at every stage:
+
+```mdx
+import { Button } from "./components";
+
+# Welcome
+
+Click the button below:
+
+<Button onClick={() => alert("clicked!")}>Click me</Button>
+
+The expression {1 + 1} evaluates to 2.
+```
+
+### MDX Compilation
+
+The MDX compiler transforms the HAST into a JavaScript module:
+
+```js
+import { compileMdxToJs } from "tryckeri";
+
+const js = compileMdxToJs(mdxSource, {
+  optimizeStatic: {
+    component: "Fragment",
+    prop: "set:html",
+  },
+});
+```
+
+The `optimizeStatic` option collapses static HTML subtrees into raw strings,
+reducing the virtual DOM overhead at runtime.
+
+## Links
+
+- [CommonMark specification](https://spec.commonmark.org)
+- [GFM specification](https://github.github.com/gfm/)
+- [MDX specification](https://mdxjs.com/docs/what-is-mdx/)
+- [unist syntax tree](https://github.com/syntax-tree/unist)
+- [mdast syntax tree](https://github.com/syntax-tree/mdast)
+- [hast syntax tree](https://github.com/syntax-tree/hast)
+
+[badge-build-image]: https://img.shields.io/github/actions/workflow/status/user/repo/ci.yml
+[badge-build-url]: https://github.com/user/repo/actions
+[badge-coverage-image]: https://img.shields.io/codecov/c/github/user/repo
+[badge-coverage-url]: https://codecov.io/gh/user/repo
+
+## License
+
+MIT

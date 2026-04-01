@@ -15,25 +15,9 @@ import {
 } from "./hast-reader.js";
 import type { DataMap } from "../data-map.js";
 import type { HastNode } from "../types.js";
+import { lazyProp, lazyGroup } from "../lazy-props.js";
 
 export type { HastNode };
-
-function lazyProp<T>(key: string, get: () => T): PropertyDescriptor {
-  return {
-    get(this: Record<string, unknown>) {
-      const value = get();
-      Object.defineProperty(this, key, {
-        value,
-        writable: true,
-        configurable: true,
-        enumerable: true,
-      });
-      return value;
-    },
-    configurable: true,
-    enumerable: true,
-  };
-}
 
 function propsToRecord(props: HastProperty[]): Record<string, string | boolean | string[]> {
   const result: Record<string, string | boolean | string[]> = {};
@@ -136,13 +120,10 @@ export function materializeHastNode(
       break;
 
     case HAST_ELEMENT: {
-      // tagName and properties: lazy
-      Object.defineProperties(node, {
-        tagName: lazyProp("tagName", () => reader.getElementData(nodeId).tagName),
-        properties: lazyProp("properties", () => {
-          const { properties } = reader.getElementData(nodeId);
-          return propsToRecord(properties);
-        }),
+      // tagName and properties: lazy, resolved together from one reader call
+      lazyGroup(node, ["tagName", "properties"], () => {
+        const { tagName, properties } = reader.getElementData(nodeId);
+        return { tagName, properties: propsToRecord(properties) };
       });
       // children: lazy
       Object.defineProperty(node, "children", {
@@ -177,10 +158,7 @@ export function materializeHastNode(
 
     case HAST_MDX_JSX_ELEMENT:
     case HAST_MDX_JSX_TEXT_ELEMENT:
-      Object.defineProperties(node, {
-        name: lazyProp("name", () => reader.getMdxJsxElementData(nodeId).name),
-        attributes: lazyProp("attributes", () => reader.getMdxJsxElementData(nodeId).attributes),
-      });
+      lazyGroup(node, ["name", "attributes"], () => reader.getMdxJsxElementData(nodeId));
       Object.defineProperty(node, "children", {
         get(this: HastNode) {
           const childIds = reader.getChildIds(nodeId);

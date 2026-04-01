@@ -116,12 +116,13 @@ function runMdastPluginsOnHandle(
   const instances = initPlugins(plugins);
   const dm = new DataMap();
   let pendingCommands: Uint8Array | null = null;
+  const source = getHandleSource(handle);
 
   for (let i = 0; i < instances.length; i++) {
     const { instance } = instances[i]!;
 
     const fileContext: FileContext = {
-      source: getHandleSource(handle),
+      source,
       filename,
       get root() {
         // Fallback: materialize from serialized buffer (only for transformRoot)

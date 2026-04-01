@@ -1,6 +1,7 @@
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import type { DataMap } from "../data-map.js";
+import { lazyProp, lazyGroup } from "../lazy-props.js";
 
 export const TYPE_NAMES: Record<number, string> = {
   0: "root",
@@ -41,62 +42,6 @@ export const TYPE_NAMES: Record<number, string> = {
 
 // Leaf node types that do NOT have children
 const LEAF_TYPES = new Set([10, 13, 7, 8, 14, 3, 20, 25, 26, 27, 28, 102, 103, 104]);
-
-/**
- * Build a lazy getter descriptor that caches the value on first access.
- */
-function lazyProp<T>(key: string, get: () => T): PropertyDescriptor {
-  return {
-    get(this: Record<string, unknown>) {
-      const value = get();
-      Object.defineProperty(this, key, {
-        value,
-        writable: true,
-        configurable: true,
-        enumerable: true,
-      });
-      return value;
-    },
-    configurable: true,
-    enumerable: true,
-  };
-}
-
-/**
- * First access to any field in the group resolves all fields from one reader call.
- * All fields share a single getter — whichever is accessed first triggers the read,
- * then all fields are defined as own properties (shadowing the getters).
- */
-/**
- * First access to any field in the group resolves all fields from one reader call.
- * Uses a shared resolve-once pattern: the first getter to fire reads all data,
- * defines own properties for every key, then each per-key getter returns its value.
- */
-function lazyGroup(node: MdastNode, keys: string[], resolve: () => Record<string, unknown>): void {
-  let cached: Record<string, unknown> | undefined;
-  const ensureResolved = () => {
-    if (cached) return cached;
-    cached = resolve();
-    for (const k of keys) {
-      Object.defineProperty(node, k, {
-        value: cached[k],
-        writable: true,
-        configurable: true,
-        enumerable: true,
-      });
-    }
-    return cached;
-  };
-  for (const key of keys) {
-    Object.defineProperty(node, key, {
-      get() {
-        return ensureResolved()[key];
-      },
-      configurable: true,
-      enumerable: true,
-    });
-  }
-}
 
 /**
  * Add type-specific lazy properties to a node object.

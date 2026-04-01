@@ -1,9 +1,8 @@
 /**
- * End-to-end JS pipeline benchmarks.
+ * End-to-end pipeline benchmarks using the public API.
  *
- * Covers the full stack from the JS side: parse → HAST binary → HTML.
  * Requires the native Rust module to be built:
- *   cargo build --release -p tryckeri-napi
+ *   pnpm build:native
  *
  * Run with: pnpm bench
  */
@@ -11,157 +10,97 @@
 import { readFileSync } from "node:fs";
 import { bench, describe } from "vitest";
 import {
-  parseToBuffer,
-  parseToHastBuffer,
-  parseToHtml,
-  mdastBufferToHastBuffer,
-  hastBufferToHtmlStr,
-  compileMdx,
-  compileMdxFromBuffer,
-} from "../index.js";
-import { MdastReader } from "../src/mdast/mdast-reader.js";
-
-const MARKDOWN = readFileSync(new URL("./markdown.md", import.meta.url), "utf8");
-const MDX = `import {Chart} from './chart.js'
-
-# Hello, world
-
-Some *emphasis* and **strong** content.
-
-<Chart values={[1, 2, 3]} />
-
-> A blockquote with a [link](https://example.com).
-
-- item one
-- item two
-- item three
-`;
-
-// Pre-computed buffers so intermediate benchmarks measure only their step.
-const mdastBuf = parseToBuffer(MARKDOWN);
-const hastBuf = mdastBufferToHastBuffer(mdastBuf);
-
-// ---------------------------------------------------------------------------
-// Parse benchmarks
-// ---------------------------------------------------------------------------
-
-describe("parse", () => {
-  bench("parseToBuffer — Markdown → MDAST binary", () => {
-    parseToBuffer(MARKDOWN);
-  });
-
-  bench("parseToHastBuffer — Markdown → HAST binary (combined Rust path)", () => {
-    parseToHastBuffer(MARKDOWN);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// HAST / HTML benchmarks
-// ---------------------------------------------------------------------------
-
-describe("hast", () => {
-  bench("mdastBufferToHastBuffer — MDAST binary → HAST binary", () => {
-    mdastBufferToHastBuffer(mdastBuf);
-  });
-
-  bench("hastBufferToHtmlStr — HAST binary → HTML string", () => {
-    hastBufferToHtmlStr(hastBuf);
-  });
-
-  bench("full pipeline — parseToBuffer → mdastBufferToHastBuffer → hastBufferToHtmlStr", () => {
-    const buf = parseToBuffer(MARKDOWN);
-    const hast = mdastBufferToHastBuffer(buf);
-    hastBufferToHtmlStr(hast);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// MDAST reader benchmark (JS-only, no native call)
-// ---------------------------------------------------------------------------
-
-describe("mdast-reader", () => {
-  bench("MdastReader — walk all nodes from pre-parsed buffer", () => {
-    const reader = new MdastReader(mdastBuf);
-    for (let i = 0; i < reader.nodeCount; i++) {
-      reader.getNode(i);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Full pipeline benchmark
-// ---------------------------------------------------------------------------
-
-describe("e2e", () => {
-  bench("no plugins — parseToHtml (pure Rust, single NAPI call)", () => {
-    parseToHtml(MARKDOWN);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// MDX benchmarks
-// ---------------------------------------------------------------------------
-
-// MDX compilation requires the native module to be rebuilt after adding compileMdx.
-// Run: cargo build --release -p tryckeri-napi
-try {
-  compileMdx("# test"); // probe — throws if not yet built
-  // Pre-parse MDX with MDX constructs enabled so compileMdxFromBuffer has a valid buffer.
-  // (parseToBuffer uses default ParseOptions which don't enable MDX constructs, so we
-  // use compileMdx itself as the parse step for that bench.)
-  const mdxBuf = parseToBuffer(MDX); // MDAST binary (no MDX constructs — intentional: measures the buffer path perf)
-  describe("mdx", () => {
-    bench("compileMdx — MDX source → JavaScript (parse + compile)", () => {
-      compileMdx(MDX);
-    });
-    bench("compileMdxFromBuffer — pre-parsed MDAST binary → JavaScript", () => {
-      compileMdxFromBuffer(mdxBuf);
-    });
-  });
-} catch {
-  // compileMdx not available in the current native binary; skip.
-}
-
-// ---------------------------------------------------------------------------
-// Sync pipeline benchmarks
-// ---------------------------------------------------------------------------
-
-import { compileMarkdownToHtml, defineHastPlugin } from "../src/index.js";
+  compileMarkdownToHtml,
+  compileMdxToJs,
+  defineHastPlugin,
+  defineMdastPlugin,
+} from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 
-describe("sync pipeline", () => {
-  bench("compileMarkdownToHtml — no plugins", () => {
+const MARKDOWN = readFileSync(new URL("./fixtures/markdown.md", import.meta.url), "utf8");
+const MDX = readFileSync(new URL("./fixtures/document.mdx", import.meta.url), "utf8");
+
+// -- Plugins ----------------------------------------------------------------
+
+const noopHastPlugin = defineHastPlugin({
+  name: "noop",
+  createOnce: () => ({
+    element: { filter: [], visit() {} },
+  }),
+});
+
+const filteredHastPlugin = defineHastPlugin({
+  name: "filtered",
+  createOnce: () => ({
+    element: {
+      filter: ["a"],
+      visit(_node: HastNode, _ctx: HastVisitorContext) {},
+    },
+  }),
+});
+
+const mutatingHastPlugin = defineHastPlugin({
+  name: "mutating",
+  createOnce: () => ({
+    element: {
+      filter: ["h1", "h2", "h3"],
+      visit(node: HastNode, ctx: HastVisitorContext) {
+        ctx.setProperty(node, "id", "heading");
+      },
+    },
+  }),
+});
+
+const noopMdastPlugin = defineMdastPlugin({
+  name: "noop-mdast",
+  createOnce: () => ({ heading() {} }),
+});
+
+// -- Benchmarks -------------------------------------------------------------
+
+describe("compileMarkdownToHtml", () => {
+  bench("no plugins", () => {
     compileMarkdownToHtml(MARKDOWN);
   });
 
-  bench("compileMarkdownToHtml — sync HAST plugin", () => {
-    const plugin = defineHastPlugin({
-      name: "sync-noop",
-      createOnce: () => ({
-        element: {
-          filter: [],
-          visit() {
-            // no-op sync
-          },
-        },
-      }),
-    });
-    compileMarkdownToHtml(MARKDOWN, { hastPlugins: [plugin] });
+  bench("noop HAST plugin (all elements)", () => {
+    compileMarkdownToHtml(MARKDOWN, { hastPlugins: [noopHastPlugin] });
   });
 
-  bench("compileMarkdownToHtml — HAST plugin with callback", () => {
-    const plugin = defineHastPlugin({
-      name: "noop-with-sig",
-      createOnce: () => ({
-        element: {
-          filter: [],
-          visit(_node: HastNode, _ctx: HastVisitorContext) {
-            // no-op
-          },
-        },
-      }),
+  bench("filtered HAST plugin ([a] only)", () => {
+    compileMarkdownToHtml(MARKDOWN, { hastPlugins: [filteredHastPlugin] });
+  });
+
+  bench("mutating HAST plugin (set id on headings)", () => {
+    compileMarkdownToHtml(MARKDOWN, { hastPlugins: [mutatingHastPlugin] });
+  });
+
+  bench("noop MDAST plugin", () => {
+    compileMarkdownToHtml(MARKDOWN, { mdastPlugins: [noopMdastPlugin] });
+  });
+
+  bench("MDAST + HAST plugins", () => {
+    compileMarkdownToHtml(MARKDOWN, {
+      mdastPlugins: [noopMdastPlugin],
+      hastPlugins: [mutatingHastPlugin],
     });
-    compileMarkdownToHtml(MARKDOWN, { hastPlugins: [plugin] });
+  });
+});
+
+describe("compileMdxToJs", () => {
+  bench("no plugins", () => {
+    compileMdxToJs(MDX);
+  });
+
+  bench("noop HAST plugin", () => {
+    compileMdxToJs(MDX, { hastPlugins: [noopHastPlugin] });
+  });
+
+  bench("MDAST + HAST plugins", () => {
+    compileMdxToJs(MDX, {
+      mdastPlugins: [noopMdastPlugin],
+      hastPlugins: [mutatingHastPlugin],
+    });
   });
 });

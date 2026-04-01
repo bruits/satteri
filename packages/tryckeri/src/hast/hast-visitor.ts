@@ -19,8 +19,8 @@ import {
   type HastProperty,
 } from "./hast-reader.js";
 import { CommandBuffer } from "../command-buffer.js";
-import type { DataMap } from "../data-map.js";
-import { walkHandle, applyCommandsToHandle } from "../../index.js";
+import { DataMap } from "../data-map.js";
+import { walkHandle, applyCommandsToHandle, serializeHandle } from "../../index.js";
 
 // Opaque handle type from NAPI — the arena lives in Rust memory.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -428,6 +428,7 @@ function readElementFromBinary(
   buf: Uint8Array,
   offset: number,
   nodeId: number,
+  resolver?: LazyChildResolver,
 ): HastNode {
   let pos = offset;
 
@@ -468,17 +469,25 @@ function readElementFromBinary(
     }
   }
 
-  // Child IDs — stored as opaque markers so plugins can pass them through
+  // Child IDs
   const childCount = view.getUint16(pos, true);
   pos += 2;
-  const children: { _nodeId: number; type: string }[] = [];
+  const childIds: number[] = [];
   for (let i = 0; i < childCount; i++) {
-    const childId = view.getUint32(pos, true);
+    childIds.push(view.getUint32(pos, true));
     pos += 4;
-    children.push({ _nodeId: childId, type: "__child_ref__" });
   }
 
-  const node = { type: "element" as const, tagName, properties, children } as unknown as HastNode;
+  const node = { type: "element" as const, tagName, properties } as unknown as HastNode &
+    Record<string, unknown>;
+  if (resolver) {
+    makeLazyChildren(node, childIds, resolver);
+  } else {
+    (node as Record<string, unknown>).children = childIds.map((id) => ({
+      _nodeId: id,
+      type: "__child_ref__",
+    }));
+  }
   Object.defineProperty(node, "_nodeId", {
     value: nodeId,
     writable: false,
@@ -517,6 +526,7 @@ function readMdxJsxFromBinary(
   offset: number,
   nodeId: number,
   nodeType: number,
+  resolver?: LazyChildResolver,
 ): HastNode {
   let pos = offset;
 
@@ -565,14 +575,23 @@ function readMdxJsxFromBinary(
   // Child IDs
   const childCount = view.getUint16(pos, true);
   pos += 2;
-  const children: { _nodeId: number; type: string }[] = [];
+  const childIds: number[] = [];
   for (let i = 0; i < childCount; i++) {
-    children.push({ _nodeId: view.getUint32(pos, true), type: "__child_ref__" });
+    childIds.push(view.getUint32(pos, true));
     pos += 4;
   }
 
   const typeName = nodeType === HAST_MDX_JSX_ELEMENT ? "mdxJsxFlowElement" : "mdxJsxTextElement";
-  const node = { type: typeName, name, attributes, children } as unknown as HastNode;
+  const node = { type: typeName, name, attributes } as unknown as HastNode &
+    Record<string, unknown>;
+  if (resolver) {
+    makeLazyChildren(node, childIds, resolver);
+  } else {
+    (node as Record<string, unknown>).children = childIds.map((id) => ({
+      _nodeId: id,
+      type: "__child_ref__",
+    }));
+  }
   Object.defineProperty(node, "_nodeId", {
     value: nodeId,
     writable: false,
@@ -588,13 +607,14 @@ function readMatchedNode(
   offset: number,
   nodeId: number,
   nodeType: number,
+  resolver?: LazyChildResolver,
 ): HastNode {
   if (nodeType === HAST_ELEMENT) {
-    return readElementFromBinary(view, buf, offset, nodeId);
+    return readElementFromBinary(view, buf, offset, nodeId, resolver);
   } else if (nodeType === HAST_TEXT || nodeType === HAST_COMMENT || nodeType === HAST_RAW) {
     return readTextFromBinary(view, buf, offset, nodeId, nodeType);
   } else if (nodeType === HAST_MDX_JSX_ELEMENT || nodeType === HAST_MDX_JSX_TEXT_ELEMENT) {
-    return readMdxJsxFromBinary(view, buf, offset, nodeId, nodeType);
+    return readMdxJsxFromBinary(view, buf, offset, nodeId, nodeType, resolver);
   }
   // Fallback: minimal node
   return { type: `unknown(${nodeType})`, _nodeId: nodeId } as unknown as HastNode;
@@ -604,12 +624,62 @@ function readMatchedNode(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Lazy child materializer — serializes the handle's buffer once when first
+ * child is accessed, then materializes children from it via HastReader.
+ */
+class LazyChildResolver {
+  #handle: HastHandle;
+  #reader: HastReader | null = null;
+  #dataMap: DataMap | null = null;
+
+  constructor(handle: HastHandle) {
+    this.#handle = handle;
+  }
+
+  #ensure(): { reader: HastReader; dataMap: DataMap } {
+    if (!this.#reader) {
+      this.#reader = new HastReader(serializeHandle(this.#handle));
+      this.#dataMap = new DataMap();
+    }
+    return { reader: this.#reader, dataMap: this.#dataMap! };
+  }
+
+  materializeChildren(childIds: number[]): HastNode[] {
+    const { reader, dataMap } = this.#ensure();
+    return childIds.map((id) => materializeHastNode(reader, id, dataMap));
+  }
+}
+
+/** Create a lazy `children` property backed by the handle. */
+function makeLazyChildren(
+  node: Record<string, unknown>,
+  childIds: number[],
+  resolver: LazyChildResolver,
+): void {
+  Object.defineProperty(node, "children", {
+    get() {
+      const children = resolver.materializeChildren(childIds);
+      Object.defineProperty(this, "children", {
+        value: children,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      return children;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+}
+
 /** Dispatch matched nodes from a binary match buffer to visitor functions. */
 function dispatchMatches(
   matchBuf: Uint8Array,
   subs: ResolvedSubscription[],
   ctx: HastVisitorContextImpl,
   returnBuffer: CommandBuffer,
+  resolver?: LazyChildResolver,
 ): void {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
@@ -621,7 +691,7 @@ function dispatchMatches(
     const dataOffset = matchView.getUint32(indexBase + 6, true);
 
     const sub = subs[subIndex]!;
-    const node = readMatchedNode(matchView, matchBuf, dataOffset, nodeId, sub.nodeType);
+    const node = readMatchedNode(matchView, matchBuf, dataOffset, nodeId, sub.nodeType, resolver);
     const result = sub.visitFn(node, ctx);
     if (result != null) {
       returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
@@ -671,8 +741,9 @@ export function visitHastHandle(
 
   plugin.before?.(ctx);
 
+  const resolver = new LazyChildResolver(handle);
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
-  dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer);
+  dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
 
   plugin.after?.(ctx);
 

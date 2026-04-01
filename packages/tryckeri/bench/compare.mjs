@@ -6,7 +6,7 @@ import { compileMarkdownToHtml, defineHastPlugin } from "../dist/index.js";
 import { parseToHtml } from "../dist/index.js";
 import { readFileSync } from "node:fs";
 
-const MARKDOWN = readFileSync(new URL("./markdown.md", import.meta.url), "utf8");
+const MARKDOWN = readFileSync(new URL("./fixtures/markdown.md", import.meta.url), "utf8");
 
 const ITERATIONS = 2000;
 const WARMUP = 200;

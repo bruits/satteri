@@ -90,7 +90,7 @@ pub fn compile_arena_bytes(buf: &[u8], options: &Options) -> Result<String, mess
             rule_id: Box::new(String::new()),
             source: Box::new("mdxjs".into()),
         })?;
-    let source = mdast_view.get_source().to_string();
+    let source = mdast_view.source().to_string();
 
     let hast_buf = tryckeri_hast::mdast_to_hast_buffer(buf).map_err(|e| message::Message {
         reason: format!("invalid MDAST buffer: {e:?}"),
@@ -111,6 +111,107 @@ pub fn compile_arena_bytes(buf: &[u8], options: &Options) -> Result<String, mess
 /// Returns an error if the buffer is malformed or compilation fails.
 pub fn compile_hast_buffer(buf: &[u8], options: &Options) -> Result<String, message::Message> {
     compile_hast_buffer_with_source(buf, options, &[])
+}
+
+/// Compile a HAST arena directly to JavaScript.
+///
+/// This avoids the serialize→deserialize roundtrip of `compile_hast_buffer`.
+/// The arena can be mutated before calling (e.g. `simplify_plain_mdx_nodes`).
+///
+/// # Errors
+///
+/// Returns an error if compilation fails (e.g. invalid MDX expressions).
+pub fn compile_hast_arena(
+    arena: &tryckeri_mdast::MdastArena,
+    options: &Options,
+) -> Result<String, message::Message> {
+    let source_bytes = arena.source().as_bytes();
+    let allocator = Allocator::default();
+    let location = Location::new(source_bytes);
+    let mut explicit_jsxs = FxHashSet::default();
+    let mut program = hast_util_to_oxc(
+        arena,
+        options.filepath.clone(),
+        Some(&location),
+        &mut explicit_jsxs,
+        &allocator,
+        options.optimize_static.as_ref(),
+    )?;
+    mdx_plugin_recma_document(&mut program, options, Some(&location), &allocator)?;
+    mdx_plugin_recma_jsx_rewrite(
+        &mut program,
+        options,
+        Some(&location),
+        &explicit_jsxs,
+        &allocator,
+    )?;
+    Ok(serialize(&program.program))
+}
+
+/// Simplify plain MDX JSX elements into regular HAST elements in-place.
+///
+/// Finds MDX JSX elements (e.g. `<kbd>`, `<abbr>`) that are:
+/// - Lowercase name (not a component)
+/// - No attributes
+/// - Not in the ignore list
+///
+/// And converts them to `HAST_ELEMENT` nodes so they can be:
+/// - Collapsed by `optimizeStatic` into `set:html`
+/// - Rendered to HTML by `render_node`
+pub fn simplify_plain_mdx_nodes(
+    arena: &mut tryckeri_mdast::MdastArena,
+    ignore_elements: &[String],
+) {
+    use tryckeri_hast::node_types::{
+        HAST_ELEMENT, HAST_MDX_JSX_ELEMENT, HAST_MDX_JSX_TEXT_ELEMENT,
+    };
+    use tryckeri_mdast::{decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name};
+
+    let node_count = arena.len();
+    for i in 0..node_count {
+        let node_id = i as u32;
+        let node = arena.get_node(node_id);
+        let nt = node.node_type;
+
+        if nt != HAST_MDX_JSX_ELEMENT && nt != HAST_MDX_JSX_TEXT_ELEMENT {
+            continue;
+        }
+
+        let data = arena.get_type_data(node_id);
+        if data.len() < 16 {
+            continue;
+        }
+
+        // Must have a name (not a fragment)
+        let name_ref = decode_mdx_jsx_element_name(data);
+        if name_ref.is_empty() {
+            continue;
+        }
+
+        // Must be lowercase (not a component)
+        let name = arena.get_str(name_ref);
+        if !name.as_bytes().first().is_some_and(u8::is_ascii_lowercase) {
+            continue;
+        }
+
+        // Must not be in ignore list
+        if ignore_elements.iter().any(|s| s == name) {
+            continue;
+        }
+
+        // Must have no attributes
+        let attr_count = decode_mdx_jsx_attr_count(data);
+        if attr_count > 0 {
+            continue;
+        }
+
+        // Rewrite: change node_type to HAST_ELEMENT and rewrite type_data
+        // MDX JSX format: [name: StringRef(8B)][attr_count: u32(4B)][_pad: u32(4B)]
+        // Element format: [tag_name: StringRef(8B)][prop_count: u32(4B)][_pad: u32(4B)]
+        // The layout is the same! name_ref is already at offset 0, and attr_count (0) becomes prop_count (0).
+        // We only need to change the node_type byte.
+        arena.get_node_mut(node_id).node_type = HAST_ELEMENT;
+    }
 }
 
 /// Compile a HAST binary buffer to JavaScript, with source text for position resolution.

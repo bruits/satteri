@@ -5,11 +5,6 @@
  */
 import { readFileSync } from "node:fs";
 import {
-  parseToBuffer,
-  parseToHtml,
-  mdastBufferToHastBuffer,
-  hastBufferToHtmlStr,
-  compileMdx,
   compileMarkdownToHtml,
   compileMdxToJs,
   defineMdastPlugin,
@@ -19,7 +14,7 @@ import {
 const ITERATIONS = 100;
 const WARMUP = 20;
 
-const BASE_MD = readFileSync(new URL("./markdown.md", import.meta.url), "utf8");
+const BASE_MD = readFileSync(new URL("./fixtures/markdown.md", import.meta.url), "utf8");
 const LARGE_MD = Array.from({ length: 10 }, () => BASE_MD).join("\n\n---\n\n");
 const MDX_SAFE_MD = LARGE_MD.replace(/<[^>]+>/g, "");
 const LARGE_MDX = `import {Chart} from './chart.js'\n\n${MDX_SAFE_MD}\n\n<Chart values={[1, 2, 3]} />\n`;
@@ -158,7 +153,7 @@ const filteredHastMulti = defineHastPlugin({
 });
 
 const scenarios = [
-  ["parseToHtml (pure Rust)", () => parseToHtml(LARGE_MD)],
+  ["HTML — pure Rust (no plugins)", () => compileMarkdownToHtml(LARGE_MD)],
   ["HTML — no plugins", () => compileMarkdownToHtml(LARGE_MD)],
   [
     "HTML — noop mdast plugin",
@@ -194,7 +189,7 @@ const scenarios = [
         hastPlugins: [mutatingHast],
       }),
   ],
-  ["MDX  — pure Rust", () => compileMdx(LARGE_MDX)],
+  ["MDX  — pure Rust (no plugins)", () => compileMdxToJs(LARGE_MDX)],
   ["MDX  — no plugins", () => compileMdxToJs(LARGE_MDX)],
   ["MDX  — noop mdast plugin", () => compileMdxToJs(LARGE_MDX, { mdastPlugins: [noopMdast] })],
   ["MDX  — noop hast plugin", () => compileMdxToJs(LARGE_MDX, { hastPlugins: [noopHast] })],

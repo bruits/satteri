@@ -45,24 +45,3 @@ impl ReadMdast for crate::arena::MdastArena {
         self.get_node_data(node_id)
     }
 }
-
-impl ReadMdast for crate::raw_buffer::MdastView<'_> {
-    fn get_node(&self, node_id: u32) -> &MdastNode {
-        self.get_node(node_id)
-    }
-    fn get_children(&self, node_id: u32) -> &[u32] {
-        self.get_children(node_id)
-    }
-    fn get_type_data(&self, node_id: u32) -> &[u8] {
-        self.get_type_data(node_id)
-    }
-    fn get_str(&self, string_ref: StringRef) -> &str {
-        self.get_str(string_ref)
-    }
-    fn source(&self) -> &str {
-        self.get_source()
-    }
-    fn len(&self) -> usize {
-        self.node_count() as usize
-    }
-}

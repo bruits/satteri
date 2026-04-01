@@ -4,10 +4,12 @@ import { DataMap } from "../src/data-map.js";
 import { visitHast } from "../src/hast/hast-visitor.js";
 import { materializeHastTree } from "../src/hast/hast-materializer.js";
 import {
-  parseToHastBuffer,
-  hastBufferToHtmlStr,
-  applyMutations,
-  parseMdxToHastBuffer,
+  createHastHandle,
+  createMdxHastHandle,
+  serializeHandle,
+  applyCommandsToHandle,
+  renderHandle,
+  dropHandle,
 } from "../index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
@@ -15,16 +17,20 @@ import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 // Parse a simple markdown document to a HAST binary buffer for testing.
 // "# Hello\n\nWorld" produces: root > [h1 > text("Hello"), p > text("World")]
 function setup(source = "# Hello\n\nWorld") {
-  const uint8 = parseToHastBuffer(source);
+  const handle = createHastHandle(source);
+  const uint8 = serializeHandle(handle);
   const reader = new HastReader(uint8);
   const dataMap = new DataMap();
-  return { reader, dataMap, uint8 };
+  return { reader, dataMap, handle };
 }
 
-/** Apply visitor mutations and return HTML */
-function applyAndSerialize(uint8: Uint8Array, commandBuffer: Uint8Array): string {
-  const newBuf = applyMutations(uint8, commandBuffer);
-  return hastBufferToHtmlStr(newBuf);
+/** Apply visitor mutations to handle and return HTML */
+function applyAndRender(
+  handle: ReturnType<typeof createHastHandle>,
+  commandBuffer: Uint8Array,
+): string {
+  applyCommandsToHandle(handle, commandBuffer);
+  return renderHandle(handle);
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +152,7 @@ describe("visitHast — lifecycle hooks", () => {
 
 describe("visitHast — mutations", () => {
   test("returning a node from element() creates a replace mutation", () => {
-    const { reader, dataMap, uint8 } = setup();
+    const { reader, dataMap, handle } = setup();
     const result = visitHast(
       reader,
       {
@@ -169,13 +175,13 @@ describe("visitHast — mutations", () => {
       dataMap,
     );
     expect(result.hasMutations).toBe(true);
-    const html = applyAndSerialize(uint8, result.commandBuffer);
+    const html = applyAndRender(handle, result.commandBuffer);
     expect(html).toContain("<h2>");
     expect(html).not.toContain("<h1>");
   });
 
   test("context.removeNode() removes a node", () => {
-    const { reader, dataMap, uint8 } = setup();
+    const { reader, dataMap, handle } = setup();
     const result = visitHast(
       reader,
       {
@@ -191,13 +197,13 @@ describe("visitHast — mutations", () => {
       dataMap,
     );
     expect(result.hasMutations).toBe(true);
-    const html = applyAndSerialize(uint8, result.commandBuffer);
+    const html = applyAndRender(handle, result.commandBuffer);
     expect(html).not.toContain("<h1>");
     expect(html).toContain("World");
   });
 
   test("context.setProperty() modifies element attributes", () => {
-    const { reader, dataMap, uint8 } = setup();
+    const { reader, dataMap, handle } = setup();
     const result = visitHast(
       reader,
       {
@@ -213,7 +219,7 @@ describe("visitHast — mutations", () => {
       dataMap,
     );
     expect(result.hasMutations).toBe(true);
-    const html = applyAndSerialize(uint8, result.commandBuffer);
+    const html = applyAndRender(handle, result.commandBuffer);
     expect(html).toContain('id="title"');
   });
 });
@@ -306,7 +312,7 @@ function findHastNode(node: HastNode, type: string): HastNode | null {
 
 describe("MDX JSX attributes on HAST nodes", () => {
   test("self-closing element with no attributes", () => {
-    const buf = parseMdxToHastBuffer("<Component />\n");
+    const buf = serializeHandle(createMdxHastHandle("<Component />\n"));
     const reader = new HastReader(buf);
     const tree = materializeHastTree(reader, new DataMap());
     const jsx = findHastNode(tree, "mdxJsxFlowElement");
@@ -317,7 +323,7 @@ describe("MDX JSX attributes on HAST nodes", () => {
   });
 
   test("element with string literal attribute", () => {
-    const buf = parseMdxToHastBuffer('<Component foo="bar" />\n');
+    const buf = serializeHandle(createMdxHastHandle('<Component foo="bar" />\n'));
     const reader = new HastReader(buf);
     const tree = materializeHastTree(reader, new DataMap());
     const jsx = findHastNode(tree, "mdxJsxFlowElement");
@@ -327,7 +333,7 @@ describe("MDX JSX attributes on HAST nodes", () => {
   });
 
   test("element with boolean attribute", () => {
-    const buf = parseMdxToHastBuffer("<Component disabled />\n");
+    const buf = serializeHandle(createMdxHastHandle("<Component disabled />\n"));
     const reader = new HastReader(buf);
     const tree = materializeHastTree(reader, new DataMap());
     const jsx = findHastNode(tree, "mdxJsxFlowElement");
@@ -336,7 +342,7 @@ describe("MDX JSX attributes on HAST nodes", () => {
   });
 
   test("element with expression attribute", () => {
-    const buf = parseMdxToHastBuffer("<Component count={42} />\n");
+    const buf = serializeHandle(createMdxHastHandle("<Component count={42} />\n"));
     const reader = new HastReader(buf);
     const tree = materializeHastTree(reader, new DataMap());
     const jsx = findHastNode(tree, "mdxJsxFlowElement");
@@ -351,7 +357,7 @@ describe("MDX JSX attributes on HAST nodes", () => {
   });
 
   test("element with spread attribute", () => {
-    const buf = parseMdxToHastBuffer("<Component {...props} />\n");
+    const buf = serializeHandle(createMdxHastHandle("<Component {...props} />\n"));
     const reader = new HastReader(buf);
     const tree = materializeHastTree(reader, new DataMap());
     const jsx = findHastNode(tree, "mdxJsxFlowElement");
@@ -360,7 +366,7 @@ describe("MDX JSX attributes on HAST nodes", () => {
   });
 
   test("element with multiple mixed attributes", () => {
-    const buf = parseMdxToHastBuffer('<Component a="1" b={2} c {...d} />\n');
+    const buf = serializeHandle(createMdxHastHandle('<Component a="1" b={2} c {...d} />\n'));
     const reader = new HastReader(buf);
     const tree = materializeHastTree(reader, new DataMap());
     const jsx = findHastNode(tree, "mdxJsxFlowElement");

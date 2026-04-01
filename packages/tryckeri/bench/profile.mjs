@@ -2,18 +2,19 @@
  * Profile where time is spent in the plugin path.
  */
 import {
-  parseToBuffer,
-  mdastBufferToHastBuffer,
-  hastBufferToHtmlStr,
-  applyMutations,
-  HastReader,
-  defineHastPlugin,
-} from "../dist/index.js";
-import { visitHast } from "../dist/hast-visitor.js";
+  createMdastHandle,
+  createHastHandle,
+  convertMdastToHastHandle,
+  serializeHandle,
+  renderHandle,
+  dropHandle,
+} from "../index.js";
+import { HastReader } from "../dist/hast/hast-reader.js";
+import { visitHast } from "../dist/hast/hast-visitor.js";
 import { DataMap } from "../dist/data-map.js";
 import { readFileSync } from "node:fs";
 
-const MARKDOWN = readFileSync(new URL("./markdown.md", import.meta.url), "utf8");
+const MARKDOWN = readFileSync(new URL("./fixtures/markdown.md", import.meta.url), "utf8");
 const ITERATIONS = 2000;
 const WARMUP = 200;
 
@@ -39,12 +40,20 @@ async function timeAsync(name, fn) {
 
 console.log(`\n--- Breakdown: plugin path (${ITERATIONS} iterations) ---\n`);
 
-// Pre-compute what we'd have at each stage
-const mdastBuf = parseToBuffer(MARKDOWN);
-const hastBuf = mdastBufferToHastBuffer(mdastBuf);
+// Pre-compute a HAST buffer for reader-based benchmarks
+const preHastHandle = createHastHandle(MARKDOWN);
+const hastBuf = serializeHandle(preHastHandle);
+dropHandle(preHastHandle);
 
-const t1 = time("1. parseToBuffer (Rust)", () => parseToBuffer(MARKDOWN));
-const t2 = time("2. mdastBufferToHastBuffer (Rust)", () => mdastBufferToHastBuffer(mdastBuf));
+const t1 = time("1. createMdastHandle (Rust)", () => {
+  const h = createMdastHandle(MARKDOWN);
+  dropHandle(h);
+});
+const t2 = time("2. convertMdastToHastHandle (Rust)", () => {
+  const mdast = createMdastHandle(MARKDOWN);
+  const hast = convertMdastToHastHandle(mdast);
+  dropHandle(hast);
+});
 
 // Measure just the visitor with a noop plugin
 const t3 = await timeAsync("3. visitHast — noop plugin (JS walk + materialize)", async () => {
@@ -53,7 +62,11 @@ const t3 = await timeAsync("3. visitHast — noop plugin (JS walk + materialize)
   await visitHast(reader, { element() {} }, dataMap);
 });
 
-const t4 = time("4. hastBufferToHtmlStr (Rust)", () => hastBufferToHtmlStr(hastBuf));
+const t4 = time("4. renderHandle (Rust)", () => {
+  const hast = createHastHandle(MARKDOWN);
+  renderHandle(hast);
+  dropHandle(hast);
+});
 
 console.log(`\n--- Totals ---\n`);
 console.log(`Rust-only (1+2+4):    ${(t1 + t2 + t4).toFixed(4)} ms`);
@@ -82,7 +95,7 @@ time("  Walk all nodes (getNodeType + getChildIds)", () => {
 });
 
 // Reader + walk + materialize
-import { materializeHastNode } from "../dist/hast-materializer.js";
+import { materializeHastNode } from "../dist/hast/hast-materializer.js";
 const reader1 = new HastReader(hastBuf);
 const dm = new DataMap();
 time("  Walk + materialize all nodes", () => {
