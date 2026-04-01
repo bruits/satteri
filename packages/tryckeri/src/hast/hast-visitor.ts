@@ -139,31 +139,37 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 }
 
-/** A filtered visitor: Rust filters by tag name, only matched nodes are sent to JS. */
-interface HastFilteredVisitor<N extends HastNode = HastNode> {
+/** A filtered visitor: Rust filters by tag/component name, only matched nodes cross the boundary. */
+export interface HastFilteredVisitor<N extends HastNode = HastNode> {
   filter: string[];
   visit(node: N, ctx: HastVisitorContext): HastNode | void;
 }
 
-type HastVisitorValue<N extends HastNode = HastNode> =
-  | ((node: N, ctx: HastVisitorContext) => HastNode | void)
-  | HastFilteredVisitor<N>
-  | HastFilteredVisitor<N>[];
+type HastVisitorFn<N extends HastNode = HastNode> = (
+  node: N,
+  ctx: HastVisitorContext,
+) => HastNode | void;
 
 export interface HastVisitorInstance {
   before?(ctx: HastVisitorContext): void;
   after?(ctx: HastVisitorContext): void;
   transformRoot?(root: Root, ctx: HastVisitorContext): HastNode | void;
-  element?: HastVisitorValue<Element>;
-  text?: HastVisitorValue<Text>;
-  comment?: HastVisitorValue<Comment>;
-  raw?: HastVisitorValue<HastRaw>;
-  doctype?: HastVisitorValue<Doctype>;
-  mdxJsxFlowElement?: HastVisitorValue<MdxJsxFlowElementHast>;
-  mdxJsxTextElement?: HastVisitorValue<MdxJsxTextElementHast>;
-  mdxFlowExpression?: HastVisitorValue<MdxFlowExpressionHast>;
-  mdxTextExpression?: HastVisitorValue<MdxTextExpressionHast>;
-  mdxjsEsm?: HastVisitorValue<MdxjsEsmHast>;
+  // Element-like nodes: filtered by tag/component name (single or array)
+  element?: HastFilteredVisitor<Element> | HastFilteredVisitor<Element>[];
+  mdxJsxFlowElement?:
+    | HastFilteredVisitor<MdxJsxFlowElementHast>
+    | HastFilteredVisitor<MdxJsxFlowElementHast>[];
+  mdxJsxTextElement?:
+    | HastFilteredVisitor<MdxJsxTextElementHast>
+    | HastFilteredVisitor<MdxJsxTextElementHast>[];
+  // Leaf/value nodes: bare functions (no tag names to filter on)
+  text?: HastVisitorFn<Text>;
+  comment?: HastVisitorFn<Comment>;
+  raw?: HastVisitorFn<HastRaw>;
+  doctype?: HastVisitorFn<Doctype>;
+  mdxFlowExpression?: HastVisitorFn<MdxFlowExpressionHast>;
+  mdxTextExpression?: HastVisitorFn<MdxTextExpressionHast>;
+  mdxjsEsm?: HastVisitorFn<MdxjsEsmHast>;
 }
 
 export interface HastVisitResult {
@@ -362,46 +368,38 @@ function isFilteredVisitor(v: unknown): v is HastFilteredVisitor {
   return typeof v === "object" && v !== null && "filter" in v && "visit" in v;
 }
 
+/** Node types that use filtered visitors (have tag/component names). */
+const FILTERED_METHODS = new Set(["element", "mdxJsxFlowElement", "mdxJsxTextElement"]);
+
 /**
- * Resolve all visitor subscriptions from a plugin instance.
- * Bare functions become unfiltered subscriptions (empty tagFilter = match all).
- * Filter objects/arrays become filtered subscriptions.
- */
-/**
+ * Resolve subscriptions from a plugin instance.
  * Returns null if the plugin uses transformRoot (needs full buffer path).
- */
-/**
- * Resolve subscriptions. Returns null if the plugin uses transformRoot or
- * bare functions (which may return replacement nodes needing full children).
- * Those cases fall back to the buffer path.
  */
 export function resolveSubscriptions(plugin: HastVisitorInstance): ResolvedSubscription[] | null {
   if (plugin.transformRoot) return null;
 
   const subs: ResolvedSubscription[] = [];
-  let hasAnyVisitor = false;
 
   for (const [methodName, nodeType] of Object.entries(METHOD_TO_TYPE)) {
     const value = plugin[methodName as keyof HastVisitorInstance];
     if (value === undefined) continue;
-    hasAnyVisitor = true;
 
-    if (typeof value === "function") {
-      // Bare function — fall back to buffer path
-      return null;
-    } else if (isFilteredVisitor(value)) {
-      subs.push({ nodeType, tagFilter: value.filter, visitFn: value.visit as ResolvedSubscription["visitFn"] });
-    } else if (Array.isArray(value)) {
-      for (const item of value) {
-        if (!isFilteredVisitor(item)) return null;
-        subs.push({ nodeType, tagFilter: item.filter, visitFn: item.visit as ResolvedSubscription["visitFn"] });
+    if (FILTERED_METHODS.has(methodName)) {
+      const items = Array.isArray(value) ? value : [value];
+      for (const fv of items as HastFilteredVisitor[]) {
+        subs.push({
+          nodeType,
+          tagFilter: fv.filter,
+          visitFn: fv.visit as ResolvedSubscription["visitFn"],
+        });
       }
     } else {
-      return null;
+      // Bare function — empty filter matches all nodes of this type
+      subs.push({ nodeType, tagFilter: [], visitFn: value as ResolvedSubscription["visitFn"] });
     }
   }
 
-  return hasAnyVisitor ? subs : null;
+  return subs.length > 0 ? subs : null;
 }
 
 /** Reverse map: method name → node type number */
@@ -730,14 +728,20 @@ export function visitHast(
       const methodName = TYPE_TO_METHOD[nodeType];
 
       if (methodName && methodName !== "transformRoot") {
-        const fn = plugin[methodName] as
-          | ((node: HastNode, ctx: HastVisitorContext) => HastNode | void)
-          | undefined;
-        if (typeof fn === "function") {
-          const node = materializeForVisitor(nodeType, nodeId, reader, dataMap);
-          const result = fn.call(plugin, node, ctx);
-          if (result != null) {
-            returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
+        const entry = plugin[methodName];
+        if (entry !== undefined) {
+          let visitFn: ((node: HastNode, ctx: HastVisitorContext) => HastNode | void) | undefined;
+          if (typeof entry === "function") {
+            visitFn = entry as (node: HastNode, ctx: HastVisitorContext) => HastNode | void;
+          } else if (isFilteredVisitor(entry)) {
+            visitFn = entry.visit as (node: HastNode, ctx: HastVisitorContext) => HastNode | void;
+          }
+          if (visitFn) {
+            const node = materializeForVisitor(nodeType, nodeId, reader, dataMap);
+            const result = visitFn.call(plugin, node, ctx);
+            if (result != null) {
+              returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
+            }
           }
         }
       }

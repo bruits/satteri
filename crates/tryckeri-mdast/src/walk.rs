@@ -47,11 +47,28 @@ pub struct Subscription {
 
 const HAST_ELEMENT_TYPE: u8 = 1;
 
+/// Whether the arena contains HAST or MDAST node types.
+/// Needed because the same type numbers mean different things (e.g. 2 = HAST_TEXT vs MDAST_HEADING).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalkMode {
+    Hast,
+    Mdast,
+}
+
 /// Walk the tree and return matched nodes as a flat binary buffer.
 ///
 /// Returns a `Vec<u8>` containing the match index + inline data section.
 /// JS reads this with DataView — zero per-node object allocation.
 pub fn walk_and_collect(arena: &dyn ReadMdast, subscriptions: &[Subscription]) -> Vec<u8> {
+    walk_and_collect_with_mode(arena, subscriptions, WalkMode::Hast)
+}
+
+/// Walk with explicit mode (HAST or MDAST).
+pub fn walk_and_collect_with_mode(
+    arena: &dyn ReadMdast,
+    subscriptions: &[Subscription],
+    mode: WalkMode,
+) -> Vec<u8> {
     if subscriptions.is_empty() {
         return 0u32.to_le_bytes().to_vec();
     }
@@ -96,7 +113,14 @@ pub fn walk_and_collect(arena: &dyn ReadMdast, subscriptions: &[Subscription]) -
 
                 if matched {
                     let data_start = data_section.len() as u32;
-                    serialize_node_inline(arena, node_id, node_type, type_data, &mut data_section);
+                    serialize_node_inline(
+                        arena,
+                        node_id,
+                        node_type,
+                        type_data,
+                        &mut data_section,
+                        mode,
+                    );
                     let data_len = (data_section.len() - data_start as usize) as u16;
                     matches.push((node_id, sub_idx));
                     data_offsets.push((data_start, data_len));
@@ -140,6 +164,195 @@ pub fn walk_and_collect(arena: &dyn ReadMdast, subscriptions: &[Subscription]) -
     out
 }
 
+/// MDAST node inline serialization.
+///
+/// Format per matched node:
+/// ```text
+/// [position: 6×u32 (24 bytes)] — start_offset, end_offset, start_line, start_col, end_line, end_col
+/// [child_count: u16][child_ids: child_count × u32]  — for parent nodes
+/// [type-specific resolved data]
+/// ```
+fn serialize_mdast_node_inline(
+    arena: &dyn ReadMdast,
+    node_id: u32,
+    node_type: u8,
+    type_data: &[u8],
+    out: &mut Vec<u8>,
+) {
+    let node = arena.get_node(node_id);
+
+    // Node data (JSON bytes) — length-prefixed, always first so JS can read it at a known offset
+    if let Some(data) = arena.get_node_data(node_id) {
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(data);
+    } else {
+        out.extend_from_slice(&0u32.to_le_bytes());
+    }
+
+    // Position (always present)
+    out.extend_from_slice(&node.start_offset.to_le_bytes());
+    out.extend_from_slice(&node.end_offset.to_le_bytes());
+    out.extend_from_slice(&node.start_line.to_le_bytes());
+    out.extend_from_slice(&node.start_column.to_le_bytes());
+    out.extend_from_slice(&node.end_line.to_le_bytes());
+    out.extend_from_slice(&node.end_column.to_le_bytes());
+
+    // Children (for parent nodes)
+    let children = arena.get_children(node_id);
+    out.extend_from_slice(&(children.len() as u16).to_le_bytes());
+    for &child_id in children {
+        out.extend_from_slice(&child_id.to_le_bytes());
+    }
+
+    // Helper: write a resolved string ref as [len: u16][data]
+    let write_str16 = |out: &mut Vec<u8>, data: &[u8], offset: usize| {
+        if data.len() >= offset + 8 {
+            let sr = read_string_ref(data, offset);
+            let s = arena.get_str(sr);
+            out.extend_from_slice(&(s.len() as u16).to_le_bytes());
+            out.extend_from_slice(s.as_bytes());
+        } else {
+            out.extend_from_slice(&0u16.to_le_bytes());
+        }
+    };
+
+    let write_str32 = |out: &mut Vec<u8>, data: &[u8], offset: usize| {
+        if data.len() >= offset + 8 {
+            let sr = read_string_ref(data, offset);
+            let s = arena.get_str(sr);
+            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            out.extend_from_slice(s.as_bytes());
+        } else {
+            out.extend_from_slice(&0u32.to_le_bytes());
+        }
+    };
+
+    match node_type {
+        // Heading: depth u8
+        2 => {
+            out.push(if !type_data.is_empty() {
+                type_data[0]
+            } else {
+                1
+            });
+        }
+
+        // Text(10), InlineCode(13), Html(7), Yaml(25), Toml(26), InlineMath(28): single StringRef value
+        10 | 13 | 7 | 25 | 26 | 28 => write_str32(out, type_data, 0),
+
+        // Code(8): lang(0) + meta(8) + value(16)
+        8 => {
+            write_str16(out, type_data, 0);
+            write_str16(out, type_data, 8);
+            write_str32(out, type_data, 16);
+        }
+
+        // Math(27): meta(0) + value(8)
+        27 => {
+            write_str16(out, type_data, 0);
+            write_str32(out, type_data, 8);
+        }
+
+        // Link(15): url(0) + title(8)
+        15 => {
+            write_str16(out, type_data, 0);
+            write_str16(out, type_data, 8);
+        }
+
+        // Image(16): url(0) + alt(8) + title(16)
+        16 => {
+            write_str16(out, type_data, 0);
+            write_str16(out, type_data, 8);
+            write_str16(out, type_data, 16);
+        }
+
+        // Definition(9): url(0) + title(8) + identifier(16) + label(24)
+        9 => {
+            write_str16(out, type_data, 0);
+            write_str16(out, type_data, 8);
+            write_str16(out, type_data, 16);
+            write_str16(out, type_data, 24);
+        }
+
+        // List(5): start(0..4), ordered(4), spread(5)
+        5 => {
+            if type_data.len() >= 6 {
+                out.extend_from_slice(&type_data[0..6]);
+            } else {
+                out.extend_from_slice(&[0u8; 6]);
+            }
+        }
+
+        // ListItem(6): checked(0), spread(1)
+        6 => {
+            if type_data.len() >= 2 {
+                out.extend_from_slice(&type_data[0..2]);
+            } else {
+                out.extend_from_slice(&[0u8; 2]);
+            }
+        }
+
+        // LinkReference(17), ImageReference(18), FootnoteReference(20):
+        // identifier(0) + label(8) + kind(16)
+        17 | 18 | 20 => {
+            write_str16(out, type_data, 0);
+            write_str16(out, type_data, 8);
+            out.push(if type_data.len() > 16 {
+                type_data[16]
+            } else {
+                0
+            });
+        }
+
+        // FootnoteDefinition(19): identifier(0) + label(8)
+        19 => {
+            write_str16(out, type_data, 0);
+            write_str16(out, type_data, 8);
+        }
+
+        // Table(21): align_count(0..4) + align bytes
+        21 => {
+            if type_data.len() >= 4 {
+                let count = u32::from_le_bytes(type_data[0..4].try_into().unwrap()) as usize;
+                out.extend_from_slice(&(count as u16).to_le_bytes());
+                let end = (4 + count).min(type_data.len());
+                out.extend_from_slice(&type_data[4..end]);
+            } else {
+                out.extend_from_slice(&0u16.to_le_bytes());
+            }
+        }
+
+        // MdxJsxFlowElement(100), MdxJsxTextElement(101): name(0) + attributes
+        100 | 101 => {
+            write_str16(out, type_data, 0);
+            if type_data.len() >= 16 {
+                let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
+                out.extend_from_slice(&(attr_count as u16).to_le_bytes());
+                for i in 0..attr_count {
+                    let base = 16 + i * 20;
+                    let kind = type_data[base];
+                    let attr_name = arena.get_str(read_string_ref(type_data, base + 4));
+                    let attr_val = arena.get_str(read_string_ref(type_data, base + 12));
+                    out.push(kind);
+                    out.extend_from_slice(&(attr_name.len() as u16).to_le_bytes());
+                    out.extend_from_slice(attr_name.as_bytes());
+                    out.extend_from_slice(&(attr_val.len() as u16).to_le_bytes());
+                    out.extend_from_slice(attr_val.as_bytes());
+                }
+            } else {
+                out.extend_from_slice(&0u16.to_le_bytes());
+            }
+        }
+
+        // MdxFlowExpression(102), MdxTextExpression(103), MdxjsEsm(104): value StringRef
+        102..=104 => write_str32(out, type_data, 0),
+
+        // Root(0), Paragraph(1), ThematicBreak(3), Blockquote(4), Emphasis(11),
+        // Strong(12), Break(14), TableRow(22), TableCell(23), Delete(24): no type data
+        _ => {}
+    }
+}
+
 fn read_string_ref(data: &[u8], offset: usize) -> StringRef {
     StringRef::new(
         u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()),
@@ -155,7 +368,12 @@ fn serialize_node_inline(
     node_type: u8,
     type_data: &[u8],
     out: &mut Vec<u8>,
+    mode: WalkMode,
 ) {
+    if mode == WalkMode::Mdast {
+        return serialize_mdast_node_inline(arena, node_id, node_type, type_data, out);
+    }
+
     match node_type {
         // HAST element
         1 => {

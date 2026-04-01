@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::node::{MdastNode, MdastNodeType, StringRef};
 
 /// The central arena that owns all nodes and associated data for one parse.
@@ -13,6 +15,8 @@ pub struct MdastArena {
     /// Variable-length type-specific data, packed.
     pub(crate) type_data: Vec<u8>,
     pub(crate) source: String,
+    /// Per-node `data` blobs (JSON bytes), set by JS plugins.
+    pub(crate) node_data: HashMap<u32, Vec<u8>>,
 }
 
 impl MdastArena {
@@ -22,6 +26,7 @@ impl MdastArena {
             children: Vec::new(),
             type_data: Vec::new(),
             source,
+            node_data: HashMap::new(),
         }
     }
 
@@ -106,6 +111,18 @@ impl MdastArena {
         let start = string_ref.offset as usize;
         let end = start + string_ref.len as usize;
         &self.source[start..end]
+    }
+
+    pub fn get_node_data(&self, node_id: u32) -> Option<&[u8]> {
+        self.node_data.get(&node_id).map(|v| v.as_slice())
+    }
+
+    pub fn set_node_data(&mut self, node_id: u32, data: Vec<u8>) {
+        if data.is_empty() {
+            self.node_data.remove(&node_id);
+        } else {
+            self.node_data.insert(node_id, data);
+        }
     }
 
     pub fn source(&self) -> &str {

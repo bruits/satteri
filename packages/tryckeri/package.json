@@ -1,6 +1,6 @@
 {
   "name": "tryckeri",
-  "version": "0.1.15",
+  "version": "0.1.17",
   "description": "High-performance Markdown processing",
   "files": [
     "dist",
@@ -17,6 +17,8 @@
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js",
+    "./hast": "./dist/hast-types.js",
+    "./mdast": "./dist/mdast-types.js",
     "./arena-reader": "./dist/arena-reader.js"
   },
   "scripts": {

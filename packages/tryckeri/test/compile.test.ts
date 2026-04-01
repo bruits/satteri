@@ -8,6 +8,8 @@ import {
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { MdastNode } from "../src/types.js";
+import type { Element } from "hast";
+import type { MdxJsxTextElementHast } from "mdast-util-mdx-jsx";
 
 // ---------------------------------------------------------------------------
 // compileMarkdownToHtml — no plugins
@@ -91,8 +93,11 @@ describe("compileMarkdownToHtml", () => {
     const addClasses = defineHastPlugin({
       name: "add-classes",
       createOnce: () => ({
-        element(node: HastNode, ctx: HastVisitorContext) {
-          ctx.setProperty(node, "class", "styled");
+        element: {
+          filter: [],
+          visit(node, ctx) {
+            ctx.setProperty(node, "class", "styled");
+          },
         },
       }),
     });
@@ -108,10 +113,13 @@ describe("compileMarkdownToHtml", () => {
     const removeHeadings = defineHastPlugin({
       name: "remove-h1",
       createOnce: () => ({
-        element(node: HastNode, ctx: HastVisitorContext) {
-          if (node.type === "element" && node.tagName === "h1") {
-            ctx.removeNode(node);
-          }
+        element: {
+          filter: [],
+          visit(node, ctx) {
+            if (node.tagName === "h1") {
+              ctx.removeNode(node);
+            }
+          },
         },
       }),
     });
@@ -128,17 +136,17 @@ describe("compileMarkdownToHtml", () => {
     const replaceH1 = defineHastPlugin({
       name: "demote-h1",
       createOnce: () => ({
-        element(node: HastNode) {
-          if (node.type === "element" && node.tagName === "h1") {
+        element: {
+          filter: ["h1"],
+          visit(node) {
             return {
               type: "element" as const,
-              _nodeId: -1,
               tagName: "h2",
               properties: { class: "demoted" },
-              children: node.children ?? [],
+              children: node.children,
               data: undefined,
-            };
-          }
+            } as HastNode;
+          },
         },
       }),
     });
@@ -156,10 +164,13 @@ describe("compileMarkdownToHtml", () => {
     const addIds = defineHastPlugin({
       name: "add-ids",
       createOnce: () => ({
-        element(node: HastNode, ctx: HastVisitorContext) {
-          if (node.type === "element" && node.tagName === "h1") {
-            ctx.setProperty(node, "id", "main-title");
-          }
+        element: {
+          filter: [],
+          visit(node, ctx) {
+            if (node.tagName === "h1") {
+              ctx.setProperty(node, "id", "main-title");
+            }
+          },
         },
       }),
     });
@@ -174,7 +185,7 @@ describe("compileMarkdownToHtml", () => {
     const wrapTexts = defineHastPlugin({
       name: "wrap-texts",
       createOnce: () => ({
-        transformRoot(root: HastNode) {
+        transformRoot(root) {
           function walk(node: HastNode): HastNode {
             if (node.type === "text") {
               return {
@@ -205,8 +216,11 @@ describe("compileMarkdownToHtml", () => {
     const noopPlugin = defineHastPlugin({
       name: "noop",
       createOnce: () => ({
-        element() {
-          // inspect but don't mutate
+        element: {
+          filter: [],
+          visit() {
+            // inspect but don't mutate
+          },
         },
       }),
     });
@@ -236,8 +250,11 @@ describe("compileMarkdownToHtml", () => {
     const addClasses = defineHastPlugin({
       name: "add-classes",
       createOnce: () => ({
-        element(node: HastNode, ctx: HastVisitorContext) {
-          ctx.setProperty(node, "class", "styled");
+        element: {
+          filter: [],
+          visit(node, ctx) {
+            ctx.setProperty(node, "class", "styled");
+          },
         },
       }),
     });
@@ -255,10 +272,13 @@ describe("compileMarkdownToHtml", () => {
     const addIds = defineHastPlugin({
       name: "add-ids",
       createOnce: () => ({
-        element(node: HastNode, ctx: HastVisitorContext) {
-          if (node.type === "element" && node.tagName === "h1") {
-            ctx.setProperty(node, "id", "title");
-          }
+        element: {
+          filter: [],
+          visit(node, ctx) {
+            if (node.tagName === "h1") {
+              ctx.setProperty(node, "id", "title");
+            }
+          },
         },
       }),
     });
@@ -266,8 +286,11 @@ describe("compileMarkdownToHtml", () => {
     const addClasses = defineHastPlugin({
       name: "add-classes",
       createOnce: () => ({
-        element(node: HastNode, ctx: HastVisitorContext) {
-          ctx.setProperty(node, "class", "styled");
+        element: {
+          filter: [],
+          visit(node, ctx) {
+            ctx.setProperty(node, "class", "styled");
+          },
         },
       }),
     });
@@ -408,10 +431,17 @@ describe("compileMdxToJs", () => {
     const injectMeta = defineHastPlugin({
       name: "inject-meta",
       createOnce: () => ({
-        mdxJsxTextElement(node: HastNode, ctx: HastVisitorContext) {
-          ctx.setProperty(node, "client:component-path", "/absolute/path/B.jsx");
-          ctx.setProperty(node, "client:component-export", "default");
-          ctx.setProperty(node, "client:component-hydration", "");
+        mdxJsxTextElement: {
+          filter: [],
+          visit(node, ctx) {
+            ctx.setProperty(
+              node as unknown as HastNode,
+              "client:component-path",
+              "/absolute/path/B.jsx",
+            );
+            ctx.setProperty(node as unknown as HastNode, "client:component-export", "default");
+            ctx.setProperty(node as unknown as HastNode, "client:component-hydration", "");
+          },
         },
       }),
     });
@@ -433,8 +463,11 @@ describe("compileMdxToJs", () => {
     const noop = defineHastPlugin({
       name: "noop",
       createOnce: () => ({
-        mdxJsxTextElement() {
-          // do nothing
+        mdxJsxTextElement: {
+          filter: [],
+          visit() {
+            // do nothing
+          },
         },
       }),
     });
@@ -452,8 +485,11 @@ describe("compileMdxToJs", () => {
     const overwrite = defineHastPlugin({
       name: "overwrite-attr",
       createOnce: () => ({
-        mdxJsxTextElement(node: HastNode, ctx: HastVisitorContext) {
-          ctx.setProperty(node, "foo", "replaced");
+        mdxJsxTextElement: {
+          filter: [],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            ctx.setProperty(node, "foo", "replaced");
+          },
         },
       }),
     });
@@ -581,8 +617,11 @@ describe("compileMdxToJs", () => {
     const plugin = defineHastPlugin({
       name: "class-adder",
       createOnce: () => ({
-        element(node: HastNode, ctx: HastVisitorContext) {
-          ctx.setProperty(node, "class", "added");
+        element: {
+          filter: [],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            ctx.setProperty(node, "class", "added");
+          },
         },
       }),
     });

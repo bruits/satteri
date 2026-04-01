@@ -142,6 +142,7 @@ fn replace_leaf_node() {
         &[Patch::Replace {
             node_id: text_id,
             new_tree: replacement,
+            keep_children: false,
         }],
     );
 
@@ -169,6 +170,7 @@ fn replace_root_child_with_different_type() {
         &[Patch::Replace {
             node_id: heading_id,
             new_tree: replacement,
+            keep_children: false,
         }],
     );
 

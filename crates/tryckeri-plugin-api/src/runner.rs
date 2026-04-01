@@ -116,6 +116,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &MdastArena) -> Vec<Patch
                 .map(|sub| Patch::Replace {
                     node_id: *node_id,
                     new_tree: sub,
+                    keep_children: false,
                 }),
             Command::Remove { node_id } => Some(Patch::Remove { node_id: *node_id }),
             Command::InsertBefore { node_id, new_node } => {

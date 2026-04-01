@@ -16,6 +16,10 @@ pub trait ReadMdast {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Per-node data blob (JSON bytes) set by JS plugins.
+    fn get_node_data(&self, _node_id: u32) -> Option<&[u8]> {
+        None
+    }
 }
 
 impl ReadMdast for crate::arena::MdastArena {
@@ -36,6 +40,9 @@ impl ReadMdast for crate::arena::MdastArena {
     }
     fn len(&self) -> usize {
         self.len()
+    }
+    fn get_node_data(&self, node_id: u32) -> Option<&[u8]> {
+        self.get_node_data(node_id)
     }
 }
 

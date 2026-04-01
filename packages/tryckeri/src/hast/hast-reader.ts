@@ -1,11 +1,7 @@
 import type { BufferHeader } from "../types.js";
-import type {
-  MdxJsxAttribute,
-  MdxJsxExpressionAttribute,
-  MdxJsxAttributeValueExpression,
-} from "mdast-util-mdx-jsx";
+import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "mdast-util-mdx-jsx";
 
-export type { MdxJsxAttribute, MdxJsxExpressionAttribute, MdxJsxAttributeValueExpression };
+export type { MdxJsxAttribute, MdxJsxExpressionAttribute };
 
 // HAST node type constants (must match node_types.rs)
 export const HAST_ROOT = 0;
@@ -22,11 +18,11 @@ export const HAST_MDX_FLOW_EXPRESSION = 12;
 export const HAST_MDX_ESM = 13;
 export const HAST_MDX_TEXT_EXPRESSION = 14;
 
-export const PROP_STRING = 0;
-export const PROP_BOOL_TRUE = 1;
-export const PROP_BOOL_FALSE = 2;
-export const PROP_SPACE_SEP = 3;
-export const PROP_COMMA_SEP = 4;
+const PROP_STRING = 0;
+const PROP_BOOL_TRUE = 1;
+const PROP_BOOL_FALSE = 2;
+const PROP_SPACE_SEP = 3;
+const PROP_COMMA_SEP = 4;
 
 // MDX JSX attribute kinds (must match node_types.rs)
 const MDX_ATTR_BOOLEAN_PROP = 0;

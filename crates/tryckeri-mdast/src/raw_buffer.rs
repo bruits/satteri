@@ -251,6 +251,7 @@ impl<'a> MdastView<'a> {
             children,
             type_data,
             source,
+            node_data: std::collections::HashMap::new(),
         }
     }
 }

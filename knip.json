@@ -5,10 +5,7 @@
     "packages/tryckeri": {
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": [
-        "@emnapi/runtime",
-        "@napi-rs/wasm-runtime"
-      ]
+      "ignoreDependencies": ["@emnapi/runtime", "@napi-rs/wasm-runtime"]
     }
   },
   "ignoreExportsUsedInFile": {

@@ -9,21 +9,14 @@ pub enum Patch {
     Replace {
         node_id: u32,
         new_tree: MdastArena,
+        keep_children: bool,
     },
     /// Removes the entire subtree rooted at this node
-    Remove {
-        node_id: u32,
-    },
+    Remove { node_id: u32 },
     /// Inserted as a preceding sibling
-    InsertBefore {
-        node_id: u32,
-        new_tree: MdastArena,
-    },
+    InsertBefore { node_id: u32, new_tree: MdastArena },
     /// Inserted as a following sibling
-    InsertAfter {
-        node_id: u32,
-        new_tree: MdastArena,
-    },
+    InsertAfter { node_id: u32, new_tree: MdastArena },
     /// The original node becomes a child of the new parent
     Wrap {
         node_id: u32,
@@ -91,8 +84,19 @@ fn copy_node(
     // For Replace patches, the replacement is emitted here (not by the parent)
     // when this is the root node or when copy_children delegates to copy_node.
     if deleted.contains(&node_id) {
-        if let Some(Patch::Replace { new_tree, .. }) = patch_map.get(&node_id) {
-            emit_subtree(new_tree, builder);
+        if let Some(Patch::Replace {
+            new_tree,
+            keep_children,
+            ..
+        }) = patch_map.get(&node_id)
+        {
+            if *keep_children {
+                emit_subtree_with_original_children(
+                    new_tree, node_id, orig, builder, patch_map, deleted,
+                );
+            } else {
+                emit_subtree(new_tree, builder);
+            }
             return true;
         }
         return false;
@@ -119,7 +123,12 @@ fn copy_node(
     let node_type =
         MdastNodeType::from_u8(node.node_type).expect("unknown node type in arena — corrupt data");
 
-    builder.open_node(node_type);
+    let new_id = builder.open_node(node_type);
+
+    // Copy node_data if present
+    if let Some(data) = orig.get_node_data(node_id) {
+        builder.arena_mut().set_node_data(new_id, data.to_vec());
+    }
 
     builder.set_position_current(
         node.start_offset,
@@ -142,8 +151,19 @@ fn copy_node(
     let child_ids: Vec<u32> = orig.get_children(node_id).to_vec();
     for child_id in child_ids {
         if deleted.contains(&child_id) {
-            if let Some(Patch::Replace { new_tree, .. }) = patch_map.get(&child_id) {
-                emit_subtree(new_tree, builder);
+            if let Some(Patch::Replace {
+                new_tree,
+                keep_children,
+                ..
+            }) = patch_map.get(&child_id)
+            {
+                if *keep_children {
+                    emit_subtree_with_original_children(
+                        new_tree, child_id, orig, builder, patch_map, deleted,
+                    );
+                } else {
+                    emit_subtree(new_tree, builder);
+                }
             }
         } else {
             copy_node(child_id, orig, builder, patch_map, deleted);
@@ -216,6 +236,53 @@ fn emit_subtree_node(
     let child_ids: Vec<u32> = sub_arena.get_children(node_id).to_vec();
     for child_id in child_ids {
         emit_subtree_node(child_id, sub_arena, builder, source_base);
+    }
+
+    builder.close_node();
+}
+
+/// Emit the replacement node's root (type + data) but use the original node's children.
+fn emit_subtree_with_original_children(
+    sub_arena: &MdastArena,
+    orig_node_id: u32,
+    orig: &MdastArena,
+    builder: &mut MdastBuilder,
+    patch_map: &HashMap<u32, &Patch>,
+    deleted: &HashSet<u32>,
+) {
+    if sub_arena.is_empty() {
+        return;
+    }
+
+    let sub_source = sub_arena.source();
+    let source_base = if sub_source.is_empty() {
+        0u32
+    } else {
+        let sref = builder.alloc_string(sub_source);
+        sref.offset
+    };
+
+    // Emit the replacement root node's type and data
+    let node = sub_arena.get_node(0);
+    let node_type = MdastNodeType::from_u8(node.node_type)
+        .expect("unknown node type in sub-arena — corrupt data");
+    builder.open_node(node_type);
+
+    let type_data = sub_arena.get_type_data(0);
+    if !type_data.is_empty() {
+        if source_base != 0 {
+            let mut remapped = type_data.to_vec();
+            remap_string_refs(&mut remapped, node.node_type, source_base);
+            builder.set_data_current(&remapped);
+        } else {
+            builder.set_data_current(type_data);
+        }
+    }
+
+    // Copy children from the original node
+    let child_ids: Vec<u32> = orig.get_children(orig_node_id).to_vec();
+    for child_id in child_ids {
+        copy_node(child_id, orig, builder, patch_map, deleted);
     }
 
     builder.close_node();
@@ -460,6 +527,7 @@ mod tests {
         let patches = vec![Patch::Replace {
             node_id: text_id,
             new_tree: replacement,
+            keep_children: false,
         }];
         let rebuilt = rebuild(&orig, &patches);
 
@@ -488,6 +556,7 @@ mod tests {
         let patches = vec![Patch::Replace {
             node_id: heading_id,
             new_tree: replacement,
+            keep_children: false,
         }];
         let rebuilt = rebuild(&orig, &patches);
 

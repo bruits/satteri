@@ -40,7 +40,7 @@ const noopMdast = defineMdastPlugin({
 });
 const noopHast = defineHastPlugin({
   name: "noop-hast",
-  createOnce: () => ({ element() {} }),
+  createOnce: () => ({ element: { filter: [], visit() {} } }),
 });
 const mutatingMdast = defineMdastPlugin({
   name: "mutate-mdast",
@@ -53,8 +53,11 @@ const mutatingMdast = defineMdastPlugin({
 const mutatingHast = defineHastPlugin({
   name: "mutate-hast",
   createOnce: () => ({
-    element(node, ctx) {
-      ctx.setProperty(node, "class", "bench");
+    element: {
+      filter: [],
+      visit(node, ctx) {
+        ctx.setProperty(node, "class", "bench");
+      },
     },
   }),
 });
@@ -100,10 +103,11 @@ function measure(name, fn) {
 const unfilteredAOnly = defineHastPlugin({
   name: "unfiltered-a-only",
   createOnce: () => ({
-    element(node, ctx) {
-      if (node.tagName === "a") {
+    element: {
+      filter: ["a"],
+      visit(node, ctx) {
         ctx.setProperty(node, "class", "link");
-      }
+      },
     },
   }),
 });

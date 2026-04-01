@@ -1,78 +1,23 @@
-export { MdastReader, NodeType, NodeTypeName } from "./mdast/mdast-reader.js";
-export { DataMap } from "./data-map.js";
-export { materializeNode, materializeTree, TYPE_NAMES } from "./mdast/mdast-materializer.js";
-export { visitMdast, MutationType } from "./mdast/mdast-visitor.js";
-export { CommandBuffer, classifyReturn } from "./command-buffer.js";
+// Public API — compile functions
+export { compileMarkdownToHtml, compileMdxToJs } from "./compile.js";
+export type { CompileOptions, OptimizeStaticConfig } from "./compile.js";
+
+// Plugin definitions
 export { defineMdastPlugin, defineHastPlugin } from "./plugin.js";
 export type { MdastPluginDefinition, HastPluginDefinition } from "./plugin.js";
-export { createProcessor, ProcessorContext } from "./processor.js";
-export {
-  parseToBuffer,
-  parseMdxToBuffer,
-  parseToHastBuffer,
-  parseMdxToHastBuffer,
-  mdastBufferToHastBuffer,
-  hastBufferToHtmlStr,
-  compileMdx,
-  compileMdxFromBuffer,
-  compileHastBufferToJs,
-  parseToHtml,
-  parseMdxToHtml,
-  applyMutations,
-  applyMutationsAndConvertToHast,
-  applyMutationsAndRenderHtml,
-  applyMutationsAndCompileJs,
-  walkAndCollect,
-  createHastHandle,
-  createHastHandleFromBuffer,
-  createMdxHastHandle,
-  walkHandle,
-  applyCommandsToHandle,
-  renderHandle,
-  compileHandle,
-  serializeHandle,
-} from "../index.js";
 
-// HAST support
-export {
-  HastReader,
-  HAST_ROOT,
-  HAST_ELEMENT,
-  HAST_TEXT,
-  HAST_COMMENT,
-  HAST_DOCTYPE,
-  HAST_RAW,
-  HAST_MDX_JSX_ELEMENT,
-  HAST_MDX_JSX_TEXT_ELEMENT,
-  HAST_MDX_FLOW_EXPRESSION,
-  HAST_MDX_TEXT_EXPRESSION,
-  HAST_MDX_ESM,
-  PROP_STRING,
-  PROP_BOOL_TRUE,
-  PROP_BOOL_FALSE,
-  PROP_SPACE_SEP,
-  PROP_COMMA_SEP,
-} from "./hast/hast-reader.js";
-export type {
-  HastProperty,
-  MdxJsxAttribute,
-  MdxJsxExpressionAttribute,
-  MdxJsxAttributeValueExpression,
-} from "./hast/hast-reader.js";
-export { materializeHastNode, materializeHastTree } from "./hast/hast-materializer.js";
-export type { HastNode } from "./hast/hast-materializer.js";
-export { visitHast } from "./hast/hast-visitor.js";
+// Visitor types (for plugin authors)
 export type {
   HastVisitorInstance,
   HastVisitorContext,
   HastVisitResult,
+  HastFilteredVisitor,
 } from "./hast/hast-visitor.js";
 
-export { compileMarkdownToHtml, compileMdxToJs } from "./compile.js";
-export type { CompileOptions, OptimizeStaticConfig } from "./compile.js";
-
+// Node types
 export type {
   MdastNode,
+  HastNode,
   Position,
   Point,
   MdxJsxAttributeNode,

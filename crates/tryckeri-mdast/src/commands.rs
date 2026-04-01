@@ -544,10 +544,10 @@ fn escape_braces_in_html_text(html: &str) -> String {
     result
 }
 
-fn js_node_to_arena(js_node: &JsNode) -> Result<MdastArena, CommandError> {
+fn js_node_to_arena(js_node: &JsNode) -> Result<(MdastArena, bool), CommandError> {
     let mut builder = MdastBuilder::new(String::new());
     emit_js_node(js_node, &mut builder)?;
-    Ok(builder.finish())
+    Ok((builder.finish(), js_node.keep_children))
 }
 
 fn emit_js_node(js_node: &JsNode, builder: &mut MdastBuilder) -> Result<(), CommandError> {
@@ -877,26 +877,23 @@ fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
     }
 }
 
+/// Returns (arena, keep_children).
 fn read_payload(
     reader: &mut BufReader<'_>,
     parse_markdown: &dyn Fn(&str) -> MdastArena,
-) -> Result<MdastArena, CommandError> {
+) -> Result<(MdastArena, bool), CommandError> {
     let payload_type = reader.read_u8()?;
     let len = reader.read_u32()? as usize;
 
     match payload_type {
         PAYLOAD_RAW_MARKDOWN => {
             let md = reader.read_str(len)?;
-            Ok(parse_raw_markdown(md, parse_markdown))
+            Ok((parse_raw_markdown(md, parse_markdown), false))
         }
         PAYLOAD_RAW_HTML => {
-            // Re-parse the HTML through the markdown/MDX parser so that
-            // HTML tags become proper JSX element nodes in MDX mode.
-            // Escape { and } in text content first so they are treated as
-            // literal characters rather than MDX expression boundaries.
             let html = reader.read_str(len)?;
             let escaped = escape_braces_in_html_text(html);
-            Ok(parse_raw_markdown(&escaped, parse_markdown))
+            Ok((parse_raw_markdown(&escaped, parse_markdown), false))
         }
         PAYLOAD_SERDE_JSON => {
             let json_str = reader.read_str(len)?;
@@ -946,19 +943,19 @@ pub fn apply_commands(
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_u32()?;
-                let new_tree = read_payload(&mut reader, parse_markdown)?;
+                let (new_tree, _) = read_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_u32()?;
-                let new_tree = read_payload(&mut reader, parse_markdown)?;
+                let (new_tree, _) = read_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let child_tree = read_payload(&mut reader, parse_markdown)?;
+                let (child_tree, _) = read_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -967,7 +964,7 @@ pub fn apply_commands(
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let child_tree = read_payload(&mut reader, parse_markdown)?;
+                let (child_tree, _) = read_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -976,7 +973,7 @@ pub fn apply_commands(
 
             CMD_WRAP => {
                 let node_id = reader.read_u32()?;
-                let parent_tree = read_payload(&mut reader, parse_markdown)?;
+                let (parent_tree, _) = read_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -985,8 +982,12 @@ pub fn apply_commands(
 
             CMD_REPLACE => {
                 let node_id = reader.read_u32()?;
-                let new_tree = read_payload(&mut reader, parse_markdown)?;
-                patches.push(Patch::Replace { node_id, new_tree });
+                let (new_tree, keep_children) = read_payload(&mut reader, parse_markdown)?;
+                patches.push(Patch::Replace {
+                    node_id,
+                    new_tree,
+                    keep_children,
+                });
             }
 
             other => return Err(CommandError::UnknownCommand(other)),
@@ -1254,7 +1255,7 @@ mod tests {
             keep_children: false,
         };
 
-        let arena = js_node_to_arena(&js).unwrap();
+        let (arena, _keep) = js_node_to_arena(&js).unwrap();
         assert_eq!(arena.len(), 2); // heading + text
         assert_eq!(arena.get_node(0).node_type, MdastNodeType::Heading as u8);
         assert_eq!(arena.get_children(0).len(), 1);

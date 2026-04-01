@@ -115,7 +115,11 @@ pub fn render_node<R: ReadMdast>(node_id: u32, view: &R, out: &mut String) {
             }
         }
 
-        HAST_MDX_JSX_ELEMENT | HAST_MDX_JSX_TEXT_ELEMENT | HAST_MDX_FLOW_EXPRESSION | HAST_MDX_TEXT_EXPRESSION | HAST_MDX_ESM => {
+        HAST_MDX_JSX_ELEMENT
+        | HAST_MDX_JSX_TEXT_ELEMENT
+        | HAST_MDX_FLOW_EXPRESSION
+        | HAST_MDX_TEXT_EXPRESSION
+        | HAST_MDX_ESM => {
             // MDX nodes have no HTML representation — they're only used
             // in the MDX→JS compilation path.
         }

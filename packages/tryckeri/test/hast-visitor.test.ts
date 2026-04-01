@@ -46,8 +46,11 @@ describe("visitHast — basic behaviour", () => {
     visitHast(
       reader,
       {
-        element(node: HastNode) {
-          tags.push(node.type === "element" ? node.tagName : "?");
+        element: {
+          filter: [],
+          visit(node: HastNode) {
+            tags.push(node.type === "element" ? node.tagName : "?");
+          },
         },
       },
       dataMap,
@@ -87,8 +90,11 @@ describe("visitHast — lifecycle hooks", () => {
         before() {
           order.push("before");
         },
-        element() {
-          order.push("element");
+        element: {
+          filter: [],
+          visit() {
+            order.push("element");
+          },
         },
       },
       dataMap,
@@ -103,8 +109,11 @@ describe("visitHast — lifecycle hooks", () => {
     visitHast(
       reader,
       {
-        element() {
-          order.push("element");
+        element: {
+          filter: [],
+          visit() {
+            order.push("element");
+          },
         },
         after() {
           order.push("after");
@@ -141,17 +150,20 @@ describe("visitHast — mutations", () => {
     const result = visitHast(
       reader,
       {
-        element(node: HastNode) {
-          if (node.type === "element" && node.tagName === "h1") {
-            return {
-              type: "element" as const,
-              tagName: "h2",
-              properties: {},
-              children: node.children ?? [],
-              data: undefined,
-              _nodeId: -1,
-            };
-          }
+        element: {
+          filter: ["h1"],
+          visit(node: HastNode) {
+            if (node.type === "element" && node.tagName === "h1") {
+              return {
+                type: "element" as const,
+                tagName: "h2",
+                properties: {},
+                children: node.children ?? [],
+                data: undefined,
+                _nodeId: -1,
+              };
+            }
+          },
         },
       },
       dataMap,
@@ -167,10 +179,13 @@ describe("visitHast — mutations", () => {
     const result = visitHast(
       reader,
       {
-        element(node: HastNode, ctx: HastVisitorContext) {
-          if (node.type === "element" && node.tagName === "h1") {
-            ctx.removeNode(node);
-          }
+        element: {
+          filter: ["h1"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            if (node.type === "element" && node.tagName === "h1") {
+              ctx.removeNode(node);
+            }
+          },
         },
       },
       dataMap,
@@ -186,10 +201,13 @@ describe("visitHast — mutations", () => {
     const result = visitHast(
       reader,
       {
-        element(node: HastNode, ctx: HastVisitorContext) {
-          if (node.type === "element" && node.tagName === "h1") {
-            ctx.setProperty(node, "id", "title");
-          }
+        element: {
+          filter: ["h1"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            if (node.type === "element" && node.tagName === "h1") {
+              ctx.setProperty(node, "id", "title");
+            }
+          },
         },
       },
       dataMap,
@@ -210,10 +228,13 @@ describe("visitHast — diagnostics", () => {
     const result = visitHast(
       reader,
       {
-        element(node: HastNode, ctx: HastVisitorContext) {
-          if (node.type === "element" && node.tagName === "h1") {
-            ctx.report({ message: "heading found", node, severity: "info" });
-          }
+        element: {
+          filter: ["h1"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            if (node.type === "element" && node.tagName === "h1") {
+              ctx.report({ message: "heading found", node, severity: "info" });
+            }
+          },
         },
       },
       dataMap,

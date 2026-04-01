@@ -18,7 +18,7 @@ import {
   hastBufferToHtmlStr,
   compileMdx,
   compileMdxFromBuffer,
-} from "../src/index.js";
+} from "../index.js";
 import { MdastReader } from "../src/mdast/mdast-reader.js";
 
 const MARKDOWN = readFileSync(new URL("./markdown.md", import.meta.url), "utf8");
@@ -139,8 +139,11 @@ describe("sync pipeline", () => {
     const plugin = defineHastPlugin({
       name: "sync-noop",
       createOnce: () => ({
-        element() {
-          // no-op sync
+        element: {
+          filter: [],
+          visit() {
+            // no-op sync
+          },
         },
       }),
     });
@@ -151,8 +154,11 @@ describe("sync pipeline", () => {
     const plugin = defineHastPlugin({
       name: "noop-with-sig",
       createOnce: () => ({
-        element(_node: HastNode, _ctx: HastVisitorContext) {
-          // no-op
+        element: {
+          filter: [],
+          visit(_node: HastNode, _ctx: HastVisitorContext) {
+            // no-op
+          },
         },
       }),
     });
