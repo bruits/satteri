@@ -55,9 +55,7 @@ fn string_ref_encoded_as_type_data() {
     builder.close_node(); // root
 
     let arena = builder.finish();
-    let text_node = arena.get_node(text_id);
-    let raw =
-        &arena.arena_type_data()[text_node.data_offset as usize..][..text_node.data_len as usize];
+    let raw = arena.get_type_data(text_id);
     let decoded = decode_string_ref_data(raw);
     assert_eq!(decoded, sr);
     assert_eq!(arena.get_str(decoded), "world");

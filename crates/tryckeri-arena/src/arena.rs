@@ -52,10 +52,6 @@ impl Arena {
         id
     }
 
-    pub fn set_parent(&mut self, node_id: u32, parent_id: u32) {
-        self.nodes[node_id as usize].parent = parent_id;
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn set_position(
         &mut self,
@@ -149,15 +145,6 @@ impl Arena {
         let len = s.len() as u32;
         self.source.push_str(s);
         StringRef::new(offset, len)
-    }
-
-    pub fn change_node_type(&mut self, node_id: u32, new_type: u8) {
-        self.nodes[node_id as usize].node_type = new_type;
-    }
-
-    /// Exposed for tests and the raw buffer layer.
-    pub fn arena_type_data(&self) -> &[u8] {
-        &self.type_data
     }
 
     pub fn get_type_data(&self, node_id: u32) -> &[u8] {

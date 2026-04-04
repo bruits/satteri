@@ -1,53 +1,28 @@
-//! Raw buffer export/import for zero-copy transfer.
+//! Raw buffer export for zero-copy transfer.
 //!
-//! Wire format: `[BufferHeader][nodes...][children u32s][type_data bytes][source UTF-8]`
+//! Wire format: `[Header][nodes...][children u32s][type_data bytes][source UTF-8]`
 
 use crate::arena::Arena;
-use crate::node::{ArenaNode, NODE_STRUCT_SIZE};
+use crate::node::NODE_STRUCT_SIZE;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BufferError {
-    TooShort,
-    BadMagic,
-    VersionMismatch,
-    NodeSizeMismatch,
-    InvalidUtf8,
-    OutOfBounds,
-}
-
-impl std::fmt::Display for BufferError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BufferError::TooShort => write!(f, "buffer too short"),
-            BufferError::BadMagic => write!(f, "bad magic bytes"),
-            BufferError::VersionMismatch => write!(f, "version mismatch"),
-            BufferError::NodeSizeMismatch => write!(f, "ArenaNode size mismatch"),
-            BufferError::InvalidUtf8 => write!(f, "source is not valid UTF-8"),
-            BufferError::OutOfBounds => write!(f, "offset out of bounds"),
-        }
-    }
-}
-
-impl std::error::Error for BufferError {}
-
-pub const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
-pub const BUFFER_VERSION: u32 = 1;
+const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
+const BUFFER_VERSION: u32 = 1;
 
 /// Wire-format header placed at the very start of the exported buffer.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
-pub struct BufferHeader {
-    pub magic: [u8; 4],
-    pub version: u32,
-    pub node_struct_size: u32,
-    pub node_count: u32,
-    pub nodes_offset: u32,
-    pub children_count: u32,
-    pub children_offset: u32,
-    pub type_data_len: u32,
-    pub type_data_offset: u32,
-    pub source_len: u32,
-    pub source_offset: u32,
+struct BufferHeader {
+    magic: [u8; 4],
+    version: u32,
+    node_struct_size: u32,
+    node_count: u32,
+    nodes_offset: u32,
+    children_count: u32,
+    children_offset: u32,
+    type_data_len: u32,
+    type_data_offset: u32,
+    source_len: u32,
+    source_offset: u32,
 }
 
 const HEADER_SIZE: usize = std::mem::size_of::<BufferHeader>();
@@ -104,144 +79,4 @@ impl Arena {
         buf
     }
 
-    /// Deserialize from a raw buffer into an owned `Arena`.
-    pub fn from_raw_buffer(buf: &[u8]) -> Result<Arena, BufferError> {
-        if buf.len() < HEADER_SIZE {
-            return Err(BufferError::TooShort);
-        }
-        let header: BufferHeader = unsafe {
-            let mut h = std::mem::MaybeUninit::<BufferHeader>::uninit();
-            std::ptr::copy_nonoverlapping(buf.as_ptr(), h.as_mut_ptr() as *mut u8, HEADER_SIZE);
-            h.assume_init()
-        };
-
-        if header.magic != BUFFER_MAGIC {
-            return Err(BufferError::BadMagic);
-        }
-        if header.version != BUFFER_VERSION {
-            return Err(BufferError::VersionMismatch);
-        }
-        if header.node_struct_size as usize != NODE_STRUCT_SIZE {
-            return Err(BufferError::NodeSizeMismatch);
-        }
-
-        let nodes_end =
-            header.nodes_offset as usize + header.node_count as usize * NODE_STRUCT_SIZE;
-        let children_end = header.children_offset as usize + header.children_count as usize * 4;
-        let type_data_end = header.type_data_offset as usize + header.type_data_len as usize;
-        let source_end = header.source_offset as usize + header.source_len as usize;
-
-        if nodes_end > buf.len()
-            || children_end > buf.len()
-            || type_data_end > buf.len()
-            || source_end > buf.len()
-        {
-            return Err(BufferError::OutOfBounds);
-        }
-
-        let source_bytes = &buf[header.source_offset as usize..source_end];
-        std::str::from_utf8(source_bytes).map_err(|_| BufferError::InvalidUtf8)?;
-
-        // Deserialize into owned vectors
-        let node_count = header.node_count as usize;
-        let nodes_start = header.nodes_offset as usize;
-        let nodes: Vec<ArenaNode> = (0..node_count)
-            .map(|i| {
-                let offset = nodes_start + i * NODE_STRUCT_SIZE;
-                unsafe {
-                    let mut node = std::mem::MaybeUninit::<ArenaNode>::uninit();
-                    std::ptr::copy_nonoverlapping(
-                        buf[offset..].as_ptr(),
-                        node.as_mut_ptr() as *mut u8,
-                        NODE_STRUCT_SIZE,
-                    );
-                    node.assume_init()
-                }
-            })
-            .collect();
-
-        let children_count = header.children_count as usize;
-        let children_start = header.children_offset as usize;
-        let children: Vec<u32> = (0..children_count)
-            .map(|i| {
-                let offset = children_start + i * 4;
-                u32::from_ne_bytes(buf[offset..offset + 4].try_into().unwrap())
-            })
-            .collect();
-
-        let td_start = header.type_data_offset as usize;
-        let td_len = header.type_data_len as usize;
-        let type_data = buf[td_start..td_start + td_len].to_vec();
-
-        let source = unsafe { std::str::from_utf8_unchecked(source_bytes) }.to_string();
-
-        Ok(Arena {
-            nodes,
-            children,
-            type_data,
-            source,
-            node_data: rustc_hash::FxHashMap::default(),
-            mdx: false,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::builder::ArenaBuilder;
-
-    fn simple_arena() -> Arena {
-        let mut builder = ArenaBuilder::new("Hello, world!".to_string());
-        builder.open_node(0);
-        builder.open_node(1);
-        builder.add_leaf(10);
-        builder.close_node();
-        builder.close_node();
-        builder.finish()
-    }
-
-    #[test]
-    fn header_magic_and_version() {
-        let arena = simple_arena();
-        let buf = arena.to_raw_buffer();
-        assert_eq!(&buf[..4], b"MDAR");
-        // version at offset 4 (after magic[4])
-        let version = u32::from_ne_bytes(buf[4..8].try_into().unwrap());
-        assert_eq!(version, BUFFER_VERSION);
-    }
-
-    #[test]
-    fn round_trip_node_count() {
-        let arena = simple_arena();
-        let buf = arena.to_raw_buffer();
-        let view = Arena::from_raw_buffer(&buf).unwrap();
-        assert_eq!(view.len(), arena.len());
-    }
-
-    #[test]
-    fn bad_magic_rejected() {
-        let arena = simple_arena();
-        let mut buf = arena.to_raw_buffer();
-        buf[0] = b'X';
-        let err = Arena::from_raw_buffer(&buf).unwrap_err();
-        assert_eq!(err, BufferError::BadMagic);
-    }
-
-    #[test]
-    fn round_trip_source() {
-        let arena = simple_arena();
-        let buf = arena.to_raw_buffer();
-        let view = Arena::from_raw_buffer(&buf).unwrap();
-        assert_eq!(view.source(), "Hello, world!");
-    }
-
-    #[test]
-    fn round_trip_children() {
-        let arena = simple_arena();
-        let original_children: Vec<u32> = arena.get_children(0).to_vec();
-        let buf = arena.to_raw_buffer();
-        let view = Arena::from_raw_buffer(&buf).unwrap();
-        assert_eq!(view.get_children(0), original_children.as_slice());
-    }
 }

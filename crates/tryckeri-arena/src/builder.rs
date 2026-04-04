@@ -188,11 +188,6 @@ impl ArenaBuilder {
         self.arena.alloc_string(s)
     }
 
-    /// For reclassifying nodes during parsing (e.g. Link → LinkReference).
-    pub fn change_node_type(&mut self, node_id: u32, new_type: u8) {
-        self.arena.change_node_type(node_id, new_type);
-    }
-
     pub fn current_node_id(&self) -> u32 {
         self.stack
             .last()
@@ -213,30 +208,6 @@ impl ArenaBuilder {
         &self.arena
     }
 
-    /// Returns a mutable view of the current node's pending children.
-    /// The returned Vec is a temporary clone; callers must write back via `replace_current_children`.
-    pub fn current_children_snapshot(&self) -> Vec<u32> {
-        let (_, children_start) = self.stack.last().expect("empty stack");
-        self.pending_children[*children_start as usize..].to_vec()
-    }
-
-    /// Replace the current node's pending children entirely.
-    pub fn replace_current_children(&mut self, new_children: &[u32]) {
-        let (_, children_start) = self.stack.last().expect("empty stack");
-        let start = *children_start as usize;
-        self.pending_children.truncate(start);
-        self.pending_children.extend_from_slice(new_children);
-    }
-
-    /// Returns a mutable reference to the pending children slice for the current node.
-    pub fn current_children_mut(&mut self) -> PendingChildrenMut<'_> {
-        let (_, children_start) = *self.stack.last().expect("empty stack");
-        PendingChildrenMut {
-            pending: &mut self.pending_children,
-            start: children_start as usize,
-        }
-    }
-
     pub fn arena_mut(&mut self) -> &mut Arena {
         &mut self.arena
     }
@@ -247,30 +218,6 @@ impl ArenaBuilder {
             self.close_node();
         }
         self.arena
-    }
-}
-
-/// Mutable view into the pending children of the current stack frame.
-pub struct PendingChildrenMut<'a> {
-    pending: &'a mut Vec<u32>,
-    start: usize,
-}
-
-impl PendingChildrenMut<'_> {
-    pub fn as_slice(&self) -> &[u32] {
-        &self.pending[self.start..]
-    }
-
-    pub fn clone_to_vec(&self) -> Vec<u32> {
-        self.pending[self.start..].to_vec()
-    }
-
-    pub fn clear(&mut self) {
-        self.pending.truncate(self.start);
-    }
-
-    pub fn extend_from_slice(&mut self, items: &[u32]) {
-        self.pending.extend_from_slice(items);
     }
 }
 

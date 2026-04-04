@@ -21,22 +21,6 @@ impl LineIndex {
         }
     }
 
-    pub fn offset_to_line_col(&self, offset: u32) -> (u32, u32) {
-        match self.line_offsets.binary_search(&offset) {
-            Ok(idx) => {
-                let line = idx as u32 + 1;
-                (line, 1)
-            }
-            Err(idx) => {
-                // idx is the insertion point; the line is the one before it.
-                let line_idx = idx - 1;
-                let line = line_idx as u32 + 1;
-                let col = offset - self.line_offsets[line_idx] + 1;
-                (line, col)
-            }
-        }
-    }
-
     /// Create a cursor for O(1) amortized lookups when offsets are roughly ascending.
     pub fn cursor(&self) -> LineIndexCursor<'_> {
         LineIndexCursor {
@@ -45,10 +29,6 @@ impl LineIndex {
         }
     }
 
-    /// Number of lines in the source (including a final unterminated line).
-    pub fn line_count(&self) -> usize {
-        self.line_offsets.len()
-    }
 }
 
 /// A cursor over a `LineIndex` that remembers its last position for O(1) amortized lookups.
@@ -94,46 +74,37 @@ mod tests {
     #[test]
     fn single_line() {
         let idx = LineIndex::from_source("hello");
-        assert_eq!(idx.offset_to_line_col(0), (1, 1));
-        assert_eq!(idx.offset_to_line_col(4), (1, 5));
-        assert_eq!(idx.line_count(), 1);
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(0), (1, 1));
+        assert_eq!(c.offset_to_line_col(4), (1, 5));
     }
 
     #[test]
     fn two_lines() {
         let idx = LineIndex::from_source("hi\nbye");
-        // "hi\n" = offsets 0,1,2(\n)
-        assert_eq!(idx.offset_to_line_col(0), (1, 1));
-        assert_eq!(idx.offset_to_line_col(1), (1, 2));
-        // byte 3 is 'b' on line 2
-        assert_eq!(idx.offset_to_line_col(3), (2, 1));
-        assert_eq!(idx.offset_to_line_col(5), (2, 3));
-        assert_eq!(idx.line_count(), 2);
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(0), (1, 1));
+        assert_eq!(c.offset_to_line_col(1), (1, 2));
+        assert_eq!(c.offset_to_line_col(3), (2, 1));
+        assert_eq!(c.offset_to_line_col(5), (2, 3));
     }
 
     #[test]
     fn trailing_newline() {
-        // "abc\n" — the newline pushes offset 4 into line_offsets, but
-        // that represents an empty line 2.
         let idx = LineIndex::from_source("abc\n");
-        assert_eq!(idx.offset_to_line_col(0), (1, 1));
-        assert_eq!(idx.offset_to_line_col(2), (1, 3));
-        // offset 4 is the start of the empty trailing line
-        assert_eq!(idx.offset_to_line_col(4), (2, 1));
-        assert_eq!(idx.line_count(), 2);
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(0), (1, 1));
+        assert_eq!(c.offset_to_line_col(2), (1, 3));
+        assert_eq!(c.offset_to_line_col(4), (2, 1));
     }
 
     #[test]
     fn multi_line() {
-        let source = "line1\nline2\nline3";
-        let idx = LineIndex::from_source(source);
-        assert_eq!(idx.line_count(), 3);
-        // "line1" = bytes 0-4, '\n' at 5
-        // "line2" starts at 6
-        // "line3" starts at 12
-        assert_eq!(idx.offset_to_line_col(6), (2, 1));
-        assert_eq!(idx.offset_to_line_col(10), (2, 5));
-        assert_eq!(idx.offset_to_line_col(12), (3, 1));
-        assert_eq!(idx.offset_to_line_col(16), (3, 5));
+        let idx = LineIndex::from_source("line1\nline2\nline3");
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(6), (2, 1));
+        assert_eq!(c.offset_to_line_col(10), (2, 5));
+        assert_eq!(c.offset_to_line_col(12), (3, 1));
+        assert_eq!(c.offset_to_line_col(16), (3, 5));
     }
 }

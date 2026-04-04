@@ -151,25 +151,6 @@ fn hast_arena_to_html(bencher: divan::Bencher) {
     bencher.bench(|| tryckeri_hast::hast_arena_to_html(&hast));
 }
 
-/// Given a pre-serialised MDAST buffer, convert to HAST buffer.
-#[divan::bench]
-fn mdast_buffer_to_hast_buffer(bencher: divan::Bencher) {
-    let (arena, _) = tryckeri_pulldown_cmark::parse(MARKDOWN, tryckeri_pulldown_cmark::DEFAULT_OPTIONS);
-    let mdast_buf = arena.to_raw_buffer();
-
-    bencher.bench(|| tryckeri_hast::mdast_to_hast_buffer(&mdast_buf).unwrap());
-}
-
-/// Given a pre-built HAST binary buffer, emit an HTML string.
-#[divan::bench]
-fn hast_buffer_to_html(bencher: divan::Bencher) {
-    let (arena, _) = tryckeri_pulldown_cmark::parse(MARKDOWN, tryckeri_pulldown_cmark::DEFAULT_OPTIONS);
-    let mdast_buf = arena.to_raw_buffer();
-    let hast_buf = tryckeri_hast::mdast_to_hast_buffer(&mdast_buf).unwrap();
-
-    bencher.bench(|| tryckeri_hast::hast_buffer_to_html(&hast_buf).unwrap());
-}
-
 // ---------------------------------------------------------------------------
 // MDX benchmarks — full pipeline and step-by-step breakdown
 // ---------------------------------------------------------------------------
@@ -178,18 +159,6 @@ fn hast_buffer_to_html(bencher: divan::Bencher) {
 #[divan::bench]
 fn mdx_compile(bencher: divan::Bencher) {
     bencher.bench(|| tryckeri_mdxjs::compile(MDX, &tryckeri_mdxjs::Options::default()).unwrap());
-}
-
-/// Compile from a pre-parsed MDAST binary buffer — skips the parse step.
-#[divan::bench]
-fn mdx_compile_from_buffer(bencher: divan::Bencher) {
-    let (arena, _) = tryckeri_pulldown_cmark::parse(MDX, tryckeri_pulldown_cmark::MDX_OPTIONS);
-    let mdast_buf = arena.to_raw_buffer();
-
-    bencher.bench(|| {
-        tryckeri_mdxjs::compile_arena_bytes(&mdast_buf, &tryckeri_mdxjs::Options::default())
-            .unwrap()
-    });
 }
 
 // ---- Step-by-step breakdown ----
@@ -201,22 +170,20 @@ fn mdx_step1_parse(bencher: divan::Bencher) {
     bencher.bench(|| tryckeri_pulldown_cmark::parse(MDX, opts));
 }
 
-/// Step 2 of MDX compile: MDAST binary → HAST binary.
+/// Step 2 of MDX compile: MDAST arena → HAST arena.
 #[divan::bench]
 fn mdx_step2_mdast_to_hast(bencher: divan::Bencher) {
     let (arena, _) = tryckeri_pulldown_cmark::parse(MDX, tryckeri_pulldown_cmark::MDX_OPTIONS);
-    let mdast_buf = arena.to_raw_buffer();
 
-    bencher.bench(|| tryckeri_hast::mdast_to_hast_buffer(&mdast_buf).unwrap());
+    bencher.bench(|| tryckeri_hast::mdast_arena_to_hast_arena(&arena));
 }
 
-/// Step 3 of MDX compile: HAST binary → OXC ES AST → JavaScript.
+/// Step 3 of MDX compile: HAST arena → OXC ES AST → JavaScript.
 #[divan::bench]
 fn mdx_step3_hast_to_js(bencher: divan::Bencher) {
     let (arena, _) = tryckeri_pulldown_cmark::parse(MDX, tryckeri_pulldown_cmark::MDX_OPTIONS);
-    let mdast_buf = arena.to_raw_buffer();
-    let hast_buf = tryckeri_hast::mdast_to_hast_buffer(&mdast_buf).unwrap();
+    let hast_arena = tryckeri_hast::mdast_arena_to_hast_arena(&arena);
     let opts = tryckeri_mdxjs::Options::default();
 
-    bencher.bench(|| tryckeri_mdxjs::compile_hast_buffer(&hast_buf, &opts).unwrap());
+    bencher.bench(|| tryckeri_mdxjs::compile_hast_arena(&hast_arena, &opts).unwrap());
 }

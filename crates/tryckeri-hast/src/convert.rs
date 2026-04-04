@@ -1,7 +1,7 @@
-//! Convert an MDAST binary buffer to a HAST binary buffer.
+//! Convert an MDAST arena to a HAST arena.
 
 use tryckeri_arena::{
-    decode_string_ref_data, Arena, ArenaBuilder, BufferError, ReadArena, StringRef,
+    decode_string_ref_data, Arena, ArenaBuilder, ReadArena, StringRef,
 };
 use tryckeri_mdast::{decode_code_data, decode_definition_data, decode_expression_data, decode_heading_data, decode_image_data, decode_link_data, decode_list_data, decode_list_item_data, decode_math_data, decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name, decode_reference_data, MdastNodeType};
 
@@ -9,23 +9,10 @@ use crate::codec::encode_text_data;
 use crate::node_types::*;
 use tryckeri_mdast::encode_mdx_jsx_element_data;
 
-pub fn mdast_to_hast_buffer(mdast_buf: &[u8]) -> Result<Vec<u8>, BufferError> {
-    let view = Arena::from_raw_buffer(mdast_buf)?;
-    Ok(mdast_arena_to_hast_buffer(&view))
-}
-
-/// Convert an MDAST arena directly to a HAST buffer (skips deserialize round-trip).
-pub fn mdast_arena_to_hast_buffer(source: &dyn ReadArena) -> Vec<u8> {
-    mdast_arena_to_hast_arena(source).to_raw_buffer()
-}
-
 /// Convert an MDAST arena directly to a HAST arena.
-///
-/// Unlike `mdast_arena_to_hast_buffer`, this preserves `node_data` (e.g. code
-/// fence `lang`/`meta` stored on `<code>` element data).
 pub fn mdast_arena_to_hast_arena(source: &dyn ReadArena) -> Arena {
     let n = source.len();
-    let mut builder = ArenaBuilder::new(String::with_capacity(source.source().len()));
+    let mut builder = ArenaBuilder::new(source.source().to_string());
     // Pre-allocate based on source arena size
     builder.arena_mut().nodes.reserve(n);
     builder.arena_mut().children.reserve(n);

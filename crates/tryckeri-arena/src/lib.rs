@@ -22,5 +22,4 @@ pub use builder::ArenaBuilder;
 pub use codec::{decode_string_ref_data, encode_string_ref_data};
 pub use line_index::{LineIndex, LineIndexCursor};
 pub use node::{ArenaNode, StringRef, NODE_STRUCT_SIZE};
-pub use raw_buffer::{BufferError, BufferHeader, BUFFER_MAGIC, BUFFER_VERSION};
 pub use read_arena::ReadArena;

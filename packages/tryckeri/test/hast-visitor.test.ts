@@ -130,6 +130,137 @@ describe("visitHastHandle — mutations", () => {
     const html = renderHandle(handle);
     expect(html).toContain('id="title"');
   });
+
+  test("context.setProperty() modifies text node value", () => {
+    const { handle, source } = setup("hello");
+    const plugin = {
+      text(node: HastNode, ctx: HastVisitorContext) {
+        ctx.setProperty(node, "value", (node as unknown as { value: string }).value.toUpperCase());
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    const html = renderHandle(handle);
+    expect(html).toContain("HELLO");
+    expect(html).not.toContain("hello");
+  });
+
+  test("context.insertAfter() inserts a sibling element", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.insertAfter(node, { type: "element", tagName: "hr", properties: {}, children: [] } as unknown as HastNode);
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello</h1><hr>");
+  });
+
+  test("context.wrapNode() wraps an element", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.wrapNode(node, { type: "element", tagName: "div", properties: {}, children: [] } as unknown as HastNode);
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    const html = renderHandle(handle);
+    expect(html).toContain("<div><h1>Hello</h1></div>");
+  });
+
+  test("context.appendChild() adds a child to an element", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.appendChild(node, { type: "text", value: "!" } as unknown as HastNode);
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello!</h1>");
+  });
+
+  test("context.insertBefore() inserts a sibling before an element", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.insertBefore(node, { type: "element", tagName: "hr", properties: {}, children: [] } as unknown as HastNode);
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    const html = renderHandle(handle);
+    expect(html).toContain("<hr><h1>Hello</h1>");
+  });
+
+  test("context.prependChild() adds a child at the start of an element", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.prependChild(node, { type: "text", value: ">> " } as unknown as HastNode);
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>&gt;&gt; Hello</h1>");
+  });
+
+  test("context.replaceNode() replaces a node via context method", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.replaceNode(node, { type: "element", tagName: "h3", properties: {}, children: [{ type: "text", value: "Replaced" }] } as unknown as HastNode);
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    const html = renderHandle(handle);
+    expect(html).toContain("<h3>Replaced</h3>");
+    expect(html).not.toContain("<h1>");
+  });
+
+  test("mutations work on child nodes accessed via node.children", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          const textChild = node.children?.[0];
+          if (textChild) {
+            ctx.insertAfter(textChild, { type: "text", value: " World" } as unknown as HastNode);
+          }
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello World</h1>");
+  });
+
 });
 
 // ---------------------------------------------------------------------------

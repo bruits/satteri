@@ -1,6 +1,6 @@
-//! Convert a HAST binary buffer to an HTML string.
+//! Render a HAST arena to an HTML string.
 
-use tryckeri_arena::{BufferError, Arena, ReadArena};
+use tryckeri_arena::{Arena, ReadArena};
 
 use crate::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
@@ -8,14 +8,7 @@ use crate::codec::{
 use crate::html::is_void_element;
 use crate::node_types::*;
 
-pub fn hast_buffer_to_html(buf: &[u8]) -> Result<String, BufferError> {
-    let view = Arena::from_raw_buffer(buf)?;
-    let mut out = String::with_capacity(view.source().len());
-    render_node(0, &view, &mut out);
-    Ok(out)
-}
-
-/// Render HTML from an arena directly (skips serialize→deserialize round-trip).
+/// Render HTML from an arena.
 pub fn hast_arena_to_html(arena: &Arena) -> String {
     let mut out = String::with_capacity(arena.source().len());
     render_node(0, arena, &mut out);

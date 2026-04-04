@@ -97,52 +97,12 @@ pub fn compile(value: &str, options: &Options) -> Result<String, message::Messag
             source: Box::new("mdx-jsx".into()),
         });
     }
-    let mdast_buf = arena.to_raw_buffer();
-    compile_arena_bytes(&mdast_buf, options)
-}
-
-/// Compile a raw MDAST binary buffer (as produced by the NAPI layer) to JavaScript.
-///
-/// This is the main compilation path: MDAST binary → HAST binary → OXC → JS.
-/// All other compile functions route through this.
-///
-/// ## Errors
-///
-/// Returns an error if the buffer is malformed or compilation fails.
-pub fn compile_arena_bytes(buf: &[u8], options: &Options) -> Result<String, message::Message> {
-    // Extract source text from MDAST buffer for position resolution.
-    let mdast_view = tryckeri_arena::Arena::from_raw_buffer(buf).map_err(|e| message::Message {
-        reason: format!("invalid MDAST buffer: {e:?}"),
-        place: None,
-        rule_id: Box::new(String::new()),
-        source: Box::new("mdxjs".into()),
-    })?;
-    let source = mdast_view.source().to_string();
-
-    let hast_buf = tryckeri_hast::mdast_to_hast_buffer(buf).map_err(|e| message::Message {
-        reason: format!("invalid MDAST buffer: {e:?}"),
-        place: None,
-        rule_id: Box::new(String::new()),
-        source: Box::new("mdxjs".into()),
-    })?;
-    compile_hast_buffer_with_source(&hast_buf, options, source.as_bytes())
-}
-
-/// Compile a HAST binary buffer (with MDX node types) to JavaScript.
-///
-/// This is the split-pipeline entry point: takes a HAST binary buffer
-/// and runs hast → OXC → JS directly from the binary format.
-///
-/// ## Errors
-///
-/// Returns an error if the buffer is malformed or compilation fails.
-pub fn compile_hast_buffer(buf: &[u8], options: &Options) -> Result<String, message::Message> {
-    compile_hast_buffer_with_source(buf, options, &[])
+    let hast_arena = tryckeri_hast::mdast_arena_to_hast_arena(&arena);
+    compile_hast_arena(&hast_arena, options)
 }
 
 /// Compile a HAST arena directly to JavaScript.
 ///
-/// This avoids the serialize→deserialize roundtrip of `compile_hast_buffer`.
 /// The arena can be mutated before calling (e.g. `simplify_plain_mdx_nodes`).
 ///
 /// # Errors
@@ -236,45 +196,6 @@ pub fn simplify_plain_mdx_nodes(arena: &mut tryckeri_arena::Arena, ignore_elemen
         // We only need to change the node_type byte.
         arena.get_node_mut(node_id).node_type = HAST_ELEMENT;
     }
-}
-
-/// Compile a HAST binary buffer to JavaScript, with source text for position resolution.
-///
-/// ## Errors
-///
-/// Returns an error if the buffer is malformed or compilation fails.
-pub fn compile_hast_buffer_with_source(
-    buf: &[u8],
-    options: &Options,
-    source: &[u8],
-) -> Result<String, message::Message> {
-    let view = tryckeri_arena::Arena::from_raw_buffer(buf).map_err(|e| message::Message {
-        reason: format!("invalid HAST buffer: {e:?}"),
-        place: None,
-        rule_id: Box::new(String::new()),
-        source: Box::new("mdxjs".into()),
-    })?;
-
-    let allocator = Allocator::default();
-    let location = Location::new(source);
-    let mut explicit_jsxs = FxHashSet::default();
-    let mut program = hast_util_to_oxc(
-        &view,
-        options.filepath.clone(),
-        Some(&location),
-        &mut explicit_jsxs,
-        &allocator,
-        options.optimize_static.as_ref(),
-    )?;
-    mdx_plugin_recma_document(&mut program, options, Some(&location), &allocator)?;
-    mdx_plugin_recma_jsx_rewrite(
-        &mut program,
-        options,
-        Some(&location),
-        &explicit_jsxs,
-        &allocator,
-    )?;
-    Ok(serialize(&program.program))
 }
 
 /// Wrap the ES AST nodes coming from hast into a whole document.

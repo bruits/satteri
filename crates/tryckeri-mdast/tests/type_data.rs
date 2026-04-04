@@ -1,7 +1,7 @@
 //! Integration tests for type-specific data codec.
 
 use tryckeri_arena::{ArenaBuilder, StringRef};
-use tryckeri_mdast::{decode_code_data, decode_heading_data, decode_link_data, decode_list_data, decode_table_data, encode_code_data, encode_heading_data, encode_link_data, encode_list_data, encode_table_data, ColumnAlign, MdastNodeType};
+use tryckeri_mdast::{decode_code_data, decode_heading_data, decode_link_data, decode_list_data, encode_code_data, encode_heading_data, encode_link_data, encode_list_data, encode_table_data, ColumnAlign, MdastNodeType};
 
 #[test]
 fn encode_decode_heading_data() {
@@ -64,25 +64,16 @@ fn encode_decode_list_data_unordered() {
 }
 
 #[test]
-fn encode_decode_table_data_alignments() {
-    let aligns = vec![
+fn encode_table_data_produces_bytes() {
+    let aligns = [
         ColumnAlign::None,
         ColumnAlign::Left,
         ColumnAlign::Right,
         ColumnAlign::Center,
     ];
     let bytes = encode_table_data(&aligns);
-    let (hdr, decoded) = decode_table_data(&bytes);
-    assert_eq!(hdr.align_count, 4);
-    assert_eq!(decoded, aligns);
-}
-
-#[test]
-fn encode_decode_table_data_empty() {
-    let bytes = encode_table_data(&[]);
-    let (hdr, decoded) = decode_table_data(&bytes);
-    assert_eq!(hdr.align_count, 0);
-    assert!(decoded.is_empty());
+    // Header (4 bytes for align_count) + 4 alignment bytes
+    assert_eq!(bytes.len(), 4 + 4);
 }
 
 #[test]
@@ -96,8 +87,6 @@ fn type_data_stored_in_arena() {
     builder.close_node();
     let arena = builder.finish();
 
-    let node = arena.get_node(heading);
-    let raw = &arena.arena_type_data()[node.data_offset as usize..][..node.data_len as usize];
-    let d = decode_heading_data(raw);
+    let d = decode_heading_data(arena.get_type_data(heading));
     assert_eq!(d.depth, 2);
 }

@@ -258,18 +258,6 @@ pub fn encode_table_data(alignments: &[ColumnAlign]) -> Vec<u8> {
     bytes
 }
 
-pub fn decode_table_data(bytes: &[u8]) -> (TableData, Vec<ColumnAlign>) {
-    let header: TableData = unsafe { bytes_to_struct(bytes) };
-    let count = header.align_count as usize;
-    let struct_size = std::mem::size_of::<TableData>();
-    let align_bytes = &bytes[struct_size..struct_size + count];
-    let alignments = align_bytes
-        .iter()
-        .map(|&b| ColumnAlign::from_u8(b).unwrap_or(ColumnAlign::None))
-        .collect();
-    (header, alignments)
-}
-
 pub fn encode_reference_data(
     identifier: StringRef,
     label: StringRef,
@@ -291,10 +279,6 @@ pub fn decode_reference_data(bytes: &[u8]) -> ReferenceData {
 pub fn encode_footnote_definition_data(identifier: StringRef, label: StringRef) -> Vec<u8> {
     let d = FootnoteDefinitionData { identifier, label };
     unsafe { struct_to_bytes(&d) }.to_vec()
-}
-
-pub fn decode_footnote_definition_data(bytes: &[u8]) -> FootnoteDefinitionData {
-    unsafe { bytes_to_struct(bytes) }
 }
 
 pub fn encode_mdx_jsx_element_data(
@@ -403,12 +387,4 @@ mod tests {
         assert_eq!(d.title, title);
     }
 
-    #[test]
-    fn table_round_trip() {
-        let aligns = vec![ColumnAlign::Left, ColumnAlign::Right, ColumnAlign::Center];
-        let bytes = encode_table_data(&aligns);
-        let (hdr, decoded) = decode_table_data(&bytes);
-        assert_eq!(hdr.align_count, 3);
-        assert_eq!(decoded, aligns);
-    }
 }

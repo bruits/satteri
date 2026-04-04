@@ -268,6 +268,30 @@ fn apply_set_property(
         return apply_hast_element_property(arena, node_id, prop_name, value_type, value_str);
     }
 
+    // HAST text/comment/raw/expression — "value" stored as StringRef at type_data[0..8]
+    if matches!(
+        node_type,
+        HAST_TEXT_TYPE
+            | HAST_COMMENT_TYPE
+            | HAST_RAW_TYPE
+            | HAST_MDX_FLOW_EXPRESSION_TYPE
+            | HAST_MDX_TEXT_EXPRESSION_TYPE
+            | HAST_MDX_ESM_TYPE
+    ) && prop_name == "value"
+    {
+        let sref = arena.alloc_string(value_str);
+        let data = arena.get_type_data(node_id);
+        if data.len() >= 8 {
+            let data_offset = arena.get_node(node_id).data_offset as usize;
+            arena.type_data[data_offset..data_offset + 4]
+                .copy_from_slice(&sref.offset.to_le_bytes());
+            arena.type_data[data_offset + 4..data_offset + 8]
+                .copy_from_slice(&sref.len.to_le_bytes());
+            return Ok(());
+        }
+        return Err(CommandError::UnknownField(0));
+    }
+
     // MDAST node — resolve name to field and apply
     let field_id =
         resolve_mdast_field(node_type, prop_name).ok_or(CommandError::UnknownField(0))?;

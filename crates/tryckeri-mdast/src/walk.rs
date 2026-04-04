@@ -336,7 +336,7 @@ fn serialize_mdast_node_inline(
                     out.push(kind);
                     out.extend_from_slice(&(attr_name.len() as u16).to_le_bytes());
                     out.extend_from_slice(attr_name.as_bytes());
-                    out.extend_from_slice(&(attr_val.len() as u16).to_le_bytes());
+                    out.extend_from_slice(&(attr_val.len() as u32).to_le_bytes());
                     out.extend_from_slice(attr_val.as_bytes());
                 }
             } else {
@@ -450,7 +450,7 @@ fn serialize_node_inline(
                 out.push(kind);
                 out.extend_from_slice(&(attr_name.len() as u16).to_le_bytes());
                 out.extend_from_slice(attr_name.as_bytes());
-                out.extend_from_slice(&(attr_val.len() as u16).to_le_bytes());
+                out.extend_from_slice(&(attr_val.len() as u32).to_le_bytes());
                 out.extend_from_slice(attr_val.as_bytes());
             }
 

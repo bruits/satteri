@@ -3,7 +3,6 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use tryckeri_arena::{Arena, ArenaBuilder};
-use crate::MdastNodeType;
 
 #[derive(Debug, Clone)]
 pub enum Patch {
@@ -121,10 +120,8 @@ fn copy_node(
     }
 
     let node = orig.get_node(node_id);
-    let node_type =
-        MdastNodeType::from_u8(node.node_type).expect("unknown node type in arena — corrupt data");
 
-    let new_id = builder.open_node(node_type as u8);
+    let new_id = builder.open_node_raw(node.node_type);
 
     // Copy node_data if present
     if let Some(data) = orig.get_node_data(node_id) {
@@ -209,10 +206,8 @@ fn emit_subtree_node(
     source_base: u32,
 ) {
     let node = sub_arena.get_node(node_id);
-    let node_type = MdastNodeType::from_u8(node.node_type)
-        .expect("unknown node type in sub-arena — corrupt data");
 
-    builder.open_node(node_type as u8);
+    builder.open_node_raw(node.node_type);
 
     builder.set_position_current(
         node.start_offset + source_base,
@@ -265,9 +260,7 @@ fn emit_subtree_with_original_children(
 
     // Emit the replacement root node's type and data
     let node = sub_arena.get_node(0);
-    let node_type = MdastNodeType::from_u8(node.node_type)
-        .expect("unknown node type in sub-arena — corrupt data");
-    builder.open_node(node_type as u8);
+    builder.open_node_raw(node.node_type);
 
     let type_data = sub_arena.get_type_data(0);
     if !type_data.is_empty() {
@@ -387,11 +380,18 @@ fn emit_wrap_node(
         return;
     }
 
-    let wrapper = parent_tree.get_node(0);
-    let node_type =
-        MdastNodeType::from_u8(wrapper.node_type).expect("unknown node type in wrapper arena");
+    // Remap string refs from the wrapper arena into the builder's merged source
+    let sub_source = parent_tree.source();
+    let source_base = if sub_source.is_empty() {
+        0u32
+    } else {
+        let sref = builder.alloc_string(sub_source);
+        sref.offset
+    };
 
-    builder.open_node(node_type as u8);
+    let wrapper = parent_tree.get_node(0);
+
+    builder.open_node_raw(wrapper.node_type);
     builder.set_position_current(
         wrapper.start_offset,
         wrapper.end_offset,
@@ -402,11 +402,58 @@ fn emit_wrap_node(
     );
     let wrapper_data = parent_tree.get_type_data(0);
     if !wrapper_data.is_empty() {
-        builder.set_data_current(wrapper_data);
+        if source_base != 0 {
+            let mut remapped = wrapper_data.to_vec();
+            remap_string_refs(&mut remapped, wrapper.node_type, source_base);
+            builder.set_data_current(&remapped);
+        } else {
+            builder.set_data_current(wrapper_data);
+        }
     }
 
-    // Emit the original node as the child
-    copy_node(original_node_id, orig, builder, patch_map, deleted);
+    // Emit the original node as the child — copy it directly without
+    // consulting the patch map (to avoid infinite recursion back into Wrap).
+    copy_node_raw(original_node_id, orig, builder, patch_map, deleted);
+
+    builder.close_node();
+}
+
+/// Copy a single node and its children without checking the patch map
+/// for the node itself (only children are patched). Used by wrap to
+/// avoid re-entering the Wrap branch.
+fn copy_node_raw(
+    node_id: u32,
+    orig: &Arena,
+    builder: &mut ArenaBuilder,
+    patch_map: &FxHashMap<u32, &Patch>,
+    deleted: &FxHashSet<u32>,
+) {
+    let node = orig.get_node(node_id);
+    let new_id = builder.open_node_raw(node.node_type);
+
+    if let Some(data) = orig.get_node_data(node_id) {
+        builder.arena_mut().set_node_data(new_id, data.to_vec());
+    }
+
+    builder.set_position_current(
+        node.start_offset,
+        node.end_offset,
+        node.start_line,
+        node.start_column,
+        node.end_line,
+        node.end_column,
+    );
+
+    let type_data = orig.get_type_data(node_id);
+    if !type_data.is_empty() {
+        builder.set_data_current(type_data);
+    }
+
+    // Children are copied normally (patches on children still apply)
+    let child_ids: Vec<u32> = orig.get_children(node_id).to_vec();
+    for child_id in child_ids {
+        copy_node(child_id, orig, builder, patch_map, deleted);
+    }
 
     builder.close_node();
 }
@@ -737,5 +784,65 @@ mod tests {
             rebuilt.get_node(root_children[1]).node_type,
             MdastNodeType::ThematicBreak as u8
         );
+    }
+
+    #[test]
+    fn wrap_hast_element() {
+        // Build a minimal HAST arena: root(0) -> h1(1) -> text(2)
+        use crate::codec::encode_string_ref_data;
+        use tryckeri_arena::StringRef;
+
+        const HAST_ROOT: u8 = 0;
+        const HAST_ELEMENT: u8 = 1;
+        const HAST_TEXT: u8 = 2;
+
+        let mut b = ArenaBuilder::new(String::new());
+        b.open_node_raw(HAST_ROOT);
+
+        b.open_node_raw(HAST_ELEMENT);
+        // Element type_data: tag_ref(0..8), prop_count(8..12), pad(12..16)
+        let tag = b.alloc_string("h1");
+        let mut td = vec![0u8; 16];
+        td[0..4].copy_from_slice(&tag.offset.to_le_bytes());
+        td[4..8].copy_from_slice(&tag.len.to_le_bytes());
+        b.set_data_current(&td);
+
+        b.open_node_raw(HAST_TEXT);
+        let text = b.alloc_string("Hello");
+        b.set_data_current(&encode_string_ref_data(text));
+        b.close_node(); // text
+
+        b.close_node(); // h1
+        b.close_node(); // root
+        let orig = b.finish();
+
+        // Build wrapper: div element
+        let mut wb = ArenaBuilder::new(String::new());
+        wb.open_node_raw(HAST_ELEMENT);
+        let div_tag = wb.alloc_string("div");
+        let mut div_td = vec![0u8; 16];
+        div_td[0..4].copy_from_slice(&div_tag.offset.to_le_bytes());
+        div_td[4..8].copy_from_slice(&div_tag.len.to_le_bytes());
+        wb.set_data_current(&div_td);
+        wb.close_node();
+        let wrapper = wb.finish();
+
+        // Wrap node 1 (h1) with the div
+        let patches = vec![Patch::Wrap {
+            node_id: 1,
+            parent_tree: wrapper,
+        }];
+        let rebuilt = rebuild(&orig, &patches);
+
+        // Should be: root -> div -> h1 -> text
+        assert_eq!(rebuilt.len(), 4);
+        let root_children = rebuilt.get_children(0);
+        assert_eq!(root_children.len(), 1);
+        let div_id = root_children[0];
+        assert_eq!(rebuilt.get_node(div_id).node_type, HAST_ELEMENT);
+        let div_children = rebuilt.get_children(div_id);
+        assert_eq!(div_children.len(), 1);
+        let h1_id = div_children[0];
+        assert_eq!(rebuilt.get_node(h1_id).node_type, HAST_ELEMENT);
     }
 }

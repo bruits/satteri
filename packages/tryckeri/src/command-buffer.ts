@@ -149,9 +149,34 @@ export class CommandBuffer {
 
   /** Write a REPLACE command with a pre-serialized JSON payload. */
   replaceRawJson(nodeId: number, json: string): void {
+    this.writeRawJsonCommand(CMD_REPLACE, nodeId, json);
+  }
+
+  /** Write any structural command with a pre-serialized JSON payload. */
+  insertBeforeRawJson(nodeId: number, json: string): void {
+    this.writeRawJsonCommand(CMD_INSERT_BEFORE, nodeId, json);
+  }
+
+  insertAfterRawJson(nodeId: number, json: string): void {
+    this.writeRawJsonCommand(CMD_INSERT_AFTER, nodeId, json);
+  }
+
+  prependChildRawJson(nodeId: number, json: string): void {
+    this.writeRawJsonCommand(CMD_PREPEND_CHILD, nodeId, json);
+  }
+
+  appendChildRawJson(nodeId: number, json: string): void {
+    this.writeRawJsonCommand(CMD_APPEND_CHILD, nodeId, json);
+  }
+
+  wrapNodeRawJson(nodeId: number, json: string): void {
+    this.writeRawJsonCommand(CMD_WRAP, nodeId, json);
+  }
+
+  private writeRawJsonCommand(cmd: number, nodeId: number, json: string): void {
     const encoded = encoder.encode(json);
     this.ensureCapacity(10 + encoded.length);
-    this.writeU8(CMD_REPLACE);
+    this.writeU8(cmd);
     this.writeU32(nodeId);
     this.writeU8(PAYLOAD_SERDE_JSON);
     this.writeU32(encoded.length);

@@ -836,4 +836,36 @@ describe("compileMdxToJs", () => {
     expect(result).toContain('id="test"');
   });
 
+  test("mdast setProperty + returning same node preserves mutation", () => {
+    const plugin = defineMdastPlugin({
+      name: "bump-heading",
+      createOnce: () => ({
+        heading(node: MdastNode, ctx) {
+          if ((node as { depth: number }).depth < 6) {
+            ctx.setProperty(node, "depth", (node as { depth: number }).depth + 1);
+          }
+          return node; // returning same node should NOT clobber setProperty
+        },
+      }),
+    });
+
+    const html = compileMarkdownToHtml("# Hello", { mdastPlugins: [plugin] });
+    expect(html).toContain("<h2>");
+    expect(html).not.toContain("<h1>");
+  });
+
+  test("hast setProperty on text node updates value", () => {
+    const plugin = defineHastPlugin({
+      name: "uppercase-text",
+      createOnce: () => ({
+        text(node: HastNode, ctx: HastVisitorContext) {
+          ctx.setProperty(node, "value", (node as unknown as { value: string }).value.toUpperCase());
+        },
+      }),
+    });
+
+    const html = compileMarkdownToHtml("hello world", { hastPlugins: [plugin] });
+    expect(html).toContain("HELLO WORLD");
+  });
+
 });

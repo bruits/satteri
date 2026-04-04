@@ -105,8 +105,11 @@ const VISITOR_KEYS = new Set([
   "mdxjsEsm",
 ]);
 
+/** Maps MdastNode objects to their arena node IDs without Object.defineProperty overhead. */
+const mdastNodeIdMap: WeakMap<object, number> = new WeakMap();
+
 function nid(node: MdastNode): number {
-  return (node as MdastNodeInternal)._nodeId;
+  return mdastNodeIdMap.get(node as object) ?? (node as MdastNodeInternal)._nodeId;
 }
 
 export class MdastVisitorContext {
@@ -575,8 +578,8 @@ function readMdastMatchedNode(
         pos += 2;
         const an = rstr(buf, pos, anLen);
         pos += anLen;
-        const avLen = ru16(view, pos);
-        pos += 2;
+        const avLen = ru32(view, pos);
+        pos += 4;
         const av = rstr(buf, pos, avLen);
         pos += avLen;
         switch (kind) {
@@ -613,7 +616,7 @@ function readMdastMatchedNode(
     // strong(12), break(14), tableRow(22), tableCell(23), delete(24): no extra data
   }
 
-  Object.defineProperty(node, "_nodeId", { value: nodeId, enumerable: false });
+  mdastNodeIdMap.set(node as object, nodeId);
 
   // Read inline node_data JSON from the end of the data section.
   // The Rust serializer always appends [json_len: u32][json_bytes...] at the end.
@@ -640,13 +643,17 @@ function readMdastMatchedNode(
   return node as unknown as MdastNode;
 }
 
-/** Apply a sync visitor result to the return buffer. */
+/** Apply a sync visitor result to the return buffer.
+ *  If the result is the same object as the input node, treat it as a no-op
+ *  so that context mutations (e.g. setProperty) are not clobbered. */
 function applyMdastVisitResult(
   result: MdastVisitorResult,
   nodeId: number,
   returnBuffer: CommandBuffer,
+  originalNode?: MdastNode,
 ): void {
   if (result === undefined || result === null) return;
+  if (result === originalNode) return;
   const cls = classifyReturn(result);
   switch (cls) {
     case "raw_markdown":
@@ -684,7 +691,7 @@ export function visitMdastHandle(
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  let deferred: { nodeId: number; promise: Promise<MdastVisitorResult> }[] | null = null;
+  let deferred: { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[] | null = null;
 
   for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 12;
@@ -698,17 +705,17 @@ export function visitMdastHandle(
 
     if (result instanceof Promise) {
       deferred ??= [];
-      deferred.push({ nodeId, promise: result });
+      deferred.push({ nodeId, promise: result, originalNode: node });
     } else {
-      applyMdastVisitResult(result as MdastVisitorResult, nodeId, returnBuffer);
+      applyMdastVisitResult(result as MdastVisitorResult, nodeId, returnBuffer, node);
     }
   }
 
   if (deferred) {
-    return Promise.all(deferred.map((d) => d.promise.then((r) => ({ nodeId: d.nodeId, result: r }))))
+    return Promise.all(deferred.map((d) => d.promise.then((r) => ({ nodeId: d.nodeId, result: r, originalNode: d.originalNode }))))
       .then((results) => {
-        for (const { nodeId, result } of results) {
-          applyMdastVisitResult(result, nodeId, returnBuffer);
+        for (const { nodeId, result, originalNode } of results) {
+          applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
         }
         return finalizeMdastVisit(handle, context, returnBuffer, dirtyData);
       });

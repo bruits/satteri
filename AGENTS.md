@@ -28,6 +28,6 @@ cd packages/tryckeri && pnpm build       # build NAPI binding + TS
 - Do not add external dependencies without justification. Prefer the standard library and existing utilities.
 - Match the current project structure, naming, and style; do not create parallel patterns and avoid duplication.
 - All code, comments, documentation, commit messages, and user-facing output must be in English.
-- The vendored `pulldown-cmark` and `pulldown-cmark-escape` intentionally diverge from upstream — do not "update" them to match upstream without explicit instruction.
+- The vendored `pulldown-cmark` intentionally diverge from upstream — do not "update" them to match upstream without explicit instruction.
 - `mdxjs` is a maintained fork — preserve the existing structure and naming conventions from the original crate.
 - In general, mdast and hast are very similar, just with different node types and properties. As such, if an optimization or pattern is applied for one, it should also most likely also be applied to the other, unless there is a specific reason not to.
