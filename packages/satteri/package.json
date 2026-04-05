@@ -1,6 +1,6 @@
 {
   "name": "satteri",
-  "version": "0.1.24",
+  "version": "0.1.0",
   "description": "High-performance Markdown processing",
   "files": [
     "dist",
@@ -40,6 +40,7 @@
     "mdast-util-mdxjs-esm": "^2.0.1"
   },
   "devDependencies": {
+    "@codspeed/vitest-plugin": "^5.2.0",
     "@emnapi/runtime": "^1.9.1",
     "@napi-rs/wasm-runtime": "^1.1.2",
     "@types/node": "^25.5.0",

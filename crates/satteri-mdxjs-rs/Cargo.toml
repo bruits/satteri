@@ -1,8 +1,8 @@
 [dependencies]
-satteri-arena = { path = "../satteri-arena" }
-satteri-mdast = { path = "../satteri-mdast" }
-satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" }
-satteri-hast = { path = "../satteri-hast" }
+satteri-arena = { version = "0.1.0", path = "../satteri-arena" }
+satteri-mdast = { version = "0.1.0", path = "../satteri-mdast" }
+satteri-pulldown-cmark = { version = "0.1.0", path = "../satteri-pulldown-cmark" }
+satteri-hast = { version = "0.1.0", path = "../satteri-hast" }
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 oxc_allocator = { workspace = true }
@@ -20,7 +20,7 @@ pretty_assertions = "1"
 serializable = []
 
 [package]
-authors = ["Titus Wormer <tituswormer@gmail.com>", "Bruits"]
+authors = ["Bruits", "Titus Wormer <tituswormer@gmail.com>"]
 categories = ["compilers", "text-processing"]
 description = "Compile MDX to JavaScript in Rust."
 edition = "2024"

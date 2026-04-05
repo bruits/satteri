@@ -3,16 +3,18 @@ name = "satteri-napi"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "NAPI bindings exposing the Sätteri pipeline to Node.js"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-satteri-arena = { path = "../satteri-arena" }
-satteri-mdast = { path = "../satteri-mdast" }
-satteri-hast = { path = "../satteri-hast" }
-satteri-mdxjs = { path = "../satteri-mdxjs-rs" }
-satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" }
+satteri-arena = { version = "0.1.0", path = "../satteri-arena" }
+satteri-mdast = { version = "0.1.0", path = "../satteri-mdast" }
+satteri-hast = { version = "0.1.0", path = "../satteri-hast" }
+satteri-mdxjs = { version = "0.1.0", path = "../satteri-mdxjs-rs" }
+satteri-pulldown-cmark = { version = "0.1.0", path = "../satteri-pulldown-cmark" }
 napi = { version = "3", features = ["napi8"] }
 napi-derive = "3"
 

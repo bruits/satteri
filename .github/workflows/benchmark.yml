@@ -1,0 +1,95 @@
+name: CodSpeed
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "crates/**"
+      - "packages/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pnpm-lock.yaml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "packages/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-benchmarks:
+    name: Rust benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain, cache and cargo-codspeed
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          cache-target: release
+          bins: cargo-codspeed
+
+      - name: Build the benchmark target(s)
+        run: cargo codspeed build -p satteri-bench
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v3
+        with:
+          run: cargo codspeed run -p satteri-bench
+          token: ${{ secrets.CODSPEED_TOKEN }}
+
+  js-benchmarks:
+    name: JS benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-bench-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: latest
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build NAPI binding
+        run: pnpm run build:native
+        working-directory: packages/satteri
+
+      - name: Build TypeScript
+        run: pnpm run build:ts
+        working-directory: packages/satteri
+
+      - name: Run the benchmarks
+        uses: CodSpeedHQ/action@v3
+        with:
+          run: pnpm run bench
+          working-directory: packages/satteri
+          token: ${{ secrets.CODSPEED_TOKEN }}

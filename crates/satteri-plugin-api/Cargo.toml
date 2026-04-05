@@ -2,8 +2,10 @@
 name = "satteri-plugin-api"
 version = "0.1.0"
 edition = "2021"
+description = "Rust plugin trait, typed visitors, and runner for Sätteri"
+license = "MIT"
 
 [dependencies]
-satteri-arena = { path = "../satteri-arena" }
-satteri-mdast = { path = "../satteri-mdast" }
+satteri-arena = { version = "0.1.0", path = "../satteri-arena" }
+satteri-mdast = { version = "0.1.0", path = "../satteri-mdast" }
 rustc-hash = "2"

@@ -2,10 +2,11 @@
 name = "satteri-mdast"
 version = "0.1.0"
 edition = "2021"
+description = "Arena-allocated MDAST nodes with zero-copy references and binary buffer format for Sätteri"
+license = "MIT"
 
 [dependencies]
-satteri-arena = { path = "../satteri-arena" }
+satteri-arena = { version = "0.1.0", path = "../satteri-arena" }
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-

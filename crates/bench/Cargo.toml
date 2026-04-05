@@ -3,6 +3,8 @@ name = "satteri-bench"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "Benchmarks and profiling harnesses for Sätteri"
+license = "MIT"
 
 [[bench]]
 name = "pipeline"
@@ -17,7 +19,7 @@ path = "src/profile_parse.rs"
 satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" }
 
 [dev-dependencies]
-divan = "0.1"
+divan = { version = "4", package = "codspeed-divan-compat" }
 satteri-hast = { path = "../satteri-hast" }
 satteri-mdxjs = { path = "../satteri-mdxjs-rs" }
 oxc_allocator = { workspace = true }

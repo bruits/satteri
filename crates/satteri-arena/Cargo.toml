@@ -2,6 +2,8 @@
 name = "satteri-arena"
 version = "0.1.0"
 edition = "2021"
+description = "Arena allocator and binary buffer primitives for Sätteri"
+license = "MIT"
 
 [dependencies]
 rustc-hash = "2"

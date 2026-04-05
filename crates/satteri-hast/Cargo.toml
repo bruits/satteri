@@ -2,11 +2,13 @@
 name = "satteri-hast"
 version = "0.1.0"
 edition = "2021"
+description = "MDAST to HAST conversion and HTML serialization for Sätteri"
+license = "MIT"
 
 [dependencies]
-satteri-arena = { path = "../satteri-arena" }
-satteri-mdast = { path = "../satteri-mdast" }
+satteri-arena = { version = "0.1.0", path = "../satteri-arena" }
+satteri-mdast = { version = "0.1.0", path = "../satteri-mdast" }
 pulldown-cmark-escape = "0.11"
 
 [dev-dependencies]
-satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" }
+satteri-pulldown-cmark = { version = "0.1.0", path = "../satteri-pulldown-cmark" }
