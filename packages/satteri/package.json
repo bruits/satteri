@@ -1,7 +1,7 @@
 {
   "name": "satteri",
-  "version": "0.1.1",
-  "description": "High-performance Markdown processing",
+  "version": "0.1.2",
+  "description": "High-performance Markdown and MDX processing",
   "files": [
     "dist",
     "browser.js",
@@ -23,7 +23,7 @@
     "build:native:debug": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --esm",
     "build:ts": "tsc --project tsconfig.build.json",
     "build": "pnpm build:native && pnpm build:ts",
-    "artifacts": "napi create-npm-dirs && napi artifacts && napi version",
+    "artifacts": "napi create-npm-dirs && napi artifacts",
     "dev": "tsc --watch",
     "vitest": "vitest",
     "test": "vitest run",

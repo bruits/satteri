@@ -135,7 +135,7 @@ jobs:
           path: packages/satteri/artifacts
 
       - name: Build TypeScript and prepare artifacts
-        run: pnpm run build:ts && pnpm napi create-npm-dirs && pnpm run artifacts && pnpm napi prepublish
+        run: pnpm run build:ts && pnpm napi create-npm-dirs && napi artifacts
         working-directory: packages/satteri
 
       - name: Check if release PR merge
