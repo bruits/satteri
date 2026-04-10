@@ -1,6 +1,7 @@
 target
 node_modules
 *.node
+*.wasm
 perf.data
 perf.data.old
 flamegraph.svg

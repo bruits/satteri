@@ -1,0 +1,17 @@
+{
+  "name": "satteri-playground",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "satteri": "workspace:*",
+    "shiki": "^4.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^6",
+    "vite": "^8"
+  }
+}

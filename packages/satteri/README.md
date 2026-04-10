@@ -231,6 +231,8 @@ const js = mdxToJs("# Hello\n\nWorld", {
 
 The `ignoreElements` option can be used to exclude specific elements from collapsing.
 
+Shoutout to [Bjorn Lu](https://bjornlu.com) for originally developing this optimization for [Astro](https://astro.build/).
+
 ### `markdownToMdast(source: string)`
 
 Parse Markdown and return a complete mdast tree. This can be useful if you wanted to benefit from the fast native parsing of Sätteri, but ultimately wanted another pipeline to handle transformations and compilation, e.g. using remark plugins and `remark-stringify` to convert back to Markdown after processing.

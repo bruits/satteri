@@ -1,5 +1,5 @@
 import { test, expect } from "vitest";
-import { ArenaReader, NodeType, NodeTypeName } from "../src/mdast/mdast-reader.js";
+import { MdastReader, NodeType, NodeTypeName } from "../src/mdast/mdast-reader.js";
 import { buildHelloWorldBuffer, buildTestBuffer } from "./fixtures.js";
 
 test("NodeType constants", () => {
@@ -16,28 +16,28 @@ test("NodeType constants", () => {
   expect(NodeTypeName[25]).toBe("Yaml");
 });
 
-test("ArenaReader rejects invalid magic", () => {
+test("MdastReader rejects invalid magic", () => {
   const buf = new ArrayBuffer(44);
-  expect(() => new ArenaReader(buf)).toThrow(/bad magic/);
+  expect(() => new MdastReader(buf)).toThrow(/bad magic/);
 });
 
-test("ArenaReader rejects wrong version", () => {
+test("MdastReader rejects wrong version", () => {
   const buf = new ArrayBuffer(44);
   const view = new DataView(buf);
   view.setUint32(0, 0x5241444d, true); // correct "MDAR" magic
   view.setUint32(4, 99, true);
-  expect(() => new ArenaReader(buf)).toThrow(/version/);
+  expect(() => new MdastReader(buf)).toThrow(/version/);
 });
 
-test("ArenaReader reads node count", () => {
+test("MdastReader reads node count", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   expect(reader.nodeCount).toBe(5);
 });
 
-test("ArenaReader reads root node", () => {
+test("MdastReader reads root node", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   const root = reader.getNode(0);
   expect(root.type).toBe(NodeType.Root);
   expect(root.typeName).toBe("Root");
@@ -46,43 +46,43 @@ test("ArenaReader reads root node", () => {
   expect(root.position.start.column).toBe(1);
 });
 
-test("ArenaReader reads heading node", () => {
+test("MdastReader reads heading node", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   const heading = reader.getNode(1);
   expect(heading.type).toBe(NodeType.Heading);
   expect(heading.childrenCount).toBe(1);
   expect(reader.getHeadingDepth(1)).toBe(1);
 });
 
-test("ArenaReader reads text values", () => {
+test("MdastReader reads text values", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   expect(reader.getTextValue(3)).toBe("Hello");
   expect(reader.getTextValue(4)).toBe("World");
 });
 
-test("ArenaReader getNodeType fast path", () => {
+test("MdastReader getNodeType fast path", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   expect(reader.getNodeType(0)).toBe(NodeType.Root);
   expect(reader.getNodeType(1)).toBe(NodeType.Heading);
   expect(reader.getNodeType(2)).toBe(NodeType.Paragraph);
   expect(reader.getNodeType(3)).toBe(NodeType.Text);
 });
 
-test("ArenaReader getChildIds", () => {
+test("MdastReader getChildIds", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   expect(reader.getChildIds(0)).toEqual([1, 2]);
   expect(reader.getChildIds(1)).toEqual([3]);
   expect(reader.getChildIds(2)).toEqual([4]);
   expect(reader.getChildIds(3)).toEqual([]);
 });
 
-test("ArenaReader.walk visits all nodes", () => {
+test("MdastReader.walk visits all nodes", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   const visited: { nodeId: number; nodeType: number }[] = [];
   reader.walk((nodeId, nodeType) => {
     visited.push({ nodeId, nodeType });
@@ -91,9 +91,9 @@ test("ArenaReader.walk visits all nodes", () => {
   expect(visited[0]!.nodeId).toBe(0);
 });
 
-test("ArenaReader.walk skip children", () => {
+test("MdastReader.walk skip children", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   const visited: number[] = [];
   reader.walk((nodeId, nodeType) => {
     visited.push(nodeId);
@@ -106,29 +106,29 @@ test("ArenaReader.walk skip children", () => {
   expect(visited).toContain(4);
 });
 
-test("ArenaReader getSource", () => {
+test("MdastReader getSource", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   expect(reader.getSource()).toBe("# Hello\n\nWorld");
 });
 
-test("ArenaReader accepts Uint8Array", () => {
+test("MdastReader accepts Uint8Array", () => {
   const buf = buildHelloWorldBuffer();
   const u8 = new Uint8Array(buf);
-  const reader = new ArenaReader(u8);
+  const reader = new MdastReader(u8);
   expect(reader.nodeCount).toBe(5);
   expect(reader.getTextValue(3)).toBe("Hello");
 });
 
-test("ArenaReader getTypeData returns empty for nodes without data", () => {
+test("MdastReader getTypeData returns empty for nodes without data", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   expect(reader.getTypeData(2).length).toBe(0); // Paragraph has no data
 });
 
-test("ArenaReader out of range node throws", () => {
+test("MdastReader out of range node throws", () => {
   const buf = buildHelloWorldBuffer();
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   expect(() => reader.getNode(99)).toThrow(/out of range/);
 });
 
@@ -150,7 +150,7 @@ test("getListData reads correct layout: start(u32)@0, ordered(bool)@4, spread(bo
     children: [1],
     typeData,
   });
-  const reader = new ArenaReader(buf);
+  const reader = new MdastReader(buf);
   const d = reader.getListData(1);
   expect(d.start).toBe(42);
   expect(d.ordered).toBe(true);

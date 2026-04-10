@@ -1,5 +1,5 @@
 import type { MdastNode } from "../types.js";
-import type { ArenaReader } from "./mdast-reader.js";
+import type { MdastReader } from "./mdast-reader.js";
 import { lazyProp, lazyGroup } from "../lazy-props.js";
 
 export const TYPE_NAMES: Record<number, string> = {
@@ -47,7 +47,7 @@ const LEAF_TYPES = new Set([10, 13, 7, 8, 14, 3, 20, 25, 26, 27, 28, 102, 103, 1
  */
 function addTypeProperties(
   node: MdastNode,
-  reader: ArenaReader,
+  reader: MdastReader,
   nodeId: number,
   nodeType: number,
 ): void {
@@ -147,7 +147,7 @@ function addTypeProperties(
 /**
  * Materialize a single MDAST node from a binary buffer as a lazy JS object.
  */
-export function materializeNode(reader: ArenaReader, nodeId: number): MdastNode {
+export function materializeNode(reader: MdastReader, nodeId: number): MdastNode {
   const rawNode = reader.getNode(nodeId);
   const nodeType = rawNode.type;
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
@@ -191,6 +191,6 @@ export function materializeNode(reader: ArenaReader, nodeId: number): MdastNode 
 }
 
 /** Materialize the full tree from root (nodeId=0). */
-export function materializeTree(reader: ArenaReader): MdastNode {
+export function materializeMdastTree(reader: MdastReader): MdastNode {
   return materializeNode(reader, 0);
 }

@@ -1,5 +1,5 @@
 import { materializeNode, TYPE_NAMES } from "./mdast-materializer.js";
-import { ArenaReader } from "./mdast-reader.js";
+import { MdastReader } from "./mdast-reader.js";
 import { CommandBuffer, classifyReturn } from "../command-buffer.js";
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
 import {
@@ -7,7 +7,7 @@ import {
   serializeMdastHandle,
   getNodeData as napiGetNodeData,
   mdastTextContentHandle,
-} from "../../index.js";
+} from "#binding";
 import type {
   Blockquote,
   Break,
@@ -337,19 +337,19 @@ function rstr(buf: Uint8Array, off: number, len: number): string {
 /**
  * Lazy child materializer for the MDAST handle walk path.
  * Serializes the handle once on first child access, then materializes
- * children via ArenaReader + materializeNode.
+ * children via MdastReader + materializeNode.
  */
 class MdastLazyChildResolver {
   #handle: MdastHandle;
-  #reader: ArenaReader | null = null;
+  #reader: MdastReader | null = null;
 
   constructor(handle: MdastHandle) {
     this.#handle = handle;
   }
 
-  #ensure(): ArenaReader {
+  #ensure(): MdastReader {
     if (!this.#reader) {
-      this.#reader = new ArenaReader(serializeMdastHandle(this.#handle));
+      this.#reader = new MdastReader(serializeMdastHandle(this.#handle));
     }
     return this.#reader;
   }

@@ -95,7 +95,7 @@ const FIELD = {
 
 const MAGIC = 0x5241444d; // "MDAR" bytes [0x4d,0x44,0x41,0x52] read as little-endian u32
 
-export class ArenaReader {
+export class MdastReader {
   readonly #view: DataView;
   readonly #header: BufferHeader;
   readonly #textDecoder: TextDecoder;

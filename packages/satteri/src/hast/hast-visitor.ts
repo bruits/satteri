@@ -24,7 +24,7 @@ import {
   textContentHandle,
   getNodeData as napiGetNodeData,
   parseExpression as napiParseExpression,
-} from "../../index.js";
+} from "#binding";
 
 // Opaque handle type from NAPI, the arena lives in Rust memory.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -22,9 +22,9 @@ import {
   getHandleSource,
   serializeHandle,
   serializeMdastHandle,
-} from "../index.js";
-import { ArenaReader } from "./mdast/mdast-reader.js";
-import { materializeTree } from "./mdast/mdast-materializer.js";
+} from "#binding";
+import { MdastReader } from "./mdast/mdast-reader.js";
+import { materializeMdastTree } from "./mdast/mdast-materializer.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
 import type { MdastNode, HastNode } from "./types.js";
@@ -229,14 +229,14 @@ function createHastHandleFromMdast(
 export function markdownToMdast(source: string): MdastNode {
   const handle = createMdastHandle(source);
   const buf = serializeMdastHandle(handle);
-  return materializeTree(new ArenaReader(buf));
+  return materializeMdastTree(new MdastReader(buf));
 }
 
 /** Parse MDX source into a materialized mdast tree. */
 export function mdxToMdast(source: string): MdastNode {
   const handle = createMdxMdastHandle(source);
   const buf = serializeMdastHandle(handle);
-  return materializeTree(new ArenaReader(buf));
+  return materializeMdastTree(new MdastReader(buf));
 }
 
 /** Convert Markdown source to a materialized hast tree. */

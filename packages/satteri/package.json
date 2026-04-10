@@ -15,10 +15,17 @@
   ],
   "type": "module",
   "main": "./dist/index.js",
+  "imports": {
+    "#binding": {
+      "browser": "./dist/binding.browser.js",
+      "default": "./dist/binding.js"
+    }
+  },
   "exports": {
     ".": "./dist/index.js"
   },
   "scripts": {
+    "build:wasm": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --release --esm --strip --target wasm32-wasip1-threads",
     "build:native": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --release --esm --strip",
     "build:native:debug": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --esm",
     "build:ts": "tsc --project tsconfig.build.json",
@@ -36,6 +43,7 @@
   },
   "devDependencies": {
     "@codspeed/vitest-plugin": "^5.2.0",
+    "@emnapi/core": "^1.9.1",
     "@emnapi/runtime": "^1.9.1",
     "@napi-rs/wasm-runtime": "^1.1.2",
     "@types/node": "^25.5.0",

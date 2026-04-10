@@ -1,4 +1,4 @@
-// Builds a minimal valid MDAST buffer in pure JS for testing ArenaReader
+// Builds a minimal valid MDAST buffer in pure JS for testing MdastReader
 // without requiring the native module to be built.
 
 const MAGIC = 0x5241444d; // "MDAR" bytes [0x4d,0x44,0x41,0x52] read as little-endian u32

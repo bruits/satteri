@@ -72,7 +72,8 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
       break;
   }
 
-  const node = { type: typeName } as HastNode;
+  const position = reader.getPosition(nodeId);
+  const node = (position ? { type: typeName, position } : { type: typeName }) as HastNode;
 
   // _nodeId: non-enumerable internal reference
   Object.defineProperty(node, "_nodeId", {

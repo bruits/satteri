@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sätteri Playground</title>
+    <link rel="stylesheet" href="/src/prin.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <h2>Sätteri Playground</h2>
+
+        <fieldset>
+          <legend>Mode</legend>
+          <label>
+            <input type="radio" name="mode" value="markdown" checked />
+            Markdown
+          </label>
+          <label>
+            <input type="radio" name="mode" value="mdx" />
+            MDX
+          </label>
+        </fieldset>
+
+        <fieldset id="optimize-static-fieldset">
+          <legend>optimizeStatic</legend>
+          <label>
+            <input type="checkbox" id="optimize-static-toggle" />
+            Enable
+          </label>
+          <div id="optimize-static-fields" class="hidden">
+            <label>
+              component
+              <input type="text" id="os-component" value="Fragment" />
+            </label>
+            <label>
+              prop
+              <input type="text" id="os-prop" value="set:html" />
+            </label>
+            <label>
+              <input type="checkbox" id="os-wrap-prop-value" />
+              wrapPropValue
+            </label>
+            <label>
+              ignoreElements
+              <input
+                type="text"
+                id="os-ignore-elements"
+                placeholder="comma-separated"
+              />
+            </label>
+          </div>
+        </fieldset>
+      </aside>
+
+      <main id="editor-panel">
+        <nav id="input-tabs">
+          <button class="tab active" data-input-tab="source">Source</button>
+          <button class="tab" data-input-tab="mdast-plugin">mdast plugin</button>
+          <button class="tab" data-input-tab="hast-plugin">hast plugin</button>
+        </nav>
+        <div id="input-content">
+          <div class="input-pane active" data-input-pane="source">
+            <pre class="input-highlight" id="highlight-source"><code></code></pre>
+            <textarea id="input" spellcheck="false"># Hello World
+
+This is a **Markdown** playground for Sätteri.
+
+- Item 1
+- Item 2
+- Item 3
+
+```js
+console.log("hello");
+```</textarea>
+          </div>
+          <div class="input-pane" data-input-pane="mdast-plugin">
+            <pre class="input-highlight" id="highlight-mdast-plugin"><code></code></pre>
+            <textarea id="input-mdast-plugin" spellcheck="false">export default [
+  {
+    name: "my-plugin",
+    // heading(node, ctx) {
+    //   ...
+    // },
+  },
+]</textarea>
+          </div>
+          <div class="input-pane" data-input-pane="hast-plugin">
+            <pre class="input-highlight" id="highlight-hast-plugin"><code></code></pre>
+            <textarea id="input-hast-plugin" spellcheck="false">export default [
+  {
+    name: "my-plugin",
+    // element: {
+    //   filter: ["h1"],
+    //   visit(node, ctx) {
+    //     ...
+    //   },
+    // },
+  },
+]</textarea>
+          </div>
+        </div>
+      </main>
+
+      <section id="output-panel">
+        <nav id="output-tabs">
+          <button class="tab active" data-tab="mdast">mdast</button>
+          <button class="tab" data-tab="hast">hast</button>
+          <button class="tab" data-tab="output">HTML</button>
+          <button class="tab" data-tab="rendered">Rendered</button>
+        </nav>
+        <div id="output-content">
+          <pre id="tab-mdast" class="tab-pane active"></pre>
+          <pre id="tab-hast" class="tab-pane"></pre>
+          <pre id="tab-output" class="tab-pane"></pre>
+          <div id="tab-rendered" class="tab-pane"><iframe id="rendered-frame" sandbox="allow-same-origin"></iframe></div>
+        </div>
+        <div id="status-bar"></div>
+      </section>
+    </div>
+
+    <div id="loading-overlay">
+      <p>Loading WASM&hellip;</p>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

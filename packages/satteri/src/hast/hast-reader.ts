@@ -48,6 +48,12 @@ export interface HastProperty {
 //   Total: 52 bytes
 const FIELD = {
   node_type: 4,
+  start_offset: 12,
+  end_offset: 16,
+  start_line: 20,
+  start_column: 24,
+  end_line: 28,
+  end_column: 32,
   children_start: 36,
   children_count: 40,
   data_offset: 44,
@@ -128,6 +134,27 @@ export class HastReader {
       len,
     );
     return this.#textDecoder.decode(bytes);
+  }
+
+  /** Get position data for a node. */
+  getPosition(nodeId: number): { start: { offset: number; line: number; column: number }; end: { offset: number; line: number; column: number } } | undefined {
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    const v = this.#view;
+    const startLine = v.getUint32(base + FIELD.start_line, true);
+    const startOffset = v.getUint32(base + FIELD.start_offset, true);
+    if (startLine === 0 && startOffset === 0) return undefined;
+    return {
+      start: {
+        offset: startOffset,
+        line: startLine,
+        column: v.getUint32(base + FIELD.start_column, true),
+      },
+      end: {
+        offset: v.getUint32(base + FIELD.end_offset, true),
+        line: v.getUint32(base + FIELD.end_line, true),
+        column: v.getUint32(base + FIELD.end_column, true),
+      },
+    };
   }
 
   /** Get the node_type byte for a given node ID. */

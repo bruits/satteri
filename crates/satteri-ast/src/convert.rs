@@ -190,6 +190,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, defs: &[
     match MdastNodeType::from_u8(raw_type) {
         Some(MdastNodeType::Root) => {
             builder.open_node_raw(HastNodeType::Root as u8);
+            copy_position(node_id, view, builder);
             convert_children_wrapped(node_id, view, builder, defs);
             builder.close_node();
         }
