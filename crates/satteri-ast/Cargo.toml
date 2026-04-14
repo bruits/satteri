@@ -1,6 +1,6 @@
 [package]
 name = "satteri-ast"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "MDAST and HAST node types, codecs, tree operations, and conversion for Sätteri"
 license = "MIT"
@@ -13,4 +13,4 @@ serde_json = "1"
 pulldown-cmark-escape = "0.11"
 
 [dev-dependencies]
-satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" }
+satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" , version = "0.2.0" }
