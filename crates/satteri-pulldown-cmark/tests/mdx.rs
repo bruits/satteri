@@ -171,7 +171,10 @@ fn esm_multiline_export_object() {
     let input = "export const data = {\n  users: [\n    { name: 'Alice', age: 30 },\n    { name: 'Bob', age: 25 }\n  ]\n};\n\n# Hello\n";
     let ev = mdx_events(input);
     assert!(
-        has(&ev, |e| matches!(e, Event::MdxEsm(s) if s.contains("data") && s.contains("}"))),
+        has(
+            &ev,
+            |e| matches!(e, Event::MdxEsm(s) if s.contains("data") && s.contains("}"))
+        ),
         "multiline export object should be a single ESM block: {:?}",
         ev
     );
@@ -198,7 +201,10 @@ fn esm_export_spanning_blank_line() {
     let input = "export const x = {\n  a: 1,\n\n  b: 2\n};\n\n# Hello\n";
     let ev = mdx_events(input);
     assert!(
-        has(&ev, |e| matches!(e, Event::MdxEsm(s) if s.contains("b: 2") && s.contains("};"))) ,
+        has(
+            &ev,
+            |e| matches!(e, Event::MdxEsm(s) if s.contains("b: 2") && s.contains("};"))
+        ),
         "export spanning blank line should be a single ESM block: {:?}",
         ev
     );

@@ -815,7 +815,12 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let sr = builder.alloc_string(&cow);
                         builder.add_leaf_full(
                             MdastNodeType::MdxFlowExpression as u8,
-                            start, end, start_line, start_col, end_line, end_col,
+                            start,
+                            end,
+                            start_line,
+                            start_col,
+                            end_line,
+                            end_col,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -825,7 +830,12 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let sr = builder.alloc_string(&cow);
                         builder.add_leaf_full(
                             MdastNodeType::MdxTextExpression as u8,
-                            start, end, start_line, start_col, end_line, end_col,
+                            start,
+                            end,
+                            start_line,
+                            start_col,
+                            end_line,
+                            end_col,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -835,7 +845,12 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let sr = builder.alloc_string(&cow);
                         builder.add_leaf_full(
                             MdastNodeType::MdxjsEsm as u8,
-                            start, end, start_line, start_col, end_line, end_col,
+                            start,
+                            end,
+                            start_line,
+                            start_col,
+                            end_line,
+                            end_col,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);

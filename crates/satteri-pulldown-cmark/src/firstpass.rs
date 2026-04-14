@@ -21,7 +21,10 @@ use crate::{
 
 /// Runs the first pass, which resolves the block structure of the document,
 /// and returns the resulting tree.
-pub(crate) fn run_first_pass(text: &str, options: Options) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
+pub(crate) fn run_first_pass(
+    text: &str,
+    options: Options,
+) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
     // This is a very naive heuristic for the number of nodes
     // we'll need.
     let start_capacity = max(128, text.len() / 32);
@@ -496,8 +499,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                         break;
                                     }
                                     final_end = pos - ix;
-                                    let candidate =
-                                        self.text[ix..ix + final_end].trim_end();
+                                    let candidate = self.text[ix..ix + final_end].trim_end();
                                     match crate::mdx::try_parse_esm(candidate, &mut allocator) {
                                         EsmParseResult::Complete => break,
                                         EsmParseResult::Incomplete => continue,

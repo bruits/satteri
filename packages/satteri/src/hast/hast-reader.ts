@@ -137,7 +137,14 @@ export class HastReader {
   }
 
   /** Get position data for a node. */
-  getPosition(nodeId: number): { start: { offset: number; line: number; column: number }; end: { offset: number; line: number; column: number } } | undefined {
+  getPosition(
+    nodeId: number,
+  ):
+    | {
+        start: { offset: number; line: number; column: number };
+        end: { offset: number; line: number; column: number };
+      }
+    | undefined {
     const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
     const v = this.#view;
     const startLine = v.getUint32(base + FIELD.start_line, true);
@@ -351,5 +358,4 @@ export class HastReader {
     const ref = this.#readStringRef(data, 0);
     return this.getString(ref.offset, ref.len);
   }
-
 }

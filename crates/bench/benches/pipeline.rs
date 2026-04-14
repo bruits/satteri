@@ -152,7 +152,14 @@ fn hast_arena_to_html(bencher: divan::Bencher) {
 /// Full pipeline: MDX source → JavaScript (parse + mdast→hast + hast→OXC + serialize).
 #[divan::bench]
 fn mdx_compile(bencher: divan::Bencher) {
-    bencher.bench(|| satteri_mdxjs::compile(MDX, &satteri_mdxjs::Options::default(), satteri_pulldown_cmark::MDX_OPTIONS).unwrap());
+    bencher.bench(|| {
+        satteri_mdxjs::compile(
+            MDX,
+            &satteri_mdxjs::Options::default(),
+            satteri_pulldown_cmark::MDX_OPTIONS,
+        )
+        .unwrap()
+    });
 }
 
 /// Step 1 of MDX compile: parse MDX source into an Arena.

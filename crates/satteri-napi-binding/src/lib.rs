@@ -207,10 +207,7 @@ use std::sync::Mutex;
 
 type ArenaHandle = External<Mutex<satteri_arena::Arena>>;
 
-fn make_parse_fn(
-    mdx: bool,
-    parse_options: u32,
-) -> impl Fn(&str) -> satteri_arena::Arena {
+fn make_parse_fn(mdx: bool, parse_options: u32) -> impl Fn(&str) -> satteri_arena::Arena {
     move |source: &str| -> satteri_arena::Arena {
         let opts = satteri_pulldown_cmark::Options::from_bits_truncate(parse_options);
         let (mut parsed, _errors) = satteri_pulldown_cmark::parse(source, opts);
