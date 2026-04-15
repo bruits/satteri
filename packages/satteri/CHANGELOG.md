@@ -1,5 +1,11 @@
 # satteri
 
+## 0.2.2 — 2026-04-15
+
+### Patch changes
+
+- [5e73ad2](https://github.com/bruits/satteri/commit/5e73ad293b4cb9403801b6bdc4392b8b53259502) Fixes missing `optionalDependencies` field. — Thanks @Princesseuh!
+
 ## 0.2.1 — 2026-04-15
 
 ### Patch changes
