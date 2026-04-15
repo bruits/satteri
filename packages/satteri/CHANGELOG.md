@@ -1,5 +1,11 @@
 # satteri
 
+## 0.2.1 — 2026-04-15
+
+### Patch changes
+
+- [db66d07](https://github.com/bruits/satteri/commit/db66d074090769cfefca7ee379b6d8c2431a2973) Added `parseExpression()` to `mdxjsEsm` nodes, allowing ESM import/export statements to be parsed into ESTree ASTs. — Thanks @Princesseuh!
+
 ## 0.2.0 — 2026-04-14
 
 ### Minor changes
