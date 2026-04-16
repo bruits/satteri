@@ -1,5 +1,12 @@
 # satteri-pulldown-cmark
 
+## 0.2.1 — 2026-04-16
+
+### Patch changes
+
+- [ef20299](https://github.com/bruits/satteri/commit/ef202996675d5e45548e34bef49da906c28a30e9) Fixed `code.value` in the MDAST tree including a trailing newline for well-formed fenced code blocks, which diverged from `remark-parse`. MDAST plugins inspecting `node.value` now see the same bytes as remark. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.1.3
+
 ## 0.2.0 — 2026-04-14
 
 ### Minor changes

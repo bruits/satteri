@@ -1,5 +1,12 @@
 # satteri-mdxjs
 
+## 0.1.5 — 2026-04-16
+
+### Patch changes
+
+- [ef20299](https://github.com/bruits/satteri/commit/ef202996675d5e45548e34bef49da906c28a30e9) Fixed hyphenated JSX element names (e.g. `<my-widget>`) written explicitly in MDX being incorrectly routed through the components provider and producing invalid JavaScript — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.1.3, satteri-pulldown-cmark (Cargo)@0.2.1
+
 ## 0.1.4 — 2026-04-16
 
 ### Patch changes
