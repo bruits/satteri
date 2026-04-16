@@ -1,5 +1,11 @@
 # satteri-mdxjs
 
+## 0.1.4 — 2026-04-16
+
+### Patch changes
+
+- [ae83450](https://github.com/bruits/satteri/commit/ae83450e535f965d45be64aa83bc12806acb827b) Fixed optimizeStatic silently collapsing elements that have runtime component overrides via `export const components` — Thanks @Princesseuh!
+
 ## 0.1.3 — 2026-04-15
 
 ### Patch changes
