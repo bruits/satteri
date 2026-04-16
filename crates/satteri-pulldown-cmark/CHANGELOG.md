@@ -1,5 +1,11 @@
 # satteri-pulldown-cmark
 
+## 0.2.2 — 2026-04-16
+
+### Patch changes
+
+- [6f9f66f](https://github.com/bruits/satteri/commit/6f9f66fa75722c0b58f50783b5ac85fefd53a157) Fixed JSX inside MDX expression bodies, JSX inside `.map()` callbacks or other expressions is now compiled to `_jsx()` calls instead of being dropped or emitted as raw JSX — Thanks @Princesseuh!
+
 ## 0.2.1 — 2026-04-16
 
 ### Patch changes
