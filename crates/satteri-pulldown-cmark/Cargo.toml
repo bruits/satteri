@@ -1,6 +1,6 @@
 [package]
 name = "satteri-pulldown-cmark"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Raph Levien <raph.levien@gmail.com>", "Marcus Klaas de Vries <mail@marcusklaas.nl>", "Bruits"]
 license = "MIT"
 description = "A fork of the pulldown-cmark crate with MDX extensions, used in the satteri project."

@@ -122,9 +122,9 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "codspeed"
-version = "4.4.1"
+version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b684e94583e85a5ca7e1a6454a89d76a5121240f2fb67eb564129d9bafdb9db0"
+checksum = "c83592369519f73d5731f9c91aa562e213a33cc14bb0f27ac2f5730fd1ecbcec"
 dependencies = [
  "anyhow",
  "cc",
@@ -140,9 +140,9 @@ dependencies = [
 
 [[package]]
 name = "codspeed-divan-compat"
-version = "4.4.1"
+version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89e4bf8c7793c170fd0fcf3be97b9032b2ae39c2b9e8818aba3cc10ca0f0c6c0"
+checksum = "a717deb83a7472e31b38244f836c92947ac17890970f61a083495b3a6653bf1b"
 dependencies = [
  "clap",
  "codspeed",
@@ -153,9 +153,9 @@ dependencies = [
 
 [[package]]
 name = "codspeed-divan-compat-macros"
-version = "4.4.1"
+version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78aae02f2a278588e16e8ca62ea1915b8ab30f8230a09926671bba19ede801a4"
+checksum = "eed8dc7bd913f259c57e2b94657a4c9fd20b3bded18462b22c647877feb43b53"
 dependencies = [
  "divan-macros",
  "itertools",
@@ -167,9 +167,9 @@ dependencies = [
 
 [[package]]
 name = "codspeed-divan-compat-walltime"
-version = "4.4.1"
+version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59ffd32c0c59ab8b674b15be65ba7c59aebac047036cfa7fa1e11bc2c178b81f"
+checksum = "96500330271308ca89e68e1885951716cf2d3895ef9508192376dd125321a8f2"
 dependencies = [
  "cfg-if",
  "clap",
@@ -1062,7 +1062,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "satteri"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "satteri-ast",
  "satteri-mdxjs",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-mdxjs"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-napi"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "napi",
  "napi-build",
@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-pulldown-cmark"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "bitflags",
  "memchr",

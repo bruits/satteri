@@ -1,5 +1,11 @@
 # satteri
 
+## 0.2.6 — 2026-04-17
+
+### Patch changes
+
+- [11ffcfc](https://github.com/bruits/satteri/commit/11ffcfca6c8486a3744e37e0c19e78100925323e) Fixed unclosed `{` in a paragraph silently consuming later blocks as an MDX expression, and fixed literal `{` inside code spans being falsely reported as an unclosed MDX expression — Thanks @Princesseuh!
+
 ## 0.2.5 — 2026-04-16
 
 ### Patch changes
