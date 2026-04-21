@@ -34,8 +34,8 @@ const PROP_STRING = 0;
 const PROP_BOOL_TRUE = 1;
 const PROP_BOOL_FALSE = 2;
 const PROP_SPACE_SEP = 3;
-const PROP_INT = 4;
-const PROP_NULL = 5;
+const PROP_INT = 5;
+const PROP_NULL = 6;
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
 

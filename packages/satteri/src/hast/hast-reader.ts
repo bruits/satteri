@@ -32,7 +32,7 @@ const MDX_ATTR_SPREAD = 3;
 
 export interface HastProperty {
   name: string;
-  value: string | boolean | string[];
+  value: string | number | boolean | string[];
 }
 
 // HastNode field offsets (same layout as MDAST, shared binary format)
@@ -271,6 +271,11 @@ export class HastReader {
               .map((s) => s.trim())
               .filter((s) => s.length > 0),
           });
+          break;
+        }
+        case 5: { // PROP_INT
+          const raw = this.getString(valueRef.offset, valueRef.len);
+          properties.push({ name, value: Number(raw) });
           break;
         }
       }

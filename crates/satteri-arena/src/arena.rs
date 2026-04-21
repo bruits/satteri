@@ -135,6 +135,20 @@ impl Arena {
         &self.children[start..end]
     }
 
+    pub fn replace_node_with_children(&mut self, node_id: u32, replacement_children: &[u32]) {
+        let parent_id = self.nodes[node_id as usize].parent;
+        let parent_children: Vec<u32> = self.get_children(parent_id).to_vec();
+        let mut new_children = Vec::with_capacity(parent_children.len() + replacement_children.len());
+        for &child_id in &parent_children {
+            if child_id == node_id {
+                new_children.extend_from_slice(replacement_children);
+            } else {
+                new_children.push(child_id);
+            }
+        }
+        self.set_children(parent_id, &new_children);
+    }
+
     pub fn get_str(&self, string_ref: StringRef) -> &str {
         let start = string_ref.offset as usize;
         let end = start + string_ref.len as usize;

@@ -392,18 +392,6 @@ fn scan_mdx_expression_end_inner(
     None
 }
 
-/// Check if from `start` to the next newline (or EOF) there are only spaces/tabs.
-fn is_only_whitespace_to_eol(bytes: &[u8]) -> bool {
-    for &b in bytes {
-        match b {
-            b' ' | b'\t' => continue,
-            b'\n' | b'\r' => return true,
-            _ => return false,
-        }
-    }
-    true // EOF counts
-}
-
 /// Scan to the end of a line, returning offset past the newline.
 fn scan_to_line_end(bytes: &[u8], start: usize) -> Option<usize> {
     let eol = memchr(b'\n', &bytes[start..])
@@ -574,24 +562,21 @@ pub(crate) fn scan_mdx_jsx_block(
     }
 
     // Fragment: `<>` or `</>`
-    if bytes[name_start] == b'>' {
-        let after = name_start + 1;
-        return if is_only_whitespace_to_eol(&bytes[after..]) {
-            scan_to_line_end(bytes, after)
-        } else {
-            None // trailing content → inline
-        };
-    }
-
-    if !is_jsx_name_start(bytes, name_start) {
-        return None;
-    }
-
-    let mut pos = scan_mdx_jsx_tag_end_inner(bytes, container_check)?;
+    let mut pos = if bytes[name_start] == b'>' {
+        name_start + 1
+    } else {
+        if !is_jsx_name_start(bytes, name_start) {
+            return None;
+        }
+        scan_mdx_jsx_tag_end_inner(bytes, container_check)?
+    };
 
     // Consume any subsequent JSX tags or expressions on the same line.
     // Bare text rejects flow — the line falls through to paragraph parsing
     // where the JSX becomes inline MdxJsxTextElement nodes.
+    // Two consecutive expressions without a JSX tag between them also reject flow,
+    // matching micromark-extension-mdx-jsx behavior.
+    let mut last_was_jsx = true;
     loop {
         while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
             pos += 1;
@@ -602,12 +587,27 @@ pub(crate) fn scan_mdx_jsx_block(
         if bytes[pos] == b'<' {
             if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check) {
                 pos += end;
+                last_was_jsx = true;
+                continue;
+            }
+            if pos + 1 < bytes.len() && bytes[pos + 1] == b'>' {
+                pos += 2;
+                last_was_jsx = true;
+                continue;
+            }
+            if pos + 2 < bytes.len() && bytes[pos + 1] == b'/' && bytes[pos + 2] == b'>' {
+                pos += 3;
+                last_was_jsx = true;
                 continue;
             }
         }
         if bytes[pos] == b'{' {
             if let Some(len) = scan_mdx_expression_end(&bytes[pos..], true) {
+                if !last_was_jsx {
+                    return None;
+                }
                 pos += len;
+                last_was_jsx = false;
                 continue;
             }
         }
@@ -624,22 +624,46 @@ pub(crate) fn scan_mdx_expression_block(
     container_check: Option<ContainerLineCheck<'_>>,
 ) -> Option<usize> {
     let mut ix = scan_mdx_expression_end_inner(bytes, false, container_check)?;
+    let mut last_was_jsx = false;
 
-    // Block-level expression: only whitespace may follow on the line.
-    if !is_only_whitespace_to_eol(&bytes[ix..]) {
+    loop {
+        while ix < bytes.len() && (bytes[ix] == b' ' || bytes[ix] == b'\t') {
+            ix += 1;
+        }
+        if ix >= bytes.len() || bytes[ix] == b'\n' || bytes[ix] == b'\r' {
+            break;
+        }
+        if bytes[ix] == b'<' {
+            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[ix..], container_check) {
+                ix += end;
+                last_was_jsx = true;
+                continue;
+            }
+            if ix + 1 < bytes.len() && bytes[ix + 1] == b'>' {
+                ix += 2;
+                last_was_jsx = true;
+                continue;
+            }
+            if ix + 2 < bytes.len() && bytes[ix + 1] == b'/' && bytes[ix + 2] == b'>' {
+                ix += 3;
+                last_was_jsx = true;
+                continue;
+            }
+        }
+        if bytes[ix] == b'{' {
+            if let Some(len) = scan_mdx_expression_end(&bytes[ix..], true) {
+                if !last_was_jsx {
+                    return None;
+                }
+                ix += len;
+                last_was_jsx = false;
+                continue;
+            }
+        }
         return None;
     }
-    // Skip trailing whitespace and newline.
-    while ix < bytes.len() && (bytes[ix] == b' ' || bytes[ix] == b'\t') {
-        ix += 1;
-    }
-    if ix < bytes.len() && bytes[ix] == b'\r' {
-        ix += 1;
-    }
-    if ix < bytes.len() && bytes[ix] == b'\n' {
-        ix += 1;
-    }
-    Some(ix)
+
+    scan_to_line_end(bytes, ix)
 }
 
 /// Scan an inline MDX expression: `{...}` using lexer-based boundary detection.
@@ -824,25 +848,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         end_ix
     }
 
-    pub(crate) fn parse_mdx_flow_expression(&mut self, start_ix: usize, end_ix: usize) -> usize {
-        let raw = &self.text[start_ix..end_ix].trim_end();
-        let inner = if self.tree.spine_len() > 0 {
-            let stripped = self.strip_container_prefixes(start_ix, end_ix);
-            let stripped = stripped.trim_end();
-            CowStr::from(alloc::string::String::from(
-                &stripped[1..stripped.len() - 1],
-            ))
-        } else {
-            (&raw[1..raw.len() - 1]).into()
-        };
-        let cow_ix = self.allocs.allocate_cow(inner);
-        self.tree.append(Item {
-            start: start_ix,
-            end: end_ix,
-            body: ItemBody::MdxFlowExpression(cow_ix),
-        });
-        end_ix
-    }
 
     /// Strip container prefixes from continuation lines in a raw text span.
     /// Returns the original text if not inside a container.

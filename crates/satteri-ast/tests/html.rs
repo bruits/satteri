@@ -145,7 +145,7 @@ fn thematic_break() {
 fn hard_line_break() {
     assert_eq!(
         html("Line one  \nLine two"),
-        "<p>Line one<br>Line two</p>\n"
+        "<p>Line one<br>\nLine two</p>\n"
     );
 }
 
@@ -181,7 +181,7 @@ fn task_list_mixed() {
     assert_eq!(
         html("- [x] done\n- [ ] todo"),
         "<ul class=\"contains-task-list\">\n\
-         <li class=\"task-list-item\"><input type=\"checkbox\" disabled checked> done</li>\n\
+         <li class=\"task-list-item\"><input type=\"checkbox\" checked disabled> done</li>\n\
          <li class=\"task-list-item\"><input type=\"checkbox\" disabled> todo</li>\n\
          </ul>\n"
     );
@@ -223,21 +223,21 @@ fn code_block_preserves_single_trailing_newline() {
 fn table_column_alignments() {
     assert_eq!(
         html("| a | b | c |\n| :--- | :---: | ---: |\n| 1 | 2 | 3 |\n"),
-        "<table>\
-         <thead>\
-         <tr>\
-         <th style=\"text-align: left\">a</th>\
-         <th style=\"text-align: center\">b</th>\
-         <th style=\"text-align: right\">c</th>\
-         </tr>\
-         </thead>\
-         <tbody>\
-         <tr>\
-         <td style=\"text-align: left\">1</td>\
-         <td style=\"text-align: center\">2</td>\
-         <td style=\"text-align: right\">3</td>\
-         </tr>\
-         </tbody>\
+        "<table>\n\
+         <thead>\n\
+         <tr>\n\
+         <th style=\"text-align: left\">a</th>\n\
+         <th style=\"text-align: center\">b</th>\n\
+         <th style=\"text-align: right\">c</th>\n\
+         </tr>\n\
+         </thead>\n\
+         <tbody>\n\
+         <tr>\n\
+         <td style=\"text-align: left\">1</td>\n\
+         <td style=\"text-align: center\">2</td>\n\
+         <td style=\"text-align: right\">3</td>\n\
+         </tr>\n\
+         </tbody>\n\
          </table>\n"
     );
 }
@@ -246,9 +246,19 @@ fn table_column_alignments() {
 fn table_no_alignment_omits_style() {
     assert_eq!(
         html("| a | b |\n|---|---|\n| 1 | 2 |"),
-        "<table>\
-         <thead><tr><th>a</th><th>b</th></tr></thead>\
-         <tbody><tr><td>1</td><td>2</td></tr></tbody>\
+        "<table>\n\
+         <thead>\n\
+         <tr>\n\
+         <th>a</th>\n\
+         <th>b</th>\n\
+         </tr>\n\
+         </thead>\n\
+         <tbody>\n\
+         <tr>\n\
+         <td>1</td>\n\
+         <td>2</td>\n\
+         </tr>\n\
+         </tbody>\n\
          </table>\n"
     );
 }
@@ -265,7 +275,7 @@ fn footnote_single_reference_and_definition() {
         "<p>Here<sup class=\"footnote-reference\"><a href=\"#1\">1</a></sup>.</p>\n\
          <div class=\"footnote-definition\" id=\"1\">\
          <sup class=\"footnote-definition-label\">1</sup>\
-         <p>the note</p>\n\
+         <p>the note</p>\
          </div>\n"
     );
 }
@@ -281,11 +291,11 @@ fn footnote_numbers_follow_source_order() {
             " then<sup class=\"footnote-reference\"><a href=\"#a\">2</a></sup>.</p>\n",
             "<div class=\"footnote-definition\" id=\"a\">",
             "<sup class=\"footnote-definition-label\">2</sup>",
-            "<p>first def</p>\n",
+            "<p>first def</p>",
             "</div>\n",
             "<div class=\"footnote-definition\" id=\"b\">",
             "<sup class=\"footnote-definition-label\">1</sup>",
-            "<p>second def</p>\n",
+            "<p>second def</p>",
             "</div>\n",
         )
     );

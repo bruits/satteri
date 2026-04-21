@@ -34,6 +34,7 @@ pub(crate) fn run_first_pass(
         tree: Tree::with_capacity(start_capacity),
         begin_list_item: None,
         last_line_blank: false,
+        list_interrupted_paragraph: false,
         allocs: Allocations::new(),
         options,
         lookup_table,
@@ -61,6 +62,7 @@ pub(crate) struct FirstPass<'a, 'b> {
     pub(crate) tree: Tree<Item>,
     begin_list_item: Option<usize>,
     last_line_blank: bool,
+    list_interrupted_paragraph: bool,
     pub(crate) allocs: Allocations<'a>,
     pub(crate) options: Options,
     lookup_table: &'b LookupTable,
@@ -93,6 +95,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.brace_context_next = 0;
 
         let i = scan_containers(&self.tree, &mut line_start, self.options);
+        if i < self.tree.spine_len() {
+            self.list_interrupted_paragraph = false;
+        }
         for _ in i..self.tree.spine_len() {
             self.pop(start_ix);
         }
@@ -152,9 +157,20 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if let Some((ch, index, indent)) = line_start.scan_list_marker_with_indent(outer_indent)
             {
                 let after_marker_index = start_ix + line_start.bytes_scanned();
-                self.continue_list(container_start - outer_indent, ch, index);
+                let already_in_list = self.tree.peek_up().is_some_and(|ix| {
+                    matches!(self.tree[ix].item.body, ItemBody::List(_, _, _))
+                });
+                if self.list_interrupted_paragraph
+                    && !already_in_list
+                    && scan_blank_line(&bytes[after_marker_index..]).is_some()
+                {
+                    self.list_interrupted_paragraph = false;
+                    line_start = save;
+                    break;
+                }
+                self.continue_list(container_start, ch, index);
                 self.tree.append(Item {
-                    start: container_start - outer_indent,
+                    start: container_start,
                     end: after_marker_index, // will get updated later if item not empty
                     body: ItemBody::ListItem(indent),
                 });
@@ -164,6 +180,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     return after_marker_index + n;
                 }
                 if self.options.contains(Options::ENABLE_TASKLISTS) {
+                    let saved_line_start = line_start.clone();
                     let task_list_marker =
                         line_start.scan_task_list_marker().map(|is_checked| Item {
                             start: after_marker_index,
@@ -171,14 +188,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::TaskListMarker(is_checked),
                         });
                     if let Some(task_list_marker) = task_list_marker {
-                        if let Some(n) = scan_blank_line(&bytes[task_list_marker.end..]) {
-                            self.tree.append(task_list_marker);
-                            self.begin_list_item = Some(task_list_marker.end + n);
-                            return task_list_marker.end + n;
+                        if scan_blank_line(&bytes[task_list_marker.end..]).is_some() {
+                            line_start = saved_line_start;
                         } else {
-                            line_start.scan_all_space();
-                            let ix = start_ix + line_start.bytes_scanned();
-                            return self.parse_paragraph(ix, Some(task_list_marker));
+                            return self
+                                .parse_paragraph(task_list_marker.end, Some(task_list_marker));
                         }
                     }
                 }
@@ -416,6 +430,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         // Save `remaining_space` here to avoid needing to backtrack `line_start` for HTML blocks
         let remaining_space = line_start.remaining_space();
+        let content_start_ix = start_ix + line_start.bytes_scanned();
 
         let mut indent = line_start.scan_space_upto(4);
         if indent == 4 {
@@ -431,7 +446,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.finish_list(start_ix);
                 let ix = start_ix + line_start.bytes_scanned();
                 let remaining_space = line_start.remaining_space();
-                return self.parse_indented_code_block(start_ix, ix, remaining_space);
+                return self.parse_indented_code_block(content_start_ix, ix, remaining_space);
             }
         }
 
@@ -532,7 +547,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     self.scan_mdx_flow_in_container(ix, |b, c| scan_mdx_expression_block(b, c))
                 {
                     self.finish_list(start_ix);
-                    return self.parse_mdx_flow_expression(ix, ix + end_ix);
+                    return self.parse_mdx_jsx_flow(ix, ix + end_ix);
                 }
                 // If the inline scanner also can't find a closing `}`, it's truly unclosed.
                 // (If it CAN find one, the `{` will be handled as inline in a paragraph.)
@@ -554,7 +569,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if let Some(html_end_tag) = get_html_end_tag(&bytes[(ix + 1)..]) {
                 self.finish_list(start_ix);
                 return self.parse_html_block_type_1_to_5(
-                    ix,
+                    content_start_ix,
                     html_end_tag,
                     remaining_space,
                     indent,
@@ -564,13 +579,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // Detect type 6
             if starts_html_block_type_6(&bytes[(ix + 1)..]) {
                 self.finish_list(start_ix);
-                return self.parse_html_block_type_6_or_7(ix, remaining_space, indent);
+                return self.parse_html_block_type_6_or_7(content_start_ix, remaining_space, indent);
             }
 
             // Detect type 7
             if let Some(_html_bytes) = scan_html_type_7(&bytes[ix..]) {
                 self.finish_list(start_ix);
-                return self.parse_html_block_type_6_or_7(ix, remaining_space, indent);
+                return self.parse_html_block_type_6_or_7(content_start_ix, remaining_space, indent);
             }
         }
 
@@ -836,6 +851,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
     /// Returns offset of line start after paragraph.
     fn parse_paragraph(&mut self, start_ix: usize, tasklist_marker: Option<Item>) -> usize {
+        self.list_interrupted_paragraph = false;
         let body = if let Some(ItemBody::DefinitionList(_)) =
             self.tree.peek_up().map(|idx| self.tree[idx].item.body)
         {
@@ -941,6 +957,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     if let Some(pos) = trailing_backslash_pos {
                         self.tree.append_text(pos, pos + 1, false);
                     }
+                    self.list_interrupted_paragraph = scan_listitem(suffix).is_some()
+                        || scan_blockquote_start(suffix).is_some();
                     break;
                 }
                 if self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS)
@@ -1105,7 +1123,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         );
                     }
 
-                    if mode == TableParseMode::Scan && pipes > 0 {
+                    if mode == TableParseMode::Scan {
                         // check if we may be parsing a table
                         let next_line_ix = ix + eol_bytes;
                         let mut line_start = LineStart::new(&bytes[next_line_ix..]);
@@ -1113,15 +1131,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             == self.tree.spine_len()
                         {
                             let table_head_ix = next_line_ix + line_start.bytes_scanned();
+                            let sep_bytes = &bytes[table_head_ix..];
+                            let sep_is_list = scan_listitem(sep_bytes).is_some();
                             let (table_head_bytes, alignment) =
-                                scan_table_head(&bytes[table_head_ix..]);
+                                scan_table_head(sep_bytes);
 
-                            if table_head_bytes > 0 {
-                                // computing header count from number of pipes
-                                let header_count =
-                                    count_header_cols(bytes, pipes, start, last_pipe_ix);
+                            if table_head_bytes > 0 && !sep_is_list {
+                                let header_count = if pipes > 0 {
+                                    count_header_cols(bytes, pipes, start, last_pipe_ix)
+                                } else {
+                                    1
+                                };
 
-                                // make sure they match the number of columns we find in separator line
                                 if alignment.len() == header_count {
                                     let alignment_ix = self.allocs.allocate_alignment(alignment);
                                     let end_ix = table_head_ix + table_head_bytes;
@@ -1138,10 +1159,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         }
                     }
 
-                    let trailing_whitespace =
-                        scan_rev_while(&bytes[..ix], is_ascii_whitespace_no_nl);
-                    if trailing_whitespace >= 2 {
-                        i -= trailing_whitespace;
+                    let trailing_spaces =
+                        scan_rev_while(&bytes[..ix], |c| c == b' ');
+                    if trailing_spaces >= 2 {
+                        i -= trailing_spaces;
                         self.tree.append_text(begin_text, i, backslash_escaped);
                         backslash_escaped = false;
                         return LoopInstruction::BreakAtWith(
@@ -1154,6 +1175,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         );
                     }
 
+                    let trailing_whitespace =
+                        scan_rev_while(&bytes[..ix], is_ascii_whitespace_no_nl);
                     self.tree
                         .append_text(begin_text, ix - trailing_whitespace, backslash_escaped);
                     backslash_escaped = false;
@@ -1685,6 +1708,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.tree[child].item.end = last_nonblank_ix;
         }
         self.pop(end_ix);
+        self.list_interrupted_paragraph = true;
         ix
     }
 
@@ -1873,16 +1897,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.pop(ix);
             }
         }
-        if self.last_line_blank {
-            if let Some(node_ix) = self.tree.peek_grandparent() {
-                if let ItemBody::List(ref mut is_tight, _, _)
-                | ItemBody::DefinitionList(ref mut is_tight) = self.tree[node_ix].item.body
-                {
-                    *is_tight = false;
-                }
-            }
-            self.last_line_blank = false;
-        }
+        self.last_line_blank = false;
     }
 
     fn finish_empty_list_item(&mut self) {
@@ -2002,7 +2017,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             let header_text = &bytes[header_start..content_end];
             let mut limit = header_text
                 .iter()
-                .rposition(|&b| !(b == b'\n' || b == b'\r' || b == b' '))
+                .rposition(|&b| !(b == b'\n' || b == b'\r' || b == b' ' || b == b'\t'))
                 .map_or(0, |i| i + 1);
             let closer = header_text[..limit]
                 .iter()
@@ -2011,7 +2026,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if closer == 0 {
                 limit = closer;
             } else {
-                let spaces = scan_rev_while(&header_text[..closer], |b| b == b' ');
+                let spaces = scan_rev_while(&header_text[..closer], |b| b == b' ' || b == b'\t');
                 if spaces > 0 {
                     limit = closer - spaces;
                 }
@@ -2339,7 +2354,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // ---|---|---
         //  d | e | f
         // ```
-        if !self.options.contains(Options::ENABLE_TABLES) || !bytes.starts_with(b"|") {
+        if !self.options.contains(Options::ENABLE_TABLES) {
             return false;
         }
 
@@ -2424,12 +2439,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let header_bytes = &self.text.as_bytes()[header_start..header_end];
         let (content_len, attr_block_range_rel) =
             extract_attribute_block_content_from_header_text(header_bytes);
-        let content_end = header_start + content_len;
         let attrs = attr_block_range_rel.and_then(|r| {
             parse_inside_attribute_block(
                 &self.text[(header_start + r.start)..(header_start + r.end)],
             )
         });
+        let content_end = if attrs.is_some() {
+            header_start + content_len
+        } else {
+            header_end
+        };
         (content_end, attrs)
     }
 }
@@ -2636,7 +2655,9 @@ fn delim_run_can_open(
         }
     }
     let delim = suffix.bytes().next().unwrap();
-    // `*`, `~~`, and `^` can be intraword, `~` can only be interword if it's subscript, `_` cannot
+    if delim == b'*' && (next_char == '*' || next_char == '_' || next_char == '~') {
+        return true;
+    }
     if (delim == b'*' || delim == b'^') && !is_punctuation(next_char) {
         return true;
     }
@@ -2649,6 +2670,11 @@ fn delim_run_can_open(
         && !is_punctuation(next_char)
     {
         return true;
+    }
+    if delim == b'~' && options.contains(Options::ENABLE_STRIKETHROUGH) && run_len == 1 {
+        return !is_punctuation(next_char)
+            || (is_punctuation(next_char)
+                && (prev_char.is_whitespace() || is_punctuation(prev_char)));
     }
 
     prev_char.is_whitespace()
@@ -2687,14 +2713,22 @@ fn delim_run_can_close(
         }
     }
     let delim = suffix.bytes().next().unwrap();
-    // `*`, `~~`, and `^` can be intraword, `~` can only be interword if it's subscript, `_` cannot
-    if (delim == b'*' || delim == b'^' || (delim == b'~' && run_len > 1))
-        && !is_punctuation(prev_char)
-    {
+    if delim == b'*' && (prev_char == '*' || prev_char == '_' || prev_char == '~') {
+        return true;
+    }
+    if (delim == b'*' || delim == b'^') && !is_punctuation(prev_char) {
+        return true;
+    }
+    if delim == b'~' && run_len > 1 && !is_punctuation(prev_char) {
         return true;
     }
     if delim == b'~' && (prev_char == '~' || options.contains(Options::ENABLE_SUBSCRIPT)) {
         return true;
+    }
+    if delim == b'~' && options.contains(Options::ENABLE_STRIKETHROUGH) && run_len == 1 {
+        return !is_punctuation(prev_char)
+            || (is_punctuation(prev_char)
+                && (next_char.is_whitespace() || is_punctuation(next_char)));
     }
 
     next_char.is_whitespace() || is_punctuation(next_char)
@@ -2935,6 +2969,9 @@ fn parse_inside_attribute_block(inside_attr_block: &str) -> Option<HeadingAttrib
         }
     }
 
+    if id.is_none() && classes.is_empty() && attrs.is_empty() {
+        return None;
+    }
     Some(HeadingAttributes { id, classes, attrs })
 }
 

@@ -210,8 +210,6 @@ function _createMdxContent(props) {
     return _jsxs(_Fragment, { children: [
         1,
         \"\\n\",
-        \" \",
-        \"\\n\",
         2
     ] });
 }

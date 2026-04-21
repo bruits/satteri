@@ -267,9 +267,8 @@ export function markdownToHtml(
   const { mdastPlugins = [], hastPlugins = [], features, filename = "<unknown>" } = options;
   const nativeFeatures = featuresToNative(features);
 
-  if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
-    return parseToHtml(source, nativeFeatures);
-  }
+  // TODO: When there's no plugins, we shouldn't go through all the steps below, we could just call parseToHtml directly.
+  // However right now pulldown-cmark's HTML output is super different from our target (unified's). So until that's fixed, we'll do the slower pipeline
 
   const handleResult = createHastHandleFromMdast(
     source,

@@ -691,7 +691,7 @@ impl<'input> ParserInner<'input> {
                         search_count -= 1;
                         if search_count == 0 {
                             self.tree[cur_ix].item.body = ItemBody::Text {
-                                backslash_escaped: false,
+                                backslash_escaped: true,
                             };
                             prev = cur;
                             cur = self.tree[cur_ix].next;
@@ -706,7 +706,7 @@ impl<'input> ParserInner<'input> {
                             self.make_code_span(cur_ix, scan_ix, preceded_by_backslash);
                         } else {
                             self.tree[cur_ix].item.body = ItemBody::Text {
-                                backslash_escaped: false,
+                                backslash_escaped: preceded_by_backslash,
                             };
                         }
                     } else {
@@ -733,7 +733,7 @@ impl<'input> ParserInner<'input> {
                         }
                         if scan.is_none() {
                             self.tree[cur_ix].item.body = ItemBody::Text {
-                                backslash_escaped: false,
+                                backslash_escaped: preceded_by_backslash,
                             };
                         }
                     }
@@ -1486,8 +1486,11 @@ impl<'input> ParserInner<'input> {
             if c == b'\r' || c == b'\n' {
                 let buf = buf.get_or_insert_with(|| String::with_capacity(spanned_bytes.len()));
                 buf.push_str(&spanned_text[start_ix..ix]);
-                buf.push(' ');
+                buf.push('\n');
                 ix += 1;
+                if c == b'\r' && spanned_bytes.get(ix) == Some(&b'\n') {
+                    ix += 1;
+                }
                 ix += skip_container_prefixes(&self.tree, &spanned_bytes[ix..], self.options);
                 start_ix = ix;
             } else if c == b'\\'
@@ -1512,9 +1515,9 @@ impl<'input> ParserInner<'input> {
                 spanned_text
             };
             (
-                s.as_bytes().first() == Some(&b' '),
-                s.as_bytes().last() == Some(&b' '),
-                s.bytes().all(|b| b == b' '),
+                matches!(s.as_bytes().first(), Some(b' ' | b'\n')),
+                matches!(s.as_bytes().last(), Some(b' ' | b'\n')),
+                s.bytes().all(|b| b == b' ' || b == b'\n'),
             )
         };
 

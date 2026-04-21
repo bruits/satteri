@@ -2,9 +2,13 @@ import { describe, test, expect } from "vitest";
 import { remark } from "remark";
 import remarkMdx from "remark-mdx";
 import { toHast } from "mdast-util-to-hast";
+import { pathToFileURL } from "node:url";
 import { mdxToMdast, mdxToHast } from "../../src/index.js";
 
-const mdxParser = remark().use(remarkMdx);
+const { remarkMarkAndUnravel } = await import(
+  pathToFileURL("node_modules/@mdx-js/mdx/lib/plugin/remark-mark-and-unravel.js").href
+);
+const mdxParser = remark().use(remarkMdx).use(remarkMarkAndUnravel);
 
 const MDX_PASS_THROUGH_NODES = [
   "mdxJsxFlowElement",
@@ -33,7 +37,7 @@ function stripPositionsAndEstree(node: unknown): unknown {
 }
 
 function referenceMdast(input: string): unknown {
-  return stripPositionsAndEstree(mdxParser.parse(input));
+  return stripPositionsAndEstree(mdxParser.runSync(mdxParser.parse(input)));
 }
 
 function satteriMdast(input: string): unknown {
@@ -47,7 +51,7 @@ function assertMdastConformance(input: string): void {
 }
 
 function referenceHast(input: string): unknown {
-  const mdast = mdxParser.parse(input);
+  const mdast = mdxParser.runSync(mdxParser.parse(input));
   return stripPositionsAndEstree(
     toHast(mdast, { allowDangerousHtml: true, passThrough: MDX_PASS_THROUGH_NODES }),
   );
@@ -150,14 +154,8 @@ describe("MDX HAST conformance", () => {
     assertHastConformance("<Foo bar={1}/>\n");
   });
 
-  // toHast with passThrough doesn't do MDX paragraph unraveling, but
-  // @mdx-js/mdx does (no <p> wrapper for JSX-only paragraphs). Sätteri
-  // matches @mdx-js/mdx behavior here, which the HTML conformance tests verify.
-  test("flow element with children (unraveled)", () => {
-    const sat = satteriHastTree("<Box>hello</Box>\n") as any;
-    // Should be unraveled: root > mdxJsxTextElement (no <p> wrapper)
-    expect(sat.children[0].type).toBe("mdxJsxTextElement");
-    expect(sat.children[0].name).toBe("Box");
+  test("flow element with children", () => {
+    assertHastConformance("<Box>hello</Box>\n");
   });
 
   test("inline JSX in paragraph", () => {
@@ -190,5 +188,39 @@ describe("MDX HAST conformance", () => {
 
   test("markdown paragraph with JSX and text", () => {
     assertHastConformance("hello <Foo/> world\n");
+  });
+
+  test("fragment with expression is flow", () => {
+    assertMdastConformance("<>{998}</>");
+    assertHastConformance("<>{998}</>");
+  });
+
+  test("fragment with text unraveled to flow", () => {
+    assertMdastConformance("<>hello</>");
+    assertHastConformance("<>hello</>");
+  });
+
+  test("fragment with backtick expression is flow", () => {
+    assertMdastConformance("<>{`code`}</>");
+    assertHastConformance("<>{`code`}</>");
+  });
+
+  test("expression then JSX on same line is flow", () => {
+    assertMdastConformance("{-83} <Box/>");
+    assertHastConformance("{-83} <Box/>");
+  });
+
+  test("two consecutive expressions unraveled to flow", () => {
+    assertMdastConformance("{-417} {-333}");
+    assertHastConformance("{-417} {-333}");
+  });
+
+  test("JSX then two expressions unraveled to flow", () => {
+    assertMdastConformance("<Box/> {42} {43}");
+    assertHastConformance("<Box/> {42} {43}");
+  });
+
+  test("expr JSX expr is flow", () => {
+    assertMdastConformance("{expr} <Box/> {42}");
   });
 });

@@ -1,7 +1,7 @@
 //! Direct arena builder: walks the pulldown-cmark internal tree and builds
 //! a `satteri_arena::Arena` without going through the Event iterator.
 
-use satteri_arena::{Arena, ArenaBuilder, LineIndex, StringRef};
+use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, LineIndex, StringRef};
 use satteri_ast::mdast::{
     encode_mdx_jsx_element_data, encode_table_data, CodeData, ColumnAlign, ExpressionData,
     FootnoteDefinitionData, ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType,
@@ -12,7 +12,7 @@ use satteri_ast::shared::{
 };
 
 use crate::parse::{DefaultParserCallbacks, ItemBody, JsxAttr, ParserInner};
-use crate::{Alignment, HeadingLevel, Options};
+use crate::{Alignment, HeadingLevel, LinkType, Options};
 
 /// Default options: tables, footnotes, strikethrough, task lists, math, heading attributes, YAML metadata.
 pub const DEFAULT_OPTIONS: Options = Options::from_bits_truncate(
@@ -148,13 +148,15 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             let orig_start = node.start_offset;
                             let orig_start_line = node.start_line;
                             let orig_start_col = node.start_column;
+                            let raw_end = item.end as u32;
+                            let (raw_end_line, raw_end_col) = cursor.offset_to_line_col(raw_end);
                             builder.set_position_current(
                                 orig_start,
-                                end,
+                                raw_end,
                                 orig_start_line,
                                 orig_start_col,
-                                end_line,
-                                end_col,
+                                raw_end_line,
+                                raw_end_col,
                             );
                             builder.set_data_current(&sr.as_bytes());
                             builder.close_node();
@@ -211,6 +213,105 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         );
                         builder.close_node();
                     }
+                    ItemBody::ListItem(_) => {
+                        let id = builder.current_node_id();
+                        let is_spread = {
+                            let mut child = inner.tree[ix].child;
+                            let mut para_count = 0u32;
+                            let mut has_other_block = false;
+                            while let Some(c) = child {
+                                match inner.tree[c].item.body {
+                                    ItemBody::Paragraph | ItemBody::TightParagraph => {
+                                        para_count += 1;
+                                    }
+                                    _ if inner.tree[c].item.body.is_block_level()
+                                        && !matches!(inner.tree[c].item.body,
+                                            ItemBody::List(..) | ItemBody::BlockQuote(..)
+                                            | ItemBody::DefinitionList(..)
+                                            | ItemBody::Container(..)
+                                            | ItemBody::ListItem(..)
+                                        ) =>
+                                    {
+                                        has_other_block = true;
+                                    }
+                                    _ => {}
+                                }
+                                child = inner.tree[c].next;
+                            }
+                            para_count > 1 || (para_count >= 1 && has_other_block)
+                        };
+                        if is_spread {
+                            let existing = builder.arena_ref().get_type_data(id).to_vec();
+                            if existing.len() >= 2 {
+                                let mut data = existing;
+                                data[1] = 1; // spread = true
+                                builder.set_data_current(&data);
+                            }
+                        }
+                        let node = builder.arena_ref().get_node(id);
+                        let orig_start = node.start_offset;
+                        let orig_start_line = node.start_line;
+                        let orig_start_col = node.start_column;
+                        let (cont_end, cont_end_line, cont_end_col) =
+                            if let Some(last_child) = builder.last_sibling_id() {
+                                let lc = builder.arena_ref().get_node(last_child);
+                                (lc.end_offset, lc.end_line, lc.end_column)
+                            } else {
+                                (end, end_line, end_col)
+                            };
+                        builder.set_position_current(
+                            orig_start,
+                            cont_end,
+                            orig_start_line,
+                            orig_start_col,
+                            cont_end_line,
+                            cont_end_col,
+                        );
+                        builder.close_node();
+                    }
+                    ItemBody::List(is_tight, _, _) => {
+                        let id = builder.current_node_id();
+                        let any_item_spread = {
+                            let children = builder.arena_ref().get_children(id).to_vec();
+                            children.iter().any(|&child_id| {
+                                let cdata = builder.arena_ref().get_type_data(child_id);
+                                if cdata.len() >= 2 {
+                                    cdata[1] != 0
+                                } else {
+                                    false
+                                }
+                            })
+                        };
+                        if !is_tight || any_item_spread {
+                            let existing = builder.arena_ref().get_type_data(id).to_vec();
+                            if existing.len() >= 8 && existing[5] == 0 {
+                                let mut data = existing;
+                                data[5] = 1;
+                                builder.set_data_current(&data);
+                            }
+                        }
+                        let id = builder.current_node_id();
+                        let node = builder.arena_ref().get_node(id);
+                        let orig_start = node.start_offset;
+                        let orig_start_line = node.start_line;
+                        let orig_start_col = node.start_column;
+                        let (cont_end, cont_end_line, cont_end_col) =
+                            if let Some(last_child) = builder.last_sibling_id() {
+                                let lc = builder.arena_ref().get_node(last_child);
+                                (lc.end_offset, lc.end_line, lc.end_column)
+                            } else {
+                                (end, end_line, end_col)
+                            };
+                        builder.set_position_current(
+                            orig_start,
+                            cont_end,
+                            orig_start_line,
+                            orig_start_col,
+                            cont_end_line,
+                            cont_end_col,
+                        );
+                        builder.close_node();
+                    }
                     // Regular container close.
                     _ => {
                         let id = builder.current_node_id();
@@ -218,13 +319,28 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let orig_start = node.start_offset;
                         let orig_start_line = node.start_line;
                         let orig_start_col = node.start_column;
+                        let use_last_child = matches!(
+                            item.body,
+                            ItemBody::BlockQuote(..)
+                                | ItemBody::Container(..)
+                        );
+                        let (cont_end, cont_end_line, cont_end_col) = if use_last_child {
+                            if let Some(last_child) = builder.last_sibling_id() {
+                                let lc = builder.arena_ref().get_node(last_child);
+                                (lc.end_offset, lc.end_line, lc.end_column)
+                            } else {
+                                (end, end_line, end_col)
+                            }
+                        } else {
+                            (end, end_line, end_col)
+                        };
                         builder.set_position_current(
                             orig_start,
-                            end,
+                            cont_end,
                             orig_start_line,
                             orig_start_col,
-                            end_line,
-                            end_col,
+                            cont_end_line,
+                            cont_end_col,
                         );
                         builder.close_node();
                     }
@@ -266,10 +382,19 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                 }
 
                 if let Some(buf) = code_block_buf.as_mut() {
-                    if let ItemBody::Text { .. } = &item.body {
-                        buf.push_str(&source[item.start..item.end]);
-                        inner.tree.next_sibling(cur_ix);
-                        continue;
+                    match &item.body {
+                        ItemBody::Text { .. } => {
+                            buf.push_str(&source[item.start..item.end]);
+                            inner.tree.next_sibling(cur_ix);
+                            continue;
+                        }
+                        ItemBody::SynthesizeText(cow_ix) => {
+                            let cow = inner.allocs.take_cow(*cow_ix);
+                            buf.push_str(&cow);
+                            inner.tree.next_sibling(cur_ix);
+                            continue;
+                        }
+                        _ => {}
                     }
                 }
 
@@ -469,8 +594,13 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         inner.tree.push();
                     }
                     ItemBody::Link(link_ix) => {
-                        let (_link_type, dest_url, title, _id) = inner.allocs.take_link(link_ix);
-                        let url_ref = builder.alloc_string(&dest_url);
+                        let (link_type, dest_url, title, _id) = inner.allocs.take_link(link_ix);
+                        let url_ref = if matches!(link_type, LinkType::Email) {
+                            let mailto = format!("mailto:{}", &*dest_url);
+                            builder.alloc_string(&mailto)
+                        } else {
+                            builder.alloc_string(&dest_url)
+                        };
                         let title_ref = if title.is_empty() {
                             StringRef::empty()
                         } else {
@@ -788,17 +918,50 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::SoftBreak => {
-                        let sr = builder.alloc_string("\n");
-                        builder.add_leaf_full(
-                            MdastNodeType::Text as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                            &sr.as_bytes(),
-                        );
+                        let prev_id = builder.last_sibling_id();
+                        let merged = if let Some(pid) = prev_id {
+                            let prev = builder.arena_ref().get_node(pid);
+                            if prev.node_type == MdastNodeType::Text as u8 {
+                                let prev_data = builder.arena_ref().get_type_data(pid);
+                                if prev_data.len() >= 8 {
+                                    let prev_sr = StringRef::from_bytes(prev_data);
+                                    let prev_text = builder.arena_ref().get_str(prev_sr);
+                                    let combined = [prev_text, "\n"].concat();
+                                    let new_sr = builder.alloc_string(&combined);
+                                    let pn = builder.arena_ref().get_node(pid);
+                                    builder.update_leaf_full(
+                                        pid,
+                                        pn.start_offset,
+                                        end,
+                                        pn.start_line,
+                                        pn.start_column,
+                                        end_line,
+                                        end_col,
+                                        &new_sr.as_bytes(),
+                                    );
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if !merged {
+                            let sr = builder.alloc_string("\n");
+                            builder.add_leaf_full(
+                                MdastNodeType::Text as u8,
+                                start,
+                                end,
+                                start_line,
+                                start_col,
+                                end_line,
+                                end_col,
+                                &sr.as_bytes(),
+                            );
+                        }
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::HardBreak(_) => {
@@ -815,14 +978,22 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::Rule => {
+                        let mut rule_end = end;
+                        let src = source.as_bytes();
+                        while rule_end > start
+                            && matches!(src.get(rule_end as usize - 1), Some(b'\n' | b'\r'))
+                        {
+                            rule_end -= 1;
+                        }
+                        let (rule_end_line, rule_end_col) = cursor.offset_to_line_col(rule_end);
                         builder.add_leaf_full(
                             MdastNodeType::ThematicBreak as u8,
                             start,
-                            end,
+                            rule_end,
                             start_line,
                             start_col,
-                            end_line,
-                            end_col,
+                            rule_end_line,
+                            rule_end_col,
                             &[],
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -948,18 +1119,51 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     | ItemBody::MaybeLinkOpen
                     | ItemBody::MaybeLinkClose(..)
                     | ItemBody::MaybeImage => {
-                        // Treat as text.
-                        let sr = StringRef::new(start, end - start);
-                        builder.add_leaf_full(
-                            MdastNodeType::Text as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                            &sr.as_bytes(),
-                        );
+                        let text_value: &str = &source[item.start..item.end];
+                        let prev_id = builder.last_sibling_id();
+                        let merged = if let Some(pid) = prev_id {
+                            let prev = builder.arena_ref().get_node(pid);
+                            if prev.node_type == MdastNodeType::Text as u8 {
+                                let prev_data = builder.arena_ref().get_type_data(pid);
+                                if prev_data.len() >= 8 {
+                                    let prev_sr = StringRef::from_bytes(prev_data);
+                                    let prev_text = builder.arena_ref().get_str(prev_sr);
+                                    let combined = [prev_text, text_value].concat();
+                                    let new_sr = builder.alloc_string(&combined);
+                                    let pn = builder.arena_ref().get_node(pid);
+                                    builder.update_leaf_full(
+                                        pid,
+                                        pn.start_offset,
+                                        end,
+                                        pn.start_line,
+                                        pn.start_column,
+                                        end_line,
+                                        end_col,
+                                        &new_sr.as_bytes(),
+                                    );
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if !merged {
+                            let sr = StringRef::new(start, end - start);
+                            builder.add_leaf_full(
+                                MdastNodeType::Text as u8,
+                                start,
+                                end,
+                                start_line,
+                                start_col,
+                                end_line,
+                                end_col,
+                                &sr.as_bytes(),
+                            );
+                        }
                         inner.tree.next_sibling(cur_ix);
                     }
 
@@ -996,7 +1200,86 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
     builder.close_node();
     let mut arena = builder.finish();
     arena.parse_options = options.bits();
+
+    if options.contains(Options::ENABLE_MDX) {
+        mdx_mark_and_unravel(&mut arena);
+    }
+
     (arena, mdx_errors)
+}
+
+fn mdx_mark_and_unravel(arena: &mut Arena) {
+    let len = arena.len() as u32;
+    for id in 0..len {
+        let node = arena.get_node(id);
+        if node.node_type != MdastNodeType::Paragraph as u8 {
+            continue;
+        }
+        let parent_type = MdastNodeType::from_u8(arena.get_node(node.parent).node_type);
+        if matches!(parent_type, Some(MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement)) {
+            continue;
+        }
+        let children = arena.get_children(id).to_vec();
+        if children.is_empty() {
+            continue;
+        }
+        let mut all_mdx = true;
+        let mut has_mdx = false;
+        for &child_id in &children {
+            let child = arena.get_node(child_id);
+            match MdastNodeType::from_u8(child.node_type) {
+                Some(MdastNodeType::MdxJsxTextElement | MdastNodeType::MdxTextExpression) => {
+                    has_mdx = true;
+                }
+                Some(MdastNodeType::Text) => {
+                    let data = arena.get_type_data(child_id);
+                    if !data.is_empty() {
+                            let sr = decode_string_ref_data(data);
+                        let text = arena.get_str(sr);
+                        if !text.chars().all(|c| c.is_ascii_whitespace()) {
+                            all_mdx = false;
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    all_mdx = false;
+                    break;
+                }
+            }
+        }
+        if !all_mdx || !has_mdx {
+            continue;
+        }
+        let mut promoted: Vec<u32> = Vec::new();
+        for &child_id in &children {
+            let child = arena.get_node(child_id);
+            match MdastNodeType::from_u8(child.node_type) {
+                Some(MdastNodeType::MdxJsxTextElement) => {
+                    arena.get_node_mut(child_id).node_type = MdastNodeType::MdxJsxFlowElement as u8;
+                    promoted.push(child_id);
+                }
+                Some(MdastNodeType::MdxTextExpression) => {
+                    arena.get_node_mut(child_id).node_type = MdastNodeType::MdxFlowExpression as u8;
+                    promoted.push(child_id);
+                }
+                Some(MdastNodeType::Text) => {
+                    let data = arena.get_type_data(child_id);
+                    if !data.is_empty() {
+                            let sr = decode_string_ref_data(data);
+                        let text = arena.get_str(sr);
+                        if !text.chars().all(|c| c.is_ascii_whitespace()) {
+                            promoted.push(child_id);
+                        }
+                    }
+                }
+                _ => {
+                    promoted.push(child_id);
+                }
+            }
+        }
+        arena.replace_node_with_children(id, &promoted);
+    }
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {

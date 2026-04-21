@@ -303,10 +303,10 @@ function decodeProperties(
   view: DataView,
   buf: Uint8Array,
   pos: number,
-): Record<string, string | boolean | string[]> {
+): Record<string, string | number | boolean | string[]> {
   const propCount = view.getUint16(pos, true);
   pos += 2;
-  const properties: Record<string, string | boolean | string[]> = {};
+  const properties: Record<string, string | number | boolean | string[]> = {};
   for (let i = 0; i < propCount; i++) {
     const nameLen = view.getUint16(pos, true);
     pos += 2;
@@ -329,6 +329,9 @@ function decodeProperties(
         break;
       case 3: // PROP_SPACE_SEP
         properties[name] = valStr.split(" ").filter((s) => s.length > 0);
+        break;
+      case 5: // PROP_INT
+        properties[name] = Number(valStr);
         break;
     }
   }
@@ -355,7 +358,7 @@ class WalkElement {
   /** @internal */ _dataPos!: number;
   /** @internal */ _dataLen!: number;
 
-  get properties(): Record<string, string | boolean | string[]> {
+  get properties(): Record<string, string | number | boolean | string[]> {
     const val = decodeProperties(this._view, this._buf, this._propsPos);
     Object.defineProperty(this, "properties", {
       value: val,

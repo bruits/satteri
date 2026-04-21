@@ -111,7 +111,8 @@ where
                 }
                 Code(text) => {
                     self.write("<code>")?;
-                    escape_html_body_text(&mut self.writer, &text)?;
+                    let html_text = text.replace('\n', " ");
+                    escape_html_body_text(&mut self.writer, &html_text)?;
                     self.write("</code>")?;
                 }
                 InlineMath(text) => {

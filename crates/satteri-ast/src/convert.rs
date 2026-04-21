@@ -10,9 +10,45 @@ use crate::mdast::{
     decode_footnote_definition_data, decode_heading_data, decode_image_data, decode_link_data,
     decode_list_data, decode_list_item_data, decode_math_data, decode_mdx_jsx_attr,
     decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name, decode_reference_data,
-    decode_table_alignments, encode_mdx_jsx_element_data, ColumnAlign, MdastNodeType,
+    decode_table_alignments, encode_mdx_jsx_element_data, ColumnAlign, ListItemData,
+    MdastNodeType,
 };
-use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_SPACE_SEP, PROP_STRING};
+use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
+
+fn encode_url(builder: &mut ArenaBuilder, url: &str) -> StringRef {
+    if url.bytes().all(|b| is_url_safe(b)) {
+        return builder.alloc_string(url);
+    }
+    let mut encoded = String::with_capacity(url.len() * 2);
+    for byte in url.bytes() {
+        if is_url_safe(byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(hex_digit(byte >> 4));
+            encoded.push(hex_digit(byte & 0xf));
+        }
+    }
+    builder.alloc_string(&encoded)
+}
+
+fn is_url_safe(b: u8) -> bool {
+    matches!(b,
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+        | b'-' | b'.' | b'_' | b'~'
+        | b':' | b'/' | b'?' | b'#' | b'[' | b']' | b'@'
+        | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'='
+        | b'%'
+    )
+}
+
+fn hex_digit(n: u8) -> char {
+    match n {
+        0..=9 => (b'0' + n) as char,
+        10..=15 => (b'A' + n - 10) as char,
+        _ => unreachable!(),
+    }
+}
 
 /// Convert an MDAST arena directly to a HAST arena.
 pub fn mdast_arena_to_hast_arena(source: &Arena) -> Arena {
@@ -337,7 +373,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             if list_data.ordered && list_data.start != 1 {
                 start_str = list_data.start.to_string();
                 start_ref = builder.alloc_string(&start_str);
-                prop_specs.push(("start", PROP_STRING, start_ref));
+                prop_specs.push(("start", PROP_INT, start_ref));
             }
             if has_task_items {
                 class_ref = builder.alloc_string("contains-task-list");
@@ -373,47 +409,28 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             }
             copy_position(node_id, view, builder);
 
-            if is_task {
-                let item_data = item_data.expect("is_task implies item_data is Some");
-                let type_ref = builder.alloc_string("checkbox");
-                if item_data.checked == 1 {
-                    let props = build_props(
-                        builder,
-                        &[
-                            ("type", PROP_STRING, type_ref),
-                            ("disabled", PROP_BOOL_TRUE, StringRef::empty()),
-                            ("checked", PROP_BOOL_TRUE, StringRef::empty()),
-                        ],
-                    );
-                    add_void_element_with_props(builder, "input", &props);
-                } else {
-                    let props = build_props(
-                        builder,
-                        &[
-                            ("type", PROP_STRING, type_ref),
-                            ("checked", PROP_BOOL_FALSE, StringRef::empty()),
-                            ("disabled", PROP_BOOL_TRUE, StringRef::empty()),
-                        ],
-                    );
-                    add_void_element_with_props(builder, "input", &props);
-                }
-                add_text_node(builder, " ");
-            }
-            // Use parent list's spread, not the item's, to decide
-            // whether to wrap content in <p> tags.
             let parent_id = view.get_node(node_id).parent;
-            let parent_spread = {
+            let loose = {
                 let pd = view.get_type_data(parent_id);
-                if !pd.is_empty() {
-                    decode_list_data(pd).spread
+                if !pd.is_empty() && decode_list_data(pd).spread {
+                    true
                 } else {
-                    false
+                    view.get_children(parent_id).iter().any(|&sibling_id| {
+                        let sd = view.get_type_data(sibling_id);
+                        !sd.is_empty() && decode_list_item_data(sd).spread
+                    })
                 }
             };
-            if parent_spread {
-                convert_children_with_newlines(node_id, view, builder, ctx);
+            if loose {
+                convert_children_with_newlines_task(
+                    node_id, view, builder, ctx,
+                    is_task.then(|| item_data.unwrap()),
+                );
             } else {
-                convert_children_unwrap_paragraphs(node_id, view, builder, ctx);
+                convert_children_unwrap_paragraphs_task(
+                    node_id, view, builder, ctx,
+                    is_task.then(|| item_data.unwrap()),
+                );
             }
             builder.close_node();
         }
@@ -421,7 +438,8 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         Some(MdastNodeType::Html) => {
             let data = view.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
-            let id = add_raw_node(builder, view.get_str(string_ref));
+            let value = view.get_str(string_ref).trim_end_matches('\n');
+            let id = add_raw_node(builder, value);
             copy_position_to(id, node_id, view, builder);
         }
 
@@ -451,8 +469,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 builder.arena_mut().set_node_data(code_id, json);
             }
 
-            // mdast-util-to-hast always ends code content with \n
-            if value.ends_with('\n') {
+            if value.is_empty() {
                 add_text_node(builder, value);
             } else {
                 let mut buf = String::with_capacity(value.len() + 1);
@@ -490,8 +507,15 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             let string_ref = decode_string_ref_data(data);
             open_element(builder, "code");
             copy_position(node_id, view, builder);
-            let text_id = add_text_node(builder, view.get_str(string_ref));
-            copy_position_to(text_id, node_id, view, builder);
+            let value = view.get_str(string_ref);
+            if value.contains('\n') {
+                let normalized = value.replace('\n', " ");
+                let text_id = add_text_node(builder, &normalized);
+                copy_position_to(text_id, node_id, view, builder);
+            } else {
+                let text_id = add_text_node(builder, value);
+                copy_position_to(text_id, node_id, view, builder);
+            }
             builder.close_node();
         }
 
@@ -504,7 +528,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         Some(MdastNodeType::Link) => {
             let data = view.get_type_data(node_id);
             let link_data = decode_link_data(data);
-            let url_ref = builder.alloc_string(view.get_str(link_data.url));
+            let url_ref = encode_url(builder, view.get_str(link_data.url));
             if link_data.title.len > 0 {
                 let title_ref = builder.alloc_string(view.get_str(link_data.title));
                 let props = build_props(
@@ -527,7 +551,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         Some(MdastNodeType::Image) => {
             let data = view.get_type_data(node_id);
             let img_data = decode_image_data(data);
-            let url_ref = builder.alloc_string(view.get_str(img_data.url));
+            let url_ref = encode_url(builder, view.get_str(img_data.url));
             let alt_ref = builder.alloc_string(view.get_str(img_data.alt));
             let id = if img_data.title.len > 0 {
                 let title_ref = builder.alloc_string(view.get_str(img_data.title));
@@ -635,8 +659,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 let rd = decode_reference_data(data);
                 let identifier = view.get_str(rd.identifier);
                 if let Some(def) = find_def(ctx.defs, view, identifier) {
-                    // StringRefs from MDAST source are valid in HAST builder (same source).
-                    let url_ref = def.url;
+                    let url_ref = encode_url(builder, view.get_str(def.url));
                     if !def.title.is_empty() {
                         let title_ref = def.title;
                         let props = build_props(
@@ -668,7 +691,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 let identifier = view.get_str(rd.identifier);
                 if let Some(def) = find_def(ctx.defs, view, identifier) {
                     let alt = extract_text_content(node_id, view);
-                    let url_ref = def.url;
+                    let url_ref = encode_url(builder, view.get_str(def.url));
                     let alt_ref = builder.alloc_string(&alt);
                     let id = if !def.title.is_empty() {
                         let title_ref = def.title;
@@ -877,25 +900,13 @@ fn convert_children_with_newlines(
     ctx: &ConvertCtx<'_, '_>,
 ) {
     let children = view.get_children(node_id);
+    add_text_node(builder, "\n");
     if children.is_empty() {
         return;
     }
-    add_text_node(builder, "\n");
     for &child_id in children {
-        let child_node = view.get_node(child_id);
-        let is_unraveled = MdastNodeType::from_u8(child_node.node_type)
-            == Some(MdastNodeType::Paragraph)
-            && is_mdx_only_paragraph(child_id, view);
-        if is_unraveled {
-            let para_children = view.get_children(child_id);
-            for &para_child_id in para_children {
-                convert_node(para_child_id, view, builder, ctx);
-                add_text_node(builder, "\n");
-            }
-        } else {
-            convert_node(child_id, view, builder, ctx);
-            add_text_node(builder, "\n");
-        }
+        convert_node(child_id, view, builder, ctx);
+        add_text_node(builder, "\n");
     }
 }
 
@@ -921,6 +932,103 @@ fn convert_children_unwrap_paragraphs(
     }
 }
 
+fn emit_checkbox(builder: &mut ArenaBuilder, item_data: ListItemData) {
+    let type_ref = builder.alloc_string("checkbox");
+    if item_data.checked == 1 {
+        let props = build_props(
+            builder,
+            &[
+                ("type", PROP_STRING, type_ref),
+                ("checked", PROP_BOOL_TRUE, StringRef::empty()),
+                ("disabled", PROP_BOOL_TRUE, StringRef::empty()),
+            ],
+        );
+        add_void_element_with_props(builder, "input", &props);
+    } else {
+        let props = build_props(
+            builder,
+            &[
+                ("type", PROP_STRING, type_ref),
+                ("checked", PROP_BOOL_FALSE, StringRef::empty()),
+                ("disabled", PROP_BOOL_TRUE, StringRef::empty()),
+            ],
+        );
+        add_void_element_with_props(builder, "input", &props);
+    }
+    add_text_node(builder, " ");
+}
+
+fn convert_children_with_newlines_task(
+    node_id: u32,
+    view: &Arena,
+    builder: &mut ArenaBuilder,
+    ctx: &ConvertCtx<'_, '_>,
+    task: Option<ListItemData>,
+) {
+    let children = view.get_children(node_id);
+    if children.is_empty() {
+        if let Some(td) = task {
+            add_text_node(builder, "\n");
+            open_element(builder, "p");
+            copy_position(node_id, view, builder);
+            emit_checkbox(builder, td);
+            builder.close_node();
+            add_text_node(builder, "\n");
+        }
+        return;
+    }
+    add_text_node(builder, "\n");
+    let mut first = true;
+    for &child_id in children {
+        let child_node = view.get_node(child_id);
+        let is_para =
+            MdastNodeType::from_u8(child_node.node_type) == Some(MdastNodeType::Paragraph);
+        if first && is_para && task.is_some() {
+            let td = task.unwrap();
+            open_element(builder, "p");
+            copy_position(child_id, view, builder);
+            emit_checkbox(builder, td);
+            convert_children(child_id, view, builder, ctx);
+            builder.close_node();
+        } else if first && task.is_some() {
+            emit_checkbox(builder, task.unwrap());
+            convert_node(child_id, view, builder, ctx);
+        } else {
+            convert_node(child_id, view, builder, ctx);
+        }
+        add_text_node(builder, "\n");
+        first = false;
+    }
+}
+
+fn convert_children_unwrap_paragraphs_task(
+    node_id: u32,
+    view: &Arena,
+    builder: &mut ArenaBuilder,
+    ctx: &ConvertCtx<'_, '_>,
+    task: Option<ListItemData>,
+) {
+    let children = view.get_children(node_id);
+    let mut first = true;
+    for &child_id in children {
+        let child = view.get_node(child_id);
+        if MdastNodeType::from_u8(child.node_type) == Some(MdastNodeType::Paragraph) {
+            if first && task.is_some() {
+                emit_checkbox(builder, task.unwrap());
+            }
+            convert_children(child_id, view, builder, ctx);
+        } else {
+            add_text_node(builder, "\n");
+            if first && task.is_some() {
+                emit_checkbox(builder, task.unwrap());
+            }
+            convert_node(child_id, view, builder, ctx);
+            add_text_node(builder, "\n");
+        }
+        first = false;
+    }
+}
+
 /// Convert children with `\n` text nodes inserted between them.
 /// These are needed by the MDX compilation path (JSX children spacing).
 /// The HTML renderer skips whitespace-only text nodes between block elements.
@@ -933,27 +1041,11 @@ fn convert_children_wrapped(
     let children = view.get_children(node_id);
     let mut first = true;
     for &child_id in children {
-        let child_node = view.get_node(child_id);
-        let is_unraveled_paragraph = MdastNodeType::from_u8(child_node.node_type)
-            == Some(MdastNodeType::Paragraph)
-            && is_mdx_only_paragraph(child_id, view);
-
-        if is_unraveled_paragraph {
-            let para_children = view.get_children(child_id);
-            for &para_child_id in para_children {
-                if !first {
-                    add_text_node(builder, "\n");
-                }
-                first = false;
-                convert_node(para_child_id, view, builder, ctx);
-            }
-        } else {
-            if !first {
-                add_text_node(builder, "\n");
-            }
-            first = false;
-            convert_node(child_id, view, builder, ctx);
+        if !first {
+            add_text_node(builder, "\n");
         }
+        first = false;
+        convert_node(child_id, view, builder, ctx);
     }
 }
 
@@ -1131,7 +1223,7 @@ mod hast_convert_tests {
             ("<Foo/><Bar/>\n", &[100, 100]),
             ("<Box>{1}</Box>\n", &[100]),
             ("<Box><Foo/></Box>\n", &[100]),
-            ("<Box>hello</Box>\n", &[1]), // paragraph
+            ("<Box>hello</Box>\n", &[100]), // unraveled to flow
         ];
         // Match the NAPI binding's default options for MDX
         let opts = satteri_pulldown_cmark::MDX_OPTIONS

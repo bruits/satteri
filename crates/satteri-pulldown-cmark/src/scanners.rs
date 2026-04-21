@@ -423,6 +423,7 @@ impl<'a> LineStart<'a> {
             *self = save;
             return None;
         }
+        self.ix += 1;
         Some(is_checked)
     }
 

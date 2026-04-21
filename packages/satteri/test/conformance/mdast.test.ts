@@ -1,20 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { markdownToMdast } from "../../src/index.js";
-import { unified } from "unified";
-import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
-
-const processor = unified().use(remarkParse).use(remarkGfm);
-
-function referenceMdast(md: string): unknown {
-  return processor.parse(md);
-}
-
-function assertMdastConformance(md: string): void {
-  const satTree = JSON.parse(JSON.stringify(markdownToMdast(md)));
-  const refTree = JSON.parse(JSON.stringify(referenceMdast(md)));
-  expect(satTree).toEqual(refTree);
-}
+import { describe, test } from "vitest";
+import { assertMdastConformance } from "./helpers.js";
 
 describe("MDAST conformance: block elements", () => {
   test("heading", () => {
@@ -159,6 +144,18 @@ describe("MDAST conformance: edge cases", () => {
     assertMdastConformance("~~deleted~~");
   });
 
+  test("GFM single-tilde strikethrough", () => {
+    assertMdastConformance("~deleted~");
+  });
+
+  test("single-tilde strikethrough intraword", () => {
+    assertMdastConformance("]1~lr~ -x");
+  });
+
+  test("single-tilde strikethrough with brackets", () => {
+    assertMdastConformance("{sl~v[ {@~");
+  });
+
   test("heading with inline formatting", () => {
     assertMdastConformance("## The `config` object");
   });
@@ -166,6 +163,115 @@ describe("MDAST conformance: edge cases", () => {
   test("blockquote with formatting", () => {
     assertMdastConformance("> **bold** in quote");
   });
+
+  test("blockquote with leading space", () => {
+    assertMdastConformance(" >~#7f\ndl");
+  });
+
+  test("soft break merges text nodes", () => {
+    assertMdastConformance("^)\n4");
+  });
+
+  test("multiple soft breaks merge text nodes", () => {
+    assertMdastConformance("c\nsq1\nz<o");
+  });
+
+  test("thematic break position excludes trailing newline", () => {
+    assertMdastConformance("***\n\n# l");
+  });
+
+  test("heading positions in multi-block document", () => {
+    assertMdastConformance("# hello\n\nworld");
+  });
+
+  test("task list with double space after checkbox", () => {
+    assertMdastConformance("- [ ]  text");
+  });
+
+  test("list with leading space", () => {
+    assertMdastConformance(" -");
+  });
+
+  test("indented ordered list", () => {
+    assertMdastConformance("  0)");
+  });
+
+  test("emphasis wrapping punctuation (*_*)", () => {
+    assertMdastConformance("\n+u*_*@|q)");
+  });
+
+  test("list spread with trailing content in item", () => {
+    assertMdastConformance("gpr\n\n- e4smu\n- 245t2hw\n\n  m27rz3ex9");
+  });
+
+  test("tabs before newline are not hard break", () => {
+    assertMdastConformance("-v\t\t\nr {l ");
+  });
+
+  test("escaped backtick position", () => {
+    assertMdastConformance("\\`d");
+  });
+
+  test("escaped backtick with leading space", () => {
+    assertMdastConformance(" \\`z");
+  });
+
+  test("single tilde with underscore is not strikethrough", () => {
+    assertMdastConformance("2jj~_|m~<");
+  });
+
+  test("underscore emphasis does not open near attention markers", () => {
+    assertMdastConformance(" ==d_*\\`_");
+  });
+
+  test("html block includes leading space", () => {
+    assertMdastConformance(" <!n=n0p");
+  });
+
+  test("heading trailing tab stripped", () => {
+    assertMdastConformance("# h\t");
+  });
+
+  test("heading trailing tab with closing hashes", () => {
+    assertMdastConformance("# -0 #\t");
+  });
+
+  test("tilde fence with content", () => {
+    assertMdastConformance("~~~)_>u");
+  });
+
+  test("html block with backslash newline", () => {
+    assertMdastConformance("<!o \\\n");
+  });
+
+  test("code span newline kept in mdast", () => {
+    assertMdastConformance(")x_`[>^w\n`");
+  });
+
+  test("escaped backtick followed by backtick", () => {
+    assertMdastConformance("\\``a");
+  });
+
+  test("escaped backtick followed by multiple backticks", () => {
+    assertMdastConformance("\\``)( kpd");
+  });
+
+  test("empty sub-list cannot interrupt paragraph", () => {
+    assertMdastConformance("x\n+ -");
+  });
+
+  test("empty list in blockquote after paragraph", () => {
+    assertMdastConformance("x\n>*");
+  });
+
+  test("blockquote with dash after paragraph", () => {
+    assertMdastConformance("x\n>-");
+  });
+
+  test("empty heading attribute block preserved", () => {
+    assertMdastConformance("#  _i~+{}");
+  });
+
 
   test.skip("reference link", () => {
     // Satteri resolves references eagerly (produces `link` node),

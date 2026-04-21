@@ -7,9 +7,8 @@ pub const PROP_BOOL_FALSE: u8 = 2;
 pub const PROP_SPACE_SEP: u8 = 3;
 pub const PROP_COMMA_SEP: u8 = 4;
 
-// Command wire format value types (MDAST-specific extensions)
-pub const PROP_INT: u8 = 4;
-pub const PROP_NULL: u8 = 5;
+pub const PROP_INT: u8 = 5;
+pub const PROP_NULL: u8 = 6;
 
 // MDX JSX attribute kinds (used in both MDAST and HAST MDX JSX element type_data)
 pub const MDX_ATTR_BOOLEAN_PROP: u8 = 0; // name only, no value

@@ -1,48 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { markdownToHast } from "../../src/index.js";
-import { unified } from "unified";
-import remarkParse from "remark-parse";
-import remarkRehype from "remark-rehype";
-import remarkGfm from "remark-gfm";
-import type { Nodes } from "hast";
-
-const processor = unified()
-  .use(remarkParse)
-  .use(remarkGfm)
-  .use(remarkRehype, { allowDangerousHtml: true });
-
-function referenceHast(md: string): Nodes {
-  const mdast = processor.parse(md);
-  return processor.runSync(mdast) as Nodes;
-}
-
-type AnyNode = Record<string, unknown>;
-
-// Rehype uses the deprecated `align` attribute on table cells; satteri uses
-// `style="text-align: ..."` instead. Normalize rehype's `align` to `style`
-// so the comparison tests structural equivalence.
-function normalizeAlignToStyle(node: AnyNode): AnyNode {
-  if (typeof node !== "object" || node === null) return node;
-  const out = { ...node };
-  if (out.properties && typeof out.properties === "object") {
-    const props = { ...(out.properties as Record<string, unknown>) };
-    if ("align" in props && typeof props.align === "string") {
-      props.style = `text-align: ${props.align}`;
-      delete props.align;
-    }
-    out.properties = props;
-  }
-  if (Array.isArray(out.children)) {
-    out.children = (out.children as AnyNode[]).map(normalizeAlignToStyle);
-  }
-  return out;
-}
-
-function assertHastConformance(md: string): void {
-  const satTree = JSON.parse(JSON.stringify(markdownToHast(md)));
-  const refTree = normalizeAlignToStyle(JSON.parse(JSON.stringify(referenceHast(md))));
-  expect(satTree).toEqual(refTree);
-}
+import { describe, test } from "vitest";
+import { assertHastConformance } from "./helpers.js";
 
 describe("HAST conformance: block elements", () => {
   test("heading", () => {
@@ -187,6 +144,10 @@ describe("HAST conformance: edge cases", () => {
     assertHastConformance("~~deleted~~");
   });
 
+  test("single-tilde strikethrough intraword", () => {
+    assertHastConformance("]1~lr~ -x");
+  });
+
   test("heading with inline formatting", () => {
     assertHastConformance("## The `config` object");
   });
@@ -198,4 +159,129 @@ describe("HAST conformance: edge cases", () => {
   test("reference link", () => {
     assertHastConformance("[text][ref]\n\n[ref]: https://example.com");
   });
+
+  test("soft break merges text nodes", () => {
+    assertHastConformance("]\n< ");
+  });
+
+  test("thematic break position excludes trailing newline", () => {
+    assertHastConformance("---\n\nparagraph");
+  });
+
+  test("task list with double space after checkbox", () => {
+    assertHastConformance("- [x]  text");
+  });
+
+  test("code block with blank line before closing fence", () => {
+    assertHastConformance("```\ng\n\n```");
+  });
+
+  test("code block with blank line and language", () => {
+    assertHastConformance("```rust\n\nmrdtvt\n\n```");
+  });
+
+  test("empty blockquote", () => {
+    assertHastConformance(">");
+  });
+
+  test("emphasis wrapping punctuation (*_*)", () => {
+    assertHastConformance("{0v*_*2");
+  });
+
+  test("list with leading space and content", () => {
+    assertHastConformance(" * 3g");
+  });
+
+  test("ordered list start as number", () => {
+    assertHastConformance("0)");
+  });
+
+  test("tabs before newline are not hard break", () => {
+    assertHastConformance("-v\t\t\nr {l ");
+  });
+
+  test("escaped backtick position", () => {
+    assertHastConformance("\\`d");
+  });
+
+  test("escaped backtick with leading space", () => {
+    assertHastConformance(" \\`z");
+  });
+
+  test("autolink email adds mailto", () => {
+    assertHastConformance("<x_@6>{|1");
+  });
+
+  test("autolink email in code context", () => {
+    assertHastConformance("`g<xj@ht>");
+  });
+
+  test("code span newline to space in HAST", () => {
+    assertHastConformance("7m`xy2co\n`");
+  });
+
+  test("code span newline stripped in HAST", () => {
+    assertHastConformance("`\n]~ w`+|)");
+  });
+
+  test("spread task list items HAST structure", () => {
+    assertHastConformance("- [ ] p\n\n- 8rj2\n- 3uabr2\n- xmr");
+  });
+
+  test("spread task list double spread", () => {
+    assertHastConformance("- [x] k\n\n- [x] b16ibm247hrh\n- [ ]  a2cmlb\n\n*88i22p0bt8wy*");
+  });
+
+  test("task list mixed items 1", () => {
+    assertHastConformance("- [x] 0 ud\n- [x] 81h\n\n- b0fxcmh1q\n\n# svk");
+  });
+
+  test("task list mixed items 2", () => {
+    assertHastConformance("- [ ] 7j3xbf\n- [ ] o4m\n\n- [x] 97p2 zwfnr\n- [x] 61fg");
+  });
+
+  test("empty checkbox not task item", () => {
+    assertHastConformance("- [x] o\n- [x] hl9i\n- [x]  ");
+  });
+
+  test("spread empty checkbox not task item", () => {
+    assertHastConformance("###### i69j\n\nw9\n\n- [x] ft\n- [x]  \n- [ ] 9h\n\n**yljwm9**");
+  });
+
+  test("ordered then empty task", () => {
+    assertHastConformance("1. 8tj\n2. 721ruj3\n\n- [ ]  \n- [ ] f mr0\n- [ ] unyrdla7n\n\n- [x] dqof");
+  });
+
+  test("empty task spread paragraph", () => {
+    assertHastConformance("- [ ]  \n\n*9 xjct6yd1*\n\n*k1x4l0*\n\nym\n\n> 440xlhbng\n\n##### 84722");
+  });
+
+  test("ordered then mixed task empty", () => {
+    assertHastConformance("1. 6ewzgkavoqr\n2. tz2ds7kofn\n3. ebhcu3hxls\n\n[ xqi08kw20](https://example.com/qnvjfq)\n\n- nhkl0p54th7h\n\n- [ ]  \n\n**3clittp**");
+  });
+
+  test("spread task list empty item no extra newline", () => {
+    assertHastConformance("- [x] a\n- [x]  \n\n- b");
+  });
+
+  test("item-level spread propagates to all siblings", () => {
+    assertHastConformance("- a\n- b\n\n  c");
+  });
+
+  test("empty list in blockquote after paragraph", () => {
+    assertHastConformance("x\n>*");
+  });
+
+  test("empty list with space in blockquote after paragraph", () => {
+    assertHastConformance("x\n> *");
+  });
+
+  test("unclosed code fence has empty content", () => {
+    assertHastConformance("```~q");
+  });
+
+  test("autolink email encodes special chars in href", () => {
+    assertHastConformance("<{{@8-w>");
+  });
+
 });
