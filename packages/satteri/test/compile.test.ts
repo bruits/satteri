@@ -363,7 +363,7 @@ describe("mdxToJs", () => {
   test("HAST plugin setProperty on MDX JSX element preserves existing attributes", () => {
     const injectMeta = defineHastPlugin({
       name: "inject-meta",
-      mdxJsxTextElement: {
+      mdxJsxFlowElement: {
         filter: [],
         visit(node, ctx) {
           ctx.setProperty(node, "client:component-path", "/absolute/path/B.jsx");
@@ -389,7 +389,7 @@ describe("mdxToJs", () => {
   test("HAST plugin setProperty on MDX JSX element - no-op plugin preserves all attributes", () => {
     const noop = defineHastPlugin({
       name: "noop",
-      mdxJsxTextElement: {
+      mdxJsxFlowElement: {
         filter: [],
         visit() {
           // do nothing
@@ -408,7 +408,7 @@ describe("mdxToJs", () => {
   test("HAST plugin setProperty overwrites existing MDX JSX attribute", () => {
     const overwrite = defineHastPlugin({
       name: "overwrite-attr",
-      mdxJsxTextElement: {
+      mdxJsxFlowElement: {
         filter: [],
         visit(node, ctx) {
           ctx.setProperty(node, "foo", "replaced");

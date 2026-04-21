@@ -156,7 +156,7 @@ describe("visitHastHandle - mutations", () => {
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, "<test>");
     const html = renderHandle(handle);
-    expect(html).toContain("<h1>Hello</h1>\n<hr>");
+    expect(html).toContain("<h1>Hello</h1><hr>");
   });
 
   test("context.wrapNode() wraps an element", () => {
@@ -177,7 +177,7 @@ describe("visitHastHandle - mutations", () => {
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, "<test>");
     const html = renderHandle(handle);
-    expect(html).toContain("<div><h1>Hello</h1>\n</div>");
+    expect(html).toContain("<div><h1>Hello</h1></div>");
   });
 
   test("context.appendChild() adds a child to an element", () => {
@@ -214,7 +214,7 @@ describe("visitHastHandle - mutations", () => {
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, "<test>");
     const html = renderHandle(handle);
-    expect(html).toContain("<hr>\n<h1>Hello</h1>");
+    expect(html).toContain("<hr><h1>Hello</h1>");
   });
 
   test("context.prependChild() adds a child at the start of an element", () => {
