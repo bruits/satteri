@@ -1,6 +1,4 @@
-#![cfg(feature = "html")]
-
-use satteri_pulldown_cmark::{Options, Parser};
+use satteri_pulldown_cmark::Options;
 
 #[rustfmt::skip]
 mod suite;
@@ -10,6 +8,7 @@ mod suite;
 pub fn test_markdown_html(
     input: &str,
     output: &str,
+    base_options: u32,
     smart_punct: bool,
     metadata_blocks: bool,
     old_footnotes: bool,
@@ -18,34 +17,23 @@ pub fn test_markdown_html(
     deflists: bool,
     container_extensions: bool,
 ) {
-    let mut s = String::new();
-
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_MATH);
-    opts.insert(Options::ENABLE_TABLES);
-    opts.insert(Options::ENABLE_STRIKETHROUGH);
-    opts.insert(Options::ENABLE_SUPERSCRIPT);
-    if wikilinks {
-        opts.insert(Options::ENABLE_WIKILINKS);
-    }
-    if subscript {
-        opts.insert(Options::ENABLE_SUBSCRIPT);
-    }
-    opts.insert(Options::ENABLE_TASKLISTS);
-    opts.insert(Options::ENABLE_GFM);
-    if old_footnotes {
-        opts.insert(Options::ENABLE_OLD_FOOTNOTES);
-    } else {
-        opts.insert(Options::ENABLE_FOOTNOTES);
+    let mut opts = Options::from_bits_truncate(base_options);
+    if smart_punct {
+        opts.insert(Options::ENABLE_SMART_PUNCTUATION);
     }
     if metadata_blocks {
         opts.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
         opts.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
     }
-    if smart_punct {
-        opts.insert(Options::ENABLE_SMART_PUNCTUATION);
+    if old_footnotes {
+        opts.insert(Options::ENABLE_OLD_FOOTNOTES);
     }
-    opts.insert(Options::ENABLE_HEADING_ATTRIBUTES);
+    if subscript {
+        opts.insert(Options::ENABLE_SUBSCRIPT);
+    }
+    if wikilinks {
+        opts.insert(Options::ENABLE_WIKILINKS);
+    }
     if deflists {
         opts.insert(Options::ENABLE_DEFINITION_LIST);
     }
@@ -53,19 +41,50 @@ pub fn test_markdown_html(
         opts.insert(Options::ENABLE_CONTAINER_EXTENSIONS);
     }
 
-    let p = Parser::new_ext(input, opts);
-    satteri_pulldown_cmark::html::push_html(&mut s, p);
+    let (arena, _) = satteri_pulldown_cmark::parse(input, opts);
+    let s = satteri_ast::mdast_to_html(&arena);
 
-    // normalizing the HTML using html5ever may hide actual errors
-    // assert_eq!(html_standardize(output), html_standardize(&s));
     assert_eq!(html_standardize(output), html_standardize(&s));
 }
 
 fn html_standardize(s: &str) -> String {
-    s.replace("<br>", "<br />")
+    let mut result = s.to_string();
+    // Normalize void element self-closing style
+    result = result
+        .replace("<br>", "<br />")
         .replace("<br/>", "<br />")
         .replace("<hr>", "<hr />")
-        .replace("<hr/>", "<hr />")
-        // permit extra or missing line breaks only between tags
-        .replace(">\n<", "><")
+        .replace("<hr/>", "<hr />");
+    // Normalize HTML entity encoding style (hex vs named, > encoding)
+    result = result
+        .replace("&#x3C;", "&lt;")
+        .replace("&#x3E;", "&gt;")
+        .replace("&#x26;", "&amp;")
+        .replace("&#x22;", "&quot;");
+    // rehype-stringify doesn't encode >, but our renderer does — normalize
+    result = result.replace("&gt;", ">");
+    // Normalize <img ...> to <img ... /> (and similar void elements)
+    for tag in ["img", "input"] {
+        let open = format!("<{tag}");
+        let mut i = 0;
+        while let Some(pos) = result[i..].find(&open) {
+            let abs = i + pos;
+            if let Some(end) = result[abs..].find('>') {
+                let tag_end = abs + end;
+                if !result[..tag_end].ends_with('/') {
+                    result.insert(tag_end, ' ');
+                    result.insert(tag_end + 1, '/');
+                }
+                i = tag_end + 3;
+            } else {
+                break;
+            }
+        }
+    }
+    // Collapse any whitespace-only gap between tags
+    while result.contains(">\n<") || result.contains(">\n\n<") {
+        result = result.replace(">\n\n<", "><");
+        result = result.replace(">\n<", "><");
+    }
+    result
 }

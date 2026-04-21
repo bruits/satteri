@@ -554,6 +554,36 @@ pub(crate) fn scan_closing_code_fence(
     scan_eol(&bytes[i..]).map(|_| i)
 }
 
+pub(crate) fn scan_math_fence(data: &[u8]) -> Option<usize> {
+    let c = *data.first()?;
+    if c != b'$' {
+        return None;
+    }
+    let n = 1 + scan_ch_repeat(&data[1..], b'$');
+    if n >= 2 {
+        let suffix = &data[n..];
+        let next_line = scan_nextline(suffix);
+        if suffix[..next_line].contains(&b'$') {
+            return None;
+        }
+        Some(n)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn scan_closing_math_fence(bytes: &[u8], n_fence_char: usize) -> Option<usize> {
+    if bytes.is_empty() {
+        return Some(0);
+    }
+    let num_fence_chars_found = scan_ch_repeat(bytes, b'$');
+    if num_fence_chars_found < n_fence_char {
+        return None;
+    }
+    let i = num_fence_chars_found + scan_ch_repeat(&bytes[num_fence_chars_found..], b' ');
+    scan_eol(&bytes[i..]).map(|_| i)
+}
+
 // return: end byte for closing metadata block, or None
 // if the line is not a closing metadata block
 pub(crate) fn scan_closing_metadata_block(bytes: &[u8], fence_char: u8) -> Option<usize> {
@@ -767,11 +797,23 @@ pub(crate) fn scan_code_fence(data: &[u8]) -> Option<(usize, u8)> {
 
 pub(crate) fn scan_interrupting_container_extensions_fence(data: &[u8]) -> bool {
     let fence_length = scan_ch_repeat(data, b':');
-    let kind_start = fence_length + scan_whitespace_no_nl(&data[fence_length..]);
-    let kind_length = scan_while(&data[kind_start..], |c| {
-        is_ascii_alphanumeric(c) || c == b'_' || c == b'-' || c == b':' || c == b'.'
+    if fence_length < 2 {
+        return false;
+    }
+    if data.len() <= fence_length || !data[fence_length].is_ascii_alphanumeric() {
+        return false;
+    }
+    let name_len = scan_while(&data[fence_length..], |c| {
+        c.is_ascii_alphanumeric() || c == b'-' || c == b'_'
     });
-    fence_length > 2 && kind_length > 0
+    if name_len == 0 {
+        return false;
+    }
+    let last = data[fence_length + name_len - 1];
+    if last == b'-' || last == b'_' {
+        return false;
+    }
+    true
 }
 
 /// Scan metadata block, returning the number of delimiter bytes
@@ -808,10 +850,10 @@ pub(crate) fn scan_metadata_block(
             while j < data.len() {
                 j += scan_nextline(&data[j..]);
                 let closed = scan_closing_metadata_block(&data[j..], c).is_some();
-                // The first line of the metadata block cannot be an empty line
-                // nor the end of the block
+                // The first line of the metadata block cannot be an empty line,
+                // but it can be the closing delimiter (empty frontmatter).
                 if first_line {
-                    if closed || scan_blank_line(&data[j..]).is_some() {
+                    if !closed && scan_blank_line(&data[j..]).is_some() {
                         return None;
                     }
                     first_line = false;

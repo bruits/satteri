@@ -7,12 +7,12 @@
 > Is this inside?
 > :::
 .
-<blockquote><p>Is this <strong>bold</strong>?
+<blockquote>
+<p>Is this <strong>bold</strong>?
 Is this <strong>bold</strong>?</p>
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this inside?</p>
-</details>
+</blockquote>
 </blockquote>
 ````````````````````````````````
 
@@ -24,12 +24,13 @@ Is this collapsable?
 :::
 **is this seperate and bold**
 .
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
-<blockquote><p>Is this <strong>bold</strong>?
-Is this <strong>bold</strong>?</p></blockquote>
-</details>
+<blockquote>
+<p>Is this <strong>bold</strong>?
+Is this <strong>bold</strong>?</p>
+</blockquote>
+</blockquote>
 <p><strong>is this seperate and bold</strong></p>
 ````````````````````````````````
 
@@ -43,17 +44,16 @@ Is this collapsable?
 > :::
 :::
 .
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
-<blockquote><p>Is this <strong>bold</strong>?
+<blockquote>
+<p>Is this <strong>bold</strong>?
 Is this <strong>bold</strong>?</p>
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this inside?</p>
-</details>
 </blockquote>
-</details>
+</blockquote>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -69,19 +69,20 @@ Is this collapsable?
 :::
 **is this seperate and bold**
 .
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
-<blockquote><p>Is this <strong>bold</strong>?
+<blockquote>
+<p>Is this <strong>bold</strong>?
 Is this <strong>bold</strong>?</p>
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
-<blockquote><p>Is this <strong>bold</strong>?
-Is this <strong>bold</strong>?</p></blockquote>
-</details>
+<blockquote>
+<p>Is this <strong>bold</strong>?
+Is this <strong>bold</strong>?</p>
 </blockquote>
-</details>
+</blockquote>
+</blockquote>
+</blockquote>
 <p><strong>is this seperate and bold</strong></p>
 ````````````````````````````````
 
@@ -91,10 +92,9 @@ Is this collapsable?
 :::
 **is this seperate and bold**
 .
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
-</details>
+</blockquote>
 <p><strong>is this seperate and bold</strong></p>
 ````````````````````````````````
 
@@ -105,11 +105,10 @@ Is this collapsable?
 Is this **bold**?
 :::
 .
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</details>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -119,11 +118,10 @@ Is this collapsable?
 Is this **bold**?
 :::
 .
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</details>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -133,10 +131,10 @@ Is this collapsable?
 Is this **bold**?
 :::
 .
-<div class="example">
+<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</div>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -146,10 +144,10 @@ Is this collapsable?
 Is this **bold**?
 ::::
 .
-<div class="example">
+<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</div>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -159,11 +157,10 @@ Is this collapsable?
 Is this **bold**?
 :::::
 .
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</details>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -185,11 +182,11 @@ content
 
 ::: end
 .
-<div class="block">
+<blockquote>
 <p>content</p>
-<div class="end">
-</div>
-</div>
+<blockquote>
+</blockquote>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -199,10 +196,10 @@ content
 ::: block
  :::
 .
-<div class="block">
-</div>
-<div class="block">
-</div>
+<blockquote>
+</blockquote>
+<blockquote>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -212,10 +209,10 @@ content
 :::
 :::
 .
-<div class="a">
-<div class="b">
-</div>
-</div>
+<blockquote>
+<blockquote>
+</blockquote>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -225,10 +222,10 @@ content
 :::
 ::::
 .
-<div class="a">
-<div class="b">
-</div>
-</div>
+<blockquote>
+<blockquote>
+</blockquote>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -238,10 +235,10 @@ content
 ::::
 :::
 .
-<div class="a">
-<div class="b">
-</div>
-</div>
+<blockquote>
+<blockquote>
+</blockquote>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -260,10 +257,10 @@ Hi
 :::
 ::::::
 .
-<div class="foo">
+<blockquote>
 <p>Hi
 :::</p>
-</div>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -271,9 +268,9 @@ Hi
 > Hi
 .
 <blockquote>
-<div class="foo">
+<blockquote>
 <p>Hi</p>
-</div>
+</blockquote>
 </blockquote>
 ````````````````````````````````
 
@@ -282,9 +279,9 @@ Hi
 Hi
 :::
 .
-<div class="c_d">
+<blockquote>
 <p>Hi</p>
-</div>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -294,13 +291,13 @@ Hi
 > x
 :::
 .
-<div class="container">
+<blockquote>
 <blockquote>
 <p>shouldn't close, right?
 :::
 x</p>
 </blockquote>
-</div>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -311,13 +308,13 @@ x</p>
 
 :::
 .
-<div class="container">
+<blockquote>
 <blockquote>
 <p>shouldn't close, right?
 :::
 x</p>
 </blockquote>
-</div>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
@@ -327,25 +324,29 @@ x</p>
 ::::
 x
 .
-<div class="a">
-<div class="b">
-<div class="c">
-</div>
-</div>
+<blockquote>
+<blockquote>
+<blockquote>
+</blockquote>
+</blockquote>
 <p>x</p>
-</div>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
 ::: a
 content :::
 .
-<div class="a"><p>content :::</p></div>
+<blockquote>
+<p>content :::</p>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_container_extensions
 :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::: a
 content :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 .
-<div class="a"><p>content :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::</p></div>
+<blockquote>
+<p>content :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::</p>
+</blockquote>
 ````````````````````````````````

@@ -8,15 +8,13 @@ fn gfm_tasklist_test_1() {
     let original = r##"- [ ] foo
 - [x] bar
 "##;
-    let expected = r##"<ul>
-<li><input disabled="" type="checkbox"/>
-foo</li>
-<li><input disabled="" type="checkbox" checked=""/>
-bar</li>
+    let expected = r##"<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" disabled> foo</li>
+<li class="task-list-item"><input type="checkbox" checked disabled> bar</li>
 </ul>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2064, false, false, false, false, false, false, false);
 }
 
 #[test]
@@ -26,20 +24,16 @@ fn gfm_tasklist_test_2() {
   - [x] baz
 - [ ] bim
 "##;
-    let expected = r##"<ul>
-<li><input disabled="" type="checkbox" checked=""/>
-foo
-<ul>
-<li><input disabled="" type="checkbox"/>
-bar</li>
-<li><input disabled="" type="checkbox" checked=""/>
-baz</li>
+    let expected = r##"<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" checked disabled> foo
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" disabled> bar</li>
+<li class="task-list-item"><input type="checkbox" checked disabled> baz</li>
 </ul>
 </li>
-<li><input disabled="" type="checkbox"/>
-bim</li>
+<li class="task-list-item"><input type="checkbox" disabled> bim</li>
 </ul>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2064, false, false, false, false, false, false, false);
 }

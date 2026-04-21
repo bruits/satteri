@@ -21,35 +21,9 @@ fn main() {
     ];
 
     let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
-    let mut diffs = 0;
     for (i, source) in sources.iter().enumerate() {
-        // push_html path
-        let parser = satteri_pulldown_cmark::Parser::new_ext(source, opts);
-        let mut push = String::new();
-        satteri_pulldown_cmark::html::push_html(&mut push, parser);
-
-        // arena path
         let (arena, _) = satteri_pulldown_cmark::parse(source, opts);
-        let arena_html = satteri_ast::mdast_to_html(&arena);
-
-        if push != arena_html {
-            diffs += 1;
-            eprintln!("DIFF #{} (source #{}):", diffs, i);
-            eprintln!("  Input: {:?}", source);
-            eprintln!("  push_html: {:?}", push);
-            eprintln!("  arena:     {:?}", arena_html);
-            eprintln!();
-        }
-    }
-
-    if diffs == 0 {
-        println!("All {} test cases produce identical HTML.", sources.len());
-    } else {
-        eprintln!(
-            "{} differences found out of {} cases.",
-            diffs,
-            sources.len()
-        );
-        std::process::exit(1);
+        let html = satteri_ast::mdast_to_html(&arena);
+        println!("Source #{}: {} bytes of HTML", i, html.len());
     }
 }

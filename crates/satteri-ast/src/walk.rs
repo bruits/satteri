@@ -239,8 +239,8 @@ fn serialize_mdast_node_inline(
             });
         }
 
-        // Text(10), InlineCode(13), Html(7), Yaml(25), Toml(26), InlineMath(28): single StringRef value
-        10 | 13 | 7 | 25 | 26 | 28 => write_str32(out, type_data, 0),
+        // Text(10), InlineCode(13), Html(7), Yaml(25), Toml(26): single StringRef value
+        10 | 13 | 7 | 25 | 26 => write_str32(out, type_data, 0),
 
         // Code(8): lang(0) + meta(8) + value(16)
         8 => {
@@ -249,8 +249,8 @@ fn serialize_mdast_node_inline(
             write_str32(out, type_data, 16);
         }
 
-        // Math(27): meta(0) + value(8)
-        27 => {
+        // Math(27), InlineMath(28): meta(0) + value(8)
+        27 | 28 => {
             write_str16(out, type_data, 0);
             write_str32(out, type_data, 8);
         }
@@ -340,6 +340,27 @@ fn serialize_mdast_node_inline(
                     out.extend_from_slice(attr_name.as_bytes());
                     out.extend_from_slice(&(attr_val.len() as u32).to_le_bytes());
                     out.extend_from_slice(attr_val.as_bytes());
+                }
+            } else {
+                out.extend_from_slice(&0u16.to_le_bytes());
+            }
+        }
+
+        // ContainerDirective(30), LeafDirective(31), TextDirective(32): name + attributes
+        30 | 31 | 32 => {
+            write_str16(out, type_data, 0);
+            if type_data.len() >= 16 {
+                let attr_count =
+                    u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
+                out.extend_from_slice(&(attr_count as u16).to_le_bytes());
+                for i in 0..attr_count {
+                    let base = 16 + i * 16;
+                    let key = arena.get_str(read_string_ref(type_data, base));
+                    let val = arena.get_str(read_string_ref(type_data, base + 8));
+                    out.extend_from_slice(&(key.len() as u16).to_le_bytes());
+                    out.extend_from_slice(key.as_bytes());
+                    out.extend_from_slice(&(val.len() as u16).to_le_bytes());
+                    out.extend_from_slice(val.as_bytes());
                 }
             } else {
                 out.extend_from_slice(&0u16.to_le_bytes());

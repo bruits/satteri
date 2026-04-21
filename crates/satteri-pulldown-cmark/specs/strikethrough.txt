@@ -64,13 +64,13 @@ Intraword strikeout requires two tildes:
 ```````````````````````````````` example
 This~is~nothing
 .
-<p>This~is~nothing</p>
+<p>This<del>is</del>nothing</p>
 ````````````````````````````````
 
 ```````````````````````````````` example
 ~This~is~nothing~
 .
-<p><del>This~is~nothing</del></p>
+<p><del>This</del>is<del>nothing</del></p>
 ````````````````````````````````
 
 Punctuation is used for purposes of determining

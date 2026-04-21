@@ -458,9 +458,8 @@ function readMdastMatchedNode(
     case 13:
     case 7:
     case 25:
-    case 26:
-    case 28: {
-      // text, inlineCode, html, yaml, toml, inlineMath
+    case 26: {
+      // text, inlineCode, html, yaml, toml
       const vlen = ru32(view, pos);
       node.value = rstr(buf, pos + 4, vlen);
       break;
@@ -480,8 +479,9 @@ function readMdastMatchedNode(
       node.value = rstr(buf, pos, valLen);
       break;
     }
-    case 27: {
-      // math
+    case 27:
+    case 28: {
+      // math, inlineMath
       const metaLen = ru16(view, pos);
       pos += 2;
       node.meta = metaLen > 0 ? rstr(buf, pos, metaLen) : null;

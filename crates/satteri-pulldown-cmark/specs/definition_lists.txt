@@ -21,12 +21,7 @@ apple
 orange
 :   orange fruit
 .
-<dl>
-<dt>apple</dt>
-<dd>red fruit</dd>
-<dt>orange</dt>
-<dd>orange fruit</dd>
-</dl>
+<p><p>apple</p><p><p>red fruit</p></p><p>orange</p><p><p>orange fruit</p></p></p>
 ````````````````````````````````
 
 Loose:
@@ -40,16 +35,7 @@ orange
 
 :   orange fruit
 .
-<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-<dt>orange</dt>
-<dd>
-<p>orange fruit</p>
-</dd>
-</dl>
+<p><p>apple</p><p><p>red fruit</p></p><p>orange</p><p><p>orange fruit</p></p></p>
 ````````````````````````````````
 
 Also loose:
@@ -59,12 +45,7 @@ apple
 
 :   red fruit
 .
-<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-</dl>
+<p><p>apple</p><p><p>red fruit</p></p></p>
 ````````````````````````````````
 
 Indented marker:
@@ -76,12 +57,7 @@ apple
 orange
   : orange fruit
 .
-<dl>
-<dt>apple</dt>
-<dd>red fruit</dd>
-<dt>orange</dt>
-<dd>orange fruit</dd>
-</dl>
+<p><p>apple</p><p><p>red fruit</p></p><p>orange</p><p><p>orange fruit</p></p></p>
 ````````````````````````````````
 
 ```````````````````````````````` example_deflists
@@ -93,16 +69,7 @@ orange
 
  : orange fruit
 .
-<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-<dt>orange</dt>
-<dd>
-<p>orange fruit</p>
-</dd>
-</dl>
+<p><p>apple</p><p><p>red fruit</p></p><p>orange</p><p><p>orange fruit</p></p></p>
 ````````````````````````````````
 
 Multiple blocks in a definition:
@@ -123,23 +90,11 @@ Multiple blocks in a definition:
 
     > orange block quote
 .
-<dl>
-<dt><em>apple</em></dt>
-<dd>
-<p>red fruit</p>
-<p>contains seeds,
-crisp, pleasant to taste</p>
-</dd>
-<dt><em>orange</em></dt>
-<dd>
-<p>orange fruit</p>
-<pre><code>{ orange code block }
-</code></pre>
-<blockquote>
+<p><p><em>apple</em></p><p><p>red fruit</p><p>contains seeds,
+crisp, pleasant to taste</p></p><p><em>orange</em></p><p><p>orange fruit</p><pre><code>{ orange code block }
+</code></pre><blockquote>
 <p>orange block quote</p>
-</blockquote>
-</dd>
-</dl>
+</blockquote></p></p>
 ````````````````````````````````
 
 Nested lists:
@@ -151,15 +106,12 @@ term
 
        Para two
 .
-<dl>
-<dt>term</dt>
-<dd>
-<ol>
-<li><p>Para one</p>
-<p>Para two</p></li>
-</ol>
-</dd>
-</dl>
+<p><p>term</p><p><ol>
+<li>
+<p>Para one</p>
+<p>Para two</p>
+</li>
+</ol></p></p>
 ````````````````````````````````
 
 Multiple definitions, tight:
@@ -173,14 +125,7 @@ orange
 :   orange fruit
 :   telecom company
 .
-<dl>
-<dt>apple</dt>
-<dd>red fruit</dd>
-<dd>computer company</dd>
-<dt>orange</dt>
-<dd>orange fruit</dd>
-<dd>telecom company</dd>
-</dl>
+<p><p>apple</p><p><p>red fruit</p></p><p><p>computer company</p></p><p>orange</p><p><p>orange fruit</p></p><p><p>telecom company</p></p></p>
 ````````````````````````````````
 
 Multiple definitions, loose:
@@ -197,22 +142,7 @@ orange
 :   orange fruit
 :   telecom company
 .
-<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-<dd>
-<p>computer company</p>
-</dd>
-<dt>orange</dt>
-<dd>
-<p>orange fruit</p>
-</dd>
-<dd>
-<p>telecom company</p>
-</dd>
-</dl>
+<p><p>apple</p><p><p>red fruit</p></p><p><p>computer company</p></p><p>orange</p><p><p>orange fruit</p></p><p><p>telecom company</p></p></p>
 ````````````````````````````````
 
 Lazy line continuations:
@@ -231,24 +161,9 @@ orange
 fruit
 :   telecom company
 .
-<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-<dd>
-<p>computer
-company</p>
-</dd>
-<dt>orange</dt>
-<dd>
-<p>orange
-fruit</p>
-</dd>
-<dd>
-<p>telecom company</p>
-</dd>
-</dl>
+<p><p>apple</p><p><p>red fruit</p></p><p><p>computer
+company</p></p><p>orange</p><p><p>orange
+fruit</p></p><p><p>telecom company</p></p></p>
 ````````````````````````````````
 
 A lazy continuation may start with a `:`, if it has enough indent.
@@ -266,26 +181,14 @@ chili's
    : > restaurant company
  : spicy fruit
 .
-<dl>
-<dt>apple</dt>
-<dd><blockquote>
+<p><p>apple</p><p><blockquote>
 <p>computer company
 : red fruit</p>
-</blockquote>
-</dd>
-<dt>orange</dt>
-<dd><blockquote>
+</blockquote></p><p>orange</p><p><blockquote>
 <p>telecom company</p>
-</blockquote>
-</dd>
-<dd>orange fruit</dd>
-<dt>chili's</dt>
-<dd><blockquote>
+</blockquote></p><p><p>orange fruit</p></p><p>chili's</p><p><blockquote>
 <p>restaurant company</p>
-</blockquote>
-</dd>
-<dd>spicy fruit</dd>
-</dl>
+</blockquote></p><p><p>spicy fruit</p></p></p>
 ````````````````````````````````
 
 It may not, however, lazily act as a definition in a list.
@@ -297,12 +200,9 @@ It may not, however, lazily act as a definition in a list.
 : tart fruit
 .
 <blockquote>
-<dl>
-<dt>cherry</dt>
-<dd>keyboard company
+<p><p>cherry</p><p><p>keyboard company
 pomegranate
-: tart fruit</dd>
-</dl>
+: tart fruit</p></p></p>
 </blockquote>
 ````````````````````````````````
 
@@ -315,14 +215,9 @@ c
 
 :   foo
 .
-<dl>
-<dt>a
-b<br />
-c</dt>
-<dd>
-<p>foo</p>
-</dd>
-</dl>
+<p><p>a
+b<br>
+c</p><p><p>foo</p></p></p>
 ````````````````````````````````
 
 Definition list with preceding paragraph
@@ -338,12 +233,7 @@ bim
 :   bor
 .
 <p>Foo</p>
-<dl>
-<dt>bar</dt>
-<dd>baz</dd>
-<dt>bim</dt>
-<dd>bor</dd>
-</dl>
+<p><p>bar</p><p><p>baz</p></p><p>bim</p><p><p>bor</p></p></p>
 ````````````````````````````````
 
 Definition list followed by paragraph.
@@ -357,12 +247,7 @@ bim
 
 Bloze
 .
-<dl>
-<dt>bar</dt>
-<dd>baz</dd>
-<dt>bim</dt>
-<dd>bor</dd>
-</dl>
+<p><p>bar</p><p><p>baz</p></p><p>bim</p><p><p>bor</p></p></p>
 <p>Bloze</p>
 ````````````````````````````````
 
@@ -389,10 +274,7 @@ bar
 
 Bloze
 .
-<dl>
-<dt>bar</dt>
-<dd>baz</dd>
-</dl>
+<p><p>bar</p><p><p>baz</p></p></p>
 <p>Bloze</p>
 ````````````````````````````````
 
@@ -415,25 +297,10 @@ bar
 bar
     :   baz
 .
-<dl>
-<dt>bar</dt>
-<dd>
-<pre><code>  baz
-</code></pre>
-</dd>
-<dt>bar</dt>
-<dd>
-<pre><code> baz
-</code></pre>
-</dd>
-<dt>bar</dt>
-<dd>
-<pre><code>baz
-</code></pre>
-</dd>
-<dt>bar</dt>
-<dd>baz</dd>
-</dl>
+<p><p>bar</p><p><pre><code>  baz
+</code></pre></p><p>bar</p><p><pre><code> baz
+</code></pre></p><p>bar</p><p><pre><code>baz
+</code></pre></p><p>bar</p><p><p>baz</p></p></p>
 <p>bar
 :   baz</p>
 ````````````````````````````````
@@ -460,29 +327,17 @@ the indentation of the earlier block.
 
   > orange block quote
 .
-<dl>
-<dt><em>orange</em></dt>
-<dd>
-<p>orange fruit</p>
-<pre><code>{ orange code block }
-</code></pre>
-</dd>
-</dl>
+<p><p><em>orange</em></p><p><p>orange fruit</p><pre><code>{ orange code block }
+</code></pre></p></p>
 <blockquote>
 <p>orange block quote</p>
 </blockquote>
-<dl>
-<dt><em>orange</em></dt>
-<dd>
-<pre><code>orange fruit
+<p><p><em>orange</em></p><p><pre><code>orange fruit
 
   { orange code block }
-</code></pre>
-<blockquote>
+</code></pre><blockquote>
 <p>orange block quote</p>
-</blockquote>
-</dd>
-</dl>
+</blockquote></p></p>
 ````````````````````````````````
 
 Definition titles can't be tables.
@@ -492,10 +347,8 @@ Test|Table
 ----|-----
 : first
 .
-<table><thead><tr><th>Test</th><th>Table</th></tr></thead><tbody>
-<tr><td>: first</td><td></td></tr>
-</tbody>
-</table>
+<p><p>Test|Table
+----|-----</p><p><p>first</p></p></p>
 ````````````````````````````````
 
 ```````````````````````````````` example_deflists
@@ -506,14 +359,8 @@ Test|Table
 ----|-----
 : fourth
 .
-<dl>
-<dt>first</dt>
-<dd>second</dd>
-</dl>
-<table><thead><tr><th>Test</th><th>Table</th></tr></thead><tbody>
-<tr><td>: fourth</td><td></td></tr>
-</tbody>
-</table>
+<p><p>first</p><p><p>second</p></p><p>Test|Table
+----|-----</p><p><p>fourth</p></p></p>
 ````````````````````````````````
 
 
@@ -536,10 +383,7 @@ My section
 ==========
 : fourth
 .
-<dl>
-<dt>first</dt>
-<dd>second</dd>
-</dl>
+<p><p>first</p><p><p>second</p></p></p>
 <h1>My section</h1>
 <p>: fourth</p>
 ````````````````````````````````
@@ -559,10 +403,7 @@ first
 ## My subsection
 : fourth
 .
-<dl>
-<dt>first</dt>
-<dd>second</dd>
-</dl>
+<p><p>first</p><p><p>second</p></p></p>
 <h2>My subsection</h2>
 <p>: fourth</p>
 ````````````````````````````````
@@ -590,12 +431,7 @@ first\
 third  
 : fourth
 .
-<dl>
-<dt>first\</dt>
-<dd>second</dd>
-<dt>third</dt>
-<dd>fourth</dd>
-</dl>
+<p><p>first\</p><p><p>second</p></p><p>third</p><p><p>fourth</p></p></p>
 ````````````````````````````````
 
 
@@ -612,10 +448,8 @@ first
 .
 <div>first</div>
 : second
-<dl>
-<dt>first</dt>
-<dd>second</dd>
-</dl>
+
+<p><p>first</p><p><p>second</p></p></p>
 <div>third</div>
 : fourth
 ````````````````````````````````
@@ -630,14 +464,7 @@ third
 <span>fifth</span>
 : sixth
 .
-<dl>
-<dt><span>first</span></dt>
-<dd>second</dd>
-<dt>third</dt>
-<dd>fourth</dd>
-<dt><span>fifth</span></dt>
-<dd>sixth</dd>
-</dl>
+<p><p><span>first</span></p><p><p>second</p></p><p>third</p><p><p>fourth</p></p><p><span>fifth</span></p><p><p>sixth</p></p></p>
 ````````````````````````````````
 
 Nested definition lists:
@@ -654,24 +481,9 @@ level one
 level one
 : l1
 .
-<dl>
-<dt>level one</dt>
-<dd>
-<dl>
-<dt>l1
-level two</dt>
-<dd>
-<dl>
-<dt>l2
-level three</dt>
-<dd>l3</dd>
-</dl>
-</dd>
-</dl>
-</dd>
-<dt>level one</dt>
-<dd>l1</dd>
-</dl>
+<p><p>level one</p><p><p><p>l1
+level two</p><p><p><p>l2
+level three</p><p><p>l3</p></p></p></p></p></p><p>level one</p><p><p>l1</p></p></p>
 ````````````````````````````````
 
 https://github.com/pulldown-cmark/pulldown-cmark/issues/997

@@ -281,6 +281,46 @@ impl MathData {
     }
 }
 
+/// Header for directive type_data (ContainerDirective, LeafDirective, TextDirective).
+///
+/// Full layout (variable-length):
+///   [name: StringRef(8B)][attr_count: u32(4B)][_pad: u32(4B)] = 16-byte header
+///   then attr_count × 16 bytes each:
+///     [key: StringRef(8B)][value: StringRef(8B)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct DirectiveData {
+    pub name: StringRef,
+}
+
+pub fn encode_directive_data(name: StringRef, attrs: &[(StringRef, StringRef)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16 + attrs.len() * 16);
+    out.extend_from_slice(&name.as_bytes());
+    out.extend_from_slice(&(attrs.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // _pad
+    for &(key, value) in attrs {
+        out.extend_from_slice(&key.as_bytes());
+        out.extend_from_slice(&value.as_bytes());
+    }
+    out
+}
+
+pub fn decode_directive_name(bytes: &[u8]) -> StringRef {
+    StringRef::from_bytes(bytes)
+}
+
+pub fn decode_directive_attr_count(bytes: &[u8]) -> u32 {
+    assert!(bytes.len() >= 12);
+    u32::from_le_bytes(bytes[8..12].try_into().unwrap())
+}
+
+pub fn decode_directive_attr(bytes: &[u8], index: u32) -> (StringRef, StringRef) {
+    let base = 16 + index as usize * 16;
+    let key = StringRef::from_bytes(&bytes[base..base + 8]);
+    let value = StringRef::from_bytes(&bytes[base + 8..base + 16]);
+    (key, value)
+}
+
 /// Header for MdxJsxFlowElement and MdxJsxTextElement type_data.
 /// `name.len == 0` means a fragment.
 ///

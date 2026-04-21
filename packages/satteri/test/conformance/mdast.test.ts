@@ -272,6 +272,67 @@ describe("MDAST conformance: edge cases", () => {
     assertMdastConformance("#  _i~+{}");
   });
 
+  test("non-empty list in blockquote after paragraph", () => {
+    assertMdastConformance("x\n>* a");
+  });
+
+  test("empty list in blockquote after blank line", () => {
+    assertMdastConformance("x\n\n>*");
+  });
+
+  test("empty list with + in blockquote after paragraph", () => {
+    assertMdastConformance("x\n>+");
+  });
+
+  test("heading with empty attribute block {}", () => {
+    assertMdastConformance("# Hello {}");
+  });
+
+  test("heading with double empty attribute block {} {}", () => {
+    assertMdastConformance("## World {} {}");
+  });
+
+  test("heading with empty id {#}", () => {
+    assertMdastConformance("# H {#}");
+  });
+
+  test("html block with leading indentation", () => {
+    assertMdastConformance("  <div>\n  *hello*\n         <foo><a>");
+  });
+
+  test.skip("html block indentation in list", () => {
+    // TODO: HTML block inside list item includes trailing newline in value
+    assertMdastConformance("-    <div>\n   <div>");
+  });
+
+  test("html comment with indentation", () => {
+    assertMdastConformance("    <!-- foo -->\n\n    <!-- foo -->");
+  });
+
+  test("single tilde strikethrough intraword", () => {
+    assertMdastConformance("This~is~nothing");
+  });
+
+  test.skip("task list followed by blank then content", () => {
+    // TODO: text value after task marker includes leading newline
+    assertMdastConformance("- [x]\t\t\n\\\n-");
+  });
+
+  test("task list marker not consumed when blank", () => {
+    assertMdastConformance("* [ ] \n---");
+  });
+
+  test("task list with nested content after blank marker", () => {
+    assertMdastConformance("- [x] * some text\n- [ ] > some text\n- [x]\n  * some text\n- [ ]\n  > some text");
+  });
+
+  test("tab before newline is not hard break", () => {
+    assertMdastConformance("hello\t  \nworld");
+  });
+
+  test("blockquote with empty continuation", () => {
+    assertMdastConformance(">n4\n>");
+  });
 
   test.skip("reference link", () => {
     // Satteri resolves references eagerly (produces `link` node),

@@ -38,12 +38,8 @@ However, they should not otherwise interfere with normal Markdown links:
 
 [calamari [squid]](https://en.wikipedia.org/wiki/Squid)
 .
-<p>
-<a href="https://en.wikipedia.org/wiki/Squid">[squid] calamari is considered a delicacy</a>
-</p>
-<p>
-<a href="https://en.wikipedia.org/wiki/Squid">calamari [squid]</a>
-</p>
+<p><a href="https://en.wikipedia.org/wiki/Squid">[squid] calamari is considered a delicacy</a></p>
+<p><a href="https://en.wikipedia.org/wiki/Squid">calamari [squid]</a></p>
 ````````````````````````````````
 
 They also take precedence over inline links:
@@ -96,9 +92,7 @@ This is a cute dog, linked to the page "WikiLink"
 [[WikiLink|![dog](dog.png)]]
 .
 <p>This is a cute dog, linked to the page "WikiLink"</p>
-<p>
-<a href="WikiLink"><img src="dog.png" alt="dog" /></a>
-</p>
+<p><a href="WikiLink"><img src="dog.png" alt="dog"></a></p>
 ````````````````````````````````
 
 With nested wikilinks, the deepest one takes precedence:
@@ -125,9 +119,7 @@ This is a cute dog.
 ![[dog.png]]
 .
 <p>This is a cute dog.</p>
-<p>
-<img src="dog.png" alt="dog.png" />
-</p>
+<p><img src="dog.png" alt="dog.png"></p>
 ````````````````````````````````
 
 In this syntax, the pipe operator serves as a way to define alt text.
@@ -135,7 +127,7 @@ In this syntax, the pipe operator serves as a way to define alt text.
 ```````````````````````````````` example_wikilinks
 ![[dog.png|a cute dog]]
 .
-<p><img src="dog.png" alt="a cute dog" /></p>
+<p><img src="dog.png" alt="a cute dog"></p>
 ````````````````````````````````
 
 Wikilinks cannot be empty. They will render as-is.
@@ -151,13 +143,13 @@ Other interactions wikilinks have with other Markdown syntax:
 ```````````````````````````````` example_wikilinks
 [inline link]([[url]])
 .
-<p><a href="%5B%5Burl%5D%5D">inline link</a></p>
+<p><a href="[[url]]">inline link</a></p>
 ````````````````````````````````
 
 ```````````````````````````````` example_wikilinks
 [inline link]([[url)]]
 .
-<p><a href="%5B%5Burl">inline link</a>]]</p>
+<p><a href="[[url">inline link</a>]]</p>
 ````````````````````````````````
 
 ```````````````````````````````` example_wikilinks

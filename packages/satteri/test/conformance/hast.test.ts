@@ -284,4 +284,15 @@ describe("HAST conformance: edge cases", () => {
     assertHastConformance("<{{@8-w>");
   });
 
+  test("html block trailing newline preserved in hast", () => {
+    assertHastConformance("<!c\n");
+  });
+
+  test("blockquote end position includes empty continuation", () => {
+    assertHastConformance(">n4\n>");
+  });
+
+  test("tab before spaces is not hard break", () => {
+    assertHastConformance("uau>(\t  \nr");
+  });
 });

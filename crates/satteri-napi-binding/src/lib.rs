@@ -19,9 +19,10 @@ pub struct JsSmartPunctuationOptions {
 /// Feature toggles for the Markdown/MDX parser, passed from JavaScript.
 #[napi(object)]
 pub struct JsFeatures {
-    /// GFM: tables, footnotes, strikethrough, task lists, blockquote tags.
-    /// Default: true.
+    /// GFM: tables, footnotes, strikethrough, task lists. Default: true.
     pub gfm: Option<bool>,
+    /// GitHub-style blockquote alerts ([!NOTE], [!TIP], etc.). Default: true.
+    pub github_alerts: Option<bool>,
     /// Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true.
     pub frontmatter: Option<bool>,
     /// Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true.
@@ -49,6 +50,7 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
 
     let f = features.unwrap_or(JsFeatures {
         gfm: None,
+        github_alerts: None,
         frontmatter: None,
         math: None,
         heading_attributes: None,
@@ -69,6 +71,9 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
             | Options::ENABLE_STRIKETHROUGH
             | Options::ENABLE_TASKLISTS
             | Options::ENABLE_GFM;
+    }
+    if f.github_alerts.unwrap_or(false) {
+        opts |= Options::ENABLE_GITHUB_ALERTS;
     }
     if f.frontmatter.unwrap_or(true) {
         opts |= Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
@@ -223,14 +228,11 @@ pub fn compile_mdx(
 // Direct rendering (no handle needed)
 
 /// Parse Markdown source and return HTML string directly.
-/// Uses pulldown-cmark's streaming renderer, skipping the arena entirely.
 #[napi]
 pub fn parse_to_html(source: String, features: Option<JsFeatures>) -> Result<String> {
     let opts = features_to_options(features, false);
-    let parser = satteri_pulldown_cmark::Parser::new_ext(&source, opts);
-    let mut html = String::with_capacity(source.len());
-    satteri_pulldown_cmark::html::push_html(&mut html, parser);
-    Ok(html)
+    let (arena, _) = satteri_pulldown_cmark::parse(&source, opts);
+    Ok(satteri_ast::mdast_to_html(&arena))
 }
 
 // Handle-based API: arena stays in Rust, no buffer copies to JS

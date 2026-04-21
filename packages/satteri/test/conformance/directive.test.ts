@@ -1,0 +1,152 @@
+import { describe, test } from "vitest";
+import { assertExtMdastConformance } from "./helpers.js";
+
+const DIR: ["directive"] = ["directive"];
+
+describe("Directive MDAST conformance", () => {
+  describe("container directives", () => {
+    test("basic container", () => {
+      assertExtMdastConformance(":::note\nContent here\n:::", DIR);
+    });
+
+    test("container with label", () => {
+      assertExtMdastConformance(":::note[Title]\nContent\n:::", DIR);
+    });
+
+    test("container with attributes", () => {
+      assertExtMdastConformance(":::warning{.big}\nBe careful!\n:::", DIR);
+    });
+
+    test("container with id shortcut", () => {
+      assertExtMdastConformance(":::note{#my-note}\nContent\n:::", DIR);
+    });
+
+    test("container with multiple classes", () => {
+      assertExtMdastConformance(":::note{.a .b .c}\nContent\n:::", DIR);
+    });
+
+    test("container with named attribute", () => {
+      assertExtMdastConformance(':::note{key="value"}\nContent\n:::', DIR);
+    });
+
+    test("container with label and attributes", () => {
+      assertExtMdastConformance(":::note[My Title]{.special}\nContent\n:::", DIR);
+    });
+
+    test("empty container", () => {
+      assertExtMdastConformance(":::note\n:::", DIR);
+    });
+
+    test("nested containers", () => {
+      assertExtMdastConformance("::::outer\n:::inner\nContent\n:::\n::::", DIR);
+    });
+
+    test("container with multiple paragraphs", () => {
+      assertExtMdastConformance(":::note\nParagraph 1\n\nParagraph 2\n:::", DIR);
+    });
+
+    test("not a directive without name", () => {
+      assertExtMdastConformance(":::\nJust text\n:::", DIR);
+    });
+
+    test("container with unquoted attribute value", () => {
+      assertExtMdastConformance(":::note{key=value}\nContent\n:::", DIR);
+    });
+
+    test("container with single-quoted attribute", () => {
+      assertExtMdastConformance(":::note{key='value'}\nContent\n:::", DIR);
+    });
+  });
+
+  describe("leaf directives", () => {
+    test("basic leaf", () => {
+      assertExtMdastConformance("::video[Title]{src=video.mp4}", DIR);
+    });
+
+    test("leaf without label", () => {
+      assertExtMdastConformance("::hr{.red}", DIR);
+    });
+
+    test("leaf with label only", () => {
+      assertExtMdastConformance("::component[Some content]", DIR);
+    });
+
+    test("leaf with empty label", () => {
+      assertExtMdastConformance("::component[]", DIR);
+    });
+
+    test("leaf with multiple attributes", () => {
+      assertExtMdastConformance('::youtube[Video]{vid=abc123 width="100%"}', DIR);
+    });
+
+    test("leaf name only", () => {
+      assertExtMdastConformance("::break", DIR);
+    });
+  });
+
+  describe("text directives", () => {
+    test("basic text directive", () => {
+      assertExtMdastConformance(
+        'A :abbr[HTML]{title="HyperText Markup Language"} example.',
+        DIR,
+      );
+    });
+
+    test("text directive with label only", () => {
+      assertExtMdastConformance("This is :cite[smith04] reference.", DIR);
+    });
+
+    test("text directive with attrs only", () => {
+      assertExtMdastConformance("This is :span{.highlight} text.", DIR);
+    });
+
+    test("text directive with empty label", () => {
+      assertExtMdastConformance("This :name[] works.", DIR);
+    });
+
+    test("text directive with empty attrs", () => {
+      assertExtMdastConformance("This :name{} works.", DIR);
+    });
+
+    test("bare name is not a text directive", () => {
+      assertExtMdastConformance("This :smile is not a directive.", DIR);
+    });
+
+    test("colon emoji-style is not a directive", () => {
+      assertExtMdastConformance("Hello :smile: world", DIR);
+    });
+
+    test("multiple text directives", () => {
+      assertExtMdastConformance(
+        "A :abbr[CSS]{title=Cascading} and :abbr[HTML]{title=HyperText} example.",
+        DIR,
+      );
+    });
+  });
+
+  describe("edge cases", () => {
+    test("directive at start of paragraph", () => {
+      assertExtMdastConformance(":name[label]{key=val} at start.", DIR);
+    });
+
+    test("directive at end of paragraph", () => {
+      assertExtMdastConformance("At end :name[label]{key=val}", DIR);
+    });
+
+    test("two colons is leaf not two text directives", () => {
+      assertExtMdastConformance("::leaf[content]", DIR);
+    });
+
+    test("three colons is container", () => {
+      assertExtMdastConformance(":::container\ncontent\n:::", DIR);
+    });
+
+    test("name with hyphens", () => {
+      assertExtMdastConformance("::my-component[text]", DIR);
+    });
+
+    test("name with underscores", () => {
+      assertExtMdastConformance("::my_component[text]", DIR);
+    });
+  });
+});

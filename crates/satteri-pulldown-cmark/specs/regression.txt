@@ -12,6 +12,7 @@ This is a test of the details element.
 </details>
 .
 <details><summary>Testing 1..2..3..</summary>
+
 <p>This is a test of the details element.</p>
 </details>
 ````````````````````````````````
@@ -40,8 +41,8 @@ ISSUE #135
 [docsrs-image]: https://docs.rs/debug_stub_derive/badge.svg?version=0.3.0
 [docsrs]: https://docs.rs/debug_stub_derive/0.3.0/
 .
-<p><a href="https://crates.io/crates/debug_stub_derive"><img src="https://img.shields.io/crates/v/debug_stub_derive.svg" alt="debug-stub-derive on crates.io" /></a>
-<a href="https://docs.rs/debug_stub_derive/0.3.0/"><img src="https://docs.rs/debug_stub_derive/badge.svg?version=0.3.0" alt="debug-stub-derive on docs.rs" /></a></p>
+<p><a href="https://crates.io/crates/debug_stub_derive"><img src="https://img.shields.io/crates/v/debug_stub_derive.svg" alt="debug-stub-derive on crates.io"></a>
+<a href="https://docs.rs/debug_stub_derive/0.3.0/"><img src="https://docs.rs/debug_stub_derive/badge.svg?version=0.3.0" alt="debug-stub-derive on docs.rs"></a></p>
 ````````````````````````````````
 
 ISSUE #145
@@ -55,12 +56,38 @@ ISSUE #145
 | --------- | --------- | --------- | ---------:|
 | Content   | Content   | Conent    | Content   |
 .
-<table><thead><tr><th>Title A</th><th>Title B</th></tr></thead><tbody>
-<tr><td>Content</td><td>Content</td></tr>
-</tbody></table>
-<table><thead><tr><th>Title A</th><th>Title B</th><th>Title C</th><th style="text-align: right">Title D</th></tr></thead><tbody>
-<tr><td>Content</td><td>Content</td><td>Conent</td><td style="text-align: right">Content</td></tr>
-</tbody></table>
+<table>
+<thead>
+<tr>
+<th>Title A</th>
+<th>Title B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Content</td>
+<td>Content</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Title A</th>
+<th>Title B</th>
+<th>Title C</th>
+<th style="text-align: right">Title D</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Content</td>
+<td>Content</td>
+<td>Conent</td>
+<td style="text-align: right">Content</td>
+</tr>
+</tbody>
+</table>
 ````````````````````````````````
 
 Unicode punctuation and emphasis
@@ -104,6 +131,7 @@ ISSUE #43 (2)
   make something
 .
 <!-- <dl> -->
+
 <ul>
 <li>
 <p><strong>foo</strong> (u8, u8)</p>
@@ -279,8 +307,19 @@ foo|bar
 ---|---
 foo|bar
 .
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>foo</td><td>bar</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>foo</td>
+<td>bar</td>
+</tr>
+</tbody>
 </table>
 ````````````````````````````````
 
@@ -291,8 +330,19 @@ foo|bar\\
 ---|---
 foo|bar
 .
-<table><thead><tr><th>foo</th><th>bar\</th></tr></thead>
-<tbody><tr><td>foo</td><td>bar</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar\</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>foo</td>
+<td>bar</td>
+</tr>
+</tbody>
 </table>
 ````````````````````````````````
 
@@ -317,7 +367,7 @@ ISSUE #328
 ```````````````````````````````` example
 ![<http://example.com>](http://example.com/logo.png)
 .
-<p><img src="http://example.com/logo.png" alt="http://example.com" /></p>
+<p><img src="http://example.com/logo.png" alt="http://example.com"></p>
 ````````````````````````````````
 
 ISSUE #328
@@ -336,8 +386,15 @@ Markdown | Less | Pretty
  
 some text
 .
-<table><thead><tr><th>Markdown</th><th>Less</th><th>Pretty</th></tr></thead><tbody>
-</tbody></table>
+<table>
+<thead>
+<tr>
+<th>Markdown</th>
+<th>Less</th>
+<th>Pretty</th>
+</tr>
+</thead>
+</table>
 <p>some text</p>
 ````````````````````````````````
 
@@ -402,7 +459,14 @@ TABLES IN BROKEN CONTAINERS
 yolo | swag
 .
 <blockquote>
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead><tbody></tbody></table>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+</table>
 </blockquote>
 <p>yolo | swag</p>
 ````````````````````````````````
@@ -481,7 +545,20 @@ foo | bar
 --- | ---
 [a](< | url>)
 .
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead><tbody><tr><td>[a](&lt;</td><td>url&gt;)</td></tr></tbody></table>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>[a](&lt;</td>
+<td>url&gt;)</td>
+</tr>
+</tbody>
+</table>
 ````````````````````````````````
 
 ISSUE 351
@@ -543,10 +620,16 @@ foo | bar
 .
 <table>
 <thead>
-<tr><th>foo</th><th>bar</th></tr>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>&lt;http://</td><td>baz</td></tr>
+<tr>
+<td>&lt;http://</td>
+<td>baz</td>
+</tr>
 </tbody>
 </table>
 ````````````````````````````````
@@ -560,10 +643,16 @@ foo | bar
 .
 <table>
 <thead>
-<tr><th>foo</th><th>bar</th></tr>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>&lt;http://</td><td>&gt;</td></tr>
+<tr>
+<td>&lt;http://</td>
+<td>&gt;</td>
+</tr>
 </tbody>
 </table>
 ````````````````````````````````
@@ -720,9 +809,7 @@ An unordered list before the footnotes:
 <li>Ipsum</li>
 <li>Lorem</li>
 </ul>
-<div class="footnote-definition" id="a"><sup class="footnote-definition-label">1</sup>
-<p>Cool.</p>
-</div>
+<div class="footnote-definition" id="a"><sup class="footnote-definition-label">1</sup><p>Cool.</p></div>
 ````````````````````````````````
 
 ISSUE 421
@@ -738,7 +825,7 @@ ISSUE 421
 [crates-badge]: http://meritbadge.herokuapp.com/assimp
 .
 <p><a href="b"></a></p>
-<h1>assimp-rs <a href="https://crates.io/crates/assimp"><img src="http://meritbadge.herokuapp.com/assimp" alt="" /></a></h1>
+<h1>assimp-rs <a href="https://crates.io/crates/assimp"><img src="http://meritbadge.herokuapp.com/assimp" alt=""></a></h1>
 ````````````````````````````````
 
 ISSUE 443 (note the spaces on the blank lines)
@@ -860,10 +947,13 @@ ISSUE 557
 
 baz
 .
-<ul>
-<li><p><input disabled="" type="checkbox"/>
-foo</p></li><li><p><input disabled="" type="checkbox"/>
-bar</p></li>
+<ul class="contains-task-list">
+<li class="task-list-item">
+<p><input type="checkbox" disabled> foo</p>
+</li>
+<li class="task-list-item">
+<p><input type="checkbox" disabled> bar</p>
+</li>
 </ul>
 <p>baz</p>
 ````````````````````````````````
@@ -1010,29 +1100,117 @@ ISSUE 656
 →|-----|------|
 | baz | alef |
 .
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>baz</td><td>alef</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>alef</td>
+</tr>
+</tbody>
 </table>
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>baz</td><td>alef</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>alef</td>
+</tr>
+</tbody>
 </table>
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>baz</td><td>alef</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>alef</td>
+</tr>
+</tbody>
 </table>
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>baz</td><td>alef</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>alef</td>
+</tr>
+</tbody>
 </table>
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>baz</td><td>alef</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>alef</td>
+</tr>
+</tbody>
 </table>
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>baz</td><td>alef</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>alef</td>
+</tr>
+</tbody>
 </table>
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>baz</td><td>alef</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>alef</td>
+</tr>
+</tbody>
 </table>
-<table><thead><tr><th>foo</th><th>bar</th></tr></thead>
-<tbody><tr><td>baz</td><td>alef</td></tr></tbody>
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>alef</td>
+</tr>
+</tbody>
 </table>
 <pre><code>| foo | bar  |
 |-----|------|
@@ -1102,10 +1280,24 @@ ISSUE 540
   | without | leading |
   | empty   | lines   |
 .
-<table><thead><tr><th>A</th><th>table</th></tr></thead><tbody>
-<tr><td>not</td><td>in</td></tr>
-<tr><td>a</td><td>list</td></tr>
-</tbody></table>
+<table>
+<thead>
+<tr>
+<th>A</th>
+<th>table</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>not</td>
+<td>in</td>
+</tr>
+<tr>
+<td>a</td>
+<td>list</td>
+</tr>
+</tbody>
+</table>
 <ul>
 <li>
 <p>A blockquote:</p>
@@ -1119,19 +1311,53 @@ ISSUE 540
 </li>
 <li>
 <p>A table:</p>
-<table><thead><tr><th>inside</th><th>a</th></tr></thead><tbody>
-<tr><td>list</td><td>item</td></tr>
-<tr><td>with</td><td>leading</td></tr>
-<tr><td>empty</td><td>lines</td></tr>
-</tbody></table>
+<table>
+<thead>
+<tr>
+<th>inside</th>
+<th>a</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>list</td>
+<td>item</td>
+</tr>
+<tr>
+<td>with</td>
+<td>leading</td>
+</tr>
+<tr>
+<td>empty</td>
+<td>lines</td>
+</tr>
+</tbody>
+</table>
 </li>
 <li>
 <p>A table:</p>
-<table><thead><tr><th>inside</th><th>a</th></tr></thead><tbody>
-<tr><td>list</td><td>item</td></tr>
-<tr><td>without</td><td>leading</td></tr>
-<tr><td>empty</td><td>lines</td></tr>
-</tbody></table>
+<table>
+<thead>
+<tr>
+<th>inside</th>
+<th>a</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>list</td>
+<td>item</td>
+</tr>
+<tr>
+<td>without</td>
+<td>leading</td>
+</tr>
+<tr>
+<td>empty</td>
+<td>lines</td>
+</tr>
+</tbody>
+</table>
 </li>
 </ul>
 ````````````````````````````````
@@ -1200,7 +1426,8 @@ ISSUE 674
 >
 .
 <p>&lt;a</p>
-<blockquote></blockquote>
+<blockquote>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example
@@ -1216,7 +1443,9 @@ ISSUE 674
 > quote
 .
 <p>&lt;a</p>
-<blockquote><p>quote</p></blockquote>
+<blockquote>
+<p>quote</p>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example
@@ -1232,7 +1461,9 @@ ISSUE 674
 >quote
 .
 <p>&lt;a</p>
-<blockquote><p>quote</p></blockquote>
+<blockquote>
+<p>quote</p>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example
@@ -1254,9 +1485,19 @@ Table interruption when nested inside paragraph.
 <blockquote>
 <p>alpha</p>
 <table>
-<thead><tr><th>a</th><th>b</th></tr></thead><tbody>
-<tr><td>c</td><td>d</td></tr>
-</tbody></table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
 </blockquote>
 ````````````````````````````````
 
@@ -1372,7 +1613,9 @@ ISSUE #727
 .
 <ul>
 <li></li>
-<li><p>.</p></li>
+<li>
+<p>.</p>
+</li>
 </ul>
 ````````````````````````````````
 
@@ -1431,9 +1674,11 @@ Table
 |-</p>
 <p>Table</p>
 <table>
-<thead><tr><th>x</th></tr></thead>
-<tbody>
-</tbody>
+<thead>
+<tr>
+<th>x</th>
+</tr>
+</thead>
 </table>
 <p>Not enough table
 | col1 | col2 |
@@ -1443,9 +1688,12 @@ Table
 | :    | ---- |</p>
 <p>Table</p>
 <table>
-<thead><tr><th>col1</th><th>col2</th></tr></thead>
-<tbody>
-</tbody>
+<thead>
+<tr>
+<th>col1</th>
+<th>col2</th>
+</tr>
+</thead>
 </table>
 ````````````````````````````````
 
@@ -1592,12 +1840,27 @@ ISSUE 755
 <p>*<em>#</em></p>
 </blockquote>
 <p>*<em>#</em></p>
-<table><thead><tr><th>*<em>#</em></th></tr></thead><tbody>
-<tr><td>*<em>#</em></td></tr>
-<tr><td>*<em>#</em></td></tr>
-<tr><td>*<em>#</em></td></tr>
-<tr><td>*<em>#</em></td></tr>
-</tbody></table>
+<table>
+<thead>
+<tr>
+<th>*<em>#</em></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>*<em>#</em></td>
+</tr>
+<tr>
+<td>*<em>#</em></td>
+</tr>
+<tr>
+<td>*<em>#</em></td>
+</tr>
+<tr>
+<td>*<em>#</em></td>
+</tr>
+</tbody>
+</table>
 ````````````````````````````````
 
 ISSUE #762
@@ -1682,9 +1945,7 @@ ISSUE 772
 <p><sup class="footnote-reference"><a href="#foo">1</a></sup>[]</p>
 <p><a href="https://rust-lang.org">^foo</a></p>
 <p><a href="https://rust-lang.org">baz</a><sup class="footnote-reference"><a href="#foo">1</a></sup></p>
-<div class="footnote-definition" id="foo"><sup class="footnote-definition-label">1</sup>
-<p>bar</p>
-</div>
+<div class="footnote-definition" id="foo"><sup class="footnote-definition-label">1</sup><p>bar</p></div>
 ````````````````````````````````
 
 ISSUE 774
@@ -2014,9 +2275,7 @@ ISSUE 791
 [foo]
 .
 <ul>
-<li>
-<a href="https://example.com" title="[foo]">foo</a>
-</li>
+<li><a href="https://example.com" title="[foo]">foo</a></li>
 </ul>
 ````````````````````````````````
 
@@ -2065,13 +2324,10 @@ ISSUE 797
 <ul>
 <li>*foo
 <ul>
-<li>
-<ul>
-<li></li>
+<li>-
+baz*</li>
 </ul>
 </li>
-</ul>
-baz*</li>
 </ul>
 ````````````````````````````````
 
@@ -2083,13 +2339,10 @@ baz*</li>
 <ul>
 <li>`foo
 <ul>
-<li>
-<ul>
-<li></li>
+<li>-
+baz`</li>
 </ul>
 </li>
-</ul>
-baz`</li>
 </ul>
 ````````````````````````````````
 
@@ -2101,13 +2354,10 @@ baz`</li>
 <ul>
 <li>[foo
 <ul>
-<li>
-<ul>
-<li></li>
+<li>-
+baz](https://example.com)</li>
 </ul>
 </li>
-</ul>
-baz](https://example.com)</li>
 </ul>
 ````````````````````````````````
 
@@ -2188,9 +2438,7 @@ ISSUE 817
 [^1]: foo
 .
 <p>!<sup class="footnote-reference"><a href="#1">1</a></sup></p>
-<div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup>
-<p>foo</p>
-</div>
+<div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup><p>foo</p></div>
 ````````````````````````````````
 
 ```````````````````````````````` example
@@ -2199,9 +2447,7 @@ First ![^1][] Second
 [^1]: foo
 .
 <p>First !<sup class="footnote-reference"><a href="#1">1</a></sup>[] Second</p>
-<div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup>
-<p>foo</p>
-</div>
+<div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup><p>foo</p></div>
 ````````````````````````````````
 
 ISSUE 826
@@ -2232,9 +2478,11 @@ ISSUE 828
   t_
 .
 <ul>
-<li>_t
+<li>
+<p>_t</p>
 <h1>test</h1>
-t_</li>
+<p>t_</p>
+</li>
 </ul>
 ````````````````````````````````
 
@@ -2244,9 +2492,11 @@ t_</li>
   N*
 .
 <ul>
-<li>*_
+<li>
+<p>*_</p>
 <h1></h1>
-N*</li>
+<p>N*</p>
+</li>
 </ul>
 ````````````````````````````````
 
@@ -2280,7 +2530,7 @@ ISSUE 662
 <ul>
 <li>
 <foo>
-  <bar>
+<bar>
 </li>
 </ul>
 ````````````````````````````````
@@ -2294,8 +2544,8 @@ ISSUE 662
 <ul>
 <li>
 <p>test</p>
-   <foo>
-  <bar>
+ <foo>
+<bar>
 </li>
 </ul>
 ````````````````````````````````
@@ -2306,8 +2556,9 @@ ISSUE 662
 → <div>
 .
 <ul>
-<li>   <div>
-   <div>
+<li>
+ <div>
+ <div>
 </li>
 </ul>
 ````````````````````````````````
@@ -2318,8 +2569,9 @@ ISSUE 662
 →<div>
 .
 <ul>
-<li>  <div>
-  <div>
+<li>
+<div>
+<div>
 </li>
 </ul>
 ````````````````````````````````
@@ -2330,7 +2582,8 @@ ISSUE 662
   <div>
 .
 <ul>
-<li>   <div>
+<li>
+   <div>
 <div>
 </li>
 </ul>
@@ -2342,7 +2595,8 @@ ISSUE 662
    <div>
 .
 <ul>
-<li>   <div>
+<li>
+   <div>
  <div>
 </li>
 </ul>
@@ -2357,6 +2611,7 @@ ISSUE 662
 <li>
 <pre><code>&lt;div&gt;
 </code></pre>
+
    <div>
 </li>
 </ul>
@@ -2458,7 +2713,8 @@ test2
 <li>
 <pre><code>test
 </code></pre>
-test2</li>
+<p>test2</p>
+</li>
 </ul>
 ````````````````````````````````
 
@@ -2499,6 +2755,7 @@ ISSUE 847
 <\!p>
 .
 <!p>
+
 <p>&lt;!p&gt;</p>
 ````````````````````````````````
 
@@ -2564,10 +2821,12 @@ _**
   ^_
 .
 <ul>
-<li>_
-_**
-<hr />
-^_</li>
+<li>
+<p>_
+_**</p>
+<hr>
+<p>^_</p>
+</li>
 </ul>
 ````````````````````````````````
 
@@ -2577,7 +2836,7 @@ ISSUE #907
 > [!Note]
 > - Foo
 .
-<blockquote class="markdown-alert-note">
+<blockquote>
 <ul>
 <li>Foo</li>
 </ul>
@@ -2591,7 +2850,7 @@ ISSUE #912
 --
 ---
 .
-<hr />
+<hr>
 <h2>--</h2>
 ````````````````````````````````
 
@@ -2616,10 +2875,11 @@ ISSUE #921
 \
 -
 .
-<ul>
-<li><input disabled="" type="checkbox" checked=""/></li>
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" checked disabled> 
+\</li>
+<li></li>
 </ul>
-<h2>\</h2>
 ````````````````````````````````
 
 ISSUE #882
@@ -2630,9 +2890,9 @@ ISSUE #882
 bar
 .
 <ul>
-<li><input disabled="" type="checkbox"/></li>
+<li>[ ]</li>
 </ul>
-<hr />
+<hr>
 <p>bar</p>
 ````````````````````````````````
 
@@ -2652,12 +2912,7 @@ ISSUE #949
   : def text def text
 .
 <ul>
-<li>
-<dl>
-<dt>def this</dt>
-<dd>def text def text</dd>
-</dl>
-</li>
+<li><p>def this</p><p><p>def text def text</p></p></li>
 </ul>
 ````````````````````````````````
 
@@ -2667,12 +2922,7 @@ ISSUE #949
   : def text def text
 .
 <ul>
-<li>
-<dl>
-<dt>def this</dt>
-<dd><p>def text def text</p></dd>
-</dl>
-</li>
+<li><p>def this</p><p><p>def text def text</p></p></li>
 </ul>
 ````````````````````````````````
 
@@ -2687,13 +2937,13 @@ ISSUE #949
 > :x:,:x:,:x:, and :x: but no :x: or
 > :x:.)
 .
-<p><strong>A:</strong></p><blockquote>
-<dl><dt>B C
-I J :x: K</dt><dd>x: L M
+<p><strong>A:</strong></p>
+<blockquote>
+<p><p>B C
+I J :x: K</p><p><p>x: L M
 N O <em>P</em> Q R. (S
-T U, V W</dd>
-<dd>x:,:x:,:x:, and :x: but no :x: or</dd>
-<dd>x:.)</dd></dl></blockquote>
+T U, V W</p></p><p><p>x:,:x:,:x:, and :x: but no :x: or</p></p><p><p>x:.)</p></p></p>
+</blockquote>
 ````````````````````````````````
 
 ```````````````````````````````` example_deflists
@@ -2705,11 +2955,8 @@ T U, V W</dd>
  
  &gt; Something is wrong!
 .
-<dl>
-<dt>[abc] check <code>foobar_raz</code>
-Some preamble <code>foobar_raz</code>, not <code>barfoo_raz</code></dt>
-<dd>D</dd>
-</dl>
+<p><p>[abc] check <code>foobar_raz</code>
+Some preamble <code>foobar_raz</code>, not <code>barfoo_raz</code></p><p><p>D</p></p></p>
 <p>This should fix:</p>
 <p>&gt; Something is wrong!</p>
 ````````````````````````````````
@@ -2721,9 +2968,11 @@ Some preamble <code>foobar_raz</code>, not <code>barfoo_raz</code></dt>
   stuff](https://example.com)
 .
 <ul>
-<li>Item definition [it
+<li>
+<p>Item definition [it</p>
 <pre><code class="language-rust"></code></pre>
-stuff](https://example.com)</li>
+<p>stuff](https://example.com)</p>
+</li>
 </ul>
 ````````````````````````````````
 
@@ -2750,26 +2999,26 @@ foo
 >→{.class}
 >→===
 .
-<h1 class="class">foo
+<h1>foo
 </h1>
 <blockquote>
-<h1 class="class">foo
+<h1>foo
 </h1>
 <blockquote>
-<h1 class="class">foo
+<h1>foo
 </h1>
 </blockquote>
 </blockquote>
 <ul>
 <li>
 <blockquote>
-<h1 class="class">foo
+<h1>foo
 </h1>
 </blockquote>
 </li>
 </ul>
 <blockquote>
-<h1 class="class">foo
+<h1>foo
 </h1>
 </blockquote>
 ````````````````````````````````
@@ -2779,7 +3028,7 @@ the trailing space after the &gt; should be stripped
     > {.bar}
 ===
 .
-<h1 class="bar">the trailing space after the &gt; should be stripped
+<h1>the trailing space after the &gt; should be stripped
 &gt;</h1>
 ````````````````````````````````
 
@@ -2795,7 +3044,9 @@ the trailing space after the &gt; should be stripped
 .
 <ul>
 <li>&lt;c
-<blockquote></blockquote></li>
+<blockquote>
+</blockquote>
+</li>
 </ul>
 ````````````````````````````````
 
@@ -2809,19 +3060,19 @@ https://github.com/pulldown-cmark/pulldown-cmark/issues/999
 - [ ]
   > some text
 .
-<ul>
-<li><input disabled="" type="checkbox" checked=""/>
-* some text</li>
-<li><input disabled="" type="checkbox"/>
-&gt; some text</li>
-<li><input disabled="" type="checkbox" checked=""/>
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" checked disabled> * some text</li>
+<li class="task-list-item"><input type="checkbox" disabled> &gt; some text</li>
+<li>[x]
 <ul>
 <li>some text</li>
-</ul></li>
-<li><input disabled="" type="checkbox"/>
+</ul>
+</li>
+<li>[ ]
 <blockquote>
 <p>some text</p>
-</blockquote></li>
+</blockquote>
+</li>
 </ul>
 ````````````````````````````````
 

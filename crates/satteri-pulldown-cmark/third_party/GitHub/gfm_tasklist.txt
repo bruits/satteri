@@ -29,11 +29,9 @@ the final rendered document.
 - [ ] foo
 - [x] bar
 .
-<ul>
-<li><input disabled="" type="checkbox"/>
-foo</li>
-<li><input disabled="" type="checkbox" checked=""/>
-bar</li>
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" disabled> foo</li>
+<li class="task-list-item"><input type="checkbox" checked disabled> bar</li>
 </ul>
 ````````````````````````````````
 
@@ -45,17 +43,13 @@ Task lists can be arbitrarily nested:
   - [x] baz
 - [ ] bim
 .
-<ul>
-<li><input disabled="" type="checkbox" checked=""/>
-foo
-<ul>
-<li><input disabled="" type="checkbox"/>
-bar</li>
-<li><input disabled="" type="checkbox" checked=""/>
-baz</li>
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" checked disabled> foo
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox" disabled> bar</li>
+<li class="task-list-item"><input type="checkbox" checked disabled> baz</li>
 </ul>
 </li>
-<li><input disabled="" type="checkbox"/>
-bim</li>
+<li class="task-list-item"><input type="checkbox" disabled> bim</li>
 </ul>
 ````````````````````````````````

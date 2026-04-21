@@ -1,0 +1,204 @@
+import { describe, test } from "vitest";
+import { assertExtMdastConformance, assertExtHastConformance } from "./helpers.js";
+
+const MATH: ["math"] = ["math"];
+
+describe("Math MDAST conformance", () => {
+  test("basic inline and display math", () => {
+    assertExtMdastConformance("Math $\\alpha$\n\n$$\n\\beta+\\gamma\n$$", MATH);
+  });
+
+  test("escaped opening dollar sign", () => {
+    assertExtMdastConformance("\\$\\alpha$", MATH);
+  });
+
+  test("escaped closing dollar sign", () => {
+    assertExtMdastConformance("$\\alpha\\$", MATH);
+  });
+
+  test("escaped escape before dollar sign", () => {
+    assertExtMdastConformance("\\\\\\$\\alpha$", MATH);
+  });
+
+  test("dollar signs in inline code", () => {
+    assertExtMdastConformance("`$`\\alpha$", MATH);
+  });
+
+  test("backticks in math", () => {
+    assertExtMdastConformance("$\\alpha`$`", MATH);
+  });
+
+  test("double dollar inline", () => {
+    assertExtMdastConformance("$$\\alpha$$", MATH);
+  });
+
+  test("display math after paragraph", () => {
+    assertExtMdastConformance("tango\n$$\n\\alpha\n$$", MATH);
+  });
+
+  test("triple dollar display math", () => {
+    assertExtMdastConformance("$$$\n\\alpha\n$$$", MATH);
+  });
+
+  test("indented display math", () => {
+    assertExtMdastConformance("  $$\n    \\alpha\n  $$", MATH);
+  });
+
+  test("opening fence without closing", () => {
+    assertExtMdastConformance("$$just two dollars", MATH);
+  });
+
+  test("meta text after opening fence", () => {
+    assertExtMdastConformance("$$  must\n\\alpha\n$$", MATH);
+  });
+
+  test("values before closing fence", () => {
+    assertExtMdastConformance("$$\n\\alpha\nmust  $$", MATH);
+  });
+
+  test("spacing before closing fence", () => {
+    assertExtMdastConformance("$$\n\\alpha\n  $$", MATH);
+  });
+
+  test("spacing after closing fence", () => {
+    assertExtMdastConformance("$$\n\\alpha\n$$  ", MATH);
+  });
+
+  test("display math followed by code block", () => {
+    assertExtMdastConformance("$$\n\\alpha\n$$\n```\nbravo\n```", MATH);
+  });
+
+  test("basic arithmetic", () => {
+    assertExtMdastConformance("$1+1 = 2$", MATH);
+  });
+
+  test("math without surrounding whitespace", () => {
+    assertExtMdastConformance("foo$1+1 = 2$bar", MATH);
+  });
+
+  test("math starting with negative sign", () => {
+    assertExtMdastConformance("foo$-1+1 = 2$bar", MATH);
+  });
+
+  test("empty math content", () => {
+    assertExtMdastConformance("aaa $$ bbb", MATH);
+  });
+
+  test("unclosed delimiter", () => {
+    assertExtMdastConformance("aaa $5.99 bbb", MATH);
+  });
+
+  test("paragraph break in inline math", () => {
+    assertExtMdastConformance("foo $1+1\n\n= 2$ bar", MATH);
+  });
+
+  test("markup inside math", () => {
+    assertExtMdastConformance("foo $1 *i* 1$ bar", MATH);
+  });
+
+  test("3-space indented display math", () => {
+    assertExtMdastConformance("   $$\n   1+1 = 2\n   $$", MATH);
+  });
+
+  test("4-space indentation becomes code block", () => {
+    assertExtMdastConformance("    $$\n    1+1 = 2\n    $$", MATH);
+  });
+
+  test("multiline inline math", () => {
+    assertExtMdastConformance("foo $1 + 1\n= 2$ bar", MATH);
+  });
+
+  test("multiline display math", () => {
+    assertExtMdastConformance("$$\n\n  1\n+ 1\n\n= 2\n\n$$", MATH);
+  });
+
+  test("text following inline math", () => {
+    assertExtMdastConformance("$n$-th order", MATH);
+  });
+
+  test("display math at end of document", () => {
+    assertExtMdastConformance("$$\n1+1 = 2", MATH);
+  });
+
+  test("math in lists", () => {
+    assertExtMdastConformance("* $1+1 = 2$\n* $$\n  1+1 = 2\n  $$", MATH);
+  });
+
+  test("escaped delimiters not parsed", () => {
+    assertExtMdastConformance("Foo \\$1$ bar\n\n\\$\\$\n1\n\\$\\$", MATH);
+  });
+
+  test("currency amounts not parsed", () => {
+    assertExtMdastConformance("Thus, $20,000 and USD$30,000 won't parse", MATH);
+  });
+
+  test("whitespace after opening dollar", () => {
+    assertExtMdastConformance("It is 2$ for a can of soda, not 1$.", MATH);
+  });
+
+  test("whitespace before closing dollar", () => {
+    assertExtMdastConformance("I'll give $20 today, if you give me more $ tomorrow.", MATH);
+  });
+
+  test("escaped dollars inside math", () => {
+    assertExtMdastConformance("Money adds: $\\$X + \\$Y = \\$Z$.", MATH);
+  });
+});
+
+describe("Math HAST conformance", () => {
+  test("basic inline math", () => {
+    assertExtHastConformance("$\\alpha$", MATH);
+  });
+
+  test("basic display math", () => {
+    assertExtHastConformance("$$\n\\beta+\\gamma\n$$", MATH);
+  });
+
+  test("inline and display together", () => {
+    assertExtHastConformance("Math $\\alpha$\n\n$$\n\\beta+\\gamma\n$$", MATH);
+  });
+
+  test("basic arithmetic", () => {
+    assertExtHastConformance("$1+1 = 2$", MATH);
+  });
+
+  test("math without surrounding whitespace", () => {
+    assertExtHastConformance("foo$1+1 = 2$bar", MATH);
+  });
+
+  test("text following inline math", () => {
+    assertExtHastConformance("$n$-th order", MATH);
+  });
+
+  test("display math after paragraph", () => {
+    assertExtHastConformance("tango\n$$\n\\alpha\n$$", MATH);
+  });
+
+  test("double dollar inline", () => {
+    assertExtHastConformance("$$\\alpha$$", MATH);
+  });
+
+  test("currency amounts not parsed", () => {
+    assertExtHastConformance("Thus, $20,000 and USD$30,000 won't parse", MATH);
+  });
+
+  test("math in lists", () => {
+    assertExtHastConformance("* $1+1 = 2$\n* $$\n  1+1 = 2\n  $$", MATH);
+  });
+
+  test("display math at end of document", () => {
+    assertExtHastConformance("$$\n1+1 = 2", MATH);
+  });
+
+  test("multiline display math", () => {
+    assertExtHastConformance("$$\n\n  1\n+ 1\n\n= 2\n\n$$", MATH);
+  });
+
+  test("escaped delimiters not parsed", () => {
+    assertExtHastConformance("Foo \\$1$ bar\n\n\\$\\$\n1\n\\$\\$", MATH);
+  });
+
+  test("escaped dollars inside math", () => {
+    assertExtHastConformance("Money adds: $\\$X + \\$Y = \\$Z$.", MATH);
+  });
+});

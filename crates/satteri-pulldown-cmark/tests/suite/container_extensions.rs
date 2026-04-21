@@ -11,16 +11,16 @@ fn container_extensions_test_1() {
 > Is this inside?
 > :::
 "##;
-    let expected = r##"<blockquote><p>Is this <strong>bold</strong>?
+    let expected = r##"<blockquote>
+<p>Is this <strong>bold</strong>?
 Is this <strong>bold</strong>?</p>
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this inside?</p>
-</details>
+</blockquote>
 </blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -32,16 +32,17 @@ Is this collapsable?
 :::
 **is this seperate and bold**
 "##;
-    let expected = r##"<details>
-<summary>Is this expandable?</summary>
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
-<blockquote><p>Is this <strong>bold</strong>?
-Is this <strong>bold</strong>?</p></blockquote>
-</details>
+<blockquote>
+<p>Is this <strong>bold</strong>?
+Is this <strong>bold</strong>?</p>
+</blockquote>
+</blockquote>
 <p><strong>is this seperate and bold</strong></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -55,20 +56,19 @@ Is this collapsable?
 > :::
 :::
 "##;
-    let expected = r##"<details>
-<summary>Is this expandable?</summary>
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
-<blockquote><p>Is this <strong>bold</strong>?
+<blockquote>
+<p>Is this <strong>bold</strong>?
 Is this <strong>bold</strong>?</p>
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this inside?</p>
-</details>
 </blockquote>
-</details>
+</blockquote>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -85,23 +85,24 @@ Is this collapsable?
 :::
 **is this seperate and bold**
 "##;
-    let expected = r##"<details>
-<summary>Is this expandable?</summary>
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
-<blockquote><p>Is this <strong>bold</strong>?
+<blockquote>
+<p>Is this <strong>bold</strong>?
 Is this <strong>bold</strong>?</p>
-<details>
-<summary>Is this expandable?</summary>
+<blockquote>
 <p>Is this collapsable?</p>
-<blockquote><p>Is this <strong>bold</strong>?
-Is this <strong>bold</strong>?</p></blockquote>
-</details>
+<blockquote>
+<p>Is this <strong>bold</strong>?
+Is this <strong>bold</strong>?</p>
 </blockquote>
-</details>
+</blockquote>
+</blockquote>
+</blockquote>
 <p><strong>is this seperate and bold</strong></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -111,14 +112,13 @@ Is this collapsable?
 :::
 **is this seperate and bold**
 "##;
-    let expected = r##"<details>
-<summary>Is this expandable?</summary>
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
-</details>
+</blockquote>
 <p><strong>is this seperate and bold</strong></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -129,14 +129,13 @@ Is this collapsable?
 Is this **bold**?
 :::
 "##;
-    let expected = r##"<details>
-<summary>Is this expandable?</summary>
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</details>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -147,14 +146,13 @@ Is this collapsable?
 Is this **bold**?
 :::
 "##;
-    let expected = r##"<details>
-<summary>Is this expandable?</summary>
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</details>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -165,13 +163,13 @@ Is this collapsable?
 Is this **bold**?
 :::
 "##;
-    let expected = r##"<div class="example">
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</div>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -182,13 +180,13 @@ Is this collapsable?
 Is this **bold**?
 ::::
 "##;
-    let expected = r##"<div class="example">
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</div>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -199,14 +197,13 @@ Is this collapsable?
 Is this **bold**?
 :::::
 "##;
-    let expected = r##"<details>
-<summary>Is this expandable?</summary>
+    let expected = r##"<blockquote>
 <p>Is this collapsable?</p>
 <p>Is this <strong>bold</strong>?</p>
-</details>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -222,7 +219,7 @@ content
 <p>:::</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -233,14 +230,14 @@ content
 
 ::: end
 "##;
-    let expected = r##"<div class="block">
+    let expected = r##"<blockquote>
 <p>content</p>
-<div class="end">
-</div>
-</div>
+<blockquote>
+</blockquote>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -251,13 +248,13 @@ fn container_extensions_test_13() {
 ::: block
  :::
 "##;
-    let expected = r##"<div class="block">
-</div>
-<div class="block">
-</div>
+    let expected = r##"<blockquote>
+</blockquote>
+<blockquote>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -268,13 +265,13 @@ fn container_extensions_test_14() {
 :::
 :::
 "##;
-    let expected = r##"<div class="a">
-<div class="b">
-</div>
-</div>
+    let expected = r##"<blockquote>
+<blockquote>
+</blockquote>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -285,13 +282,13 @@ fn container_extensions_test_15() {
 :::
 ::::
 "##;
-    let expected = r##"<div class="a">
-<div class="b">
-</div>
-</div>
+    let expected = r##"<blockquote>
+<blockquote>
+</blockquote>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -302,13 +299,13 @@ fn container_extensions_test_16() {
 ::::
 :::
 "##;
-    let expected = r##"<div class="a">
-<div class="b">
-</div>
-</div>
+    let expected = r##"<blockquote>
+<blockquote>
+</blockquote>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -322,7 +319,7 @@ Hi
 :::</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -332,13 +329,13 @@ Hi
 :::
 ::::::
 "##;
-    let expected = r##"<div class="foo">
+    let expected = r##"<blockquote>
 <p>Hi
 :::</p>
-</div>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -347,13 +344,13 @@ fn container_extensions_test_19() {
 > Hi
 "##;
     let expected = r##"<blockquote>
-<div class="foo">
+<blockquote>
 <p>Hi</p>
-</div>
+</blockquote>
 </blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -362,12 +359,12 @@ fn container_extensions_test_20() {
 Hi
 :::
 "##;
-    let expected = r##"<div class="c_d">
+    let expected = r##"<blockquote>
 <p>Hi</p>
-</div>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -378,16 +375,16 @@ fn container_extensions_test_21() {
 > x
 :::
 "##;
-    let expected = r##"<div class="container">
+    let expected = r##"<blockquote>
 <blockquote>
 <p>shouldn't close, right?
 :::
 x</p>
 </blockquote>
-</div>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -399,16 +396,16 @@ fn container_extensions_test_22() {
 
 :::
 "##;
-    let expected = r##"<div class="container">
+    let expected = r##"<blockquote>
 <blockquote>
 <p>shouldn't close, right?
 :::
 x</p>
 </blockquote>
-</div>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -419,16 +416,16 @@ fn container_extensions_test_23() {
 ::::
 x
 "##;
-    let expected = r##"<div class="a">
-<div class="b">
-<div class="c">
-</div>
-</div>
+    let expected = r##"<blockquote>
+<blockquote>
+<blockquote>
+</blockquote>
+</blockquote>
 <p>x</p>
-</div>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -436,10 +433,12 @@ fn container_extensions_test_24() {
     let original = r##"::: a
 content :::
 "##;
-    let expected = r##"<div class="a"><p>content :::</p></div>
+    let expected = r##"<blockquote>
+<p>content :::</p>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }
 
 #[test]
@@ -447,8 +446,10 @@ fn container_extensions_test_25() {
     let original = r##":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::: a
 content :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 "##;
-    let expected = r##"<div class="a"><p>content :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::</p></div>
+    let expected = r##"<blockquote>
+<p>content :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::</p>
+</blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
 }

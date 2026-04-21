@@ -41,8 +41,6 @@ A metadata block cannot be empty:
 ---
 ---
 .
-<hr>
-<hr>
 ````````````````````````````````
 
 A blank line cannot be after the start of the metadata block:

@@ -31,6 +31,10 @@ export const NodeType = Object.freeze({
   Toml: 26,
   Math: 27,
   InlineMath: 28,
+  // Directives
+  ContainerDirective: 30,
+  LeafDirective: 31,
+  TextDirective: 32,
   // MDX
   MdxJsxFlowElement: 100,
   MdxJsxTextElement: 101,
@@ -497,6 +501,37 @@ export class MdastReader {
           });
           break;
       }
+    }
+
+    return { name, attributes };
+  }
+
+  /**
+   * DirectiveData layout:
+   *   [name: StringRef(8B)][attr_count: u32(4B)][_pad: u32(4B)] = 16-byte header
+   *   then attr_count × 16 bytes:
+   *     [key: StringRef(8B)][value: StringRef(8B)]
+   */
+  getDirectiveData(nodeId: number): { name: string; attributes: Record<string, string> } {
+    const data = this.getTypeData(nodeId);
+    if (data.length < 16) {
+      return { name: "", attributes: {} };
+    }
+
+    const nameRef = this.readStringRef(data, 0);
+    const name = this.getString(nameRef.offset, nameRef.len);
+
+    const view = new DataView(data.buffer, data.byteOffset + 8);
+    const attrCount = view.getUint32(0, true);
+
+    const attributes: Record<string, string> = {};
+    for (let i = 0; i < attrCount; i++) {
+      const base = 16 + i * 16;
+      const keyRef = this.readStringRef(data, base);
+      const valRef = this.readStringRef(data, base + 8);
+      const key = this.getString(keyRef.offset, keyRef.len);
+      const val = this.getString(valRef.offset, valRef.len);
+      attributes[key] = val;
     }
 
     return { name, attributes };

@@ -438,7 +438,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         Some(MdastNodeType::Html) => {
             let data = view.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
-            let value = view.get_str(string_ref).trim_end_matches('\n');
+            let value = view.get_str(string_ref);
             let id = add_raw_node(builder, value);
             copy_position_to(id, node_id, view, builder);
         }
@@ -639,8 +639,8 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
 
         Some(MdastNodeType::InlineMath) => {
             let data = view.get_type_data(node_id);
-            let string_ref = decode_string_ref_data(data);
-            let value = view.get_str(string_ref);
+            let math_data = decode_math_data(data);
+            let value = view.get_str(math_data.value);
             let class_ref = builder.alloc_string("language-math math-inline");
             let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
             open_element_with_props(builder, "code", &props);
@@ -872,6 +872,13 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             );
         }
 
+        Some(MdastNodeType::ContainerDirective)
+        | Some(MdastNodeType::LeafDirective)
+        | Some(MdastNodeType::TextDirective) => {
+            // Directives have no standard HAST representation.
+            // Like remark-rehype, skip unless a handler is registered.
+        }
+
         _ => {
             // Unknown: recurse into children
             convert_children(node_id, view, builder, ctx);
@@ -1032,6 +1039,14 @@ fn convert_children_unwrap_paragraphs_task(
 /// Convert children with `\n` text nodes inserted between them.
 /// These are needed by the MDX compilation path (JSX children spacing).
 /// The HTML renderer skips whitespace-only text nodes between block elements.
+fn produces_hast_output(child_id: u32, view: &Arena) -> bool {
+    let raw_type = view.get_node(child_id).node_type;
+    !matches!(
+        MdastNodeType::from_u8(raw_type),
+        Some(MdastNodeType::Definition | MdastNodeType::Yaml | MdastNodeType::Toml)
+    )
+}
+
 fn convert_children_wrapped(
     node_id: u32,
     view: &Arena,
@@ -1039,12 +1054,14 @@ fn convert_children_wrapped(
     ctx: &ConvertCtx<'_, '_>,
 ) {
     let children = view.get_children(node_id);
-    let mut first = true;
+    let mut has_output = false;
     for &child_id in children {
-        if !first {
-            add_text_node(builder, "\n");
+        if produces_hast_output(child_id, view) {
+            if has_output {
+                add_text_node(builder, "\n");
+            }
+            has_output = true;
         }
-        first = false;
         convert_node(child_id, view, builder, ctx);
     }
 }

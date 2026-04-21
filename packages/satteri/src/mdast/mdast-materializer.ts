@@ -32,6 +32,9 @@ export const TYPE_NAMES: Record<number, string> = {
   26: "toml",
   27: "math",
   28: "inlineMath",
+  30: "containerDirective",
+  31: "leafDirective",
+  32: "textDirective",
   100: "mdxJsxFlowElement",
   101: "mdxJsxTextElement",
   102: "mdxFlowExpression",
@@ -63,7 +66,6 @@ function addTypeProperties(
     case 7: // html
     case 25: // yaml
     case 26: // toml
-    case 28: // inlineMath
       Object.defineProperties(node, {
         value: lazyProp("value", () => reader.getTextValue(nodeId)),
       });
@@ -75,6 +77,12 @@ function addTypeProperties(
 
     case 27: // math
       lazyGroup(node, ["meta", "value"], () => reader.getMathData(nodeId));
+      break;
+
+    case 28: // inlineMath
+      Object.defineProperties(node, {
+        value: lazyProp("value", () => reader.getMathData(nodeId).value),
+      });
       break;
 
     case 15: // link
@@ -102,7 +110,7 @@ function addTypeProperties(
     }
 
     case 6: // listItem
-      lazyGroup(node, ["checked", "spread"], () => reader.getListItemData(nodeId));
+      lazyGroup(node, ["spread", "checked"], () => reader.getListItemData(nodeId));
       break;
 
     case 17: // linkReference
@@ -121,6 +129,12 @@ function addTypeProperties(
       Object.defineProperties(node, {
         align: lazyProp("align", () => reader.getTableAlign(nodeId)),
       });
+      break;
+
+    case 30: // containerDirective
+    case 31: // leafDirective
+    case 32: // textDirective
+      lazyGroup(node, ["name", "attributes"], () => reader.getDirectiveData(nodeId));
       break;
 
     case 100: // mdxJsxFlowElement

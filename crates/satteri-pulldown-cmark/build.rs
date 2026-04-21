@@ -64,6 +64,8 @@ fn generate_tests_from_spec() {
 
         let spec_name = file_path.file_stem().unwrap().to_str().unwrap();
 
+        let base_options = base_options_for_spec(spec_name);
+
         let spec = Spec::new(&raw_spec);
         let mut n_tests = 0;
 
@@ -86,13 +88,14 @@ fn {}_test_{i}() {{
     let original = r##"{original}"##;
     let expected = r##"{expected}"##;
 
-    test_markdown_html(original, expected, {smart_punct}, {metadata_blocks}, {old_footnotes}, {subscript}, {wikilinks}, {deflists}, {container_extensions});
+    test_markdown_html(original, expected, {base_options}, {smart_punct}, {metadata_blocks}, {old_footnotes}, {subscript}, {wikilinks}, {deflists}, {container_extensions});
 }}
 "###,
                     spec_name,
                     i = i + 1,
                     original = testcase.original,
                     expected = testcase.expected,
+                    base_options = base_options,
                     smart_punct = testcase.smart_punct,
                     metadata_blocks = testcase.metadata_blocks,
                     old_footnotes = testcase.old_footnotes,
@@ -133,6 +136,52 @@ fn {}_test_{i}() {{
         mod_rs.write_all(b"mod ").unwrap();
         mod_rs.write_all(mod_name.as_bytes()).unwrap();
         mod_rs.write_all(b";\n").unwrap();
+    }
+}
+
+#[cfg(feature = "gen-tests")]
+fn base_options_for_spec(spec_name: &str) -> u32 {
+    // Option bit values from src/lib.rs
+    const TABLES: u32 = 1 << 1;
+    const FOOTNOTES: u32 = 1 << 2;
+    const STRIKETHROUGH: u32 = 1 << 3;
+    const TASKLISTS: u32 = 1 << 4;
+    const HEADING_ATTRIBUTES: u32 = 1 << 6;
+    const MATH: u32 = 1 << 10;
+    const GFM: u32 = 1 << 11;
+    const SUPERSCRIPT: u32 = 1 << 13;
+    const GITHUB_ALERTS: u32 = 1 << 21;
+
+    match spec_name {
+        // CommonMark spec: no extensions
+        "spec" | "smart_punct" => 0,
+
+        // GFM specs: GFM + the specific extension
+        "gfm_table" => GFM | TABLES,
+        "gfm_strikethrough" => GFM | STRIKETHROUGH,
+        "gfm_tasklist" => GFM | TASKLISTS,
+
+        // Extension-specific specs
+        "blockquotes_tags" => GITHUB_ALERTS,
+        "footnotes" => FOOTNOTES,
+        "heading_attrs" => HEADING_ATTRIBUTES,
+        "math" => MATH,
+        "strikethrough" => GFM | STRIKETHROUGH,
+        "super_sub" => SUPERSCRIPT,
+        "table" => TABLES,
+
+        // Regression tests: enable common extensions to match historical behavior
+        "regression" => TABLES | FOOTNOTES | STRIKETHROUGH | TASKLISTS
+            | HEADING_ATTRIBUTES | MATH | GFM | SUPERSCRIPT | GITHUB_ALERTS,
+
+        // old_footnotes has negative tests that expect new-style footnotes to be active
+        "old_footnotes" => FOOTNOTES,
+
+        // Specs that use per-example suffix flags only
+        "container_extensions" | "definition_lists" | "metadata_blocks"
+        | "wikilinks" => 0,
+
+        other => panic!("Unknown spec file: {other}"),
     }
 }
 

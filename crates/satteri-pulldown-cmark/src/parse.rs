@@ -37,7 +37,7 @@ use crate::{
     scanners::*,
     strings::CowStr,
     tree::{Tree, TreeIndex},
-    Alignment, BlockQuoteKind, CodeBlockKind, ContainerKind, Event, HeadingLevel, LinkType,
+    Alignment, BlockQuoteKind, CodeBlockKind, DirectiveKind, Event, HeadingLevel, LinkType,
     MetadataBlockKind, Options, Tag, TagEnd,
 };
 
@@ -61,8 +61,8 @@ pub(crate) enum ItemBody {
 
     // repeats, can_open, can_close
     MaybeEmphasis(usize, bool, bool),
-    // can_open, can_close, brace context
-    MaybeMath(bool, bool, u8),
+    // preceded_by_backslash, brace context
+    MaybeMath(bool, u8),
     // quote byte, can_open, can_close
     MaybeSmartQuote(u8, bool, bool),
     MaybeCode(usize, bool), // number of backticks, preceded by backslash
@@ -108,10 +108,13 @@ pub(crate) enum ItemBody {
     Rule,
     Heading(HeadingLevel, Option<HeadingIndex>), // heading level
     FencedCodeBlock(CowIndex),
+    MathBlock(CowIndex), // meta string (info after $$)
     IndentCodeBlock,
     HtmlBlock,
     BlockQuote(Option<BlockQuoteKind>),
-    Container(u8, ContainerKind, CowIndex), // (fence length, specific renderer, descriptor used in renderer)
+    ContainerDirective(u8, DirectiveIndex), // (fence length, directive data)
+    LeafDirective(DirectiveIndex),
+    TextDirective(DirectiveIndex),
     List(bool, u8, u64),                    // is_tight, list character, list start index
     ListItem(usize),                        // indent level
     FootnoteDefinition(CowIndex),
@@ -606,79 +609,65 @@ impl<'input> ParserInner<'input> {
                         backslash_escaped: false,
                     };
                 }
-                ItemBody::MaybeMath(can_open, _can_close, brace_context) => {
-                    if !can_open {
+                ItemBody::MaybeMath(preceded_by_backslash, _brace_context) => {
+                    if preceded_by_backslash {
                         self.tree[cur_ix].item.body = ItemBody::Text {
-                            backslash_escaped: false,
+                            backslash_escaped: true,
                         };
                         prev = cur;
                         cur = self.tree[cur_ix].next;
                         continue;
                     }
-                    let is_display = self.tree[cur_ix].next.is_some_and(|next_ix| {
-                        matches!(
-                            self.tree[next_ix].item.body,
-                            ItemBody::MaybeMath(_can_open, _can_close, _brace_context)
-                        )
-                    });
-                    let result = if self.math_delims.is_populated() {
-                        // we have previously scanned all math environment delimiters,
-                        // so we can reuse that work
-                        self.math_delims
-                            .find(&self.tree, cur_ix, is_display, brace_context)
-                    } else {
-                        // we haven't previously scanned all math delimiters,
-                        // so walk the AST
-                        let mut scan = self.tree[cur_ix].next;
-                        if is_display {
-                            // a display delimiter, `$$`, is actually two delimiters
-                            // skip the second one
-                            scan = self.tree[scan.unwrap()].next;
-                        }
-                        let mut invalid = false;
-                        while let Some(scan_ix) = scan {
-                            if let ItemBody::MaybeMath(_can_open, can_close, delim_brace_context) =
-                                self.tree[scan_ix].item.body
+                    // Count consecutive $ from the opening position
+                    let mut open_count = 1usize;
+                    let mut open_end = cur_ix;
+                    {
+                        let mut peek = self.tree[cur_ix].next;
+                        while let Some(peek_ix) = peek {
+                            if matches!(self.tree[peek_ix].item.body, ItemBody::MaybeMath(..))
+                                && self.tree[peek_ix].item.start == self.tree[open_end].item.end
                             {
-                                let delim_is_display =
-                                    self.tree[scan_ix].next.is_some_and(|next_ix| {
-                                        matches!(
-                                            self.tree[next_ix].item.body,
-                                            ItemBody::MaybeMath(
-                                                _can_open,
-                                                _can_close,
-                                                _brace_context
-                                            )
-                                        )
-                                    });
-                                if !invalid && delim_brace_context == brace_context {
-                                    if (!is_display && can_close)
-                                        || (is_display && delim_is_display)
-                                    {
-                                        // This will skip ahead past everything we
-                                        // just inserted. Needed for correctness to
-                                        // ensure that a new scan is done after this item.
-                                        self.math_delims.clear();
-                                        break;
-                                    } else {
-                                        // Math cannot contain $, so the current item
-                                        // is invalid. Keep scanning to fill math_delims.
-                                        invalid = true;
-                                    }
-                                }
-                                self.math_delims.insert(
-                                    delim_is_display,
-                                    delim_brace_context,
-                                    scan_ix,
-                                    can_close,
-                                );
+                                open_count += 1;
+                                open_end = peek_ix;
+                                peek = self.tree[peek_ix].next;
+                            } else {
+                                break;
                             }
-                            scan = self.tree[scan_ix].next;
                         }
-                        scan
-                    };
+                    }
 
-                    if let Some(scan_ix) = result {
+                    // Scan forward for a matching run of the same count
+                    let mut scan = self.tree[open_end].next;
+                    let mut close_ix = None;
+                    while let Some(scan_ix) = scan {
+                        if matches!(self.tree[scan_ix].item.body, ItemBody::MaybeMath(..)) {
+                            let mut run = 1usize;
+                            let mut run_end = scan_ix;
+                            let mut peek = self.tree[scan_ix].next;
+                            while let Some(peek_ix) = peek {
+                                if matches!(self.tree[peek_ix].item.body, ItemBody::MaybeMath(..))
+                                    && self.tree[peek_ix].item.start
+                                        == self.tree[run_end].item.end
+                                {
+                                    run += 1;
+                                    run_end = peek_ix;
+                                    peek = self.tree[peek_ix].next;
+                                } else {
+                                    break;
+                                }
+                            }
+                            if run == open_count {
+                                close_ix = Some(scan_ix);
+                                break;
+                            }
+                            // Skip past this non-matching run
+                            scan = self.tree[run_end].next;
+                            continue;
+                        }
+                        scan = self.tree[scan_ix].next;
+                    }
+
+                    if let Some(scan_ix) = close_ix {
                         self.make_math_span(cur_ix, scan_ix);
                     } else {
                         self.tree[cur_ix].item.body = ItemBody::Text {
@@ -1395,39 +1384,48 @@ impl<'input> ParserInner<'input> {
         None
     }
 
-    fn make_math_span(&mut self, open: TreeIndex, mut close: TreeIndex) {
-        let start_is_display = self.tree[open].next.filter(|&next_ix| {
-            next_ix != close
-                && matches!(
-                    self.tree[next_ix].item.body,
-                    ItemBody::MaybeMath(_can_open, _can_close, _brace_context)
-                )
-        });
-        let end_is_display = self.tree[close].next.filter(|&next_ix| {
-            matches!(
-                self.tree[next_ix].item.body,
-                ItemBody::MaybeMath(_can_open, _can_close, _brace_context)
-            )
-        });
-        let is_display = start_is_display.is_some() && end_is_display.is_some();
-        if is_display {
-            // This unwrap() can't panic, because if the next variable were None, end_is_display would be None
-            close = self.tree[close].next.unwrap();
-            self.tree[open].next = Some(close);
-            self.tree[open].item.end += 1;
-            self.tree[close].item.start -= 1;
-        } else {
-            if self.tree[open].item.end == self.tree[close].item.start {
-                // inline math spans cannot be empty
-                self.tree[open].item.body = ItemBody::Text {
-                    backslash_escaped: false,
-                };
-                return;
+    fn make_math_span(&mut self, open: TreeIndex, close: TreeIndex) {
+        // Find the end of the opening run of consecutive $ tokens
+        let mut open_end = open;
+        {
+            let mut peek = self.tree[open].next;
+            while let Some(peek_ix) = peek {
+                if matches!(self.tree[peek_ix].item.body, ItemBody::MaybeMath(..))
+                    && self.tree[peek_ix].item.start == self.tree[open_end].item.end
+                    && peek_ix != close
+                {
+                    open_end = peek_ix;
+                    peek = self.tree[peek_ix].next;
+                } else {
+                    break;
+                }
             }
-            self.tree[open].next = Some(close);
         }
-        let span_start = self.tree[open].item.end;
+        // Find the end of the closing run
+        let mut close_end = close;
+        {
+            let mut peek = self.tree[close].next;
+            while let Some(peek_ix) = peek {
+                if matches!(self.tree[peek_ix].item.body, ItemBody::MaybeMath(..))
+                    && self.tree[peek_ix].item.start == self.tree[close_end].item.end
+                {
+                    close_end = peek_ix;
+                    peek = self.tree[peek_ix].next;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        let span_start = self.tree[open_end].item.end;
         let span_end = self.tree[close].item.start;
+
+        if span_start > span_end {
+            self.tree[open].item.body = ItemBody::Text {
+                backslash_escaped: false,
+            };
+            return;
+        }
 
         let spanned_text = &self.text[span_start..span_end];
         let spanned_bytes = spanned_text.as_bytes();
@@ -1464,9 +1462,9 @@ impl<'input> ParserInner<'input> {
             spanned_text.into()
         };
 
-        self.tree[open].item.body = ItemBody::Math(self.allocs.allocate_cow(cow), is_display);
-        self.tree[open].item.end = self.tree[close].item.end;
-        self.tree[open].next = self.tree[close].next;
+        self.tree[open].item.body = ItemBody::Math(self.allocs.allocate_cow(cow), false);
+        self.tree[open].item.end = self.tree[close_end].item.end;
+        self.tree[open].next = self.tree[close_end].next;
     }
 
     /// Make a code span.
@@ -2108,6 +2106,9 @@ pub(crate) struct HeadingIndex(NonZeroUsize);
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) struct JsxElementIndex(usize);
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct DirectiveIndex(usize);
+
 /// A parsed JSX attribute.
 #[derive(Debug, Clone)]
 pub(crate) enum JsxAttr<'a> {
@@ -2150,6 +2151,14 @@ impl<'a> JsxElementData<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DirectiveAttrData<'a> {
+    pub name: CowStr<'a>,
+    pub attributes: Vec<(CowStr<'a>, CowStr<'a>)>,
+    pub label_start: usize,
+    pub label_end: usize,
+}
+
 #[derive(Clone)]
 pub(crate) struct Allocations<'a> {
     pub refdefs: RefDefs<'a>,
@@ -2159,6 +2168,7 @@ pub(crate) struct Allocations<'a> {
     alignments: Vec<Vec<Alignment>>,
     headings: Vec<HeadingAttributes<'a>>,
     jsx_elements: Vec<JsxElementData<'a>>,
+    directives: Vec<DirectiveAttrData<'a>>,
 }
 
 /// Used by the heading attributes extension.
@@ -2216,6 +2226,7 @@ impl<'a> Allocations<'a> {
             alignments: Vec::new(),
             headings: Vec::new(),
             jsx_elements: Vec::new(),
+            directives: Vec::new(),
         }
     }
 
@@ -2269,6 +2280,28 @@ impl<'a> Allocations<'a> {
         let ix = self.jsx_elements.len();
         self.jsx_elements.push(data);
         JsxElementIndex(ix)
+    }
+
+    pub fn allocate_directive(&mut self, data: DirectiveAttrData<'a>) -> DirectiveIndex {
+        let ix = self.directives.len();
+        self.directives.push(data);
+        DirectiveIndex(ix)
+    }
+
+    pub fn take_directive(&mut self, ix: DirectiveIndex) -> DirectiveAttrData<'a> {
+        core::mem::replace(
+            &mut self.directives[ix.0],
+            DirectiveAttrData {
+                name: "".into(),
+                attributes: Vec::new(),
+                label_start: 0,
+                label_end: 0,
+            },
+        )
+    }
+
+    pub fn directive_ref(&self, ix: DirectiveIndex) -> &DirectiveAttrData<'a> {
+        &self.directives[ix.0]
     }
 
     pub fn take_jsx_element(&mut self, ix: JsxElementIndex) -> JsxElementData<'a> {
@@ -2489,8 +2522,10 @@ fn body_to_tag_end(body: &ItemBody) -> TagEnd {
         ItemBody::Link(..) => TagEnd::Link,
         ItemBody::Image(..) => TagEnd::Image,
         ItemBody::Heading(level, _) => TagEnd::Heading(level),
-        ItemBody::IndentCodeBlock | ItemBody::FencedCodeBlock(..) => TagEnd::CodeBlock,
-        ItemBody::Container(_, kind, _) => TagEnd::ContainerBlock(kind),
+        ItemBody::IndentCodeBlock | ItemBody::FencedCodeBlock(..) | ItemBody::MathBlock(..) => TagEnd::CodeBlock,
+        ItemBody::ContainerDirective(..) => TagEnd::Directive(DirectiveKind::Container),
+        ItemBody::LeafDirective(..) => TagEnd::Directive(DirectiveKind::Leaf),
+        ItemBody::TextDirective(..) => TagEnd::Directive(DirectiveKind::Text),
         ItemBody::BlockQuote(kind) => TagEnd::BlockQuote(kind),
         ItemBody::HtmlBlock => TagEnd::HtmlBlock,
         ItemBody::List(_, c, _) => {
@@ -2569,11 +2604,26 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
             classes: Vec::new(),
             attrs: Vec::new(),
         },
+        ItemBody::MathBlock(cow_ix) => {
+            Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
+        }
         ItemBody::FencedCodeBlock(cow_ix) => {
             Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
         }
         ItemBody::IndentCodeBlock => Tag::CodeBlock(CodeBlockKind::Indented),
-        ItemBody::Container(_, kind, cow_ix) => Tag::ContainerBlock(kind, allocs.take_cow(cow_ix)),
+        ItemBody::ContainerDirective(_, dir_ix) | ItemBody::LeafDirective(dir_ix) | ItemBody::TextDirective(dir_ix) => {
+            let kind = match item.body {
+                ItemBody::ContainerDirective(..) => DirectiveKind::Container,
+                ItemBody::LeafDirective(..) => DirectiveKind::Leaf,
+                _ => DirectiveKind::Text,
+            };
+            let dir = allocs.take_directive(dir_ix);
+            Tag::Directive {
+                kind,
+                name: dir.name,
+                attributes: dir.attributes,
+            }
+        }
         ItemBody::BlockQuote(kind) => Tag::BlockQuote(kind),
         ItemBody::List(is_tight, c, listitem_start) => {
             if c == b'.' || c == b')' {

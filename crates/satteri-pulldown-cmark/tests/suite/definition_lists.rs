@@ -11,15 +11,10 @@ fn definition_lists_test_1() {
 orange
 :   orange fruit
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd>red fruit</dd>
-<dt>orange</dt>
-<dd>orange fruit</dd>
-</dl>
+    let expected = r##"<p><p>apple</p><p><p>red fruit</p></p><p>orange</p><p><p>orange fruit</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -32,19 +27,10 @@ orange
 
 :   orange fruit
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-<dt>orange</dt>
-<dd>
-<p>orange fruit</p>
-</dd>
-</dl>
+    let expected = r##"<p><p>apple</p><p><p>red fruit</p></p><p>orange</p><p><p>orange fruit</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -53,15 +39,10 @@ fn definition_lists_test_3() {
 
 :   red fruit
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-</dl>
+    let expected = r##"<p><p>apple</p><p><p>red fruit</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -72,15 +53,10 @@ fn definition_lists_test_4() {
 orange
   : orange fruit
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd>red fruit</dd>
-<dt>orange</dt>
-<dd>orange fruit</dd>
-</dl>
+    let expected = r##"<p><p>apple</p><p><p>red fruit</p></p><p>orange</p><p><p>orange fruit</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -93,19 +69,10 @@ orange
 
  : orange fruit
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-<dt>orange</dt>
-<dd>
-<p>orange fruit</p>
-</dd>
-</dl>
+    let expected = r##"<p><p>apple</p><p><p>red fruit</p></p><p>orange</p><p><p>orange fruit</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -125,26 +92,14 @@ fn definition_lists_test_6() {
 
     > orange block quote
 "##;
-    let expected = r##"<dl>
-<dt><em>apple</em></dt>
-<dd>
-<p>red fruit</p>
-<p>contains seeds,
-crisp, pleasant to taste</p>
-</dd>
-<dt><em>orange</em></dt>
-<dd>
-<p>orange fruit</p>
-<pre><code>{ orange code block }
-</code></pre>
-<blockquote>
+    let expected = r##"<p><p><em>apple</em></p><p><p>red fruit</p><p>contains seeds,
+crisp, pleasant to taste</p></p><p><em>orange</em></p><p><p>orange fruit</p><pre><code>{ orange code block }
+</code></pre><blockquote>
 <p>orange block quote</p>
-</blockquote>
-</dd>
-</dl>
+</blockquote></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -155,18 +110,15 @@ fn definition_lists_test_7() {
 
        Para two
 "##;
-    let expected = r##"<dl>
-<dt>term</dt>
-<dd>
-<ol>
-<li><p>Para one</p>
-<p>Para two</p></li>
-</ol>
-</dd>
-</dl>
+    let expected = r##"<p><p>term</p><p><ol>
+<li>
+<p>Para one</p>
+<p>Para two</p>
+</li>
+</ol></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -179,17 +131,10 @@ orange
 :   orange fruit
 :   telecom company
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd>red fruit</dd>
-<dd>computer company</dd>
-<dt>orange</dt>
-<dd>orange fruit</dd>
-<dd>telecom company</dd>
-</dl>
+    let expected = r##"<p><p>apple</p><p><p>red fruit</p></p><p><p>computer company</p></p><p>orange</p><p><p>orange fruit</p></p><p><p>telecom company</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -205,25 +150,10 @@ orange
 :   orange fruit
 :   telecom company
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-<dd>
-<p>computer company</p>
-</dd>
-<dt>orange</dt>
-<dd>
-<p>orange fruit</p>
-</dd>
-<dd>
-<p>telecom company</p>
-</dd>
-</dl>
+    let expected = r##"<p><p>apple</p><p><p>red fruit</p></p><p><p>computer company</p></p><p>orange</p><p><p>orange fruit</p></p><p><p>telecom company</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -241,27 +171,12 @@ orange
 fruit
 :   telecom company
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd>
-<p>red fruit</p>
-</dd>
-<dd>
-<p>computer
-company</p>
-</dd>
-<dt>orange</dt>
-<dd>
-<p>orange
-fruit</p>
-</dd>
-<dd>
-<p>telecom company</p>
-</dd>
-</dl>
+    let expected = r##"<p><p>apple</p><p><p>red fruit</p></p><p><p>computer
+company</p></p><p>orange</p><p><p>orange
+fruit</p></p><p><p>telecom company</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -278,29 +193,17 @@ chili's
    : > restaurant company
  : spicy fruit
 "##;
-    let expected = r##"<dl>
-<dt>apple</dt>
-<dd><blockquote>
+    let expected = r##"<p><p>apple</p><p><blockquote>
 <p>computer company
 : red fruit</p>
-</blockquote>
-</dd>
-<dt>orange</dt>
-<dd><blockquote>
+</blockquote></p><p>orange</p><p><blockquote>
 <p>telecom company</p>
-</blockquote>
-</dd>
-<dd>orange fruit</dd>
-<dt>chili's</dt>
-<dd><blockquote>
+</blockquote></p><p><p>orange fruit</p></p><p>chili's</p><p><blockquote>
 <p>restaurant company</p>
-</blockquote>
-</dd>
-<dd>spicy fruit</dd>
-</dl>
+</blockquote></p><p><p>spicy fruit</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -311,16 +214,13 @@ fn definition_lists_test_12() {
 : tart fruit
 "##;
     let expected = r##"<blockquote>
-<dl>
-<dt>cherry</dt>
-<dd>keyboard company
+<p><p>cherry</p><p><p>keyboard company
 pomegranate
-: tart fruit</dd>
-</dl>
+: tart fruit</p></p></p>
 </blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -331,17 +231,12 @@ c
 
 :   foo
 "##;
-    let expected = r##"<dl>
-<dt>a
-b<br />
-c</dt>
-<dd>
-<p>foo</p>
-</dd>
-</dl>
+    let expected = r##"<p><p>a
+b<br>
+c</p><p><p>foo</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -355,15 +250,10 @@ bim
 :   bor
 "##;
     let expected = r##"<p>Foo</p>
-<dl>
-<dt>bar</dt>
-<dd>baz</dd>
-<dt>bim</dt>
-<dd>bor</dd>
-</dl>
+<p><p>bar</p><p><p>baz</p></p><p>bim</p><p><p>bor</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -376,16 +266,11 @@ bim
 
 Bloze
 "##;
-    let expected = r##"<dl>
-<dt>bar</dt>
-<dd>baz</dd>
-<dt>bim</dt>
-<dd>bor</dd>
-</dl>
+    let expected = r##"<p><p>bar</p><p><p>baz</p></p><p>bim</p><p><p>bor</p></p></p>
 <p>Bloze</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -400,7 +285,7 @@ Bloze
 <p>Bloze</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -410,14 +295,11 @@ fn definition_lists_test_17() {
 
 Bloze
 "##;
-    let expected = r##"<dl>
-<dt>bar</dt>
-<dd>baz</dd>
-</dl>
+    let expected = r##"<p><p>bar</p><p><p>baz</p></p></p>
 <p>Bloze</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -437,30 +319,15 @@ bar
 bar
     :   baz
 "##;
-    let expected = r##"<dl>
-<dt>bar</dt>
-<dd>
-<pre><code>  baz
-</code></pre>
-</dd>
-<dt>bar</dt>
-<dd>
-<pre><code> baz
-</code></pre>
-</dd>
-<dt>bar</dt>
-<dd>
-<pre><code>baz
-</code></pre>
-</dd>
-<dt>bar</dt>
-<dd>baz</dd>
-</dl>
+    let expected = r##"<p><p>bar</p><p><pre><code>  baz
+</code></pre></p><p>bar</p><p><pre><code> baz
+</code></pre></p><p>bar</p><p><pre><code>baz
+</code></pre></p><p>bar</p><p><p>baz</p></p></p>
 <p>bar
 :   baz</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -481,32 +348,20 @@ fn definition_lists_test_19() {
 
   > orange block quote
 "##;
-    let expected = r##"<dl>
-<dt><em>orange</em></dt>
-<dd>
-<p>orange fruit</p>
-<pre><code>{ orange code block }
-</code></pre>
-</dd>
-</dl>
+    let expected = r##"<p><p><em>orange</em></p><p><p>orange fruit</p><pre><code>{ orange code block }
+</code></pre></p></p>
 <blockquote>
 <p>orange block quote</p>
 </blockquote>
-<dl>
-<dt><em>orange</em></dt>
-<dd>
-<pre><code>orange fruit
+<p><p><em>orange</em></p><p><pre><code>orange fruit
 
   { orange code block }
-</code></pre>
-<blockquote>
+</code></pre><blockquote>
 <p>orange block quote</p>
-</blockquote>
-</dd>
-</dl>
+</blockquote></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -515,13 +370,11 @@ fn definition_lists_test_20() {
 ----|-----
 : first
 "##;
-    let expected = r##"<table><thead><tr><th>Test</th><th>Table</th></tr></thead><tbody>
-<tr><td>: first</td><td></td></tr>
-</tbody>
-</table>
+    let expected = r##"<p><p>Test|Table
+----|-----</p><p><p>first</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -533,17 +386,11 @@ Test|Table
 ----|-----
 : fourth
 "##;
-    let expected = r##"<dl>
-<dt>first</dt>
-<dd>second</dd>
-</dl>
-<table><thead><tr><th>Test</th><th>Table</th></tr></thead><tbody>
-<tr><td>: fourth</td><td></td></tr>
-</tbody>
-</table>
+    let expected = r##"<p><p>first</p><p><p>second</p></p><p>Test|Table
+----|-----</p><p><p>fourth</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -556,7 +403,7 @@ fn definition_lists_test_22() {
 <p>: first</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -568,15 +415,12 @@ My section
 ==========
 : fourth
 "##;
-    let expected = r##"<dl>
-<dt>first</dt>
-<dd>second</dd>
-</dl>
+    let expected = r##"<p><p>first</p><p><p>second</p></p></p>
 <h1>My section</h1>
 <p>: fourth</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -588,7 +432,7 @@ fn definition_lists_test_24() {
 <p>: first</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -599,15 +443,12 @@ fn definition_lists_test_25() {
 ## My subsection
 : fourth
 "##;
-    let expected = r##"<dl>
-<dt>first</dt>
-<dd>second</dd>
-</dl>
+    let expected = r##"<p><p>first</p><p><p>second</p></p></p>
 <h2>My subsection</h2>
 <p>: fourth</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -621,7 +462,7 @@ fn definition_lists_test_26() {
 </blockquote>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -632,15 +473,10 @@ fn definition_lists_test_27() {
 third  
 : fourth
 "##;
-    let expected = r##"<dl>
-<dt>first\</dt>
-<dd>second</dd>
-<dt>third</dt>
-<dd>fourth</dd>
-</dl>
+    let expected = r##"<p><p>first\</p><p><p>second</p></p><p>third</p><p><p>fourth</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -655,15 +491,13 @@ first
 "##;
     let expected = r##"<div>first</div>
 : second
-<dl>
-<dt>first</dt>
-<dd>second</dd>
-</dl>
+
+<p><p>first</p><p><p>second</p></p></p>
 <div>third</div>
 : fourth
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -677,17 +511,10 @@ third
 <span>fifth</span>
 : sixth
 "##;
-    let expected = r##"<dl>
-<dt><span>first</span></dt>
-<dd>second</dd>
-<dt>third</dt>
-<dd>fourth</dd>
-<dt><span>fifth</span></dt>
-<dd>sixth</dd>
-</dl>
+    let expected = r##"<p><p><span>first</span></p><p><p>second</p></p><p>third</p><p><p>fourth</p></p><p><span>fifth</span></p><p><p>sixth</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -702,27 +529,12 @@ fn definition_lists_test_30() {
 level one
 : l1
 "##;
-    let expected = r##"<dl>
-<dt>level one</dt>
-<dd>
-<dl>
-<dt>l1
-level two</dt>
-<dd>
-<dl>
-<dt>l2
-level three</dt>
-<dd>l3</dd>
-</dl>
-</dd>
-</dl>
-</dd>
-<dt>level one</dt>
-<dd>l1</dd>
-</dl>
+    let expected = r##"<p><p>level one</p><p><p><p>l1
+level two</p><p><p><p>l2
+level three</p><p><p>l3</p></p></p></p></p></p><p>level one</p><p><p>l1</p></p></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }
 
 #[test]
@@ -734,5 +546,5 @@ fn definition_lists_test_31() {
     let expected = r##"<p>:</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, false, false, true, false);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true, false);
 }

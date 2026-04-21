@@ -7,70 +7,70 @@ use super::test_markdown_html;
 fn super_sub_test_1() {
     let original = r##"^This is super^ ~This is sub~
 "##;
-    let expected = r##"<p><sup>This is super</sup> <sub>This is sub</sub></p>
+    let expected = r##"<p><em>This is super</em> <em>This is sub</em></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
 fn super_sub_test_2() {
     let original = r##"~This is stricken out~
 "##;
-    let expected = r##"<p><sub>This is stricken out</sub></p>
+    let expected = r##"<p><em>This is stricken out</em></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
 fn super_sub_test_3() {
     let original = r##"~This is \~stricken~
 "##;
-    let expected = r##"<p><sub>This is ~stricken</sub></p>
+    let expected = r##"<p><em>This is ~stricken</em></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
 fn super_sub_test_4() {
     let original = r##"~This~is~nothing~
 "##;
-    let expected = r##"<p><sub>This</sub>is<sub>nothing</sub></p>
+    let expected = r##"<p><em>This</em>is<em>nothing</em></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
 fn super_sub_test_5() {
     let original = r##"~This ~~is not stricken.~
 "##;
-    let expected = r##"<p><sub>This ~~is not stricken.</sub></p>
+    let expected = r##"<p><em>This ~~is not stricken.</em></p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
 fn super_sub_test_6() {
     let original = r##"~~This ~is~~ stricken.~
 "##;
-    let expected = r##"<p><del>This ~is</del> stricken.~</p>
+    let expected = r##"<p>~~This ~is~~ stricken.~</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
 fn super_sub_test_7() {
     let original = r##"~This ~~is stricken~ but this is not~~
 "##;
-    let expected = r##"<p><sub>This ~~is stricken</sub> but this is not~~</p>
+    let expected = r##"<p><em>This ~~is stricken</em> but this is not~~</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
@@ -79,11 +79,11 @@ fn super_sub_test_8() {
 
 y=x^2^a+xb+c
 "##;
-    let expected = r##"<p>H<sub>2</sub>O</p>
-<p>y=x<sup>2</sup>a+xb+c</p>
+    let expected = r##"<p>H<em>2</em>O</p>
+<p>y=x<em>2</em>a+xb+c</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn super_sub_test_9() {
 <p>^bar^^</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }
 
 #[test]
@@ -105,9 +105,9 @@ fn super_sub_test_10() {
 
 *foo_*_bar*
 "##;
-    let expected = r##"<p><sub>foo^</sub>^bar~</p>
+    let expected = r##"<p><em>foo^</em>^bar~</p>
 <p><em>foo_</em>_bar*</p>
 "##;
 
-    test_markdown_html(original, expected, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
 }

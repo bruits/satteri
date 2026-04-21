@@ -22,6 +22,18 @@ import {
   satteriMdast,
   satteriHast,
   satteriHtml,
+  referenceFmMdast,
+  referenceFmHast,
+  referenceFmHtml,
+  satteriFmMdast,
+  satteriFmHast,
+  satteriFmHtml,
+  referenceMathMdast,
+  referenceMathHast,
+  referenceMathHtml,
+  satteriMathMdast,
+  satteriMathHast,
+  satteriMathHtml,
 } from "./helpers.js";
 
 const INLINE_TEXT = fc.string({
@@ -273,6 +285,89 @@ const mdxDocument = fc
   .array(mdxBlock, { minLength: 1, maxLength: 8 })
   .map((blocks) => blocks.join("\n\n"));
 
+const MATH_CONTENT = fc.string({
+  unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789 +-=^_{}\\".split("")),
+  minLength: 1,
+  maxLength: 30,
+});
+
+const MATH_COMMAND = fc.constantFrom(
+  "\\alpha", "\\beta", "\\gamma", "\\delta", "\\sum", "\\int",
+  "\\frac{a}{b}", "\\sqrt{x}", "\\mathbb{R}", "\\cdot", "\\times",
+  "\\leq", "\\geq", "\\neq", "\\infty", "\\partial",
+);
+
+const inlineMath = fc.oneof(
+  MATH_CONTENT.map((t) => `$${t}$`),
+  MATH_COMMAND.map((t) => `$${t}$`),
+  fc.tuple(INLINE_TEXT, MATH_CONTENT).map(([t, m]) => `${t} $${m}$`),
+);
+
+const displayMath = fc.oneof(
+  MATH_CONTENT.map((t) => `$$\n${t}\n$$`),
+  MATH_COMMAND.map((t) => `$$\n${t}\n$$`),
+  fc.tuple(
+    fc.constantFrom("", "js", "math"),
+    MATH_CONTENT,
+  ).map(([meta, content]) => meta ? `$$ ${meta}\n${content}\n$$` : `$$\n${content}\n$$`),
+);
+
+const mathBlock = fc.oneof(
+  { weight: 3, arbitrary: paragraph },
+  { weight: 3, arbitrary: heading },
+  { weight: 3, arbitrary: inlineMath },
+  { weight: 3, arbitrary: displayMath },
+  { weight: 2, arbitrary: bold },
+  { weight: 2, arbitrary: italic },
+  { weight: 1, arbitrary: codeBlock },
+  { weight: 1, arbitrary: blockquote },
+  { weight: 1, arbitrary: unorderedList },
+  { weight: 1, arbitrary: link },
+  { weight: 1, arbitrary: inlineCode },
+  { weight: 1, arbitrary: horizontalRule },
+  { weight: 1, arbitrary: table },
+);
+
+const mathDocument = fc
+  .array(mathBlock, { minLength: 1, maxLength: 10 })
+  .map((blocks) => blocks.join("\n\n"));
+
+const YAML_KEY = fc.string({
+  unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz_".split("")),
+  minLength: 1,
+  maxLength: 12,
+});
+
+const YAML_VALUE = fc.oneof(
+  WORD,
+  fc.integer({ min: -999, max: 9999 }).map(String),
+  fc.boolean().map(String),
+  INLINE_TEXT.map((t) => `"${t}"`),
+);
+
+const yamlFrontmatter = fc
+  .array(fc.tuple(YAML_KEY, YAML_VALUE), { minLength: 1, maxLength: 5 })
+  .map((pairs) => {
+    const fields = pairs.map(([k, v]) => `${k}: ${v}`).join("\n");
+    return `---\n${fields}\n---`;
+  });
+
+const tomlFrontmatter = fc
+  .array(fc.tuple(YAML_KEY, YAML_VALUE), { minLength: 1, maxLength: 5 })
+  .map((pairs) => {
+    const fields = pairs.map(([k, v]) => `${k} = ${v}`).join("\n");
+    return `+++\n${fields}\n+++`;
+  });
+
+const fmDocument = fc
+  .tuple(
+    fc.oneof(yamlFrontmatter, tomlFrontmatter),
+    fc.array(markdownBlock, { minLength: 0, maxLength: 8 }),
+  )
+  .map(([fm, blocks]) =>
+    blocks.length > 0 ? `${fm}\n\n${blocks.join("\n\n")}` : fm,
+  );
+
 const NUM_RUNS = Number(process.env.FUZZ_RUNS) || 200;
 const FC_OPTIONS: fc.Parameters<unknown> = {
   numRuns: NUM_RUNS,
@@ -280,7 +375,9 @@ const FC_OPTIONS: fc.Parameters<unknown> = {
   verbose: fc.VerbosityLevel.None,
 };
 
-type FuzzLevel = "mdast" | "hast" | "html" | "mdx-mdast" | "mdx-hast";
+type FuzzLevel = "mdast" | "hast" | "html" | "mdx-mdast" | "mdx-hast"
+  | "math-mdast" | "math-hast" | "math-html"
+  | "fm-mdast" | "fm-hast" | "fm-html";
 
 interface FuzzIssue {
   input: string;
@@ -296,6 +393,12 @@ const LEVEL_FUNS: Record<FuzzLevel, { parse: (s: string) => unknown; ref: (s: st
   "html": { parse: satteriHtml, ref: referenceHtml },
   "mdx-mdast": { parse: satteriMdxMdast, ref: referenceMdxMdast },
   "mdx-hast": { parse: satteriMdxHast, ref: referenceMdxHast },
+  "math-mdast": { parse: satteriMathMdast, ref: referenceMathMdast },
+  "math-hast": { parse: satteriMathHast, ref: referenceMathHast },
+  "math-html": { parse: satteriMathHtml, ref: referenceMathHtml },
+  "fm-mdast": { parse: satteriFmMdast, ref: referenceFmMdast },
+  "fm-hast": { parse: satteriFmHast, ref: referenceFmHast },
+  "fm-html": { parse: satteriFmHtml, ref: referenceFmHtml },
 };
 
 function collectIssues(
@@ -531,6 +634,62 @@ describe("fuzz: conformance", () => {
 
       const inputs = unique.map((i) => JSON.stringify(i.input));
       expect.soft(unique, `Found ${unique.length} conformance issue(s):\n${inputs.join("\n")}`).toHaveLength(0);
+    }
+  });
+});
+
+describe("fuzz: math conformance", () => {
+  test("collect and report math issues", () => {
+    const allIssues = [
+      ...collectIssues(mathDocument, "math-mdast", "structured"),
+      ...collectIssues(mathDocument, "math-hast", "structured"),
+      ...collectIssues(mathDocument, "math-html", "structured"),
+    ];
+
+    const unique = deduplicateIssues(allIssues);
+
+    if (unique.length > 0) {
+      const report = [
+        "# Math fuzz-discovered conformance issues",
+        "",
+        `Found ${unique.length} unique issue(s) across ${allIssues.length} total failure(s).`,
+        "",
+        ...unique.map(formatIssue),
+      ].join("\n");
+
+      const issuesPath = new URL("./FUZZ-ISSUES-MATH.md", import.meta.url);
+      writeFileSync(issuesPath, report + "\n");
+
+      const inputs = unique.map((i) => JSON.stringify(i.input));
+      expect.soft(unique, `Found ${unique.length} math conformance issue(s):\n${inputs.join("\n")}`).toHaveLength(0);
+    }
+  });
+});
+
+describe("fuzz: frontmatter conformance", () => {
+  test("collect and report frontmatter issues", () => {
+    const allIssues = [
+      ...collectIssues(fmDocument, "fm-mdast", "structured"),
+      ...collectIssues(fmDocument, "fm-hast", "structured"),
+      ...collectIssues(fmDocument, "fm-html", "structured"),
+    ];
+
+    const unique = deduplicateIssues(allIssues);
+
+    if (unique.length > 0) {
+      const report = [
+        "# Frontmatter fuzz-discovered conformance issues",
+        "",
+        `Found ${unique.length} unique issue(s) across ${allIssues.length} total failure(s).`,
+        "",
+        ...unique.map(formatIssue),
+      ].join("\n");
+
+      const issuesPath = new URL("./FUZZ-ISSUES-FM.md", import.meta.url);
+      writeFileSync(issuesPath, report + "\n");
+
+      const inputs = unique.map((i) => JSON.stringify(i.input));
+      expect.soft(unique, `Found ${unique.length} frontmatter conformance issue(s):\n${inputs.join("\n")}`).toHaveLength(0);
     }
   });
 });

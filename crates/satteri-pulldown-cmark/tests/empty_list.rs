@@ -61,7 +61,6 @@ fn empty_list_in_blockquote_after_para() {
     let input = "x\n>*";
     let (arena, _) = parse(input, DEFAULT_OPTIONS);
     let root_children = arena.get_children(0);
-    // paragraph, blockquote — the `*` inside the blockquote is text, not a list
     assert_eq!(root_children.len(), 2, "expected paragraph + blockquote");
     let bq_children = arena.get_children(root_children[1]);
     let bq_child_type = arena.get_node(bq_children[0]).node_type;

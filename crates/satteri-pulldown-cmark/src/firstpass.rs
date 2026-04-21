@@ -10,13 +10,13 @@ use crate::{
     linklabel::{scan_link_label_rest, LinkLabel},
     mdx::*,
     parse::{
-        scan_containers, Allocations, FootnoteDef, HeadingAttributes, Item, ItemBody, LinkDef,
-        LINK_MAX_NESTED_PARENS,
+        scan_containers, Allocations, DirectiveAttrData, FootnoteDef, HeadingAttributes, Item,
+        ItemBody, LinkDef, LINK_MAX_NESTED_PARENS,
     },
     scanners::*,
     strings::CowStr,
     tree::{Tree, TreeIndex},
-    ContainerKind, HeadingLevel, MetadataBlockKind, Options,
+    HeadingLevel, MetadataBlockKind, Options,
 };
 
 /// Runs the first pass, which resolves the block structure of the document,
@@ -160,9 +160,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 let already_in_list = self.tree.peek_up().is_some_and(|ix| {
                     matches!(self.tree[ix].item.body, ItemBody::List(_, _, _))
                 });
+                let after_marker_blank = {
+                    let rest = &bytes[after_marker_index..];
+                    rest.is_empty() || scan_blank_line(rest).is_some()
+                };
                 if self.list_interrupted_paragraph
                     && !already_in_list
-                    && scan_blank_line(&bytes[after_marker_index..]).is_some()
+                    && after_marker_blank
                 {
                     self.list_interrupted_paragraph = false;
                     line_start = save;
@@ -188,7 +192,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::TaskListMarker(is_checked),
                         });
                     if let Some(task_list_marker) = task_list_marker {
-                        if scan_blank_line(&bytes[task_list_marker.end..]).is_some() {
+                        let rest = &bytes[task_list_marker.end..];
+                        let line_blank_after_marker = rest.is_empty()
+                            || matches!(rest.first(), Some(b'\n' | b'\r'))
+                            || matches!(
+                                bytes.get(task_list_marker.end.wrapping_sub(1)),
+                                Some(b'\n' | b'\r')
+                            )
+                            || rest
+                                .iter()
+                                .take_while(|&&b| b != b'\n' && b != b'\r')
+                                .all(|&b| b == b' ');
+                        if line_blank_after_marker {
                             line_start = saved_line_start;
                         } else {
                             return self
@@ -266,7 +281,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     return after_marker_index + n;
                 }
             } else if line_start.scan_blockquote_marker() {
-                let kind = if self.options.contains(Options::ENABLE_GFM) {
+                let kind = if self.options.contains(Options::ENABLE_GITHUB_ALERTS) {
                     line_start.scan_blockquote_tag()
                 } else {
                     None
@@ -305,68 +320,58 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     }
                 }
             } else if self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS)
-                && scan_ch_repeat(&bytes[(start_ix + line_start.bytes_scanned())..], b':') > 2
+                && scan_ch_repeat(&bytes[(start_ix + line_start.bytes_scanned())..], b':') > 1
             {
-                let fence_length = scan_while_max(
-                    &bytes[(start_ix + line_start.bytes_scanned())..],
-                    |c| c == b':',
-                    u8::MAX as usize,
-                );
-                if self.tree.spine_len() > u8::MAX as usize {
+                let colon_start = start_ix + line_start.bytes_scanned();
+                let colon_count = scan_ch_repeat(&bytes[colon_start..], b':');
+                if colon_count >= 3 && self.tree.spine_len() <= u8::MAX as usize {
+                    // Container directive (:::+)
+                    let fence_length = core::cmp::min(colon_count, u8::MAX as usize);
+                    let after_colons = colon_start + colon_count;
+                    if let Some((dir_data, content_end)) =
+                        parse_directive_after_colons(&self.text, &bytes, after_colons)
+                    {
+                        // For block directives, advance to end of line
+                        let after = &bytes[content_end..];
+                        let ws = scan_whitespace_no_nl(after);
+                        let line_end = content_end + ws + scan_nextline(&after[ws..]);
+                        let dir_ix = self.allocs.allocate_directive(dir_data);
+                        self.tree.append(Item {
+                            start: container_start,
+                            end: 0,
+                            body: ItemBody::ContainerDirective(fence_length as u8, dir_ix),
+                        });
+                        self.tree.push();
+                        return line_end;
+                    } else {
+                        break;
+                    }
+                } else if colon_count == 2 {
+                    // Leaf directive (::)
+                    let after_colons = colon_start + 2;
+                    if let Some((dir_data, line_end)) =
+                        parse_directive_after_colons(&self.text, &bytes, after_colons)
+                    {
+                        // Verify only whitespace follows on the line
+                        let remaining = &bytes[line_end..];
+                        let ws = scan_whitespace_no_nl(remaining);
+                        let at_eol = line_end + ws >= bytes.len()
+                            || bytes[line_end + ws] == b'\n'
+                            || bytes[line_end + ws] == b'\r';
+                        if at_eol || line_end >= bytes.len() {
+                            let dir_ix = self.allocs.allocate_directive(dir_data);
+                            self.tree.append(Item {
+                                start: container_start,
+                                end: line_end,
+                                body: ItemBody::LeafDirective(dir_ix),
+                            });
+                            let next_line = line_end + scan_nextline(&bytes[line_end..]);
+                            return next_line;
+                        }
+                    }
                     break;
                 } else {
-                    let excess_colons = scan_while(
-                        &bytes[(start_ix + line_start.bytes_scanned() + fence_length)..],
-                        |c| c == b':',
-                    );
-                    let mut kind_start =
-                        start_ix + line_start.bytes_scanned() + fence_length + excess_colons;
-                    kind_start += scan_whitespace_no_nl(&bytes[kind_start..]);
-                    let kind_length = scan_while(&bytes[kind_start..], |c| {
-                        is_ascii_alphanumeric(c) || c == b'_' || c == b'-' || c == b':' || c == b'.'
-                    });
-                    if kind_length == 0 {
-                        break;
-                    } else {
-                        let kind = unescape(
-                            &self.text[kind_start..(kind_start + kind_length)],
-                            self.tree.is_in_table(),
-                        );
-                        let mut summary_start = kind_start + kind_length;
-                        summary_start += scan_whitespace_no_nl(&bytes[summary_start..]);
-                        let line_end = summary_start + scan_nextline(&bytes[summary_start..]);
-                        let summary_end = line_end
-                            - scan_rev_while(&bytes[summary_start..line_end], is_ascii_whitespace);
-                        if kind.eq_ignore_ascii_case("spoiler") {
-                            let summary = unescape(
-                                &self.text[summary_start..summary_end],
-                                self.tree.is_in_table(),
-                            );
-                            let summary_cow_ix = self.allocs.allocate_cow(summary);
-                            self.tree.append(Item {
-                                start: container_start,
-                                end: 0,
-                                body: ItemBody::Container(
-                                    fence_length as u8,
-                                    ContainerKind::Spoiler,
-                                    summary_cow_ix,
-                                ),
-                            });
-                        } else {
-                            let kind_cow_ix = self.allocs.allocate_cow(kind);
-                            self.tree.append(Item {
-                                start: container_start,
-                                end: 0,
-                                body: ItemBody::Container(
-                                    fence_length as u8,
-                                    ContainerKind::Default,
-                                    kind_cow_ix,
-                                ),
-                            });
-                        }
-                        self.tree.push();
-                        return summary_end + 1;
-                    }
+                    break;
                 }
             } else {
                 line_start = save;
@@ -376,10 +381,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         if self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS) {
             let mut pop_count = None;
+            let mut fence_line_end = start_ix;
             for (i, &node_ix) in self.tree.walk_spine().rev().enumerate() {
                 match self.tree[node_ix].item.body {
-                    ItemBody::Container(length, ..) => {
+                    ItemBody::ContainerDirective(length, ..) => {
                         if line_start.scan_closing_container_extensions_fence(length) {
+                            let after_fence = start_ix + line_start.bytes_scanned();
+                            fence_line_end =
+                                after_fence + scan_nextline(&bytes[after_fence..]);
                             pop_count = Some(i + 1);
                             break;
                         }
@@ -392,8 +401,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
             if let Some(c) = pop_count {
                 for _ in 0..c {
-                    self.pop(start_ix);
+                    self.pop(fence_line_end);
                 }
+                return fence_line_end;
             }
         }
         let ix = start_ix + line_start.bytes_scanned();
@@ -401,7 +411,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if let Some(n) = scan_blank_line(&bytes[ix..]) {
             if let Some(node_ix) = self.tree.peek_up() {
                 match &mut self.tree[node_ix].item.body {
-                    ItemBody::Container(..) => (),
+                    ItemBody::ContainerDirective(..) => (),
                     ItemBody::BlockQuote(..) => (),
                     ItemBody::ListItem(indent) | ItemBody::DefinitionListDefinition(indent)
                         if self.begin_list_item.is_some() =>
@@ -602,6 +612,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if let Some((n, fence_ch)) = scan_code_fence(&bytes[ix..]) {
             self.finish_list(start_ix);
             return self.parse_fenced_code_block(ix, indent, fence_ch, n);
+        }
+
+        if self.options.contains(Options::ENABLE_MATH) {
+            if let Some(n) = scan_math_fence(&bytes[ix..]) {
+                self.finish_list(start_ix);
+                return self.parse_math_block(ix, indent, n);
+            }
         }
 
         // parse refdef
@@ -839,6 +856,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.options.contains(Options::ENABLE_FOOTNOTES),
             self.options.contains(Options::ENABLE_DEFINITION_LIST),
             self.options.contains(Options::ENABLE_MDX),
+            self.options.contains(Options::ENABLE_MATH),
             &self.tree,
             tree_position,
         ) {
@@ -980,7 +998,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 let mut closes = false;
                 for &node_ix in self.tree.walk_spine().rev().skip(1) {
                     match self.tree[node_ix].item.body {
-                        ItemBody::Container(length, ..) => {
+                        ItemBody::ContainerDirective(length, ..) => {
                             if line_start.scan_closing_container_extensions_fence(length) {
                                 closes = true;
                                 break;
@@ -1123,7 +1141,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         );
                     }
 
-                    if mode == TableParseMode::Scan {
+                    if mode == TableParseMode::Scan && pipes > 0 {
                         // check if we may be parsing a table
                         let next_line_ix = ix + eol_bytes;
                         let mut line_start = LineStart::new(&bytes[next_line_ix..]);
@@ -1131,18 +1149,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             == self.tree.spine_len()
                         {
                             let table_head_ix = next_line_ix + line_start.bytes_scanned();
-                            let sep_bytes = &bytes[table_head_ix..];
-                            let sep_is_list = scan_listitem(sep_bytes).is_some();
                             let (table_head_bytes, alignment) =
-                                scan_table_head(sep_bytes);
+                                scan_table_head(&bytes[table_head_ix..]);
 
-                            if table_head_bytes > 0 && !sep_is_list {
-                                let header_count = if pipes > 0 {
-                                    count_header_cols(bytes, pipes, start, last_pipe_ix)
-                                } else {
-                                    1
-                                };
+                            if table_head_bytes > 0 {
+                                // computing header count from number of pipes
+                                let header_count =
+                                    count_header_cols(bytes, pipes, start, last_pipe_ix);
 
+                                // make sure they match the number of columns we find in separator line
                                 if alignment.len() == header_count {
                                     let alignment_ix = self.allocs.allocate_alignment(alignment);
                                     let end_ix = table_head_ix + table_head_bytes;
@@ -1161,7 +1176,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
                     let trailing_spaces =
                         scan_rev_while(&bytes[..ix], |c| c == b' ');
-                    if trailing_spaces >= 2 {
+                    let has_tab_before_spaces = trailing_spaces > 0
+                        && ix > trailing_spaces
+                        && bytes[ix - trailing_spaces - 1] == b'\t';
+                    if trailing_spaces >= 2 && !has_tab_before_spaces {
                         i -= trailing_spaces;
                         self.tree.append_text(begin_text, i, backslash_escaped);
                         backslash_escaped = false;
@@ -1221,6 +1239,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         begin_text = ix + 2;
                         backslash_escaped = true;
                         LoopInstruction::ContinueAndSkip(2)
+                    } else if bytes[ix + 1] == b'$'
+                        && self.options.contains(Options::ENABLE_MATH)
+                    {
+                        // In math context, \$ should still produce a MaybeMath
+                        // delimiter so it can close a math span. The backslash
+                        // only prevents opening.
+                        begin_text = ix + 1;
+                        backslash_escaped = true;
+                        LoopInstruction::ContinueAndSkip(0)
                     } else {
                         begin_text = ix + 1;
                         backslash_escaped = true;
@@ -1267,22 +1294,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     LoopInstruction::ContinueAndSkip(count - 1)
                 }
                 b'$' => {
-                    let byte_suffix = &bytes[ix..];
-                    let can_open = !byte_suffix[1..]
-                        .first()
-                        .copied()
-                        .is_none_or(is_ascii_whitespace);
-                    let can_close =
-                        ix > start && !bytes[..ix].last().copied().is_none_or(is_ascii_whitespace);
-
-                    // 0xFFFF_FFFF... represents the root brace context. Using None would require
-                    // storing Option<u8>, which is bigger than u8.
-                    //
-                    // These shouldn't conflict unless you have 255 levels of nesting, which is
-                    // past the intended limit anyway.
-                    //
-                    // Unbalanced braces will cause the root to be changed, which is why it gets
-                    // stored here.
                     let brace_context =
                         if self.brace_context_stack.len() > MATH_BRACE_CONTEXT_MAX_NESTING {
                             self.brace_context_next as u8
@@ -1297,9 +1308,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     self.tree.append(Item {
                         start: ix,
                         end: ix + 1,
-                        body: ItemBody::MaybeMath(can_open, can_close, brace_context),
+                        body: ItemBody::MaybeMath(backslash_escaped, brace_context),
                     });
                     begin_text = ix + 1;
+                    backslash_escaped = false;
                     LoopInstruction::ContinueAndSkip(0)
                 }
                 b'{' if self.options.contains(Options::ENABLE_MDX) => {
@@ -1451,6 +1463,37 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     }
                     _ => LoopInstruction::ContinueAndSkip(0),
                 },
+                b':' if self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS) => {
+                    // Text directive: :name[label]{attrs}
+                    // Must not be preceded by another colon (to avoid ::, :::)
+                    if ix > 0 && bytes[ix - 1] == b':' {
+                        LoopInstruction::ContinueAndSkip(0)
+                    } else if let Some((dir_data, end_pos)) =
+                        parse_directive_after_colons(self.text, bytes, ix + 1)
+                    {
+                        // :name: (followed by colon) is NOT a directive (emoji compat)
+                        if end_pos < bytes.len() && bytes[end_pos] == b':' {
+                            let name_end = ix + 1 + dir_data.name.len();
+                            if name_end == end_pos {
+                                // bare :name: with no label/attrs
+                                return LoopInstruction::ContinueAndSkip(0);
+                            }
+                        }
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        backslash_escaped = false;
+                        let dir_ix = self.allocs.allocate_directive(dir_data);
+                        let consumed = end_pos - ix;
+                        self.tree.append(Item {
+                            start: ix,
+                            end: end_pos,
+                            body: ItemBody::TextDirective(dir_ix),
+                        });
+                        begin_text = end_pos;
+                        LoopInstruction::ContinueAndSkip(consumed - 1)
+                    } else {
+                        LoopInstruction::ContinueAndSkip(0)
+                    }
+                }
                 b'|' => {
                     if ix != 0 && bytes[ix - 1] == b'\\' {
                         LoopInstruction::ContinueAndSkip(0)
@@ -1781,6 +1824,53 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
     }
 
+    fn parse_math_block(
+        &mut self,
+        start_ix: usize,
+        indent: usize,
+        n_fence_char: usize,
+    ) -> usize {
+        let bytes = self.text.as_bytes();
+        let mut meta_start = start_ix + n_fence_char;
+        meta_start += scan_whitespace_no_nl(&bytes[meta_start..]);
+        let mut ix = meta_start + scan_nextline(&bytes[meta_start..]);
+        let meta_end = ix - scan_rev_while(&bytes[meta_start..ix], is_ascii_whitespace);
+        let meta_string = if meta_start < meta_end {
+            unescape(&self.text[meta_start..meta_end], self.tree.is_in_table())
+        } else {
+            "".into()
+        };
+        self.tree.append(Item {
+            start: start_ix,
+            end: 0,
+            body: ItemBody::MathBlock(self.allocs.allocate_cow(meta_string)),
+        });
+        self.tree.push();
+        loop {
+            let mut line_start = LineStart::new(&bytes[ix..]);
+            let n_containers = scan_containers(&self.tree, &mut line_start, self.options);
+            if n_containers < self.tree.spine_len() {
+                self.pop(ix);
+                return ix;
+            }
+            line_start.scan_space(indent);
+            let mut close_line_start = line_start.clone();
+            if !close_line_start.scan_space(4 - indent) {
+                let close_ix = ix + close_line_start.bytes_scanned();
+                if let Some(n) = scan_closing_math_fence(&bytes[close_ix..], n_fence_char) {
+                    ix = close_ix + n;
+                    self.pop(ix);
+                    return ix + scan_blank_line(&bytes[ix..]).unwrap_or(0);
+                }
+            }
+            let remaining_space = line_start.remaining_space();
+            ix += line_start.bytes_scanned();
+            let next_ix = ix + scan_nextline(&bytes[ix..]);
+            self.append_code_text(remaining_space, ix, next_ix);
+            ix = next_ix;
+        }
+    }
+
     fn parse_metadata_block(&mut self, start_ix: usize, metadata_block_ch: u8) -> usize {
         let bytes = self.text.as_bytes();
         let metadata_block_kind = match metadata_block_ch {
@@ -1897,7 +1987,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.pop(ix);
             }
         }
-        self.last_line_blank = false;
+        if self.last_line_blank {
+            if let Some(node_ix) = self.tree.peek_grandparent() {
+                if let ItemBody::List(ref mut is_tight, _, _)
+                | ItemBody::DefinitionList(ref mut is_tight) = self.tree[node_ix].item.body
+                {
+                    *is_tight = false;
+                }
+            }
+            self.last_line_blank = false;
+        }
     }
 
     fn finish_empty_list_item(&mut self) {
@@ -2335,6 +2434,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.options.contains(Options::ENABLE_FOOTNOTES),
             self.options.contains(Options::ENABLE_DEFINITION_LIST),
             self.options.contains(Options::ENABLE_MDX),
+            self.options.contains(Options::ENABLE_MATH),
             &self.tree,
             tree_position,
         ) {
@@ -2354,7 +2454,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // ---|---|---
         //  d | e | f
         // ```
-        if !self.options.contains(Options::ENABLE_TABLES) {
+        if !self.options.contains(Options::ENABLE_TABLES) || !bytes.starts_with(b"|") {
             return false;
         }
 
@@ -2496,6 +2596,7 @@ fn scan_paragraph_interrupt_no_table(
     has_footnote: bool,
     definition_list: bool,
     mdx: bool,
+    math: bool,
     tree: &Tree<Item>,
     tree_position: usize,
 ) -> bool {
@@ -2503,6 +2604,7 @@ fn scan_paragraph_interrupt_no_table(
         || scan_hrule(bytes).is_ok()
         || scan_atx_heading(bytes).is_some()
         || scan_code_fence(bytes).is_some()
+        || (math && scan_math_fence(bytes).is_some())
         || scan_interrupting_container_extensions_fence(bytes)
         || scan_blockquote_start(bytes).is_some()
         || scan_listitem(bytes).is_some_and(|(ix, delim, index, _)| {
@@ -2539,6 +2641,223 @@ fn scan_paragraph_interrupt_no_table(
                 tree.is_in_table(),
             )
             .is_some_and(|(len, _)| bytes.get(2 + len) == Some(&b':')))
+}
+
+fn is_directive_name_start(c: u8) -> bool {
+    c.is_ascii_alphanumeric()
+}
+
+fn is_directive_name_char(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'-' || c == b'_'
+}
+
+/// Parse a directive name per remark-directive spec.
+/// Returns (name, bytes_consumed) or None.
+fn scan_directive_name(bytes: &[u8]) -> Option<(usize, usize)> {
+    if bytes.is_empty() || !is_directive_name_start(bytes[0]) {
+        return None;
+    }
+    let len = scan_while(bytes, is_directive_name_char);
+    if len == 0 {
+        return None;
+    }
+    let last = bytes[len - 1];
+    if last == b'-' || last == b'_' {
+        return None;
+    }
+    Some((0, len))
+}
+
+/// Parse a directive label `[content]`. Returns (label_start, label_end, total_consumed).
+/// label_start/label_end are byte offsets within `bytes` of the inner content.
+fn scan_directive_label(bytes: &[u8]) -> Option<(usize, usize, usize)> {
+    if bytes.is_empty() || bytes[0] != b'[' {
+        return None;
+    }
+    let mut depth = 1i32;
+    let mut i = 1;
+    let label_start = 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if i + 1 < bytes.len() => {
+                i += 2;
+                continue;
+            }
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((label_start, i, i + 1));
+                }
+            }
+            b'\n' | b'\r' => return None,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse directive attributes `{...}`. Returns (attrs, total_consumed).
+fn scan_directive_attributes(bytes: &[u8]) -> Option<(Vec<(CowStr<'_>, CowStr<'_>)>, usize)> {
+    if bytes.is_empty() || bytes[0] != b'{' {
+        return None;
+    }
+    let mut i = 1;
+    let end = loop {
+        if i >= bytes.len() {
+            return None;
+        }
+        match bytes[i] {
+            b'}' => break i,
+            b'\n' | b'\r' => return None,
+            b'\\' if i + 1 < bytes.len() => i += 2,
+            _ => i += 1,
+        }
+    };
+    let inner = &bytes[1..end];
+    let attrs = parse_directive_attrs_inner(inner);
+    Some((attrs, end + 1))
+}
+
+fn parse_directive_attrs_inner(bytes: &[u8]) -> Vec<(CowStr<'_>, CowStr<'_>)> {
+    let mut attrs: Vec<(CowStr<'_>, CowStr<'_>)> = Vec::new();
+    let mut classes: Vec<&str> = Vec::new();
+    let mut id: Option<&str> = None;
+    let text = core::str::from_utf8(bytes).unwrap_or("");
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' | b'\t' => {
+                i += 1;
+            }
+            b'#' => {
+                i += 1;
+                let start = i;
+                while i < bytes.len() && !is_attr_shortcut_terminator(bytes[i]) {
+                    i += 1;
+                }
+                if i > start {
+                    id = Some(&text[start..i]);
+                }
+            }
+            b'.' => {
+                i += 1;
+                let start = i;
+                while i < bytes.len() && !is_attr_shortcut_terminator(bytes[i]) {
+                    i += 1;
+                }
+                if i > start {
+                    classes.push(&text[start..i]);
+                }
+            }
+            _ => {
+                let name_start = i;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric()
+                        || bytes[i] == b'-'
+                        || bytes[i] == b'.'
+                        || bytes[i] == b':'
+                        || bytes[i] == b'_')
+                {
+                    i += 1;
+                }
+                if i == name_start {
+                    i += 1;
+                    continue;
+                }
+                let name = &text[name_start..i];
+                if i < bytes.len() && bytes[i] == b'=' {
+                    i += 1;
+                    if i < bytes.len() && (bytes[i] == b'"' || bytes[i] == b'\'') {
+                        let quote = bytes[i];
+                        i += 1;
+                        let val_start = i;
+                        while i < bytes.len() && bytes[i] != quote {
+                            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                                i += 1;
+                            }
+                            i += 1;
+                        }
+                        let val = &text[val_start..i];
+                        if i < bytes.len() {
+                            i += 1; // skip closing quote
+                        }
+                        attrs.push((name.into(), val.into()));
+                    } else {
+                        let val_start = i;
+                        while i < bytes.len()
+                            && bytes[i] != b' '
+                            && bytes[i] != b'\t'
+                            && bytes[i] != b'}'
+                        {
+                            i += 1;
+                        }
+                        attrs.push((name.into(), text[val_start..i].into()));
+                    }
+                } else {
+                    attrs.push((name.into(), "".into()));
+                }
+            }
+        }
+    }
+
+    if let Some(id_val) = id {
+        attrs.push(("id".into(), id_val.into()));
+    }
+    if !classes.is_empty() {
+        attrs.push(("class".into(), classes.join(" ").into()));
+    }
+    attrs
+}
+
+fn is_attr_shortcut_terminator(c: u8) -> bool {
+    matches!(c, b'#' | b'.' | b'}' | b' ' | b'\t')
+}
+
+/// Parse name[label]{attrs} after the colon(s). Returns (DirectiveAttrData, end_position).
+/// The end_position is right after the last parsed component (name, label, or attrs).
+fn parse_directive_after_colons<'a>(
+    text: &'a str,
+    bytes: &'a [u8],
+    start: usize,
+) -> Option<(DirectiveAttrData<'a>, usize)> {
+    let remaining = &bytes[start..];
+    let (_, name_len) = scan_directive_name(remaining)?;
+    let name: CowStr<'a> = text[start..start + name_len].into();
+    let mut pos = start + name_len;
+
+    let mut label_start = 0usize;
+    let mut label_end = 0usize;
+
+    // Label (no space allowed between name and [)
+    if pos < bytes.len() && bytes[pos] == b'[' {
+        if let Some((ls, le, consumed)) = scan_directive_label(&bytes[pos..]) {
+            label_start = pos + ls;
+            label_end = pos + le;
+            pos += consumed;
+        }
+    }
+
+    // Attributes (no space allowed between label/name and {)
+    let mut attributes = Vec::new();
+    if pos < bytes.len() && bytes[pos] == b'{' {
+        if let Some((attrs, consumed)) = scan_directive_attributes(&bytes[pos..]) {
+            attributes = attrs;
+            pos += consumed;
+        }
+    }
+
+    Some((
+        DirectiveAttrData {
+            name,
+            attributes,
+            label_start,
+            label_end,
+        },
+        pos,
+    ))
 }
 
 /// Assumes `text_bytes` is preceded by `<`.
@@ -2681,9 +3000,6 @@ fn delim_run_can_open(
         || is_punctuation(prev_char) && (delim != b'\'' || ![']', ')'].contains(&prev_char))
 }
 
-/// Determines whether the delimiter run starting at given index is
-/// right-flanking, as defined by the commonmark spec (and isn't intraword
-/// for _ delims)
 fn delim_run_can_close(
     s: &str,
     suffix: &str,
@@ -2786,6 +3102,9 @@ fn special_bytes(options: &Options) -> [bool; 256] {
     if options.has_smart_quotes() {
         bytes[b'"' as usize] = true;
         bytes[b'\'' as usize] = true;
+    }
+    if options.contains(Options::ENABLE_CONTAINER_EXTENSIONS) {
+        bytes[b':' as usize] = true;
     }
 
     bytes
