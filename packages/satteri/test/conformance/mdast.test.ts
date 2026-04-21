@@ -323,7 +323,9 @@ describe("MDAST conformance: edge cases", () => {
   });
 
   test("task list with nested content after blank marker", () => {
-    assertMdastConformance("- [x] * some text\n- [ ] > some text\n- [x]\n  * some text\n- [ ]\n  > some text");
+    assertMdastConformance(
+      "- [x] * some text\n- [ ] > some text\n- [x]\n  * some text\n- [ ]\n  > some text",
+    );
   });
 
   test("tab before newline is not hard break", () => {

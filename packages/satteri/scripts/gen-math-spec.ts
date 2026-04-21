@@ -4,11 +4,7 @@ import remarkMath from "remark-math";
 import remarkRehype from "remark-rehype";
 import rehypeStringify from "rehype-stringify";
 
-const processor = unified()
-  .use(remarkParse)
-  .use(remarkMath)
-  .use(remarkRehype)
-  .use(rehypeStringify);
+const processor = unified().use(remarkParse).use(remarkMath).use(remarkRehype).use(rehypeStringify);
 
 function html(md: string): string {
   return processor.processSync(md).toString();
@@ -62,9 +58,18 @@ const inlineCases: TestCase[] = [
   { description: "Math with angle brackets", input: "$a <b > c$" },
   { description: "Math with markdown-like content", input: "$[(a+b)c](d+e)$" },
   { description: "Math with underscores", input: "${a}_b c_{d}$" },
-  { description: "Currency amounts are not math", input: "Thus, $20,000 and USD$30,000 won't parse" },
-  { description: "Whitespace after opening dollar prevents math", input: "It is 2$ for a can of soda, not 1$." },
-  { description: "Whitespace before closing dollar prevents math", input: "I'll give $20 today, if you give me more $ tomorrow." },
+  {
+    description: "Currency amounts are not math",
+    input: "Thus, $20,000 and USD$30,000 won't parse",
+  },
+  {
+    description: "Whitespace after opening dollar prevents math",
+    input: "It is 2$ for a can of soda, not 1$.",
+  },
+  {
+    description: "Whitespace before closing dollar prevents math",
+    input: "I'll give $20 today, if you give me more $ tomorrow.",
+  },
   { description: "Escaped dollars inside math", input: "Money adds: $\\$X + \\$Y = \\$Z$." },
   { description: "Hard breaks not recognized in math", input: "$not a\\\nhard break  \neither$" },
   { description: "Inline math with escaped closing dollar", input: "$\\alpha\\$" },
@@ -73,8 +78,14 @@ const inlineCases: TestCase[] = [
 const precedenceCases: TestCase[] = [
   { description: "Inline math vs code span — math first", input: "$Inline `first$ then` code" },
   { description: "Inline math vs code span — code first", input: "`Code $first` then$ inline" },
-  { description: "Display math vs code span — math first", input: "$$ Display `first $$ then` code" },
-  { description: "Display math vs code span — code first", input: "`Code $$ first` then $$ display" },
+  {
+    description: "Display math vs code span — math first",
+    input: "$$ Display `first $$ then` code",
+  },
+  {
+    description: "Display math vs code span — code first",
+    input: "`Code $$ first` then $$ display",
+  },
   { description: "Empty inline math not allowed", input: "Oops empty $$ expression." },
   { description: "Greedy left-to-right dollar parsing", input: "$x$$$$$$$y$$" },
   { description: "Greedy left-to-right dollar parsing 2", input: "$x$$$$$$y$$" },
@@ -83,8 +94,14 @@ const precedenceCases: TestCase[] = [
 ];
 
 const blockStructureCases: TestCase[] = [
-  { description: "Block structure takes precedence — list interrupts math", input: "$x + y - z$\n\n$x + y\n- z$\n\n$$ x + y\n> z $$" },
-  { description: "Empty lines start new paragraph, breaking math", input: "$not\n\nmath$\n\n$$\nnot\n\nmath\n$$" },
+  {
+    description: "Block structure takes precedence — list interrupts math",
+    input: "$x + y - z$\n\n$x + y\n- z$\n\n$$ x + y\n> z $$",
+  },
+  {
+    description: "Empty lines start new paragraph, breaking math",
+    input: "$not\n\nmath$\n\n$$\nnot\n\nmath\n$$",
+  },
   { description: "Nested list structure breaks math", input: "- $not\n    - *\n  math$" },
 ];
 
@@ -103,23 +120,43 @@ const displayCases: TestCase[] = [
   { description: "Spacing before closing fence", input: "$$\n\\alpha\n  $$" },
   { description: "Spacing after closing fence", input: "$$\n\\alpha\n$$  " },
   { description: "Display math with blank lines in content", input: "$$\n\n  1\n+ 1\n\n= 2\n\n$$" },
-  { description: "Escaped delimiters are not math fences", input: "Foo \\$1$ bar\n\n\\$\\$\n1\n\\$\\$" },
-  { description: "Display math with Cauchy-Schwarz", input: "**The Cauchy-Schwarz Inequality**\n\n$$\n\\left( \\sum_{k=1}^n a_k b_k \\right)^2 \\leq \\left( \\sum_{k=1}^n a_k^2 \\right) \\left( \\sum_{k=1}^n b_k^2 \\right)\n$$" },
-  { description: "Display and inline in same list", input: "- $a$\n\n  $$\n  a\n  $$\n\n- $$\n  b\n  $$" },
+  {
+    description: "Escaped delimiters are not math fences",
+    input: "Foo \\$1$ bar\n\n\\$\\$\n1\n\\$\\$",
+  },
+  {
+    description: "Display math with Cauchy-Schwarz",
+    input:
+      "**The Cauchy-Schwarz Inequality**\n\n$$\n\\left( \\sum_{k=1}^n a_k b_k \\right)^2 \\leq \\left( \\sum_{k=1}^n a_k^2 \\right) \\left( \\sum_{k=1}^n b_k^2 \\right)\n$$",
+  },
+  {
+    description: "Display and inline in same list",
+    input: "- $a$\n\n  $$\n  a\n  $$\n\n- $$\n  b\n  $$",
+  },
   { description: "Display math in blockquote", input: "> $$\n> x\n> $$" },
   { description: "Dollar in display text block", input: "$$\n\\text{$b$}\n$$" },
-  { description: "Dollar-math with spaces on same line", input: "When $a \\ne 0$, there are two solutions to $(ax^2 + bx + c = 0)$ and they are\n$$ x = {-b \\pm \\sqrt{b^2-4ac} \\over 2a} $$" },
+  {
+    description: "Dollar-math with spaces on same line",
+    input:
+      "When $a \\ne 0$, there are two solutions to $(ax^2 + bx + c = 0)$ and they are\n$$ x = {-b \\pm \\sqrt{b^2-4ac} \\over 2a} $$",
+  },
 ];
 
 const contextCases: TestCase[] = [
   { description: "Math in link", input: "[$a$](x)" },
-  { description: "Math preceded by various characters", input: "$\\pi$\n'$\\pi$\n\"$\\pi$\n($\\pi$\n[$\\pi$\n{$\\pi$\n/$\\pi$" },
+  {
+    description: "Math preceded by various characters",
+    input: "$\\pi$\n'$\\pi$\n\"$\\pi$\n($\\pi$\n[$\\pi$\n{$\\pi$\n/$\\pi$",
+  },
   { description: "Inline math in italic text", input: "_Equation $\\Omega(69)$ in italic text_" },
   { description: "Inline math wrapped in quotes", input: "$x$ $`y`$" },
   { description: "Math vs HTML mix-up", input: "$a <b > c$\n\n$[(a+b)c](d+e)$\n\n${a}_b c_{d}$" },
   { description: "Spacing around dollar sign in math mode", input: "$x = \\$$" },
   { description: "Math starting with negative sign", input: "foo$-1+1 = 2$bar" },
-  { description: "Images and math in same list", input: "- ![node logo](https://nodejs.org/static/images/logo.svg)\n- $x$" },
+  {
+    description: "Images and math in same list",
+    input: "- ![node logo](https://nodejs.org/static/images/logo.svg)\n- $x$",
+  },
 ];
 
 let output = `Run this with \`cargo test --features gen-tests suite::math\`.

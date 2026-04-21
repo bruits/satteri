@@ -7,7 +7,9 @@ use crate::hast::codec::{
 };
 use crate::hast::properties::property_to_attribute;
 use crate::hast::HastNodeType;
-use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
+use crate::shared::{
+    PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_SPACE_SEP, PROP_STRING,
+};
 
 /// Render HTML from an arena.
 pub fn hast_arena_to_html(arena: &Arena) -> String {

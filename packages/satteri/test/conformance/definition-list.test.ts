@@ -17,7 +17,10 @@ describe("Definition list MDAST conformance", () => {
   });
 
   test("multiple terms and definitions", () => {
-    assertExtMdastConformance("apple\n: red fruit\n\norange\n: orange fruit\n\nbanana\n: yellow fruit", DL);
+    assertExtMdastConformance(
+      "apple\n: red fruit\n\norange\n: orange fruit\n\nbanana\n: yellow fruit",
+      DL,
+    );
   });
 
   test("definition with inline formatting", () => {

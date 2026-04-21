@@ -273,7 +273,8 @@ export class HastReader {
           });
           break;
         }
-        case 5: { // PROP_INT
+        case 5: {
+          // PROP_INT
           const raw = this.getString(valueRef.offset, valueRef.len);
           properties.push({ name, value: Number(raw) });
           break;

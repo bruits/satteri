@@ -50,9 +50,9 @@ const WORD = fc.string({
 
 const URL_ARB = WORD.map((w) => `https://example.com/${w}`);
 
-const heading = fc.tuple(fc.integer({ min: 1, max: 6 }), INLINE_TEXT).map(
-  ([level, text]) => `${"#".repeat(level)} ${text}`,
-);
+const heading = fc
+  .tuple(fc.integer({ min: 1, max: 6 }), INLINE_TEXT)
+  .map(([level, text]) => `${"#".repeat(level)} ${text}`);
 
 const paragraph = INLINE_TEXT;
 
@@ -61,24 +61,22 @@ const italic = INLINE_TEXT.map((t) => `*${t}*`);
 const inlineCode = WORD.map((t) => `\`${t}\``);
 const strikethrough = INLINE_TEXT.map((t) => `~~${t}~~`);
 
-const link = fc.tuple(INLINE_TEXT, URL_ARB).map(
-  ([text, url]) => `[${text}](${url})`,
-);
+const link = fc.tuple(INLINE_TEXT, URL_ARB).map(([text, url]) => `[${text}](${url})`);
 
-const image = fc.tuple(WORD, URL_ARB).map(
-  ([alt, url]) => `![${alt}](${url})`,
-);
+const image = fc.tuple(WORD, URL_ARB).map(([alt, url]) => `![${alt}](${url})`);
 
 const blockquote = INLINE_TEXT.map((t) => `> ${t}`);
 
-const codeBlock = fc.tuple(
-  fc.constantFrom("", "js", "ts", "python", "rust", "html"),
-  fc.string({
-    unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz 0123456789=;.\n".split("")),
-    minLength: 1,
-    maxLength: 60,
-  }),
-).map(([lang, code]) => `\`\`\`${lang}\n${code}\n\`\`\``);
+const codeBlock = fc
+  .tuple(
+    fc.constantFrom("", "js", "ts", "python", "rust", "html"),
+    fc.string({
+      unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz 0123456789=;.\n".split("")),
+      minLength: 1,
+      maxLength: 60,
+    }),
+  )
+  .map(([lang, code]) => `\`\`\`${lang}\n${code}\n\`\`\``);
 
 const horizontalRule = fc.constantFrom("---", "***", "___");
 
@@ -92,17 +90,12 @@ const orderedList = fc
 
 const taskList = fc
   .array(fc.tuple(fc.boolean(), INLINE_TEXT), { minLength: 1, maxLength: 5 })
-  .map((items) =>
-    items.map(([checked, text]) => `- [${checked ? "x" : " "}] ${text}`).join("\n"),
-  );
+  .map((items) => items.map(([checked, text]) => `- [${checked ? "x" : " "}] ${text}`).join("\n"));
 
 const table = fc
   .tuple(
     fc.array(WORD, { minLength: 2, maxLength: 4 }),
-    fc.array(
-      fc.array(WORD, { minLength: 2, maxLength: 4 }),
-      { minLength: 1, maxLength: 3 },
-    ),
+    fc.array(fc.array(WORD, { minLength: 2, maxLength: 4 }), { minLength: 1, maxLength: 3 }),
   )
   .map(([headers, rows]) => {
     const cols = headers.length;
@@ -166,8 +159,7 @@ function stripPositionsAndEstree(node: unknown): unknown {
   for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
     if (k === "position" || k === "data") continue;
     if (Array.isArray(v)) out[k] = v.map(stripPositionsAndEstree);
-    else if (typeof v === "object" && v !== null)
-      out[k] = stripPositionsAndEstree(v);
+    else if (typeof v === "object" && v !== null) out[k] = stripPositionsAndEstree(v);
     else out[k] = v;
   }
   return out;
@@ -212,23 +204,20 @@ const SAFE_EXPR_TEXT = fc.string({
 const jsExpression = fc.oneof(
   fc.integer({ min: -999, max: 999 }).map((n) => `{${n}}`),
   SAFE_EXPR_TEXT.map((t) => `{\`${t}\`}`),
-  fc.constantFrom(
-    "{1 + 2}",
-    "{true ? 'a' : 'b'}",
-    "{`hello`}",
-    "{/* comment */}",
-    "{String(42)}",
-  ),
+  fc.constantFrom("{1 + 2}", "{true ? 'a' : 'b'}", "{`hello`}", "{/* comment */}", "{String(42)}"),
 );
 
 const jsxSelfClosing = fc
   .tuple(
     JSX_TAG,
     fc.array(
-      fc.tuple(WORD, fc.oneof(
-        fc.integer({ min: 0, max: 99 }).map((n) => `{${n}}`),
-        WORD.map((w) => `"${w}"`),
-      )),
+      fc.tuple(
+        WORD,
+        fc.oneof(
+          fc.integer({ min: 0, max: 99 }).map((n) => `{${n}}`),
+          WORD.map((w) => `"${w}"`),
+        ),
+      ),
       { minLength: 0, maxLength: 3 },
     ),
   )
@@ -238,15 +227,10 @@ const jsxSelfClosing = fc
   });
 
 const jsxWithChildren = fc
-  .tuple(
-    fc.constantFrom("Box", "Wrapper"),
-    fc.oneof(SAFE_EXPR_TEXT, jsExpression),
-  )
+  .tuple(fc.constantFrom("Box", "Wrapper"), fc.oneof(SAFE_EXPR_TEXT, jsExpression))
   .map(([tag, child]) => `<${tag}>${child}</${tag}>`);
 
-const jsxFragment = fc
-  .oneof(SAFE_EXPR_TEXT, jsExpression)
-  .map((child) => `<>${child}</>`);
+const jsxFragment = fc.oneof(SAFE_EXPR_TEXT, jsExpression).map((child) => `<>${child}</>`);
 
 const mdxInlineElement = fc.oneof(
   { weight: 3, arbitrary: jsExpression },
@@ -257,10 +241,7 @@ const mdxInlineElement = fc.oneof(
 
 const mdxParagraph = fc
   .array(
-    fc.oneof(
-      { weight: 3, arbitrary: SAFE_EXPR_TEXT },
-      { weight: 2, arbitrary: mdxInlineElement },
-    ),
+    fc.oneof({ weight: 3, arbitrary: SAFE_EXPR_TEXT }, { weight: 2, arbitrary: mdxInlineElement }),
     { minLength: 1, maxLength: 4 },
   )
   .map((parts) => parts.join(" "));
@@ -292,9 +273,22 @@ const MATH_CONTENT = fc.string({
 });
 
 const MATH_COMMAND = fc.constantFrom(
-  "\\alpha", "\\beta", "\\gamma", "\\delta", "\\sum", "\\int",
-  "\\frac{a}{b}", "\\sqrt{x}", "\\mathbb{R}", "\\cdot", "\\times",
-  "\\leq", "\\geq", "\\neq", "\\infty", "\\partial",
+  "\\alpha",
+  "\\beta",
+  "\\gamma",
+  "\\delta",
+  "\\sum",
+  "\\int",
+  "\\frac{a}{b}",
+  "\\sqrt{x}",
+  "\\mathbb{R}",
+  "\\cdot",
+  "\\times",
+  "\\leq",
+  "\\geq",
+  "\\neq",
+  "\\infty",
+  "\\partial",
 );
 
 const inlineMath = fc.oneof(
@@ -306,10 +300,9 @@ const inlineMath = fc.oneof(
 const displayMath = fc.oneof(
   MATH_CONTENT.map((t) => `$$\n${t}\n$$`),
   MATH_COMMAND.map((t) => `$$\n${t}\n$$`),
-  fc.tuple(
-    fc.constantFrom("", "js", "math"),
-    MATH_CONTENT,
-  ).map(([meta, content]) => meta ? `$$ ${meta}\n${content}\n$$` : `$$\n${content}\n$$`),
+  fc
+    .tuple(fc.constantFrom("", "js", "math"), MATH_CONTENT)
+    .map(([meta, content]) => (meta ? `$$ ${meta}\n${content}\n$$` : `$$\n${content}\n$$`)),
 );
 
 const mathBlock = fc.oneof(
@@ -364,9 +357,7 @@ const fmDocument = fc
     fc.oneof(yamlFrontmatter, tomlFrontmatter),
     fc.array(markdownBlock, { minLength: 0, maxLength: 8 }),
   )
-  .map(([fm, blocks]) =>
-    blocks.length > 0 ? `${fm}\n\n${blocks.join("\n\n")}` : fm,
-  );
+  .map(([fm, blocks]) => (blocks.length > 0 ? `${fm}\n\n${blocks.join("\n\n")}` : fm));
 
 const NUM_RUNS = Number(process.env.FUZZ_RUNS) || 200;
 const FC_OPTIONS: fc.Parameters<unknown> = {
@@ -375,9 +366,18 @@ const FC_OPTIONS: fc.Parameters<unknown> = {
   verbose: fc.VerbosityLevel.None,
 };
 
-type FuzzLevel = "mdast" | "hast" | "html" | "mdx-mdast" | "mdx-hast"
-  | "math-mdast" | "math-hast" | "math-html"
-  | "fm-mdast" | "fm-hast" | "fm-html";
+type FuzzLevel =
+  | "mdast"
+  | "hast"
+  | "html"
+  | "mdx-mdast"
+  | "mdx-hast"
+  | "math-mdast"
+  | "math-hast"
+  | "math-html"
+  | "fm-mdast"
+  | "fm-hast"
+  | "fm-html";
 
 interface FuzzIssue {
   input: string;
@@ -387,10 +387,13 @@ interface FuzzIssue {
   actual: unknown;
 }
 
-const LEVEL_FUNS: Record<FuzzLevel, { parse: (s: string) => unknown; ref: (s: string) => unknown }> = {
-  "mdast": { parse: satteriMdast, ref: referenceMdast },
-  "hast": { parse: satteriHast, ref: referenceHast },
-  "html": { parse: satteriHtml, ref: referenceHtml },
+const LEVEL_FUNS: Record<
+  FuzzLevel,
+  { parse: (s: string) => unknown; ref: (s: string) => unknown }
+> = {
+  mdast: { parse: satteriMdast, ref: referenceMdast },
+  hast: { parse: satteriHast, ref: referenceHast },
+  html: { parse: satteriHtml, ref: referenceHtml },
   "mdx-mdast": { parse: satteriMdxMdast, ref: referenceMdxMdast },
   "mdx-hast": { parse: satteriMdxHast, ref: referenceMdxHast },
   "math-mdast": { parse: satteriMathMdast, ref: referenceMathMdast },
@@ -431,13 +434,16 @@ function collectIssues(
 }
 
 function diffFingerprint(expected: unknown, actual: unknown, path = ""): string[] {
-  if (typeof expected !== typeof actual) return [`${path}: type ${typeof expected} vs ${typeof actual}`];
+  if (typeof expected !== typeof actual)
+    return [`${path}: type ${typeof expected} vs ${typeof actual}`];
   if (typeof expected !== "object" || expected === null || actual === null) {
-    if (expected !== actual) return [`${path}: ${JSON.stringify(expected)} vs ${JSON.stringify(actual)}`];
+    if (expected !== actual)
+      return [`${path}: ${JSON.stringify(expected)} vs ${JSON.stringify(actual)}`];
     return [];
   }
   if (Array.isArray(expected) && Array.isArray(actual)) {
-    if (expected.length !== actual.length) return [`${path}: array length ${expected.length} vs ${actual.length}`];
+    if (expected.length !== actual.length)
+      return [`${path}: array length ${expected.length} vs ${actual.length}`];
     return expected.flatMap((_, i) => diffFingerprint(expected[i], actual[i], `${path}[${i}]`));
   }
   const eObj = expected as Record<string, unknown>;
@@ -514,7 +520,9 @@ async function collectMdxEvalIssues(
         const { default: RefComponent } = (await mdxEvaluate(input, {
           ...runtime,
         })) as { default: Function };
-        refHtml = normalizeHtml(renderToStaticMarkup(createElement(RefComponent as any, { components: jsxComponents })));
+        refHtml = normalizeHtml(
+          renderToStaticMarkup(createElement(RefComponent as any, { components: jsxComponents })),
+        );
       } catch {
         refError = true;
       }
@@ -525,7 +533,9 @@ async function collectMdxEvalIssues(
         const { default: SatComponent } = await satteriEvaluate(input, {
           ...runtime,
         } as any);
-        satHtml = normalizeHtml(renderToStaticMarkup(createElement(SatComponent as any, { components: jsxComponents })));
+        satHtml = normalizeHtml(
+          renderToStaticMarkup(createElement(SatComponent as any, { components: jsxComponents })),
+        );
       } catch {
         satError = true;
       }
@@ -539,7 +549,9 @@ async function collectMdxEvalIssues(
           kind: satError ? "satteri-error" : "both-error-disagree",
           referenceHtml: refHtml,
           satteriHtml: satHtml,
-          error: satError ? "satteri threw but @mdx-js/mdx succeeded" : "@mdx-js/mdx threw but satteri succeeded",
+          error: satError
+            ? "satteri threw but @mdx-js/mdx succeeded"
+            : "@mdx-js/mdx threw but satteri succeeded",
         });
         return true;
       }
@@ -580,8 +592,10 @@ function formatMdxEvalIssue(issue: MdxEvalIssue, index: number): string {
     `**Input:** \`${JSON.stringify(issue.input)}\``,
   ];
   if (issue.error) lines.push("", `**Error:** ${issue.error}`);
-  if (issue.referenceHtml !== undefined) lines.push("", `**@mdx-js/mdx:** \`${issue.referenceHtml.slice(0, 300)}\``);
-  if (issue.satteriHtml !== undefined) lines.push("", `**Sätteri:** \`${issue.satteriHtml.slice(0, 300)}\``);
+  if (issue.referenceHtml !== undefined)
+    lines.push("", `**@mdx-js/mdx:** \`${issue.referenceHtml.slice(0, 300)}\``);
+  if (issue.satteriHtml !== undefined)
+    lines.push("", `**Sätteri:** \`${issue.satteriHtml.slice(0, 300)}\``);
   return lines.join("\n");
 }
 
@@ -633,7 +647,9 @@ describe("fuzz: conformance", () => {
       writeFileSync(issuesPath, report + "\n");
 
       const inputs = unique.map((i) => JSON.stringify(i.input));
-      expect.soft(unique, `Found ${unique.length} conformance issue(s):\n${inputs.join("\n")}`).toHaveLength(0);
+      expect
+        .soft(unique, `Found ${unique.length} conformance issue(s):\n${inputs.join("\n")}`)
+        .toHaveLength(0);
     }
   });
 });
@@ -661,7 +677,9 @@ describe("fuzz: math conformance", () => {
       writeFileSync(issuesPath, report + "\n");
 
       const inputs = unique.map((i) => JSON.stringify(i.input));
-      expect.soft(unique, `Found ${unique.length} math conformance issue(s):\n${inputs.join("\n")}`).toHaveLength(0);
+      expect
+        .soft(unique, `Found ${unique.length} math conformance issue(s):\n${inputs.join("\n")}`)
+        .toHaveLength(0);
     }
   });
 });
@@ -689,7 +707,12 @@ describe("fuzz: frontmatter conformance", () => {
       writeFileSync(issuesPath, report + "\n");
 
       const inputs = unique.map((i) => JSON.stringify(i.input));
-      expect.soft(unique, `Found ${unique.length} frontmatter conformance issue(s):\n${inputs.join("\n")}`).toHaveLength(0);
+      expect
+        .soft(
+          unique,
+          `Found ${unique.length} frontmatter conformance issue(s):\n${inputs.join("\n")}`,
+        )
+        .toHaveLength(0);
     }
   });
 });
@@ -730,7 +753,9 @@ describe("fuzz: MDX eval conformance", () => {
       writeFileSync(issuesPath, report + "\n");
 
       const inputs = unique.map((i) => JSON.stringify(i.input));
-      expect.soft(unique, `Found ${unique.length} MDX conformance issue(s):\n${inputs.join("\n")}`).toHaveLength(0);
+      expect
+        .soft(unique, `Found ${unique.length} MDX conformance issue(s):\n${inputs.join("\n")}`)
+        .toHaveLength(0);
     }
   });
 });

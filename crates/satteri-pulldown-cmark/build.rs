@@ -171,15 +171,23 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         "table" => TABLES,
 
         // Regression tests: enable common extensions to match historical behavior
-        "regression" => TABLES | FOOTNOTES | STRIKETHROUGH | TASKLISTS
-            | HEADING_ATTRIBUTES | MATH | GFM | SUPERSCRIPT | GITHUB_ALERTS,
+        "regression" => {
+            TABLES
+                | FOOTNOTES
+                | STRIKETHROUGH
+                | TASKLISTS
+                | HEADING_ATTRIBUTES
+                | MATH
+                | GFM
+                | SUPERSCRIPT
+                | GITHUB_ALERTS
+        }
 
         // old_footnotes has negative tests that expect new-style footnotes to be active
         "old_footnotes" => FOOTNOTES,
 
         // Specs that use per-example suffix flags only
-        "container_extensions" | "definition_lists" | "metadata_blocks"
-        | "wikilinks" => 0,
+        "container_extensions" | "definition_lists" | "metadata_blocks" | "wikilinks" => 0,
 
         other => panic!("Unknown spec file: {other}"),
     }

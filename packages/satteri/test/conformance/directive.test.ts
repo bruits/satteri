@@ -86,10 +86,7 @@ describe("Directive MDAST conformance", () => {
 
   describe("text directives", () => {
     test("basic text directive", () => {
-      assertExtMdastConformance(
-        'A :abbr[HTML]{title="HyperText Markup Language"} example.',
-        DIR,
-      );
+      assertExtMdastConformance('A :abbr[HTML]{title="HyperText Markup Language"} example.', DIR);
     });
 
     test("text directive with label only", () => {

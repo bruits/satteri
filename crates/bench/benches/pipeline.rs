@@ -103,25 +103,6 @@ fn pulldown_parse_events_mdx(bencher: divan::Bencher) {
     });
 }
 
-/// pulldown-cmark: parse + render to HTML string.
-#[divan::bench]
-fn pulldown_to_html(bencher: divan::Bencher) {
-    use satteri_pulldown_cmark::{html, Options, Parser};
-
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_MATH;
-
-    bencher.bench(|| {
-        let parser = Parser::new_ext(MARKDOWN, opts);
-        let mut html_output = String::new();
-        html::push_html(&mut html_output, parser);
-        html_output
-    });
-}
-
 /// pulldown-cmark MDX: parse the MDX snippet.
 #[divan::bench]
 fn pulldown_mdx_parse(bencher: divan::Bencher) {

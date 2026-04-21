@@ -32,9 +32,9 @@ use crate::{
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{
     BindingPattern, BindingProperty, Declaration, Directive, ExportSpecifier, Expression,
-    ImportDeclarationSpecifier, ModuleExportName, ObjectProperty,
-    ObjectPropertyKind, PropertyKey, PropertyKind, ReturnStatement, Statement,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    ImportDeclarationSpecifier, ModuleExportName, ObjectProperty, ObjectPropertyKind, PropertyKey,
+    PropertyKind, ReturnStatement, Statement, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use oxc_estree::{CompactJSSerializer, ESTree};
 use oxc_parser::{ParseOptions, Parser};
@@ -177,10 +177,7 @@ pub fn compile_hast_arena(
     Ok(serialize(&program.program))
 }
 
-fn transform_program_to_function_body<'a>(
-    program: &mut MdxProgram<'a>,
-    allocator: &'a Allocator,
-) {
+fn transform_program_to_function_body<'a>(program: &mut MdxProgram<'a>, allocator: &'a Allocator) {
     let body = std::mem::replace(&mut program.program.body, OxcVec::new_in(allocator));
     let mut new_body: Vec<Statement<'a>> = Vec::with_capacity(body.len());
     // (exported_name, local_name) pairs
@@ -271,18 +268,16 @@ fn import_to_arguments_destructure<'a>(
         }
     }
 
-    let arguments_0 = Expression::from(MemberExpression::ComputedMemberExpression(
-        OxcBox::new_in(
-            ComputedMemberExpression {
-                node_id: Cell::new(NodeId::DUMMY),
-                object: create_ident_expression(alloc, "arguments"),
-                expression: create_num_expression(alloc, 0.0),
-                optional: false,
-                span: SPAN,
-            },
-            alloc,
-        ),
-    ));
+    let arguments_0 = Expression::from(MemberExpression::ComputedMemberExpression(OxcBox::new_in(
+        ComputedMemberExpression {
+            node_id: Cell::new(NodeId::DUMMY),
+            object: create_ident_expression(alloc, "arguments"),
+            expression: create_num_expression(alloc, 0.0),
+            optional: false,
+            span: SPAN,
+        },
+        alloc,
+    )));
 
     let mut decls = OxcVec::with_capacity_in(1, alloc);
     decls.push(VariableDeclarator {
@@ -315,7 +310,10 @@ fn import_to_arguments_destructure<'a>(
     )))
 }
 
-fn collect_specifier_exports(specifiers: &[ExportSpecifier<'_>], exports: &mut Vec<(String, String)>) {
+fn collect_specifier_exports(
+    specifiers: &[ExportSpecifier<'_>],
+    exports: &mut Vec<(String, String)>,
+) {
     for spec in specifiers {
         let exported = module_export_name_str(&spec.exported);
         if exported == "default" {
@@ -352,10 +350,7 @@ fn collect_declaration_exports(decl: &Declaration<'_>, exports: &mut Vec<(String
     }
 }
 
-fn create_exports_return<'a>(
-    alloc: &'a Allocator,
-    exports: &[(String, String)],
-) -> Statement<'a> {
+fn create_exports_return<'a>(alloc: &'a Allocator, exports: &[(String, String)]) -> Statement<'a> {
     let mut properties = OxcVec::with_capacity_in(exports.len() + 1, alloc);
 
     for (exported, local) in exports {

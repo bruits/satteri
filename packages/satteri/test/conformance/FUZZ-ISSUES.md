@@ -7,6 +7,7 @@ Found 5 unique issue(s) across 8 total failure(s).
 **Input:** `"- pv02y\n- hsfjvctjgw60\n\n  x5j77edfop\n\n`bdm`\n\n![qezmegvjb](https://example.com/rt)\n\n`mkjalex`"`
 
 **Expected (reference):**
+
 ```json
 {
   "type": "root",
@@ -30,10 +31,11 @@ Found 5 unique issue(s) across 8 total failure(s).
                   "value": "pv02y",
                   "position": {
                     "start": {
-  
+
 ```
 
 **Actual (Sätteri):**
+
 ```json
 {
   "type": "root",
@@ -67,11 +69,13 @@ Found 5 unique issue(s) across 8 total failure(s).
       "ordered": false,
       "start": null
 ```
+
 ## 2. [MDAST] (chaos)
 
 **Input:** `"*\n "`
 
 **Expected (reference):**
+
 ```json
 {
   "type": "root",
@@ -100,6 +104,7 @@ Found 5 unique issue(s) across 8 total failure(s).
 ```
 
 **Actual (Sätteri):**
+
 ```json
 {
   "type": "root",
@@ -132,13 +137,15 @@ Found 5 unique issue(s) across 8 total failure(s).
       },
       "ordered": false,
       "start": null,
-   
+
 ```
+
 ## 3. [HAST] (chaos)
 
 **Input:** `"h!-\n{<}\n|-"`
 
 **Expected (reference):**
+
 ```json
 {
   "type": "root",
@@ -166,10 +173,11 @@ Found 5 unique issue(s) across 8 total failure(s).
         }
       ],
       "position": {
- 
+
 ```
 
 **Actual (Sätteri):**
+
 ```json
 {
   "type": "root",
@@ -203,11 +211,13 @@ Found 5 unique issue(s) across 8 total failure(s).
       "tagName": "p",
       "properties": {
 ```
+
 ## 4. [HAST] (chaos)
 
 **Input:** `"-\n\t"`
 
 **Expected (reference):**
+
 ```json
 {
   "type": "root",
@@ -233,10 +243,11 @@ Found 5 unique issue(s) across 8 total failure(s).
               "offset": 0
             },
             "end": {
-              
+
 ```
 
 **Actual (Sätteri):**
+
 ```json
 {
   "type": "root",
@@ -270,11 +281,13 @@ Found 5 unique issue(s) across 8 total failure(s).
       "tagName": "ul",
       "properties": {}
 ```
+
 ## 5. [MDX-MDAST] (structured)
 
 **Input:** `"- id48cva\n- 9g0\n- bc9vu\n- qmsibdsu0\n\n  4pj 38yd 7aci2\n\n{1 + 2}\n\n{`7jsrvi9n`}"`
 
 **Expected (reference):**
+
 ```json
 {
   "type": "root",
@@ -300,10 +313,11 @@ Found 5 unique issue(s) across 8 total failure(s).
               ]
             }
           ]
-    
+
 ```
 
 **Actual (Sätteri):**
+
 ```json
 {
   "type": "root",
@@ -329,5 +343,5 @@ Found 5 unique issue(s) across 8 total failure(s).
               ]
             }
           ]
-     
+
 ```

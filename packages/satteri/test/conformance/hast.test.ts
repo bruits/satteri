@@ -249,15 +249,21 @@ describe("HAST conformance: edge cases", () => {
   });
 
   test("ordered then empty task", () => {
-    assertHastConformance("1. 8tj\n2. 721ruj3\n\n- [ ]  \n- [ ] f mr0\n- [ ] unyrdla7n\n\n- [x] dqof");
+    assertHastConformance(
+      "1. 8tj\n2. 721ruj3\n\n- [ ]  \n- [ ] f mr0\n- [ ] unyrdla7n\n\n- [x] dqof",
+    );
   });
 
   test("empty task spread paragraph", () => {
-    assertHastConformance("- [ ]  \n\n*9 xjct6yd1*\n\n*k1x4l0*\n\nym\n\n> 440xlhbng\n\n##### 84722");
+    assertHastConformance(
+      "- [ ]  \n\n*9 xjct6yd1*\n\n*k1x4l0*\n\nym\n\n> 440xlhbng\n\n##### 84722",
+    );
   });
 
   test("ordered then mixed task empty", () => {
-    assertHastConformance("1. 6ewzgkavoqr\n2. tz2ds7kofn\n3. ebhcu3hxls\n\n[ xqi08kw20](https://example.com/qnvjfq)\n\n- nhkl0p54th7h\n\n- [ ]  \n\n**3clittp**");
+    assertHastConformance(
+      "1. 6ewzgkavoqr\n2. tz2ds7kofn\n3. ebhcu3hxls\n\n[ xqi08kw20](https://example.com/qnvjfq)\n\n- nhkl0p54th7h\n\n- [ ]  \n\n**3clittp**",
+    );
   });
 
   test("spread task list empty item no extra newline", () => {

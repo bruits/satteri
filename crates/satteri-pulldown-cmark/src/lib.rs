@@ -857,5 +857,4 @@ impl Options {
         self.contains(Options::ENABLE_SMART_PUNCTUATION)
             || self.contains(Options::ENABLE_SMART_ELLIPSES)
     }
-
 }

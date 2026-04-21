@@ -3,7 +3,9 @@ import { assertHastConformance, assertMdastConformance } from "./helpers.js";
 
 describe("CommonMark spec deltas: HTML blocks with following content", () => {
   test("spec 148: HTML block in table cell with following paragraph", () => {
-    assertHastConformance("<table><tr><td>\n<pre>\n**Hello**,\n\n_world_.\n</pre>\n</td></tr></table>\n");
+    assertHastConformance(
+      "<table><tr><td>\n<pre>\n**Hello**,\n\n_world_.\n</pre>\n</td></tr></table>\n",
+    );
   });
 
   test("spec 155: HTML block div with following paragraph", () => {
@@ -19,7 +21,9 @@ describe("CommonMark spec deltas: HTML blocks with following content", () => {
   });
 
   test("spec 191: table with indented content", () => {
-    assertHastConformance("<table>\n\n  <tr>\n\n    <td>\n      Hi\n    </td>\n\n  </tr>\n\n</table>\n");
+    assertHastConformance(
+      "<table>\n\n  <tr>\n\n    <td>\n      Hi\n    </td>\n\n  </tr>\n\n</table>\n",
+    );
   });
 });
 

@@ -9,7 +9,10 @@ describe("Frontmatter MDAST conformance", () => {
   });
 
   test("YAML with multiple fields", () => {
-    assertExtMdastConformance("---\ntitle: Test\ndate: 2024-01-01\ntags:\n  - a\n  - b\n---\n\nBody", FM);
+    assertExtMdastConformance(
+      "---\ntitle: Test\ndate: 2024-01-01\ntags:\n  - a\n  - b\n---\n\nBody",
+      FM,
+    );
   });
 
   test("empty YAML frontmatter", () => {
@@ -21,7 +24,7 @@ describe("Frontmatter MDAST conformance", () => {
   });
 
   test("TOML frontmatter", () => {
-    assertExtMdastConformance("+++\ntitle = \"Hello\"\n+++\n\nContent", FM);
+    assertExtMdastConformance('+++\ntitle = "Hello"\n+++\n\nContent', FM);
   });
 
   test("no frontmatter", () => {
@@ -43,7 +46,7 @@ describe("Frontmatter HAST conformance", () => {
   });
 
   test("TOML frontmatter", () => {
-    assertExtHastConformance("+++\ntitle = \"Hello\"\n+++\n\nContent", FM);
+    assertExtHastConformance('+++\ntitle = "Hello"\n+++\n\nContent', FM);
   });
 
   test("frontmatter only", () => {

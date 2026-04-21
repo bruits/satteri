@@ -115,8 +115,8 @@ pub(crate) enum ItemBody {
     ContainerDirective(u8, DirectiveIndex), // (fence length, directive data)
     LeafDirective(DirectiveIndex),
     TextDirective(DirectiveIndex),
-    List(bool, u8, u64),                    // is_tight, list character, list start index
-    ListItem(usize),                        // indent level
+    List(bool, u8, u64), // is_tight, list character, list start index
+    ListItem(usize),     // indent level
     FootnoteDefinition(CowIndex),
     MetadataBlock(MetadataBlockKind),
 
@@ -646,8 +646,7 @@ impl<'input> ParserInner<'input> {
                             let mut peek = self.tree[scan_ix].next;
                             while let Some(peek_ix) = peek {
                                 if matches!(self.tree[peek_ix].item.body, ItemBody::MaybeMath(..))
-                                    && self.tree[peek_ix].item.start
-                                        == self.tree[run_end].item.end
+                                    && self.tree[peek_ix].item.start == self.tree[run_end].item.end
                                 {
                                     run += 1;
                                     run_end = peek_ix;
@@ -2522,7 +2521,9 @@ fn body_to_tag_end(body: &ItemBody) -> TagEnd {
         ItemBody::Link(..) => TagEnd::Link,
         ItemBody::Image(..) => TagEnd::Image,
         ItemBody::Heading(level, _) => TagEnd::Heading(level),
-        ItemBody::IndentCodeBlock | ItemBody::FencedCodeBlock(..) | ItemBody::MathBlock(..) => TagEnd::CodeBlock,
+        ItemBody::IndentCodeBlock | ItemBody::FencedCodeBlock(..) | ItemBody::MathBlock(..) => {
+            TagEnd::CodeBlock
+        }
         ItemBody::ContainerDirective(..) => TagEnd::Directive(DirectiveKind::Container),
         ItemBody::LeafDirective(..) => TagEnd::Directive(DirectiveKind::Leaf),
         ItemBody::TextDirective(..) => TagEnd::Directive(DirectiveKind::Text),
@@ -2611,7 +2612,9 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
             Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
         }
         ItemBody::IndentCodeBlock => Tag::CodeBlock(CodeBlockKind::Indented),
-        ItemBody::ContainerDirective(_, dir_ix) | ItemBody::LeafDirective(dir_ix) | ItemBody::TextDirective(dir_ix) => {
+        ItemBody::ContainerDirective(_, dir_ix)
+        | ItemBody::LeafDirective(dir_ix)
+        | ItemBody::TextDirective(dir_ix) => {
             let kind = match item.body {
                 ItemBody::ContainerDirective(..) => DirectiveKind::Container,
                 ItemBody::LeafDirective(..) => DirectiveKind::Leaf,

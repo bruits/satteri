@@ -157,17 +157,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if let Some((ch, index, indent)) = line_start.scan_list_marker_with_indent(outer_indent)
             {
                 let after_marker_index = start_ix + line_start.bytes_scanned();
-                let already_in_list = self.tree.peek_up().is_some_and(|ix| {
-                    matches!(self.tree[ix].item.body, ItemBody::List(_, _, _))
-                });
+                let already_in_list = self
+                    .tree
+                    .peek_up()
+                    .is_some_and(|ix| matches!(self.tree[ix].item.body, ItemBody::List(_, _, _)));
                 let after_marker_blank = {
                     let rest = &bytes[after_marker_index..];
                     rest.is_empty() || scan_blank_line(rest).is_some()
                 };
-                if self.list_interrupted_paragraph
-                    && !already_in_list
-                    && after_marker_blank
-                {
+                if self.list_interrupted_paragraph && !already_in_list && after_marker_blank {
                     self.list_interrupted_paragraph = false;
                     line_start = save;
                     break;
@@ -329,7 +327,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     let fence_length = core::cmp::min(colon_count, u8::MAX as usize);
                     let after_colons = colon_start + colon_count;
                     if let Some((dir_data, content_end)) =
-                        parse_directive_after_colons(&self.text, &bytes, after_colons)
+                        parse_directive_after_colons(self.text, bytes, after_colons)
                     {
                         // For block directives, advance to end of line
                         let after = &bytes[content_end..];
@@ -350,7 +348,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // Leaf directive (::)
                     let after_colons = colon_start + 2;
                     if let Some((dir_data, line_end)) =
-                        parse_directive_after_colons(&self.text, &bytes, after_colons)
+                        parse_directive_after_colons(self.text, bytes, after_colons)
                     {
                         // Verify only whitespace follows on the line
                         let remaining = &bytes[line_end..];
@@ -387,8 +385,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     ItemBody::ContainerDirective(length, ..) => {
                         if line_start.scan_closing_container_extensions_fence(length) {
                             let after_fence = start_ix + line_start.bytes_scanned();
-                            fence_line_end =
-                                after_fence + scan_nextline(&bytes[after_fence..]);
+                            fence_line_end = after_fence + scan_nextline(&bytes[after_fence..]);
                             pop_count = Some(i + 1);
                             break;
                         }
@@ -589,13 +586,21 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // Detect type 6
             if starts_html_block_type_6(&bytes[(ix + 1)..]) {
                 self.finish_list(start_ix);
-                return self.parse_html_block_type_6_or_7(content_start_ix, remaining_space, indent);
+                return self.parse_html_block_type_6_or_7(
+                    content_start_ix,
+                    remaining_space,
+                    indent,
+                );
             }
 
             // Detect type 7
             if let Some(_html_bytes) = scan_html_type_7(&bytes[ix..]) {
                 self.finish_list(start_ix);
-                return self.parse_html_block_type_6_or_7(content_start_ix, remaining_space, indent);
+                return self.parse_html_block_type_6_or_7(
+                    content_start_ix,
+                    remaining_space,
+                    indent,
+                );
             }
         }
 
@@ -975,8 +980,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     if let Some(pos) = trailing_backslash_pos {
                         self.tree.append_text(pos, pos + 1, false);
                     }
-                    self.list_interrupted_paragraph = scan_listitem(suffix).is_some()
-                        || scan_blockquote_start(suffix).is_some();
+                    self.list_interrupted_paragraph =
+                        scan_listitem(suffix).is_some() || scan_blockquote_start(suffix).is_some();
                     break;
                 }
                 if self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS)
@@ -1174,8 +1179,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         }
                     }
 
-                    let trailing_spaces =
-                        scan_rev_while(&bytes[..ix], |c| c == b' ');
+                    let trailing_spaces = scan_rev_while(&bytes[..ix], |c| c == b' ');
                     let has_tab_before_spaces = trailing_spaces > 0
                         && ix > trailing_spaces
                         && bytes[ix - trailing_spaces - 1] == b'\t';
@@ -1239,9 +1243,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         begin_text = ix + 2;
                         backslash_escaped = true;
                         LoopInstruction::ContinueAndSkip(2)
-                    } else if bytes[ix + 1] == b'$'
-                        && self.options.contains(Options::ENABLE_MATH)
-                    {
+                    } else if bytes[ix + 1] == b'$' && self.options.contains(Options::ENABLE_MATH) {
                         // In math context, \$ should still produce a MaybeMath
                         // delimiter so it can close a math span. The backslash
                         // only prevents opening.
@@ -1824,12 +1826,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
     }
 
-    fn parse_math_block(
-        &mut self,
-        start_ix: usize,
-        indent: usize,
-        n_fence_char: usize,
-    ) -> usize {
+    fn parse_math_block(&mut self, start_ix: usize, indent: usize, n_fence_char: usize) -> usize {
         let bytes = self.text.as_bytes();
         let mut meta_start = start_ix + n_fence_char;
         meta_start += scan_whitespace_no_nl(&bytes[meta_start..]);

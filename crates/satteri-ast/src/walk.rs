@@ -347,11 +347,10 @@ fn serialize_mdast_node_inline(
         }
 
         // ContainerDirective(30), LeafDirective(31), TextDirective(32): name + attributes
-        30 | 31 | 32 => {
+        30..=32 => {
             write_str16(out, type_data, 0);
             if type_data.len() >= 16 {
-                let attr_count =
-                    u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
+                let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
                 out.extend_from_slice(&(attr_count as u16).to_le_bytes());
                 for i in 0..attr_count {
                     let base = 16 + i * 16;

@@ -29,8 +29,7 @@ function stripPositionsAndEstree(node: unknown): unknown {
     // remark-mdx includes parsed estree in `data`; satteri doesn't
     if (k === "data") continue;
     if (Array.isArray(v)) out[k] = v.map(stripPositionsAndEstree);
-    else if (typeof v === "object" && v !== null)
-      out[k] = stripPositionsAndEstree(v);
+    else if (typeof v === "object" && v !== null) out[k] = stripPositionsAndEstree(v);
     else out[k] = v;
   }
   return out;

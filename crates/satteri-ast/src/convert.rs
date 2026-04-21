@@ -10,13 +10,12 @@ use crate::mdast::{
     decode_footnote_definition_data, decode_heading_data, decode_image_data, decode_link_data,
     decode_list_data, decode_list_item_data, decode_math_data, decode_mdx_jsx_attr,
     decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name, decode_reference_data,
-    decode_table_alignments, encode_mdx_jsx_element_data, ColumnAlign, ListItemData,
-    MdastNodeType,
+    decode_table_alignments, encode_mdx_jsx_element_data, ColumnAlign, ListItemData, MdastNodeType,
 };
 use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
 
 fn encode_url(builder: &mut ArenaBuilder, url: &str) -> StringRef {
-    if url.bytes().all(|b| is_url_safe(b)) {
+    if url.bytes().all(is_url_safe) {
         return builder.alloc_string(url);
     }
     let mut encoded = String::with_capacity(url.len() * 2);
@@ -423,12 +422,18 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             };
             if loose {
                 convert_children_with_newlines_task(
-                    node_id, view, builder, ctx,
+                    node_id,
+                    view,
+                    builder,
+                    ctx,
                     is_task.then(|| item_data.unwrap()),
                 );
             } else {
                 convert_children_unwrap_paragraphs_task(
-                    node_id, view, builder, ctx,
+                    node_id,
+                    view,
+                    builder,
+                    ctx,
                     is_task.then(|| item_data.unwrap()),
                 );
             }
@@ -1236,7 +1241,7 @@ mod hast_convert_tests {
     fn jsx_flow_with_full_options() {
         use satteri_pulldown_cmark::Options;
         let cases: &[(&str, &[u8])] = &[
-            ("<a></a>\n", &[100]),        // mdxJsxFlowElement
+            ("<a></a>\n", &[100]), // mdxJsxFlowElement
             ("<Foo/><Bar/>\n", &[100, 100]),
             ("<Box>{1}</Box>\n", &[100]),
             ("<Box><Foo/></Box>\n", &[100]),
@@ -1254,11 +1259,9 @@ mod hast_convert_tests {
                 .map(|&id| arena.get_node(id).node_type)
                 .collect();
             assert_eq!(
-                &types,
-                expected_types,
+                &types, expected_types,
                 "source: {:?}, got types: {:?}",
-                source,
-                types
+                source, types
             );
         }
     }

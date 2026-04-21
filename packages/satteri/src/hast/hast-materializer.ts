@@ -18,7 +18,9 @@ import { lazyProp, lazyGroup } from "../lazy-props.js";
 
 export type { HastNode };
 
-function propsToRecord(props: HastProperty[]): Record<string, string | number | boolean | string[]> {
+function propsToRecord(
+  props: HastProperty[],
+): Record<string, string | number | boolean | string[]> {
   const result: Record<string, string | number | boolean | string[]> = {};
   for (const p of props) {
     result[p.name] = p.value;

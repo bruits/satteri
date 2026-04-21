@@ -1,5 +1,11 @@
 import { evaluate as mdxEvaluate } from "@mdx-js/mdx";
-import { evaluate as satteriEvaluate, markdownToMdast, markdownToHast, markdownToHtml, mdxToJs } from "../../src/index.js";
+import {
+  evaluate as satteriEvaluate,
+  markdownToMdast,
+  markdownToHast,
+  markdownToHtml,
+  mdxToJs,
+} from "../../src/index.js";
 import type { Features } from "../../src/index.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
@@ -49,7 +55,10 @@ function buildHastProcessor(extensions: ExtensionSet[]): Processor {
   if (extensions.includes("definitionList")) {
     Object.assign(handlers, defListHastHandlers);
   }
-  return p.use(remarkRehype, { allowDangerousHtml: true, handlers: Object.keys(handlers).length > 0 ? handlers : undefined } as any);
+  return p.use(remarkRehype, {
+    allowDangerousHtml: true,
+    handlers: Object.keys(handlers).length > 0 ? handlers : undefined,
+  } as any);
 }
 
 function featuresToSatteri(extensions: ExtensionSet[]): Features {
@@ -157,8 +166,9 @@ export function satteriMathHtml(md: string): string {
 
 const fmMdastProcessor = buildMdastProcessor(["frontmatter"]);
 const fmHastProcessor = buildHastProcessor(["frontmatter"]);
-const fmHtmlProcessor = buildHastProcessor(["frontmatter"])
-  .use(rehypeStringify, { allowDangerousHtml: true });
+const fmHtmlProcessor = buildHastProcessor(["frontmatter"]).use(rehypeStringify, {
+  allowDangerousHtml: true,
+});
 const FM_FEATURES: Features = { frontmatter: true };
 
 export function referenceFmMdast(md: string): unknown {
@@ -223,9 +233,7 @@ function normalizeHtmlForComparison(html: string): string {
 }
 
 export function referenceHtml(md: string): string {
-  return normalizeHtmlForComparison(
-    htmlProcessor.processSync(md).toString(),
-  );
+  return normalizeHtmlForComparison(htmlProcessor.processSync(md).toString());
 }
 
 export function satteriHtml(md: string): string {

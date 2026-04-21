@@ -125,8 +125,13 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                                 builder.alloc_string(&meta_str)
                             };
                             let value_ref = builder.alloc_string(&content);
+
                             builder.set_data_current(
-                                &MathData { meta: meta_ref, value: value_ref }.to_bytes(),
+                                &MathData {
+                                    meta: meta_ref,
+                                    value: value_ref,
+                                }
+                                .to_bytes(),
                             );
                             let id = builder.current_node_id();
                             let node = builder.arena_ref().get_node(id);
@@ -134,7 +139,12 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             let orig_start_line = node.start_line;
                             let orig_start_col = node.start_column;
                             builder.set_position_current(
-                                orig_start, end, orig_start_line, orig_start_col, end_line, end_col,
+                                orig_start,
+                                end,
+                                orig_start_line,
+                                orig_start_col,
+                                end_line,
+                                end_col,
                             );
                             builder.close_node();
                         }
@@ -259,11 +269,13 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                                         para_count += 1;
                                     }
                                     _ if inner.tree[c].item.body.is_block_level()
-                                        && !matches!(inner.tree[c].item.body,
-                                            ItemBody::List(..) | ItemBody::BlockQuote(..)
-                                            | ItemBody::DefinitionList(..)
-                                            | ItemBody::ContainerDirective(..)
-                                            | ItemBody::ListItem(..)
+                                        && !matches!(
+                                            inner.tree[c].item.body,
+                                            ItemBody::List(..)
+                                                | ItemBody::BlockQuote(..)
+                                                | ItemBody::DefinitionList(..)
+                                                | ItemBody::ContainerDirective(..)
+                                                | ItemBody::ListItem(..)
                                         ) =>
                                     {
                                         has_other_block = true;
@@ -355,8 +367,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let orig_start_col = node.start_column;
                         let use_last_child = matches!(
                             item.body,
-                            ItemBody::BlockQuote(..)
-                                | ItemBody::ContainerDirective(..)
+                            ItemBody::BlockQuote(..) | ItemBody::ContainerDirective(..)
                         );
                         let (cont_end, cont_end_line, cont_end_col) = if use_last_child {
                             if let Some(last_child) = builder.last_sibling_id() {
@@ -556,7 +567,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
                     }
-                    ItemBody::List(is_tight, c, listitem_start) => {
+                    ItemBody::List(_is_tight, c, listitem_start) => {
                         let ordered = c == b'.' || c == b')';
                         let start_num = if ordered { listitem_start as u32 } else { 0 };
                         builder.open_node(MdastNodeType::List as u8);
@@ -848,10 +859,9 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                                 para_end_col,
                             );
                             let para_id = builder.current_node_id();
-                            builder.arena_mut().set_node_data(
-                                para_id,
-                                b"{\"directiveLabel\":true}".to_vec(),
-                            );
+                            builder
+                                .arena_mut()
+                                .set_node_data(para_id, b"{\"directiveLabel\":true}".to_vec());
                             builder.add_leaf_full(
                                 MdastNodeType::Text as u8,
                                 dir.label_start as u32,
@@ -886,8 +896,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             let label_sr = builder.alloc_string(label);
                             let (ls_line, ls_col) =
                                 cursor.offset_to_line_col(dir.label_start as u32);
-                            let (le_line, le_col) =
-                                cursor.offset_to_line_col(dir.label_end as u32);
+                            let (le_line, le_col) = cursor.offset_to_line_col(dir.label_end as u32);
                             builder.add_leaf_full(
                                 MdastNodeType::Text as u8,
                                 dir.label_start as u32,
@@ -924,8 +933,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             let label_sr = builder.alloc_string(label);
                             let (ls_line, ls_col) =
                                 cursor.offset_to_line_col(dir.label_start as u32);
-                            let (le_line, le_col) =
-                                cursor.offset_to_line_col(dir.label_end as u32);
+                            let (le_line, le_col) = cursor.offset_to_line_col(dir.label_end as u32);
                             builder.add_leaf_full(
                                 MdastNodeType::Text as u8,
                                 dir.label_start as u32,
@@ -1393,7 +1401,10 @@ fn mdx_mark_and_unravel(arena: &mut Arena) {
             continue;
         }
         let parent_type = MdastNodeType::from_u8(arena.get_node(node.parent).node_type);
-        if matches!(parent_type, Some(MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement)) {
+        if matches!(
+            parent_type,
+            Some(MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement)
+        ) {
             continue;
         }
         let children = arena.get_children(id).to_vec();
@@ -1411,7 +1422,7 @@ fn mdx_mark_and_unravel(arena: &mut Arena) {
                 Some(MdastNodeType::Text) => {
                     let data = arena.get_type_data(child_id);
                     if !data.is_empty() {
-                            let sr = decode_string_ref_data(data);
+                        let sr = decode_string_ref_data(data);
                         let text = arena.get_str(sr);
                         if !text.chars().all(|c| c.is_ascii_whitespace()) {
                             all_mdx = false;
@@ -1443,7 +1454,7 @@ fn mdx_mark_and_unravel(arena: &mut Arena) {
                 Some(MdastNodeType::Text) => {
                     let data = arena.get_type_data(child_id);
                     if !data.is_empty() {
-                            let sr = decode_string_ref_data(data);
+                        let sr = decode_string_ref_data(data);
                         let text = arena.get_str(sr);
                         if !text.chars().all(|c| c.is_ascii_whitespace()) {
                             promoted.push(child_id);

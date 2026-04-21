@@ -790,7 +790,6 @@ fn scan_mdx_inline_jsx_inner(
     None
 }
 
-
 impl<'a, 'b> FirstPass<'a, 'b> {
     pub(crate) fn parse_mdx_esm(&mut self, start_ix: usize, end_ix: usize) -> usize {
         let content = &self.text[start_ix..end_ix].trim_end();
@@ -819,8 +818,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
             let remaining = &raw.as_bytes()[pos..];
             if remaining[0] == b'<' {
-                let tag_end = scan_mdx_jsx_tag_end(remaining)
-                    .unwrap_or(raw.len() - pos);
+                let tag_end = scan_mdx_jsx_tag_end(remaining).unwrap_or(raw.len() - pos);
                 let tag_raw = &raw[pos..pos + tag_end];
                 let jsx_data = parse_jsx_tag(tag_raw).into_static();
                 let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
@@ -831,9 +829,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 });
                 pos += tag_end;
             } else if remaining[0] == b'{' {
-                let expr_end = scan_mdx_expression_end(remaining, true)
-                    .unwrap_or(raw.len() - pos);
-                let inner: CowStr<'static> = CowStr::from(raw[pos + 1..pos + expr_end - 1].to_string());
+                let expr_end = scan_mdx_expression_end(remaining, true).unwrap_or(raw.len() - pos);
+                let inner: CowStr<'static> =
+                    CowStr::from(raw[pos + 1..pos + expr_end - 1].to_string());
                 let cow_ix = self.allocs.allocate_cow(inner);
                 self.tree.append(Item {
                     start: start_ix + pos,
@@ -847,7 +845,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
         end_ix
     }
-
 
     /// Strip container prefixes from continuation lines in a raw text span.
     /// Returns the original text if not inside a container.
