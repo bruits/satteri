@@ -110,7 +110,7 @@ pub(crate) enum ItemBody {
     FencedCodeBlock(CowIndex),
     MathBlock(CowIndex), // meta string (info after $$)
     IndentCodeBlock,
-    HtmlBlock,
+    HtmlBlock(bool), // true = type 6/7 (blank-line-terminated)
     BlockQuote(Option<BlockQuoteKind>),
     ContainerDirective(u8, DirectiveIndex), // (fence length, directive data)
     LeafDirective(DirectiveIndex),
@@ -669,9 +669,20 @@ impl<'input> ParserInner<'input> {
                     if let Some(scan_ix) = close_ix {
                         self.make_math_span(cur_ix, scan_ix);
                     } else {
-                        self.tree[cur_ix].item.body = ItemBody::Text {
-                            backslash_escaped: false,
-                        };
+                        let mut fail_ix = cur_ix;
+                        loop {
+                            self.tree[fail_ix].item.body = ItemBody::Text {
+                                backslash_escaped: false,
+                            };
+                            if fail_ix == open_end {
+                                break;
+                            }
+                            if let Some(next) = self.tree[fail_ix].next {
+                                fail_ix = next;
+                            } else {
+                                break;
+                            }
+                        }
                     }
                 }
                 ItemBody::MaybeCode(mut search_count, preceded_by_backslash) => {
@@ -1454,8 +1465,31 @@ impl<'input> ParserInner<'input> {
             }
         }
 
-        let cow = if let Some(mut buf) = buf {
-            buf.push_str(&spanned_text[start_ix..]);
+        let (opening, closing, all_spaces) = {
+            let s = if let Some(buf) = &mut buf {
+                buf.push_str(&spanned_text[start_ix..]);
+                &buf[..]
+            } else {
+                spanned_text
+            };
+            (
+                matches!(s.as_bytes().first(), Some(b' ' | b'\n')),
+                matches!(s.as_bytes().last(), Some(b' ' | b'\n')),
+                s.bytes().all(|b| b == b' ' || b == b'\n'),
+            )
+        };
+
+        let cow: CowStr<'input> = if !all_spaces && opening && closing {
+            if let Some(mut buf) = buf {
+                if !buf.is_empty() {
+                    buf.remove(0);
+                    buf.pop();
+                }
+                buf.into()
+            } else {
+                spanned_text[1..(spanned_text.len() - 1).max(1)].into()
+            }
+        } else if let Some(buf) = buf {
             buf.into()
         } else {
             spanned_text.into()
@@ -2528,7 +2562,7 @@ fn body_to_tag_end(body: &ItemBody) -> TagEnd {
         ItemBody::LeafDirective(..) => TagEnd::Directive(DirectiveKind::Leaf),
         ItemBody::TextDirective(..) => TagEnd::Directive(DirectiveKind::Text),
         ItemBody::BlockQuote(kind) => TagEnd::BlockQuote(kind),
-        ItemBody::HtmlBlock => TagEnd::HtmlBlock,
+        ItemBody::HtmlBlock(_) => TagEnd::HtmlBlock,
         ItemBody::List(_, c, _) => {
             let is_ordered = c == b'.' || c == b')';
             TagEnd::List(is_ordered)
@@ -2555,7 +2589,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::Code(cow_ix) => return Event::Code(allocs.take_cow(cow_ix)),
         ItemBody::SynthesizeText(cow_ix) => return Event::Text(allocs.take_cow(cow_ix)),
         ItemBody::SynthesizeChar(c) => return Event::Text(c.into()),
-        ItemBody::HtmlBlock => Tag::HtmlBlock,
+        ItemBody::HtmlBlock(_) => Tag::HtmlBlock,
         ItemBody::Html => return Event::Html(text[item.start..item.end].into()),
         ItemBody::InlineHtml => return Event::InlineHtml(text[item.start..item.end].into()),
         ItemBody::OwnedInlineHtml(cow_ix) => return Event::InlineHtml(allocs.take_cow(cow_ix)),

@@ -2874,11 +2874,9 @@ fn regression_test_164() {
   t_
 "##;
     let expected = r##"<ul>
-<li>
-<p>_t</p>
+<li>_t
 <h1>test</h1>
-<p>t_</p>
-</li>
+t_</li>
 </ul>
 "##;
 
@@ -2892,11 +2890,9 @@ fn regression_test_165() {
   N*
 "##;
     let expected = r##"<ul>
-<li>
-<p>*_</p>
+<li>*_
 <h1></h1>
-<p>N*</p>
-</li>
+N*</li>
 </ul>
 "##;
 
@@ -3187,8 +3183,7 @@ fn regression_test_185() {
 <li>
 <pre><code>test
 </code></pre>
-<p>test2</p>
-</li>
+test2</li>
 </ul>
 "##;
 
@@ -3319,12 +3314,10 @@ _**
   ^_
 "##;
     let expected = r##"<ul>
-<li>
-<p>_
-_**</p>
+<li>_
+_**
 <hr>
-<p>^_</p>
-</li>
+^_</li>
 </ul>
 "##;
 
@@ -3492,11 +3485,9 @@ fn regression_test_205() {
   stuff](https://example.com)
 "##;
     let expected = r##"<ul>
-<li>
-<p>Item definition [it</p>
+<li>Item definition [it
 <pre><code class="language-rust"></code></pre>
-<p>stuff](https://example.com)</p>
-</li>
+stuff](https://example.com)</li>
 </ul>
 "##;
 

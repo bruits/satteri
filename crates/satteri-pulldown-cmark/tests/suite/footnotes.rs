@@ -466,13 +466,10 @@ first      | second
 > [^5]: * test [^5]
 "##;
     let expected = r##"<ul>
-<li>
-<p>First</p>
+<li>First
 <div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup><p>test</p></div>
 </li>
-<li>
-<p>Second <sup class="footnote-reference"><a href="#1">1</a></sup> test</p>
-</li>
+<li>Second <sup class="footnote-reference"><a href="#1">1</a></sup> test</li>
 </ul>
 <blockquote>
 <p>first</p>

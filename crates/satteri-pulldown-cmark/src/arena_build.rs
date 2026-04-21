@@ -183,15 +183,22 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         }
                     }
                     // HTML block close: write accumulated content.
-                    ItemBody::HtmlBlock => {
+                    ItemBody::HtmlBlock(is_type_6_or_7) => {
                         if let Some(content) = html_block_buf.take() {
-                            let sr = builder.alloc_string(&content);
+                            let at_eof = item.end >= source.len();
+                            let trimmed = if *is_type_6_or_7 || !at_eof {
+                                content.trim_end_matches('\n')
+                            } else {
+                                content.as_str()
+                            };
+                            let sr = builder.alloc_string(trimmed);
                             let id = builder.current_node_id();
                             let node = builder.arena_ref().get_node(id);
                             let orig_start = node.start_offset;
                             let orig_start_line = node.start_line;
                             let orig_start_col = node.start_column;
-                            let raw_end = item.end as u32;
+                            let trimmed_len = content.len() - trimmed.len();
+                            let raw_end = (item.end as u32).saturating_sub(trimmed_len as u32);
                             let (raw_end_line, raw_end_col) = cursor.offset_to_line_col(raw_end);
                             builder.set_position_current(
                                 orig_start,
@@ -260,31 +267,28 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     ItemBody::ListItem(_) => {
                         let id = builder.current_node_id();
                         let is_spread = {
+                            let bytes = source.as_bytes();
                             let mut child = inner.tree[ix].child;
-                            let mut para_count = 0u32;
-                            let mut has_other_block = false;
+                            let mut prev_end: Option<usize> = None;
+                            let mut found = false;
                             while let Some(c) = child {
-                                match inner.tree[c].item.body {
-                                    ItemBody::Paragraph | ItemBody::TightParagraph => {
-                                        para_count += 1;
+                                if let Some(pe) = prev_end {
+                                    let gap = &bytes[pe..inner.tree[c].item.start];
+                                    let has_blank = gap.windows(2).any(|w| {
+                                        (w[0] == b'\n' && w[1] == b'\n')
+                                            || (w[0] == b'\n' && w[1] == b'\r')
+                                    }) || gap.windows(3).any(|w| {
+                                        w[0] == b'\r' && w[1] == b'\n' && w[2] == b'\r'
+                                    });
+                                    if has_blank {
+                                        found = true;
+                                        break;
                                     }
-                                    _ if inner.tree[c].item.body.is_block_level()
-                                        && !matches!(
-                                            inner.tree[c].item.body,
-                                            ItemBody::List(..)
-                                                | ItemBody::BlockQuote(..)
-                                                | ItemBody::DefinitionList(..)
-                                                | ItemBody::ContainerDirective(..)
-                                                | ItemBody::ListItem(..)
-                                        ) =>
-                                    {
-                                        has_other_block = true;
-                                    }
-                                    _ => {}
                                 }
+                                prev_end = Some(inner.tree[c].item.end);
                                 child = inner.tree[c].next;
                             }
-                            para_count > 1 || (para_count >= 1 && has_other_block)
+                            found
                         };
                         if is_spread {
                             let existing = builder.arena_ref().get_type_data(id).to_vec();
@@ -718,7 +722,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         );
                         inner.tree.push();
                     }
-                    ItemBody::HtmlBlock => {
+                    ItemBody::HtmlBlock(_) => {
                         builder.open_node(MdastNodeType::Html as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,

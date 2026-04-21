@@ -1618,7 +1618,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree.append(Item {
             start: start_ix,
             end: 0, // set later
-            body: ItemBody::HtmlBlock,
+            body: ItemBody::HtmlBlock(false),
         });
         self.tree.push();
 
@@ -1667,7 +1667,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree.append(Item {
             start: start_ix,
             end: 0, // set later
-            body: ItemBody::HtmlBlock,
+            body: ItemBody::HtmlBlock(true),
         });
         self.tree.push();
 

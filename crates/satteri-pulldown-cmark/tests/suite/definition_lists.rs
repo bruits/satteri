@@ -491,7 +491,6 @@ first
 "##;
     let expected = r##"<div>first</div>
 : second
-
 <p><p>first</p><p><p>second</p></p></p>
 <div>third</div>
 : fourth

@@ -143,6 +143,69 @@ describe("Math MDAST conformance", () => {
   test("escaped dollars inside math", () => {
     assertExtMdastConformance("Money adds: $\\$X + \\$Y = \\$Z$.", MATH);
   });
+
+  test("double dollar inline with spaces stripped", () => {
+    assertExtMdastConformance("$$ Display `first $$ then` code", MATH);
+  });
+
+  test("double dollar inline with leading and trailing spaces", () => {
+    assertExtMdastConformance("$$ x $$", MATH);
+  });
+
+  test("single dollar with spaces stripped", () => {
+    assertExtMdastConformance("$ x $", MATH);
+  });
+
+  test("spaces not stripped when content is only spaces", () => {
+    assertExtMdastConformance("$ $", MATH);
+  });
+
+  test("double spaces not stripped when content is only spaces", () => {
+    assertExtMdastConformance("$$  $$", MATH);
+  });
+
+  test("extra spaces partially stripped", () => {
+    assertExtMdastConformance("$$  x  $$", MATH);
+  });
+
+  test("many consecutive dollars no match", () => {
+    assertExtMdastConformance("$x$$$$$$$y$$", MATH);
+  });
+
+  test("six consecutive dollars no match", () => {
+    assertExtMdastConformance("$x$$$$$$y$$", MATH);
+  });
+
+  test("triple dollar matching triple dollar", () => {
+    assertExtMdastConformance("$$$x$$$", MATH);
+  });
+
+  test("triple dollar with spaces", () => {
+    assertExtMdastConformance("$$$ x $$$", MATH);
+  });
+
+  test("mismatched triple vs double", () => {
+    assertExtMdastConformance("$$$x$$", MATH);
+  });
+
+  test("mismatched double vs triple", () => {
+    assertExtMdastConformance("$$x$$$", MATH);
+  });
+
+  test("double dollar inline multiline with spaces", () => {
+    assertExtMdastConformance(
+      "When $a \\ne 0$, there are two solutions to $(ax^2 + bx + c = 0)$ and they are\n$$ x = {-b \\pm \\sqrt{b^2-4ac} \\over 2a} $$",
+      MATH,
+    );
+  });
+
+  test("empty double dollar inline", () => {
+    assertExtMdastConformance("Oops empty $$ expression.", MATH);
+  });
+
+  test("code first then double dollar", () => {
+    assertExtMdastConformance("`Code $$ first` then $$ display", MATH);
+  });
 });
 
 describe("Math HAST conformance", () => {
@@ -200,5 +263,36 @@ describe("Math HAST conformance", () => {
 
   test("escaped dollars inside math", () => {
     assertExtHastConformance("Money adds: $\\$X + \\$Y = \\$Z$.", MATH);
+  });
+
+  test("double dollar inline with spaces stripped", () => {
+    assertExtHastConformance("$$ Display `first $$ then` code", MATH);
+  });
+
+  test("double dollar inline with leading and trailing spaces", () => {
+    assertExtHastConformance("$$ x $$", MATH);
+  });
+
+  test("single dollar with spaces stripped", () => {
+    assertExtHastConformance("$ x $", MATH);
+  });
+
+  test("many consecutive dollars no match", () => {
+    assertExtHastConformance("$x$$$$$$$y$$", MATH);
+  });
+
+  test("triple dollar matching triple dollar", () => {
+    assertExtHastConformance("$$$x$$$", MATH);
+  });
+
+  test("mismatched triple vs double", () => {
+    assertExtHastConformance("$$$x$$", MATH);
+  });
+
+  test("double dollar inline multiline with spaces", () => {
+    assertExtHastConformance(
+      "When $a \\ne 0$, there are two solutions to $(ax^2 + bx + c = 0)$ and they are\n$$ x = {-b \\pm \\sqrt{b^2-4ac} \\over 2a} $$",
+      MATH,
+    );
   });
 });
