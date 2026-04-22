@@ -922,28 +922,6 @@ fn convert_children_with_newlines(
     }
 }
 
-/// Convert children, unwrapping paragraphs (emitting their children directly).
-/// Used for tight list items where the MDAST has paragraph wrappers but
-/// HTML output should not have `<p>` tags.
-fn convert_children_unwrap_paragraphs(
-    node_id: u32,
-    view: &Arena,
-    builder: &mut ArenaBuilder,
-    ctx: &ConvertCtx<'_, '_>,
-) {
-    let children = view.get_children(node_id);
-    for &child_id in children {
-        let child = view.get_node(child_id);
-        if MdastNodeType::from_u8(child.node_type) == Some(MdastNodeType::Paragraph) {
-            convert_children(child_id, view, builder, ctx);
-        } else {
-            add_text_node(builder, "\n");
-            convert_node(child_id, view, builder, ctx);
-            add_text_node(builder, "\n");
-        }
-    }
-}
-
 fn emit_checkbox(builder: &mut ArenaBuilder, item_data: ListItemData) {
     let type_ref = builder.alloc_string("checkbox");
     if item_data.checked == 1 {
@@ -995,15 +973,14 @@ fn convert_children_with_newlines_task(
         let child_node = view.get_node(child_id);
         let is_para =
             MdastNodeType::from_u8(child_node.node_type) == Some(MdastNodeType::Paragraph);
-        if first && is_para && task.is_some() {
-            let td = task.unwrap();
+        if let (true, true, Some(td)) = (first, is_para, task) {
             open_element(builder, "p");
             copy_position(child_id, view, builder);
             emit_checkbox(builder, td);
             convert_children(child_id, view, builder, ctx);
             builder.close_node();
-        } else if first && task.is_some() {
-            emit_checkbox(builder, task.unwrap());
+        } else if let (true, Some(td)) = (first, task) {
+            emit_checkbox(builder, td);
             convert_node(child_id, view, builder, ctx);
         } else {
             convert_node(child_id, view, builder, ctx);
@@ -1022,20 +999,25 @@ fn convert_children_unwrap_paragraphs_task(
 ) {
     let children = view.get_children(node_id);
     let mut first = true;
+    let mut prev_was_block = false;
     for &child_id in children {
         let child = view.get_node(child_id);
         if MdastNodeType::from_u8(child.node_type) == Some(MdastNodeType::Paragraph) {
-            if first && task.is_some() {
-                emit_checkbox(builder, task.unwrap());
+            if let (true, Some(td)) = (first, task) {
+                emit_checkbox(builder, td);
             }
             convert_children(child_id, view, builder, ctx);
+            prev_was_block = false;
         } else {
-            add_text_node(builder, "\n");
-            if first && task.is_some() {
-                emit_checkbox(builder, task.unwrap());
+            if !prev_was_block {
+                add_text_node(builder, "\n");
+            }
+            if let (true, Some(td)) = (first, task) {
+                emit_checkbox(builder, td);
             }
             convert_node(child_id, view, builder, ctx);
             add_text_node(builder, "\n");
+            prev_was_block = true;
         }
         first = false;
     }
@@ -1108,44 +1090,6 @@ fn convert_table_row(
         add_text_node(builder, "\n");
     }
     builder.close_node(); // tr
-}
-
-/// Check if a paragraph contains only MDX nodes and/or whitespace text.
-/// If so, the paragraph should be "unraveled" (children output without `<p>`).
-fn is_mdx_only_paragraph(node_id: u32, view: &Arena) -> bool {
-    let children = view.get_children(node_id);
-    if children.is_empty() {
-        return false;
-    }
-
-    let mut has_mdx = false;
-    for &child_id in children {
-        let child = view.get_node(child_id);
-        match MdastNodeType::from_u8(child.node_type) {
-            Some(
-                MdastNodeType::MdxJsxFlowElement
-                | MdastNodeType::MdxJsxTextElement
-                | MdastNodeType::MdxFlowExpression
-                | MdastNodeType::MdxTextExpression,
-            ) => {
-                has_mdx = true;
-            }
-            Some(MdastNodeType::Text) => {
-                // Only allow whitespace-only text
-                let data = view.get_type_data(child_id);
-                if !data.is_empty() {
-                    let sr = decode_string_ref_data(data);
-                    let text = view.get_str(sr);
-                    if !text.chars().all(|c| c.is_ascii_whitespace()) {
-                        return false;
-                    }
-                }
-            }
-            _ => return false,
-        }
-    }
-
-    has_mdx
 }
 
 fn convert_mdx_jsx_element(

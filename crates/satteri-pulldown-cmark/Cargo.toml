@@ -24,4 +24,5 @@ oxc_span = { workspace = true }
 [features]
 default = ["std"]
 std = ["memchr/std"]
+simd = []
 gen-tests = ["std"]

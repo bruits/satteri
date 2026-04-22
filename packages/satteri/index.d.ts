@@ -52,8 +52,6 @@ export declare function getNodeData(handle: ArenaHandle, nodeId: number): string
 export interface JsFeatures {
   /** GFM: tables, footnotes, strikethrough, task lists. Default: true. */
   gfm?: boolean
-  /** GitHub-style blockquote alerts ([!NOTE], [!TIP], etc.). Default: true. */
-  githubAlerts?: boolean
   /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
   frontmatter?: boolean
   /** Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true. */
@@ -72,8 +70,6 @@ export interface JsFeatures {
   smartPunctuation?: boolean
   /** Granular smart-punctuation control (overrides `smart_punctuation`). */
   smartPunctuationOptions?: JsSmartPunctuationOptions
-  /** Definition lists. Default: false. */
-  definitionList?: boolean
 }
 
 /** MDX compile options passed from JavaScript. */

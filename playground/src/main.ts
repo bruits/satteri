@@ -81,7 +81,7 @@ const smartPunctOptions = $<HTMLFieldSetElement>("#smart-punct-options");
 const featSmartQuotes = $<HTMLInputElement>("#feat-smart-quotes");
 const featSmartDashes = $<HTMLInputElement>("#feat-smart-dashes");
 const featSmartEllipses = $<HTMLInputElement>("#feat-smart-ellipses");
-const featDefinitionList = $<HTMLInputElement>("#feat-definition-list");
+
 
 let currentMode: Mode = "markdown";
 let activeTab: Tab = "mdast";
@@ -181,7 +181,6 @@ function getFeatures() {
           ellipses: featSmartEllipses.checked,
         },
       }),
-    definitionList: featDefinitionList.checked,
   };
 }
 
@@ -517,7 +516,6 @@ document.querySelectorAll('input[name="mode"]').forEach((el) => {
   featSubscript,
   featWikilinks,
   featSmartPunctuation,
-  featDefinitionList,
 ].forEach((el) => el.addEventListener("change", scheduleCompile));
 
 featSmartPunctuation.addEventListener("change", () => {

@@ -101,6 +101,26 @@ describe("MDAST conformance: lists", () => {
   test("task list (GFM)", () => {
     assertMdastConformance("- [x] done\n- [ ] todo");
   });
+
+  test("loose list with nested list in first item", () => {
+    assertMdastConformance("* *\n\n* text*");
+  });
+
+  test("spread only within item, not between items", () => {
+    assertMdastConformance("gpr\n\n- e4smu\n- 245t2hw\n\n  m27rz3ex9");
+  });
+
+  test("empty list item position", () => {
+    assertMdastConformance("1.  \n2. text");
+  });
+
+  test("empty unordered list item with continuation whitespace", () => {
+    assertMdastConformance("+\n ");
+  });
+
+  test("empty list item with trailing spaces", () => {
+    assertMdastConformance("*  \n ");
+  });
 });
 
 describe("MDAST conformance: tables (GFM)", () => {
@@ -120,6 +140,12 @@ describe("MDAST conformance: HTML in markdown", () => {
 
   test("block HTML", () => {
     assertMdastConformance("<div>block</div>");
+  });
+});
+
+describe("MDAST conformance: images", () => {
+  test("nested image in image alt text", () => {
+    assertMdastConformance("![foo ![bar](/url)](/url2)");
   });
 });
 
@@ -238,6 +264,14 @@ describe("MDAST conformance: edge cases", () => {
 
   test("tilde fence with content", () => {
     assertMdastConformance("~~~)_>u");
+  });
+
+  test("indented code block with trailing blank indented line", () => {
+    assertMdastConformance("\tl\n\t");
+  });
+
+  test("indented code block with trailing blank indented line (html content)", () => {
+    assertMdastConformance("\t<@9\\s\n\t");
   });
 
   test("html block with backslash newline", () => {

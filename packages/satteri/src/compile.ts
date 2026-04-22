@@ -33,7 +33,6 @@ function featuresToNative(features: Features | undefined) {
   if (!features) return undefined;
   const result: Record<string, unknown> = {};
   if (features.gfm !== undefined) result.gfm = features.gfm;
-  if (features.githubAlerts !== undefined) result.githubAlerts = features.githubAlerts;
   if (features.frontmatter !== undefined) result.frontmatter = features.frontmatter;
   if (features.math !== undefined) result.math = features.math;
   if (features.headingAttributes !== undefined)
@@ -49,7 +48,6 @@ function featuresToNative(features: Features | undefined) {
       result.smartPunctuation = features.smartPunctuation;
     }
   }
-  if (features.definitionList !== undefined) result.definitionList = features.definitionList;
   return result;
 }
 
@@ -198,8 +196,6 @@ export interface SmartPunctuationOptions {
 export interface Features {
   /** GFM: tables, footnotes, strikethrough, task lists. Default: true. */
   gfm?: boolean;
-  /** GitHub-style blockquote alerts ([!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION]). Default: false. */
-  githubAlerts?: boolean;
   /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
   frontmatter?: boolean;
   /** Math blocks and inline math. Default: true. */
@@ -223,8 +219,6 @@ export interface Features {
    * ```
    */
   smartPunctuation?: boolean | SmartPunctuationOptions;
-  /** Definition lists. Default: false. */
-  definitionList?: boolean;
 }
 
 export interface CompileOptions {

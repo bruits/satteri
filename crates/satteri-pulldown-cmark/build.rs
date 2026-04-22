@@ -150,7 +150,6 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
     const MATH: u32 = 1 << 10;
     const GFM: u32 = 1 << 11;
     const SUPERSCRIPT: u32 = 1 << 13;
-    const GITHUB_ALERTS: u32 = 1 << 21;
 
     match spec_name {
         // CommonMark spec: no extensions
@@ -162,7 +161,6 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         "gfm_tasklist" => GFM | TASKLISTS,
 
         // Extension-specific specs
-        "blockquotes_tags" => GITHUB_ALERTS,
         "footnotes" => FOOTNOTES,
         "heading_attrs" => HEADING_ATTRIBUTES,
         "math" => MATH,
@@ -180,14 +178,13 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
                 | MATH
                 | GFM
                 | SUPERSCRIPT
-                | GITHUB_ALERTS
         }
 
         // old_footnotes has negative tests that expect new-style footnotes to be active
         "old_footnotes" => FOOTNOTES,
 
         // Specs that use per-example suffix flags only
-        "container_extensions" | "definition_lists" | "metadata_blocks" | "wikilinks" => 0,
+        "container_extensions" | "metadata_blocks" | "wikilinks" => 0,
 
         other => panic!("Unknown spec file: {other}"),
     }

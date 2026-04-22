@@ -152,10 +152,6 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     // Code block close: write accumulated content.
                     ItemBody::FencedCodeBlock(_) | ItemBody::IndentCodeBlock => {
                         if let Some(mut content) = code_block_buf.take() {
-                            // Match remark / mdast-util-from-markdown: `Code.value`
-                            // never carries the trailing `\n` before the closing
-                            // fence. mdast-util-to-hast re-adds it at render time;
-                            // our mdast→hast converter does the same.
                             if content.ends_with('\n') {
                                 content.pop();
                             }
@@ -167,17 +163,62 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                                 data[16..24].copy_from_slice(&sr.as_bytes());
                                 builder.set_data_current(&data);
                             }
+                            let mut code_end = end;
+                            let mut code_end_line = end_line;
+                            let mut code_end_col = end_col;
+                            if matches!(inner.tree[ix].item.body, ItemBody::IndentCodeBlock)
+                            {
+                                let src = source.as_bytes();
+                                let mut pos = code_end as usize;
+                                while pos < src.len() {
+                                    if src[pos] == b'\r' {
+                                        pos += 1;
+                                    }
+                                    if pos < src.len() && src[pos] == b'\n' {
+                                        pos += 1;
+                                    }
+                                    if pos >= src.len() {
+                                        break;
+                                    }
+                                    let line_start = pos;
+                                    let is_indented = matches!(
+                                        src.get(pos),
+                                        Some(b'\t')
+                                    ) || src[pos..].starts_with(b"    ");
+                                    if !is_indented {
+                                        break;
+                                    }
+                                    while pos < src.len()
+                                        && src[pos] != b'\n'
+                                        && src[pos] != b'\r'
+                                    {
+                                        pos += 1;
+                                    }
+                                    let line_content = &src[line_start..pos];
+                                    let all_ws = line_content
+                                        .iter()
+                                        .all(|&b| b == b' ' || b == b'\t');
+                                    if !all_ws {
+                                        break;
+                                    }
+                                    code_end = pos as u32;
+                                    let (el, ec) =
+                                        cursor.offset_to_line_col(code_end);
+                                    code_end_line = el;
+                                    code_end_col = ec;
+                                }
+                            }
                             let node = builder.arena_ref().get_node(id);
                             let orig_start = node.start_offset;
                             let orig_start_line = node.start_line;
                             let orig_start_col = node.start_column;
                             builder.set_position_current(
                                 orig_start,
-                                end,
+                                code_end,
                                 orig_start_line,
                                 orig_start_col,
-                                end_line,
-                                end_col,
+                                code_end_line,
+                                code_end_col,
                             );
                             builder.close_node();
                         }
@@ -238,7 +279,10 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     ItemBody::Image(_) => {
                         if image_depth > 0 {
                             image_depth -= 1;
-                        } else if let Some(alt_text) = image_alt_buf.take() {
+                            inner.tree.next_sibling(ix);
+                            continue;
+                        }
+                        if let Some(alt_text) = image_alt_buf.take() {
                             let alt_ref = builder.alloc_string(&alt_text);
                             let id = builder.current_node_id();
                             let existing_data = builder.arena_ref().get_type_data(id).to_vec();
@@ -248,7 +292,6 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                                 builder.set_data_current(&data);
                             }
                         }
-                        // Update end position and close.
                         let id = builder.current_node_id();
                         let node = builder.arena_ref().get_node(id);
                         let orig_start = node.start_offset;
@@ -273,16 +316,19 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             let mut found = false;
                             while let Some(c) = child {
                                 if let Some(pe) = prev_end {
-                                    let gap = &bytes[pe..inner.tree[c].item.start];
-                                    let has_blank = gap.windows(2).any(|w| {
-                                        (w[0] == b'\n' && w[1] == b'\n')
-                                            || (w[0] == b'\n' && w[1] == b'\r')
-                                    }) || gap.windows(3).any(|w| {
-                                        w[0] == b'\r' && w[1] == b'\n' && w[2] == b'\r'
-                                    });
-                                    if has_blank {
-                                        found = true;
-                                        break;
+                                    let scan_start = if pe > 0 { pe - 1 } else { pe };
+                                    let scan_end = inner.tree[c].item.start;
+                                    if scan_start < scan_end {
+                                        let region = &bytes[scan_start..scan_end];
+                                        let has_blank = region.windows(2).any(|w| {
+                                            w[0] == b'\n' && (w[1] == b'\n' || w[1] == b'\r')
+                                        }) || region.windows(3).any(|w| {
+                                            w[0] == b'\r' && w[1] == b'\n' && w[2] == b'\r'
+                                        });
+                                        if has_blank {
+                                            found = true;
+                                            break;
+                                        }
                                     }
                                 }
                                 prev_end = Some(inner.tree[c].item.end);
@@ -307,7 +353,16 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                                 let lc = builder.arena_ref().get_node(last_child);
                                 (lc.end_offset, lc.end_line, lc.end_column)
                             } else {
-                                (end, end_line, end_col)
+                                let src = source.as_bytes();
+                                let start_usize = orig_start as usize;
+                                let end_usize = end as usize;
+                                let first_nl = src[start_usize..end_usize]
+                                    .iter()
+                                    .position(|&b| b == b'\n' || b == b'\r')
+                                    .map(|p| (start_usize + p) as u32)
+                                    .unwrap_or(end);
+                                let (el, ec) = cursor.offset_to_line_col(first_nl);
+                                (first_nl, el, ec)
                             };
                         builder.set_position_current(
                             orig_start,
@@ -319,27 +374,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         );
                         builder.close_node();
                     }
-                    ItemBody::List(is_tight, _, _) => {
-                        let id = builder.current_node_id();
-                        let any_item_spread = {
-                            let children = builder.arena_ref().get_children(id).to_vec();
-                            children.iter().any(|&child_id| {
-                                let cdata = builder.arena_ref().get_type_data(child_id);
-                                if cdata.len() >= 2 {
-                                    cdata[1] != 0
-                                } else {
-                                    false
-                                }
-                            })
-                        };
-                        if !is_tight && !any_item_spread {
-                            let existing = builder.arena_ref().get_type_data(id).to_vec();
-                            if existing.len() >= 8 && existing[5] == 0 {
-                                let mut data = existing;
-                                data[5] = 1;
-                                builder.set_data_current(&data);
-                            }
-                        }
+                    ItemBody::List(_is_tight, _, _) => {
                         let id = builder.current_node_id();
                         let node = builder.arena_ref().get_node(id);
                         let orig_start = node.start_offset;
@@ -361,6 +396,34 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             cont_end_col,
                         );
                         builder.close_node();
+                        let children = builder.arena_ref().get_children(id).to_vec();
+                        let has_blank_between_items = {
+                            let mut found = false;
+                            let mut prev_end_line: Option<u32> = None;
+                            for &child_id in &children {
+                                let child_node = builder.arena_ref().get_node(child_id);
+                                if let Some(pel) = prev_end_line {
+                                    if child_node.start_line > pel + 1 {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                prev_end_line = Some(child_node.end_line);
+                            }
+                            found
+                        };
+                        if has_blank_between_items {
+                            let existing =
+                                builder.arena_ref().get_type_data(id).to_vec();
+                            if existing.len() >= 8 && existing[5] == 0 {
+                                let mut data = existing;
+                                data[5] = 1;
+                                builder.arena_mut().set_type_data(id, &data);
+                            }
+                        }
+                        // Already closed above; skip the common close_node path.
+                        inner.tree.next_sibling(ix);
+                        continue;
                     }
                     // Regular container close.
                     _ => {

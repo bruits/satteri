@@ -21,8 +21,6 @@ pub struct JsSmartPunctuationOptions {
 pub struct JsFeatures {
     /// GFM: tables, footnotes, strikethrough, task lists. Default: true.
     pub gfm: Option<bool>,
-    /// GitHub-style blockquote alerts ([!NOTE], [!TIP], etc.). Default: true.
-    pub github_alerts: Option<bool>,
     /// Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true.
     pub frontmatter: Option<bool>,
     /// Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true.
@@ -41,8 +39,6 @@ pub struct JsFeatures {
     pub smart_punctuation: Option<bool>,
     /// Granular smart-punctuation control (overrides `smart_punctuation`).
     pub smart_punctuation_options: Option<JsSmartPunctuationOptions>,
-    /// Definition lists. Default: false.
-    pub definition_list: Option<bool>,
 }
 
 fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulldown_cmark::Options {
@@ -50,7 +46,6 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
 
     let f = features.unwrap_or(JsFeatures {
         gfm: None,
-        github_alerts: None,
         frontmatter: None,
         math: None,
         heading_attributes: None,
@@ -60,7 +55,6 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
         wikilinks: None,
         smart_punctuation: None,
         smart_punctuation_options: None,
-        definition_list: None,
     });
 
     let mut opts = Options::empty();
@@ -71,9 +65,6 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
             | Options::ENABLE_STRIKETHROUGH
             | Options::ENABLE_TASKLISTS
             | Options::ENABLE_GFM;
-    }
-    if f.github_alerts.unwrap_or(false) {
-        opts |= Options::ENABLE_GITHUB_ALERTS;
     }
     if f.frontmatter.unwrap_or(true) {
         opts |= Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
@@ -109,9 +100,6 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
         }
     } else if f.smart_punctuation.unwrap_or(false) {
         opts |= Options::ENABLE_SMART_PUNCTUATION;
-    }
-    if f.definition_list.unwrap_or(false) {
-        opts |= Options::ENABLE_DEFINITION_LIST;
     }
     if mdx {
         opts |= Options::ENABLE_MDX;

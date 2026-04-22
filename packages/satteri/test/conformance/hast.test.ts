@@ -101,6 +101,14 @@ describe("HAST conformance: lists", () => {
   test("task list (GFM)", () => {
     assertHastConformance("- [x] done\n- [ ] todo");
   });
+
+  test("list item with blockquote and code (no extra newlines)", () => {
+    assertHastConformance("- a\n  > b\n  ```\n  c\n  ```\n- d\n");
+  });
+
+  test("loose list with nested list in first item", () => {
+    assertHastConformance("* *\n\n* text*");
+  });
 });
 
 describe("HAST conformance: tables (GFM)", () => {

@@ -1,4 +1,5 @@
 import { evaluate as mdxEvaluate } from "@mdx-js/mdx";
+import type { EvaluateOptions as MdxEvaluateOptions } from "@mdx-js/mdx";
 import {
   evaluate as satteriEvaluate,
   markdownToMdast,
@@ -6,7 +7,7 @@ import {
   markdownToHtml,
   mdxToJs,
 } from "../../src/index.js";
-import type { Features } from "../../src/index.js";
+import type { Features, EvaluateOptions } from "../../src/index.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import * as runtime from "react/jsx-runtime";
@@ -16,13 +17,14 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkDirective from "remark-directive";
-import { remarkDefinitionList, defListHastHandlers } from "remark-definition-list";
-import { remarkAlert } from "remark-github-blockquote-alert";
+
 import remarkRehype from "remark-rehype";
 import rehypeStringify from "rehype-stringify";
 import type { Nodes } from "hast";
-import type { Processor } from "unified";
 import { expect } from "vitest";
+
+const mdxRuntime = runtime as unknown as Pick<MdxEvaluateOptions, "Fragment" | "jsx" | "jsxs">;
+const satteriRuntime = runtime as unknown as Pick<EvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 
 const mdastProcessor = unified().use(remarkParse).use(remarkGfm);
 const hastProcessor = unified()
@@ -35,30 +37,28 @@ const htmlProcessor = unified()
   .use(remarkRehype, { allowDangerousHtml: true })
   .use(rehypeStringify, { allowDangerousHtml: true });
 
-export type ExtensionSet = "math" | "frontmatter" | "directive" | "definitionList" | "gfmAlerts";
+export type ExtensionSet = "math" | "frontmatter" | "directive";
 
-function buildMdastProcessor(extensions: ExtensionSet[]): Processor {
-  let p = unified().use(remarkParse).use(remarkGfm);
+interface TestProcessor {
+  parse(md: string): import("mdast").Root;
+  runSync(tree: import("mdast").Root): Nodes;
+  processSync(md: string): { toString(): string };
+  use(plugin: unknown, ...settings: unknown[]): this;
+}
+
+function buildMdastProcessor(extensions: ExtensionSet[]): TestProcessor {
+  let p: TestProcessor = unified().use(remarkParse).use(remarkGfm) as unknown as TestProcessor;
   for (const ext of extensions) {
     if (ext === "math") p = p.use(remarkMath);
     if (ext === "frontmatter") p = p.use(remarkFrontmatter, ["yaml", "toml"]);
     if (ext === "directive") p = p.use(remarkDirective);
-    if (ext === "definitionList") p = p.use(remarkDefinitionList);
-    if (ext === "gfmAlerts") p = p.use(remarkAlert);
   }
   return p;
 }
 
-function buildHastProcessor(extensions: ExtensionSet[]): Processor {
-  let p = buildMdastProcessor(extensions);
-  const handlers: Record<string, unknown> = {};
-  if (extensions.includes("definitionList")) {
-    Object.assign(handlers, defListHastHandlers);
-  }
-  return p.use(remarkRehype, {
-    allowDangerousHtml: true,
-    handlers: Object.keys(handlers).length > 0 ? handlers : undefined,
-  } as any);
+function buildHastProcessor(extensions: ExtensionSet[]): TestProcessor {
+  const p = buildMdastProcessor(extensions);
+  return p.use(remarkRehype, { allowDangerousHtml: true });
 }
 
 function featuresToSatteri(extensions: ExtensionSet[]): Features {
@@ -67,8 +67,6 @@ function featuresToSatteri(extensions: ExtensionSet[]): Features {
     if (ext === "math") features.math = true;
     if (ext === "frontmatter") features.frontmatter = true;
     if (ext === "directive") features.directive = true;
-    if (ext === "definitionList") features.definitionList = true;
-    if (ext === "gfmAlerts") features.githubAlerts = true;
   }
   return features;
 }
@@ -93,7 +91,7 @@ export function normalizeAlignToStyle(node: AnyNode): AnyNode {
   return out;
 }
 
-function serialize(node: unknown): unknown {
+function serialize(node: unknown): AnyNode {
   return JSON.parse(JSON.stringify(node));
 }
 
@@ -140,11 +138,11 @@ const mathHtmlProcessor = unified()
 const MATH_FEATURES: Features = { math: true };
 
 export function referenceMathMdast(md: string): unknown {
-  return stripData(serialize(mathMdastProcessor.parse(md)) as AnyNode);
+  return stripData(serialize(mathMdastProcessor.parse(md)));
 }
 
 export function satteriMathMdast(md: string): unknown {
-  return stripData(serialize(markdownToMdast(md, { features: MATH_FEATURES })) as AnyNode);
+  return stripData(serialize(markdownToMdast(md, { features: MATH_FEATURES })));
 }
 
 export function referenceMathHast(md: string): unknown {
@@ -153,7 +151,7 @@ export function referenceMathHast(md: string): unknown {
 }
 
 export function referenceMathHtml(md: string): string {
-  return normalizeHtmlForComparison(mathHtmlProcessor.processSync(md).toString());
+  return normalizeHtmlForComparison(String(mathHtmlProcessor.processSync(md)));
 }
 
 export function satteriMathHast(md: string): unknown {
@@ -161,7 +159,9 @@ export function satteriMathHast(md: string): unknown {
 }
 
 export function satteriMathHtml(md: string): string {
-  return normalizeHtmlForComparison(markdownToHtml(md, { features: MATH_FEATURES }));
+  const result = markdownToHtml(md, { features: MATH_FEATURES });
+  if (typeof result !== "string") throw new Error("expected sync result");
+  return normalizeHtmlForComparison(result);
 }
 
 const fmMdastProcessor = buildMdastProcessor(["frontmatter"]);
@@ -181,7 +181,7 @@ export function referenceFmHast(md: string): unknown {
 }
 
 export function referenceFmHtml(md: string): string {
-  return normalizeHtmlForComparison(fmHtmlProcessor.processSync(md).toString());
+  return normalizeHtmlForComparison(String(fmHtmlProcessor.processSync(md)));
 }
 
 export function satteriFmMdast(md: string): unknown {
@@ -193,7 +193,9 @@ export function satteriFmHast(md: string): unknown {
 }
 
 export function satteriFmHtml(md: string): string {
-  return normalizeHtmlForComparison(markdownToHtml(md, { features: FM_FEATURES }));
+  const result = markdownToHtml(md, { features: FM_FEATURES });
+  if (typeof result !== "string") throw new Error("expected sync result");
+  return normalizeHtmlForComparison(result);
 }
 
 export function assertMdastConformance(md: string): void {
@@ -207,8 +209,8 @@ export function assertHastConformance(md: string): void {
 export function assertExtMdastConformance(md: string, extensions: ExtensionSet[]): void {
   const proc = buildMdastProcessor(extensions);
   const features = featuresToSatteri(extensions);
-  const expected = stripData(serialize(proc.parse(md)) as AnyNode);
-  const actual = stripData(serialize(markdownToMdast(md, { features })) as AnyNode);
+  const expected = stripData(serialize(proc.parse(md)));
+  const actual = stripData(serialize(markdownToMdast(md, { features })));
   expect(actual).toEqual(expected);
 }
 
@@ -251,14 +253,14 @@ export async function assertMdxConformance(
   components: Record<string, unknown> = {},
 ): Promise<void> {
   const { default: MdxComponent } = (await mdxEvaluate(input, {
-    ...runtime,
+    ...mdxRuntime,
   })) as { default: Function };
-  const mdxHtml = renderToStaticMarkup(createElement(MdxComponent as any, { components }));
+  const mdxHtml = renderToStaticMarkup(createElement(MdxComponent as React.FC<Record<string, unknown>>, { components }));
 
   const { default: SatComponent } = await satteriEvaluate(input, {
-    ...runtime,
+    ...satteriRuntime,
   });
-  const satHtml = renderToStaticMarkup(createElement(SatComponent as any, { components }));
+  const satHtml = renderToStaticMarkup(createElement(SatComponent as React.FC<Record<string, unknown>>, { components }));
 
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }
@@ -266,7 +268,7 @@ export async function assertMdxConformance(
 export async function assertBothReject(input: string): Promise<void> {
   let mdxOk = true;
   try {
-    await mdxEvaluate(input, { ...runtime });
+    await mdxEvaluate(input, { ...mdxRuntime });
   } catch {
     mdxOk = false;
   }

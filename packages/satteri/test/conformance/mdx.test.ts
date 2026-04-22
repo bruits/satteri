@@ -369,4 +369,8 @@ describe("MDX conformance: markdown elements", () => {
   test("heading with inline code", async () => {
     await assertMdxConformance("## The `config` object");
   });
+
+  test("loose list wraps items in paragraphs", async () => {
+    await assertMdxConformance("- a\n- b\n\n- c\n- d");
+  });
 });
