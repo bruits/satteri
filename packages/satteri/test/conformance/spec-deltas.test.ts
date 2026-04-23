@@ -51,6 +51,22 @@ describe("CommonMark spec deltas: URL encoding", () => {
   });
 });
 
+describe("CommonMark spec deltas: list spread detection", () => {
+  test("spec 259: nested blockquote ordered list with blank continuation", () => {
+    assertHastConformance("   > > 1.  one\n>>\n>>     two\n");
+  });
+
+  test("spec 325: list item with sublist and trailing content becomes loose", () => {
+    assertHastConformance("* foo\n  * bar\n\n  baz\n");
+  });
+});
+
+describe("CommonMark spec deltas: HTML block in list item", () => {
+  test("regression 175: code block followed by HTML block in list item", () => {
+    assertHastConformance("*\n      <div>\n     <div>\n");
+  });
+});
+
 describe("CommonMark spec deltas: image alt text", () => {
   // Skipped: triggers a crash in HAST conversion (close_node called with empty stack)
   test.skip("spec 574: nested image in image alt", () => {

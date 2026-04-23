@@ -206,6 +206,10 @@ export function assertHastConformance(md: string): void {
   expect(satteriHast(md)).toEqual(referenceHast(md));
 }
 
+export function assertHtmlConformance(md: string): void {
+  expect(satteriHtml(md)).toEqual(referenceHtml(md));
+}
+
 export function assertExtMdastConformance(md: string, extensions: ExtensionSet[]): void {
   const proc = buildMdastProcessor(extensions);
   const features = featuresToSatteri(extensions);

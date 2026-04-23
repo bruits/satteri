@@ -229,6 +229,13 @@ impl ArenaBuilder {
         }
     }
 
+    /// Children already collected for the node currently on top of the stack.
+    /// Unlike `Arena::get_children`, this works before the node is closed.
+    pub fn current_pending_children(&self) -> &[u32] {
+        let children_start = self.stack.last().map(|(_, cs)| *cs as usize).unwrap_or(0);
+        &self.pending_children[children_start..]
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn update_leaf_full(
         &mut self,

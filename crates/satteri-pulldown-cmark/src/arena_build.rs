@@ -310,29 +310,17 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     ItemBody::ListItem(_) => {
                         let id = builder.current_node_id();
                         let is_spread = {
-                            let bytes = source.as_bytes();
-                            let mut child = inner.tree[ix].child;
-                            let mut prev_end: Option<usize> = None;
                             let mut found = false;
-                            while let Some(c) = child {
-                                if let Some(pe) = prev_end {
-                                    let scan_start = if pe > 0 { pe - 1 } else { pe };
-                                    let scan_end = inner.tree[c].item.start;
-                                    if scan_start < scan_end {
-                                        let region = &bytes[scan_start..scan_end];
-                                        let has_blank = region.windows(2).any(|w| {
-                                            w[0] == b'\n' && (w[1] == b'\n' || w[1] == b'\r')
-                                        }) || region.windows(3).any(|w| {
-                                            w[0] == b'\r' && w[1] == b'\n' && w[2] == b'\r'
-                                        });
-                                        if has_blank {
-                                            found = true;
-                                            break;
-                                        }
+                            let mut prev_end_line: Option<u32> = None;
+                            for &child_id in builder.current_pending_children() {
+                                let child_node = builder.arena_ref().get_node(child_id);
+                                if let Some(pel) = prev_end_line {
+                                    if child_node.start_line > pel + 1 {
+                                        found = true;
+                                        break;
                                     }
                                 }
-                                prev_end = Some(inner.tree[c].item.end);
-                                child = inner.tree[c].next;
+                                prev_end_line = Some(child_node.end_line);
                             }
                             found
                         };

@@ -121,6 +121,14 @@ describe("MDAST conformance: lists", () => {
   test("empty list item with trailing spaces", () => {
     assertMdastConformance("*  \n ");
   });
+
+  test("spec 259: nested blockquote ordered list with blank continuation", () => {
+    assertMdastConformance("   > > 1.  one\n>>\n>>     two\n");
+  });
+
+  test("spec 325: list item with sublist and trailing content becomes loose", () => {
+    assertMdastConformance("* foo\n  * bar\n\n  baz\n");
+  });
 });
 
 describe("MDAST conformance: tables (GFM)", () => {

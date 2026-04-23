@@ -3045,7 +3045,6 @@ fn regression_test_175() {
 <li>
 <pre><code>&lt;div&gt;
 </code></pre>
-
    <div>
 </li>
 </ul>
