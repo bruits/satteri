@@ -1,5 +1,9 @@
 import { describe, test } from "vitest";
-import { assertHastConformance, assertMdastConformance } from "./helpers.js";
+import {
+  assertHastConformance,
+  assertHtmlConformance,
+  assertMdastConformance,
+} from "./helpers.js";
 
 describe("CommonMark spec deltas: HTML blocks with following content", () => {
   test("spec 148: HTML block in table cell with following paragraph", () => {
@@ -68,8 +72,56 @@ describe("CommonMark spec deltas: HTML block in list item", () => {
 });
 
 describe("CommonMark spec deltas: image alt text", () => {
-  // Skipped: triggers a crash in HAST conversion (close_node called with empty stack)
-  test.skip("spec 574: nested image in image alt", () => {
+  test("spec 574: nested image in image alt", () => {
     assertHastConformance("![foo ![bar](/url)](/url2)\n");
+  });
+});
+
+describe("CommonMark spec deltas: fuzz-discovered regressions", () => {
+  test("fuzz: GFM table with single-char header row", () => {
+    assertMdastConformance("r\n|-");
+  });
+
+  test("fuzz: invalid HTML comment syntax stays as text", () => {
+    assertMdastConformance("<!~@7reg>)");
+  });
+
+  test("fuzz: GFM table with punctuation-only header", () => {
+    assertHastConformance("06*!@)(\n-|");
+  });
+
+  test("fuzz: invalid HTML tag syntax stays as paragraph text", () => {
+    assertHastConformance("<c-!@9>#>}");
+  });
+
+  test("fuzz: single-tilde strikethrough around content with inner tildes", () => {
+    assertHastConformance("~o5o~~#(~");
+  });
+
+  test("fuzz: GFM table with escaped backslash before delimiter", () => {
+    assertHtmlConformance("]g\\\n|-");
+  });
+
+  // A line starting with `- ` (bullet-list marker) takes precedence over being
+  // a GFM table delimiter row, even when the column counts match.
+  test("bullet-list marker beats table delimiter (no backslash)", () => {
+    assertHtmlConformance("a | b\n- | -\n1 | 2\n");
+  });
+
+  test("bullet-list marker beats table delimiter (with hard-break backslash)", () => {
+    assertHtmlConformance("a | b\\\n- | -\n1 | 2\n");
+  });
+
+  // Remark keeps any `{...}` suffix in a heading as plain text rather than
+  // stripping it as an attribute block (heading attributes aren't part of
+  // CommonMark / GFM).
+  test("fuzz: heading with brace suffix stays as text", () => {
+    assertHastConformance("# { ()g}");
+  });
+
+  // Backtick in HTML attribute values is serialized as `&#x60;` to match
+  // rehype-stringify (which escapes `` ` `` for legacy-browser safety).
+  test("fuzz: backtick in code-fence language is entity-encoded", () => {
+    assertHtmlConformance("~~~r`|");
   });
 });

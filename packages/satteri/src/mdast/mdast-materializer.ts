@@ -42,8 +42,10 @@ export const TYPE_NAMES: Record<number, string> = {
   104: "mdxjsEsm",
 };
 
-// Leaf node types that do NOT have children
-const LEAF_TYPES = new Set([10, 13, 7, 8, 14, 3, 16, 20, 25, 26, 27, 28, 102, 103, 104]);
+// Leaf node types that do NOT have children.
+// Type 9 = `definition`; type 18 = `imageReference` — leaves per mdast spec
+// (imageReference carries `alt` as a string, not children).
+const LEAF_TYPES = new Set([9, 10, 13, 7, 8, 14, 3, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104]);
 
 /**
  * Add type-specific lazy properties to a node object.
@@ -114,10 +116,15 @@ function addTypeProperties(
       break;
 
     case 17: // linkReference
-    case 18: // imageReference
     case 20: // footnoteReference
       lazyGroup(node, ["identifier", "label", "referenceType"], () =>
         reader.getReferenceData(nodeId),
+      );
+      break;
+
+    case 18: // imageReference — leaf with alt (remark treats it as a void node)
+      lazyGroup(node, ["identifier", "label", "referenceType", "alt"], () =>
+        reader.getImageReferenceData(nodeId),
       );
       break;
 

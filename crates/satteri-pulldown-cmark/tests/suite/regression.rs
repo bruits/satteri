@@ -2085,12 +2085,15 @@ fn regression_test_118() {
 
 #[test]
 fn regression_test_119() {
+    // The blank line in the would-be reference label breaks the definition;
+    // remark renders both halves as paragraphs and the GFM autolink pass
+    // then turns the bare URL into an anchor.
     let original = r##"[x\
 
 ]: https://rust-lang.org
 "##;
     let expected = r##"<p>[x\</p>
-<p>]: https://rust-lang.org</p>
+<p>]: <a href="https://rust-lang.org">https://rust-lang.org</a></p>
 "##;
 
     test_markdown_html(original, expected, 2108510, false, false, false, false, false, false, false);
@@ -2204,12 +2207,15 @@ https://rust-lang.org
 
 #[test]
 fn regression_test_123() {
+    // `----------` is a setext-H2 underline; it breaks the reference label,
+    // leaving `Second try]: ...` as a plain paragraph whose bare URL is
+    // picked up by the GFM autolink pass. Matches remark.
     let original = r##"[First try
 ----------
 Second try]: https://rust-lang.org
 "##;
     let expected = r##"<h2>[First try</h2>
-<p>Second try]: https://rust-lang.org</p>
+<p>Second try]: <a href="https://rust-lang.org">https://rust-lang.org</a></p>
 "##;
 
     test_markdown_html(original, expected, 2108510, false, false, false, false, false, false, false);
@@ -2457,6 +2463,8 @@ List can interrupt the paragraph at the start of a link definition if it starts 
 
 #[test]
 fn regression_test_138() {
+    // Same pattern as test_123: the setext underline breaks the reference,
+    // and the leftover paragraph's bare URL becomes an autolink. Matches remark.
     let original = r##"[first
 -
 second]: https://example.com
@@ -2466,7 +2474,7 @@ second]: https://example.com
 second]
 "##;
     let expected = r##"<h2>[first</h2>
-<p>second]: https://example.com</p>
+<p>second]: <a href="https://example.com">https://example.com</a></p>
 <h2>[first</h2>
 <p>second]</p>
 "##;
@@ -2721,15 +2729,17 @@ baz`</li>
 
 #[test]
 fn regression_test_153() {
+    // A nested sublist marker breaks the `[...](url)` link; remark leaves the
+    // `](https://...)` suffix as literal text with the URL autolinked.
     let original = r##"- [foo
-  - - 
+  - -
   baz](https://example.com)
 "##;
     let expected = r##"<ul>
 <li>[foo
 <ul>
 <li>-
-baz](https://example.com)</li>
+baz](<a href="https://example.com">https://example.com</a>)</li>
 </ul>
 </li>
 </ul>
@@ -3131,11 +3141,14 @@ fn regression_test_181() {
 
 #[test]
 fn regression_test_182() {
+    // Apostrophe in attribute values is serialized as `&#x27;` (hex) to match
+    // rehype-stringify, which is the conformance target. pulldown-cmark used to
+    // emit `&#39;` (decimal).
     let original = r##"[link]: test '\''
 
 [link]
 "##;
-    let expected = r##"<p><a href="test" title="&#39;">link</a></p>
+    let expected = r##"<p><a href="test" title="&#x27;">link</a></p>
 "##;
 
     test_markdown_html(original, expected, 2108510, false, false, false, false, false, false, false);
@@ -3353,11 +3366,14 @@ fn regression_test_196() {
 
 #[test]
 fn regression_test_197() {
+    // The second `[40](...)` exceeds pulldown-cmark's balanced-parens limit so
+    // it never becomes a link; the bare URL inside the parens is then picked
+    // up by the GFM autolink pass. Matches remark.
     let original = r##"[30](https://rust.org/something%3A((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))
 [40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))
 "##;
     let expected = r##"<p><a href="https://rust.org/something%3A((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))">30</a>
-[40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))</p>
+[40](<a href="https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))">https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))</a>)</p>
 "##;
 
     test_markdown_html(original, expected, 2108510, false, true, false, false, false, false, false);
@@ -3365,13 +3381,13 @@ fn regression_test_197() {
 
 #[test]
 fn regression_test_198() {
-    let original = r##"- [x]		
-\
--
-"##;
+    // Task-list marker followed by tab-whitespace and a newline skips that
+    // trailing whitespace so the paragraph starts on the next line's content.
+    // Matches remark (which is the conformance target); pulldown-cmark used to
+    // include the trailing whitespace + newline inside the task item's cell.
+    let original = "- [x]\t\t\n\\\n-\n";
     let expected = r##"<ul class="contains-task-list">
-<li class="task-list-item"><input type="checkbox" checked disabled> 
-\</li>
+<li class="task-list-item"><input type="checkbox" checked disabled> \</li>
 <li></li>
 </ul>
 "##;
@@ -3478,6 +3494,9 @@ Some preamble <code>foobar_raz</code>, not <code>barfoo_raz</code></p><p><p>D</p
 
 #[test]
 fn regression_test_205() {
+    // The fenced code block splits the would-be `[...](url)` link; remark
+    // leaves the surrounding text as plain paragraph content and autolinks
+    // the URL in the trailing parens.
     let original = r##"- Item definition [it
   ```rust
   ```
@@ -3486,7 +3505,7 @@ fn regression_test_205() {
     let expected = r##"<ul>
 <li>Item definition [it
 <pre><code class="language-rust"></code></pre>
-stuff](https://example.com)</li>
+stuff](<a href="https://example.com">https://example.com</a>)</li>
 </ul>
 "##;
 

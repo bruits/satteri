@@ -1,5 +1,8 @@
 import { describe, test } from "vitest";
-import { assertExtMdastConformance } from "./helpers.js";
+import {
+  assertExtMdastConformance,
+  assertExtMdastConformanceNoPosition,
+} from "./helpers.js";
 
 const DIR: ["directive"] = ["directive"];
 
@@ -55,6 +58,63 @@ describe("Directive MDAST conformance", () => {
 
     test("container with single-quoted attribute", () => {
       assertExtMdastConformance(":::note{key='value'}\nContent\n:::", DIR);
+    });
+
+    test("closing fence closes through open list", () => {
+      // Regression: the closing `:::` used to bail at any non-directive
+      // ancestor (list, blockquote, …), trapping every subsequent block
+      // inside the directive.
+      assertExtMdastConformance(
+        ":::tip\nintro\n\n- item a\n- item b\n:::\n\n## next\n\nafter\n",
+        DIR,
+      );
+    });
+
+    test("closing fence closes through open blockquote", () => {
+      assertExtMdastConformance(":::note\n> quoted\n:::\n\nafter\n", DIR);
+    });
+  });
+
+  describe("directive names: unicode", () => {
+    // Regression: the name scanner used to treat every non-ASCII byte as a
+    // valid name character, swallowing Japanese `。` and similar punctuation
+    // into the name. Now uses unicode_id_continue, which rejects Po/Ps/etc.
+    // These tests strip position because satteri counts bytes and remark
+    // counts code points — unrelated to this fix.
+    test("CJK letters in textDirective name", () => {
+      assertExtMdastConformanceNoPosition("text :API를 more", DIR);
+    });
+
+    test("Japanese full-stop terminates directive name", () => {
+      assertExtMdastConformanceNoPosition("text :word。more", DIR);
+    });
+
+    test("Han letters in directive name", () => {
+      assertExtMdastConformanceNoPosition(":日本語\ncontent\n:::", DIR);
+    });
+  });
+
+  describe("directive labels: inline code", () => {
+    // Regression: directive labels used to be stored as a single raw Text
+    // node. Post-pass now splits on backtick pairs so `:::tip[Set a \`x\`]`
+    // renders an `inlineCode` child.
+    test("inline code inside container directive label", () => {
+      assertExtMdastConformance(
+        ":::tip[Set a `baseUrl`]\ncontent\n:::",
+        DIR,
+      );
+    });
+
+    test("inline code inside leaf directive label", () => {
+      assertExtMdastConformance("::video[See `baseUrl` option]{src=x}", DIR);
+    });
+
+    test("inline code inside text directive label", () => {
+      assertExtMdastConformance("text :tip[Set a `baseUrl`] more", DIR);
+    });
+
+    test("multiple inline code spans in one label", () => {
+      assertExtMdastConformance(":::note[Use `a` then `b` here]\nx\n:::", DIR);
     });
   });
 

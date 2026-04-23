@@ -1,10 +1,10 @@
 # Math fuzz-discovered conformance issues
 
-Found 1 unique issue(s) across 1 total failure(s).
+Found 2 unique issue(s) across 2 total failure(s).
 
-## 1. [MATH-MDAST] (structured)
+## 1. [MATH-HAST] (structured)
 
-**Input:** `"$$\nmv-c\n$$\n\n- mn\n- l1iourp7f88\n-  \n\n> w1dz3h5h1\n\n[pc cecu](https://example.com/aacdqjq)\n\n- c3ctzf639he\n- v41hnvkigub\n- 50zpreq9pxbl\n- 2fhqbplnpo7\n\n- gbchwud92hb\n- 19j\n- fwu9aeua\n- bw3myn\n- r6kd aiptw\n\n**28k34dvs**\n\n$$\nzn4ydh-w=\n$$"`
+**Input:** `"---\n\n---\n\n1v0\n\n##### obxkpho\n\na $668^$\n\n$$\nz{ q}g}\n$$\n\n> 5hyxhuc"`
 
 **Expected (reference):**
 ```json
@@ -12,9 +12,10 @@ Found 1 unique issue(s) across 1 total failure(s).
   "type": "root",
   "children": [
     {
-      "type": "math",
-      "meta": null,
-      "value": "mv-c",
+      "type": "element",
+      "tagName": "hr",
+      "properties": {},
+      "children": [],
       "position": {
         "start": {
           "line": 1,
@@ -22,21 +23,21 @@ Found 1 unique issue(s) across 1 total failure(s).
           "offset": 0
         },
         "end": {
-          "line": 3,
-          "column": 3,
-          "offset": 10
+          "line": 1,
+          "column": 4,
+          "offset": 3
         }
       }
     },
     {
-      "type": "list",
-      "ordered": false,
-      "start": null,
-      "spread": false,
-      "children": [
-        {
-          "type": "listItem",
-          "s
+      "type": "text",
+      "value": "\n"
+    },
+    {
+      "type": "element",
+      "tagName": "hr",
+      "properties": {},
+      "
 ```
 
 **Actual (Sätteri):**
@@ -50,27 +51,39 @@ Found 1 unique issue(s) across 1 total failure(s).
       "column": 1
     },
     "end": {
-      "offset": 230,
-      "line": 28,
-      "column": 3
+      "offset": 64,
+      "line": 15,
+      "column": 10
     }
   },
   "children": [
     {
-      "type": "math",
+      "type": "element",
       "position": {
         "start": {
-          "offset": 0,
-          "line": 1,
+          "offset": 10,
+          "line": 5,
           "column": 1
         },
         "end": {
-          "offset": 10,
-          "line": 3,
-          "column": 3
+          "offset": 13,
+          "line": 5,
+          "column": 4
         }
       },
-      "meta": null,
-      "value": "mv-c"
-  
+      "tagName": "p",
+      "properties"
+```
+## 2. [MATH-HTML] (structured)
+
+**Input:** `"---\n\n$$\n\\int\n$$\n\n#### tgvm2f\n\n---"`
+
+**Expected (reference):**
+```json
+"<hr />\n<pre><code class=\"language-math math-display\">\\int</code></pre>\n<h4>tgvm2f</h4>\n<hr />"
+```
+
+**Actual (Sätteri):**
+```json
+""
 ```

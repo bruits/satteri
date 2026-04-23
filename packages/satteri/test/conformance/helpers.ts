@@ -26,16 +26,41 @@ import { expect } from "vitest";
 const mdxRuntime = runtime as unknown as Pick<MdxEvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 const satteriRuntime = runtime as unknown as Pick<EvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 
+// Satteri's Rust mdast→hast converter can't see JS-level directive handlers,
+// so by default it emits nothing for directive nodes. Match that on the
+// reference side with empty `toHast` handlers; users who want to render
+// directives are expected to plug in their own handler on both pipelines.
+const emptyHandler = () => undefined;
+export const REF_REHYPE_OPTIONS = {
+  allowDangerousHtml: true,
+  handlers: {
+    containerDirective: emptyHandler,
+    leafDirective: emptyHandler,
+    textDirective: emptyHandler,
+  },
+} as const;
+
+// Default reference is plain remark + GFM. We intentionally do NOT enable
+// frontmatter or math here — remark-frontmatter has a quirk where enabling
+// it changes how `---` interacts with surrounding content even when no yaml
+// actually matches, which would make fuzz comparisons unstable.
+//
+// Satteri's `markdownToMdast(md)` default turns frontmatter/math on, so the
+// plain helpers below pass `features: BASE_FEATURES` to disable them when
+// comparing with this reference. Tests that specifically want frontmatter
+// or math use `assertExt*` which build feature-matched processors.
 const mdastProcessor = unified().use(remarkParse).use(remarkGfm);
 const hastProcessor = unified()
   .use(remarkParse)
   .use(remarkGfm)
-  .use(remarkRehype, { allowDangerousHtml: true });
+  .use(remarkRehype, REF_REHYPE_OPTIONS);
 const htmlProcessor = unified()
   .use(remarkParse)
   .use(remarkGfm)
-  .use(remarkRehype, { allowDangerousHtml: true })
+  .use(remarkRehype, REF_REHYPE_OPTIONS)
   .use(rehypeStringify, { allowDangerousHtml: true });
+
+const BASE_FEATURES: Features = { frontmatter: false, math: false };
 
 export type ExtensionSet = "math" | "frontmatter" | "directive";
 
@@ -58,7 +83,7 @@ function buildMdastProcessor(extensions: ExtensionSet[]): TestProcessor {
 
 function buildHastProcessor(extensions: ExtensionSet[]): TestProcessor {
   const p = buildMdastProcessor(extensions);
-  return p.use(remarkRehype, { allowDangerousHtml: true });
+  return p.use(remarkRehype, REF_REHYPE_OPTIONS);
 }
 
 function featuresToSatteri(extensions: ExtensionSet[]): Features {
@@ -115,11 +140,11 @@ export function referenceHast(md: string): unknown {
 }
 
 export function satteriMdast(md: string): unknown {
-  return serialize(markdownToMdast(md));
+  return serialize(markdownToMdast(md, { features: BASE_FEATURES }));
 }
 
 export function satteriHast(md: string): unknown {
-  return serialize(markdownToHast(md));
+  return serialize(markdownToHast(md, { features: BASE_FEATURES }));
 }
 
 const mathMdastProcessor = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
@@ -127,15 +152,16 @@ const mathHastProcessor = unified()
   .use(remarkParse)
   .use(remarkGfm)
   .use(remarkMath)
-  .use(remarkRehype, { allowDangerousHtml: true });
+  .use(remarkRehype, REF_REHYPE_OPTIONS);
 const mathHtmlProcessor = unified()
   .use(remarkParse)
   .use(remarkGfm)
   .use(remarkMath)
-  .use(remarkRehype, { allowDangerousHtml: true })
+  .use(remarkRehype, REF_REHYPE_OPTIONS)
   .use(rehypeStringify, { allowDangerousHtml: true });
 
-const MATH_FEATURES: Features = { math: true };
+// Isolate math: the reference math processors don't enable frontmatter.
+const MATH_FEATURES: Features = { math: true, frontmatter: false };
 
 export function referenceMathMdast(md: string): unknown {
   return stripData(serialize(mathMdastProcessor.parse(md)));
@@ -169,7 +195,8 @@ const fmHastProcessor = buildHastProcessor(["frontmatter"]);
 const fmHtmlProcessor = buildHastProcessor(["frontmatter"]).use(rehypeStringify, {
   allowDangerousHtml: true,
 });
-const FM_FEATURES: Features = { frontmatter: true };
+// Isolate frontmatter: the reference fm processors don't enable math.
+const FM_FEATURES: Features = { frontmatter: true, math: false };
 
 export function referenceFmMdast(md: string): unknown {
   return serialize(fmMdastProcessor.parse(md));
@@ -218,6 +245,32 @@ export function assertExtMdastConformance(md: string, extensions: ExtensionSet[]
   expect(actual).toEqual(expected);
 }
 
+function stripPositions(node: AnyNode): AnyNode {
+  if (typeof node !== "object" || node === null) return node;
+  const out = { ...node };
+  delete out.data;
+  delete out.position;
+  if (Array.isArray(out.children)) {
+    out.children = (out.children as AnyNode[]).map(stripPositions);
+  }
+  return out;
+}
+
+/** Like `assertExtMdastConformance` but ignores `position`. Use this when the
+ * input contains non-ASCII characters: remark counts columns in code points
+ * while satteri currently counts in bytes, so positions diverge even when
+ * trees are structurally identical. */
+export function assertExtMdastConformanceNoPosition(
+  md: string,
+  extensions: ExtensionSet[],
+): void {
+  const proc = buildMdastProcessor(extensions);
+  const features = featuresToSatteri(extensions);
+  const expected = stripPositions(serialize(proc.parse(md)));
+  const actual = stripPositions(serialize(markdownToMdast(md, { features })));
+  expect(actual).toEqual(expected);
+}
+
 export function assertExtHastConformance(md: string, extensions: ExtensionSet[]): void {
   const proc = buildHastProcessor(extensions);
   const features = featuresToSatteri(extensions);
@@ -243,7 +296,7 @@ export function referenceHtml(md: string): string {
 }
 
 export function satteriHtml(md: string): string {
-  const result = markdownToHtml(md);
+  const result = markdownToHtml(md, { features: BASE_FEATURES });
   if (typeof result !== "string") throw new Error("markdownToHtml returned a promise");
   return normalizeHtmlForComparison(result);
 }

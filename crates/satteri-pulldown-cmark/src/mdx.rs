@@ -792,8 +792,10 @@ fn scan_mdx_inline_jsx_inner(
 
 impl<'a, 'b> FirstPass<'a, 'b> {
     pub(crate) fn parse_mdx_esm(&mut self, start_ix: usize, end_ix: usize) -> usize {
-        let content = &self.text[start_ix..end_ix].trim_end();
-        let cow_ix = self.allocs.allocate_cow((*content).into());
+        // Strip only trailing line terminators — remark keeps trailing spaces
+        // (e.g. `"import X; "`) in the mdxjsEsm value.
+        let content = self.text[start_ix..end_ix].trim_end_matches(|c| c == '\n' || c == '\r');
+        let cow_ix = self.allocs.allocate_cow(content.into());
         self.tree.append(Item {
             start: start_ix,
             end: end_ix,

@@ -41,16 +41,17 @@ fn metadata_blocks_test_3() {
 
 #[test]
 fn metadata_blocks_test_4() {
+    // A lone `---` followed by a blank line is parsed as a YAML metadata
+    // block that runs to the next `---`, consuming the `title:`/`another_field:`
+    // lines. Remark (the conformance target) emits an empty `yaml` node with
+    // no HTML output.
     let original = r##"---
 
 title: example
 another_field: 0
 ---
 "##;
-    let expected = r##"<hr>
-<h2>title: example
-another_field: 0</h2>
-"##;
+    let expected = "";
 
     test_markdown_html(original, expected, 0, false, true, false, false, false, false, false);
 }
@@ -73,6 +74,10 @@ another_field: 0</h2>
 
 #[test]
 fn metadata_blocks_test_6() {
+    // YAML metadata blocks only start at document position 0; the `---` after
+    // a paragraph can't open one. Remark renders the standalone `---` as a
+    // thematic break and the trailing `title:`/`another_field:`/`---` block
+    // as a setext H2.
     let original = r##"My paragraph here.
 
 ---
@@ -81,6 +86,9 @@ another_field: 0
 ---
 "##;
     let expected = r##"<p>My paragraph here.</p>
+<hr>
+<h2>title: example
+another_field: 0</h2>
 "##;
 
     test_markdown_html(original, expected, 0, false, true, false, false, false, false, false);

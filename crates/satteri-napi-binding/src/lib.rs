@@ -73,7 +73,7 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
     if f.math.unwrap_or(true) {
         opts |= Options::ENABLE_MATH;
     }
-    if f.heading_attributes.unwrap_or(true) {
+    if f.heading_attributes.unwrap_or(false) {
         opts |= Options::ENABLE_HEADING_ATTRIBUTES;
     }
     if f.directive.unwrap_or(false) {

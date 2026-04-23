@@ -1,5 +1,5 @@
 import { describe, test } from "vitest";
-import { assertMdastConformance } from "./helpers.js";
+import { assertMdastConformance, assertExtMdastConformance } from "./helpers.js";
 
 describe("MDAST conformance: block elements", () => {
   test("heading", () => {
@@ -342,8 +342,7 @@ describe("MDAST conformance: edge cases", () => {
     assertMdastConformance("  <div>\n  *hello*\n         <foo><a>");
   });
 
-  test.skip("html block indentation in list", () => {
-    // TODO: HTML block inside list item includes trailing newline in value
+  test("html block indentation in list", () => {
     assertMdastConformance("-    <div>\n   <div>");
   });
 
@@ -356,7 +355,8 @@ describe("MDAST conformance: edge cases", () => {
   });
 
   test.skip("task list followed by blank then content", () => {
-    // TODO: text value after task marker includes leading newline
+    // Tree structure and text value match remark; only paragraph/text
+    // start.line and start.column differ due to a remark quirk
     assertMdastConformance("- [x]\t\t\n\\\n-");
   });
 
@@ -379,8 +379,104 @@ describe("MDAST conformance: edge cases", () => {
   });
 
   test.skip("reference link", () => {
+    // TODO:
     // Satteri resolves references eagerly (produces `link` node),
     // remark keeps them as `linkReference` + `definition`. To be changed.
     assertMdastConformance("[text][ref]\n\n[ref]: https://example.com");
+  });
+});
+
+describe("MDAST conformance: GFM autolink literal", () => {
+  // Bare URLs in text are promoted to `link` nodes (remark-gfm behavior).
+  test("https:// URL in paragraph", () => {
+    assertMdastConformance("Visit https://example.com today");
+  });
+
+  test("https:// URL at end of sentence (trailing punctuation trimmed)", () => {
+    assertMdastConformance("Check out https://example.com.");
+  });
+
+  test("URL alone in paragraph", () => {
+    assertMdastConformance("https://example.com");
+  });
+
+  test("URL in parentheses", () => {
+    assertMdastConformance("See (https://example.com) for details");
+  });
+
+  test("www. URL gets http:// prepended", () => {
+    assertMdastConformance("Visit www.example.com");
+  });
+
+  test("URL with path and query", () => {
+    assertMdastConformance("See https://example.com/path?q=1#frag");
+  });
+
+  test("URL after bold text", () => {
+    assertMdastConformance("**bold** https://example.com");
+  });
+
+  test("bare URL is NOT matched when preceded by letter", () => {
+    // GFM: URL must be preceded by whitespace, (, *, _, ~, or start of line.
+    assertMdastConformance("abchttps://example.com");
+  });
+
+  test("trailing closing paren balanced", () => {
+    assertMdastConformance("(see https://example.com/foo)");
+  });
+
+  test("URL with port preserved when directive is enabled", () => {
+    // When both GFM autolink and remark-directive are enabled, `:4321` in
+    // `http://host:4321` must stay inside the URL. In remark this happens
+    // because autolink tokenization beats directive detection; we achieve
+    // the same effect by merging the `text + textDirective + text` split
+    // back together before the autolink scan runs.
+    assertExtMdastConformance(
+      "Navigate to http://localhost:4321/ now",
+      ["directive"],
+    );
+  });
+
+  test("URL with port inside bracketed link keeps directive (not merged)", () => {
+    // Inverse of the above: inside a `[label](...)` bracketed link, remark
+    // keeps the directive split. The merge must skip link children.
+    assertExtMdastConformance(
+      "See [http://localhost:4321/](http://localhost:4321/)",
+      ["directive"],
+    );
+  });
+});
+
+describe("MDAST conformance: entity decoding merges text", () => {
+  // Regression: decoded entities used to emit a standalone Text node
+  // that broke adjacent text runs into multiple siblings. remark merges
+  // them into a single Text; satteri now matches via emit_text_merging.
+
+  test("&lt; and &gt; around plain text", () => {
+    assertMdastConformance("Promise&lt;string&gt;");
+  });
+
+  test("&amp; between runs", () => {
+    assertMdastConformance("x&amp;y");
+  });
+
+  test("&colon; between runs", () => {
+    assertMdastConformance("x&colon;y");
+  });
+
+  test("entity at start of strong", () => {
+    assertMdastConformance("**&amp;foo**");
+  });
+
+  test("entity at end of strong", () => {
+    assertMdastConformance("**foo&amp;**");
+  });
+
+  test("multiple entities in one text run", () => {
+    assertMdastConformance("a&lt;b&gt;c&amp;d");
+  });
+
+  test("entity inside link text", () => {
+    assertMdastConformance("[set&colon;html](/foo)");
   });
 });

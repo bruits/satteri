@@ -18,6 +18,20 @@ const MDX_PASS_THROUGH_NODES = [
   "mdxjsEsm",
 ];
 
+// Satteri drops directives during mdast→hast conversion (JS-level handlers
+// aren't visible to the Rust converter). Match that by passing empty handlers
+// on the reference side.
+const emptyHandler = () => undefined;
+const REF_TO_HAST_OPTIONS = {
+  allowDangerousHtml: true,
+  passThrough: MDX_PASS_THROUGH_NODES,
+  handlers: {
+    containerDirective: emptyHandler,
+    leafDirective: emptyHandler,
+    textDirective: emptyHandler,
+  },
+};
+
 type AnyNode = Record<string, unknown>;
 
 function stripPositionsAndEstree(node: unknown): unknown {
@@ -51,9 +65,7 @@ function assertMdastConformance(input: string): void {
 
 function referenceHast(input: string): unknown {
   const mdast = mdxParser.runSync(mdxParser.parse(input));
-  return stripPositionsAndEstree(
-    toHast(mdast, { allowDangerousHtml: true, passThrough: MDX_PASS_THROUGH_NODES }),
-  );
+  return stripPositionsAndEstree(toHast(mdast, REF_TO_HAST_OPTIONS));
 }
 
 function satteriHastTree(input: string): unknown {
@@ -221,5 +233,46 @@ describe("MDX HAST conformance", () => {
 
   test("expr JSX expr is flow", () => {
     assertMdastConformance("{expr} <Box/> {42}");
+  });
+});
+
+describe("MDX mark-and-unravel: paragraph inside flow JSX parent", () => {
+  // Regression for bug A: when a flow JSX element contains a paragraph whose
+  // only children are text-level JSX, remark unravels the paragraph and
+  // promotes the child to a flow element. Satteri previously skipped
+  // unraveling whenever the paragraph's parent was itself a flow/text JSX
+  // element, leaving `<summary>` nested inside an extra paragraph wrapper.
+
+  test("details/summary with blank-line body", () => {
+    assertMdastConformance(
+      "<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>",
+    );
+    assertHastConformance(
+      "<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>",
+    );
+  });
+
+  test("single-line flow JSX inside flow parent is unraveled", () => {
+    assertMdastConformance("<section>\n<Callout>hello</Callout>\n\nbody\n</section>");
+    assertHastConformance("<section>\n<Callout>hello</Callout>\n\nbody\n</section>");
+  });
+
+  test("self-closing JSX inside flow parent is unraveled", () => {
+    assertMdastConformance("<section>\n<Foo/>\n\nbody\n</section>");
+    assertHastConformance("<section>\n<Foo/>\n\nbody\n</section>");
+  });
+
+  test("JSX with inline code child is unraveled", () => {
+    assertMdastConformance("<details>\n<Spoiler>`inline code`</Spoiler>\n\nbody\n</details>");
+  });
+
+  test("JSX with attributes is unraveled", () => {
+    assertMdastConformance(
+      "<Question>\n<Option isCorrect>yes</Option>\n\n<Option>no</Option>\n</Question>",
+    );
+  });
+
+  test("text expression inside flow parent is unraveled", () => {
+    assertMdastConformance("<Box>\n{value}\n\nbody\n</Box>");
   });
 });

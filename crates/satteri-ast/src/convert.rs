@@ -7,10 +7,11 @@ use crate::hast::codec::encode_element_data_into;
 use crate::hast::HastNodeType;
 use crate::mdast::{
     decode_code_data, decode_definition_data, decode_expression_data,
-    decode_footnote_definition_data, decode_heading_data, decode_image_data, decode_link_data,
-    decode_list_data, decode_list_item_data, decode_math_data, decode_mdx_jsx_attr,
-    decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name, decode_reference_data,
-    decode_table_alignments, encode_mdx_jsx_element_data, ColumnAlign, ListItemData, MdastNodeType,
+    decode_footnote_definition_data, decode_heading_data, decode_image_data,
+    decode_image_reference_alt, decode_link_data, decode_list_data, decode_list_item_data,
+    decode_math_data, decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
+    decode_reference_data, decode_table_alignments, encode_mdx_jsx_element_data, ColumnAlign,
+    ListItemData, MdastNodeType,
 };
 use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
 
@@ -695,7 +696,17 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 let rd = decode_reference_data(data);
                 let identifier = view.get_str(rd.identifier);
                 if let Some(def) = find_def(ctx.defs, view, identifier) {
-                    let alt = extract_text_content(node_id, view);
+                    // Parser-emitted ImageReferences store alt inline (the
+                    // node has no children — alt is accumulated from the
+                    // bracket text at parse time). Plugin-synthesized ones
+                    // may lack this byte range and carry the text as
+                    // children, so fall back to extracting from those.
+                    let stored_alt = decode_image_reference_alt(data);
+                    let alt = if !stored_alt.is_empty() {
+                        view.get_str(stored_alt).to_string()
+                    } else {
+                        extract_text_content(node_id, view)
+                    };
                     let url_ref = encode_url(builder, view.get_str(def.url));
                     let alt_ref = builder.alloc_string(&alt);
                     let id = if !def.title.is_empty() {
@@ -880,8 +891,11 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         Some(MdastNodeType::ContainerDirective)
         | Some(MdastNodeType::LeafDirective)
         | Some(MdastNodeType::TextDirective) => {
-            // Directives have no standard HAST representation.
-            // Like remark-rehype, skip unless a handler is registered.
+            // Directives have no HAST representation here. Users register a
+            // JS-level plugin (mdast or hast) to transform them; the Rust
+            // converter can't see those handlers, so the only safe default is
+            // to drop the node. Reference comparisons pass empty directive
+            // handlers to `mdast-util-to-hast` so both sides emit nothing.
         }
 
         _ => {
@@ -917,6 +931,9 @@ fn convert_children_with_newlines(
         return;
     }
     for &child_id in children {
+        if !produces_hast_output(child_id, view) {
+            continue;
+        }
         convert_node(child_id, view, builder, ctx);
         add_text_node(builder, "\n");
     }
@@ -985,7 +1002,11 @@ fn convert_children_with_newlines_task(
         } else {
             convert_node(child_id, view, builder, ctx);
         }
-        add_text_node(builder, "\n");
+        // Skip the trailing separator for children that render to nothing
+        // (e.g. directives without a handler) so we don't leave stray `\n`s.
+        if produces_hast_output(child_id, view) {
+            add_text_node(builder, "\n");
+        }
         first = false;
     }
 }
@@ -1002,6 +1023,11 @@ fn convert_children_unwrap_paragraphs_task(
     let mut prev_was_block = false;
     for &child_id in children {
         let child = view.get_node(child_id);
+        // Children that render to nothing (e.g. directives) shouldn't
+        // introduce extra `\n` separators.
+        if !produces_hast_output(child_id, view) {
+            continue;
+        }
         if MdastNodeType::from_u8(child.node_type) == Some(MdastNodeType::Paragraph) {
             if let (true, Some(td)) = (first, task) {
                 emit_checkbox(builder, td);
@@ -1030,7 +1056,14 @@ fn produces_hast_output(child_id: u32, view: &Arena) -> bool {
     let raw_type = view.get_node(child_id).node_type;
     !matches!(
         MdastNodeType::from_u8(raw_type),
-        Some(MdastNodeType::Definition | MdastNodeType::Yaml | MdastNodeType::Toml)
+        Some(
+            MdastNodeType::Definition
+                | MdastNodeType::Yaml
+                | MdastNodeType::Toml
+                | MdastNodeType::ContainerDirective
+                | MdastNodeType::LeafDirective
+                | MdastNodeType::TextDirective
+        )
     )
 }
 

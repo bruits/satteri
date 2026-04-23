@@ -374,3 +374,28 @@ describe("MDX conformance: markdown elements", () => {
     await assertMdxConformance("- a\n- b\n\n- c\n- d");
   });
 });
+
+describe("MDX conformance: mark-and-unravel", () => {
+  // Bug A regression: paragraphs inside flow JSX whose only children are
+  // text-level JSX must be unraveled so the child becomes a flow element.
+  // Without unraveling, the HTML pipeline renders an extra <p> wrapper around
+  // the JSX component, diverging from @mdx-js/mdx.
+
+  test("details/summary with blank-line body", async () => {
+    await assertMdxConformance(
+      "<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>",
+    );
+  });
+
+  test("single-line flow JSX inside flow parent", async () => {
+    const Callout = (props: any) => createElement("div", null, props.children);
+    await assertMdxConformance(
+      "<section>\n<Callout>hello</Callout>\n\nbody\n</section>",
+      { Callout },
+    );
+  });
+
+  test("self-closing JSX inside flow parent", async () => {
+    await assertMdxConformance("<section>\n<Foo/>\n\nbody\n</section>", { Foo });
+  });
+});

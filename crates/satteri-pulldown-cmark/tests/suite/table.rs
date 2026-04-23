@@ -503,24 +503,18 @@ b</p>
 
 #[test]
 fn table_test_14() {
+    // A line starting with `- ` is a bullet-list marker, which takes
+    // precedence over being a table delimiter row. Matches remark (which is
+    // the conformance target); pulldown-cmark used to produce a table here.
     let original = r##"a | b
 - | -
 1 | 2
 "##;
-    let expected = r##"<table>
-<thead>
-<tr>
-<th>a</th>
-<th>b</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>1</td>
-<td>2</td>
-</tr>
-</tbody>
-</table>
+    let expected = r##"<p>a | b</p>
+<ul>
+<li>| -
+1 | 2</li>
+</ul>
 "##;
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);

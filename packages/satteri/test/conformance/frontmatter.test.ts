@@ -38,6 +38,24 @@ describe("Frontmatter MDAST conformance", () => {
   test("frontmatter with blank lines in value", () => {
     assertExtMdastConformance("---\ndescription: |\n  Line one\n  Line two\n---\n\nContent", FM);
   });
+
+  test("frontmatter with blank line as first content line", () => {
+    // Regression: the metadata-block scanner used to bail when the first
+    // line after the opening `---` was blank, treating it as a thematic
+    // break + heading instead of a yaml block.
+    assertExtMdastConformance("---\n\ntitle: test\n---\n", FM);
+  });
+
+  test("frontmatter with multiple blank lines", () => {
+    assertExtMdastConformance("---\n\n\ntitle: test\n---\n", FM);
+  });
+
+  test("frontmatter preserves CRLF line endings in value", () => {
+    // Regression: metadata blocks used to go through `append_code_text`,
+    // which normalizes CRLF→LF (correct for code blocks, wrong for
+    // frontmatter — remark keeps `\r\n` in `yaml.value`).
+    assertExtMdastConformance("---\r\ntitle: X\r\nauthor: Y\r\n---\r\n", FM);
+  });
 });
 
 describe("Frontmatter HAST conformance", () => {

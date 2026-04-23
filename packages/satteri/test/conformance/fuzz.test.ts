@@ -174,11 +174,22 @@ function satteriMdxMdast(input: string): unknown {
   return stripPositionsAndEstree(mdxToMdast(input));
 }
 
+// Satteri drops directive nodes during mdast→hast; match that on the
+// reference with empty directive handlers.
+const emptyDirectiveHandler = () => undefined;
+const REF_TO_HAST_OPTIONS = {
+  allowDangerousHtml: true,
+  passThrough: MDX_PASS_THROUGH_NODES,
+  handlers: {
+    containerDirective: emptyDirectiveHandler,
+    leafDirective: emptyDirectiveHandler,
+    textDirective: emptyDirectiveHandler,
+  },
+};
+
 function referenceMdxHast(input: string): unknown {
   const mdast = mdxParser.runSync(mdxParser.parse(input));
-  return stripPositionsAndEstree(
-    toHast(mdast, { allowDangerousHtml: true, passThrough: MDX_PASS_THROUGH_NODES }),
-  );
+  return stripPositionsAndEstree(toHast(mdast, REF_TO_HAST_OPTIONS));
 }
 
 function satteriMdxHast(input: string): unknown {

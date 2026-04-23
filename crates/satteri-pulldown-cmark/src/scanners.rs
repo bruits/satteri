@@ -844,21 +844,13 @@ pub(crate) fn scan_metadata_block(
             }
         }
         if i == 3 {
-            // Search the closing sequence
+            // Search the closing sequence. remark-frontmatter accepts any
+            // content between the fences, including blank first lines
+            // (`---\n\ntitle: x\n---`), so we don't special-case them here.
             let mut j = i;
-            let mut first_line = true;
             while j < data.len() {
                 j += scan_nextline(&data[j..]);
-                let closed = scan_closing_metadata_block(&data[j..], c).is_some();
-                // The first line of the metadata block cannot be an empty line,
-                // but it can be the closing delimiter (empty frontmatter).
-                if first_line {
-                    if !closed && scan_blank_line(&data[j..]).is_some() {
-                        return None;
-                    }
-                    first_line = false;
-                }
-                if closed {
+                if scan_closing_metadata_block(&data[j..], c).is_some() {
                     return Some((i, c));
                 }
             }
@@ -1469,8 +1461,11 @@ fn scan_email(text: &str, start_ix: usize) -> Option<(usize, CowStr<'_>)> {
         i += 1;
         match c {
             c if is_ascii_alphanumeric(c) => (),
-            b'.' | b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'/' | b'=' | b'?'
-            | b'^' | b'_' | b'`' | b'{' | b'|' | b'}' | b'~' | b'-' => (),
+            // Local-part character class matches micromark's `asciiAtext`, which
+            // deliberately excludes `!` even though CommonMark's reference regex
+            // allows it. remark inherits this behavior, so we need to match it.
+            b'.' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'/' | b'=' | b'?' | b'^'
+            | b'_' | b'`' | b'{' | b'|' | b'}' | b'~' | b'-' => (),
             b'@' if i > 1 => break,
             _ => return None,
         }
@@ -1615,7 +1610,8 @@ mod test {
         const EMAILS: &[&str] = &[
             "<a@b.c>",
             "<a@b>",
-            "<a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-@example.com>",
+            // Matches micromark's `asciiAtext` character class (no `!`).
+            "<a-zA-Z0-9.#$%&'*+/=?^_`{|}~-@example.com>",
             "<a@sixty-three-letters-in-this-identifier-----------------------63>",
         ];
         for email in EMAILS {
@@ -1633,6 +1629,9 @@ mod test {
             "<a(noparens)@example.com>",
             "<\"noquotes\"@example.com>",
             "<a@sixty-four-letters-in-this-identifier-------------------------64>",
+            // `!` is excluded from the local-part character class to match
+            // micromark/remark.
+            "<a!b@example.com>",
         ];
         for email in EMAILS {
             assert!(scan_email(email, 1).is_none());

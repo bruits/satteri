@@ -21,6 +21,23 @@ pub fn hast_arena_to_html(arena: &Arena) -> String {
     out
 }
 
+/// Escape a string to appear inside a double-quoted HTML attribute value,
+/// matching hast-util-to-html's default "safe" serialization. Encodes `&`,
+/// `"`, `'`, and `` ` `` (backtick is escaped because some legacy browsers
+/// treat it as an attribute-value delimiter). Unlike body-text escaping,
+/// `<` and `>` are kept as-is since they're valid inside attribute values.
+fn escape_html_attr_value(out: &mut String, value: &str) {
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            '`' => out.push_str("&#x60;"),
+            _ => out.push(c),
+        }
+    }
+}
+
 /// Render a HAST node subtree to HTML.
 ///
 /// `in_raw_text` indicates the node is being rendered inside a raw-text element
@@ -70,7 +87,7 @@ pub fn render_node(node_id: u32, view: &Arena, out: &mut String, in_raw_text: bo
                         out.push(' ');
                         out.push_str(&attr_name);
                         out.push_str("=\"");
-                        pulldown_cmark_escape::escape_html(&mut *out, value).unwrap();
+                        escape_html_attr_value(&mut *out, value);
                         out.push('"');
                     }
                     _ => {}

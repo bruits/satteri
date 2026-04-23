@@ -1,10 +1,10 @@
 # Frontmatter fuzz-discovered conformance issues
 
-Found 1 unique issue(s) across 1 total failure(s).
+Found 2 unique issue(s) across 2 total failure(s).
 
-## 1. [FM-MDAST] (structured)
+## 1. [FM-HAST] (structured)
 
-**Input:** `"+++\nu = 2574\ndjzjkwn_clr = dkaon\nq = h\n+++\n\n##### b055e\n\n*q52*\n\n`eirwwirgxtm`\n\n- 2l\n- av9o5yeg\n\nhtomsw1j\n\n1. 2or jh41tsv\n2.  \n3. tnqnrxznve\n4. m4m21kh04bsn"`
+**Input:** `"---\nxnhouc: xmyfu\n---\n\n---\n\n**i**\n\n---"`
 
 **Expected (reference):**
 ```json
@@ -12,29 +12,32 @@ Found 1 unique issue(s) across 1 total failure(s).
   "type": "root",
   "children": [
     {
-      "type": "toml",
-      "value": "u = 2574\ndjzjkwn_clr = dkaon\nq = h",
+      "type": "element",
+      "tagName": "hr",
+      "properties": {},
+      "children": [],
       "position": {
         "start": {
-          "line": 1,
+          "line": 5,
           "column": 1,
-          "offset": 0
+          "offset": 23
         },
         "end": {
           "line": 5,
           "column": 4,
-          "offset": 42
+          "offset": 26
         }
       }
     },
     {
-      "type": "heading",
-      "depth": 5,
-      "children": [
-        {
-          "type": "text",
-          "value": "b055e",
-          "position": {
+      "type": "text",
+      "value": "\n"
+    },
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {},
+      
 ```
 
 **Actual (Sätteri):**
@@ -48,25 +51,76 @@ Found 1 unique issue(s) across 1 total failure(s).
       "column": 1
     },
     "end": {
-      "offset": 155,
-      "line": 21,
-      "column": 16
+      "offset": 38,
+      "line": 9,
+      "column": 4
+    }
+  },
+  "children": []
+}
+```
+## 2. [FM-HAST] (structured)
+
+**Input:** `"+++\nt = \"072ol\"\nm = false\nulbtmpx = false\ny = true\nzax = 291\n+++\n\n![glsx](https://example.com/qiulplqepzwk)\n\n*jzu83k4*\n\n---\n\n```html\n6 2\n```\n\n---"`
+
+**Expected (reference):**
+```json
+{
+  "type": "root",
+  "children": [
+    {
+      "type": "element",
+      "tagName": "p",
+      "properties": {},
+      "children": [
+        {
+          "type": "element",
+          "tagName": "img",
+          "properties": {
+            "src": "https://example.com/qiulplqepzwk",
+            "alt": "glsx"
+          },
+          "children": [],
+          "position": {
+            "start": {
+              "line": 9,
+              "column": 1,
+              "offset": 66
+            },
+            "
+```
+
+**Actual (Sätteri):**
+```json
+{
+  "type": "root",
+  "position": {
+    "start": {
+      "offset": 0,
+      "line": 1,
+      "column": 1
+    },
+    "end": {
+      "offset": 145,
+      "line": 19,
+      "column": 4
     }
   },
   "children": [
     {
-      "type": "toml",
+      "type": "element",
       "position": {
         "start": {
-          "offset": 0,
-          "line": 1,
+          "offset": 66,
+          "line": 9,
           "column": 1
         },
         "end": {
-          "offset": 42,
-          "line": 5,
-          "column": 4
+          "offset": 107,
+          "line": 9,
+          "column": 42
         }
       },
-      "value": "u = 2574\ndjzjkwn_clr = dka
+      "tagName": "p",
+      "propertie
 ```

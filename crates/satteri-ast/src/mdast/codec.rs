@@ -475,6 +475,28 @@ pub fn decode_reference_data(bytes: &[u8]) -> ReferenceData {
     ReferenceData::from_bytes(bytes)
 }
 
+/// `imageReference` layout: 20-byte [`ReferenceData`] header followed by an
+/// 8-byte [`StringRef`] for `alt`. When bytes aren't present (data.len() < 28),
+/// `alt` falls back to empty — callers can then derive it from children.
+pub fn encode_image_reference_data(
+    identifier: StringRef,
+    label: StringRef,
+    reference_kind: u8,
+    alt: StringRef,
+) -> Vec<u8> {
+    let mut bytes = encode_reference_data(identifier, label, reference_kind);
+    bytes.extend_from_slice(&alt.as_bytes());
+    bytes
+}
+
+pub fn decode_image_reference_alt(bytes: &[u8]) -> StringRef {
+    if bytes.len() >= 28 {
+        StringRef::from_bytes(&bytes[20..28])
+    } else {
+        StringRef::empty()
+    }
+}
+
 pub fn decode_footnote_definition_data(bytes: &[u8]) -> FootnoteDefinitionData {
     FootnoteDefinitionData::from_bytes(bytes)
 }

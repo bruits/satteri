@@ -399,6 +399,29 @@ export class MdastReader {
   }
 
   /**
+   * ImageReference layout: 20-byte ReferenceData header + 8-byte alt StringRef.
+   * Parser-emitted image references carry alt inline; plugin-created ones
+   * may lack this suffix, in which case `alt` is empty.
+   */
+  getImageReferenceData(nodeId: number): {
+    identifier: string;
+    label: string;
+    referenceType: string;
+    alt: string;
+  } {
+    const base = this.getReferenceData(nodeId);
+    const data = this.getTypeData(nodeId);
+    if (data.length >= 28) {
+      const altRef = this.readStringRef(data, 20);
+      return {
+        ...base,
+        alt: this.getString(altRef.offset, altRef.len),
+      };
+    }
+    return { ...base, alt: "" };
+  }
+
+  /**
    * FootnoteDefinitionData #[repr(C)]: identifier(0..8), label(8..16).
    */
   getFootnoteDefinitionData(nodeId: number): { identifier: string; label: string } {

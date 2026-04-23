@@ -1844,7 +1844,15 @@ impl InlineStack {
             self.truncate(matching_ix);
             Some(matching_el)
         } else {
-            self.set_lowerbound(c, run_length, both, self.stack.len());
+            // For `*`/`_`, the lower-bound optimisation is safe because their
+            // matching rule (CM "rule of three") is monotonic across future
+            // closers with the same count. Tildes/carets match strictly by
+            // equal run-length, so a failure at run-length 2 must not close
+            // the door on a later run-length 1 closer matching an earlier
+            // run-length 1 opener still on the stack.
+            if c != b'~' && c != b'^' {
+                self.set_lowerbound(c, run_length, both, self.stack.len());
+            }
             None
         }
     }
