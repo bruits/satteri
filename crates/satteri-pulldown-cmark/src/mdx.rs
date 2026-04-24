@@ -10,17 +10,26 @@ use crate::{
     strings::CowStr,
 };
 
-/// Strip the micromark `indentSize + 1` prefix from each continuation
+/// Strip the micromark `indentSize = 2` prefix from each continuation
 /// line of an MDX expression. Matches `micromark-factory-mdx-expression`
-/// which consumes up to `indentSize = 2` columns of whitespace after a
-/// line ending (tabs expand to the next multiple of 4; any leftover tab
-/// columns are emitted as literal spaces).
-fn dedent_expression_continuation(s: &str) -> alloc::borrow::Cow<'_, str> {
+/// which consumes up to 2 columns of whitespace after a line ending
+/// (tabs expand to the next multiple of 4; any leftover tab columns are
+/// emitted as literal spaces).
+///
+/// `container_content_col` is the 1-indexed column where the innermost
+/// list/blockquote's content begins — continuation lines are conceptually
+/// at that column, which affects tab-stop math when a tab straddles the
+/// container prefix boundary.
+fn dedent_expression_continuation(
+    s: &str,
+    container_content_col: usize,
+) -> alloc::borrow::Cow<'_, str> {
     if !s.contains('\n') && !s.contains('\r') {
         return alloc::borrow::Cow::Borrowed(s);
     }
     const INDENT: usize = 2;
     const TAB_SIZE: usize = 4;
+    let base_col = if container_content_col == 0 { 1 } else { container_content_col };
     let bytes = s.as_bytes();
     let mut out = alloc::string::String::with_capacity(s.len());
     let mut i = 0;
@@ -43,8 +52,10 @@ fn dedent_expression_continuation(s: &str) -> alloc::borrow::Cow<'_, str> {
         }
         out.push_str(&s[line_end_start..i]);
         // Strip up to INDENT columns of leading whitespace from the new line.
+        // Track `column` starting from `base_col - 1` so tab-stop math runs
+        // against the true absolute column in the source.
         let mut stripped = 0usize;
-        let mut column = 0usize;
+        let mut column = base_col - 1;
         while i < bytes.len() && stripped < INDENT {
             let b = bytes[i];
             if b == b' ' {
@@ -75,6 +86,93 @@ fn dedent_expression_continuation(s: &str) -> alloc::borrow::Cow<'_, str> {
     alloc::borrow::Cow::Owned(out)
 }
 
+/// Mirror `mdast-util-mdx-jsx`'s attribute-expression continuation-line
+/// handling.
+///
+/// Remark strips `container_content_col - 1 + indentSize` columns from each
+/// continuation line (where `container_content_col` is the column at which
+/// the innermost list/blockquote container's content begins — 1 if no
+/// container). The container-prefix stripping happens upstream in
+/// `strip_container_prefixes` and consumes `container_content_col - 1`
+/// columns; the remaining `indentSize = 2` columns are stripped here on
+/// the already-prefix-stripped value.
+fn strip_expression_indent(
+    s: &str,
+    container_content_col: usize,
+    _element_column: usize,
+) -> alloc::string::String {
+    const INDENT_SIZE: usize = 2;
+    const TAB_WIDTH: usize = 4;
+    let base_col = if container_content_col == 0 { 1 } else { container_content_col };
+    let strip_cols = INDENT_SIZE;
+    let mut result = alloc::string::String::with_capacity(s.len());
+    let mut at_line_start = false;
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\n' {
+            result.push('\n');
+            i += 1;
+            at_line_start = true;
+            continue;
+        }
+        if c == b'\r' {
+            result.push('\r');
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'\n' {
+                result.push('\n');
+                i += 1;
+            }
+            at_line_start = true;
+            continue;
+        }
+        if !at_line_start {
+            let ch_len = char_len_utf8(c);
+            result.push_str(&s[i..i + ch_len]);
+            i += ch_len;
+            continue;
+        }
+        // At line start: strip up to `strip_cols` columns of whitespace,
+        // treating the first byte of the line as being at absolute column
+        // `base_col` in the source (which affects tab-stop math).
+        let mut cols_consumed = 0usize;
+        let mut col = base_col;
+        while i < bytes.len() && cols_consumed < strip_cols {
+            match bytes[i] {
+                b' ' => {
+                    cols_consumed += 1;
+                    col += 1;
+                    i += 1;
+                }
+                b'\t' => {
+                    let tab_cols = TAB_WIDTH - ((col - 1) % TAB_WIDTH);
+                    let want = strip_cols - cols_consumed;
+                    if want >= tab_cols {
+                        cols_consumed += tab_cols;
+                        col += tab_cols;
+                        i += 1;
+                    } else {
+                        // Partial tab consumption: each column still owed
+                        // of the tab becomes a space on the output.
+                        let keep_cols = tab_cols - want;
+                        for _ in 0..keep_cols {
+                            result.push(' ');
+                        }
+                        cols_consumed += want;
+                        col += tab_cols;
+                        i += 1;
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        at_line_start = false;
+    }
+    result
+}
+
 fn strip_attr_continuation_indent(s: &str) -> alloc::borrow::Cow<'_, str> {
     if !s.contains('\n') && !s.contains('\r') {
         return alloc::borrow::Cow::Borrowed(s);
@@ -93,6 +191,35 @@ fn strip_attr_continuation_indent(s: &str) -> alloc::borrow::Cow<'_, str> {
         }
     }
     alloc::borrow::Cow::Owned(result)
+}
+
+/// Decode HTML character entities (`&quot;`, `&lt;`, `&#x3C;`, …) in a JSX
+/// literal attribute value — remark's `mdast-util-mdx-jsx` runs attribute
+/// values through the HTML entity decoder so `title="&quot;x&quot;"`
+/// materializes as `"x"` in the mdast. Leaves unrecognised `&foo` runs alone.
+fn decode_attr_entities(s: &str) -> alloc::borrow::Cow<'_, str> {
+    if !s.contains('&') {
+        return alloc::borrow::Cow::Borrowed(s);
+    }
+    let bytes = s.as_bytes();
+    let mut out = alloc::string::String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            let (consumed, replacement) = crate::scanners::scan_entity(&bytes[i..]);
+            if consumed > 0 {
+                if let Some(rep) = replacement {
+                    out.push_str(&rep);
+                }
+                i += consumed;
+                continue;
+            }
+        }
+        let ch_len = char_len_utf8(bytes[i]);
+        out.push_str(&s[i..i + ch_len]);
+        i += ch_len;
+    }
+    alloc::borrow::Cow::Owned(out)
 }
 
 fn is_mdx_unicode_whitespace(s: &[u8], ix: usize) -> bool {
@@ -359,8 +486,19 @@ fn scan_mdx_expression_end_inner(
                 }
                 ix += 1;
             }
-            // String literals (cannot span lines in JS)
+            // String literals (cannot span lines in JS). A `'` preceded by an
+            // identifier char is almost certainly an apostrophe inside JSX
+            // text (`user's`), not a string open — in that position it
+            // couldn't be a valid JS expression anyway. Skip it as a regular
+            // char so the apostrophe doesn't swallow the rest of the line.
             b'"' | b'\'' => {
+                if bytes[ix] == b'\''
+                    && ix > 0
+                    && (bytes[ix - 1].is_ascii_alphanumeric() || bytes[ix - 1] == b'_')
+                {
+                    ix += 1;
+                    continue;
+                }
                 let quote = bytes[ix];
                 ix += 1;
                 while ix < bytes.len()
@@ -478,8 +616,14 @@ fn scan_mdx_jsx_tag_end_inner(
     let mut ix = 1; // skip `<`
 
     // Skip `/` for closing tags
-    if ix < bytes.len() && bytes[ix] == b'/' {
+    let is_closing = ix < bytes.len() && bytes[ix] == b'/';
+    if is_closing {
         ix += 1;
+        // Micromark-extension-mdx-jsx tolerates whitespace between `</` and
+        // the tag name (e.g. `</ Details>`). Skip ASCII whitespace here.
+        while ix < bytes.len() && matches!(bytes[ix], b' ' | b'\t') {
+            ix += 1;
+        }
     }
 
     // Fragment `<>` / `</>`
@@ -525,8 +669,12 @@ fn scan_mdx_jsx_tag_end_inner(
             }
             b'{' => {
                 // Attribute expression — use lexer to find the matching `}`.
-                // JSX attributes live inside a tag, so blank lines abort.
-                let expr_len = scan_mdx_expression_end(&bytes[ix..], true)?;
+                // Blank lines inside the attribute body do NOT abort: the JSX
+                // tag hasn't closed yet, and remark-mdx keeps capturing until
+                // the matching `}`. This matters for multi-line `params={{…}}`
+                // expressions that contain backtick template literals with
+                // embedded empty lines.
+                let expr_len = scan_mdx_expression_end(&bytes[ix..], false)?;
                 ix += expr_len;
             }
             b'"' => {
@@ -620,7 +768,17 @@ pub(crate) fn scan_mdx_jsx_block(
     }
 
     let is_closing = bytes[1] == b'/';
-    let name_start = if is_closing { 2 } else { 1 };
+    let mut name_start = if is_closing { 2 } else { 1 };
+
+    // Micromark-extension-mdx-jsx allows whitespace between `</` and the
+    // closing tag name — e.g. `</ Name>`. Probe past it for the name-start
+    // check, but leave `scan_mdx_jsx_tag_end_inner` to consume the same
+    // whitespace so positions stay aligned.
+    if is_closing {
+        while name_start < bytes.len() && matches!(bytes[name_start], b' ' | b'\t') {
+            name_start += 1;
+        }
+    }
 
     if name_start >= bytes.len() {
         return None;
@@ -761,7 +919,15 @@ fn scan_mdx_inline_jsx_inner(
     }
 
     let is_closing = bytes[1] == b'/';
-    let name_start = if is_closing { 2 } else { 1 };
+    let mut name_start = if is_closing { 2 } else { 1 };
+
+    // Micromark-extension-mdx-jsx tolerates whitespace between `</` and the
+    // closing tag name (e.g. `</ Name>`).
+    if is_closing {
+        while name_start < bytes.len() && matches!(bytes[name_start], b' ' | b'\t') {
+            name_start += 1;
+        }
+    }
 
     if name_start >= bytes.len() {
         return None;
@@ -875,6 +1041,66 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             stripped.trim_end().to_string()
         };
 
+        // Map stripped-string offsets back to original-source byte offsets.
+        // `strip_container_prefixes` removes container-continuation prefixes
+        // from every line after the first and may prepend phantom spaces when
+        // the prefix partially consumed a tab. Build per-line breakpoints so
+        // we can convert any stripped offset back to source.
+        //
+        // Each entry: (stripped_line_start, orig_line_start, phantom_count)
+        //   * positions in [stripped_line_start, stripped_line_start + phantom_count)
+        //     map to `orig_line_start` (phantom region has no source bytes).
+        //   * positions beyond that map 1:1: orig = orig_line_start + (s - stripped_line_start - phantom_count).
+        let orig_bytes = self.text.as_bytes();
+        let stripped_bytes = raw.as_bytes();
+        let mut map: Vec<(usize, usize, usize)> = Vec::new();
+        map.push((0, start_ix, 0));
+        {
+            let mut s_pos = 0usize;
+            let mut o_pos = start_ix;
+            while s_pos < stripped_bytes.len() && o_pos < end_ix {
+                let b = stripped_bytes[s_pos];
+                if b == b'\n' || b == b'\r' {
+                    s_pos += 1;
+                    o_pos += 1;
+                    if b == b'\r'
+                        && s_pos < stripped_bytes.len()
+                        && stripped_bytes[s_pos] == b'\n'
+                        && o_pos < end_ix
+                        && orig_bytes[o_pos] == b'\n'
+                    {
+                        s_pos += 1;
+                        o_pos += 1;
+                    }
+                    // After the newline we're at the start of a continuation
+                    // line — skip the container prefix in the original source.
+                    let mut ls = crate::scanners::LineStart::new(&orig_bytes[o_pos..end_ix]);
+                    let _ = crate::parse::scan_containers(&self.tree, &mut ls, self.options);
+                    o_pos += ls.bytes_scanned();
+                    let phantom = ls.remaining_space();
+                    map.push((s_pos, o_pos, phantom));
+                    // Skip over phantom bytes in the stripped buffer.
+                    s_pos += phantom;
+                } else {
+                    s_pos += 1;
+                    o_pos += 1;
+                }
+            }
+        }
+        let stripped_to_orig = |s_pos: usize| -> usize {
+            let idx = match map.binary_search_by(|probe| probe.0.cmp(&s_pos)) {
+                Ok(i) => i,
+                Err(i) => i.saturating_sub(1),
+            };
+            let (base_s, base_o, phantom) = map[idx];
+            let offset = s_pos - base_s;
+            if offset <= phantom {
+                base_o
+            } else {
+                base_o + (offset - phantom)
+            }
+        };
+
         let mut pos = 0;
         while pos < raw.len() {
             while pos < raw.len() && raw.as_bytes()[pos] == b' ' {
@@ -887,23 +1113,33 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if remaining[0] == b'<' {
                 let tag_end = scan_mdx_jsx_tag_end(remaining).unwrap_or(raw.len() - pos);
                 let tag_raw = &raw[pos..pos + tag_end];
-                let jsx_data = parse_jsx_tag(tag_raw).into_static();
+                // For attribute-expression indent stripping we need both the
+                // container content column (where list/blockquote prefixes
+                // stop and content begins) and the element column itself
+                // (used to account for extra JSX-nesting indent).
+                let container_content_col = self.container_content_col();
+                let element_column = column_at(self.text.as_bytes(), start_ix + pos);
+                let jsx_data =
+                    parse_jsx_tag_with_cols(tag_raw, container_content_col, element_column)
+                        .into_static();
                 let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
                 self.tree.append(Item {
-                    start: start_ix + pos,
-                    end: start_ix + pos + tag_end,
+                    start: stripped_to_orig(pos),
+                    end: stripped_to_orig(pos + tag_end),
                     body: ItemBody::MdxJsxFlowElement(jsx_ix),
                 });
                 pos += tag_end;
             } else if remaining[0] == b'{' {
                 let expr_end = scan_mdx_expression_end(remaining, true).unwrap_or(raw.len() - pos);
                 let inner_raw = &raw[pos + 1..pos + expr_end - 1];
-                let inner: CowStr<'static> =
-                    CowStr::from(dedent_expression_continuation(inner_raw).into_owned());
+                let inner: CowStr<'static> = CowStr::from(
+                    dedent_expression_continuation(inner_raw, self.container_content_col())
+                        .into_owned(),
+                );
                 let cow_ix = self.allocs.allocate_cow(inner);
                 self.tree.append(Item {
-                    start: start_ix + pos,
-                    end: start_ix + pos + expr_end,
+                    start: stripped_to_orig(pos),
+                    end: stripped_to_orig(pos + expr_end),
                     body: ItemBody::MdxFlowExpression(cow_ix),
                 });
                 pos += expr_end;
@@ -912,6 +1148,28 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
         }
         end_ix
+    }
+
+    /// Compute the column (1-indexed) at which the innermost list/blockquote
+    /// container's content begins. Used for attribute-expression continuation
+    /// line indent stripping.
+    fn container_content_col(&self) -> usize {
+        use crate::parse::ItemBody;
+        let mut col = 1usize;
+        for &node_ix in self.tree.walk_spine() {
+            match self.tree[node_ix].item.body {
+                ItemBody::BlockQuote(..) => col += 2, // `>` + space
+                ItemBody::ListItem(indent, _)
+                | ItemBody::DefinitionListDefinition(indent) => col += indent as usize,
+                ItemBody::FootnoteDefinition(..)
+                    if self.options.contains(crate::Options::ENABLE_FOOTNOTES) =>
+                {
+                    col += 4
+                }
+                _ => {}
+            }
+        }
+        col
     }
 
     /// Strip container prefixes from continuation lines in a raw text span.
@@ -955,6 +1213,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             let mut ls = LineStart::new(&bytes[pos..]);
             let _ = scan_containers(&self.tree, &mut ls, self.options);
             pos += ls.bytes_scanned();
+            // When the container prefix partially consumes a tab (e.g. a
+            // list with 3-col indent over a tab-indented continuation), the
+            // leftover columns are preserved by remark as literal spaces.
+            // Mirror that so downstream position mapping stays consistent.
+            for _ in 0..ls.remaining_space() {
+                result.push(' ');
+            }
 
             // Copy rest of line via string slice
             let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
@@ -997,14 +1262,23 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         ix: usize,
         scanner: impl Fn(&[u8], Option<ContainerLineCheck<'_>>) -> Option<usize>,
     ) -> Option<usize> {
-        let bytes = self.text.as_bytes();
+        self.scan_mdx_flow_in_container_bytes(&self.text.as_bytes()[ix..], scanner)
+    }
 
+    /// Same as `scan_mdx_flow_in_container` but takes the byte slice directly.
+    /// Used where the slice doesn't start at a known `ix` in `self.text` (e.g.
+    /// paragraph-interrupt probes where `bytes` is already container-stripped).
+    pub(crate) fn scan_mdx_flow_in_container_bytes(
+        &self,
+        bytes: &[u8],
+        scanner: impl Fn(&[u8], Option<ContainerLineCheck<'_>>) -> Option<usize>,
+    ) -> Option<usize> {
         if self.tree.spine_len() == 0 {
-            return scanner(&bytes[ix..], None);
+            return scanner(bytes, None);
         }
 
         let check = self.make_container_line_check();
-        scanner(&bytes[ix..], Some(&check))
+        scanner(bytes, Some(&check))
     }
 }
 
@@ -1013,11 +1287,54 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 /// Handles opening, closing, self-closing tags, and fragments.
 /// Attributes are extracted with zero-copy `CowStr::Borrowed` where possible.
 pub(crate) fn parse_jsx_tag<'a>(raw: &'a str) -> JsxElementData<'a> {
+    parse_jsx_tag_with_cols(raw, 1, 1)
+}
+
+/// Back-compat shim — callers that only know the element column still land
+/// here. Treats `column` as both the container content column and the
+/// element column, which is correct for inline JSX (no nested wrapper
+/// indent to account for).
+pub(crate) fn parse_jsx_tag_with_column<'a>(raw: &'a str, column: usize) -> JsxElementData<'a> {
+    parse_jsx_tag_with_cols(raw, column, column)
+}
+
+/// Return the 1-indexed column of `bytes[pos]` by walking back to the most
+/// recent line start. Tabs in the preceding indent are expanded to 4-column
+/// tab stops, matching micromark.
+pub(crate) fn column_at(bytes: &[u8], pos: usize) -> usize {
+    const TAB_WIDTH: usize = 4;
+    let mut line_start = pos;
+    while line_start > 0 && bytes[line_start - 1] != b'\n' && bytes[line_start - 1] != b'\r' {
+        line_start -= 1;
+    }
+    let mut col: usize = 1;
+    let mut i = line_start;
+    while i < pos {
+        if bytes[i] == b'\t' {
+            col += TAB_WIDTH - ((col - 1) % TAB_WIDTH);
+        } else {
+            col += 1;
+        }
+        i += 1;
+    }
+    col
+}
+
+/// Like `parse_jsx_tag`, but takes the 1-indexed column of the opening `<` in
+/// the source. Container indent (list prefix, blockquote gutter, etc.) lives in
+/// that column offset, and multi-line JSX attribute expressions need to strip
+/// `(column - 1) + indentSize` columns from each continuation line to match
+/// remark's normalized output.
+pub(crate) fn parse_jsx_tag_with_cols<'a>(
+    raw: &'a str,
+    container_content_col: usize,
+    element_column: usize,
+) -> JsxElementData<'a> {
     let s = raw.trim();
 
-    // Closing tag: </Name>
+    // Closing tag: `</Name>` (optionally with whitespace between `</` and the name)
     if let Some(rest) = s.strip_prefix("</") {
-        let name = extract_tag_name(rest);
+        let name = extract_tag_name(rest.trim_start());
         return JsxElementData {
             name: name.into(),
             attrs: Vec::new(),
@@ -1044,7 +1361,7 @@ pub(crate) fn parse_jsx_tag<'a>(raw: &'a str) -> JsxElementData<'a> {
     let is_self_closing = ends_self_close || is_self_contained;
 
     // Parse attributes
-    let attrs = parse_jsx_attrs(s);
+    let attrs = parse_jsx_attrs(s, container_content_col, element_column);
 
     JsxElementData {
         name: name.into(),
@@ -1099,7 +1416,11 @@ fn extract_opening_tag(text: &str) -> &str {
     text
 }
 
-fn parse_jsx_attrs<'a>(text: &'a str) -> Vec<JsxAttr<'a>> {
+fn parse_jsx_attrs<'a>(
+    text: &'a str,
+    container_content_col: usize,
+    element_column: usize,
+) -> Vec<JsxAttr<'a>> {
     let tag = extract_opening_tag(text);
     let bytes = tag.as_bytes();
     let len = bytes.len();
@@ -1206,7 +1527,11 @@ fn parse_jsx_attrs<'a>(text: &'a str) -> Vec<JsxAttr<'a>> {
                     i += 1;
                 }
                 let value = strip_attr_continuation_indent(raw_value);
-                attrs.push(JsxAttr::Literal(name.into(), value.into()));
+                let decoded = decode_attr_entities(value.as_ref());
+                attrs.push(JsxAttr::Literal(
+                    name.into(),
+                    decoded.into_owned().into(),
+                ));
             } else if bytes[i] == b'{' {
                 i += 1;
                 let val_start = i;
@@ -1230,7 +1555,16 @@ fn parse_jsx_attrs<'a>(text: &'a str) -> Vec<JsxAttr<'a>> {
                     i += 1;
                 }
                 let value = &tag[val_start..i.saturating_sub(1)];
-                attrs.push(JsxAttr::Expression(name.into(), value.into()));
+                let normalized = if value.contains('\n') || value.contains('\r') {
+                    alloc::borrow::Cow::Owned(strip_expression_indent(
+                        value,
+                        container_content_col,
+                        element_column,
+                    ))
+                } else {
+                    alloc::borrow::Cow::Borrowed(value)
+                };
+                attrs.push(JsxAttr::Expression(name.into(), normalized.into_owned().into()));
             } else {
                 attrs.push(JsxAttr::Boolean(name.into()));
             }

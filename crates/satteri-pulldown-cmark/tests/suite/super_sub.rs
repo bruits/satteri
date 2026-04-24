@@ -10,7 +10,7 @@ fn super_sub_test_1() {
     let expected = r##"<p><em>This is super</em> <em>This is sub</em></p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn super_sub_test_2() {
     let expected = r##"<p><em>This is stricken out</em></p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn super_sub_test_3() {
     let expected = r##"<p><em>This is ~stricken</em></p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn super_sub_test_4() {
     let expected = r##"<p><em>This</em>is<em>nothing</em></p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -50,7 +50,7 @@ fn super_sub_test_5() {
     let expected = r##"<p><em>This ~~is not stricken.</em></p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn super_sub_test_6() {
     let expected = r##"<p>~~This ~is~~ stricken.~</p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn super_sub_test_7() {
     let expected = r##"<p><em>This ~~is stricken</em> but this is not~~</p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -83,7 +83,7 @@ y=x^2^a+xb+c
 <p>y=x<em>2</em>a+xb+c</p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn super_sub_test_9() {
 <p>^bar^^</p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }
 
 #[test]
@@ -109,5 +109,5 @@ fn super_sub_test_10() {
 <p><em>foo_</em>_bar*</p>
 "##;
 
-    test_markdown_html(original, expected, 8192, false, false, false, true, false, false, false);
+    test_markdown_html(original, expected, 8192, false, false, true, false, false, false);
 }

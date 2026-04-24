@@ -728,7 +728,7 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
             break;
         }
         match *c {
-            b' ' => (),
+            b' ' | b'\t' => (),
             b':' => {
                 active_col = match (start_col, active_col) {
                     (true, Alignment::None) => Alignment::Left,

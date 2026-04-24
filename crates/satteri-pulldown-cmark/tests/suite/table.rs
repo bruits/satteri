@@ -11,7 +11,7 @@ fn table_test_1() {
     let expected = r##"<h2>Test header</h2>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn table_test_2() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn table_test_3() {
 </blockquote>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn table_test_4() {
 </ol>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn table_test_5() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn table_test_6() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -195,7 +195,7 @@ fn table_test_7() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn table_test_8() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn table_test_9() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -316,7 +316,7 @@ fn table_test_10() {
 |ぃ|い|</p>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn table_test_11() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -366,7 +366,7 @@ fn table_test_12() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -498,14 +498,11 @@ b</p>
 <p>b</p>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
 fn table_test_14() {
-    // A line starting with `- ` is a bullet-list marker, which takes
-    // precedence over being a table delimiter row. Matches remark (which is
-    // the conformance target); pulldown-cmark used to produce a table here.
     let original = r##"a | b
 - | -
 1 | 2
@@ -517,7 +514,7 @@ fn table_test_14() {
 </ul>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -533,7 +530,7 @@ fn table_test_15() {
 </ul>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -560,7 +557,7 @@ fn table_test_16() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -675,7 +672,7 @@ fn table_test_17() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -757,11 +754,14 @@ fn table_test_18() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
 fn table_test_19() {
+    // remark-gfm accepts a stray `|`-only line as a row with a single empty
+    // cell rather than terminating the table. Update from the old
+    // pulldown-cmark behaviour so mid-table `|` lines continue the table.
     let original = r##"| Table | Header |
 |-------|--------|
 | Table | Body   |
@@ -772,7 +772,7 @@ fn table_test_19() {
 | Table | Header |
 |-------|--------|
 | Table | Body   |
-|	
+|
 | Not   | Enough |
 "##;
     let expected = r##"<table>
@@ -787,10 +787,16 @@ fn table_test_19() {
 <td>Table</td>
 <td>Body</td>
 </tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Not</td>
+<td>Enough</td>
+</tr>
 </tbody>
 </table>
-<p>|
-| Not   | Enough |</p>
 <table>
 <thead>
 <tr>
@@ -803,17 +809,25 @@ fn table_test_19() {
 <td>Table</td>
 <td>Body</td>
 </tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Not</td>
+<td>Enough</td>
+</tr>
 </tbody>
 </table>
-<p>|
-| Not   | Enough |</p>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
 fn table_test_20() {
+    // remark-gfm: a `|` immediately after the delimiter row is a first
+    // body row with a single empty cell, not a paragraph.
     let original = r##"| Table | Header |
 |-------|--------|
 |
@@ -825,11 +839,16 @@ fn table_test_20() {
 <th>Header</th>
 </tr>
 </thead>
+<tbody>
+<tr>
+<td></td>
+<td></td>
+</tr>
+</tbody>
 </table>
-<p>|</p>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -843,7 +862,7 @@ fn table_test_21() {
 | Table | Body   |</p>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -883,7 +902,7 @@ fn table_test_22() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -927,7 +946,7 @@ fn table_test_23() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -958,7 +977,7 @@ A: Interrupting —?</p>
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -981,7 +1000,7 @@ fn table_test_25() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -1004,7 +1023,7 @@ fn table_test_26() {
 </table>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -1033,7 +1052,7 @@ moo | moo
 </ul>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }
 
 #[test]
@@ -1062,5 +1081,5 @@ moo | moo
 </ol>
 "##;
 
-    test_markdown_html(original, expected, 2, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, false);
 }

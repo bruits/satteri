@@ -15,7 +15,7 @@ const { remarkMarkAndUnravel } = await import(
 );
 
 const DOCS_ROOT = "/home/erika/Projects/docs";
-const FEATURES = { frontmatter: true, directive: true };
+const FEATURES = { frontmatter: true, directive: true, math: false };
 
 const MDX_PASS_THROUGH = [
   "mdxJsxFlowElement",

@@ -11,7 +11,6 @@ pub fn test_markdown_html(
     base_options: u32,
     smart_punct: bool,
     metadata_blocks: bool,
-    old_footnotes: bool,
     subscript: bool,
     wikilinks: bool,
     deflists: bool,
@@ -24,9 +23,6 @@ pub fn test_markdown_html(
     if metadata_blocks {
         opts.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
         opts.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
-    }
-    if old_footnotes {
-        opts.insert(Options::ENABLE_OLD_FOOTNOTES);
     }
     if subscript {
         opts.insert(Options::ENABLE_SUBSCRIPT);

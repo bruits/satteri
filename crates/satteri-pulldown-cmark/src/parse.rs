@@ -514,7 +514,8 @@ impl<'input> ParserInner<'input> {
                             let end = start + total_len;
                             let node = scan_nodes_to_ix(&self.tree, self.tree[cur_ix].next, end);
                             let raw = &block_text[start..end];
-                            let jsx_data = crate::mdx::parse_jsx_tag(raw);
+                            let col = crate::mdx::column_at(block_text.as_bytes(), start);
+                            let jsx_data = crate::mdx::parse_jsx_tag_with_column(raw, col);
                             let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
                             self.tree[cur_ix].item.body = ItemBody::MdxJsxTextElement(jsx_ix);
                             self.tree[cur_ix].item.end = end;
@@ -837,6 +838,52 @@ impl<'input> ParserInner<'input> {
                                 self.disable_all_links();
                             }
                         } else {
+                            // Footnote-first check: if the first bracket content is
+                            // `[^X]` where `X` has a matching footnote definition,
+                            // emit a FootnoteReference regardless of what follows.
+                            // Otherwise `[^X][Y]` would be resolved as a link whose
+                            // text happens to start with `^`, which diverges from
+                            // remark-gfm's two-node parse (footnote + trailing ref).
+                            let first_bracket_start = self.tree[tos.node].item.start;
+                            let first_bracket_end = self.tree[cur_ix].item.end;
+                            let first_bracket_text =
+                                &self.text[first_bracket_start..first_bracket_end];
+                            if let Some((_, ReferenceLabel::Footnote(footlabel))) =
+                                scan_link_label(&self.tree, first_bracket_text, self.options)
+                            {
+                                if self.allocs.footdefs.contains(&*footlabel) {
+                                    let footref = self.allocs.allocate_cow(footlabel);
+                                    if let Some(def) = self
+                                        .allocs
+                                        .footdefs
+                                        .get_mut(self.allocs.cows[footref.0].to_owned())
+                                    {
+                                        def.use_count += 1;
+                                    }
+                                    let footnote_ix = if tos.ty == LinkStackTy::Image {
+                                        self.tree[tos.node].next = Some(cur_ix);
+                                        self.tree[tos.node].child = None;
+                                        self.tree[tos.node].item.body =
+                                            ItemBody::SynthesizeChar('!');
+                                        self.tree[cur_ix].item.start =
+                                            self.tree[tos.node].item.start + 1;
+                                        self.tree[tos.node].item.end =
+                                            self.tree[tos.node].item.start + 1;
+                                        cur_ix
+                                    } else {
+                                        tos.node
+                                    };
+                                    self.tree[footnote_ix].next = next;
+                                    self.tree[footnote_ix].child = None;
+                                    self.tree[footnote_ix].item.body =
+                                        ItemBody::FootnoteReference(footref);
+                                    self.tree[footnote_ix].item.end = first_bracket_end;
+                                    prev = Some(footnote_ix);
+                                    cur = next;
+                                    self.link_stack.clear();
+                                    continue;
+                                }
+                            }
                             // ok, so its not an inline link. maybe it is a reference
                             // to a defined link?
                             let scan_result =
@@ -870,10 +917,17 @@ impl<'input> ParserInner<'input> {
                                     }
                                     (next_node, LinkType::Collapsed)
                                 }
+                                // [X][^Y] — full-reference form with a footnote-shaped
+                                // second label. Per CommonMark the full-ref has to
+                                // resolve to a link definition, which `^Y` never will;
+                                // shortcut fallback is NOT tried. Leave both brackets
+                                // literal and let `[^Y]` be parsed as a footnote on
+                                // its own MaybeLinkClose iteration.
+                                RefScan::UnexpectedFootnote => continue,
                                 // [shortcut]
                                 //
                                 // [shortcut]: /blah
-                                RefScan::Failed | RefScan::UnexpectedFootnote => {
+                                RefScan::Failed => {
                                     if !could_be_ref {
                                         continue;
                                     }
@@ -922,9 +976,7 @@ impl<'input> ParserInner<'input> {
                                 {
                                     def.use_count += 1;
                                 }
-                                if !self.options.has_gfm_footnotes()
-                                    || self.allocs.footdefs.contains(&self.allocs.cows[footref.0])
-                                {
+                                if self.allocs.footdefs.contains(&self.allocs.cows[footref.0]) {
                                     // If this came from a MaybeImage, then the `!` prefix
                                     // isn't part of the footnote reference.
                                     let footnote_ix = if tos.ty == LinkStackTy::Image {
@@ -1647,7 +1699,7 @@ pub(crate) fn scan_containers(
                     break;
                 }
             }
-            ItemBody::FootnoteDefinition(..) if options.has_gfm_footnotes() => {
+            ItemBody::FootnoteDefinition(..) if options.contains(Options::ENABLE_FOOTNOTES) => {
                 let save = line_start.clone();
                 if !line_start.scan_space(4) && !line_start.is_at_eol() {
                     *line_start = save;
@@ -1914,11 +1966,8 @@ fn scan_link_label<'text>(
         && b'^' == bytes[1]
         && bytes.get(2) != Some(&b']')
     {
-        let linebreak_handler: &dyn Fn(&[u8]) -> Option<usize> = if options.has_gfm_footnotes() {
-            &|_| None
-        } else {
-            &linebreak_handler
-        };
+        // GFM footnote labels don't wrap across line breaks.
+        let linebreak_handler: &dyn Fn(&[u8]) -> Option<usize> = &|_| None;
         if let Some((byte_index, cow)) =
             scan_link_label_rest(&text[2..], linebreak_handler, tree.is_in_table())
         {

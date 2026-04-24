@@ -63,6 +63,9 @@ pub fn mdast_arena_to_hast_arena(source: &Arena) -> Arena {
     let ctx = ConvertCtx {
         defs: &refs.defs,
         footnotes: refs.footnotes.as_ref(),
+        footnote_defs: &refs.footnote_defs,
+        footnote_ref_occurrence: &refs.footnote_ref_occurrence,
+        footnote_ref_totals: &refs.footnote_ref_totals,
     };
     convert_node(0, source, &mut builder, &ctx);
     builder.finish()
@@ -76,6 +79,17 @@ pub fn mdast_arena_to_hast_arena(source: &Arena) -> Arena {
 struct ConvertCtx<'a, 'src> {
     defs: &'a [Definition],
     footnotes: Option<&'a FxHashMap<&'src str, usize>>,
+    /// Node IDs of FootnoteDefinition nodes in the order their identifiers
+    /// are first referenced. This matches remark-gfm's `state.footnoteOrder`
+    /// and drives the order of `<li>`s in the emitted `<section>`.
+    footnote_defs: &'a [u32],
+    /// For each FootnoteReference node id: the 1-based occurrence index of
+    /// that reference within its identifier. First ref = 1, second = 2, etc.
+    /// Used to emit `id="user-content-fnref-ID[-K]"` on the anchor.
+    footnote_ref_occurrence: &'a FxHashMap<u32, usize>,
+    /// Per-identifier total number of references (for the backref links in
+    /// the section).
+    footnote_ref_totals: &'a FxHashMap<&'src str, usize>,
 }
 
 /// Definition data stored as StringRefs into the MDAST source, avoids cloning strings.
@@ -93,13 +107,21 @@ struct CollectedRefs<'src> {
     /// `None` when the document contains no footnotes — saves the HashMap
     /// allocation on the common path.
     footnotes: Option<FxHashMap<&'src str, usize>>,
+    /// FootnoteDefinition node ids in the order their identifiers are first
+    /// referenced (main flow first, then inside definitions that got queued).
+    footnote_defs: Vec<u32>,
+    /// 1-based occurrence index for each FootnoteReference node id.
+    footnote_ref_occurrence: FxHashMap<u32, usize>,
+    /// Total reference count per identifier.
+    footnote_ref_totals: FxHashMap<&'src str, usize>,
 }
 
 fn collect_refs(view: &Arena) -> CollectedRefs<'_> {
     let mut defs = Vec::new();
-    let mut footnotes: Option<FxHashMap<&str, usize>> = None;
-    let mut next_footnote = 1usize;
+    let mut fn_def_nodes: FxHashMap<&str, u32> = FxHashMap::default();
 
+    // Pass 1: link/image reference defs + map every footnote identifier to
+    // its definition node, if any.
     for id in 0..view.len() as u32 {
         let node = view.get_node(id);
         let data = view.get_type_data(id);
@@ -112,29 +134,178 @@ fn collect_refs(view: &Arena) -> CollectedRefs<'_> {
                     title: dd.title,
                 });
             }
-            Some(MdastNodeType::FootnoteReference) if data.len() >= 20 => {
-                let rd = decode_reference_data(data);
-                let identifier = view.get_str(rd.identifier);
-                let map = footnotes.get_or_insert_with(FxHashMap::default);
-                if !map.contains_key(identifier) {
-                    map.insert(identifier, next_footnote);
-                    next_footnote += 1;
-                }
-            }
             Some(MdastNodeType::FootnoteDefinition) if data.len() >= 16 => {
                 let fd = decode_footnote_definition_data(data);
                 let identifier = view.get_str(fd.identifier);
-                let map = footnotes.get_or_insert_with(FxHashMap::default);
-                if !map.contains_key(identifier) {
-                    map.insert(identifier, next_footnote);
-                    next_footnote += 1;
-                }
+                fn_def_nodes.entry(identifier).or_insert(id);
             }
             _ => {}
         }
     }
 
-    CollectedRefs { defs, footnotes }
+    // Pass 2: mirror remark-gfm's rendering-time footnoteOrder. Main-flow
+    // refs come first (skip into definition bodies), then each referenced
+    // definition's body is scanned in the order it was first referenced —
+    // which can itself add more entries as nested refs are discovered.
+    //
+    // Queueing is done in terms of node ids so nothing needs to outlive
+    // `view`. Identifier lookups use the shared `fn_def_nodes` map.
+    let mut fn_numbers: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut fn_def_order: Vec<u32> = Vec::new();
+
+    // Collect refs encountered in the main document (everything except
+    // footnote definition bodies), in DFS order. Store as node ids.
+    //
+    // Skip directive subtrees too: our HAST conversion drops directives, so
+    // any footnote reference inside a directive never appears in the output.
+    // Counting it here would incorrectly force the footnote `<section>` to
+    // appear even when no live reference remains.
+    fn walk_main_refs(view: &Arena, node_id: u32, refs: &mut Vec<u32>) {
+        let node = view.get_node(node_id);
+        let ty = MdastNodeType::from_u8(node.node_type);
+        if ty == Some(MdastNodeType::FootnoteDefinition) {
+            return;
+        }
+        if matches!(
+            ty,
+            Some(
+                MdastNodeType::ContainerDirective
+                    | MdastNodeType::LeafDirective
+                    | MdastNodeType::TextDirective
+            )
+        ) {
+            return;
+        }
+        if ty == Some(MdastNodeType::FootnoteReference) {
+            refs.push(node_id);
+        }
+        for &child_id in view.get_children(node_id) {
+            walk_main_refs(view, child_id, refs);
+        }
+    }
+    let mut main_refs: Vec<u32> = Vec::new();
+    walk_main_refs(view, 0, &mut main_refs);
+
+    for ref_id in main_refs {
+        let data = view.get_type_data(ref_id);
+        if data.len() < 20 {
+            continue;
+        }
+        let rd = decode_reference_data(data);
+        let identifier = view.get_str(rd.identifier);
+        if fn_numbers.contains_key(identifier) {
+            continue;
+        }
+        let Some(&def_id) = fn_def_nodes.get(identifier) else {
+            continue;
+        };
+        let def_data = view.get_type_data(def_id);
+        let fd = decode_footnote_definition_data(def_data);
+        let id_view: &str = view.get_str(fd.identifier);
+        fn_numbers.insert(id_view, fn_numbers.len() + 1);
+        fn_def_order.push(def_id);
+    }
+
+    // Walk each queued def body to pick up nested refs. Because defs can
+    // reference each other, the queue may grow while we iterate — index into
+    // it by position rather than borrowing an iterator.
+    fn walk_body_refs(view: &Arena, node_id: u32, refs: &mut Vec<u32>) {
+        let node = view.get_node(node_id);
+        if MdastNodeType::from_u8(node.node_type) == Some(MdastNodeType::FootnoteReference) {
+            refs.push(node_id);
+        }
+        for &child_id in view.get_children(node_id) {
+            walk_body_refs(view, child_id, refs);
+        }
+    }
+    let mut cursor = 0;
+    while cursor < fn_def_order.len() {
+        let def_id = fn_def_order[cursor];
+        let mut body_refs: Vec<u32> = Vec::new();
+        walk_body_refs(view, def_id, &mut body_refs);
+        for ref_id in body_refs {
+            let data = view.get_type_data(ref_id);
+            if data.len() < 20 {
+                continue;
+            }
+            let rd = decode_reference_data(data);
+            let identifier = view.get_str(rd.identifier);
+            if fn_numbers.contains_key(identifier) {
+                continue;
+            }
+            let Some(&d_id) = fn_def_nodes.get(identifier) else {
+                continue;
+            };
+            let dd = view.get_type_data(d_id);
+            let fd = decode_footnote_definition_data(dd);
+            let id_view: &str = view.get_str(fd.identifier);
+            fn_numbers.insert(id_view, fn_numbers.len() + 1);
+            fn_def_order.push(d_id);
+        }
+        cursor += 1;
+    }
+
+    // Pass 3: assign 1-based occurrence indices to every reference that
+    // resolves to a numbered definition, matching remark's rendering order
+    // (main flow first, then each queued def body in `fn_def_order` order).
+    let mut fn_ref_occurrence: FxHashMap<u32, usize> = FxHashMap::default();
+    let mut fn_ref_totals: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut main_refs2: Vec<u32> = Vec::new();
+    walk_main_refs(view, 0, &mut main_refs2);
+    for ref_id in main_refs2 {
+        let data = view.get_type_data(ref_id);
+        if data.len() < 20 {
+            continue;
+        }
+        let rd = decode_reference_data(data);
+        let identifier = view.get_str(rd.identifier);
+        if !fn_numbers.contains_key(identifier) {
+            continue;
+        }
+        // Resolve identifier to the definition's view-owned string so it
+        // outlives the caller chain.
+        let &def_id = fn_def_nodes.get(identifier).unwrap();
+        let fd = decode_footnote_definition_data(view.get_type_data(def_id));
+        let id_view: &str = view.get_str(fd.identifier);
+        let entry = fn_ref_totals.entry(id_view).or_insert(0);
+        *entry += 1;
+        fn_ref_occurrence.insert(ref_id, *entry);
+    }
+    for &def_id in &fn_def_order {
+        let mut body_refs: Vec<u32> = Vec::new();
+        walk_body_refs(view, def_id, &mut body_refs);
+        for ref_id in body_refs {
+            let data = view.get_type_data(ref_id);
+            if data.len() < 20 {
+                continue;
+            }
+            let rd = decode_reference_data(data);
+            let identifier = view.get_str(rd.identifier);
+            if !fn_numbers.contains_key(identifier) {
+                continue;
+            }
+            let &d_id = fn_def_nodes.get(identifier).unwrap();
+            let fd = decode_footnote_definition_data(view.get_type_data(d_id));
+            let id_view: &str = view.get_str(fd.identifier);
+            let entry = fn_ref_totals.entry(id_view).or_insert(0);
+            *entry += 1;
+            fn_ref_occurrence.insert(ref_id, *entry);
+        }
+    }
+
+    let footnotes = if fn_numbers.is_empty() {
+        None
+    } else {
+        Some(fn_numbers)
+    };
+
+    CollectedRefs {
+        defs,
+        footnotes,
+        footnote_defs: fn_def_order,
+        footnote_ref_occurrence: fn_ref_occurrence,
+        footnote_ref_totals: fn_ref_totals,
+    }
 }
 
 fn find_def<'a>(defs: &'a [Definition], view: &Arena, identifier: &str) -> Option<&'a Definition> {
@@ -315,6 +486,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             builder.open_node_raw(HastNodeType::Root as u8);
             copy_position(node_id, view, builder);
             convert_children_wrapped(node_id, view, builder, ctx);
+            emit_gfm_footnotes_section(view, builder, ctx);
             builder.close_node();
         }
 
@@ -737,61 +909,57 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             if data.len() >= 20 {
                 let rd = decode_reference_data(data);
                 let identifier = view.get_str(rd.identifier);
-                // `collect_refs` visits every FootnoteReference and
-                // FootnoteDefinition in the source arena, so reaching this
-                // arm guarantees the map exists and contains `identifier`.
-                let number = ctx
-                    .footnotes
-                    .and_then(|m| m.get(identifier).copied())
-                    .expect("footnote identifier missing from collected numbers");
-                let href = format!("#{}", identifier);
-                let href_ref = builder.alloc_string(&href);
-                let class_ref = builder.alloc_string("footnote-reference");
-                let sup_props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
-                open_element_with_props(builder, "sup", &sup_props);
+                let Some(number) = ctx.footnotes.and_then(|m| m.get(identifier).copied())
+                else {
+                    // Orphan reference (no matching definition): remark keeps
+                    // these as literal `[^id]` text.
+                    let literal = format!("[^{}]", identifier);
+                    add_text_node(builder, &literal);
+                    return;
+                };
+                // remark lowercases the identifier when building URL/id
+                // attributes so fragment targets collide-resist regardless of
+                // how the author cased the source label.
+                let safe_id = identifier.to_ascii_lowercase();
+                let occurrence = ctx
+                    .footnote_ref_occurrence
+                    .get(&node_id)
+                    .copied()
+                    .unwrap_or(1);
+                open_element(builder, "sup");
                 copy_position(node_id, view, builder);
-                let a_props = build_props(builder, &[("href", PROP_STRING, href_ref)]);
+                let href = format!("#user-content-fn-{}", safe_id);
+                // Reuses of the same footnote get a `-K` suffix on the id so
+                // backrefs can target the specific call site.
+                let id_attr = if occurrence > 1 {
+                    format!("user-content-fnref-{}-{}", safe_id, occurrence)
+                } else {
+                    format!("user-content-fnref-{}", safe_id)
+                };
+                let href_ref = builder.alloc_string(&href);
+                let id_ref = builder.alloc_string(&id_attr);
+                let empty_ref = StringRef::empty();
+                let aria_ref = builder.alloc_string("footnote-label");
+                let a_props = build_props(
+                    builder,
+                    &[
+                        ("href", PROP_STRING, href_ref),
+                        ("id", PROP_STRING, id_ref),
+                        ("dataFootnoteRef", PROP_BOOL_TRUE, empty_ref),
+                        ("ariaDescribedBy", PROP_SPACE_SEP, aria_ref),
+                    ],
+                );
                 open_element_with_props(builder, "a", &a_props);
-                let num_str = number.to_string();
-                add_text_node(builder, &num_str);
+                add_text_node(builder, &number.to_string());
                 builder.close_node(); // a
                 builder.close_node(); // sup
             }
         }
 
         Some(MdastNodeType::FootnoteDefinition) => {
-            let data = view.get_type_data(node_id);
-            if data.len() >= 16 {
-                let fd = decode_footnote_definition_data(data);
-                let identifier = view.get_str(fd.identifier);
-                // `collect_refs` visits every FootnoteReference and
-                // FootnoteDefinition in the source arena, so reaching this
-                // arm guarantees the map exists and contains `identifier`.
-                let number = ctx
-                    .footnotes
-                    .and_then(|m| m.get(identifier).copied())
-                    .expect("footnote identifier missing from collected numbers");
-                let id_ref = builder.alloc_string(identifier);
-                let class_ref = builder.alloc_string("footnote-definition");
-                let div_props = build_props(
-                    builder,
-                    &[
-                        ("className", PROP_SPACE_SEP, class_ref),
-                        ("id", PROP_STRING, id_ref),
-                    ],
-                );
-                open_element_with_props(builder, "div", &div_props);
-                copy_position(node_id, view, builder);
-                let label_class_ref = builder.alloc_string("footnote-definition-label");
-                let label_props =
-                    build_props(builder, &[("className", PROP_SPACE_SEP, label_class_ref)]);
-                open_element_with_props(builder, "sup", &label_props);
-                let num_str = number.to_string();
-                add_text_node(builder, &num_str);
-                builder.close_node(); // sup
-                convert_children(node_id, view, builder, ctx);
-                builder.close_node(); // div
-            }
+            // Skipped inline — GFM renders all definitions together in the
+            // trailing `<section class="footnotes">` block that's emitted by
+            // `emit_gfm_footnotes_section` after the root's other children.
         }
 
         Some(MdastNodeType::MdxJsxFlowElement) => {
@@ -1052,6 +1220,215 @@ fn convert_children_unwrap_paragraphs_task(
 /// Convert children with `\n` text nodes inserted between them.
 /// These are needed by the MDX compilation path (JSX children spacing).
 /// The HTML renderer skips whitespace-only text nodes between block elements.
+/// Emit the `<section class="footnotes">` block that remark-gfm appends to
+/// the end of a document whenever it contains any footnote definitions.
+fn emit_gfm_footnotes_section(
+    view: &Arena,
+    builder: &mut ArenaBuilder,
+    ctx: &ConvertCtx<'_, '_>,
+) {
+    if ctx.footnote_defs.is_empty() {
+        return;
+    }
+
+    // "\n" separator between the document content and the section, matching
+    // `convert_children_wrapped`'s output for adjacent siblings.
+    add_text_node(builder, "\n");
+
+    let empty_ref = StringRef::empty();
+    let footnotes_class = builder.alloc_string("footnotes");
+    let section_props = build_props(
+        builder,
+        &[
+            ("dataFootnotes", PROP_BOOL_TRUE, empty_ref),
+            ("className", PROP_SPACE_SEP, footnotes_class),
+        ],
+    );
+    open_element_with_props(builder, "section", &section_props);
+
+    let sronly_class = builder.alloc_string("sr-only");
+    let label_id_ref = builder.alloc_string("footnote-label");
+    let h2_props = build_props(
+        builder,
+        &[
+            ("className", PROP_SPACE_SEP, sronly_class),
+            ("id", PROP_STRING, label_id_ref),
+        ],
+    );
+    open_element_with_props(builder, "h2", &h2_props);
+    add_text_node(builder, "Footnotes");
+    builder.close_node(); // h2
+
+    add_text_node(builder, "\n");
+
+    open_element(builder, "ol");
+    add_text_node(builder, "\n");
+
+    for &def_id in ctx.footnote_defs {
+        let def_data = view.get_type_data(def_id);
+        if def_data.len() < 16 {
+            continue;
+        }
+        let fd = decode_footnote_definition_data(def_data);
+        let identifier = view.get_str(fd.identifier);
+        let number = ctx
+            .footnotes
+            .and_then(|m| m.get(identifier).copied())
+            .expect("footnote identifier missing from collected numbers");
+
+        let safe_id = identifier.to_ascii_lowercase();
+        let li_id = format!("user-content-fn-{}", safe_id);
+        let li_id_ref = builder.alloc_string(&li_id);
+        let li_props = build_props(builder, &[("id", PROP_STRING, li_id_ref)]);
+        open_element_with_props(builder, "li", &li_props);
+        add_text_node(builder, "\n");
+
+        let children: Vec<u32> = view.get_children(def_id).to_vec();
+        let last_para_idx = children.iter().enumerate().rev().find(|(_, &cid)| {
+            view.get_node(cid).node_type == MdastNodeType::Paragraph as u8
+        }).map(|(i, _)| i);
+
+        let total_refs = ctx
+            .footnote_ref_totals
+            .get(identifier)
+            .copied()
+            .unwrap_or(1)
+            .max(1);
+
+        if children.is_empty() {
+            // Empty definition: emit the backref directly in the <li>.
+            emit_footnote_backrefs(builder, &safe_id, number, total_refs);
+        } else {
+            for (i, &child_id) in children.iter().enumerate() {
+                if i > 0 {
+                    add_text_node(builder, "\n");
+                }
+                if Some(i) == last_para_idx {
+                    emit_paragraph_with_backrefs(
+                        child_id,
+                        view,
+                        builder,
+                        ctx,
+                        &safe_id,
+                        number,
+                        total_refs,
+                    );
+                } else {
+                    convert_node(child_id, view, builder, ctx);
+                }
+            }
+            // Fallback: definition contained no paragraph at all. Append the
+            // backref as a trailing sibling so it still reaches readers.
+            if last_para_idx.is_none() {
+                add_text_node(builder, "\n");
+                emit_footnote_backrefs(builder, &safe_id, number, total_refs);
+            }
+        }
+
+        add_text_node(builder, "\n");
+        builder.close_node(); // li
+        add_text_node(builder, "\n");
+    }
+
+    builder.close_node(); // ol
+    add_text_node(builder, "\n");
+    builder.close_node(); // section
+}
+
+/// Emit a `<p>` for `para_id`, converting its inline children and then
+/// appending the GFM footnote backref(s). Matches remark-gfm's behaviour of
+/// merging the separator space into the trailing text node when possible
+/// (so the output has one text "foo " instead of two nodes "foo" + " ").
+fn emit_paragraph_with_backrefs(
+    para_id: u32,
+    view: &Arena,
+    builder: &mut ArenaBuilder,
+    ctx: &ConvertCtx<'_, '_>,
+    identifier: &str,
+    number: usize,
+    total_refs: usize,
+) {
+    open_element(builder, "p");
+    copy_position(para_id, view, builder);
+
+    let inline_children = view.get_children(para_id);
+    if let Some((&last_id, prefix)) = inline_children.split_last() {
+        for &cid in prefix {
+            convert_node(cid, view, builder, ctx);
+        }
+        let last_is_text = view.get_node(last_id).node_type == MdastNodeType::Text as u8;
+        if last_is_text {
+            let data = view.get_type_data(last_id);
+            if data.len() >= 8 {
+                let sr = StringRef::from_bytes(data);
+                let value = view.get_str(sr);
+                let with_space = format!("{} ", value);
+                add_text_node(builder, &with_space);
+            } else {
+                convert_node(last_id, view, builder, ctx);
+                add_text_node(builder, " ");
+            }
+        } else {
+            convert_node(last_id, view, builder, ctx);
+            add_text_node(builder, " ");
+        }
+    }
+
+    emit_footnote_backrefs(builder, identifier, number, total_refs);
+    builder.close_node(); // p
+}
+
+/// Emit one or more backref `<a>` tags inside the footnotes section. With N
+/// references to the same definition, remark emits N anchor tags separated
+/// by single-space text nodes; the first uses the bare identifier, subsequent
+/// ones use `-K` suffixes matching the `id`s stamped on the reference sups.
+fn emit_footnote_backrefs(
+    builder: &mut ArenaBuilder,
+    identifier: &str,
+    number: usize,
+    total_refs: usize,
+) {
+    for k in 1..=total_refs.max(1) {
+        if k > 1 {
+            add_text_node(builder, " ");
+        }
+        let href = if k > 1 {
+            format!("#user-content-fnref-{}-{}", identifier, k)
+        } else {
+            format!("#user-content-fnref-{}", identifier)
+        };
+        let aria = if k > 1 {
+            format!("Back to reference {}-{}", number, k)
+        } else {
+            format!("Back to reference {}", number)
+        };
+        let href_ref = builder.alloc_string(&href);
+        let aria_ref = builder.alloc_string(&aria);
+        let empty_ref = StringRef::empty();
+        let backref_class = builder.alloc_string("data-footnote-backref");
+        let props = build_props(
+            builder,
+            &[
+                ("href", PROP_STRING, href_ref),
+                ("dataFootnoteBackref", PROP_STRING, empty_ref),
+                ("ariaLabel", PROP_STRING, aria_ref),
+                ("className", PROP_SPACE_SEP, backref_class),
+            ],
+        );
+        open_element_with_props(builder, "a", &props);
+        add_text_node(builder, "\u{21a9}");
+        if k > 1 {
+            // Reuse markers: `<sup>K</sup>` follows the arrow for every
+            // reference past the first so readers can tell which call site
+            // the link targets.
+            open_element(builder, "sup");
+            add_text_node(builder, &k.to_string());
+            builder.close_node();
+        }
+        builder.close_node(); // a
+    }
+}
+
 fn produces_hast_output(child_id: u32, view: &Arena) -> bool {
     let raw_type = view.get_node(child_id).node_type;
     !matches!(
@@ -1063,6 +1440,9 @@ fn produces_hast_output(child_id: u32, view: &Arena) -> bool {
                 | MdastNodeType::ContainerDirective
                 | MdastNodeType::LeafDirective
                 | MdastNodeType::TextDirective
+                // FootnoteDefinition is emitted only at document end as part
+                // of the GFM `<section class="footnotes">` block.
+                | MdastNodeType::FootnoteDefinition
         )
     )
 }
@@ -1119,6 +1499,30 @@ fn convert_table_row(
         }
         copy_position(cell_id, view, builder);
         convert_children(cell_id, view, builder, ctx);
+        builder.close_node();
+        add_text_node(builder, "\n");
+    }
+    // Pad to the header width — mdast-util-to-hast emits empty `<th>`/`<td>`
+    // for any missing cells so the rendered table is rectangular, even though
+    // the MDAST table row only stores the source cell count.
+    for col_idx in cell_ids.len()..alignments.len() {
+        let align = alignments
+            .get(col_idx)
+            .copied()
+            .unwrap_or(ColumnAlign::None);
+        let style = match align {
+            ColumnAlign::None => None,
+            ColumnAlign::Left => Some("text-align: left"),
+            ColumnAlign::Right => Some("text-align: right"),
+            ColumnAlign::Center => Some("text-align: center"),
+        };
+        if let Some(style) = style {
+            let style_ref = builder.alloc_string(style);
+            let props = build_props(builder, &[("style", PROP_STRING, style_ref)]);
+            open_element_with_props(builder, cell_tag, &props);
+        } else {
+            open_element(builder, cell_tag);
+        }
         builder.close_node();
         add_text_node(builder, "\n");
     }

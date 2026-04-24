@@ -102,17 +102,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.pop(start_ix);
         }
 
-        if self.options.contains(Options::ENABLE_OLD_FOOTNOTES) {
-            // finish footnote if it's still open and was preceded by blank line
-            if let Some(node_ix) = self.tree.peek_up() {
-                if let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body {
-                    if self.last_line_blank {
-                        self.pop(start_ix);
-                    }
-                }
-            }
-        }
-
         // Before processing new containers: if we arrive here with a
         // non-blank line pending, the previous line was a non-trailing blank
         // that belongs to the currently-open list item. Mark the item as
@@ -140,16 +129,35 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if outer_indent >= 4 {
                 if self.options.contains(Options::ENABLE_MDX) {
                     // MDX has no indented code blocks.  Speculatively scan all
-                    // remaining whitespace to look for a list marker at deeper
-                    // indentation.  If no new container is found we restore and
-                    // break so that the indentation is preserved for content
-                    // that belongs to an existing list item.
+                    // remaining whitespace to look for a new container (list
+                    // marker, blockquote, or — when enabled — a directive fence)
+                    // at deeper indentation. If no new container is found we
+                    // restore and break so that the indentation is preserved for
+                    // content that belongs to an existing list item.
                     let extra = line_start.scan_space_upto(usize::MAX);
                     let mdx_ix = start_ix + line_start.bytes_scanned();
-                    // Quick check: is there a list marker or blockquote here?
+                    let has_directive =
+                        self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS)
+                            && scan_ch_repeat(&bytes[mdx_ix..], b':') > 1;
                     let has_container = scan_listitem(&bytes[mdx_ix..]).is_some()
-                        || (mdx_ix < bytes.len() && bytes[mdx_ix] == b'>');
+                        || (mdx_ix < bytes.len() && bytes[mdx_ix] == b'>')
+                        || has_directive;
                     if !has_container {
+                        // Tables are detected later in parse_paragraph when
+                        // the table opener (`|`) is the first non-whitespace
+                        // char on the line. Don't break here if this line
+                        // could be a table start — restore only the outer
+                        // indent and let paragraph-level parsing continue
+                        // so scan_paragraph_table sees it.
+                        if self.options.contains(Options::ENABLE_TABLES)
+                            && mdx_ix < bytes.len()
+                            && bytes[mdx_ix] == b'|'
+                        {
+                            // keep the whitespace we consumed; break so we
+                            // advance into paragraph parsing with the pipe
+                            // as the first non-whitespace byte.
+                            break;
+                        }
                         line_start = save;
                         break;
                     }
@@ -166,11 +174,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 let container_start = start_ix + line_start.bytes_scanned();
                 if let Some(bytecount) = self.parse_footnote(container_start) {
                     start_ix = container_start + bytecount;
-                    if self.options.contains(Options::ENABLE_OLD_FOOTNOTES) {
-                        // gfm footnotes need indented, but old footnotes don't
-                        // handle this, old footnotes treat the next line as part of the current line
-                        start_ix += scan_blank_line(&bytes[start_ix..]).unwrap_or(0);
-                    }
                     line_start = LineStart::new(&bytes[start_ix..]);
                     continue;
                 }
@@ -452,6 +455,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // line_start before continuing with normal block parsing.
             let fence_save = line_start.clone();
             let _ = line_start.scan_space_upto(3);
+            let mut matched_length: Option<u8> = None;
             for (i, &node_ix) in self.tree.walk_spine().rev().enumerate() {
                 match self.tree[node_ix].item.body {
                     ItemBody::ContainerDirective(length, ..) => {
@@ -460,6 +464,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             let after_fence = start_ix + line_start.bytes_scanned();
                             fence_line_end = after_fence + scan_nextline(&bytes[after_fence..]);
                             pop_count = Some(i + 1);
+                            matched_length = Some(length);
                             break;
                         }
                         line_start = probe;
@@ -472,7 +477,28 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 line_start = fence_save;
             }
 
-            if let Some(c) = pop_count {
+            if let Some(mut c) = pop_count {
+                // remark-directive closes a contiguous run of same-length
+                // container directives on a single closing `:::` — the fence
+                // line is shared between the innermost open directive and
+                // all of its ancestors that use the same fence length. Walk
+                // further up the spine and bump the pop count accordingly.
+                if let Some(length) = matched_length {
+                    let spine: Vec<TreeIndex> = self.tree.walk_spine().copied().collect();
+                    if c < spine.len() {
+                        for &ancestor_ix in spine.iter().rev().skip(c) {
+                            match self.tree[ancestor_ix].item.body {
+                                ItemBody::ContainerDirective(other_length, ..)
+                                    if other_length == length =>
+                                {
+                                    c += 1;
+                                }
+                                ItemBody::List(..) | ItemBody::ListItem(..) => {}
+                                _ => break,
+                            }
+                        }
+                    }
+                }
                 for _ in 0..c {
                     self.pop(fence_line_end);
                 }
@@ -484,7 +510,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if let Some(n) = scan_blank_line(&bytes[ix..]) {
             if let Some(node_ix) = self.tree.peek_up() {
                 match &mut self.tree[node_ix].item.body {
-                    ItemBody::ContainerDirective(..) => (),
+                    ItemBody::ContainerDirective(..) => {
+                        // Blank lines inside a container directive propagate
+                        // looseness to the enclosing list item — matching
+                        // remark-directive's behavior where a directive with
+                        // blank-line-separated content makes its ancestor list
+                        // item spread.
+                        self.mark_enclosing_listitem_spread();
+                    }
                     ItemBody::BlockQuote(..) => (),
                     ItemBody::ListItem(indent, _) | ItemBody::DefinitionListDefinition(indent)
                         if self.begin_list_item.is_some() =>
@@ -837,9 +870,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         row_cells: usize,
         missing_empty_cells: &mut usize,
     ) -> Option<(usize, TreeIndex)> {
-        // Limit to prevent a malicious input from causing a denial of service.
-        const MAX_AUTOCOMPLETED_CELLS: usize = 1 << 18; // = 0x40000
-
         let bytes = self.text.as_bytes();
         let mut cells = 0;
         let mut final_cell_ix = None;
@@ -852,13 +882,33 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         });
         self.tree.push();
 
+        let mut first_iter = true;
+        let mut saw_opening_pipe = false;
         loop {
             let cell_start = ix;
-            ix += scan_ch(&bytes[ix..], b'|');
+            let pipe_consumed = scan_ch(&bytes[ix..], b'|');
+            ix += pipe_consumed;
+            if first_iter && pipe_consumed > 0 {
+                saw_opening_pipe = true;
+            }
+            first_iter = false;
             let _start_ix = ix;
             ix += scan_whitespace_no_nl(&bytes[ix..]);
 
             if let Some(eol_bytes) = scan_eol(&bytes[ix..]) {
+                // A line with only an opening `|` and no content (e.g. stray
+                // `              |` between table rows) emits a row with a
+                // single empty cell in remark-gfm instead of terminating the
+                // table. Mirror that here.
+                if saw_opening_pipe && cells == 0 {
+                    let empty_cell_ix = self.tree.append(Item {
+                        start: cell_start,
+                        end: ix,
+                        body: ItemBody::TableCell,
+                    });
+                    final_cell_ix = Some(empty_cell_ix);
+                    cells = 1;
+                }
                 ix += eol_bytes;
                 break;
             }
@@ -888,20 +938,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return None;
         }
 
-        // fill empty cells if needed
-        // note: this is where GFM and commonmark-extra diverge. we follow
-        // GFM here
-        for _ in cells..row_cells {
-            if *missing_empty_cells >= MAX_AUTOCOMPLETED_CELLS {
-                return None;
-            }
-            *missing_empty_cells += 1;
-            self.tree.append(Item {
-                start: ix,
-                end: ix,
-                body: ItemBody::TableCell,
-            });
-        }
+        // Don't fill missing cells in MDAST: GFM HTML rendering pads rows to
+        // the header width, but `mdast-util-gfm-table` keeps the source cell
+        // count (HAST padding happens downstream in `mdast-util-to-hast`).
+        // Match remark-gfm's mdast shape.
+        let _ = row_cells;
+        let _ = missing_empty_cells;
 
         // Extend the last cell's end to include the trailing `|` and
         // whitespace, matching remark's convention.
@@ -1243,6 +1285,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         if scan_containers(&self.tree, &mut line_start, self.options)
                             == self.tree.spine_len()
                         {
+                            // In MDX, the delimiter row of a table nested inside
+                            // a list item may have extra leading whitespace
+                            // beyond the container continuation. No indented
+                            // code blocks, so consume it before scan_table_head.
+                            if self.options.contains(Options::ENABLE_MDX) {
+                                line_start.scan_all_space();
+                            }
                             let table_head_ix = next_line_ix + line_start.bytes_scanned();
                             let delim = &bytes[table_head_ix..];
                             let delim_is_list_item = scan_listitem(delim).is_some();
@@ -1424,6 +1473,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     LoopInstruction::ContinueAndSkip(0)
                 }
                 b'{' if self.options.contains(Options::ENABLE_MDX) => {
+                    // If `{` sits inside a pair of matching backtick runs on
+                    // the current line, it's part of a code span's text —
+                    // code spans take priority over MDX expressions in
+                    // remark. Skip inline-expression detection so the `{` is
+                    // consumed as literal text (the enclosing code span will
+                    // pick it up when backtick pairing resolves).
+                    if is_inside_code_span_on_line(bytes, ix) {
+                        LoopInstruction::ContinueAndSkip(0)
+                    } else {
                     // MDX inline expression: try to scan balanced braces.
                     let scan_result = if self.tree.spine_len() > 0 {
                         let check = self.make_container_line_check();
@@ -1452,6 +1510,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 .to_string(),
                         ));
                         LoopInstruction::ContinueAndSkip(0)
+                    }
                     }
                 }
                 b'{' => {
@@ -2268,17 +2327,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if !bytes.starts_with(b"[^") {
             return None;
         }
-        let (mut i, label) = if self.options.has_gfm_footnotes() {
-            // GitHub doesn't allow footnote definition labels to contain line breaks.
-            // It actually does allow this for link definitions under certain circumstances,
-            // but for this it's simpler to avoid it.
-            scan_link_label_rest(&self.text[start + 2..], &|_| None, self.tree.is_in_table())?
-        } else {
-            self.parse_refdef_label(start + 2)?
-        };
-        if self.options.has_gfm_footnotes() && label.bytes().any(|b| b == b'\r' || b == b'\n') {
-            // GitHub doesn't allow footnote definition labels to contain line breaks,
-            // even if they're escaped.
+        // GitHub doesn't allow footnote definition labels to contain line
+        // breaks. It actually does allow this for link definitions under
+        // certain circumstances, but for this it's simpler to avoid it.
+        let (mut i, label) =
+            scan_link_label_rest(&self.text[start + 2..], &|_| None, self.tree.is_in_table())?;
+        if label.bytes().any(|b| b == b'\r' || b == b'\n') {
             return None;
         }
         i += 2;
@@ -2293,9 +2347,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.pop(start);
             }
         }
-        if self.options.has_gfm_footnotes() {
-            i += scan_whitespace_no_nl(&bytes[i..]);
-        }
+        i += scan_whitespace_no_nl(&bytes[i..]);
         self.allocs
             .footdefs
             .0
@@ -2538,6 +2590,20 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         current_container: bool,
         tree_position: usize,
     ) -> bool {
+        // The free `scan_paragraph_interrupt_no_table` helper checks MDX JSX
+        // flow elements with a `None` container check, which misfires inside
+        // a blockquote or similar container where the `>` continuation prefix
+        // would be mis-read as a JSX close `>`. Re-check that specific case
+        // with the spine's container prefix so multi-line JSX in blockquotes
+        // correctly interrupts paragraphs.
+        if self.options.contains(Options::ENABLE_MDX) && bytes.starts_with(b"<") {
+            if self
+                .scan_mdx_flow_in_container_bytes(bytes, |b, c| scan_mdx_jsx_block(b, c))
+                .is_some()
+            {
+                return true;
+            }
+        }
         if scan_paragraph_interrupt_no_table(
             bytes,
             current_container,
@@ -2613,6 +2679,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let mut line_start = LineStart::new(&bytes[next_line_ix..]);
         if scan_containers(&self.tree, &mut line_start, self.options) != self.tree.spine_len() {
             return false;
+        }
+        // In MDX, a table nested inside a list item may be indented beyond the
+        // list's continuation column (no indented code blocks to conflict
+        // with). Consume any extra whitespace so scan_table_head sees the
+        // delimiter row flush-left.
+        if self.options.contains(Options::ENABLE_MDX) {
+            line_start.scan_all_space();
         }
         let table_head_ix = next_line_ix + line_start.bytes_scanned();
         let (table_head_bytes, alignment) = scan_table_head(&bytes[table_head_ix..]);
@@ -2763,6 +2836,68 @@ fn scan_paragraph_interrupt_no_table(
 /// entirely of spaces/tabs, or an empty line). Used to propagate "loose"
 /// state up to the enclosing list when a multi-line flow block (JSX or
 /// expression) is consumed atomically.
+/// Return `true` if `pos` sits between two backtick runs of matching length
+/// on the current line. Used to give code spans priority over MDX inline
+/// expressions — `` `{foo}` `` is a code span containing the text `{foo}`,
+/// not an inline expression.
+fn is_inside_code_span_on_line(bytes: &[u8], pos: usize) -> bool {
+    // Scan backward for the start of the current line.
+    let mut line_start = pos;
+    while line_start > 0 && bytes[line_start - 1] != b'\n' && bytes[line_start - 1] != b'\r' {
+        line_start -= 1;
+    }
+    // Scan forward for the end of the current line.
+    let mut line_end = pos;
+    while line_end < bytes.len() && bytes[line_end] != b'\n' && bytes[line_end] != b'\r' {
+        line_end += 1;
+    }
+    // Collect backtick runs on this line, skipping backslash-escaped ones.
+    let mut runs: Vec<(usize, usize)> = Vec::new(); // (start, count)
+    let mut i = line_start;
+    while i < line_end {
+        if bytes[i] == b'\\' && i + 1 < line_end {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'`' {
+            let start = i;
+            while i < line_end && bytes[i] == b'`' {
+                i += 1;
+            }
+            runs.push((start, i - start));
+        } else {
+            i += 1;
+        }
+    }
+    if runs.len() < 2 {
+        return false;
+    }
+    // First-fit pair the runs: each open matches the next run of the same
+    // length, and once matched both are consumed.
+    let mut paired = vec![false; runs.len()];
+    for a in 0..runs.len() {
+        if paired[a] {
+            continue;
+        }
+        for b in (a + 1)..runs.len() {
+            if paired[b] {
+                continue;
+            }
+            if runs[b].1 == runs[a].1 {
+                paired[a] = true;
+                paired[b] = true;
+                let span_start = runs[a].0 + runs[a].1;
+                let span_end = runs[b].0;
+                if pos >= span_start && pos < span_end {
+                    return true;
+                }
+                break;
+            }
+        }
+    }
+    false
+}
+
 fn contains_blank_line(bytes: &[u8]) -> bool {
     let mut i = 0;
     let mut at_line_start = true;

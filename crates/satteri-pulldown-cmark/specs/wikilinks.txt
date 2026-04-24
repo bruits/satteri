@@ -140,16 +140,18 @@ Wikilinks cannot be empty. They will render as-is.
 
 Other interactions wikilinks have with other Markdown syntax:
 
+Per-character URI escaping: rehype percent-encodes `[` and `]` in inline
+link URLs, matching remark-rehype's default sanitisation.
 ```````````````````````````````` example_wikilinks
 [inline link]([[url]])
 .
-<p><a href="[[url]]">inline link</a></p>
+<p><a href="%5B%5Burl%5D%5D">inline link</a></p>
 ````````````````````````````````
 
 ```````````````````````````````` example_wikilinks
 [inline link]([[url)]]
 .
-<p><a href="[[url">inline link</a>]]</p>
+<p><a href="%5B%5Burl">inline link</a>]]</p>
 ````````````````````````````````
 
 ```````````````````````````````` example_wikilinks

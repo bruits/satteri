@@ -16,7 +16,7 @@ content
 <p>:::</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -30,7 +30,7 @@ Hi
 :::</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -41,7 +41,7 @@ Content here
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -52,7 +52,7 @@ Content
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -63,7 +63,7 @@ Be careful!
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -76,7 +76,7 @@ Content
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn container_extensions_test_7() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn container_extensions_test_8() {
     let expected = r##"<p>A  example.</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn container_extensions_test_9() {
     let expected = r##"<p>This  is text.</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn container_extensions_test_10() {
     let expected = r##"<p>Hello :smile: world</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -128,7 +128,7 @@ Paragraph 2
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn container_extensions_test_12() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -151,7 +151,7 @@ Content
     let expected = r##"<p><strong>bold after</strong></p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -163,7 +163,7 @@ Hi
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn container_extensions_test_15() {
 </blockquote>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -186,7 +186,7 @@ Hi
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn container_extensions_test_17() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -212,7 +212,7 @@ x
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -222,20 +222,25 @@ content :::
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
 fn container_extensions_test_20() {
+    // remark-directive closes a whole run of same-length container-
+    // directive fences on a single closing `:::`. So the first `:::` here
+    // closes both `:::a` and its nested `:::b`; the second `:::` has
+    // nothing to close and falls through as literal paragraph text.
     let original = r##":::a
 :::b
 
 :::
 :::
 "##;
-    let expected = r##""##;
+    let expected = r##"<p>:::</p>
+"##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -248,7 +253,7 @@ fn container_extensions_test_21() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -261,7 +266,7 @@ fn container_extensions_test_22() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -275,7 +280,7 @@ Hi
 :::</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
 
 #[test]
@@ -284,5 +289,5 @@ fn container_extensions_test_24() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }

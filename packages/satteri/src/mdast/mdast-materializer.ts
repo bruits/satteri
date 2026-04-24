@@ -116,10 +116,13 @@ function addTypeProperties(
       break;
 
     case 17: // linkReference
-    case 20: // footnoteReference
       lazyGroup(node, ["identifier", "label", "referenceType"], () =>
         reader.getReferenceData(nodeId),
       );
+      break;
+
+    case 20: // footnoteReference — no `referenceType` per mdast spec
+      lazyGroup(node, ["identifier", "label"], () => reader.getReferenceData(nodeId));
       break;
 
     case 18: // imageReference — leaf with alt (remark treats it as a void node)

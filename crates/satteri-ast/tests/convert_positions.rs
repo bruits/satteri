@@ -227,23 +227,16 @@ fn table_position_preserved() {
 }
 
 #[test]
-fn footnote_reference_and_definition_positions_preserved() {
+fn footnote_reference_position_preserved() {
+    // In GFM footnote emission, only the reference `<sup>` copies its
+    // position from the source mdast node — the definition is moved into a
+    // synthesised `<section>` whose `<li id="user-content-fn-N">` wrapper is
+    // synthetic and deliberately has no source position.
     let mdast = parse("See[^1].\n\n[^1]: note");
     let hast = mdast_arena_to_hast_arena(&mdast);
-
-    // Both FootnoteReference and FootnoteDefinition emit a <sup>, so filter
-    // by the distinguishing class rather than relying on source order.
     let ref_m = find_mdast(&mdast, MdastNodeType::FootnoteReference);
-    let ref_h = find_hast_element_where(&hast, "sup", |arena, id| {
-        element_prop(arena, id, "className") == Some("footnote-reference")
-    });
+    let ref_h = find_hast_element(&hast, "sup");
     assert_position_matches(&hast, ref_h, &mdast, ref_m, "footnote reference");
-
-    let def_m = find_mdast(&mdast, MdastNodeType::FootnoteDefinition);
-    let def_h = find_hast_element_where(&hast, "div", |arena, id| {
-        element_prop(arena, id, "className") == Some("footnote-definition")
-    });
-    assert_position_matches(&hast, def_h, &mdast, def_m, "footnote definition");
 }
 
 #[test]

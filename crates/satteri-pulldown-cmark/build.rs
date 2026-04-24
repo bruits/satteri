@@ -88,7 +88,7 @@ fn {}_test_{i}() {{
     let original = r##"{original}"##;
     let expected = r##"{expected}"##;
 
-    test_markdown_html(original, expected, {base_options}, {smart_punct}, {metadata_blocks}, {old_footnotes}, {subscript}, {wikilinks}, {deflists}, {container_extensions});
+    test_markdown_html(original, expected, {base_options}, {smart_punct}, {metadata_blocks}, {subscript}, {wikilinks}, {deflists}, {container_extensions});
 }}
 "###,
                     spec_name,
@@ -98,7 +98,6 @@ fn {}_test_{i}() {{
                     base_options = base_options,
                     smart_punct = testcase.smart_punct,
                     metadata_blocks = testcase.metadata_blocks,
-                    old_footnotes = testcase.old_footnotes,
                     subscript = testcase.subscript,
                     wikilinks = testcase.wikilinks,
                     deflists = testcase.deflists,
@@ -160,15 +159,22 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         "gfm_strikethrough" => GFM | STRIKETHROUGH,
         "gfm_tasklist" => GFM | TASKLISTS,
 
-        // Extension-specific specs
-        "footnotes" => FOOTNOTES,
+        // Extension-specific specs. `footnotes` bundles GFM because
+        // remark-gfm (our conformance target) always enables autolink-literal
+        // alongside footnotes, so the expected HTML assumes both.
+        "footnotes" => FOOTNOTES | GFM,
         "heading_attrs" => HEADING_ATTRIBUTES,
         "math" => MATH,
         "strikethrough" => GFM | STRIKETHROUGH,
         "super_sub" => SUPERSCRIPT,
         "table" => TABLES,
 
-        // Regression tests: enable common extensions to match historical behavior
+        // Regression tests: enable a broad set of extensions so cases that
+        // exercise any one of them (GFM, footnotes, tables, heading attrs,
+        // …) can coexist in a single spec file. These flags are strictly
+        // about what the parser is asked to do here — they are not the
+        // default set shipped via the npm/napi binding, which stays
+        // close to remark-gfm.
         "regression" => {
             TABLES
                 | FOOTNOTES
@@ -179,9 +185,6 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
                 | GFM
                 | SUPERSCRIPT
         }
-
-        // old_footnotes has negative tests that expect new-style footnotes to be active
-        "old_footnotes" => FOOTNOTES,
 
         // Specs that use per-example suffix flags only
         "container_extensions" | "metadata_blocks" | "wikilinks" => 0,
@@ -208,7 +211,6 @@ pub struct TestCase {
     pub expected: String,
     pub smart_punct: bool,
     pub metadata_blocks: bool,
-    pub old_footnotes: bool,
     pub subscript: bool,
     pub wikilinks: bool,
     pub deflists: bool,
@@ -227,106 +229,46 @@ impl<'a> Iterator for Spec<'a> {
             i_start,
             smart_punct,
             metadata_blocks,
-            old_footnotes,
             subscript,
             wikilinks,
             deflists,
             container_extensions,
         ) = self.spec.find(prefix).and_then(|pos| {
-            let smartpunct_suffix = "_smartpunct\n";
-            let metadata_blocks_suffix = "_metadata_blocks\n";
-            let old_footnotes_suffix = "_old_footnotes\n";
-            let super_sub_suffix = "_super_sub\n";
-            let wikilinks_suffix = "_wikilinks\n";
-            let deflists_suffix = "_deflists\n";
-            let container_extensions_suffix = "_container_extensions\n";
-            if spec[(pos + prefix.len())..].starts_with(smartpunct_suffix) {
+            let after = pos + prefix.len();
+            let tail = &spec[after..];
+            let mut flags = [false; 6];
+            let (consumed, matched) = if let Some(rest) = tail.strip_prefix("_smartpunct\n") {
+                flags[0] = true;
+                (tail.len() - rest.len(), true)
+            } else if let Some(rest) = tail.strip_prefix("_metadata_blocks\n") {
+                flags[1] = true;
+                (tail.len() - rest.len(), true)
+            } else if let Some(rest) = tail.strip_prefix("_super_sub\n") {
+                flags[2] = true;
+                (tail.len() - rest.len(), true)
+            } else if let Some(rest) = tail.strip_prefix("_wikilinks\n") {
+                flags[3] = true;
+                (tail.len() - rest.len(), true)
+            } else if let Some(rest) = tail.strip_prefix("_deflists\n") {
+                flags[4] = true;
+                (tail.len() - rest.len(), true)
+            } else if let Some(rest) = tail.strip_prefix("_container_extensions\n") {
+                flags[5] = true;
+                (tail.len() - rest.len(), true)
+            } else if tail.starts_with('\n') {
+                (1, true)
+            } else {
+                (0, false)
+            };
+            if matched {
                 Some((
-                    pos + prefix.len() + smartpunct_suffix.len(),
-                    true,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                ))
-            } else if spec[(pos + prefix.len())..].starts_with(metadata_blocks_suffix) {
-                Some((
-                    pos + prefix.len() + metadata_blocks_suffix.len(),
-                    false,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                ))
-            } else if spec[(pos + prefix.len())..].starts_with(old_footnotes_suffix) {
-                Some((
-                    pos + prefix.len() + old_footnotes_suffix.len(),
-                    false,
-                    false,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false,
-                ))
-            } else if spec[(pos + prefix.len())..].starts_with(super_sub_suffix) {
-                Some((
-                    pos + prefix.len() + super_sub_suffix.len(),
-                    false,
-                    false,
-                    false,
-                    true,
-                    false,
-                    false,
-                    false,
-                ))
-            } else if spec[(pos + prefix.len())..].starts_with(wikilinks_suffix) {
-                Some((
-                    pos + prefix.len() + wikilinks_suffix.len(),
-                    false,
-                    false,
-                    false,
-                    false,
-                    true,
-                    false,
-                    false,
-                ))
-            } else if spec[(pos + prefix.len())..].starts_with(deflists_suffix) {
-                Some((
-                    pos + prefix.len() + deflists_suffix.len(),
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    true,
-                    false,
-                ))
-            } else if spec[(pos + prefix.len())..].starts_with(container_extensions_suffix) {
-                Some((
-                    pos + prefix.len() + container_extensions_suffix.len(),
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    true,
-                ))
-            } else if spec[(pos + prefix.len())..].starts_with('\n') {
-                Some((
-                    pos + prefix.len() + 1,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
+                    after + consumed,
+                    flags[0],
+                    flags[1],
+                    flags[2],
+                    flags[3],
+                    flags[4],
+                    flags[5],
                 ))
             } else {
                 None
@@ -348,7 +290,6 @@ impl<'a> Iterator for Spec<'a> {
             expected: spec[i_end + 2..e_end].to_string().replace("→", "\t"),
             smart_punct,
             metadata_blocks,
-            old_footnotes,
             subscript,
             wikilinks,
             deflists,

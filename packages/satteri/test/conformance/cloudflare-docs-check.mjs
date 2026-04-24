@@ -15,7 +15,7 @@ const { remarkMarkAndUnravel } = await import(
 );
 
 const DOCS_ROOT = "/home/erika/Projects/cloudflare-docs";
-const FEATURES = { frontmatter: true, directive: true };
+const FEATURES = { frontmatter: true, directive: true, math: false };
 
 const MDX_PASS_THROUGH = [
   "mdxJsxFlowElement",
@@ -51,6 +51,19 @@ function stripPositionsAndEstree(node) {
   const out = {};
   for (const [k, v] of Object.entries(node)) {
     if (k === "position" || k === "data") continue;
+    if (k === "properties" && typeof v === "object" && v !== null) {
+      // Satteri emits modern `style="text-align: <x>"` for HAST table cells
+      // where `mdast-util-to-hast` still emits the deprecated `align` prop;
+      // fold that down on the reference side so the comparison only catches
+      // structural divergence.
+      const props = { ...v };
+      if ("align" in props && typeof props.align === "string") {
+        props.style = `text-align: ${props.align}`;
+        delete props.align;
+      }
+      out[k] = props;
+      continue;
+    }
     if (Array.isArray(v)) out[k] = v.map(stripPositionsAndEstree);
     else if (typeof v === "object" && v !== null) out[k] = stripPositionsAndEstree(v);
     else out[k] = v;

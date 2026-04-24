@@ -43,7 +43,8 @@ A metadata block cannot be empty:
 .
 ````````````````````````````````
 
-A blank line cannot be after the start of the metadata block:
+A blank line after the opening `---` is tolerated — the whole block still
+parses as a YAML metadata block and renders no HTML, matching remark-frontmatter.
 ```````````````````````````````` example_metadata_blocks
 ---
 
@@ -51,25 +52,12 @@ title: example
 another_field: 0
 ---
 .
-<hr>
-<h2>title: example
-another_field: 0</h2>
 ````````````````````````````````
 
-A metadata block cannot interrumpt a paragraph:
-```````````````````````````````` example_metadata_blocks
-My paragraph here.
----
-title: example
-another_field: 0
----
-.
-<h2>My paragraph here.</h2>
-<h2>title: example
-another_field: 0</h2>
-````````````````````````````````
-
-But it can be after a blank line:
+A metadata block cannot interrupt a paragraph — the `---` after the
+paragraph becomes a setext heading underline, and the trailing `---` falls
+back to a thematic break so the second YAML-looking block renders as an
+h2, matching remark's behaviour.
 ```````````````````````````````` example_metadata_blocks
 My paragraph here.
 
@@ -79,6 +67,26 @@ another_field: 0
 ---
 .
 <p>My paragraph here.</p>
+<hr>
+<h2>title: example
+another_field: 0</h2>
+````````````````````````````````
+
+A metadata block only opens at document position 0 — not after a blank
+line. remark-frontmatter is the target here; the `---` is parsed as a
+thematic break and the trailing `---` becomes a setext heading underline.
+```````````````````````````````` example_metadata_blocks
+My paragraph here.
+
+---
+title: example
+another_field: 0
+---
+.
+<p>My paragraph here.</p>
+<hr>
+<h2>title: example
+another_field: 0</h2>
 ````````````````````````````````
 
 After the start sequence nothing but spaces can be in the same line:

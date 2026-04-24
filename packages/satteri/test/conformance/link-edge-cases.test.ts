@@ -7,6 +7,7 @@ import { describe, test } from "vitest";
 import {
   assertHtmlConformance,
   assertExtMdastConformance,
+  assertExtMdastConformanceNoPosition,
   assertMdastConformance,
 } from "./helpers.js";
 
@@ -33,6 +34,64 @@ describe("HTML conformance: malformed reference definitions fall back to paragra
     assertHtmlConformance(
       "[first\n-\nsecond]: https://example.com\n\n[first\n-\nsecond]\n",
     );
+  });
+});
+
+describe("MDAST conformance: autolink-literal vs directive inside broken link labels", () => {
+  test("unmatched `[` + `:port` after URL host: directive wins, URL stays text", () => {
+    // From docs/src/content/docs/ru/guides/testing.mdx: an inline `[...]`
+    // attempt with nested code spans never resolves into a link, so remark
+    // keeps the `:4321` as a textDirective and doesn't autolink
+    // `http://localhost:4321` in the post-transform pass (domain has no `.`).
+    // Satteri has to mirror both choices or the resulting mdast diverges.
+    assertExtMdastConformance(
+      '[``x``:"http://localhost:4321"`](https://a.com/) z `foo`.',
+      ["directive"],
+    );
+  });
+
+  test("unmatched `[` in directive: no autolink, no port merge", () => {
+    // Minimal shape of the same bug: the leading `[` in a sibling text node
+    // is what flips remark into the stricter no-autolink path.
+    assertExtMdastConformance(
+      '[`a`:"http://localhost:4321" end',
+      ["directive"],
+    );
+  });
+});
+
+describe("MDAST conformance: GFM autolink-literal trim-back split", () => {
+  test("unclosed `[` + URL: remark splits `),` from the trailing text", () => {
+    // From docs/src/content/docs/de/guides/cms/index.mdx inside `:::tip`:
+    // `Hello [label(https://host/path), rest` — remark emits the trimmed-back
+    // `),` as its own text node when an earlier unclosed `[` is present.
+    // Position-stripped: remark's post-transform autolink nodes don't carry
+    // a position for the synthesized link, while ours do.
+    assertExtMdastConformanceNoPosition(
+      "Hello [von der Community gepflegte Integrationen(https://astro.build/integrations/?search=cms), um.",
+      [],
+    );
+  });
+});
+
+describe("HTML conformance: autolink literal rejects control characters", () => {
+  test("angle-bracket autolink with embedded BEL — literal text, no link", () => {
+    // regression_test_48: `<http://\x07>` — the `<...>` autolink form rejects
+    // the control char, and GFM's autolink-literal post-pass must also bail
+    // so the sequence stays as literal `&lt;http://\x07&gt;`. Previously our
+    // post-pass kept reading past control chars and turned the tail into
+    // `<a href="http://%07%3E">http://\x07></a>`, diverging from remark.
+    assertHtmlConformance("<http://\x07>\n");
+  });
+});
+
+describe("HTML conformance: deflist-shaped input without the deflist extension", () => {
+  test("`* item\\n\\n  : body` renders as a loose list with a `:`-prefixed paragraph", () => {
+    // regression_test_202: pulldown-cmark's deflist extension produces a
+    // nested `<p><p>…</p></p>` here. Our AST layer doesn't expose deflist
+    // and remark has no deflist support, so the conformance shape is the
+    // plain two-paragraph list item both engines agree on with deflist off.
+    assertHtmlConformance("* def this\n\n  : def text def text\n");
   });
 });
 

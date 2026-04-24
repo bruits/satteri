@@ -803,13 +803,19 @@ An unordered list before the footnotes:
 
 [^a]: Cool.
 .
-<p>Lorem ipsum.<sup class="footnote-reference"><a href="#a">1</a></sup></p>
+<p>Lorem ipsum.<sup><a href="#user-content-fn-a" id="user-content-fnref-a" data-footnote-ref aria-describedby="footnote-label">1</a></sup></p>
 <p>An unordered list before the footnotes:</p>
 <ul>
 <li>Ipsum</li>
 <li>Lorem</li>
 </ul>
-<div class="footnote-definition" id="a"><sup class="footnote-definition-label">1</sup><p>Cool.</p></div>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-a">
+<p>Cool. <a href="#user-content-fnref-a" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a></p>
+</li>
+</ol>
+</section>
 ````````````````````````````````
 
 ISSUE 421
@@ -1814,7 +1820,7 @@ ISSUE 753
 ]: https://rust-lang.org
 .
 <p>[x\</p>
-<p>]: https://rust-lang.org</p>
+<p>]: <a href="https://rust-lang.org">https://rust-lang.org</a></p>
 ````````````````````````````````
 
 ISSUE 755
@@ -1926,7 +1932,7 @@ ISSUE 768
 Second try]: https://rust-lang.org
 .
 <h2>[First try</h2>
-<p>Second try]: https://rust-lang.org</p>
+<p>Second try]: <a href="https://rust-lang.org">https://rust-lang.org</a></p>
 ````````````````````````````````
 
 ISSUE 772
@@ -1942,10 +1948,16 @@ ISSUE 772
 
 [baz]: https://rust-lang.org
 .
-<p><sup class="footnote-reference"><a href="#foo">1</a></sup>[]</p>
-<p><a href="https://rust-lang.org">^foo</a></p>
-<p><a href="https://rust-lang.org">baz</a><sup class="footnote-reference"><a href="#foo">1</a></sup></p>
-<div class="footnote-definition" id="foo"><sup class="footnote-definition-label">1</sup><p>bar</p></div>
+<p><sup><a href="#user-content-fn-foo" id="user-content-fnref-foo" data-footnote-ref aria-describedby="footnote-label">1</a></sup>[]</p>
+<p><sup><a href="#user-content-fn-foo" id="user-content-fnref-foo-2" data-footnote-ref aria-describedby="footnote-label">1</a></sup><a href="https://rust-lang.org">baz</a></p>
+<p>[baz]<sup><a href="#user-content-fn-foo" id="user-content-fnref-foo-3" data-footnote-ref aria-describedby="footnote-label">1</a></sup></p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-foo">
+<p>bar <a href="#user-content-fnref-foo" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a> <a href="#user-content-fnref-foo-2" data-footnote-backref="" aria-label="Back to reference 1-2" class="data-footnote-backref">↩<sup>2</sup></a> <a href="#user-content-fnref-foo-3" data-footnote-backref="" aria-label="Back to reference 1-3" class="data-footnote-backref">↩<sup>3</sup></a></p>
+</li>
+</ol>
+</section>
 ````````````````````````````````
 
 ISSUE 774
@@ -2093,7 +2105,6 @@ https://gist.github.com/notriddle/0048782ad2e819a134c094a1cc52df84
 GFM footnotes can interrupt link defs if they have three spaces, but not four.
 .
 <p>[linkme-3]:</p>
-<div class="footnote-definition" id="foo"><sup class="footnote-definition-label">1</sup></div>
 <p>GFM footnotes can interrupt link defs if they have three spaces, but not four.</p>
 ````````````````````````````````
 
@@ -2139,7 +2150,7 @@ second]: https://example.com
 second]
 .
 <h2>[first</h2>
-<p>second]: https://example.com</p>
+<p>second]: <a href="https://example.com">https://example.com</a></p>
 <h2>[first</h2>
 <p>second]</p>
 ````````````````````````````````
@@ -2355,7 +2366,7 @@ baz`</li>
 <li>[foo
 <ul>
 <li>-
-baz](https://example.com)</li>
+baz](<a href="https://example.com">https://example.com</a>)</li>
 </ul>
 </li>
 </ul>
@@ -2437,8 +2448,14 @@ ISSUE 817
 
 [^1]: foo
 .
-<p>!<sup class="footnote-reference"><a href="#1">1</a></sup></p>
-<div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup><p>foo</p></div>
+<p>!<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup></p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>foo <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a></p>
+</li>
+</ol>
+</section>
 ````````````````````````````````
 
 ```````````````````````````````` example
@@ -2446,8 +2463,14 @@ First ![^1][] Second
 
 [^1]: foo
 .
-<p>First !<sup class="footnote-reference"><a href="#1">1</a></sup>[] Second</p>
-<div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup><p>foo</p></div>
+<p>First !<sup><a href="#user-content-fn-1" id="user-content-fnref-1" data-footnote-ref aria-describedby="footnote-label">1</a></sup>[] Second</p>
+<section data-footnotes class="footnotes"><h2 class="sr-only" id="footnote-label">Footnotes</h2>
+<ol>
+<li id="user-content-fn-1">
+<p>foo <a href="#user-content-fnref-1" data-footnote-backref="" aria-label="Back to reference 1" class="data-footnote-backref">↩</a></p>
+</li>
+</ol>
+</section>
 ````````````````````````````````
 
 ISSUE 826
@@ -2478,11 +2501,9 @@ ISSUE 828
   t_
 .
 <ul>
-<li>
-<p>_t</p>
+<li>_t
 <h1>test</h1>
-<p>t_</p>
-</li>
+t_</li>
 </ul>
 ````````````````````````````````
 
@@ -2492,11 +2513,9 @@ ISSUE 828
   N*
 .
 <ul>
-<li>
-<p>*_</p>
+<li>*_
 <h1></h1>
-<p>N*</p>
-</li>
+N*</li>
 </ul>
 ````````````````````````````````
 
@@ -2676,7 +2695,7 @@ ISSUE 840
 
 [link]
 .
-<p><a href="test" title="&#39;">link</a></p>
+<p><a href="test" title="&#x27;">link</a></p>
 ````````````````````````````````
 
 ISSUE 850
@@ -2713,8 +2732,7 @@ test2
 <li>
 <pre><code>test
 </code></pre>
-<p>test2</p>
-</li>
+test2</li>
 </ul>
 ````````````````````````````````
 
@@ -2821,12 +2839,10 @@ _**
   ^_
 .
 <ul>
-<li>
-<p>_
-_**</p>
+<li>_
+_**
 <hr>
-<p>^_</p>
-</li>
+^_</li>
 </ul>
 ````````````````````````````````
 
@@ -2837,6 +2853,7 @@ ISSUE #907
 > - Foo
 .
 <blockquote>
+<p>[!Note]</p>
 <ul>
 <li>Foo</li>
 </ul>
@@ -2916,13 +2933,16 @@ ISSUE #949
 </ul>
 ````````````````````````````````
 
-```````````````````````````````` example_deflists
+```````````````````````````````` example
 * def this
 
   : def text def text
 .
 <ul>
-<li><p>def this</p><p><p>def text def text</p></p></li>
+<li>
+<p>def this</p>
+<p>: def text def text</p>
+</li>
 </ul>
 ````````````````````````````````
 
@@ -2968,11 +2988,9 @@ Some preamble <code>foobar_raz</code>, not <code>barfoo_raz</code></p><p><p>D</p
   stuff](https://example.com)
 .
 <ul>
-<li>
-<p>Item definition [it</p>
+<li>Item definition [it
 <pre><code class="language-rust"></code></pre>
-<p>stuff](https://example.com)</p>
-</li>
+stuff](<a href="https://example.com">https://example.com</a>)</li>
 </ul>
 ````````````````````````````````
 

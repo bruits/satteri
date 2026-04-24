@@ -233,7 +233,7 @@ pub enum Tag<'a> {
     /// A footnote definition. The value contained is the footnote's label by which it can
     /// be referred to.
     ///
-    /// Only parsed and emitted with [`Options::ENABLE_FOOTNOTES`] or [`Options::ENABLE_OLD_FOOTNOTES`].
+    /// Only parsed and emitted with [`Options::ENABLE_FOOTNOTES`].
     #[cfg_attr(feature = "serde", serde(borrow))]
     FootnoteDefinition(CowStr<'a>),
 
@@ -632,7 +632,7 @@ pub enum Event<'a> {
     InlineHtml(CowStr<'a>),
     /// A reference to a footnote with given label, defined
     /// by an event with a [`Tag::FootnoteDefinition`] tag. Definitions and references to them may
-    /// occur in any order. Only parsed and emitted with [`Options::ENABLE_FOOTNOTES`] or [`Options::ENABLE_OLD_FOOTNOTES`].
+    /// occur in any order. Only parsed and emitted with [`Options::ENABLE_FOOTNOTES`].
     ///
     /// ```markdown
     /// [^1]
@@ -788,26 +788,6 @@ bitflags::bitflags! {
         /// - `+++` line at start
         /// - `+++` line at end
         const ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS = 1 << 8;
-        /// Older footnote syntax. This flag implies `ENABLE_FOOTNOTES`, changing it to use an
-        /// older syntax instead of the new, default, GitHub-compatible syntax.
-        ///
-        /// New syntax is different from the old syntax regarding
-        /// indentation, nesting, and footnote references with no definition:
-        ///
-        /// ```markdown
-        /// [^1]: In new syntax, this is two footnote definitions.
-        /// [^2]: In old syntax, this is a single footnote definition with two lines.
-        ///
-        /// [^3]:
-        ///
-        ///     In new syntax, this is a footnote with two paragraphs.
-        ///
-        ///     In old syntax, this is a footnote followed by a code block.
-        ///
-        /// In new syntax, this undefined footnote definition renders as
-        /// literal text [^4]. In old syntax, it creates a dangling link.
-        /// ```
-        const ENABLE_OLD_FOOTNOTES = (1 << 9) | (1 << 2);
         /// With this feature enabled, two events `Event::InlineMath` and `Event::DisplayMath`
         /// are emitted that conventionally contain TeX formulas.
         const ENABLE_MATH = 1 << 10;
@@ -839,10 +819,6 @@ bitflags::bitflags! {
 }
 
 impl Options {
-    pub(crate) fn has_gfm_footnotes(&self) -> bool {
-        self.contains(Options::ENABLE_FOOTNOTES) && !self.contains(Options::ENABLE_OLD_FOOTNOTES)
-    }
-
     pub(crate) fn has_smart_quotes(&self) -> bool {
         self.contains(Options::ENABLE_SMART_PUNCTUATION)
             || self.contains(Options::ENABLE_SMART_QUOTES)

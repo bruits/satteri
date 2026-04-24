@@ -10,7 +10,7 @@ fn math_test_1() {
     let expected = r##"<p><code class="language-math math-inline">x=y</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -20,7 +20,7 @@ fn math_test_2() {
     let expected = r##"<p><code class="language-math math-inline">\sqrt{3x-1}+(1+x)^2</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn math_test_3() {
     let expected = r##"<p>foo<code class="language-math math-inline">1+1 = 2</code>bar</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn math_test_4() {
     let expected = r##"<p><code class="language-math math-inline">a</code> and <code class="language-math math-inline">b</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -50,7 +50,7 @@ fn math_test_5() {
     let expected = r##"<p><code class="language-math math-inline">a$$b</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn math_test_6() {
 17</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn math_test_7() {
     let expected = r##"<p><code class="language-math math-inline">\alpha</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn math_test_8() {
     let expected = r##"<p><code class="language-math math-inline">a&#x3C;b>c&#x3C;/b></code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn math_test_9() {
     let expected = r##"<p><code class="language-math math-inline">not `code`</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn math_test_10() {
     let expected = r##"<p><code class="language-math math-inline">![not an](/image)</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn math_test_11() {
     let expected = r##"<p><code class="language-math math-inline">&#x3C;https://not.a.link/></code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn math_test_12() {
     let expected = r##"<p><code class="language-math math-inline">&#x26;alpha;</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn math_test_13() {
     let expected = r##"<p><code class="language-math math-inline"> y=x</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn math_test_14() {
     let expected = r##"<p><code class="language-math math-inline">y=x </code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn math_test_15() {
     let expected = r##"<p>Hello $world.</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn math_test_16() {
     let expected = r##"<p>Dollar at end of line$</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn math_test_17() {
     let expected = r##"<p>$$$</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn math_test_18() {
     let expected = r##"<p><code class="language-math math-inline">\{a\,b\}</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -192,7 +192,7 @@ fn math_test_19() {
     let expected = r##"<p><em><code class="language-math math-inline">a</code> equals <code class="language-math math-inline">b</code></em></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn math_test_20() {
     let expected = r##"<p><strong><code class="language-math math-inline">a</code> equals <code class="language-math math-inline">b</code></strong></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn math_test_21() {
     let expected = r##"<p>a<code class="language-math math-inline">x</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn math_test_22() {
     let expected = r##"<p><code class="language-math math-inline">x=y</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn math_test_23() {
     let expected = r##"<p><code class="language-math math-inline">n</code>-th order</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn math_test_24() {
     let expected = r##"<p><code class="language-math math-inline">a &#x3C;b > c</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -252,7 +252,7 @@ fn math_test_25() {
     let expected = r##"<p><code class="language-math math-inline">[(a+b)c](d+e)</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -262,7 +262,7 @@ fn math_test_26() {
     let expected = r##"<p><code class="language-math math-inline">{a}_b c_{d}</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -272,7 +272,7 @@ fn math_test_27() {
     let expected = r##"<p>Thus, <code class="language-math math-inline">20,000 and USD</code>30,000 won't parse</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -282,7 +282,7 @@ fn math_test_28() {
     let expected = r##"<p>It is 2<code class="language-math math-inline"> for a can of soda, not 1</code>.</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -292,7 +292,7 @@ fn math_test_29() {
     let expected = r##"<p>I'll give <code class="language-math math-inline">20 today, if you give me more </code> tomorrow.</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn math_test_30() {
     let expected = r##"<p>Money adds: <code class="language-math math-inline">\</code>X + $Y = $Z$.</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -316,7 +316,7 @@ hard break
 either</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -326,7 +326,7 @@ fn math_test_32() {
     let expected = r##"<p><code class="language-math math-inline">\alpha\</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -336,7 +336,7 @@ fn math_test_33() {
     let expected = r##"<p><code class="language-math math-inline">Inline `first</code> then` code</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -346,7 +346,7 @@ fn math_test_34() {
     let expected = r##"<p><code>Code $first</code> then$ inline</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn math_test_35() {
     let expected = r##"<p><code class="language-math math-inline">Display `first</code> then` code</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -366,7 +366,7 @@ fn math_test_36() {
     let expected = r##"<p><code>Code $$ first</code> then $$ display</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn math_test_37() {
     let expected = r##"<p>Oops empty $$ expression.</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -386,7 +386,7 @@ fn math_test_38() {
     let expected = r##"<p>$x$$$$$$$y$$</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -396,7 +396,7 @@ fn math_test_39() {
     let expected = r##"<p>$x$$$$$$y$$</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -406,7 +406,7 @@ fn math_test_40() {
     let expected = r##"<p><code class="language-math math-inline">x$$$$$$y</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -416,7 +416,7 @@ fn math_test_41() {
     let expected = r##"<p>alpha<code class="language-math math-inline">beta$gamma</code>delta</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -437,7 +437,7 @@ $$ x + y
 <pre><code class="language-math math-display">> z $$</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -459,7 +459,7 @@ $$
 math</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -478,7 +478,7 @@ math$</li>
 </ul>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -490,7 +490,7 @@ $$
     let expected = r##"<pre><code class="language-math math-display">\beta+\gamma</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -505,7 +505,7 @@ $$
 <pre><code class="language-math math-display">x = y</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -517,7 +517,7 @@ $$
     let expected = r##"<pre><code class="language-math math-display">x</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -528,7 +528,7 @@ $$
     let expected = r##"<pre><code class="language-math math-display"></code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -545,7 +545,7 @@ $$
 <pre><code class="language-math math-display">b</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -557,7 +557,7 @@ $$$
     let expected = r##"<pre><code class="language-math math-display">alpha</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -569,7 +569,7 @@ fn math_test_51() {
     let expected = r##"<pre><code class="language-math math-display">x</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -584,7 +584,7 @@ $$
 </code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -595,7 +595,7 @@ unterminated
     let expected = r##"<pre><code class="language-math math-display">unterminated</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -613,7 +613,7 @@ fn math_test_54() {
 </ul>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -627,7 +627,7 @@ $$
 <pre><code class="language-math math-display">\alpha</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -639,7 +639,7 @@ fn math_test_56() {
     let expected = r##"<pre><code class="language-math math-display">\alpha</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -651,7 +651,7 @@ $$
     let expected = r##"<pre><code class="language-math math-display">\alpha</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -673,7 +673,7 @@ $$
 </code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -690,7 +690,7 @@ fn math_test_59() {
 $$</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -705,7 +705,7 @@ $$
 <pre><code class="language-math math-display">\left( \sum_{k=1}^n a_k b_k \right)^2 \leq \left( \sum_{k=1}^n a_k^2 \right) \left( \sum_{k=1}^n b_k^2 \right)</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -731,7 +731,7 @@ fn math_test_61() {
 </ul>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -745,7 +745,7 @@ fn math_test_62() {
 </blockquote>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -757,7 +757,7 @@ $$
     let expected = r##"<pre><code class="language-math math-display">\text{$b$}</code></pre>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -769,7 +769,7 @@ $$ x = {-b \pm \sqrt{b^2-4ac} \over 2a} $$
 <code class="language-math math-inline">x = {-b \pm \sqrt{b^2-4ac} \over 2a}</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -779,7 +779,7 @@ fn math_test_65() {
     let expected = r##"<p><a href="x"><code class="language-math math-inline">a</code></a></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -801,7 +801,7 @@ fn math_test_66() {
 /<code class="language-math math-inline">\pi</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -811,7 +811,7 @@ fn math_test_67() {
     let expected = r##"<p><em>Equation <code class="language-math math-inline">\Omega(69)</code> in italic text</em></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -821,7 +821,7 @@ fn math_test_68() {
     let expected = r##"<p><code class="language-math math-inline">x</code> <code class="language-math math-inline">`y`</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -837,7 +837,7 @@ ${a}_b c_{d}$
 <p><code class="language-math math-inline">{a}_b c_{d}</code></p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -847,7 +847,7 @@ fn math_test_70() {
     let expected = r##"<p>$x = $$</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -857,7 +857,7 @@ fn math_test_71() {
     let expected = r##"<p>foo<code class="language-math math-inline">-1+1 = 2</code>bar</p>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }
 
 #[test]
@@ -871,5 +871,5 @@ fn math_test_72() {
 </ul>
 "##;
 
-    test_markdown_html(original, expected, 1024, false, false, false, false, false, false, false);
+    test_markdown_html(original, expected, 1024, false, false, false, false, false, false);
 }

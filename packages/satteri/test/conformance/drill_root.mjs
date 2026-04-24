@@ -19,7 +19,7 @@ const refParser = remark()
   .use(remarkDirective)
   .use(remarkMarkAndUnravel);
 
-const FEATURES = { frontmatter: true, directive: true };
+const FEATURES = { frontmatter: true, directive: true, math: false };
 const DOCS = "/home/erika/Projects/docs";
 
 function eq(a, b) {

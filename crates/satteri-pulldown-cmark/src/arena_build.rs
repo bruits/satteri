@@ -541,7 +541,9 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             buf.push_str(&cow);
                         }
                         ItemBody::SoftBreak | ItemBody::HardBreak(_) => {
-                            buf.push(' ');
+                            // Remark preserves the newline in alt text rather
+                            // than collapsing it to a space.
+                            buf.push('\n');
                         }
                         ItemBody::SynthesizeText(cow_ix) => {
                             let cow = inner.allocs.take_cow(*cow_ix);
@@ -960,8 +962,13 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             .map(|(k, v)| (builder.alloc_string(k), builder.alloc_string(v)))
                             .collect();
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
-                        let has_label = dir.label_start < dir.label_end;
-                        let label_text = if has_label {
+                        // `label_start == label_end == 0` means no brackets at
+                        // all; any other state (including `[]`) means brackets
+                        // were present and remark emits an (possibly empty)
+                        // directive-label paragraph.
+                        let brackets_present = dir.label_start != 0 || dir.label_end != 0;
+                        let has_label_content = dir.label_start < dir.label_end;
+                        let label_text = if has_label_content {
                             Some(source[dir.label_start..dir.label_end].to_string())
                         } else {
                             None
@@ -971,18 +978,13 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        if let Some(label) = label_text {
-                            let label_sr = builder.alloc_string(&label);
+                        if brackets_present {
                             let bracket_offset = dir.label_start.saturating_sub(1) as u32;
                             let bracket_end = (dir.label_end + 1) as u32;
                             let (para_start_line, para_start_col) =
                                 cursor.offset_to_line_col(bracket_offset);
                             let (para_end_line, para_end_col) =
                                 cursor.offset_to_line_col(bracket_end);
-                            let (text_start_line, text_start_col) =
-                                cursor.offset_to_line_col(dir.label_start as u32);
-                            let (text_end_line, text_end_col) =
-                                cursor.offset_to_line_col(dir.label_end as u32);
                             builder.open_node(MdastNodeType::Paragraph as u8);
                             builder.set_position_current(
                                 bracket_offset,
@@ -996,16 +998,23 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             builder
                                 .arena_mut()
                                 .set_node_data(para_id, b"{\"directiveLabel\":true}".to_vec());
-                            builder.add_leaf_full(
-                                MdastNodeType::Text as u8,
-                                dir.label_start as u32,
-                                dir.label_end as u32,
-                                text_start_line,
-                                text_start_col,
-                                text_end_line,
-                                text_end_col,
-                                &label_sr.as_bytes(),
-                            );
+                            if let Some(label) = label_text {
+                                let label_sr = builder.alloc_string(&label);
+                                let (text_start_line, text_start_col) =
+                                    cursor.offset_to_line_col(dir.label_start as u32);
+                                let (text_end_line, text_end_col) =
+                                    cursor.offset_to_line_col(dir.label_end as u32);
+                                builder.add_leaf_full(
+                                    MdastNodeType::Text as u8,
+                                    dir.label_start as u32,
+                                    dir.label_end as u32,
+                                    text_start_line,
+                                    text_start_col,
+                                    text_end_line,
+                                    text_end_col,
+                                    &label_sr.as_bytes(),
+                                );
+                            }
                             builder.close_node();
                         }
                         inner.tree.push();
@@ -1609,6 +1618,11 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
         // `:::tip[Set a \`baseUrl\`]` end up as inlineCode. We mirror the
         // common case (backticks) here as a post-pass.
         directive_label_inline_code_pass(&mut arena);
+        if options.contains(Options::ENABLE_MDX) {
+            // Same idea for JSX tags inside a directive label —
+            // `:::note[The <code>x</code> property]`.
+            directive_label_jsx_pass(&mut arena);
+        }
     }
 
     (arena, mdx_errors)
@@ -1620,7 +1634,11 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
 /// A match starts at one of `http://`, `https://`, `ftp://`, `www.` and
 /// extends through non-whitespace characters, with trailing punctuation
 /// trimmed per the GFM spec.
-fn scan_autolink_literal(bytes: &[u8], ix: usize) -> Option<(usize, usize, String)> {
+/// Returns (start, raw_end, end, url) where `raw_end` is the position before
+/// trailing punctuation was trimmed back, and `end` is the final URL boundary.
+/// Callers that care about the trimmed-back tail (e.g. remark's text-node
+/// split when the surrounding context has an unclosed `[`) need `raw_end`.
+fn scan_autolink_literal(bytes: &[u8], ix: usize) -> Option<(usize, usize, usize, String)> {
     // Scheme. remark-gfm's autolink-literal extension handles http(s) and
     // `www.`, but not ftp — so we match that set exactly.
     let (proto_len, is_www) = if bytes[ix..].starts_with(b"http://") {
@@ -1658,11 +1676,13 @@ fn scan_autolink_literal(bytes: &[u8], ix: usize) -> Option<(usize, usize, Strin
         }
     }
 
-    // Collect the URL body: everything until whitespace, `<`, or end.
+    // Collect the URL body: everything until whitespace, `<`, ASCII control, or end.
+    // Per GFM, valid URLs exclude control characters; matching remark's behavior
+    // here avoids autolinking e.g. `http://\x07>` inside a broken `<...>`.
     let mut end = ix + proto_len;
     while end < bytes.len() {
         let b = bytes[end];
-        if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' || b == b'<' {
+        if b <= b' ' || b == 0x7F || b == b'<' {
             break;
         }
         end += 1;
@@ -1681,6 +1701,8 @@ fn scan_autolink_literal(bytes: &[u8], ix: usize) -> Option<(usize, usize, Strin
             return None;
         }
     }
+
+    let raw_end = end;
 
     // Trim trailing punctuation. Set mirrors micromark-gfm-autolink-literal's
     // trail tokenizer: `!"'*,.:;<?]_~` plus unbalanced `)` plus `&;`-
@@ -1754,7 +1776,97 @@ fn scan_autolink_literal(bytes: &[u8], ix: usize) -> Option<(usize, usize, Strin
     } else {
         url_str.to_string()
     };
-    Some((ix, end, full_url))
+    Some((ix, raw_end, end, full_url))
+}
+
+#[inline]
+fn is_email_local_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-' | b'_')
+}
+
+/// GFM extended email autolink. Given `@` at `at_ix`, walk backward for the
+/// local-part and forward for the domain. Returns `(start, end, "mailto:...")`.
+/// Mirrors `mdast-util-gfm-autolink-literal`: requires a `.` in the domain,
+/// the TLD (last dot-segment) must contain at least one letter, and trailing
+/// `.`/`-`/`_` are trimmed.
+fn scan_email_autolink(bytes: &[u8], at_ix: usize) -> Option<(usize, usize, String)> {
+    if at_ix >= bytes.len() || bytes[at_ix] != b'@' {
+        return None;
+    }
+    // Walk backward to find the local-part start.
+    let mut start = at_ix;
+    while start > 0 && is_email_local_char(bytes[start - 1]) {
+        start -= 1;
+    }
+    if start == at_ix {
+        return None;
+    }
+    // Local-part cannot start with `.`, `-`, `_`, or `+` per remark's trimming.
+    // Trim leading punctuation from the local-part.
+    while start < at_ix && matches!(bytes[start], b'.' | b'-' | b'_' | b'+') {
+        start += 1;
+    }
+    if start == at_ix {
+        return None;
+    }
+    // Preceding char must be start-of-input, whitespace, or punctuation — not
+    // another email-like char. Since the backward walk already consumes all
+    // `is_email_local_char` bytes, the prev byte (if any) is guaranteed non-
+    // local; just reject an immediate `@` or `/` that would indicate we're
+    // inside another URL/email.
+    if start > 0 {
+        let prev = bytes[start - 1];
+        if prev == b'@' || prev == b'/' {
+            return None;
+        }
+    }
+    // Forward: scan domain.
+    let mut end = at_ix + 1;
+    while end < bytes.len() {
+        let b = bytes[end];
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_') {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    if end == at_ix + 1 {
+        return None;
+    }
+    // Trim trailing `.`, `_`, `-` per remark: an email can't end on those.
+    while end > at_ix + 1 {
+        let last = bytes[end - 1];
+        if matches!(last, b'.' | b'_' | b'-') {
+            end -= 1;
+        } else {
+            break;
+        }
+    }
+    if end == at_ix + 1 {
+        return None;
+    }
+    // Domain must contain at least one `.`.
+    let domain = &bytes[at_ix + 1..end];
+    let last_dot = domain.iter().rposition(|&b| b == b'.')?;
+    // TLD (last dot-segment) must contain at least one ASCII letter.
+    let tld = &domain[last_dot + 1..];
+    if tld.is_empty() || !tld.iter().any(|&b| b.is_ascii_alphabetic()) {
+        return None;
+    }
+    // Underscore in the last two segments is invalid per remark
+    // (`mdast-util-gfm-autolink-literal`'s `emailWithUnderscoreAtEnd` check).
+    if tld.contains(&b'_') {
+        return None;
+    }
+    if let Some(second_last_dot) = domain[..last_dot].iter().rposition(|&b| b == b'.') {
+        if domain[second_last_dot + 1..last_dot].contains(&b'_') {
+            return None;
+        }
+    } else if domain[..last_dot].contains(&b'_') {
+        return None;
+    }
+    let email_str = core::str::from_utf8(&bytes[start..end]).ok()?;
+    Some((start, end, format!("mailto:{email_str}")))
 }
 
 /// Re-merge `text + textDirective + text` sibling runs when the text ends
@@ -1767,6 +1879,44 @@ fn scan_autolink_literal(bytes: &[u8], ix: usize) -> Option<(usize, usize, Strin
 /// GFM autolink would normally consume the whole URL as a single token before
 /// the directive parser sees it, but since satteri's autolink runs as a post-
 /// pass we reconstruct the original run here so autolink can find the URL.
+/// Mirror of mdast-util-gfm-autolink-literal's `isCorrectDomain`: the URL's
+/// domain (between `//` and the first `/`, `?`, `#`, or end) must contain a
+/// dot to count as a valid autolink. Applied only in strict mode — see the
+/// caller.
+fn domain_has_dot(url: &str) -> bool {
+    let after_scheme = match url.find("://") {
+        Some(p) => &url[p + 3..],
+        None => url,
+    };
+    let domain_end = after_scheme
+        .find(|c: char| matches!(c, '/' | '?' | '#'))
+        .unwrap_or(after_scheme.len());
+    after_scheme[..domain_end].contains('.')
+}
+
+/// Fold the bracket-depth running total forward over one string of text.
+/// Returns `true` after consuming `s` iff there's a `[` (or `![`) with no
+/// matching `]` so far. Backslash-escaped brackets are ignored.
+fn update_bracket_depth(was_open: bool, s: &str) -> bool {
+    let mut depth: i32 = if was_open { 1 } else { 0 };
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\\' {
+            i += 2;
+            continue;
+        }
+        match c {
+            b'[' => depth += 1,
+            b']' if depth > 0 => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    depth > 0
+}
+
 fn merge_directive_port_splits(arena: &mut Arena) {
     // Explicitly skip Link / LinkReference — a bracketed link's label text
     // intentionally preserves `text + textDirective + text` splits (remark
@@ -1795,11 +1945,34 @@ fn merge_directive_port_splits(arena: &mut Arena) {
         }
         let mut new_children: Vec<u32> = Vec::with_capacity(children.len());
         let mut i = 0;
+        // When a potential link-label `[` remains unclosed in earlier siblings,
+        // remark's autolink-literal never tokenizes URLs in the following text
+        // and its post-transformer rejects no-dot domains. Merging back would
+        // then resurrect URLs remark deliberately leaves alone (see
+        // `docs/src/content/docs/ru/guides/testing.mdx` in the conformance
+        // check). Track the running bracket depth across preceding siblings so
+        // we can bail when we're inside a broken label attempt.
+        let mut unmatched_open_bracket = false;
         while i < children.len() {
             let text_id = children[i];
             let text_node = arena.get_node(text_id);
+            // Track bracket depth across every text node we visit so the
+            // unmatched-`[` gate below sees a correct running total.
+            let is_text = text_node.node_type == MdastNodeType::Text as u8;
+            if is_text {
+                let d = arena.get_type_data(text_id);
+                if !d.is_empty() {
+                    let s = arena.get_str(StringRef::from_bytes(d));
+                    unmatched_open_bracket = update_bracket_depth(unmatched_open_bracket, s);
+                }
+            }
             // Need a text node whose value ends with `://<host>` (no path yet).
-            if text_node.node_type != MdastNodeType::Text as u8 || i + 1 >= children.len() {
+            if !is_text || i + 1 >= children.len() {
+                new_children.push(text_id);
+                i += 1;
+                continue;
+            }
+            if unmatched_open_bracket {
                 new_children.push(text_id);
                 i += 1;
                 continue;
@@ -1881,6 +2054,14 @@ fn merge_directive_port_splits(arena: &mut Arena) {
                 end_line,
                 end_column,
             );
+            // The leading text's brackets were already folded into
+            // `unmatched_open_bracket` at the top of the loop; fold in the
+            // remaining text (if any) from the trailing sibling we consumed.
+            if consumed == 3 {
+                let tail_sr = StringRef::from_bytes(arena.get_type_data(children[i + 2]));
+                let tail = arena.get_str(tail_sr);
+                unmatched_open_bracket = update_bracket_depth(unmatched_open_bracket, tail);
+            }
             new_children.push(text_id);
             i += consumed;
         }
@@ -1893,16 +2074,46 @@ fn merge_directive_port_splits(arena: &mut Arena) {
 fn gfm_autolink_literal_pass(arena: &mut Arena) {
     let len = arena.len() as u32;
     // First collect the set of Text nodes containing URL candidates to avoid
-    // mutating while iterating in a way that shifts indices.
-    let mut candidates: Vec<u32> = Vec::new();
+    // mutating while iterating in a way that shifts indices. Alongside each
+    // candidate we track whether we're inside a broken link-label attempt —
+    // remark's autolink-literal skips such text during tokenization, and its
+    // post-transformer then requires a `.` in the domain to match, so we mirror
+    // that "require dot" rule only in the broken-label case.
+    let mut candidates: Vec<(u32, bool)> = Vec::new();
+    let mut bracket_depth_by_parent: std::collections::HashMap<u32, (i32, u32)> =
+        std::collections::HashMap::new();
     for id in 0..len {
         let node = arena.get_node(id);
+        let parent_id = node.parent;
+        if parent_id == u32::MAX || parent_id >= len {
+            continue;
+        }
+        let parent = arena.get_node(parent_id);
+        let parent_type = MdastNodeType::from_u8(parent.node_type);
+        let tracks_brackets = matches!(
+            parent_type,
+            Some(
+                MdastNodeType::Paragraph
+                    | MdastNodeType::Heading
+                    | MdastNodeType::Emphasis
+                    | MdastNodeType::Strong
+                    | MdastNodeType::Delete
+                    | MdastNodeType::TableCell
+            )
+        );
+        let strict = if tracks_brackets {
+            let entry = bracket_depth_by_parent
+                .entry(parent_id)
+                .or_insert((0, parent_id));
+            entry.0 > 0
+        } else {
+            false
+        };
+
         if node.node_type != MdastNodeType::Text as u8 {
             continue;
         }
         // Skip text inside link (would nest), code, or imports.
-        let parent = arena.get_node(node.parent);
-        let parent_type = MdastNodeType::from_u8(parent.node_type);
         if matches!(
             parent_type,
             Some(
@@ -1925,22 +2136,38 @@ fn gfm_autolink_literal_pass(arena: &mut Arena) {
         let sr = StringRef::from_bytes(data);
         let text = arena.get_str(sr);
         let bytes = text.as_bytes();
+        let mut matched = false;
         for i in 0..bytes.len() {
-            if bytes[i] == b'h' || bytes[i] == b'w' {
+            let b = bytes[i];
+            if b == b'h' || b == b'w' {
                 if scan_autolink_literal(bytes, i).is_some() {
-                    candidates.push(id);
+                    matched = true;
+                    break;
+                }
+            } else if b == b'@' {
+                if scan_email_autolink(bytes, i).is_some() {
+                    matched = true;
                     break;
                 }
             }
         }
+        if matched {
+            candidates.push((id, strict));
+        }
+        if tracks_brackets {
+            let entry = bracket_depth_by_parent.get_mut(&parent_id).unwrap();
+            let was_open = entry.0 > 0;
+            let now_open = update_bracket_depth(was_open, text);
+            entry.0 = if now_open { 1 } else { 0 };
+        }
     }
 
-    for node_id in candidates {
-        split_text_with_autolinks(arena, node_id);
+    for (node_id, strict) in candidates {
+        split_text_with_autolinks(arena, node_id, strict);
     }
 }
 
-fn split_text_with_autolinks(arena: &mut Arena, text_id: u32) {
+fn split_text_with_autolinks(arena: &mut Arena, text_id: u32, strict_domain: bool) {
     let node = arena.get_node(text_id);
     let start_offset = node.start_offset;
     let start_line = node.start_line;
@@ -1954,13 +2181,27 @@ fn split_text_with_autolinks(arena: &mut Arena, text_id: u32) {
     let bytes = text.as_bytes();
 
     // Walk through and collect replacement ranges.
-    let mut replacements: Vec<(usize, usize, String)> = Vec::new(); // (start, end, url)
+    let mut replacements: Vec<(usize, usize, usize, String)> = Vec::new(); // (start, raw_end, end, url)
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
         if b == b'h' || b == b'w' {
-            if let Some((s, e, url)) = scan_autolink_literal(bytes, i) {
-                replacements.push((s, e, url));
+            if let Some((s, raw_e, e, url)) = scan_autolink_literal(bytes, i) {
+                if strict_domain && !domain_has_dot(&url) {
+                    i += 1;
+                    continue;
+                }
+                replacements.push((s, raw_e, e, url));
+                i = raw_e;
+                continue;
+            }
+        } else if b == b'@' {
+            if let Some((s, e, url)) = scan_email_autolink(bytes, i) {
+                // Don't double-match if the local-part overlaps an already-
+                // emitted replacement.
+                if replacements.last().map_or(true, |&(_, _, prev_e, _)| s >= prev_e) {
+                    replacements.push((s, e, e, url));
+                }
                 i = e;
                 continue;
             }
@@ -1972,11 +2213,38 @@ fn split_text_with_autolinks(arena: &mut Arena, text_id: u32) {
         return;
     }
 
+    // Remark-gfm keeps the trailing trim-back chars (e.g. `),` stripped from
+    // the URL) as their own text node — rather than merging with the post-URL
+    // tail — when the preceding text contains an unclosed `[` or `![`. This
+    // mirrors a micromark quirk where the failed label/link attempt around the
+    // autolink leaves fragmented text tokens that never coalesce.
+    let preceded_by_open_bracket: Vec<bool> = replacements
+        .iter()
+        .map(|&(s, _, _, _)| {
+            let mut depth: i32 = 0;
+            let mut j = 0;
+            while j < s {
+                let c = bytes[j];
+                if c == b'\\' {
+                    j += 2;
+                    continue;
+                }
+                match c {
+                    b'[' => depth += 1,
+                    b']' if depth > 0 => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            depth > 0
+        })
+        .collect();
+
     // Build the replacement nodes in order.
     let mut new_children: Vec<u32> = Vec::new();
     let mut cursor = 0usize;
 
-    for (s, e, url) in replacements {
+    for (idx, (s, raw_e, e, url)) in replacements.into_iter().enumerate() {
         if s > cursor {
             let chunk = &text[cursor..s];
             let new_text_id = arena.alloc_node(MdastNodeType::Text as u8);
@@ -2028,7 +2296,25 @@ fn split_text_with_autolinks(arena: &mut Arena, text_id: u32) {
         arena.set_children(link_id, &[link_text_id]);
         new_children.push(link_id);
 
-        cursor = e;
+        if preceded_by_open_bracket[idx] && raw_e > e {
+            let chunk = &text[e..raw_e];
+            let new_text_id = arena.alloc_node(MdastNodeType::Text as u8);
+            let chunk_sr = arena.alloc_string(chunk);
+            arena.set_type_data(new_text_id, &chunk_sr.as_bytes());
+            arena.set_position(
+                new_text_id,
+                start_offset + e as u32,
+                start_offset + raw_e as u32,
+                start_line,
+                start_column + e as u32,
+                start_line,
+                start_column + raw_e as u32,
+            );
+            new_children.push(new_text_id);
+            cursor = raw_e;
+        } else {
+            cursor = e;
+        }
     }
 
     if cursor < bytes.len() {
@@ -2286,6 +2572,393 @@ fn split_text_on_backticks(arena: &mut Arena, text_id: u32) {
         );
         new_children.push(tid);
     }
+
+    arena.replace_node_with_children(text_id, &new_children);
+}
+
+/// Post-pass matching `directive_label_inline_code_pass` for JSX tags. For
+/// each `Text` node directly under a directive label, split on balanced
+/// `<Name>…</Name>` (or self-closing `<Name/>`) runs and emit
+/// `mdxJsxTextElement` children. Also splits on balanced `{…}` spans and
+/// emits `mdxTextExpression` nodes.
+fn directive_label_jsx_pass(arena: &mut Arena) {
+    let mut candidates: Vec<u32> = Vec::new();
+    for id in 0..arena.len() as u32 {
+        let node = arena.get_node(id);
+        if node.node_type != MdastNodeType::Text as u8 {
+            continue;
+        }
+        let data = arena.get_type_data(id);
+        if data.is_empty() {
+            continue;
+        }
+        let sr = StringRef::from_bytes(data);
+        let text = arena.get_str(sr);
+        if !text.contains('<') && !text.contains('{') {
+            continue;
+        }
+        let parent_id = node.parent;
+        let parent = arena.get_node(parent_id);
+        let parent_type = MdastNodeType::from_u8(parent.node_type);
+        let is_directive_label = match parent_type {
+            Some(MdastNodeType::LeafDirective | MdastNodeType::TextDirective) => true,
+            Some(MdastNodeType::Paragraph) => arena
+                .get_node_data(parent_id)
+                .map(|d| d.starts_with(b"{\"directiveLabel\":true}"))
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !is_directive_label {
+            continue;
+        }
+        candidates.push(id);
+    }
+    for text_id in candidates {
+        split_text_on_jsx_tags(arena, text_id);
+    }
+    // Second pass picks up text nodes created by the first split and emits
+    // MDX text expressions for `{…}` runs.
+    let mut expr_candidates: Vec<u32> = Vec::new();
+    for id in 0..arena.len() as u32 {
+        let node = arena.get_node(id);
+        if node.node_type != MdastNodeType::Text as u8 {
+            continue;
+        }
+        let data = arena.get_type_data(id);
+        if data.is_empty() {
+            continue;
+        }
+        let sr = StringRef::from_bytes(data);
+        let text = arena.get_str(sr);
+        if !text.contains('{') {
+            continue;
+        }
+        let parent_id = node.parent;
+        let parent = arena.get_node(parent_id);
+        let parent_type = MdastNodeType::from_u8(parent.node_type);
+        let in_label = match parent_type {
+            Some(MdastNodeType::LeafDirective | MdastNodeType::TextDirective) => true,
+            Some(MdastNodeType::Paragraph) => arena
+                .get_node_data(parent_id)
+                .map(|d| d.starts_with(b"{\"directiveLabel\":true}"))
+                .unwrap_or(false),
+            // Also handle the children of a JSX text element created by the
+            // first pass — they also live under a directive label.
+            Some(MdastNodeType::MdxJsxTextElement) => {
+                let grandparent_id = parent.parent;
+                if grandparent_id == u32::MAX {
+                    false
+                } else {
+                    let grandparent = arena.get_node(grandparent_id);
+                    let gp_type = MdastNodeType::from_u8(grandparent.node_type);
+                    matches!(
+                        gp_type,
+                        Some(MdastNodeType::LeafDirective | MdastNodeType::TextDirective)
+                    ) || (gp_type == Some(MdastNodeType::Paragraph)
+                        && arena
+                            .get_node_data(grandparent_id)
+                            .map(|d| d.starts_with(b"{\"directiveLabel\":true}"))
+                            .unwrap_or(false))
+                }
+            }
+            _ => false,
+        };
+        if !in_label {
+            continue;
+        }
+        expr_candidates.push(id);
+    }
+    for text_id in expr_candidates {
+        split_text_on_mdx_expressions(arena, text_id);
+    }
+}
+
+/// Split a `Text` node on `{…}` spans (balanced braces, JS-aware) and emit
+/// `mdxTextExpression` nodes for the matched spans.
+fn split_text_on_mdx_expressions(arena: &mut Arena, text_id: u32) {
+    use crate::mdx::scan_mdx_inline_expression;
+    let data = arena.get_type_data(text_id);
+    if data.is_empty() {
+        return;
+    }
+    let sr = StringRef::from_bytes(data);
+    let text = arena.get_str(sr).to_string();
+    let bytes = text.as_bytes();
+    let mut spans: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+        let Some((content_start, content_end, total_len)) =
+            scan_mdx_inline_expression(&bytes[i..])
+        else {
+            i += 1;
+            continue;
+        };
+        spans.push((i, i + total_len, i + content_start, i + content_end));
+        i += total_len;
+    }
+    if spans.is_empty() {
+        return;
+    }
+    let node = arena.get_node(text_id);
+    let base_start = node.start_offset;
+    let base_line = node.start_line;
+    let base_col = node.start_column;
+
+    let mut new_children: Vec<u32> = Vec::new();
+    let mut cursor = 0usize;
+    for (span_start, span_end, content_start, content_end) in spans {
+        if span_start > cursor {
+            let seg = &text[cursor..span_start];
+            let seg_sr = arena.alloc_string(seg);
+            let tid = arena.alloc_node(MdastNodeType::Text as u8);
+            arena.set_type_data(tid, &seg_sr.as_bytes());
+            arena.set_position(
+                tid,
+                base_start + cursor as u32,
+                base_start + span_start as u32,
+                base_line,
+                base_col + cursor as u32,
+                base_line,
+                base_col + span_start as u32,
+            );
+            new_children.push(tid);
+        }
+        let content = &text[content_start..content_end];
+        let content_sr = arena.alloc_string(content);
+        let eid = arena.alloc_node(MdastNodeType::MdxTextExpression as u8);
+        arena.set_type_data(eid, &content_sr.as_bytes());
+        arena.set_position(
+            eid,
+            base_start + span_start as u32,
+            base_start + span_end as u32,
+            base_line,
+            base_col + span_start as u32,
+            base_line,
+            base_col + span_end as u32,
+        );
+        new_children.push(eid);
+        cursor = span_end;
+    }
+    if cursor < text.len() {
+        let seg = &text[cursor..];
+        let seg_sr = arena.alloc_string(seg);
+        let tid = arena.alloc_node(MdastNodeType::Text as u8);
+        arena.set_type_data(tid, &seg_sr.as_bytes());
+        arena.set_position(
+            tid,
+            base_start + cursor as u32,
+            base_start + text.len() as u32,
+            base_line,
+            base_col + cursor as u32,
+            base_line,
+            base_col + text.len() as u32,
+        );
+        new_children.push(tid);
+    }
+    arena.replace_node_with_children(text_id, &new_children);
+}
+
+/// Split a `Text` node on `<Name>…</Name>` / `<Name/>` spans, producing
+/// `mdxJsxTextElement` nodes for the matched spans. The inner content of a
+/// matched open/close pair becomes a child `Text` node (no recursion — nested
+/// JSX inside a directive label is rare enough that a single-level split
+/// covers the conformance cases).
+fn split_text_on_jsx_tags(arena: &mut Arena, text_id: u32) {
+    use crate::mdx::{parse_jsx_tag, scan_mdx_inline_jsx};
+    let data = arena.get_type_data(text_id);
+    if data.is_empty() {
+        return;
+    }
+    let sr = StringRef::from_bytes(data);
+    let text = arena.get_str(sr).to_string();
+    let bytes = text.as_bytes();
+
+    #[derive(Clone)]
+    enum Span {
+        SelfClosing {
+            start: usize,
+            end: usize,
+            name: alloc::string::String,
+        },
+        Paired {
+            start: usize,
+            open_end: usize,
+            close_start: usize,
+            end: usize,
+            name: alloc::string::String,
+        },
+    }
+
+    let mut spans: Vec<Span> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let Some(tag_end) = scan_mdx_inline_jsx(&bytes[i..]) else {
+            i += 1;
+            continue;
+        };
+        let tag_raw = &text[i..i + tag_end];
+        let jsx = parse_jsx_tag(tag_raw);
+        if jsx.is_closing {
+            i += tag_end;
+            continue;
+        }
+        if jsx.is_self_closing {
+            spans.push(Span::SelfClosing {
+                start: i,
+                end: i + tag_end,
+                name: jsx.name.to_string(),
+            });
+            i += tag_end;
+            continue;
+        }
+        // Opening tag — scan forward for a matching `</name>`.
+        let name = jsx.name.to_string();
+        let open_end = i + tag_end;
+        let mut j = open_end;
+        let mut close_span: Option<(usize, usize)> = None;
+        while j < bytes.len() {
+            if bytes[j] != b'<' {
+                j += 1;
+                continue;
+            }
+            let Some(inner_tag_end) = scan_mdx_inline_jsx(&bytes[j..]) else {
+                j += 1;
+                continue;
+            };
+            let inner_tag = &text[j..j + inner_tag_end];
+            let inner_jsx = parse_jsx_tag(inner_tag);
+            if inner_jsx.is_closing && inner_jsx.name.as_ref() == name.as_str() {
+                close_span = Some((j, j + inner_tag_end));
+                break;
+            }
+            j += inner_tag_end;
+        }
+        if let Some((close_start, close_end)) = close_span {
+            spans.push(Span::Paired {
+                start: i,
+                open_end,
+                close_start,
+                end: close_end,
+                name,
+            });
+            i = close_end;
+        } else {
+            i = open_end;
+        }
+    }
+
+    if spans.is_empty() {
+        return;
+    }
+
+    let node = arena.get_node(text_id);
+    let base_start = node.start_offset;
+    let base_line = node.start_line;
+    let base_col = node.start_column;
+
+    let push_text = |arena: &mut Arena,
+                     out: &mut Vec<u32>,
+                     segment: &str,
+                     seg_start: usize,
+                     seg_end: usize| {
+        if segment.is_empty() {
+            return;
+        }
+        let seg_sr = arena.alloc_string(segment);
+        let tid = arena.alloc_node(MdastNodeType::Text as u8);
+        arena.set_type_data(tid, &seg_sr.as_bytes());
+        arena.set_position(
+            tid,
+            base_start + seg_start as u32,
+            base_start + seg_end as u32,
+            base_line,
+            base_col + seg_start as u32,
+            base_line,
+            base_col + seg_end as u32,
+        );
+        out.push(tid);
+    };
+
+    let mut new_children: Vec<u32> = Vec::new();
+    let mut cursor = 0usize;
+    for span in spans {
+        match span {
+            Span::SelfClosing { start, end, name } => {
+                push_text(arena, &mut new_children, &text[cursor..start], cursor, start);
+                let name_sr = arena.alloc_string(&name);
+                let jsx_data = satteri_ast::mdast::encode_mdx_jsx_element_data(name_sr, &[]);
+                let jid = arena.alloc_node(MdastNodeType::MdxJsxTextElement as u8);
+                arena.set_type_data(jid, &jsx_data);
+                arena.set_position(
+                    jid,
+                    base_start + start as u32,
+                    base_start + end as u32,
+                    base_line,
+                    base_col + start as u32,
+                    base_line,
+                    base_col + end as u32,
+                );
+                new_children.push(jid);
+                cursor = end;
+            }
+            Span::Paired {
+                start,
+                open_end,
+                close_start,
+                end,
+                name,
+            } => {
+                push_text(arena, &mut new_children, &text[cursor..start], cursor, start);
+                let name_sr = arena.alloc_string(&name);
+                let jsx_data = satteri_ast::mdast::encode_mdx_jsx_element_data(name_sr, &[]);
+                let jid = arena.alloc_node(MdastNodeType::MdxJsxTextElement as u8);
+                arena.set_type_data(jid, &jsx_data);
+                arena.set_position(
+                    jid,
+                    base_start + start as u32,
+                    base_start + end as u32,
+                    base_line,
+                    base_col + start as u32,
+                    base_line,
+                    base_col + end as u32,
+                );
+                // Inner text child.
+                let inner = &text[open_end..close_start];
+                if !inner.is_empty() {
+                    let inner_sr = arena.alloc_string(inner);
+                    let cid = arena.alloc_node(MdastNodeType::Text as u8);
+                    arena.set_type_data(cid, &inner_sr.as_bytes());
+                    arena.set_position(
+                        cid,
+                        base_start + open_end as u32,
+                        base_start + close_start as u32,
+                        base_line,
+                        base_col + open_end as u32,
+                        base_line,
+                        base_col + close_start as u32,
+                    );
+                    arena.set_children(jid, &[cid]);
+                }
+                new_children.push(jid);
+                cursor = end;
+            }
+        }
+    }
+    push_text(
+        arena,
+        &mut new_children,
+        &text[cursor..],
+        cursor,
+        text.len(),
+    );
 
     arena.replace_node_with_children(text_id, &new_children);
 }
