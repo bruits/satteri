@@ -755,6 +755,131 @@ fn jsx_inside_new_expression() -> Result<(), satteri_arena::mdx_types::Message> 
 }
 
 #[test]
+fn jsx_inside_switch_case() -> Result<(), satteri_arena::mdx_types::Message> {
+    // JSX returned from a switch case inside an IIFE must be lowered, not
+    // left as raw JSX. Regression from Cloudflare Docs' c3-post-run-steps.mdx.
+    let result = compile(
+        "{(function () {\n  switch (props.k) {\n    case 'a': return <ul><li>A</li><li>AA</li></ul>;\n    case 'b': return <p>B</p>;\n  }\n})()}\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("case \"a\": return _jsxs(\"ul\",")
+            && result.contains("case \"b\": return _jsx(\"p\","),
+        "JSX inside switch case bodies must be lowered: {result}"
+    );
+    assert!(
+        !result.contains("<ul>")
+            && !result.contains("</ul>")
+            && !result.contains("<li>")
+            && !result.contains("<p>"),
+        "compiled output must not contain raw JSX: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn jsx_inside_try_catch_finally() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "{(() => {\n  try { return <a>t</a>; }\n  catch (e) { return <b>c</b>; }\n  finally { void <i>f</i>; }\n})()}\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("_jsx(\"a\", { children: \"t\" })"),
+        "try-block JSX must be lowered: {result}"
+    );
+    assert!(
+        result.contains("_jsx(\"b\", { children: \"c\" })"),
+        "catch-block JSX must be lowered: {result}"
+    );
+    assert!(
+        result.contains("_jsx(\"i\", { children: \"f\" })"),
+        "finally-block JSX must be lowered: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn jsx_inside_while_and_for_bodies() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "{(() => {\n  while (cond) { void <w>1</w>; }\n  for (let i = 0; i < 3; i++) { void <f>2</f>; }\n  for (const x of xs) { void <o>3</o>; }\n  return null;\n})()}\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("_jsx(\"w\", { children: \"1\" })"),
+        "while-body JSX must be lowered: {result}"
+    );
+    assert!(
+        result.contains("_jsx(\"f\", { children: \"2\" })"),
+        "for-body JSX must be lowered: {result}"
+    );
+    assert!(
+        result.contains("_jsx(\"o\", { children: \"3\" })"),
+        "for-of-body JSX must be lowered: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn jsx_inside_class_method_and_field() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "export class Demo {\n  field = <d>init</d>;\n  render() { return <r>rendered</r>; }\n}\n\n<p>hi</p>\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("_jsx(\"d\", { children: \"init\" })"),
+        "class field initializer JSX must be lowered: {result}"
+    );
+    assert!(
+        result.contains("_jsx(\"r\", { children: \"rendered\" })"),
+        "class method body JSX must be lowered: {result}"
+    );
+    assert!(
+        !result.contains("<d>") && !result.contains("<r>"),
+        "compiled output must not contain raw JSX: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn jsx_inside_if_statement_test() -> Result<(), satteri_arena::mdx_types::Message> {
+    // JSX inside an `if (...)` test expression (used for truthiness) must be
+    // lowered too, not left as a raw JSXElement.
+    let result = compile(
+        "{(() => {\n  if (<span>c</span>) { return <div>t</div>; }\n  return null;\n})()}\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("_jsx(\"span\", { children: \"c\" })"),
+        "JSX inside if-test must be lowered: {result}"
+    );
+    assert!(
+        result.contains("_jsx(_components.div, { children: \"t\" })"),
+        "JSX inside if-consequent must be lowered: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn jsx_in_default_export_expression() -> Result<(), satteri_arena::mdx_types::Message> {
+    // `export default <Foo/>` should have the JSX expression lowered.
+    let result = compile(
+        "export default <r>x</r>;\n\n<p>hi</p>\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("_jsx(\"r\", { children: \"x\" })"),
+        "JSX in default export expression must be lowered: {result}"
+    );
+    Ok(())
+}
+
+#[test]
 fn function_body_simple() -> Result<(), satteri_arena::mdx_types::Message> {
     let result = compile(
         "# Hi!",

@@ -12,11 +12,12 @@ use crate::oxc_utils::{
 use core::str;
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{
-    Argument, ArrayExpression, ArrayExpressionElement, CallExpression, Declaration,
-    ExportDefaultDeclarationKind, Expression, ImportDeclaration, ImportDeclarationSpecifier,
-    ImportOrExportKind, ImportSpecifier, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXChild, JSXElement, JSXExpression, JSXFragment, ModuleDeclaration, ModuleExportName,
-    ObjectProperty, ObjectPropertyKind, PropertyKey, PropertyKind, Statement, ThisExpression,
+    Argument, ArrayExpression, ArrayExpressionElement, CallExpression, ChainElement, Class,
+    ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit,
+    ImportDeclaration, ImportDeclarationSpecifier, ImportOrExportKind, ImportSpecifier,
+    JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXExpression,
+    JSXFragment, ModuleDeclaration, ModuleExportName, ObjectProperty, ObjectPropertyKind,
+    PropertyKey, PropertyKind, Statement, ThisExpression,
 };
 use oxc_span::{SPAN, Span};
 use oxc_syntax::node::NodeId;
@@ -240,6 +241,20 @@ fn process_statement_jsx<'a>(
             }
         }
         Statement::IfStatement(if_stmt) => {
+            process_expression_jsx(
+                &mut if_stmt.test,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
             process_statement_jsx(
                 &mut if_stmt.consequent,
                 alloc,
@@ -270,6 +285,382 @@ fn process_statement_jsx<'a>(
                     import_jsx_dev,
                 )?;
             }
+        }
+        Statement::SwitchStatement(switch) => {
+            process_expression_jsx(
+                &mut switch.discriminant,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+            for case in &mut switch.cases {
+                if let Some(test) = &mut case.test {
+                    process_expression_jsx(
+                        test,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+                for s in &mut case.consequent {
+                    process_statement_jsx(
+                        s,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+            }
+        }
+        Statement::TryStatement(try_stmt) => {
+            for s in &mut try_stmt.block.body {
+                process_statement_jsx(
+                    s,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+            if let Some(handler) = &mut try_stmt.handler {
+                for s in &mut handler.body.body {
+                    process_statement_jsx(
+                        s,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+            }
+            if let Some(finalizer) = &mut try_stmt.finalizer {
+                for s in &mut finalizer.body {
+                    process_statement_jsx(
+                        s,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+            }
+        }
+        Statement::WhileStatement(while_stmt) => {
+            process_expression_jsx(
+                &mut while_stmt.test,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+            process_statement_jsx(
+                &mut while_stmt.body,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Statement::DoWhileStatement(do_while) => {
+            process_statement_jsx(
+                &mut do_while.body,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+            process_expression_jsx(
+                &mut do_while.test,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Statement::ForStatement(for_stmt) => {
+            if let Some(init) = &mut for_stmt.init {
+                match init {
+                    ForStatementInit::VariableDeclaration(decl) => {
+                        for d in &mut decl.declarations {
+                            if let Some(ref mut init) = d.init {
+                                process_expression_jsx(
+                                    init,
+                                    alloc,
+                                    automatic,
+                                    development,
+                                    filepath,
+                                    location,
+                                    create_element_name,
+                                    fragment_name,
+                                    import_fragment,
+                                    import_jsx,
+                                    import_jsxs,
+                                    import_jsx_dev,
+                                )?;
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(expr) = init.as_expression_mut() {
+                            process_expression_jsx(
+                                expr,
+                                alloc,
+                                automatic,
+                                development,
+                                filepath,
+                                location,
+                                create_element_name,
+                                fragment_name,
+                                import_fragment,
+                                import_jsx,
+                                import_jsxs,
+                                import_jsx_dev,
+                            )?;
+                        }
+                    }
+                }
+            }
+            if let Some(test) = &mut for_stmt.test {
+                process_expression_jsx(
+                    test,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+            if let Some(update) = &mut for_stmt.update {
+                process_expression_jsx(
+                    update,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+            process_statement_jsx(
+                &mut for_stmt.body,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Statement::ForInStatement(for_in) => {
+            process_expression_jsx(
+                &mut for_in.right,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+            process_statement_jsx(
+                &mut for_in.body,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Statement::ForOfStatement(for_of) => {
+            process_expression_jsx(
+                &mut for_of.right,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+            process_statement_jsx(
+                &mut for_of.body,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Statement::LabeledStatement(labeled) => {
+            process_statement_jsx(
+                &mut labeled.body,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Statement::WithStatement(with) => {
+            process_expression_jsx(
+                &mut with.object,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+            process_statement_jsx(
+                &mut with.body,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Statement::ClassDeclaration(class) => {
+            process_class_jsx(
+                class,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
         }
         Statement::BlockStatement(block) => {
             for s in &mut block.body {
@@ -309,13 +700,47 @@ fn process_statement_jsx<'a>(
                 }
             }
         }
-        Statement::ExportDefaultDeclaration(decl) => {
-            if let ExportDefaultDeclarationKind::FunctionDeclaration(func) = &mut decl.declaration
-                && let Some(ref mut body) = func.body
-            {
-                for s in &mut body.statements {
-                    process_statement_jsx(
-                        s,
+        Statement::ExportDefaultDeclaration(decl) => match &mut decl.declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
+                if let Some(ref mut body) = func.body {
+                    for s in &mut body.statements {
+                        process_statement_jsx(
+                            s,
+                            alloc,
+                            automatic,
+                            development,
+                            filepath,
+                            location,
+                            create_element_name,
+                            fragment_name,
+                            import_fragment,
+                            import_jsx,
+                            import_jsxs,
+                            import_jsx_dev,
+                        )?;
+                    }
+                }
+            }
+            ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                process_class_jsx(
+                    class,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+            other => {
+                if let Some(expr) = other.as_expression_mut() {
+                    process_expression_jsx(
+                        expr,
                         alloc,
                         automatic,
                         development,
@@ -330,30 +755,29 @@ fn process_statement_jsx<'a>(
                     )?;
                 }
             }
-        }
-        Statement::ExportNamedDeclaration(decl) => {
-            if let Some(Declaration::FunctionDeclaration(ref mut func)) = decl.declaration
-                && let Some(ref mut body) = func.body
-            {
-                for s in &mut body.statements {
-                    process_statement_jsx(
-                        s,
-                        alloc,
-                        automatic,
-                        development,
-                        filepath,
-                        location,
-                        create_element_name,
-                        fragment_name,
-                        import_fragment,
-                        import_jsx,
-                        import_jsxs,
-                        import_jsx_dev,
-                    )?;
+        },
+        Statement::ExportNamedDeclaration(decl) => match &mut decl.declaration {
+            Some(Declaration::FunctionDeclaration(func)) => {
+                if let Some(ref mut body) = func.body {
+                    for s in &mut body.statements {
+                        process_statement_jsx(
+                            s,
+                            alloc,
+                            automatic,
+                            development,
+                            filepath,
+                            location,
+                            create_element_name,
+                            fragment_name,
+                            import_fragment,
+                            import_jsx,
+                            import_jsxs,
+                            import_jsx_dev,
+                        )?;
+                    }
                 }
-            } else if let Some(Declaration::VariableDeclaration(ref mut var_decl)) =
-                decl.declaration
-            {
+            }
+            Some(Declaration::VariableDeclaration(var_decl)) => {
                 for d in &mut var_decl.declarations {
                     if let Some(ref mut init) = d.init {
                         process_expression_jsx(
@@ -373,7 +797,24 @@ fn process_statement_jsx<'a>(
                     }
                 }
             }
-        }
+            Some(Declaration::ClassDeclaration(class)) => {
+                process_class_jsx(
+                    class,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+            _ => {}
+        },
         Statement::ThrowStatement(throw) => {
             process_expression_jsx(
                 &mut throw.argument,
@@ -955,7 +1396,399 @@ fn process_sub_expressions<'a>(
                 )?;
             }
         }
+        Expression::ChainExpression(chain) => match &mut chain.expression {
+            ChainElement::CallExpression(call) => {
+                process_expression_jsx(
+                    &mut call.callee,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+                for arg in &mut call.arguments {
+                    if let Argument::SpreadElement(spread) = arg {
+                        process_expression_jsx(
+                            &mut spread.argument,
+                            alloc,
+                            automatic,
+                            development,
+                            filepath,
+                            location,
+                            create_element_name,
+                            fragment_name,
+                            import_fragment,
+                            import_jsx,
+                            import_jsxs,
+                            import_jsx_dev,
+                        )?;
+                    } else if let Some(expr) = arg.as_expression_mut() {
+                        process_expression_jsx(
+                            expr,
+                            alloc,
+                            automatic,
+                            development,
+                            filepath,
+                            location,
+                            create_element_name,
+                            fragment_name,
+                            import_fragment,
+                            import_jsx,
+                            import_jsxs,
+                            import_jsx_dev,
+                        )?;
+                    }
+                }
+            }
+            ChainElement::ComputedMemberExpression(member) => {
+                process_expression_jsx(
+                    &mut member.object,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+                process_expression_jsx(
+                    &mut member.expression,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+            ChainElement::StaticMemberExpression(member) => {
+                process_expression_jsx(
+                    &mut member.object,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+            ChainElement::PrivateFieldExpression(member) => {
+                process_expression_jsx(
+                    &mut member.object,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+            _ => {}
+        },
+        Expression::ImportExpression(imp) => {
+            process_expression_jsx(
+                &mut imp.source,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+            if let Some(opt) = &mut imp.options {
+                process_expression_jsx(
+                    opt,
+                    alloc,
+                    automatic,
+                    development,
+                    filepath,
+                    location,
+                    create_element_name,
+                    fragment_name,
+                    import_fragment,
+                    import_jsx,
+                    import_jsxs,
+                    import_jsx_dev,
+                )?;
+            }
+        }
+        Expression::ClassExpression(class) => {
+            process_class_jsx(
+                class,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Expression::PrivateInExpression(priv_in) => {
+            process_expression_jsx(
+                &mut priv_in.right,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Expression::ComputedMemberExpression(member) => {
+            process_expression_jsx(
+                &mut member.object,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+            process_expression_jsx(
+                &mut member.expression,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Expression::StaticMemberExpression(member) => {
+            process_expression_jsx(
+                &mut member.object,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
+        Expression::PrivateFieldExpression(member) => {
+            process_expression_jsx(
+                &mut member.object,
+                alloc,
+                automatic,
+                development,
+                filepath,
+                location,
+                create_element_name,
+                fragment_name,
+                import_fragment,
+                import_jsx,
+                import_jsxs,
+                import_jsx_dev,
+            )?;
+        }
         _ => {}
+    }
+    Ok(())
+}
+
+/// Process JSX inside a class body.
+#[allow(clippy::too_many_arguments)]
+fn process_class_jsx<'a>(
+    class: &mut OxcBox<'a, Class<'a>>,
+    alloc: &'a Allocator,
+    automatic: bool,
+    development: bool,
+    filepath: Option<&String>,
+    location: Option<&Location>,
+    create_element_name: &str,
+    fragment_name: &str,
+    import_fragment: &mut bool,
+    import_jsx: &mut bool,
+    import_jsxs: &mut bool,
+    import_jsx_dev: &mut bool,
+) -> Result<(), Message> {
+    for element in &mut class.body.body {
+        match element {
+            ClassElement::MethodDefinition(method) => {
+                if method.computed
+                    && let Some(key) = method.key.as_expression_mut()
+                {
+                    process_expression_jsx(
+                        key,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+                if let Some(body) = &mut method.value.body {
+                    for s in &mut body.statements {
+                        process_statement_jsx(
+                            s,
+                            alloc,
+                            automatic,
+                            development,
+                            filepath,
+                            location,
+                            create_element_name,
+                            fragment_name,
+                            import_fragment,
+                            import_jsx,
+                            import_jsxs,
+                            import_jsx_dev,
+                        )?;
+                    }
+                }
+            }
+            ClassElement::PropertyDefinition(prop) => {
+                if prop.computed
+                    && let Some(key) = prop.key.as_expression_mut()
+                {
+                    process_expression_jsx(
+                        key,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+                if let Some(value) = &mut prop.value {
+                    process_expression_jsx(
+                        value,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+            }
+            ClassElement::AccessorProperty(acc) => {
+                if acc.computed
+                    && let Some(key) = acc.key.as_expression_mut()
+                {
+                    process_expression_jsx(
+                        key,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+                if let Some(value) = &mut acc.value {
+                    process_expression_jsx(
+                        value,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+            }
+            ClassElement::StaticBlock(block) => {
+                for s in &mut block.body {
+                    process_statement_jsx(
+                        s,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
+                }
+            }
+            ClassElement::TSIndexSignature(_) => {}
+        }
     }
     Ok(())
 }

@@ -480,3 +480,44 @@ describe("MDAST conformance: entity decoding merges text", () => {
     assertMdastConformance("[set&colon;html](/foo)");
   });
 });
+
+describe("MDAST conformance: softbreak preserves CRLF", () => {
+  // Regression: inline SoftBreak was hard-coded to emit "\n" when merging into
+  // an adjacent Text node, collapsing `\r\n` line endings to `\n`. The line
+  // ending must be taken from the source span to keep CRLF source round-
+  // tripping through text nodes.
+
+  test("plain text across CRLF softbreak", () => {
+    assertMdastConformance("a\r\nb");
+  });
+
+  test("CRLF softbreak after strong", () => {
+    assertMdastConformance("**a** b\r\n**c** d");
+  });
+
+  test("CRLF softbreak after inline code", () => {
+    assertMdastConformance("`a`\r\nb");
+  });
+
+  test("plain LF softbreak still works", () => {
+    assertMdastConformance("a\nb");
+  });
+});
+
+describe("MDAST conformance: closing code fence whitespace", () => {
+  // Regression: CommonMark/remark allow tabs as well as spaces after the
+  // closing fence. Satteri previously only consumed spaces, leaving the
+  // `\`\`\`\t` line as literal content of the code block.
+
+  test("closing fence followed by a tab", () => {
+    assertMdastConformance("```js\nfoo\n```\t\n");
+  });
+
+  test("closing fence followed by space then tab", () => {
+    assertMdastConformance("```js\nfoo\n``` \t\n");
+  });
+
+  test("closing fence followed by spaces (baseline)", () => {
+    assertMdastConformance("```js\nfoo\n```  \n");
+  });
+});

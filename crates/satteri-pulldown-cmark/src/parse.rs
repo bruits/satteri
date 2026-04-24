@@ -116,7 +116,7 @@ pub(crate) enum ItemBody {
     LeafDirective(DirectiveIndex),
     TextDirective(DirectiveIndex),
     List(bool, u8, u64), // is_tight, list character, list start index
-    ListItem(usize),     // indent level
+    ListItem(usize, bool), // indent level, spread (loose item)
     FootnoteDefinition(CowIndex),
     MetadataBlock(MetadataBlockKind),
 
@@ -1633,7 +1633,7 @@ pub(crate) fn scan_containers(
                     break;
                 }
             }
-            ItemBody::ListItem(indent) => {
+            ItemBody::ListItem(indent, _) => {
                 let save = line_start.clone();
                 if !line_start.scan_space(indent) && !line_start.is_at_eol() {
                     *line_start = save;
@@ -2575,7 +2575,7 @@ fn body_to_tag_end(body: &ItemBody) -> TagEnd {
             let is_ordered = c == b'.' || c == b')';
             TagEnd::List(is_ordered)
         }
-        ItemBody::ListItem(_) => TagEnd::Item,
+        ItemBody::ListItem(_, _) => TagEnd::Item,
         ItemBody::TableHead => TagEnd::TableHead,
         ItemBody::TableCell => TagEnd::TableCell,
         ItemBody::TableRow => TagEnd::TableRow,
@@ -2677,7 +2677,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
                 Tag::List(None, is_tight)
             }
         }
-        ItemBody::ListItem(_) => Tag::Item,
+        ItemBody::ListItem(_, _) => Tag::Item,
         ItemBody::TableHead => Tag::TableHead,
         ItemBody::TableCell => Tag::TableCell,
         ItemBody::TableRow => Tag::TableRow,

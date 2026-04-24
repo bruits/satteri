@@ -549,8 +549,11 @@ pub(crate) fn scan_closing_code_fence(
         return None;
     }
     i += num_fence_chars_found;
-    let num_trailing_spaces = scan_ch_repeat(&bytes[i..], b' ');
-    i += num_trailing_spaces;
+    // Trailing whitespace (spaces and tabs) is allowed after the closing
+    // fence and is ignored — remark/micromark accepts both.
+    while bytes.get(i).is_some_and(|&b| b == b' ' || b == b'\t') {
+        i += 1;
+    }
     scan_eol(&bytes[i..]).map(|_| i)
 }
 

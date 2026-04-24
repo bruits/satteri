@@ -276,3 +276,103 @@ describe("MDX mark-and-unravel: paragraph inside flow JSX parent", () => {
     assertMdastConformance("<Box>\n{value}\n\nbody\n</Box>");
   });
 });
+
+describe("MDX listItem.spread: non-trailing blank lines mark item loose", () => {
+  // Regression for remark's `listItem._spread` rule: any blank line inside an
+  // item — including blanks consumed atomically inside a multi-line flow JSX
+  // element — makes the item loose. The gap-between-children heuristic isn't
+  // enough on its own (a single child whose span contains a blank line would
+  // otherwise escape detection).
+
+  test("blank line between block children of an item", () => {
+    assertMdastConformance("- para1\n- para2\n\n  para3\n");
+  });
+
+  test("blank lines inside a multi-line flow JSX child", () => {
+    assertMdastConformance("- <details>\n\n    body\n\n  </details>\n");
+  });
+
+  test("fenced code then details with internal blanks", () => {
+    assertMdastConformance(
+      "<Steps>\n1. ```js\n   code\n   ```\n   <details>\n       <summary>X</summary>\n\n       body\n   </details>\n</Steps>\n",
+    );
+  });
+
+  test("tight list with nested sublist stays tight", () => {
+    // The blank between inner items must mark the INNER item, not the outer.
+    assertMdastConformance("- a\n- b\n  - nested1\n\n  - nested2\n");
+  });
+});
+
+describe("MDX mdxFlowExpression: continuation-line dedent", () => {
+  // Regression for micromark-factory-mdx-expression's `indentSize + 1` prefix
+  // strip: up to 2 columns of whitespace are eaten from each continuation line
+  // (tabs expand to the next multiple of 4; any leftover tab columns spill out
+  // as literal spaces). Must also preserve UTF-8 continuation bytes verbatim.
+
+  test("strips single leading space on continuation", () => {
+    assertMdastConformance("{/* hello\n - line2\n*/}\n");
+  });
+
+  test("strips exactly 2 columns per continuation line", () => {
+    assertMdastConformance("{/* x\n    a\n     b\n*/}\n");
+  });
+
+  test("leading tab becomes 2 spaces of remainder", () => {
+    assertMdastConformance("{/* x\n\ta\n*/}\n");
+  });
+
+  test("space-then-tab: tab fills to column 4, then 2 stripped", () => {
+    assertMdastConformance("{/* x\n \ta\n*/}\n");
+  });
+
+  test("second tab after full-strip is preserved", () => {
+    assertMdastConformance("{/* x\n\t\ta\n*/}\n");
+  });
+
+  test("utf-8 content on continuation lines is byte-safe", () => {
+    // Previously the dedent walked by bytes and corrupted multi-byte chars.
+    assertMdastConformance("{/* x\n  café\n   über\n*/}\n");
+  });
+});
+
+describe("MDX flow expression interrupts paragraphs", () => {
+  // Regression: a line starting with `{…}` that scans as a flow expression
+  // must interrupt an open paragraph, matching remark's paragraph-interrupt
+  // set. Without this, `{/* TODO */}` nested between a paragraph/list and the
+  // next block gets swallowed as an inline MdxTextExpression.
+
+  test("expression between paragraph and heading", () => {
+    assertMdastConformance("Text.\n{/* TODO */}\n## Heading\n");
+  });
+
+  test("expression between two lists", () => {
+    assertMdastConformance("- A\n{/* TODO */}\n- B\n");
+  });
+
+  test("non-flow `{` stays inline in paragraph", () => {
+    assertMdastConformance("Text {1 + 1} more text.\n");
+  });
+});
+
+describe("MDX nested deep-indent lists", () => {
+  // Regression for the continuation-indent calculation in MDX-mode's
+  // "scan past 4 spaces to find a deeper marker" branch. The extra
+  // whitespace consumed by `scan_all_space` must be added to the item's
+  // `indent`, or sibling markers at the same column get swallowed as
+  // nested sublists.
+
+  test("bullet list at 6 spaces inside MDX flow", () => {
+    assertMdastConformance("      - a\n      - b\n      - c\n");
+  });
+
+  test("bullet list at 10 spaces inside MDX flow", () => {
+    assertMdastConformance("          - a\n          - b\n          - c\n");
+  });
+
+  test("ordered outer + deeply-indented inner list", () => {
+    assertMdastConformance(
+      "7. outer\n\n          - a\n          - b\n          - c\n",
+    );
+  });
+});

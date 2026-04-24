@@ -206,4 +206,34 @@ describe("Directive MDAST conformance", () => {
       assertExtMdastConformance("::my_component[text]", DIR);
     });
   });
+
+  describe("closing fence indentation and context", () => {
+    // Regressions for remark-directive's fence-closing rules:
+    //   * up to 3 spaces of leading whitespace on the closing fence line
+    //   * closing works across intervening list/listItem containers
+    //   * a `:::` that is also valid blockquote content (prefixed by `>`)
+    //     does NOT close an outer directive.
+
+    test("closing fence indented 2 spaces inside a list", () => {
+      assertExtMdastConformance(
+        ":::caution[Slugs]\ntext\n\n- one\n- two\n  :::\n\n## After\n",
+        DIR,
+      );
+    });
+
+    test("closing fence indented 3 spaces at top level", () => {
+      assertExtMdastConformance(":::note\ntext\n   :::\n", DIR);
+    });
+
+    test("closing fence indented 1 space at top level", () => {
+      assertExtMdastConformance(":::note\ntext\n :::\n", DIR);
+    });
+
+    test("`> :::` inside blockquote does not close outer directive", () => {
+      assertExtMdastConformance(
+        ":::container\n> text\n> :::\n> x\n:::\n",
+        DIR,
+      );
+    });
+  });
 });

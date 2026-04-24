@@ -113,10 +113,30 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
         }
 
+        // Before processing new containers: if we arrive here with a
+        // non-blank line pending, the previous line was a non-trailing blank
+        // that belongs to the currently-open list item. Mark the item as
+        // spread (loose). Must happen before the new-containers loop, which
+        // could open a deeper nested list item and shift the spine tip.
+        if self.last_line_blank {
+            let content_probe = start_ix + line_start.bytes_scanned();
+            let has_content = content_probe < bytes.len()
+                && scan_blank_line(&bytes[content_probe..]).is_none();
+            if has_content {
+                if let Some(up) = self.tree.peek_up() {
+                    if let ItemBody::ListItem(_, _) = self.tree[up].item.body {
+                        if self.tree[up].child.is_some() {
+                            self.mark_enclosing_listitem_spread();
+                        }
+                    }
+                }
+            }
+        }
+
         // Process new containers
         loop {
             let save = line_start.clone();
-            let outer_indent = line_start.scan_space_upto(4);
+            let mut outer_indent = line_start.scan_space_upto(4);
             if outer_indent >= 4 {
                 if self.options.contains(Options::ENABLE_MDX) {
                     // MDX has no indented code blocks.  Speculatively scan all
@@ -124,8 +144,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // indentation.  If no new container is found we restore and
                     // break so that the indentation is preserved for content
                     // that belongs to an existing list item.
-                    let _mdx_save = line_start.clone();
-                    line_start.scan_all_space();
+                    let extra = line_start.scan_space_upto(usize::MAX);
                     let mdx_ix = start_ix + line_start.bytes_scanned();
                     // Quick check: is there a list marker or blockquote here?
                     let has_container = scan_listitem(&bytes[mdx_ix..]).is_some()
@@ -134,6 +153,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         line_start = save;
                         break;
                     }
+                    // The deeper list marker's continuation indent must account
+                    // for the whitespace we just consumed past the initial 4.
+                    outer_indent += extra;
                 } else {
                     line_start = save;
                     break;
@@ -174,7 +196,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.tree.append(Item {
                     start: container_start,
                     end: after_marker_index, // will get updated later if item not empty
-                    body: ItemBody::ListItem(indent),
+                    body: ItemBody::ListItem(indent, false),
                 });
                 self.tree.push();
                 if let Some(n) = scan_blank_line(&bytes[after_marker_index..]) {
@@ -423,18 +445,31 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS) {
             let mut pop_count = None;
             let mut fence_line_end = start_ix;
+            // Closing fence may be indented up to 3 spaces relative to the
+            // current container cursor — matches remark-directive. Try
+            // matching against each enclosing ContainerDirective; if the
+            // speculative space consumption doesn't lead to a match, restore
+            // line_start before continuing with normal block parsing.
+            let fence_save = line_start.clone();
+            let _ = line_start.scan_space_upto(3);
             for (i, &node_ix) in self.tree.walk_spine().rev().enumerate() {
-                if let ItemBody::ContainerDirective(length, ..) = self.tree[node_ix].item.body {
-                    if line_start.scan_closing_container_extensions_fence(length) {
-                        let after_fence = start_ix + line_start.bytes_scanned();
-                        fence_line_end = after_fence + scan_nextline(&bytes[after_fence..]);
-                        pop_count = Some(i + 1);
-                        break;
+                match self.tree[node_ix].item.body {
+                    ItemBody::ContainerDirective(length, ..) => {
+                        let probe = line_start.clone();
+                        if line_start.scan_closing_container_extensions_fence(length) {
+                            let after_fence = start_ix + line_start.bytes_scanned();
+                            fence_line_end = after_fence + scan_nextline(&bytes[after_fence..]);
+                            pop_count = Some(i + 1);
+                            break;
+                        }
+                        line_start = probe;
                     }
+                    ItemBody::List(..) | ItemBody::ListItem(..) => {}
+                    _ => break,
                 }
-                // Continue past non-directive ancestors (lists, blockquotes,
-                // etc.). Popping stops at the matched directive and closes
-                // everything between it and the cursor.
+            }
+            if pop_count.is_none() {
+                line_start = fence_save;
             }
 
             if let Some(c) = pop_count {
@@ -451,7 +486,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 match &mut self.tree[node_ix].item.body {
                     ItemBody::ContainerDirective(..) => (),
                     ItemBody::BlockQuote(..) => (),
-                    ItemBody::ListItem(indent) | ItemBody::DefinitionListDefinition(indent)
+                    ItemBody::ListItem(indent, _) | ItemBody::DefinitionListDefinition(indent)
                         if self.begin_list_item.is_some() =>
                     {
                         self.last_line_blank = true;
@@ -592,6 +627,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // have to inspect the span here.
                     if contains_blank_line(&bytes[ix..ix + end_ix]) {
                         self.last_line_blank = true;
+                        self.mark_enclosing_listitem_spread();
                     }
                     return result;
                 }
@@ -606,6 +642,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     let result = self.parse_mdx_jsx_flow(ix, ix + end_ix);
                     if contains_blank_line(&bytes[ix..ix + end_ix]) {
                         self.last_line_blank = true;
+                        self.mark_enclosing_listitem_spread();
                     }
                     return result;
                 }
@@ -1057,14 +1094,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 for &node_ix in self.tree.walk_spine().rev().skip(1) {
                     match self.tree[node_ix].item.body {
                         ItemBody::ContainerDirective(length, ..) => {
+                            let probe = line_start.clone();
                             if line_start.scan_closing_container_extensions_fence(length) {
                                 closes = true;
                                 break;
                             }
+                            line_start = probe;
                         }
-                        _ => {
-                            break;
-                        }
+                        // Walk past list/listItem — closing `:::` can sit at the
+                        // list's indent level and still close an outer directive
+                        // (matches remark-directive). A blockquote on the spine,
+                        // by contrast, hides an inner `:::` as its own content.
+                        ItemBody::List(..) | ItemBody::ListItem(..) => {}
+                        _ => break,
                     }
                 }
 
@@ -2057,12 +2099,22 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
     }
 
+    fn mark_enclosing_listitem_spread(&mut self) {
+        let spine: Vec<TreeIndex> = self.tree.walk_spine().copied().collect();
+        for node_ix in spine.into_iter().rev() {
+            if let ItemBody::ListItem(indent, _) = self.tree[node_ix].item.body {
+                self.tree[node_ix].item.body = ItemBody::ListItem(indent, true);
+                return;
+            }
+        }
+    }
+
     fn finish_empty_list_item(&mut self) {
         if let Some(begin_list_item) = self.begin_list_item {
             if self.last_line_blank {
                 // A list item can begin with at most one blank line.
                 if let Some(node_ix) = self.tree.peek_up() {
-                    if let ItemBody::ListItem(_) | ItemBody::DefinitionListDefinition(_) =
+                    if let ItemBody::ListItem(_, _) | ItemBody::DefinitionListDefinition(_) =
                         self.tree[node_ix].item.body
                     {
                         self.pop(begin_list_item);
@@ -2681,6 +2733,8 @@ fn scan_paragraph_interrupt_no_table(
             && (get_html_end_tag(&bytes[1..]).is_some() || starts_html_block_type_6(&bytes[1..]))
         // MDX JSX flow elements also interrupt paragraphs
         || (mdx && bytes.starts_with(b"<") && scan_mdx_jsx_block(bytes, None).is_some())
+        // MDX flow expressions (`{ ... }` spanning the full line) also interrupt
+        || (mdx && bytes.starts_with(b"{") && scan_mdx_expression_block(bytes, None).is_some())
         || definition_list
             && ((current_container
                 && tree.peek_up().is_some_and(|cur| {

@@ -10,6 +10,71 @@ use crate::{
     strings::CowStr,
 };
 
+/// Strip the micromark `indentSize + 1` prefix from each continuation
+/// line of an MDX expression. Matches `micromark-factory-mdx-expression`
+/// which consumes up to `indentSize = 2` columns of whitespace after a
+/// line ending (tabs expand to the next multiple of 4; any leftover tab
+/// columns are emitted as literal spaces).
+fn dedent_expression_continuation(s: &str) -> alloc::borrow::Cow<'_, str> {
+    if !s.contains('\n') && !s.contains('\r') {
+        return alloc::borrow::Cow::Borrowed(s);
+    }
+    const INDENT: usize = 2;
+    const TAB_SIZE: usize = 4;
+    let bytes = s.as_bytes();
+    let mut out = alloc::string::String::with_capacity(s.len());
+    let mut i = 0;
+    // First line: copy verbatim.
+    while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
+        i += 1;
+    }
+    out.push_str(&s[..i]);
+    while i < bytes.len() {
+        let line_end_start = i;
+        if bytes[i] == b'\r' {
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'\n' {
+                i += 1;
+            }
+        } else if bytes[i] == b'\n' {
+            i += 1;
+        } else {
+            break;
+        }
+        out.push_str(&s[line_end_start..i]);
+        // Strip up to INDENT columns of leading whitespace from the new line.
+        let mut stripped = 0usize;
+        let mut column = 0usize;
+        while i < bytes.len() && stripped < INDENT {
+            let b = bytes[i];
+            if b == b' ' {
+                stripped += 1;
+                column += 1;
+                i += 1;
+            } else if b == b'\t' {
+                let next_col = (column / TAB_SIZE + 1) * TAB_SIZE;
+                let tab_width = next_col - column;
+                let to_strip = (INDENT - stripped).min(tab_width);
+                stripped += to_strip;
+                for _ in 0..(tab_width - to_strip) {
+                    out.push(' ');
+                }
+                column = next_col;
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        // Copy rest of line verbatim (UTF-8 safe via str slicing).
+        let rest_start = i;
+        while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
+            i += 1;
+        }
+        out.push_str(&s[rest_start..i]);
+    }
+    alloc::borrow::Cow::Owned(out)
+}
+
 fn strip_attr_continuation_indent(s: &str) -> alloc::borrow::Cow<'_, str> {
     if !s.contains('\n') && !s.contains('\r') {
         return alloc::borrow::Cow::Borrowed(s);
@@ -832,8 +897,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 pos += tag_end;
             } else if remaining[0] == b'{' {
                 let expr_end = scan_mdx_expression_end(remaining, true).unwrap_or(raw.len() - pos);
+                let inner_raw = &raw[pos + 1..pos + expr_end - 1];
                 let inner: CowStr<'static> =
-                    CowStr::from(raw[pos + 1..pos + expr_end - 1].to_string());
+                    CowStr::from(dedent_expression_continuation(inner_raw).into_owned());
                 let cow_ix = self.allocs.allocate_cow(inner);
                 self.tree.append(Item {
                     start: start_ix + pos,

@@ -334,9 +334,9 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         );
                         builder.close_node();
                     }
-                    ItemBody::ListItem(_) => {
+                    ItemBody::ListItem(_, item_spread) => {
                         let id = builder.current_node_id();
-                        let is_spread = {
+                        let is_spread = *item_spread || {
                             let mut found = false;
                             let mut prev_end_line: Option<u32> = None;
                             for &child_id in builder.current_pending_children() {
@@ -666,7 +666,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         builder.set_data_current(&ld.to_bytes());
                         inner.tree.push();
                     }
-                    ItemBody::ListItem(_) => {
+                    ItemBody::ListItem(_, spread) => {
                         builder.open_node(MdastNodeType::ListItem as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
@@ -674,7 +674,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         builder.set_data_current(
                             &ListItemData {
                                 checked: 2,
-                                spread: false,
+                                spread,
                             }
                             .to_bytes(),
                         );
@@ -1235,6 +1235,19 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::SoftBreak => {
+                        let src_bytes = source.as_bytes();
+                        let break_text = {
+                            let span = &src_bytes[item.start..item.end];
+                            let has_cr = span.iter().any(|&b| b == b'\r');
+                            let has_lf = span.iter().any(|&b| b == b'\n');
+                            if has_cr && has_lf {
+                                "\r\n"
+                            } else if has_cr {
+                                "\r"
+                            } else {
+                                "\n"
+                            }
+                        };
                         let prev_id = builder.last_sibling_id();
                         let merged = if let Some(pid) = prev_id {
                             let prev = builder.arena_ref().get_node(pid);
@@ -1243,7 +1256,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                                 if prev_data.len() >= 8 {
                                     let prev_sr = StringRef::from_bytes(prev_data);
                                     let prev_text = builder.arena_ref().get_str(prev_sr);
-                                    let combined = [prev_text, "\n"].concat();
+                                    let combined = [prev_text, break_text].concat();
                                     let new_sr = builder.alloc_string(&combined);
                                     let pn = builder.arena_ref().get_node(pid);
                                     builder.update_leaf_full(
@@ -1267,7 +1280,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             false
                         };
                         if !merged {
-                            let sr = builder.alloc_string("\n");
+                            let sr = builder.alloc_string(break_text);
                             builder.add_leaf_full(
                                 MdastNodeType::Text as u8,
                                 start,
@@ -1317,17 +1330,19 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     }
                     ItemBody::TaskListMarker(checked) => {
                         let checked_val = if checked { 1 } else { 0 };
-                        let data = ListItemData {
-                            checked: checked_val,
-                            spread: false,
-                        }
-                        .to_bytes();
                         let depth = builder.stack_depth();
                         for i in (0..depth).rev() {
                             if let Some(node_id) = builder.stack_node_id(i) {
                                 if builder.arena_ref().get_node(node_id).node_type
                                     == MdastNodeType::ListItem as u8
                                 {
+                                    let prev = builder.arena_ref().get_type_data(node_id).to_vec();
+                                    let prev_spread = prev.get(1).copied().unwrap_or(0) != 0;
+                                    let data = ListItemData {
+                                        checked: checked_val,
+                                        spread: prev_spread,
+                                    }
+                                    .to_bytes();
                                     builder.arena_mut().set_type_data(node_id, &data);
                                     break;
                                 }
