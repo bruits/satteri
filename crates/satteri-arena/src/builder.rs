@@ -243,8 +243,7 @@ impl ArenaBuilder {
     pub fn sort_current_pending_children_by_start_offset(&mut self) {
         let children_start = self.stack.last().map(|(_, cs)| *cs as usize).unwrap_or(0);
         let nodes = &self.arena.nodes;
-        self.pending_children[children_start..]
-            .sort_by_key(|&id| nodes[id as usize].start_offset);
+        self.pending_children[children_start..].sort_by_key(|&id| nodes[id as usize].start_offset);
     }
 
     #[allow(clippy::too_many_arguments)]

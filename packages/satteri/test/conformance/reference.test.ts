@@ -1,9 +1,5 @@
 import { describe, test } from "vitest";
-import {
-  assertMdastConformance,
-  assertHastConformance,
-  assertHtmlConformance,
-} from "./helpers.js";
+import { assertMdastConformance, assertHastConformance, assertHtmlConformance } from "./helpers.js";
 
 describe("MDAST conformance: link references", () => {
   test("full reference", () => {
@@ -71,9 +67,7 @@ describe("MDAST conformance: image references", () => {
   });
 
   test("image reference with title", () => {
-    assertMdastConformance(
-      '![alt][ref]\n\n[ref]: https://example.com/img.png "a title"',
-    );
+    assertMdastConformance('![alt][ref]\n\n[ref]: https://example.com/img.png "a title"');
   });
 
   test("unresolved image reference", () => {

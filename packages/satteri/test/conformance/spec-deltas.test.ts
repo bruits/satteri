@@ -1,9 +1,5 @@
 import { describe, test } from "vitest";
-import {
-  assertHastConformance,
-  assertHtmlConformance,
-  assertMdastConformance,
-} from "./helpers.js";
+import { assertHastConformance, assertHtmlConformance, assertMdastConformance } from "./helpers.js";
 
 describe("CommonMark spec deltas: HTML blocks with following content", () => {
   test("spec 148: HTML block in table cell with following paragraph", () => {

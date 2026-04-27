@@ -260,10 +260,7 @@ function stripPositions(node: AnyNode): AnyNode {
  * input contains non-ASCII characters: remark counts columns in code points
  * while satteri currently counts in bytes, so positions diverge even when
  * trees are structurally identical. */
-export function assertExtMdastConformanceNoPosition(
-  md: string,
-  extensions: ExtensionSet[],
-): void {
+export function assertExtMdastConformanceNoPosition(md: string, extensions: ExtensionSet[]): void {
   const proc = buildMdastProcessor(extensions);
   const features = featuresToSatteri(extensions);
   const expected = stripPositions(serialize(proc.parse(md)));
@@ -312,12 +309,16 @@ export async function assertMdxConformance(
   const { default: MdxComponent } = (await mdxEvaluate(input, {
     ...mdxRuntime,
   })) as { default: Function };
-  const mdxHtml = renderToStaticMarkup(createElement(MdxComponent as React.FC<Record<string, unknown>>, { components }));
+  const mdxHtml = renderToStaticMarkup(
+    createElement(MdxComponent as React.FC<Record<string, unknown>>, { components }),
+  );
 
   const { default: SatComponent } = await satteriEvaluate(input, {
     ...satteriRuntime,
   });
-  const satHtml = renderToStaticMarkup(createElement(SatComponent as React.FC<Record<string, unknown>>, { components }));
+  const satHtml = renderToStaticMarkup(
+    createElement(SatComponent as React.FC<Record<string, unknown>>, { components }),
+  );
 
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }

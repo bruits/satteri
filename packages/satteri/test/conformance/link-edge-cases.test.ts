@@ -22,18 +22,14 @@ describe("HTML conformance: malformed reference definitions fall back to paragra
     // regression_test_123: `----------` between `[First try` and `Second try]:`
     // converts the first line to an H2; the leftover becomes a paragraph
     // where the bare URL autolinks.
-    assertHtmlConformance(
-      "[First try\n----------\nSecond try]: https://rust-lang.org\n",
-    );
+    assertHtmlConformance("[First try\n----------\nSecond try]: https://rust-lang.org\n");
   });
 
   test("setext H2 underline breaks refdef label then reference below", () => {
     // regression_test_138: same pattern twice; the second `[first\n-\nsecond]`
     // has no matching definition (first was consumed as H2 + paragraph) so
     // it stays as literal brackets.
-    assertHtmlConformance(
-      "[first\n-\nsecond]: https://example.com\n\n[first\n-\nsecond]\n",
-    );
+    assertHtmlConformance("[first\n-\nsecond]: https://example.com\n\n[first\n-\nsecond]\n");
   });
 });
 
@@ -44,19 +40,15 @@ describe("MDAST conformance: autolink-literal vs directive inside broken link la
     // keeps the `:4321` as a textDirective and doesn't autolink
     // `http://localhost:4321` in the post-transform pass (domain has no `.`).
     // Satteri has to mirror both choices or the resulting mdast diverges.
-    assertExtMdastConformance(
-      '[``x``:"http://localhost:4321"`](https://a.com/) z `foo`.',
-      ["directive"],
-    );
+    assertExtMdastConformance('[``x``:"http://localhost:4321"`](https://a.com/) z `foo`.', [
+      "directive",
+    ]);
   });
 
   test("unmatched `[` in directive: no autolink, no port merge", () => {
     // Minimal shape of the same bug: the leading `[` in a sibling text node
     // is what flips remark into the stricter no-autolink path.
-    assertExtMdastConformance(
-      '[`a`:"http://localhost:4321" end',
-      ["directive"],
-    );
+    assertExtMdastConformance('[`a`:"http://localhost:4321" end', ["directive"]);
   });
 });
 
@@ -142,9 +134,7 @@ describe("HTML conformance: YAML metadata block edge cases", () => {
     // metadata_blocks_test_6: frontmatter only opens at offset 0, so the
     // inner `---` fence is read as a thematic break and the `title:`/`---`
     // tail becomes a setext H2.
-    assertHtmlConformance(
-      "My paragraph here.\n\n---\ntitle: example\nanother_field: 0\n---\n",
-    );
+    assertHtmlConformance("My paragraph here.\n\n---\ntitle: example\nanother_field: 0\n---\n");
   });
 });
 
@@ -155,9 +145,7 @@ describe("MDAST conformance: edge-case reference parsing", () => {
   });
 
   test("setext underline breaks label — first line becomes heading", () => {
-    assertMdastConformance(
-      "[First try\n----------\nSecond try]: https://rust-lang.org\n",
-    );
+    assertMdastConformance("[First try\n----------\nSecond try]: https://rust-lang.org\n");
   });
 
   test("fenced code block inside list item breaks inline link", () => {
@@ -172,9 +160,6 @@ describe("MDAST conformance: edge-case reference parsing", () => {
   // gap is closed.
 
   test("YAML frontmatter with leading blank line — one yaml node at root", () => {
-    assertExtMdastConformance(
-      "---\n\ntitle: example\nanother_field: 0\n---\n",
-      ["frontmatter"],
-    );
+    assertExtMdastConformance("---\n\ntitle: example\nanother_field: 0\n---\n", ["frontmatter"]);
   });
 });

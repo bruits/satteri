@@ -34,7 +34,7 @@ From `node_modules/.pnpm/mdast-util-to-hast*/lib/state.js` (`applyData`):
 - **If no `hName`, `hProperties`, or `hChildren`:** the default/registered handler runs as usual.
 - **`hName` only:** the result node is re-cast to `{ type: "element", tagName: hName, properties: {}, children: <original children> }` — the handler's own element shape is discarded but its children are kept.
 - **`hProperties`:** merged on top of whatever properties the handler produced (or an empty object if we synthesised the element from `hName`). Later keys win.
-- **`hChildren`:** **replaces** the result's children array outright. The children are *hast* nodes, not mdast — they are inlined as-is.
+- **`hChildren`:** **replaces** the result's children array outright. The children are _hast_ nodes, not mdast — they are inlined as-is.
 - **Unknown node types (no handler):** the `defaultUnknownHandler` looks at the node. If it has a `value` and no `hProperties`/`hChildren`, it becomes a `text` node. Otherwise it becomes `<div>` with children from `state.all(node)`. Then `applyData` still runs on top, so `hName` overrides the `div`.
 
 Edge cases to mirror:
@@ -81,7 +81,7 @@ Stored in a side map (`FxHashMap<u32, HData>`) rather than inline, so nodes with
 
 The `JsNode` in `commands.rs` already carries `properties`, `tag_name` for HAST nodes. Extend with `h_name`, `h_properties`, `h_children` for MDAST nodes. When the command is applied, we either write them into the arena (Option A) or — if we want to keep the arena unchanged — we fold them directly into a converted node on the fly.
 
-**Recommended: Option A.** The converter pass happens *after* all JS plugins have run, so by the time we enter `mdast_arena_to_hast_arena`, the h\* data must already be in the arena. Inline storage in a side map is the cleanest match for that lifecycle.
+**Recommended: Option A.** The converter pass happens _after_ all JS plugins have run, so by the time we enter `mdast_arena_to_hast_arena`, the h\* data must already be in the arena. Inline storage in a side map is the cleanest match for that lifecycle.
 
 ### Reuse existing encodings
 

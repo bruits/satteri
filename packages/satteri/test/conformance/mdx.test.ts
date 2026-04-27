@@ -389,10 +389,9 @@ describe("MDX conformance: mark-and-unravel", () => {
 
   test("single-line flow JSX inside flow parent", async () => {
     const Callout = (props: any) => createElement("div", null, props.children);
-    await assertMdxConformance(
-      "<section>\n<Callout>hello</Callout>\n\nbody\n</section>",
-      { Callout },
-    );
+    await assertMdxConformance("<section>\n<Callout>hello</Callout>\n\nbody\n</section>", {
+      Callout,
+    });
   });
 
   test("self-closing JSX inside flow parent", async () => {

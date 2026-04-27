@@ -41,10 +41,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
     // feature set. Expand it into the granular flags the parser checks so
     // callers don't have to remember which sub-flags GFM implies.
     let options = if options.contains(Options::ENABLE_GFM) {
-        options
-            | Options::ENABLE_TABLES
-            | Options::ENABLE_STRIKETHROUGH
-            | Options::ENABLE_TASKLISTS
+        options | Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
     } else {
         options
     };
@@ -191,8 +188,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             let mut code_end = end;
                             let mut code_end_line = end_line;
                             let mut code_end_col = end_col;
-                            if matches!(inner.tree[ix].item.body, ItemBody::IndentCodeBlock)
-                            {
+                            if matches!(inner.tree[ix].item.body, ItemBody::IndentCodeBlock) {
                                 let src = source.as_bytes();
                                 let mut pos = code_end as usize;
                                 while pos < src.len() {
@@ -206,29 +202,23 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                                         break;
                                     }
                                     let line_start = pos;
-                                    let is_indented = matches!(
-                                        src.get(pos),
-                                        Some(b'\t')
-                                    ) || src[pos..].starts_with(b"    ");
+                                    let is_indented = matches!(src.get(pos), Some(b'\t'))
+                                        || src[pos..].starts_with(b"    ");
                                     if !is_indented {
                                         break;
                                     }
-                                    while pos < src.len()
-                                        && src[pos] != b'\n'
-                                        && src[pos] != b'\r'
+                                    while pos < src.len() && src[pos] != b'\n' && src[pos] != b'\r'
                                     {
                                         pos += 1;
                                     }
                                     let line_content = &src[line_start..pos];
-                                    let all_ws = line_content
-                                        .iter()
-                                        .all(|&b| b == b' ' || b == b'\t');
+                                    let all_ws =
+                                        line_content.iter().all(|&b| b == b' ' || b == b'\t');
                                     if !all_ws {
                                         break;
                                     }
                                     code_end = pos as u32;
-                                    let (el, ec) =
-                                        cursor.offset_to_line_col(code_end);
+                                    let (el, ec) = cursor.offset_to_line_col(code_end);
                                     code_end_line = el;
                                     code_end_col = ec;
                                 }
@@ -319,8 +309,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             let id = builder.current_node_id();
                             let node_type = builder.arena_ref().get_node(id).node_type;
                             let existing_data = builder.arena_ref().get_type_data(id).to_vec();
-                            let is_image_ref =
-                                node_type == MdastNodeType::ImageReference as u8;
+                            let is_image_ref = node_type == MdastNodeType::ImageReference as u8;
                             if is_image_ref && existing_data.len() >= 28 {
                                 let mut data = existing_data;
                                 data[20..28].copy_from_slice(&alt_ref.as_bytes());
@@ -440,8 +429,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                             found
                         };
                         if has_blank_between_items {
-                            let existing =
-                                builder.arena_ref().get_type_data(id).to_vec();
+                            let existing = builder.arena_ref().get_type_data(id).to_vec();
                             if existing.len() >= 8 && existing[5] == 0 {
                                 let mut data = existing;
                                 data[5] = 1;
@@ -685,13 +673,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        builder.set_data_current(
-                            &ListItemData {
-                                checked: 2,
-                                spread,
-                            }
-                            .to_bytes(),
-                        );
+                        builder.set_data_current(&ListItemData { checked: 2, spread }.to_bytes());
                         inner.tree.push();
                     }
                     ItemBody::Table(align_ix) => {
@@ -752,15 +734,18 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         if let Some(kind) = reference_kind(link_type) {
                             let (ref_end, ref_end_line, ref_end_col) =
                                 reference_end(source, &mut cursor, end, kind);
-                            let label_src = extract_reference_label(
-                                source, start, ref_end, kind, false,
-                            );
+                            let label_src =
+                                extract_reference_label(source, start, ref_end, kind, false);
                             let label_ref = builder.alloc_string(label_src);
-                            let identifier_ref =
-                                builder.alloc_string(&normalize_identifier(&id));
+                            let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
                             builder.open_node(MdastNodeType::LinkReference as u8);
                             builder.set_position_current(
-                                start, ref_end, start_line, start_col, ref_end_line, ref_end_col,
+                                start,
+                                ref_end,
+                                start_line,
+                                start_col,
+                                ref_end_line,
+                                ref_end_col,
                             );
                             builder.set_data_current(&encode_reference_data(
                                 identifier_ref,
@@ -804,15 +789,18 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         if let Some(kind) = reference_kind(link_type) {
                             let (ref_end, ref_end_line, ref_end_col) =
                                 reference_end(source, &mut cursor, end, kind);
-                            let label_src = extract_reference_label(
-                                source, start, ref_end, kind, true,
-                            );
+                            let label_src =
+                                extract_reference_label(source, start, ref_end, kind, true);
                             let label_ref = builder.alloc_string(label_src);
-                            let identifier_ref =
-                                builder.alloc_string(&normalize_identifier(&id));
+                            let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
                             builder.open_node(MdastNodeType::ImageReference as u8);
                             builder.set_position_current(
-                                start, ref_end, start_line, start_col, ref_end_line, ref_end_col,
+                                start,
+                                ref_end,
+                                start_line,
+                                start_col,
+                                ref_end_line,
+                                ref_end_col,
                             );
                             builder.set_data_current(&encode_image_reference_data(
                                 identifier_ref,
@@ -1591,7 +1579,16 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
             label: label_ref,
         }
         .to_bytes();
-        builder.add_leaf_full(MdastNodeType::Definition as u8, start, end, sl, sc, el, ec, &data);
+        builder.add_leaf_full(
+            MdastNodeType::Definition as u8,
+            start,
+            end,
+            sl,
+            sc,
+            el,
+            ec,
+            &data,
+        );
     }
     if !inner.allocs.refdefs.0.is_empty() {
         builder.sort_current_pending_children_by_start_offset();
@@ -1726,7 +1723,18 @@ fn scan_autolink_literal(bytes: &[u8], ix: usize) -> Option<(usize, usize, usize
         let last = bytes[end - 1];
         if matches!(
             last,
-            b'!' | b'"' | b'\'' | b'*' | b',' | b'.' | b':' | b';' | b'<' | b'?' | b']' | b'_' | b'~'
+            b'!' | b'"'
+                | b'\''
+                | b'*'
+                | b','
+                | b'.'
+                | b':'
+                | b';'
+                | b'<'
+                | b'?'
+                | b']'
+                | b'_'
+                | b'~'
         ) {
             end -= 1;
             continue;
@@ -2016,7 +2024,10 @@ fn merge_directive_port_splits(arena: &mut Arena) {
             let text_sr = StringRef::from_bytes(text_data);
             let text_val = arena.get_str(text_sr).to_string();
             let looks_like_url_host = {
-                let after_ws = text_val.rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
+                let after_ws = text_val
+                    .rsplit(|c: char| c.is_whitespace())
+                    .next()
+                    .unwrap_or("");
                 after_ws.contains("://")
             };
             if !looks_like_url_host {
@@ -2210,7 +2221,10 @@ fn split_text_with_autolinks(arena: &mut Arena, text_id: u32, strict_domain: boo
             if let Some((s, e, url)) = scan_email_autolink(bytes, i) {
                 // Don't double-match if the local-part overlaps an already-
                 // emitted replacement.
-                if replacements.last().map_or(true, |&(_, _, prev_e, _)| s >= prev_e) {
+                if replacements
+                    .last()
+                    .map_or(true, |&(_, _, prev_e, _)| s >= prev_e)
+                {
                     replacements.push((s, e, e, url));
                 }
                 i = e;
@@ -2702,8 +2716,7 @@ fn split_text_on_mdx_expressions(arena: &mut Arena, text_id: u32) {
             i += 1;
             continue;
         }
-        let Some((content_start, content_end, total_len)) =
-            scan_mdx_inline_expression(&bytes[i..])
+        let Some((content_start, content_end, total_len)) = scan_mdx_inline_expression(&bytes[i..])
         else {
             i += 1;
             continue;
@@ -2875,35 +2888,38 @@ fn split_text_on_jsx_tags(arena: &mut Arena, text_id: u32) {
     let base_line = node.start_line;
     let base_col = node.start_column;
 
-    let push_text = |arena: &mut Arena,
-                     out: &mut Vec<u32>,
-                     segment: &str,
-                     seg_start: usize,
-                     seg_end: usize| {
-        if segment.is_empty() {
-            return;
-        }
-        let seg_sr = arena.alloc_string(segment);
-        let tid = arena.alloc_node(MdastNodeType::Text as u8);
-        arena.set_type_data(tid, &seg_sr.as_bytes());
-        arena.set_position(
-            tid,
-            base_start + seg_start as u32,
-            base_start + seg_end as u32,
-            base_line,
-            base_col + seg_start as u32,
-            base_line,
-            base_col + seg_end as u32,
-        );
-        out.push(tid);
-    };
+    let push_text =
+        |arena: &mut Arena, out: &mut Vec<u32>, segment: &str, seg_start: usize, seg_end: usize| {
+            if segment.is_empty() {
+                return;
+            }
+            let seg_sr = arena.alloc_string(segment);
+            let tid = arena.alloc_node(MdastNodeType::Text as u8);
+            arena.set_type_data(tid, &seg_sr.as_bytes());
+            arena.set_position(
+                tid,
+                base_start + seg_start as u32,
+                base_start + seg_end as u32,
+                base_line,
+                base_col + seg_start as u32,
+                base_line,
+                base_col + seg_end as u32,
+            );
+            out.push(tid);
+        };
 
     let mut new_children: Vec<u32> = Vec::new();
     let mut cursor = 0usize;
     for span in spans {
         match span {
             Span::SelfClosing { start, end, name } => {
-                push_text(arena, &mut new_children, &text[cursor..start], cursor, start);
+                push_text(
+                    arena,
+                    &mut new_children,
+                    &text[cursor..start],
+                    cursor,
+                    start,
+                );
                 let name_sr = arena.alloc_string(&name);
                 let jsx_data = satteri_ast::mdast::encode_mdx_jsx_element_data(name_sr, &[]);
                 let jid = arena.alloc_node(MdastNodeType::MdxJsxTextElement as u8);
@@ -2927,7 +2943,13 @@ fn split_text_on_jsx_tags(arena: &mut Arena, text_id: u32) {
                 end,
                 name,
             } => {
-                push_text(arena, &mut new_children, &text[cursor..start], cursor, start);
+                push_text(
+                    arena,
+                    &mut new_children,
+                    &text[cursor..start],
+                    cursor,
+                    start,
+                );
                 let name_sr = arena.alloc_string(&name);
                 let jsx_data = satteri_ast::mdast::encode_mdx_jsx_element_data(name_sr, &[]);
                 let jid = arena.alloc_node(MdastNodeType::MdxJsxTextElement as u8);
@@ -3075,13 +3097,7 @@ fn reference_end(
 ///
 /// `end` must already be the adjusted end from `reference_end` (so Collapsed
 /// extends past `[]`).
-fn extract_reference_label(
-    source: &str,
-    start: u32,
-    end: u32,
-    kind: u8,
-    is_image: bool,
-) -> &str {
+fn extract_reference_label(source: &str, start: u32, end: u32, kind: u8, is_image: bool) -> &str {
     let bytes = source.as_bytes();
     let inner_start = if is_image {
         start as usize + 2

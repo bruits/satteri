@@ -909,8 +909,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             if data.len() >= 20 {
                 let rd = decode_reference_data(data);
                 let identifier = view.get_str(rd.identifier);
-                let Some(number) = ctx.footnotes.and_then(|m| m.get(identifier).copied())
-                else {
+                let Some(number) = ctx.footnotes.and_then(|m| m.get(identifier).copied()) else {
                     // Orphan reference (no matching definition): remark keeps
                     // these as literal `[^id]` text.
                     let literal = format!("[^{}]", identifier);
@@ -1222,11 +1221,7 @@ fn convert_children_unwrap_paragraphs_task(
 /// The HTML renderer skips whitespace-only text nodes between block elements.
 /// Emit the `<section class="footnotes">` block that remark-gfm appends to
 /// the end of a document whenever it contains any footnote definitions.
-fn emit_gfm_footnotes_section(
-    view: &Arena,
-    builder: &mut ArenaBuilder,
-    ctx: &ConvertCtx<'_, '_>,
-) {
+fn emit_gfm_footnotes_section(view: &Arena, builder: &mut ArenaBuilder, ctx: &ConvertCtx<'_, '_>) {
     if ctx.footnote_defs.is_empty() {
         return;
     }
@@ -1284,9 +1279,12 @@ fn emit_gfm_footnotes_section(
         add_text_node(builder, "\n");
 
         let children: Vec<u32> = view.get_children(def_id).to_vec();
-        let last_para_idx = children.iter().enumerate().rev().find(|(_, &cid)| {
-            view.get_node(cid).node_type == MdastNodeType::Paragraph as u8
-        }).map(|(i, _)| i);
+        let last_para_idx = children
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
+            .map(|(i, _)| i);
 
         let total_refs = ctx
             .footnote_ref_totals
@@ -1305,13 +1303,7 @@ fn emit_gfm_footnotes_section(
                 }
                 if Some(i) == last_para_idx {
                     emit_paragraph_with_backrefs(
-                        child_id,
-                        view,
-                        builder,
-                        ctx,
-                        &safe_id,
-                        number,
-                        total_refs,
+                        child_id, view, builder, ctx, &safe_id, number, total_refs,
                     );
                 } else {
                     convert_node(child_id, view, builder, ctx);

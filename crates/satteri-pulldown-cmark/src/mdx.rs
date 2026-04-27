@@ -29,7 +29,11 @@ fn dedent_expression_continuation(
     }
     const INDENT: usize = 2;
     const TAB_SIZE: usize = 4;
-    let base_col = if container_content_col == 0 { 1 } else { container_content_col };
+    let base_col = if container_content_col == 0 {
+        1
+    } else {
+        container_content_col
+    };
     let bytes = s.as_bytes();
     let mut out = alloc::string::String::with_capacity(s.len());
     let mut i = 0;
@@ -103,7 +107,11 @@ fn strip_expression_indent(
 ) -> alloc::string::String {
     const INDENT_SIZE: usize = 2;
     const TAB_WIDTH: usize = 4;
-    let base_col = if container_content_col == 0 { 1 } else { container_content_col };
+    let base_col = if container_content_col == 0 {
+        1
+    } else {
+        container_content_col
+    };
     let strip_cols = INDENT_SIZE;
     let mut result = alloc::string::String::with_capacity(s.len());
     let mut at_line_start = false;
@@ -1157,8 +1165,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         for &node_ix in self.tree.walk_spine() {
             match self.tree[node_ix].item.body {
                 ItemBody::BlockQuote(..) => col += 2, // `>` + space
-                ItemBody::ListItem(indent, _)
-                | ItemBody::DefinitionListDefinition(indent) => col += indent as usize,
+                ItemBody::ListItem(indent, _) | ItemBody::DefinitionListDefinition(indent) => {
+                    col += indent as usize
+                }
                 ItemBody::FootnoteDefinition(..)
                     if self.options.contains(crate::Options::ENABLE_FOOTNOTES) =>
                 {
@@ -1526,10 +1535,7 @@ fn parse_jsx_attrs<'a>(
                 }
                 let value = strip_attr_continuation_indent(raw_value);
                 let decoded = decode_attr_entities(value.as_ref());
-                attrs.push(JsxAttr::Literal(
-                    name.into(),
-                    decoded.into_owned().into(),
-                ));
+                attrs.push(JsxAttr::Literal(name.into(), decoded.into_owned().into()));
             } else if bytes[i] == b'{' {
                 i += 1;
                 let val_start = i;
@@ -1562,7 +1568,10 @@ fn parse_jsx_attrs<'a>(
                 } else {
                     alloc::borrow::Cow::Borrowed(value)
                 };
-                attrs.push(JsxAttr::Expression(name.into(), normalized.into_owned().into()));
+                attrs.push(JsxAttr::Expression(
+                    name.into(),
+                    normalized.into_owned().into(),
+                ));
             } else {
                 attrs.push(JsxAttr::Boolean(name.into()));
             }

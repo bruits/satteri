@@ -431,19 +431,15 @@ describe("MDAST conformance: GFM autolink literal", () => {
     // because autolink tokenization beats directive detection; we achieve
     // the same effect by merging the `text + textDirective + text` split
     // back together before the autolink scan runs.
-    assertExtMdastConformance(
-      "Navigate to http://localhost:4321/ now",
-      ["directive"],
-    );
+    assertExtMdastConformance("Navigate to http://localhost:4321/ now", ["directive"]);
   });
 
   test("URL with port inside bracketed link keeps directive (not merged)", () => {
     // Inverse of the above: inside a `[label](...)` bracketed link, remark
     // keeps the directive split. The merge must skip link children.
-    assertExtMdastConformance(
-      "See [http://localhost:4321/](http://localhost:4321/)",
-      ["directive"],
-    );
+    assertExtMdastConformance("See [http://localhost:4321/](http://localhost:4321/)", [
+      "directive",
+    ]);
   });
 });
 

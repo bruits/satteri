@@ -82,7 +82,6 @@ const featSmartQuotes = $<HTMLInputElement>("#feat-smart-quotes");
 const featSmartDashes = $<HTMLInputElement>("#feat-smart-dashes");
 const featSmartEllipses = $<HTMLInputElement>("#feat-smart-ellipses");
 
-
 let currentMode: Mode = "markdown";
 let activeTab: Tab = "mdast";
 let compileGeneration = 0;

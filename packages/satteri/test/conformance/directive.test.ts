@@ -1,8 +1,5 @@
 import { describe, test } from "vitest";
-import {
-  assertExtMdastConformance,
-  assertExtMdastConformanceNoPosition,
-} from "./helpers.js";
+import { assertExtMdastConformance, assertExtMdastConformanceNoPosition } from "./helpers.js";
 
 const DIR: ["directive"] = ["directive"];
 
@@ -99,10 +96,7 @@ describe("Directive MDAST conformance", () => {
     // node. Post-pass now splits on backtick pairs so `:::tip[Set a \`x\`]`
     // renders an `inlineCode` child.
     test("inline code inside container directive label", () => {
-      assertExtMdastConformance(
-        ":::tip[Set a `baseUrl`]\ncontent\n:::",
-        DIR,
-      );
+      assertExtMdastConformance(":::tip[Set a `baseUrl`]\ncontent\n:::", DIR);
     });
 
     test("inline code inside leaf directive label", () => {
@@ -230,10 +224,7 @@ describe("Directive MDAST conformance", () => {
     });
 
     test("`> :::` inside blockquote does not close outer directive", () => {
-      assertExtMdastConformance(
-        ":::container\n> text\n> :::\n> x\n:::\n",
-        DIR,
-      );
+      assertExtMdastConformance(":::container\n> text\n> :::\n> x\n:::\n", DIR);
     });
   });
 });

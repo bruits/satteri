@@ -244,12 +244,8 @@ describe("MDX mark-and-unravel: paragraph inside flow JSX parent", () => {
   // element, leaving `<summary>` nested inside an extra paragraph wrapper.
 
   test("details/summary with blank-line body", () => {
-    assertMdastConformance(
-      "<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>",
-    );
-    assertHastConformance(
-      "<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>",
-    );
+    assertMdastConformance("<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>");
+    assertHastConformance("<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>");
   });
 
   test("single-line flow JSX inside flow parent is unraveled", () => {
@@ -371,8 +367,6 @@ describe("MDX nested deep-indent lists", () => {
   });
 
   test("ordered outer + deeply-indented inner list", () => {
-    assertMdastConformance(
-      "7. outer\n\n          - a\n          - b\n          - c\n",
-    );
+    assertMdastConformance("7. outer\n\n          - a\n          - b\n          - c\n");
   });
 });

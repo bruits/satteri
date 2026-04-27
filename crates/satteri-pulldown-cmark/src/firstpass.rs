@@ -109,8 +109,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // could open a deeper nested list item and shift the spine tip.
         if self.last_line_blank {
             let content_probe = start_ix + line_start.bytes_scanned();
-            let has_content = content_probe < bytes.len()
-                && scan_blank_line(&bytes[content_probe..]).is_none();
+            let has_content =
+                content_probe < bytes.len() && scan_blank_line(&bytes[content_probe..]).is_none();
             if has_content {
                 if let Some(up) = self.tree.peek_up() {
                     if let ItemBody::ListItem(_, _) = self.tree[up].item.body {
@@ -136,9 +136,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // content that belongs to an existing list item.
                     let extra = line_start.scan_space_upto(usize::MAX);
                     let mdx_ix = start_ix + line_start.bytes_scanned();
-                    let has_directive =
-                        self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS)
-                            && scan_ch_repeat(&bytes[mdx_ix..], b':') > 1;
+                    let has_directive = self.options.contains(Options::ENABLE_CONTAINER_EXTENSIONS)
+                        && scan_ch_repeat(&bytes[mdx_ix..], b':') > 1;
                     let has_container = scan_listitem(&bytes[mdx_ix..]).is_some()
                         || (mdx_ix < bytes.len() && bytes[mdx_ix] == b'>')
                         || has_directive;
@@ -227,8 +226,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             .position(|&b| b != b' ' && b != b'\t')
                             .unwrap_or(rest.len());
                         let after_ws = &rest[trailing_ws..];
-                        let rest_of_line_blank = after_ws.is_empty()
-                            || matches!(after_ws.first(), Some(b'\n' | b'\r'));
+                        let rest_of_line_blank =
+                            after_ws.is_empty() || matches!(after_ws.first(), Some(b'\n' | b'\r'));
                         // When the rest of the marker line is blank, see if the
                         // next line has lazy-continuation content we should
                         // attach to the task item's paragraph.
@@ -252,11 +251,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     &self.tree,
                                     self.tree.spine_len(),
                                 ))
-                                .then_some(start)
+                            .then_some(start)
                         } else if rest_of_line_blank {
                             let newline_len = scan_eol(after_ws).unwrap_or(0);
-                            let start =
-                                task_list_marker.end + trailing_ws + newline_len;
+                            let start = task_list_marker.end + trailing_ws + newline_len;
                             (newline_len > 0
                                 && start < bytes.len()
                                 && scan_blank_line(&bytes[start..]).is_none()
@@ -270,13 +268,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     &self.tree,
                                     self.tree.spine_len(),
                                 ))
-                                .then_some(start)
+                            .then_some(start)
                         } else {
                             None
                         };
                         if let Some(new_start) = lazy_continuation_start {
-                            return self
-                                .parse_paragraph(new_start, Some(task_list_marker));
+                            return self.parse_paragraph(new_start, Some(task_list_marker));
                         } else if rest_of_line_blank || marker_ate_newline {
                             // No paragraph content found for the task item:
                             // either the next line is a paragraph interrupt
@@ -1498,35 +1495,35 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     if is_inside_code_span_on_line(bytes, ix) {
                         LoopInstruction::ContinueAndSkip(0)
                     } else {
-                    // MDX inline expression: try to scan balanced braces.
-                    let scan_result = if self.tree.spine_len() > 0 {
-                        let check = self.make_container_line_check();
-                        scan_mdx_inline_expression_in_container(&bytes[ix..], &check)
-                    } else {
-                        scan_mdx_inline_expression(&bytes[ix..])
-                    };
-                    if let Some((content_start, content_end, total_len)) = scan_result {
-                        self.tree.append_text(begin_text, ix, backslash_escaped);
-                        backslash_escaped = false;
-                        let content = &self.text[ix + content_start..ix + content_end];
-                        let cow_ix = self.allocs.allocate_cow(content.into());
-                        self.tree.append(Item {
-                            start: ix,
-                            end: ix + total_len,
-                            body: ItemBody::MdxTextExpression(cow_ix),
-                        });
-                        begin_text = ix + total_len;
-                        LoopInstruction::ContinueAndSkip(total_len - 1)
-                    } else {
-                        // Unclosed expression.
-                        self.mdx_errors.push((
-                            ix,
-                            "Unexpected end of file in expression, expected a corresponding \
+                        // MDX inline expression: try to scan balanced braces.
+                        let scan_result = if self.tree.spine_len() > 0 {
+                            let check = self.make_container_line_check();
+                            scan_mdx_inline_expression_in_container(&bytes[ix..], &check)
+                        } else {
+                            scan_mdx_inline_expression(&bytes[ix..])
+                        };
+                        if let Some((content_start, content_end, total_len)) = scan_result {
+                            self.tree.append_text(begin_text, ix, backslash_escaped);
+                            backslash_escaped = false;
+                            let content = &self.text[ix + content_start..ix + content_end];
+                            let cow_ix = self.allocs.allocate_cow(content.into());
+                            self.tree.append(Item {
+                                start: ix,
+                                end: ix + total_len,
+                                body: ItemBody::MdxTextExpression(cow_ix),
+                            });
+                            begin_text = ix + total_len;
+                            LoopInstruction::ContinueAndSkip(total_len - 1)
+                        } else {
+                            // Unclosed expression.
+                            self.mdx_errors.push((
+                                ix,
+                                "Unexpected end of file in expression, expected a corresponding \
                              closing brace for `{`"
-                                .to_string(),
-                        ));
-                        LoopInstruction::ContinueAndSkip(0)
-                    }
+                                    .to_string(),
+                            ));
+                            LoopInstruction::ContinueAndSkip(0)
+                        }
                     }
                 }
                 b'{' => {
