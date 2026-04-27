@@ -10,11 +10,12 @@ pub struct LineIndex {
 
 impl LineIndex {
     pub fn from_source(source: &str) -> Self {
-        let mut offsets = vec![0u32];
-        for (i, b) in source.bytes().enumerate() {
-            if b == b'\n' {
-                offsets.push(i as u32 + 1);
-            }
+        let bytes = source.as_bytes();
+        let line_count_estimate = bytes.len() / 40 + 1;
+        let mut offsets = Vec::with_capacity(line_count_estimate);
+        offsets.push(0u32);
+        for nl_idx in memchr::memchr_iter(b'\n', bytes) {
+            offsets.push(nl_idx as u32 + 1);
         }
         LineIndex {
             line_offsets: offsets,

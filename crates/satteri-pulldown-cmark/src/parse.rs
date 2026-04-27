@@ -1389,7 +1389,7 @@ impl<'input> ParserInner<'input> {
             let c = bytes[i];
 
             if c == close {
-                let cow = if mark == 1 {
+                let cow = if title.is_empty() {
                     (i - start_ix + 1, text[mark..i].into())
                 } else {
                     title.push_str(&text[mark..i]);
@@ -1993,8 +1993,13 @@ fn scan_reference<'b>(
     let tail = &text.as_bytes()[start..];
 
     if tail.starts_with(b"[]") {
-        // TODO: this unwrap is sus and should be looked at closer
-        let closing_node = tree[cur_ix].next.unwrap();
+        // The trailing `]` of the collapsed reference must already exist as a
+        // tree node — pulldown-cmark emits each bracket as its own item, and
+        // we only reach here when `tail` already contains `]`. Defensive
+        // fallback to `Failed` if that invariant is somehow broken.
+        let Some(closing_node) = tree[cur_ix].next else {
+            return RefScan::Failed;
+        };
         RefScan::Collapsed(tree[closing_node].next)
     } else {
         let label = scan_link_label(tree, &text[start..], options);

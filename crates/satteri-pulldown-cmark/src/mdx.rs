@@ -100,11 +100,7 @@ fn dedent_expression_continuation(
 /// `strip_container_prefixes` and consumes `container_content_col - 1`
 /// columns; the remaining `indentSize = 2` columns are stripped here on
 /// the already-prefix-stripped value.
-fn strip_expression_indent(
-    s: &str,
-    container_content_col: usize,
-    _element_column: usize,
-) -> alloc::string::String {
+fn strip_expression_indent(s: &str, container_content_col: usize) -> alloc::string::String {
     const INDENT_SIZE: usize = 2;
     const TAB_WIDTH: usize = 4;
     let base_col = if container_content_col == 0 {
@@ -819,16 +815,6 @@ pub(crate) fn scan_mdx_jsx_block(
                 last_was_jsx = true;
                 continue;
             }
-            if pos + 1 < bytes.len() && bytes[pos + 1] == b'>' {
-                pos += 2;
-                last_was_jsx = true;
-                continue;
-            }
-            if pos + 2 < bytes.len() && bytes[pos + 1] == b'/' && bytes[pos + 2] == b'>' {
-                pos += 3;
-                last_was_jsx = true;
-                continue;
-            }
         }
         if bytes[pos] == b'{' {
             if let Some(len) = scan_mdx_expression_end(&bytes[pos..], true) {
@@ -1119,15 +1105,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if remaining[0] == b'<' {
                 let tag_end = scan_mdx_jsx_tag_end(remaining).unwrap_or(raw.len() - pos);
                 let tag_raw = &raw[pos..pos + tag_end];
-                // For attribute-expression indent stripping we need both the
-                // container content column (where list/blockquote prefixes
-                // stop and content begins) and the element column itself
-                // (used to account for extra JSX-nesting indent).
                 let container_content_col = self.container_content_col();
-                let element_column = column_at(self.text.as_bytes(), start_ix + pos);
                 let jsx_data =
-                    parse_jsx_tag_with_cols(tag_raw, container_content_col, element_column)
-                        .into_static();
+                    parse_jsx_tag_with_column(tag_raw, container_content_col).into_static();
                 let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
                 self.tree.append(Item {
                     start: stripped_to_orig(pos),
@@ -1294,15 +1274,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 /// Handles opening, closing, self-closing tags, and fragments.
 /// Attributes are extracted with zero-copy `CowStr::Borrowed` where possible.
 pub(crate) fn parse_jsx_tag<'a>(raw: &'a str) -> JsxElementData<'a> {
-    parse_jsx_tag_with_cols(raw, 1, 1)
-}
-
-/// Back-compat shim — callers that only know the element column still land
-/// here. Treats `column` as both the container content column and the
-/// element column, which is correct for inline JSX (no nested wrapper
-/// indent to account for).
-pub(crate) fn parse_jsx_tag_with_column<'a>(raw: &'a str, column: usize) -> JsxElementData<'a> {
-    parse_jsx_tag_with_cols(raw, column, column)
+    parse_jsx_tag_with_column(raw, 1)
 }
 
 /// Return the 1-indexed column of `bytes[pos]` by walking back to the most
@@ -1327,15 +1299,13 @@ pub(crate) fn column_at(bytes: &[u8], pos: usize) -> usize {
     col
 }
 
-/// Like `parse_jsx_tag`, but takes the 1-indexed column of the opening `<` in
-/// the source. Container indent (list prefix, blockquote gutter, etc.) lives in
-/// that column offset, and multi-line JSX attribute expressions need to strip
+/// Like `parse_jsx_tag`, but takes the 1-indexed column where the container's
+/// content begins. Multi-line JSX attribute expressions need to strip
 /// `(column - 1) + indentSize` columns from each continuation line to match
 /// remark's normalized output.
-pub(crate) fn parse_jsx_tag_with_cols<'a>(
+pub(crate) fn parse_jsx_tag_with_column<'a>(
     raw: &'a str,
     container_content_col: usize,
-    element_column: usize,
 ) -> JsxElementData<'a> {
     let s = raw.trim();
 
@@ -1368,7 +1338,7 @@ pub(crate) fn parse_jsx_tag_with_cols<'a>(
     let is_self_closing = ends_self_close || is_self_contained;
 
     // Parse attributes
-    let attrs = parse_jsx_attrs(s, container_content_col, element_column);
+    let attrs = parse_jsx_attrs(s, container_content_col);
 
     JsxElementData {
         name: name.into(),
@@ -1423,11 +1393,7 @@ fn extract_opening_tag(text: &str) -> &str {
     text
 }
 
-fn parse_jsx_attrs<'a>(
-    text: &'a str,
-    container_content_col: usize,
-    element_column: usize,
-) -> Vec<JsxAttr<'a>> {
+fn parse_jsx_attrs<'a>(text: &'a str, container_content_col: usize) -> Vec<JsxAttr<'a>> {
     let tag = extract_opening_tag(text);
     let bytes = tag.as_bytes();
     let len = bytes.len();
@@ -1560,11 +1526,7 @@ fn parse_jsx_attrs<'a>(
                 }
                 let value = &tag[val_start..i.saturating_sub(1)];
                 let normalized = if value.contains('\n') || value.contains('\r') {
-                    alloc::borrow::Cow::Owned(strip_expression_indent(
-                        value,
-                        container_content_col,
-                        element_column,
-                    ))
+                    alloc::borrow::Cow::Owned(strip_expression_indent(value, container_content_col))
                 } else {
                     alloc::borrow::Cow::Borrowed(value)
                 };

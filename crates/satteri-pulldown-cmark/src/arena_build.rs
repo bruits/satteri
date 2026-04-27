@@ -15,12 +15,14 @@ use satteri_ast::shared::{
 use crate::parse::{DefaultParserCallbacks, ItemBody, JsxAttr, ParserInner};
 use crate::{Alignment, HeadingLevel, LinkType, Options};
 
-/// Default options: tables, footnotes, strikethrough, task lists, math, YAML metadata.
+/// Default options: GFM (tables, strikethrough, task lists, autolink-literal),
+/// footnotes, math, YAML metadata.
 /// Note: heading attributes (`# Title {#id .cls}`) are intentionally NOT enabled
 /// here — remark doesn't parse them and stripping them breaks conformance for
 /// headings that incidentally contain `{…}` text.
 pub const DEFAULT_OPTIONS: Options = Options::from_bits_truncate(
-    Options::ENABLE_TABLES.bits()
+    Options::ENABLE_GFM.bits()
+        | Options::ENABLE_TABLES.bits()
         | Options::ENABLE_FOOTNOTES.bits()
         | Options::ENABLE_STRIKETHROUGH.bits()
         | Options::ENABLE_TASKLISTS.bits()
@@ -1605,9 +1607,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
 
     // GFM extension: promote bare URLs (http://…, https://…, www.…) inside
     // Text nodes to `link` nodes. Matches remark-gfm / mdast-util-gfm-autolink-literal.
-    // ENABLE_GFM expands to ENABLE_STRIKETHROUGH at parse entry, so this single
-    // gate also covers the umbrella flag.
-    if options.contains(Options::ENABLE_STRIKETHROUGH) {
+    if options.contains(Options::ENABLE_GFM) {
         // When directives are also on, a URL with a port (`http://host:4321`)
         // gets split by the directive parser into
         // `text("…http://host") + textDirective("4321") + text("/…")`.
@@ -2102,40 +2102,22 @@ fn gfm_autolink_literal_pass(arena: &mut Arena) {
     // post-transformer then requires a `.` in the domain to match, so we mirror
     // that "require dot" rule only in the broken-label case.
     let mut candidates: Vec<(u32, bool)> = Vec::new();
-    let mut bracket_depth_by_parent: std::collections::HashMap<u32, (i32, u32)> =
-        std::collections::HashMap::new();
+    // Per-parent running bracket depth. Indexed by node id, sized to the
+    // arena once: avoids the per-text-node HashMap entry/get hot in profiles.
+    let mut bracket_depth_by_parent: Vec<i32> = vec![0; len as usize];
+    let text_ty = MdastNodeType::Text as u8;
     for id in 0..len {
         let node = arena.get_node(id);
+        if node.node_type != text_ty {
+            continue;
+        }
         let parent_id = node.parent;
         if parent_id == u32::MAX || parent_id >= len {
             continue;
         }
-        let parent = arena.get_node(parent_id);
-        let parent_type = MdastNodeType::from_u8(parent.node_type);
-        let tracks_brackets = matches!(
-            parent_type,
-            Some(
-                MdastNodeType::Paragraph
-                    | MdastNodeType::Heading
-                    | MdastNodeType::Emphasis
-                    | MdastNodeType::Strong
-                    | MdastNodeType::Delete
-                    | MdastNodeType::TableCell
-            )
-        );
-        let strict = if tracks_brackets {
-            let entry = bracket_depth_by_parent
-                .entry(parent_id)
-                .or_insert((0, parent_id));
-            entry.0 > 0
-        } else {
-            false
-        };
-
-        if node.node_type != MdastNodeType::Text as u8 {
-            continue;
-        }
-        // Skip text inside link (would nest), code, or imports.
+        let parent_type = MdastNodeType::from_u8(arena.get_node(parent_id).node_type);
+        // Skip text inside link (would nest), code, imports, expressions, or
+        // frontmatter.
         if matches!(
             parent_type,
             Some(
@@ -2151,6 +2133,17 @@ fn gfm_autolink_literal_pass(arena: &mut Arena) {
         ) {
             continue;
         }
+        let tracks_brackets = matches!(
+            parent_type,
+            Some(
+                MdastNodeType::Paragraph
+                    | MdastNodeType::Heading
+                    | MdastNodeType::Emphasis
+                    | MdastNodeType::Strong
+                    | MdastNodeType::Delete
+                    | MdastNodeType::TableCell
+            )
+        );
         let data = arena.get_type_data(id);
         if data.is_empty() {
             continue;
@@ -2159,26 +2152,32 @@ fn gfm_autolink_literal_pass(arena: &mut Arena) {
         let text = arena.get_str(sr);
         let bytes = text.as_bytes();
         let mut matched = false;
-        for i in 0..bytes.len() {
+        let mut search_from = 0;
+        while let Some(rel) = memchr::memchr3(b'h', b'w', b'@', &bytes[search_from..]) {
+            let i = search_from + rel;
             let b = bytes[i];
-            if b == b'h' || b == b'w' {
-                if scan_autolink_literal(bytes, i).is_some() {
-                    matched = true;
-                    break;
-                }
-            } else if b == b'@' && scan_email_autolink(bytes, i).is_some() {
+            if (b == b'h' || b == b'w') && scan_autolink_literal(bytes, i).is_some() {
                 matched = true;
                 break;
             }
-        }
-        if matched {
-            candidates.push((id, strict));
+            if b == b'@' && scan_email_autolink(bytes, i).is_some() {
+                matched = true;
+                break;
+            }
+            search_from = i + 1;
         }
         if tracks_brackets {
-            let entry = bracket_depth_by_parent.get_mut(&parent_id).unwrap();
-            let was_open = entry.0 > 0;
-            let now_open = update_bracket_depth(was_open, text);
-            entry.0 = if now_open { 1 } else { 0 };
+            let slot = &mut bracket_depth_by_parent[parent_id as usize];
+            let was_open = *slot > 0;
+            if matched {
+                candidates.push((id, was_open));
+            }
+            if memchr::memchr2(b'[', b']', bytes).is_some() {
+                let now_open = update_bracket_depth(was_open, text);
+                *slot = if now_open { 1 } else { 0 };
+            }
+        } else if matched {
+            candidates.push((id, false));
         }
     }
 
@@ -2200,10 +2199,10 @@ fn split_text_with_autolinks(arena: &mut Arena, text_id: u32, strict_domain: boo
     let text = arena.get_str(sr).to_string();
     let bytes = text.as_bytes();
 
-    // Walk through and collect replacement ranges.
     let mut replacements: Vec<(usize, usize, usize, String)> = Vec::new(); // (start, raw_end, end, url)
     let mut i = 0;
-    while i < bytes.len() {
+    while let Some(rel) = memchr::memchr3(b'h', b'w', b'@', &bytes[i..]) {
+        i += rel;
         let b = bytes[i];
         if b == b'h' || b == b'w' {
             if let Some((s, raw_e, e, url)) = scan_autolink_literal(bytes, i) {
@@ -2215,19 +2214,17 @@ fn split_text_with_autolinks(arena: &mut Arena, text_id: u32, strict_domain: boo
                 i = raw_e;
                 continue;
             }
-        } else if b == b'@' {
-            if let Some((s, e, url)) = scan_email_autolink(bytes, i) {
-                // Don't double-match if the local-part overlaps an already-
-                // emitted replacement.
-                if replacements
-                    .last()
-                    .is_none_or(|&(_, _, prev_e, _)| s >= prev_e)
-                {
-                    replacements.push((s, e, e, url));
-                }
-                i = e;
-                continue;
+        } else if let Some((s, e, url)) = scan_email_autolink(bytes, i) {
+            // Don't double-match if the local-part overlaps an already-
+            // emitted replacement.
+            if replacements
+                .last()
+                .is_none_or(|&(_, _, prev_e, _)| s >= prev_e)
+            {
+                replacements.push((s, e, e, url));
             }
+            i = e;
+            continue;
         }
         i += 1;
     }
@@ -2996,6 +2993,17 @@ fn split_text_on_jsx_tags(arena: &mut Arena, text_id: u32) {
 
 fn mdx_mark_and_unravel(arena: &mut Arena) {
     let len = arena.len() as u32;
+    // Only paragraphs containing inline MDX nodes can be promoted; without
+    // any in the arena the per-paragraph work below is guaranteed wasted.
+    let has_inline_mdx = (0..len).any(|id| {
+        matches!(
+            MdastNodeType::from_u8(arena.get_node(id).node_type),
+            Some(MdastNodeType::MdxJsxTextElement | MdastNodeType::MdxTextExpression),
+        )
+    });
+    if !has_inline_mdx {
+        return;
+    }
     for id in 0..len {
         let node = arena.get_node(id);
         if node.node_type != MdastNodeType::Paragraph as u8 {
@@ -3141,6 +3149,27 @@ fn reference_kind(link_type: LinkType) -> Option<u8> {
 /// matters for chars like `ẞ` → `ss`, where a single lowercase would give
 /// `ß` and break cross-references to a `[SS]` definition.
 fn normalize_identifier(s: &str) -> String {
+    if s.is_ascii() {
+        // ASCII case folding is round-trip stable, so the
+        // lower→upper→lower dance collapses to a single in-place lowercase.
+        let mut out = String::with_capacity(s.len());
+        let mut last_was_ws = false;
+        for &b in s.as_bytes() {
+            if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+                if !last_was_ws && !out.is_empty() {
+                    out.push(' ');
+                    last_was_ws = true;
+                }
+            } else {
+                out.push(b.to_ascii_lowercase() as char);
+                last_was_ws = false;
+            }
+        }
+        if out.ends_with(' ') {
+            out.pop();
+        }
+        return out;
+    }
     let mut collapsed = String::with_capacity(s.len());
     let mut last_was_ws = false;
     for ch in s.chars() {

@@ -54,11 +54,11 @@ fn hex_digit(n: u8) -> char {
 pub fn mdast_arena_to_hast_arena(source: &Arena) -> Arena {
     let src = source.source();
     let mut builder = ArenaBuilder::new(src.to_string());
-    // Pre-allocate based on source arena size.
     let n = source.len();
     builder.arena_mut().nodes.reserve(n);
     builder.arena_mut().children.reserve(n);
     builder.arena_mut().type_data.reserve(n * 20);
+    let newline_ref = builder.alloc_string("\n");
     let refs = collect_refs(source);
     let ctx = ConvertCtx {
         defs: &refs.defs,
@@ -66,6 +66,7 @@ pub fn mdast_arena_to_hast_arena(source: &Arena) -> Arena {
         footnote_defs: &refs.footnote_defs,
         footnote_ref_occurrence: &refs.footnote_ref_occurrence,
         footnote_ref_totals: &refs.footnote_ref_totals,
+        newline_ref,
     };
     convert_node(0, source, &mut builder, &ctx);
     builder.finish()
@@ -77,8 +78,11 @@ pub fn mdast_arena_to_hast_arena(source: &Arena) -> Arena {
 /// FootnoteReference or FootnoteDefinition, so documents without footnotes
 /// don't allocate a HashMap at all.
 struct ConvertCtx<'a, 'src> {
-    defs: &'a [Definition],
+    defs: &'a FxHashMap<&'src str, Definition>,
     footnotes: Option<&'a FxHashMap<&'src str, usize>>,
+    /// Pre-allocated `"\n"` StringRef shared by every block separator inserted
+    /// during conversion; avoids re-pushing a single byte into the source pool.
+    newline_ref: StringRef,
     /// Node IDs of FootnoteDefinition nodes in the order their identifiers
     /// are first referenced. This matches remark-gfm's `state.footnoteOrder`
     /// and drives the order of `<li>`s in the emitted `<section>`.
@@ -94,7 +98,6 @@ struct ConvertCtx<'a, 'src> {
 
 /// Definition data stored as StringRefs into the MDAST source, avoids cloning strings.
 struct Definition {
-    identifier: StringRef,
     url: StringRef,
     title: StringRef, // empty = no title
 }
@@ -103,7 +106,7 @@ struct Definition {
 /// link/image reference definitions, plus source-order numbering for
 /// footnote references and definitions.
 struct CollectedRefs<'src> {
-    defs: Vec<Definition>,
+    defs: FxHashMap<&'src str, Definition>,
     /// `None` when the document contains no footnotes — saves the HashMap
     /// allocation on the common path.
     footnotes: Option<FxHashMap<&'src str, usize>>,
@@ -117,7 +120,7 @@ struct CollectedRefs<'src> {
 }
 
 fn collect_refs(view: &Arena) -> CollectedRefs<'_> {
-    let mut defs = Vec::new();
+    let mut defs: FxHashMap<&str, Definition> = FxHashMap::default();
     let mut fn_def_nodes: FxHashMap<&str, u32> = FxHashMap::default();
 
     // Pass 1: link/image reference defs + map every footnote identifier to
@@ -128,8 +131,9 @@ fn collect_refs(view: &Arena) -> CollectedRefs<'_> {
         match MdastNodeType::from_u8(node.node_type) {
             Some(MdastNodeType::Definition) if data.len() >= 32 => {
                 let dd = decode_definition_data(data);
-                defs.push(Definition {
-                    identifier: dd.identifier,
+                let identifier = view.get_str(dd.identifier);
+                // remark uses first-wins for duplicate identifiers.
+                defs.entry(identifier).or_insert_with(|| Definition {
                     url: dd.url,
                     title: dd.title,
                 });
@@ -141,6 +145,19 @@ fn collect_refs(view: &Arena) -> CollectedRefs<'_> {
             }
             _ => {}
         }
+    }
+
+    // No footnote definitions ⇒ no references can resolve, so the rest of
+    // this function's footnote bookkeeping is guaranteed to produce empty
+    // results. Skip the two arena walks and the HashMap allocations.
+    if fn_def_nodes.is_empty() {
+        return CollectedRefs {
+            defs,
+            footnotes: None,
+            footnote_defs: Vec::new(),
+            footnote_ref_occurrence: FxHashMap::default(),
+            footnote_ref_totals: FxHashMap::default(),
+        };
     }
 
     // Pass 2: mirror remark-gfm's rendering-time footnoteOrder. Main-flow
@@ -308,9 +325,12 @@ fn collect_refs(view: &Arena) -> CollectedRefs<'_> {
     }
 }
 
-fn find_def<'a>(defs: &'a [Definition], view: &Arena, identifier: &str) -> Option<&'a Definition> {
-    defs.iter()
-        .find(|d| view.get_str(d.identifier) == identifier)
+fn find_def<'a>(
+    defs: &'a FxHashMap<&str, Definition>,
+    _view: &Arena,
+    identifier: &str,
+) -> Option<&'a Definition> {
+    defs.get(identifier)
 }
 
 /// Pre-built property data: refs already interned in the builder's string pool.
@@ -334,6 +354,55 @@ fn build_props(builder: &mut ArenaBuilder, specs: &[(&str, u8, StringRef)]) -> V
         .collect()
 }
 
+/// Open an element and emit its props without an intermediate `Vec<PropData>`.
+fn open_element_with_specs(
+    builder: &mut ArenaBuilder,
+    tag: &str,
+    specs: &[(&str, u8, StringRef)],
+) -> u32 {
+    let tag_ref = builder.alloc_string(tag);
+    let id = builder.open_node_raw(HastNodeType::Element as u8);
+    write_element_data_specs(builder, tag_ref, specs);
+    id
+}
+
+fn add_void_element_with_specs(
+    builder: &mut ArenaBuilder,
+    tag: &str,
+    specs: &[(&str, u8, StringRef)],
+) -> u32 {
+    let id = open_element_with_specs(builder, tag, specs);
+    builder.close_node();
+    id
+}
+
+fn write_element_data_specs(
+    builder: &mut ArenaBuilder,
+    tag_ref: StringRef,
+    specs: &[(&str, u8, StringRef)],
+) {
+    let name_refs: [StringRef; 8] = {
+        let mut arr = [StringRef::empty(); 8];
+        debug_assert!(specs.len() <= arr.len(), "too many props for inline buffer");
+        for (i, &(name, _, _)) in specs.iter().enumerate() {
+            arr[i] = builder.alloc_string(name);
+        }
+        arr
+    };
+    let writer = builder.begin_data_current();
+    let out = &mut builder.arena_mut().type_data;
+    out.extend_from_slice(&tag_ref.as_bytes());
+    out.extend_from_slice(&(specs.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    for (i, &(_, kind, value_ref)) in specs.iter().enumerate() {
+        out.extend_from_slice(&name_refs[i].as_bytes());
+        out.push(kind);
+        out.extend_from_slice(&[0u8; 3]);
+        out.extend_from_slice(&value_ref.as_bytes());
+    }
+    builder.finish_data_current(writer);
+}
+
 fn list_contains_task_item(list_id: u32, view: &Arena) -> bool {
     for &child_id in view.get_children(list_id) {
         let child = view.get_node(child_id);
@@ -353,11 +422,16 @@ fn list_contains_task_item(list_id: u32, view: &Arena) -> bool {
 
 fn write_element_data(builder: &mut ArenaBuilder, tag_ref: StringRef, props: &[PropData]) {
     let writer = builder.begin_data_current();
-    let tuples: Vec<(StringRef, u8, StringRef)> = props
-        .iter()
-        .map(|p| (p.name_ref, p.value_kind, p.value_ref))
-        .collect();
-    encode_element_data_into(tag_ref, &tuples, &mut builder.arena_mut().type_data);
+    let out = &mut builder.arena_mut().type_data;
+    out.extend_from_slice(&tag_ref.as_bytes());
+    out.extend_from_slice(&(props.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    for p in props {
+        out.extend_from_slice(&p.name_ref.as_bytes());
+        out.push(p.value_kind);
+        out.extend_from_slice(&[0u8; 3]);
+        out.extend_from_slice(&p.value_ref.as_bytes());
+    }
     builder.finish_data_current(writer);
 }
 
@@ -397,6 +471,13 @@ fn add_void_element_with_props(builder: &mut ArenaBuilder, tag: &str, props: &[P
 
 fn add_text_node(builder: &mut ArenaBuilder, text: &str) -> u32 {
     let text_ref = builder.alloc_string(text);
+    add_text_node_with_ref(builder, text_ref)
+}
+
+/// Add a text leaf reusing a StringRef from the source arena that seeded the
+/// builder; only valid because the builder's source pool starts as a clone of
+/// the view's source, so source-derived offsets address the same bytes.
+fn add_text_node_with_ref(builder: &mut ArenaBuilder, text_ref: StringRef) -> u32 {
     let leaf_id = builder.add_leaf_raw(HastNodeType::Text as u8);
     builder
         .arena_mut()
@@ -574,8 +655,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
 
             if is_task {
                 let class_ref = builder.alloc_string("task-list-item");
-                let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
-                open_element_with_props(builder, "li", &props);
+                open_element_with_specs(builder, "li", &[("className", PROP_SPACE_SEP, class_ref)]);
             } else {
                 open_element(builder, "li");
             }
@@ -662,7 +742,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         Some(MdastNodeType::Text) => {
             let data = view.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
-            let id = add_text_node(builder, view.get_str(string_ref));
+            let id = add_text_node_with_ref(builder, string_ref);
             copy_position_to(id, node_id, view, builder);
         }
 
@@ -700,7 +780,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         Some(MdastNodeType::Break) => {
             let id = add_void_element(builder, "br");
             copy_position_to(id, node_id, view, builder);
-            add_text_node(builder, "\n");
+            add_text_node_with_ref(builder, ctx.newline_ref);
         }
 
         Some(MdastNodeType::Link) => {
@@ -708,18 +788,16 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             let link_data = decode_link_data(data);
             let url_ref = encode_url(builder, view.get_str(link_data.url));
             if link_data.title.len > 0 {
-                let title_ref = builder.alloc_string(view.get_str(link_data.title));
-                let props = build_props(
+                open_element_with_specs(
                     builder,
+                    "a",
                     &[
                         ("href", PROP_STRING, url_ref),
-                        ("title", PROP_STRING, title_ref),
+                        ("title", PROP_STRING, link_data.title),
                     ],
                 );
-                open_element_with_props(builder, "a", &props);
             } else {
-                let props = build_props(builder, &[("href", PROP_STRING, url_ref)]);
-                open_element_with_props(builder, "a", &props);
+                open_element_with_specs(builder, "a", &[("href", PROP_STRING, url_ref)]);
             }
             copy_position(node_id, view, builder);
             convert_children(node_id, view, builder, ctx);
@@ -730,24 +808,25 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             let data = view.get_type_data(node_id);
             let img_data = decode_image_data(data);
             let url_ref = encode_url(builder, view.get_str(img_data.url));
-            let alt_ref = builder.alloc_string(view.get_str(img_data.alt));
             let id = if img_data.title.len > 0 {
-                let title_ref = builder.alloc_string(view.get_str(img_data.title));
-                let props = build_props(
+                add_void_element_with_specs(
                     builder,
+                    "img",
                     &[
                         ("src", PROP_STRING, url_ref),
-                        ("alt", PROP_STRING, alt_ref),
-                        ("title", PROP_STRING, title_ref),
+                        ("alt", PROP_STRING, img_data.alt),
+                        ("title", PROP_STRING, img_data.title),
                     ],
-                );
-                add_void_element_with_props(builder, "img", &props)
+                )
             } else {
-                let props = build_props(
+                add_void_element_with_specs(
                     builder,
-                    &[("src", PROP_STRING, url_ref), ("alt", PROP_STRING, alt_ref)],
-                );
-                add_void_element_with_props(builder, "img", &props)
+                    "img",
+                    &[
+                        ("src", PROP_STRING, url_ref),
+                        ("alt", PROP_STRING, img_data.alt),
+                    ],
+                )
             };
             copy_position_to(id, node_id, view, builder);
         }
@@ -765,14 +844,14 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             copy_position(node_id, view, builder);
             let child_ids = view.get_children(node_id);
             if !child_ids.is_empty() {
-                add_text_node(builder, "\n");
+                add_text_node_with_ref(builder, ctx.newline_ref);
                 open_element(builder, "thead");
                 copy_position(child_ids[0], view, builder);
-                add_text_node(builder, "\n");
+                add_text_node_with_ref(builder, ctx.newline_ref);
                 convert_table_row(child_ids[0], view, builder, ctx, true, &alignments);
-                add_text_node(builder, "\n");
+                add_text_node_with_ref(builder, ctx.newline_ref);
                 builder.close_node(); // thead
-                add_text_node(builder, "\n");
+                add_text_node_with_ref(builder, ctx.newline_ref);
 
                 if child_ids.len() > 1 {
                     open_element(builder, "tbody");
@@ -789,13 +868,13 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                         lb.end_line,
                         lb.end_column,
                     );
-                    add_text_node(builder, "\n");
+                    add_text_node_with_ref(builder, ctx.newline_ref);
                     for &row_id in &child_ids[1..] {
                         convert_table_row(row_id, view, builder, ctx, false, &alignments);
-                        add_text_node(builder, "\n");
+                        add_text_node_with_ref(builder, ctx.newline_ref);
                     }
                     builder.close_node(); // tbody
-                    add_text_node(builder, "\n");
+                    add_text_node_with_ref(builder, ctx.newline_ref);
                 }
             }
             builder.close_node(); // table
@@ -1093,7 +1172,7 @@ fn convert_children_with_newlines(
     ctx: &ConvertCtx<'_, '_>,
 ) {
     let children = view.get_children(node_id);
-    add_text_node(builder, "\n");
+    add_text_node_with_ref(builder, ctx.newline_ref);
     if children.is_empty() {
         return;
     }
@@ -1102,7 +1181,7 @@ fn convert_children_with_newlines(
             continue;
         }
         convert_node(child_id, view, builder, ctx);
-        add_text_node(builder, "\n");
+        add_text_node_with_ref(builder, ctx.newline_ref);
     }
 }
 
@@ -1142,16 +1221,16 @@ fn convert_children_with_newlines_task(
     let children = view.get_children(node_id);
     if children.is_empty() {
         if let Some(td) = task {
-            add_text_node(builder, "\n");
+            add_text_node_with_ref(builder, ctx.newline_ref);
             open_element(builder, "p");
             copy_position(node_id, view, builder);
             emit_checkbox(builder, td);
             builder.close_node();
-            add_text_node(builder, "\n");
+            add_text_node_with_ref(builder, ctx.newline_ref);
         }
         return;
     }
-    add_text_node(builder, "\n");
+    add_text_node_with_ref(builder, ctx.newline_ref);
     let mut first = true;
     for &child_id in children {
         let child_node = view.get_node(child_id);
@@ -1172,7 +1251,7 @@ fn convert_children_with_newlines_task(
         // Skip the trailing separator for children that render to nothing
         // (e.g. directives without a handler) so we don't leave stray `\n`s.
         if produces_hast_output(child_id, view) {
-            add_text_node(builder, "\n");
+            add_text_node_with_ref(builder, ctx.newline_ref);
         }
         first = false;
     }
@@ -1203,13 +1282,13 @@ fn convert_children_unwrap_paragraphs_task(
             prev_was_block = false;
         } else {
             if !prev_was_block {
-                add_text_node(builder, "\n");
+                add_text_node_with_ref(builder, ctx.newline_ref);
             }
             if let (true, Some(td)) = (first, task) {
                 emit_checkbox(builder, td);
             }
             convert_node(child_id, view, builder, ctx);
-            add_text_node(builder, "\n");
+            add_text_node_with_ref(builder, ctx.newline_ref);
             prev_was_block = true;
         }
         first = false;
@@ -1228,7 +1307,7 @@ fn emit_gfm_footnotes_section(view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
 
     // "\n" separator between the document content and the section, matching
     // `convert_children_wrapped`'s output for adjacent siblings.
-    add_text_node(builder, "\n");
+    add_text_node_with_ref(builder, ctx.newline_ref);
 
     let empty_ref = StringRef::empty();
     let footnotes_class = builder.alloc_string("footnotes");
@@ -1254,10 +1333,10 @@ fn emit_gfm_footnotes_section(view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
     add_text_node(builder, "Footnotes");
     builder.close_node(); // h2
 
-    add_text_node(builder, "\n");
+    add_text_node_with_ref(builder, ctx.newline_ref);
 
     open_element(builder, "ol");
-    add_text_node(builder, "\n");
+    add_text_node_with_ref(builder, ctx.newline_ref);
 
     for &def_id in ctx.footnote_defs {
         let def_data = view.get_type_data(def_id);
@@ -1276,7 +1355,7 @@ fn emit_gfm_footnotes_section(view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         let li_id_ref = builder.alloc_string(&li_id);
         let li_props = build_props(builder, &[("id", PROP_STRING, li_id_ref)]);
         open_element_with_props(builder, "li", &li_props);
-        add_text_node(builder, "\n");
+        add_text_node_with_ref(builder, ctx.newline_ref);
 
         let children: Vec<u32> = view.get_children(def_id).to_vec();
         let last_para_idx = children
@@ -1299,7 +1378,7 @@ fn emit_gfm_footnotes_section(view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         } else {
             for (i, &child_id) in children.iter().enumerate() {
                 if i > 0 {
-                    add_text_node(builder, "\n");
+                    add_text_node_with_ref(builder, ctx.newline_ref);
                 }
                 if Some(i) == last_para_idx {
                     emit_paragraph_with_backrefs(
@@ -1312,18 +1391,18 @@ fn emit_gfm_footnotes_section(view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             // Fallback: definition contained no paragraph at all. Append the
             // backref as a trailing sibling so it still reaches readers.
             if last_para_idx.is_none() {
-                add_text_node(builder, "\n");
+                add_text_node_with_ref(builder, ctx.newline_ref);
                 emit_footnote_backrefs(builder, &safe_id, number, total_refs);
             }
         }
 
-        add_text_node(builder, "\n");
+        add_text_node_with_ref(builder, ctx.newline_ref);
         builder.close_node(); // li
-        add_text_node(builder, "\n");
+        add_text_node_with_ref(builder, ctx.newline_ref);
     }
 
     builder.close_node(); // ol
-    add_text_node(builder, "\n");
+    add_text_node_with_ref(builder, ctx.newline_ref);
     builder.close_node(); // section
 }
 
@@ -1450,7 +1529,7 @@ fn convert_children_wrapped(
     for &child_id in children {
         if produces_hast_output(child_id, view) {
             if has_output {
-                add_text_node(builder, "\n");
+                add_text_node_with_ref(builder, ctx.newline_ref);
             }
             has_output = true;
         }
@@ -1468,7 +1547,7 @@ fn convert_table_row(
 ) {
     open_element(builder, "tr");
     copy_position(row_id, view, builder);
-    add_text_node(builder, "\n");
+    add_text_node_with_ref(builder, ctx.newline_ref);
     let cell_ids = view.get_children(row_id);
     let cell_tag = if is_header { "th" } else { "td" };
     for (col_idx, &cell_id) in cell_ids.iter().enumerate() {
@@ -1492,7 +1571,7 @@ fn convert_table_row(
         copy_position(cell_id, view, builder);
         convert_children(cell_id, view, builder, ctx);
         builder.close_node();
-        add_text_node(builder, "\n");
+        add_text_node_with_ref(builder, ctx.newline_ref);
     }
     // Pad to the header width — mdast-util-to-hast emits empty `<th>`/`<td>`
     // for any missing cells so the rendered table is rectangular, even though
@@ -1516,7 +1595,7 @@ fn convert_table_row(
             open_element(builder, cell_tag);
         }
         builder.close_node();
-        add_text_node(builder, "\n");
+        add_text_node_with_ref(builder, ctx.newline_ref);
     }
     builder.close_node(); // tr
 }
@@ -1551,17 +1630,7 @@ fn convert_mdx_jsx_element(
     let mut attr_tuples = Vec::with_capacity(attr_count as usize);
     for i in 0..attr_count {
         let (kind, attr_name_ref, attr_value_ref) = decode_mdx_jsx_attr(mdast_data, i);
-        let n = if attr_name_ref.len > 0 {
-            builder.alloc_string(view.get_str(attr_name_ref))
-        } else {
-            StringRef::empty()
-        };
-        let v = if attr_value_ref.len > 0 {
-            builder.alloc_string(view.get_str(attr_value_ref))
-        } else {
-            StringRef::empty()
-        };
-        attr_tuples.push((kind, n, v));
+        attr_tuples.push((kind, attr_name_ref, attr_value_ref));
     }
 
     builder.open_node_raw(hast_type);

@@ -1073,6 +1073,7 @@ dependencies = [
 name = "satteri-arena"
 version = "0.1.2"
 dependencies = [
+ "memchr",
  "rustc-hash",
 ]
 

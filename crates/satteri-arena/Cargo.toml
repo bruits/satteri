@@ -6,4 +6,5 @@ description = "Arena allocator and binary buffer primitives for Sätteri"
 license = "MIT"
 
 [dependencies]
+memchr = "2.5"
 rustc-hash = "2"
