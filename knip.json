@@ -1,11 +1,23 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignore": ["crates/**"],
+  "ignore": ["crates/**", "packages/satteri/bench/fixtures/**"],
+  "ignoreBinaries": ["build"],
   "workspaces": {
     "packages/satteri": {
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["@emnapi/runtime", "@napi-rs/wasm-runtime"]
+      "ignoreDependencies": [
+        "@emnapi/core",
+        "@emnapi/runtime",
+        "@napi-rs/wasm-runtime",
+        "mdast-util-mdx"
+      ]
+    },
+    "examples": {
+      "entry": ["*.ts"]
+    },
+    "playground": {
+      "ignoreDependencies": ["wrangler"]
     }
   },
   "ignoreExportsUsedInFile": {

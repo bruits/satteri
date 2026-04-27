@@ -1247,8 +1247,8 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let src_bytes = source.as_bytes();
                         let break_text = {
                             let span = &src_bytes[item.start..item.end];
-                            let has_cr = span.iter().any(|&b| b == b'\r');
-                            let has_lf = span.iter().any(|&b| b == b'\n');
+                            let has_cr = span.contains(&b'\r');
+                            let has_lf = span.contains(&b'\n');
                             if has_cr && has_lf {
                                 "\r\n"
                             } else if has_cr {
@@ -1545,7 +1545,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
     // that lived inside e.g. a blockquote will land at root here. Plain
     // root-level definitions — the overwhelmingly common case — round-trip
     // exactly.
-    let mut refdefs: Vec<(String, String, Option<String>, std::ops::Range<usize>)> = inner
+    let mut refdefs: Vec<(String, String, Option<String>, core::ops::Range<usize>)> = inner
         .allocs
         .refdefs
         .0
@@ -1908,7 +1908,7 @@ fn domain_has_dot(url: &str) -> bool {
         None => url,
     };
     let domain_end = after_scheme
-        .find(|c: char| matches!(c, '/' | '?' | '#'))
+        .find(['/', '?', '#'])
         .unwrap_or(after_scheme.len());
     after_scheme[..domain_end].contains('.')
 }
@@ -2166,12 +2166,11 @@ fn gfm_autolink_literal_pass(arena: &mut Arena) {
                     matched = true;
                     break;
                 }
-            } else if b == b'@' {
-                if scan_email_autolink(bytes, i).is_some() {
+            } else if b == b'@'
+                && scan_email_autolink(bytes, i).is_some() {
                     matched = true;
                     break;
                 }
-            }
         }
         if matched {
             candidates.push((id, strict));
@@ -2223,7 +2222,7 @@ fn split_text_with_autolinks(arena: &mut Arena, text_id: u32, strict_domain: boo
                 // emitted replacement.
                 if replacements
                     .last()
-                    .map_or(true, |&(_, _, prev_e, _)| s >= prev_e)
+                    .is_none_or(|&(_, _, prev_e, _)| s >= prev_e)
                 {
                     replacements.push((s, e, e, url));
                 }

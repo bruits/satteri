@@ -63,8 +63,6 @@
     "fast-check": "^4.7.0",
     "mdast-util-mdx": "^3.0.0",
     "mdast-util-to-hast": "^13.2.1",
-    "micromark": "^4.0.2",
-    "micromark-extension-gfm": "^3.0.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "rehype-stringify": "^10.0.1",

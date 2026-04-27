@@ -1,11 +1,8 @@
-#![cfg(feature = "html")]
-
-use satteri_pulldown_cmark::{html, Options, Parser};
+use satteri_pulldown_cmark::{parse, Options};
 
 fn render(input: &str, opts: Options) -> String {
-    let mut out = String::new();
-    html::push_html(&mut out, Parser::new_ext(input, opts));
-    out
+    let (arena, _) = parse(input, opts);
+    satteri_ast::mdast_to_html(&arena)
 }
 
 fn opts_quotes_only() -> Options {

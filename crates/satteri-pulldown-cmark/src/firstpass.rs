@@ -2609,14 +2609,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // would be mis-read as a JSX close `>`. Re-check that specific case
         // with the spine's container prefix so multi-line JSX in blockquotes
         // correctly interrupts paragraphs.
-        if self.options.contains(Options::ENABLE_MDX) && bytes.starts_with(b"<") {
-            if self
+        if self.options.contains(Options::ENABLE_MDX) && bytes.starts_with(b"<")
+            && self
                 .scan_mdx_flow_in_container_bytes(bytes, |b, c| scan_mdx_jsx_block(b, c))
                 .is_some()
             {
                 return true;
             }
-        }
         if scan_paragraph_interrupt_no_table(
             bytes,
             current_container,
@@ -2790,6 +2789,7 @@ fn count_header_cols(
 ///
 /// Use `FirstPass::scan_paragraph_interrupt` in any context that allows
 /// tables to interrupt the paragraph.
+#[allow(clippy::too_many_arguments)]
 fn scan_paragraph_interrupt_no_table(
     bytes: &[u8],
     current_container: bool,

@@ -1508,7 +1508,7 @@ fn process_sub_expressions<'a>(
                     import_jsx_dev,
                 )?;
             }
-            _ => {}
+            ChainElement::TSNonNullExpression(_) => {}
         },
         Expression::ImportExpression(imp) => {
             process_expression_jsx(

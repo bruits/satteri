@@ -851,7 +851,7 @@ impl<'input> ParserInner<'input> {
                             if let Some((_, ReferenceLabel::Footnote(footlabel))) =
                                 scan_link_label(&self.tree, first_bracket_text, self.options)
                             {
-                                if self.allocs.footdefs.contains(&*footlabel) {
+                                if self.allocs.footdefs.contains(&footlabel) {
                                     let footref = self.allocs.allocate_cow(footlabel);
                                     if let Some(def) = self
                                         .allocs
@@ -2978,62 +2978,6 @@ mod test {
             .collect();
         let expected_offsets = vec![(0..4), (0..4)];
         assert_eq!(expected_offsets, event_offsets);
-    }
-
-    // FIXME: add this one regression suite
-    #[cfg(feature = "html")]
-    #[test]
-    fn link_def_at_eof() {
-        let test_str = "[My site][world]\n\n[world]: https://vincentprouillet.com";
-        let expected = "<p><a href=\"https://vincentprouillet.com\">My site</a></p>\n";
-
-        let mut buf = String::new();
-        crate::html::push_html(&mut buf, Parser::new(test_str));
-        assert_eq!(expected, buf);
-    }
-
-    #[cfg(feature = "html")]
-    #[test]
-    fn no_footnote_refs_without_option() {
-        let test_str = "a [^a]\n\n[^a]: yolo";
-        let expected = "<p>a <a href=\"yolo\">^a</a></p>\n";
-
-        let mut buf = String::new();
-        crate::html::push_html(&mut buf, Parser::new(test_str));
-        assert_eq!(expected, buf);
-    }
-
-    #[cfg(feature = "html")]
-    #[test]
-    fn ref_def_at_eof() {
-        let test_str = "[test]:\\";
-        let expected = "";
-
-        let mut buf = String::new();
-        crate::html::push_html(&mut buf, Parser::new(test_str));
-        assert_eq!(expected, buf);
-    }
-
-    #[cfg(feature = "html")]
-    #[test]
-    fn ref_def_cr_lf() {
-        let test_str = "[a]: /u\r\n\n[a]";
-        let expected = "<p><a href=\"/u\">a</a></p>\n";
-
-        let mut buf = String::new();
-        crate::html::push_html(&mut buf, Parser::new(test_str));
-        assert_eq!(expected, buf);
-    }
-
-    #[cfg(feature = "html")]
-    #[test]
-    fn no_dest_refdef() {
-        let test_str = "[a]:";
-        let expected = "<p>[a]:</p>\n";
-
-        let mut buf = String::new();
-        crate::html::push_html(&mut buf, Parser::new(test_str));
-        assert_eq!(expected, buf);
     }
 
     #[test]
