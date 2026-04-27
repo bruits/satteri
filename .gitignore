@@ -13,6 +13,7 @@ packages/satteri/bench/docs.ts
 
 .DS_Store
 .claude
+plans/
 
 # Fuzz-discovered conformance issues are written by the fuzz suite on demand;
 # they describe transient findings, not source of truth.
