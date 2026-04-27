@@ -538,11 +538,10 @@ fn scan_mdx_expression_end_inner(
                         }
                         b'{' if template_depth > 0 => template_depth += 1,
                         b'}' if template_depth > 0 => template_depth -= 1,
-                        b'\n' | b'\r' if inline => {
-                            if is_blank_line_next(bytes, ix) {
+                        b'\n' | b'\r' if inline
+                            && is_blank_line_next(bytes, ix) => {
                                 return None;
                             }
-                        }
                         _ => {}
                     }
                     ix += 1;
