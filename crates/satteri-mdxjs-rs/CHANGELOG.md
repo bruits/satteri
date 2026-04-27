@@ -1,5 +1,12 @@
 # satteri-mdxjs
 
+## 0.1.8 — 2026-04-27
+
+### Patch changes
+
+- [5736ca4](https://github.com/bruits/satteri/commit/5736ca45dd3eaf703e6d573f19274b42f1ca6cb9) Fixes many output inconsistencies with remark across Markdown, GFM, and MDX parsing, mostly found by extensive property-based fuzz testing. Notable areas: GFM bare-URL detection, MDX JSX flow vs inline classification, footnote numbering and section ordering, directive label inline parsing, list spread/tight handling, and reference link spans. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.1.4, satteri-pulldown-cmark (Cargo)@0.2.4
+
 ## 0.1.7 — 2026-04-17
 
 ### Patch changes
