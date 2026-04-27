@@ -232,10 +232,32 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // When the rest of the marker line is blank, see if the
                         // next line has lazy-continuation content we should
                         // attach to the task item's paragraph.
-                        let next_line_content_start = if rest_of_line_blank {
+                        //
+                        // `marker_ate_newline=true` means the scanner already
+                        // consumed the newline as the trailing whitespace, so
+                        // the marker line ended right after `]` and `after_ws`
+                        // is on the next line — handle it the same as a blank
+                        // marker tail.
+                        let lazy_continuation_start = if marker_ate_newline {
+                            let start = task_list_marker.end + trailing_ws;
+                            (start < bytes.len()
+                                && scan_blank_line(&bytes[start..]).is_none()
+                                && !scan_paragraph_interrupt_no_table(
+                                    &bytes[start..],
+                                    true,
+                                    self.options.contains(Options::ENABLE_FOOTNOTES),
+                                    self.options.contains(Options::ENABLE_DEFINITION_LIST),
+                                    self.options.contains(Options::ENABLE_MDX),
+                                    self.options.contains(Options::ENABLE_MATH),
+                                    &self.tree,
+                                    self.tree.spine_len(),
+                                ))
+                                .then_some(start)
+                        } else if rest_of_line_blank {
                             let newline_len = scan_eol(after_ws).unwrap_or(0);
-                            let start = task_list_marker.end + trailing_ws + newline_len;
-                            if newline_len > 0
+                            let start =
+                                task_list_marker.end + trailing_ws + newline_len;
+                            (newline_len > 0
                                 && start < bytes.len()
                                 && scan_blank_line(&bytes[start..]).is_none()
                                 && !scan_paragraph_interrupt_no_table(
@@ -247,25 +269,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.options.contains(Options::ENABLE_MATH),
                                     &self.tree,
                                     self.tree.spine_len(),
-                                )
-                            {
-                                Some(start)
-                            } else {
-                                None
-                            }
+                                ))
+                                .then_some(start)
                         } else {
                             None
                         };
-                        if marker_ate_newline {
-                            // The single whitespace after `]` was the newline
-                            // itself; drop the task-marker recognition and let
-                            // the outer flow re-process this line.
-                            line_start = saved_line_start;
-                        } else if let Some(new_start) = next_line_content_start {
+                        if let Some(new_start) = lazy_continuation_start {
                             return self
                                 .parse_paragraph(new_start, Some(task_list_marker));
-                        } else if rest_of_line_blank {
-                            // No paragraph content found for the task item.
+                        } else if rest_of_line_blank || marker_ate_newline {
+                            // No paragraph content found for the task item:
+                            // either the next line is a paragraph interrupt
+                            // (so it can't lazily continue the task item) or
+                            // the next line is blank.
                             line_start = saved_line_start;
                         } else {
                             return self

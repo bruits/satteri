@@ -37,6 +37,18 @@ pub const MDX_OPTIONS: Options =
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
 pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
+    // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
+    // feature set. Expand it into the granular flags the parser checks so
+    // callers don't have to remember which sub-flags GFM implies.
+    let options = if options.contains(Options::ENABLE_GFM) {
+        options
+            | Options::ENABLE_TABLES
+            | Options::ENABLE_STRIKETHROUGH
+            | Options::ENABLE_TASKLISTS
+    } else {
+        options
+    };
+
     let line_index = LineIndex::from_source(source);
     let mut cursor = line_index.cursor();
 
@@ -1596,10 +1608,9 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
 
     // GFM extension: promote bare URLs (http://…, https://…, www.…) inside
     // Text nodes to `link` nodes. Matches remark-gfm / mdast-util-gfm-autolink-literal.
+    // ENABLE_GFM expands to ENABLE_STRIKETHROUGH at parse entry, so this single
+    // gate also covers the umbrella flag.
     if options.contains(Options::ENABLE_STRIKETHROUGH) {
-        // We piggyback on ENABLE_STRIKETHROUGH as a proxy for "GFM features on"
-        // — the same flag the existing GFM extensions are gated behind.
-        //
         // When directives are also on, a URL with a port (`http://host:4321`)
         // gets split by the directive parser into
         // `text("…http://host") + textDirective("4321") + text("/…")`.

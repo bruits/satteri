@@ -159,8 +159,6 @@ fn strip_expression_indent(
                         for _ in 0..keep_cols {
                             result.push(' ');
                         }
-                        cols_consumed += want;
-                        col += tab_cols;
                         i += 1;
                         break;
                     }

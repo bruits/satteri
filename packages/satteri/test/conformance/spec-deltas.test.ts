@@ -125,3 +125,28 @@ describe("CommonMark spec deltas: fuzz-discovered regressions", () => {
     assertHtmlConformance("~~~r`|");
   });
 });
+
+describe("GFM list-item edge cases", () => {
+  // regression_test_175: indented code block followed by an HTML block inside
+  // a list item — remark emits a single newline between the `<pre>` and the
+  // HTML block, not a blank line.
+  test("indented code block then HTML block inside list item", () => {
+    assertHtmlConformance("*\n      <div>\n     <div>\n");
+  });
+
+  // regression_test_198: `- [x]` whose marker line ends in newline, with the
+  // next line carrying paragraph content (a `\` hard-break). The task marker
+  // is recognised and the next-line content lazily continues the item.
+  test("task-list marker ends line, next line carries lazy paragraph content", () => {
+    assertHtmlConformance("- [x]\n\\\n-\n");
+  });
+
+  // regression_test_210: same shape but the lazy-continuation line is a
+  // paragraph interrupt (nested list / blockquote). Then the `[x]` is NOT a
+  // task marker; the item becomes plain text + a nested block.
+  test("task-list marker ends line, next line is a paragraph interrupt", () => {
+    assertHtmlConformance(
+      "- [x] * some text\n- [ ] > some text\n- [x]\n  * some text\n- [ ]\n  > some text\n",
+    );
+  });
+});

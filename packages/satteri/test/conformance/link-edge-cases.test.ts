@@ -95,6 +95,17 @@ describe("HTML conformance: deflist-shaped input without the deflist extension",
   });
 });
 
+describe("HTML conformance: malformed reference definition labels with footnote", () => {
+  test("`[label[^fn]]: URL` — invalid refdef label, URL autolinks in trailing paragraph", () => {
+    // footnotes_test_16: a label containing an unescaped `[…]` isn't a valid
+    // CommonMark reference definition, so the line stays as a paragraph with
+    // the footnote ref and a GFM autolinked URL after `]: `.
+    assertHtmlConformance(
+      "My [otherlink[^c]].\n\n[^c]: foo.\n\n[otherlink[^c]]: https://example.com/path\n",
+    );
+  });
+});
+
 describe("HTML conformance: malformed inline links fall back to paragraphs", () => {
   test("nested sublist marker breaks `[text](url)` across lines", () => {
     // regression_test_153: the `- -` nested list marker aborts the link, so
