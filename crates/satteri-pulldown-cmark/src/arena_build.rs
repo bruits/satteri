@@ -2166,11 +2166,10 @@ fn gfm_autolink_literal_pass(arena: &mut Arena) {
                     matched = true;
                     break;
                 }
-            } else if b == b'@'
-                && scan_email_autolink(bytes, i).is_some() {
-                    matched = true;
-                    break;
-                }
+            } else if b == b'@' && scan_email_autolink(bytes, i).is_some() {
+                matched = true;
+                break;
+            }
         }
         if matched {
             candidates.push((id, strict));
