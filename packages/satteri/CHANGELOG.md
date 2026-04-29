@@ -1,5 +1,13 @@
 # satteri
 
+## 0.2.8 — 2026-04-29
+
+### Patch changes
+
+- [1f92697](https://github.com/bruits/satteri/commit/1f9269712ad4276bdbf8c9d2f205d8029bea7c43) Added visitor support for `containerDirective`, `leafDirective`, and `textDirective` nodes. Plugin authors can now subscribe to directive nodes directly (with typed `name`/`attributes` and children).
+  
+  Removed the `root` visitor key. Plugins should subscribe to specific node types instead; a dedicated API for prepending or appending content at the document level will land separately. — Thanks @Princesseuh!
+
 ## 0.2.7 — 2026-04-27
 
 ### Patch changes
