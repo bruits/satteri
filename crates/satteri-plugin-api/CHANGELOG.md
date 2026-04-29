@@ -1,5 +1,12 @@
 # satteri-plugin-api
 
+## 0.1.7 — 2026-04-29
+
+### Patch changes
+
+- [467bdf9](https://github.com/bruits/satteri/commit/467bdf9b523b1ff1f560499c4d4c769e9c888166) Fixed plugin-set `data` being lost or corrupted on MDAST and HAST nodes in certain cases. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.2.1
+
 ## 0.1.6 — 2026-04-29
 
 ### Patch changes
