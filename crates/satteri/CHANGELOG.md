@@ -1,5 +1,14 @@
 # satteri
 
+## 0.1.10 — 2026-04-29
+
+### Patch changes
+
+- [baae3b8](https://github.com/bruits/satteri/commit/baae3b83b56bf0fb4cd0b0d2f376627ff0267b8f) Fixed plugins silently dropping all but the last structural change against a given node. Multiple `insertBefore`/`insertAfter` calls on the same node, or sibling inserts paired with a `removeNode` on that same node, now all apply in the order they were issued.
+  
+  Combinations that don't have a sensible meaning, like modifying something inside a removed subtree, now report an error instead of silently dropping the change. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.2.0, satteri-mdxjs (Cargo)@0.1.10, satteri-pulldown-cmark (Cargo)@0.3.0
+
 ## 0.1.9 — 2026-04-27
 
 ### Patch changes

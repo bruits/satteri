@@ -1,5 +1,15 @@
 # satteri-pulldown-cmark
 
+## 0.3.0 — 2026-04-29
+
+### Minor changes
+
+- [baae3b8](https://github.com/bruits/satteri/commit/baae3b83b56bf0fb4cd0b0d2f376627ff0267b8f) Renamed `Options::ENABLE_CONTAINER_EXTENSIONS` to `Options::ENABLE_DIRECTIVE`. If you use this crate directly, update the option name; if you only consume satteri through the npm package or the high-level Rust API, no change is needed (the `features.directive` toggle keeps its name). — Thanks @Princesseuh!
+
+### Patch changes
+
+- Updated dependencies: satteri-ast (Cargo)@0.2.0
+
 ## 0.2.5 — 2026-04-27
 
 ### Patch changes
