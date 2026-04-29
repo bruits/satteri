@@ -1,5 +1,12 @@
 # satteri-plugin-api
 
+## 0.1.8 — 2026-04-29
+
+### Patch changes
+
+- [bf7c5a0](https://github.com/bruits/satteri/commit/bf7c5a0bb9865f8147ea6b0815558df3ece0de08) Fixed numeric property values (e.g. `width: 16`, `start: 5`) being silently dropped when set on elements from JS plugins. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.2.2
+
 ## 0.1.7 — 2026-04-29
 
 ### Patch changes

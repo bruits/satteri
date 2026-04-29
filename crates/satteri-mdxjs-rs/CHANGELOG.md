@@ -1,5 +1,12 @@
 # satteri-mdxjs
 
+## 0.1.12 — 2026-04-29
+
+### Patch changes
+
+- [bf7c5a0](https://github.com/bruits/satteri/commit/bf7c5a0bb9865f8147ea6b0815558df3ece0de08) Fixed SVG attributes names (e.g. `viewBox`, `fillOpacity`) being converted to lowercase when set on elements from JS plugins — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.2.2, satteri-pulldown-cmark (Cargo)@0.3.2
+
 ## 0.1.11 — 2026-04-29
 
 ### Patch changes

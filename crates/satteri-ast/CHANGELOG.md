@@ -1,5 +1,11 @@
 # satteri-ast
 
+## 0.2.2 — 2026-04-29
+
+### Patch changes
+
+- [bf7c5a0](https://github.com/bruits/satteri/commit/bf7c5a0bb9865f8147ea6b0815558df3ece0de08) Fixed SVG attributes names (e.g. `viewBox`, `fillOpacity`) being converted to lowercase when set on elements from JS plugins — Thanks @Princesseuh!
+
 ## 0.2.1 — 2026-04-29
 
 ### Patch changes
