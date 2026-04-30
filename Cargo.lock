@@ -1037,7 +1037,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "satteri"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "satteri-ast",
  "satteri-mdxjs",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-ast"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "pulldown-cmark-escape",
  "rustc-hash",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-mdxjs"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-napi"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "napi",
  "napi-build",
@@ -1112,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-plugin-api"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "rustc-hash",
  "satteri-arena",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-pulldown-cmark"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "bitflags",
  "memchr",

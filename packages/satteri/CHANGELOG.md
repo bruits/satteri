@@ -1,5 +1,14 @@
 # satteri
 
+## 0.3.4 — 2026-04-30
+
+### Patch changes
+
+- [80d21c8](https://github.com/bruits/satteri/commit/80d21c8b9bc7f7cb2f86c170d4fafac0d5d2a3b7) Fix a crash when an MDAST plugin returns a tree containing a directive
+  (`containerDirective` / `leafDirective` / `textDirective`) and the surrounding
+  document contains multi-byte text (e.g. Devanagari, CJK). — Thanks @Princesseuh!
+- [80d21c8](https://github.com/bruits/satteri/commit/80d21c8b9bc7f7cb2f86c170d4fafac0d5d2a3b7) Reduced memory usage when using MDAST plugins. — Thanks @Princesseuh!
+
 ## 0.3.3 — 2026-04-30
 
 ### Patch changes

@@ -1,11 +1,11 @@
 [package]
 name = "satteri"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 description = "High-level Rust API for the Sätteri markdown/MDX pipeline"
 license = "MIT"
 
 [dependencies]
-satteri-ast = { version = "0.2.3", path = "../satteri-ast" }
-satteri-mdxjs = { version = "0.1.13", path = "../satteri-mdxjs-rs" }
-satteri-pulldown-cmark = { version = "0.3.3", path = "../satteri-pulldown-cmark" }
+satteri-ast = { version = "0.2.4", path = "../satteri-ast" }
+satteri-mdxjs = { version = "0.1.14", path = "../satteri-mdxjs-rs" }
+satteri-pulldown-cmark = { version = "0.3.4", path = "../satteri-pulldown-cmark" }
