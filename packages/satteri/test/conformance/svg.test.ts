@@ -257,10 +257,9 @@ describe("SVG attribute conformance via _hast plugin emit path", () => {
       element: {
         filter: ["h1"],
         visit() {
-          return svgElement(
-            { viewBox: "0 0 24 24", width: 16, height: 16, fill: "currentColor" },
-            [pathElement({ fillRule: "evenodd", d: "M0 0L24 24" })],
-          );
+          return svgElement({ viewBox: "0 0 24 24", width: 16, height: 16, fill: "currentColor" }, [
+            pathElement({ fillRule: "evenodd", d: "M0 0L24 24" }),
+          ]);
         },
       },
     });

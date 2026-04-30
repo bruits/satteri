@@ -4,12 +4,7 @@
  * Run:  node --expose-gc bench/memory.mjs
  */
 import { readFileSync } from "node:fs";
-import {
-  markdownToHtml,
-  mdxToJs,
-  defineMdastPlugin,
-  defineHastPlugin,
-} from "../dist/index.js";
+import { markdownToHtml, mdxToJs, defineMdastPlugin, defineHastPlugin } from "../dist/index.js";
 
 const ITERATIONS = 100;
 const WARMUP = 20;
@@ -149,15 +144,9 @@ const filteredHastMulti = defineHastPlugin({
 const scenarios = [
   ["HTML - pure Rust (no plugins)", () => markdownToHtml(LARGE_MD)],
   ["HTML - no plugins", () => markdownToHtml(LARGE_MD)],
-  [
-    "HTML - noop mdast plugin",
-    () => markdownToHtml(LARGE_MD, { mdastPlugins: [noopMdast] }),
-  ],
+  ["HTML - noop mdast plugin", () => markdownToHtml(LARGE_MD, { mdastPlugins: [noopMdast] })],
   ["HTML - noop hast plugin", () => markdownToHtml(LARGE_MD, { hastPlugins: [noopHast] })],
-  [
-    "HTML - mutating mdast",
-    () => markdownToHtml(LARGE_MD, { mdastPlugins: [mutatingMdast] }),
-  ],
+  ["HTML - mutating mdast", () => markdownToHtml(LARGE_MD, { mdastPlugins: [mutatingMdast] })],
   [
     "HTML - mutating hast (bare fn)",
     () => markdownToHtml(LARGE_MD, { hastPlugins: [mutatingHast] }),
@@ -166,10 +155,7 @@ const scenarios = [
     "HTML - mutating hast (filter)",
     () => markdownToHtml(LARGE_MD, { hastPlugins: [mutatingHastFiltered] }),
   ],
-  [
-    "HTML - element() if a",
-    () => markdownToHtml(LARGE_MD, { hastPlugins: [unfilteredAOnly] }),
-  ],
+  ["HTML - element() if a", () => markdownToHtml(LARGE_MD, { hastPlugins: [unfilteredAOnly] })],
   ["HTML - filter: [a]", () => markdownToHtml(LARGE_MD, { hastPlugins: [filteredHast] })],
   [
     "HTML - filtered hast [a,h1-h3]",

@@ -380,10 +380,7 @@ fn replacement_with_directive_child_remaps_string_refs() {
     let name_ref = sub.alloc_string("inline");
     let key_ref = sub.alloc_string("class");
     let val_ref = sub.alloc_string("note");
-    sub.set_data_current(&encode_directive_data(
-        name_ref,
-        &[(key_ref, val_ref)],
-    ));
+    sub.set_data_current(&encode_directive_data(name_ref, &[(key_ref, val_ref)]));
     sub.close_node();
     sub.close_node();
     let replacement = sub.finish();

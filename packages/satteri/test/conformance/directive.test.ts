@@ -245,10 +245,7 @@ describe("Directive MDAST conformance", () => {
   // named `GatsbyレイアウトをAstro…`, leaving the slug as just `ガイド付き例`.
   describe("text directives: colon boundary in headings", () => {
     test("ASCII colon + CJK id_start consumes rest as directive name", () => {
-      assertExtMdastConformanceNoPosition(
-        "## ガイド付き例:GatsbyレイアウトをAstroへ変換する",
-        DIR,
-      );
+      assertExtMdastConformanceNoPosition("## ガイド付き例:GatsbyレイアウトをAstroへ変換する", DIR);
     });
 
     test("ASCII colon + space leaves colon as plain text", () => {
