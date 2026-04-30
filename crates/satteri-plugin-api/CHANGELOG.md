@@ -1,5 +1,12 @@
 # satteri-plugin-api
 
+## 0.1.9 — 2026-04-30
+
+### Patch changes
+
+- [8e7642c](https://github.com/bruits/satteri/commit/8e7642cde7aa2c1b0e0b9a7676666f2c990ca7da) Fixed compilation crashing with `invalid type: map, expected a sequence` when an MDAST plugin returned a tree containing a directive node (`containerDirective`, `leafDirective`, `textDirective`). Directive children now round-trip through plugins correctly. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.2.3
+
 ## 0.1.8 — 2026-04-29
 
 ### Patch changes
