@@ -1,5 +1,12 @@
 # satteri-ast
 
+## 0.2.5 — 2026-05-06
+
+### Patch changes
+
+- [22c4f06](https://github.com/bruits/satteri/commit/22c4f06e8923de01a371db798dbf39022737ad33) Fixes a rare case where plugins could produce corrupted output in very specific situations. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.1.4
+
 ## 0.2.4 — 2026-04-30
 
 ### Patch changes

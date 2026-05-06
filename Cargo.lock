@@ -1037,7 +1037,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "satteri"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "satteri-ast",
  "satteri-mdxjs",
@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-arena"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "memchr",
  "rustc-hash",
@@ -1054,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-ast"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "pulldown-cmark-escape",
  "rustc-hash",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-mdxjs"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-napi"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "napi",
  "napi-build",
@@ -1112,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-plugin-api"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "rustc-hash",
  "satteri-arena",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-pulldown-cmark"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "bitflags",
  "memchr",
@@ -1208,9 +1208,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "siphasher"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
+checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "slab"
