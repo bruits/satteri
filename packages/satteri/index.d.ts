@@ -4,49 +4,55 @@
  * Apply MDAST commands and convert to HAST handle in one step.
  * The MDAST handle is consumed (emptied).
  */
-export declare function applyCommandsAndConvertToHastHandle(handle: ArenaHandle, commandBuf: Uint8Array): ArenaHandle
+export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle, commandBuf: Uint8Array): HastHandle
 
-/** Apply a command buffer to a handle's arena in-place. No serialize/deserialize. */
-export declare function applyCommandsToHandle(handle: ArenaHandle, commandBuf: Uint8Array): void
+/** Apply a command buffer to a HAST handle's arena in-place. */
+export declare function applyCommandsToHandle(handle: HastHandle, commandBuf: Uint8Array): void
 
 /** Apply a command buffer to an MDAST handle in-place. */
-export declare function applyCommandsToMdastHandle(handle: ArenaHandle, commandBuf: Uint8Array): void
+export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): void
 
-/** Compile a handle's HAST arena to MDX JavaScript. Does not consume the handle. */
-export declare function compileHandle(handle: ArenaHandle, options?: JsMdxOptions | undefined | null): string
+/** Compile a HAST handle's arena to MDX JavaScript. Does not consume the handle. */
+export declare function compileHandle(handle: HastHandle, options?: JsMdxOptions | undefined | null): string
 
 /** Compile MDX source directly to JavaScript. */
 export declare function compileMdx(source: string, options?: JsMdxOptions | undefined | null, features?: JsFeatures | undefined | null): string
 
 /** Convert an MDAST handle to a HAST handle. The MDAST handle is consumed (emptied). */
-export declare function convertMdastToHastHandle(handle: ArenaHandle): ArenaHandle
+export declare function convertMdastToHastHandle(handle: MdastHandle): HastHandle
 
 /**
  * Parse markdown source and convert to HAST. Returns an opaque handle.
  * The arena stays in Rust memory, no buffer is copied to JS.
  */
-export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null): ArenaHandle
+export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null): HastHandle
 
 /** Parse markdown source into an MDAST arena handle. */
-export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null): ArenaHandle
+export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null): MdastHandle
 
 /** Parse MDX source and convert to HAST. Returns an opaque handle. */
-export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null): ArenaHandle
+export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null): HastHandle
 
 /** Parse MDX source into an MDAST arena handle. */
-export declare function createMdxMdastHandle(source: string, features?: JsFeatures | undefined | null): ArenaHandle
+export declare function createMdxMdastHandle(source: string, features?: JsFeatures | undefined | null): MdastHandle
 
 /**
- * Release the arena memory held by a handle. The handle becomes empty
- * but remains valid (subsequent calls are no-ops or return empty results).
+ * Release a handle's arena memory. The handle becomes empty but remains
+ * valid (subsequent calls are no-ops or return empty results).
  */
-export declare function dropHandle(handle: ArenaHandle): void
+export declare function dropHandle(handle: AnyHandle): void
 
-/** Get the source string from an MDAST handle. */
-export declare function getHandleSource(handle: ArenaHandle): string
+/**
+ * Get the source string from a handle. Kind-agnostic: source is the
+ * original markdown/MDX input and is identical across MDAST and HAST.
+ */
+export declare function getHandleSource(handle: AnyHandle): string
 
-/** Read the node_data JSON blob for a node. Returns null if none is set. */
-export declare function getNodeData(handle: ArenaHandle, nodeId: number): string | null
+/**
+ * Read the node_data JSON blob for a node. Returns null if none is set.
+ * Works for both MDAST and HAST handles.
+ */
+export declare function getNodeData(handle: AnyHandle, nodeId: number): string | null
 
 /** Feature toggles for the Markdown/MDX parser, passed from JavaScript. */
 export interface JsFeatures {
@@ -145,7 +151,7 @@ export interface JsTextContentOptions {
  * Collect the concatenated text content of an MDAST node and all its descendants.
  * Mirrors `mdast-util-to-string`: collects value from text nodes, alt from images.
  */
-export declare function mdastTextContentHandle(handle: ArenaHandle, nodeId: number, options?: JsTextContentOptions | undefined | null): string
+export declare function mdastTextContentHandle(handle: MdastHandle, nodeId: number, options?: JsTextContentOptions | undefined | null): string
 
 /** Parse ESM (import/export statements) and return ESTree-compatible AST as JSON. */
 export declare function parseEsm(source: string): string | null
@@ -159,26 +165,31 @@ export declare function parseExpression(source: string): string | null
 /** Parse Markdown source and return HTML string directly. */
 export declare function parseToHtml(source: string, features?: JsFeatures | undefined | null): string
 
-/** Render a handle's HAST arena to HTML. Does not consume the handle. */
-export declare function renderHandle(handle: ArenaHandle): string
+/** Render a HAST handle's arena to HTML. Does not consume the handle. */
+export declare function renderHandle(handle: HastHandle): string
 
-/** Serialize a handle's arena to a binary buffer (for fallback paths like transformRoot). */
-export declare function serializeHandle(handle: ArenaHandle): Uint8Array
+/**
+ * Serialize a handle's arena to a binary buffer. Works for both MDAST
+ * (read-only snapshot for the JS visitor) and HAST (fallback path for
+ * `transformRoot`) — the kind tag is embedded in the buffer header.
+ */
+export declare function serializeHandle(handle: AnyHandle): Uint8Array
 
-/** Serialize an MDAST handle to a binary buffer (read-only snapshot for JS visitor). */
-export declare function serializeMdastHandle(handle: ArenaHandle): Uint8Array
-
-/** Set the `data` blob (JSON bytes) for a node in the handle's arena. */
-export declare function setNodeData(handle: ArenaHandle, nodeId: number, json: Uint8Array): void
+/**
+ * Set the `data` blob (JSON bytes) for a node. Works for both MDAST and
+ * HAST handles — `node_data` is a per-node JSON blob with no kind-specific
+ * shape on the Rust side.
+ */
+export declare function setNodeData(handle: AnyHandle, nodeId: number, json: Uint8Array): void
 
 /**
  * Collect the concatenated text content of a HAST node and all its descendants.
  * Walks entirely in Rust, no per-child NAPI round-trips.
  */
-export declare function textContentHandle(handle: ArenaHandle, nodeId: number): string
+export declare function textContentHandle(handle: HastHandle, nodeId: number): string
 
-/** Walk a handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkHandle(handle: ArenaHandle, subscriptions: Array<JsSubscription>): Uint8Array
+/** Walk a HAST handle's arena and return matched nodes as a flat binary buffer. */
+export declare function walkHandle(handle: HastHandle, subscriptions: Array<JsSubscription>): Uint8Array
 
 /** Walk an MDAST handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkMdastHandle(handle: ArenaHandle, subscriptions: Array<JsSubscription>): Uint8Array
+export declare function walkMdastHandle(handle: MdastHandle, subscriptions: Array<JsSubscription>): Uint8Array

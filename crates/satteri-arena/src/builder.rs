@@ -1,40 +1,51 @@
+use std::marker::PhantomData;
+
 use crate::arena::{Arena, TypeDataWriter};
+use crate::kind::ArenaKind;
 use crate::node::StringRef;
 
-/// Builds an `Arena` using an open/close node pattern suitable for
+/// Builds an `Arena<K>` using an open/close node pattern suitable for
 /// depth-first tree construction (e.g. SAX-style parsers).
-pub struct ArenaBuilder {
-    arena: Arena,
+///
+/// `K` matches the kind of the inner arena; container ops are generic over
+/// `K`, so most builder code is unaware of the marker.
+pub struct ArenaBuilder<K: ArenaKind> {
+    arena: Arena<K>,
     /// Stack of `(node_id, children_start_in_pending)`.
     stack: Vec<(u32, u32)>,
     /// Flat buffer collecting child IDs for all open nodes.
     /// Each stack frame's children are `pending[children_start..]` when it's the top frame.
     pending_children: Vec<u32>,
+    _kind: PhantomData<fn() -> K>,
 }
 
-impl ArenaBuilder {
+impl<K: ArenaKind> ArenaBuilder<K> {
+    /// Construct an empty builder of the requested kind. Callers must
+    /// declare the kind explicitly, e.g. `ArenaBuilder::<Mdast>::new(s)`.
     pub fn new(source: String) -> Self {
         ArenaBuilder {
-            arena: Arena::new(source),
+            arena: Arena::<K>::new(source),
             stack: Vec::new(),
             pending_children: Vec::new(),
+            _kind: PhantomData,
         }
     }
 
     /// Create a builder wrapping a pre-allocated arena.
-    pub fn from_arena(arena: Arena) -> Self {
+    pub fn from_arena(arena: Arena<K>) -> Self {
         let cap = arena.children.capacity();
         ArenaBuilder {
             arena,
             stack: Vec::with_capacity(16),
             pending_children: Vec::with_capacity(cap),
+            _kind: PhantomData,
         }
     }
 
     /// Create a builder with pre-allocated capacity based on an existing arena's size.
-    pub fn with_capacity_from(source: String, hint: &Arena) -> Self {
+    pub fn with_capacity_from<L: ArenaKind>(source: String, hint: &Arena<L>) -> Self {
         ArenaBuilder {
-            arena: Arena::with_capacity(
+            arena: Arena::<K>::with_capacity(
                 source,
                 hint.nodes.len(),
                 hint.children.len(),
@@ -42,6 +53,7 @@ impl ArenaBuilder {
             ),
             stack: Vec::with_capacity(16),
             pending_children: Vec::with_capacity(hint.children.len()),
+            _kind: PhantomData,
         }
     }
 
@@ -270,16 +282,16 @@ impl ArenaBuilder {
         self.arena.type_data.extend_from_slice(data);
     }
 
-    pub fn arena_ref(&self) -> &Arena {
+    pub fn arena_ref(&self) -> &Arena<K> {
         &self.arena
     }
 
-    pub fn arena_mut(&mut self) -> &mut Arena {
+    pub fn arena_mut(&mut self) -> &mut Arena<K> {
         &mut self.arena
     }
 
     /// Auto-closes any remaining open nodes before returning the arena.
-    pub fn finish(mut self) -> Arena {
+    pub fn finish(mut self) -> Arena<K> {
         while !self.stack.is_empty() {
             self.close_node();
         }
@@ -293,7 +305,7 @@ mod tests {
 
     #[test]
     fn simple_open_close() {
-        let mut builder = ArenaBuilder::new("# Hello".to_string());
+        let mut builder: ArenaBuilder<crate::kind::Mdast> = ArenaBuilder::new("# Hello".to_string());
         let root = builder.open_node(0);
         let heading = builder.open_node(2);
         let text = builder.add_leaf(10);
@@ -312,7 +324,7 @@ mod tests {
 
     #[test]
     fn finish_closes_open_nodes() {
-        let mut builder = ArenaBuilder::new(String::new());
+        let mut builder: ArenaBuilder<crate::kind::Mdast> = ArenaBuilder::new(String::new());
         builder.open_node(0);
         builder.open_node(1);
         builder.add_leaf(10);
@@ -323,7 +335,7 @@ mod tests {
 
     #[test]
     fn leaf_has_no_children() {
-        let mut builder = ArenaBuilder::new(String::new());
+        let mut builder: ArenaBuilder<crate::kind::Mdast> = ArenaBuilder::new(String::new());
         builder.open_node(0);
         let leaf = builder.add_leaf(14);
         builder.close_node();
@@ -333,7 +345,7 @@ mod tests {
 
     #[test]
     fn position_and_data_current() {
-        let mut builder = ArenaBuilder::new("hello".to_string());
+        let mut builder: ArenaBuilder<crate::kind::Mdast> = ArenaBuilder::new("hello".to_string());
         let id = builder.open_node(10);
         builder.set_position_current(0, 5, 1, 1, 1, 6);
         builder.set_data_current(&[42u8]);

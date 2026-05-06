@@ -13,7 +13,10 @@ pub use render::{hast_arena_to_html, render_node};
 ///
 /// Mirrors `hast-util-to-string`: text nodes contribute their value,
 /// other nodes recurse into children.
-pub fn text_content(arena: &satteri_arena::Arena, node_id: u32) -> String {
+pub fn text_content(
+    arena: &satteri_arena::Arena<satteri_arena::Hast>,
+    node_id: u32,
+) -> String {
     crate::text_content::text_content(arena, node_id, |nt| match HastNodeType::from_u8(nt) {
         Some(
             HastNodeType::Text | HastNodeType::MdxFlowExpression | HastNodeType::MdxTextExpression,

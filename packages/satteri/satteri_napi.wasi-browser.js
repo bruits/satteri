@@ -76,7 +76,6 @@ export const parseExpression = __napiModule.exports.parseExpression
 export const parseToHtml = __napiModule.exports.parseToHtml
 export const renderHandle = __napiModule.exports.renderHandle
 export const serializeHandle = __napiModule.exports.serializeHandle
-export const serializeMdastHandle = __napiModule.exports.serializeMdastHandle
 export const setNodeData = __napiModule.exports.setNodeData
 export const textContentHandle = __napiModule.exports.textContentHandle
 export const walkHandle = __napiModule.exports.walkHandle

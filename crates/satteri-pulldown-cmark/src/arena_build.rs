@@ -1,7 +1,7 @@
 //! Direct arena builder: walks the pulldown-cmark internal tree and builds
 //! a `satteri_arena::Arena` without going through the Event iterator.
 
-use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, LineIndex, StringRef};
+use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
 use satteri_ast::mdast::{
     encode_directive_data, encode_image_reference_data, encode_mdx_jsx_element_data,
     encode_reference_data, encode_table_data, CodeData, ColumnAlign, DefinitionData,
@@ -38,7 +38,7 @@ pub const MDX_OPTIONS: Options =
 ///
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
-pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
+pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
     // feature set. Expand it into the granular flags the parser checks so
     // callers don't have to remember which sub-flags GFM implies.
@@ -56,13 +56,13 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
     let source_extra = source.len() / 2;
     let mut source_buf = String::with_capacity(source.len() + source_extra);
     source_buf.push_str(source);
-    let arena = Arena::with_capacity(
+    let arena = Arena::<Mdast>::with_capacity(
         source_buf,
         estimated_nodes,
         estimated_nodes,
         estimated_nodes * 9,
     );
-    let mut builder = ArenaBuilder::from_arena(arena);
+    let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::from_arena(arena);
 
     // Build the pulldown-cmark parser (runs first pass).
     let mut inner = ParserInner::new(source, options);
@@ -1936,7 +1936,7 @@ fn update_bracket_depth(was_open: bool, s: &str) -> bool {
     depth > 0
 }
 
-fn merge_directive_port_splits(arena: &mut Arena) {
+fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
     // Explicitly skip Link / LinkReference — a bracketed link's label text
     // intentionally preserves `text + textDirective + text` splits (remark
     // keeps them because autolink doesn't recurse into labels).
@@ -2093,7 +2093,7 @@ fn merge_directive_port_splits(arena: &mut Arena) {
     }
 }
 
-fn gfm_autolink_literal_pass(arena: &mut Arena) {
+fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>) {
     let len = arena.len() as u32;
     // First collect the set of Text nodes containing URL candidates to avoid
     // mutating while iterating in a way that shifts indices. Alongside each
@@ -2186,7 +2186,7 @@ fn gfm_autolink_literal_pass(arena: &mut Arena) {
     }
 }
 
-fn split_text_with_autolinks(arena: &mut Arena, text_id: u32, strict_domain: bool) {
+fn split_text_with_autolinks(arena: &mut Arena<Mdast>, text_id: u32, strict_domain: bool) {
     let node = arena.get_node(text_id);
     let start_offset = node.start_offset;
     let start_line = node.start_line;
@@ -2363,7 +2363,7 @@ fn split_text_with_autolinks(arena: &mut Arena, text_id: u32, strict_domain: boo
 /// that result from entity decoding, character synthesis, etc.
 #[allow(clippy::too_many_arguments)]
 fn emit_text_merging(
-    builder: &mut ArenaBuilder,
+    builder: &mut ArenaBuilder<Mdast>,
     text_value: &str,
     start: u32,
     end: u32,
@@ -2413,7 +2413,7 @@ fn emit_text_merging(
 /// for balanced backtick runs and split the text into `text + inlineCode + text`
 /// pieces. This matches the common `:::tip[Set a \`baseUrl\`]` pattern without
 /// needing to re-run the full inline parser on the label substring.
-fn directive_label_inline_code_pass(arena: &mut Arena) {
+fn directive_label_inline_code_pass(arena: &mut Arena<Mdast>) {
     // Collect candidate text node ids first (pair: parent id, text id).
     let mut candidates: Vec<u32> = Vec::new();
     for id in 0..arena.len() as u32 {
@@ -2464,7 +2464,7 @@ fn directive_label_inline_code_pass(arena: &mut Arena) {
 /// Split a `Text` node's value into `text + inlineCode + text …` on balanced
 /// backtick runs. Only handles the simple case (same-length opening/closing
 /// runs, single-line), which is what directive labels carry in practice.
-fn split_text_on_backticks(arena: &mut Arena, text_id: u32) {
+fn split_text_on_backticks(arena: &mut Arena<Mdast>, text_id: u32) {
     let data = arena.get_type_data(text_id);
     if data.is_empty() {
         return;
@@ -2601,7 +2601,7 @@ fn split_text_on_backticks(arena: &mut Arena, text_id: u32) {
 /// `<Name>…</Name>` (or self-closing `<Name/>`) runs and emit
 /// `mdxJsxTextElement` children. Also splits on balanced `{…}` spans and
 /// emits `mdxTextExpression` nodes.
-fn directive_label_jsx_pass(arena: &mut Arena) {
+fn directive_label_jsx_pass(arena: &mut Arena<Mdast>) {
     let mut candidates: Vec<u32> = Vec::new();
     for id in 0..arena.len() as u32 {
         let node = arena.get_node(id);
@@ -2695,7 +2695,7 @@ fn directive_label_jsx_pass(arena: &mut Arena) {
 
 /// Split a `Text` node on `{…}` spans (balanced braces, JS-aware) and emit
 /// `mdxTextExpression` nodes for the matched spans.
-fn split_text_on_mdx_expressions(arena: &mut Arena, text_id: u32) {
+fn split_text_on_mdx_expressions(arena: &mut Arena<Mdast>, text_id: u32) {
     use crate::mdx::scan_mdx_inline_expression;
     let data = arena.get_type_data(text_id);
     if data.is_empty() {
@@ -2786,7 +2786,7 @@ fn split_text_on_mdx_expressions(arena: &mut Arena, text_id: u32) {
 /// matched open/close pair becomes a child `Text` node (no recursion — nested
 /// JSX inside a directive label is rare enough that a single-level split
 /// covers the conformance cases).
-fn split_text_on_jsx_tags(arena: &mut Arena, text_id: u32) {
+fn split_text_on_jsx_tags(arena: &mut Arena<Mdast>, text_id: u32) {
     use crate::mdx::{parse_jsx_tag, scan_mdx_inline_jsx};
     let data = arena.get_type_data(text_id);
     if data.is_empty() {
@@ -2884,7 +2884,7 @@ fn split_text_on_jsx_tags(arena: &mut Arena, text_id: u32) {
     let base_col = node.start_column;
 
     let push_text =
-        |arena: &mut Arena, out: &mut Vec<u32>, segment: &str, seg_start: usize, seg_end: usize| {
+        |arena: &mut Arena<Mdast>, out: &mut Vec<u32>, segment: &str, seg_start: usize, seg_end: usize| {
             if segment.is_empty() {
                 return;
             }
@@ -2991,7 +2991,7 @@ fn split_text_on_jsx_tags(arena: &mut Arena, text_id: u32) {
     arena.replace_node_with_children(text_id, &new_children);
 }
 
-fn mdx_mark_and_unravel(arena: &mut Arena) {
+fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
     let len = arena.len() as u32;
     // Only paragraphs containing inline MDX nodes can be promoted; without
     // any in the arena the per-paragraph work below is guaranteed wasted.
@@ -3220,7 +3220,7 @@ fn byte_offset_to_line_col(source: &str, offset: usize) -> String {
 
 use crate::parse::JsxElementData;
 
-fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder) -> Vec<u8> {
+fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<Mdast>) -> Vec<u8> {
     let name_ref = if jsx.name.is_empty() {
         StringRef::empty()
     } else {

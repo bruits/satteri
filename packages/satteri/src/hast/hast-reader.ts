@@ -62,6 +62,7 @@ const FIELD = {
 
 // "MDAR" bytes: 4d 44 41 52; read as LE u32 = 0x5241444d
 const MAGIC = 0x5241444d;
+const KIND_HAST = 2;
 
 export class HastReader {
   readonly #view: DataView;
@@ -85,12 +86,14 @@ export class HastReader {
     if (magic !== MAGIC) {
       throw new Error(`Invalid HAST buffer: bad magic 0x${magic.toString(16)}`);
     }
-    const version = v.getUint32(4, true);
-    if (version !== 1) {
-      throw new Error(`Unsupported HAST buffer version: ${version}`);
+    const kind = v.getUint32(4, true);
+    if (kind !== KIND_HAST) {
+      throw new Error(
+        `HastReader was handed a buffer of kind ${kind} (expected ${KIND_HAST}). ` +
+          `MDAST and HAST node types overlap; reading the wrong kind decodes garbage.`,
+      );
     }
     return {
-      version,
       nodeStructSize: v.getUint32(8, true),
       nodeCount: v.getUint32(12, true),
       nodesOffset: v.getUint32(16, true),

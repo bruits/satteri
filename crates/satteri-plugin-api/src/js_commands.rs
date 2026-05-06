@@ -29,8 +29,15 @@
 //!   0x10  RAW_MARKDOWN     [len: u32][utf8...]
 //!   0x11  RAW_HTML         [len: u32][utf8...]
 //!   0x12  SERDE_JSON       [len: u32][utf8...]
+//!
+//! The MDAST and HAST command paths are deliberately separate functions
+//! (`apply_mdast_commands`, `apply_hast_commands`). Numeric `node_type`
+//! values overlap between the two arenas (e.g. mdast Paragraph=1 collides
+//! with HastNodeType::Element=1), so a single dispatcher trying to handle
+//! both kinds would silently misroute nodes. The phantom-typed `Arena<K>`
+//! signature on each entry point makes a cross-kind call a compile error.
 
-use satteri_arena::{Arena, ArenaBuilder, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
 use satteri_ast::commands::{CommandError, JsNode};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::codec::*;
@@ -124,19 +131,39 @@ impl<'a> BufReader<'a> {
     }
 }
 
+/// `data` JSON blob is stored in the per-node `node_data` map; it doesn't
+/// dispatch on node-type bytes, so it's safe under any kind.
+fn apply_data_property<K: ArenaKind>(
+    arena: &mut Arena<K>,
+    node_id: u32,
+    value_type: u8,
+    value_str: &str,
+) {
+    if value_type == PROP_NULL {
+        arena.set_node_data(node_id, Vec::new());
+    } else {
+        arena.set_node_data(node_id, value_str.as_bytes().to_vec());
+    }
+}
+
 /// Resolve an MDAST property name to its field ID for a given node type.
 fn resolve_mdast_field(node_type: u8, name: &str) -> Option<u16> {
     match (node_type, name) {
         (2, "depth") => Some(FIELD_DEPTH),
-        (15, "url") | (16, "url") | (9, "url") => Some(FIELD_URL),
-        (15, "title") | (16, "title") | (9, "title") => Some(FIELD_TITLE),
         (8, "lang") => Some(FIELD_LANG),
-        (8, "meta") | (27, "meta") => Some(FIELD_META),
-        (10 | 13 | 7 | 25 | 26 | 28, "value")
-        | (8, "value")
-        | (27, "value")
-        | (102..=104, "value") => Some(FIELD_VALUE),
+        (8, "meta") => Some(FIELD_META),
+        (8, "value") => Some(FIELD_VALUE),
+        (15, "url") => Some(FIELD_URL),
+        (15, "title") => Some(FIELD_TITLE),
+        (16, "url") => Some(FIELD_URL),
         (16, "alt") => Some(FIELD_ALT),
+        (16, "title") => Some(FIELD_TITLE),
+        (10 | 13 | 7 | 25 | 26 | 28, "value") => Some(FIELD_VALUE),
+        (27, "meta") => Some(FIELD_META),
+        (27, "value") => Some(FIELD_VALUE),
+        (102 | 103 | 104, "value") => Some(FIELD_VALUE),
+        (9, "url") => Some(FIELD_URL),
+        (9, "title") => Some(FIELD_TITLE),
         (5, "ordered") => Some(FIELD_ORDERED),
         (5, "start") => Some(FIELD_START),
         (5 | 6, "spread") => Some(FIELD_SPREAD),
@@ -149,38 +176,21 @@ fn resolve_mdast_field(node_type: u8, name: &str) -> Option<u16> {
     }
 }
 
-/// Unified set-property for both MDAST and HAST nodes.
-///
-/// For HAST elements: adds/updates a property in the element's property array.
-/// For MDAST nodes: resolves the property name to a field ID and modifies type_data.
-fn apply_set_property(
-    arena: &mut Arena,
+/// MDAST set-property: writes a typed field (or `data` JSON) onto an MDAST
+/// node. Kind-tight to `Arena<Mdast>` — the HAST element-properties writer
+/// can no longer be reached from here.
+fn apply_mdast_set_property(
+    arena: &mut Arena<Mdast>,
     node_id: u32,
     prop_name: &str,
     value_type: u8,
     value_str: &str,
 ) -> Result<(), CommandError> {
-    // "data" is stored as JSON bytes in the arena's node_data map, not as a
-    // typed field — handle it before the HAST path. Numeric node-type values
-    // overlap between MDAST and HAST (e.g. mdast Paragraph=1 collides with
-    // HastNodeType::Element=1), so dispatching by type alone misroutes
-    // mdast nodes into the HAST element-properties writer and fails on the
-    // empty type_data buffer.
     if prop_name == "data" {
-        if value_type == PROP_NULL {
-            arena.set_node_data(node_id, Vec::new());
-        } else {
-            arena.set_node_data(node_id, value_str.as_bytes().to_vec());
-        }
+        apply_data_property(arena, node_id, value_type, value_str);
         return Ok(());
     }
 
-    if let Some(result) = apply_hast_set_property(arena, node_id, prop_name, value_type, value_str)
-    {
-        return result;
-    }
-
-    // MDAST node, resolve name to field and apply
     let node_type = arena.get_node(node_id).node_type;
     let field_id =
         resolve_mdast_field(node_type, prop_name).ok_or(CommandError::UnknownField(0))?;
@@ -188,7 +198,7 @@ fn apply_set_property(
     match value_type {
         PROP_STRING | PROP_SPACE_SEP => {
             let sref = arena.alloc_string(value_str);
-            set_string_ref(arena, node_id, field_id, sref)
+            set_mdast_string_ref(arena, node_id, field_id, sref)
         }
         PROP_BOOL_TRUE => apply_mdast_bool(arena, node_id, node_type, field_id, true),
         PROP_BOOL_FALSE => apply_mdast_bool(arena, node_id, node_type, field_id, false),
@@ -202,7 +212,7 @@ fn apply_set_property(
 }
 
 fn apply_mdast_int(
-    arena: &mut Arena,
+    arena: &mut Arena<Mdast>,
     node_id: u32,
     node_type: u8,
     field_id: u16,
@@ -233,7 +243,7 @@ fn apply_mdast_int(
 }
 
 fn apply_mdast_bool(
-    arena: &mut Arena,
+    arena: &mut Arena<Mdast>,
     node_id: u32,
     node_type: u8,
     field_id: u16,
@@ -263,7 +273,7 @@ fn apply_mdast_bool(
 }
 
 fn apply_mdast_null(
-    arena: &mut Arena,
+    arena: &mut Arena<Mdast>,
     node_id: u32,
     node_type: u8,
     field_id: u16,
@@ -277,12 +287,12 @@ fn apply_mdast_null(
             }
             Ok(())
         }
-        _ => set_string_ref(arena, node_id, field_id, StringRef::empty()),
+        _ => set_mdast_string_ref(arena, node_id, field_id, StringRef::empty()),
     }
 }
 
-fn set_string_ref(
-    arena: &mut Arena,
+fn set_mdast_string_ref(
+    arena: &mut Arena<Mdast>,
     node_id: u32,
     field_id: u16,
     sref: StringRef,
@@ -335,7 +345,10 @@ fn set_string_ref(
     Ok(())
 }
 
-fn parse_raw_markdown(markdown: &str, parse_markdown: &dyn Fn(&str) -> Arena) -> Arena {
+fn parse_raw_markdown(
+    markdown: &str,
+    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+) -> Arena<Mdast> {
     parse_markdown(markdown)
 }
 
@@ -383,15 +396,39 @@ fn escape_braces_in_html_text(html: &str) -> String {
     result
 }
 
-fn js_node_to_arena(js_node: &JsNode) -> Result<(Arena, bool), CommandError> {
-    let mut builder = ArenaBuilder::new(String::new());
-    emit_js_node(js_node, &mut builder)?;
+fn js_node_to_mdast_arena(js_node: &JsNode) -> Result<(Arena<Mdast>, bool), CommandError> {
+    if js_node.is_hast {
+        return Err(CommandError::UnknownNodeType(format!(
+            "expected mdast node, got hast-flagged `{}`",
+            js_node.node_type
+        )));
+    }
+    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
+    emit_mdast_js_node(js_node, &mut builder)?;
     Ok((builder.finish(), js_node.keep_children))
 }
 
-fn emit_js_node(js_node: &JsNode, builder: &mut ArenaBuilder) -> Result<(), CommandError> {
+fn js_node_to_hast_arena(js_node: &JsNode) -> Result<(Arena<Hast>, bool), CommandError> {
+    if !js_node.is_hast {
+        return Err(CommandError::UnknownNodeType(format!(
+            "expected hast node, got mdast-flagged `{}`",
+            js_node.node_type
+        )));
+    }
+    let mut builder = ArenaBuilder::<Hast>::new(String::new());
+    emit_hast_js_node(js_node, &mut builder)?;
+    Ok((builder.finish(), js_node.keep_children))
+}
+
+fn emit_mdast_js_node(
+    js_node: &JsNode,
+    builder: &mut ArenaBuilder<Mdast>,
+) -> Result<(), CommandError> {
     if js_node.is_hast {
-        return emit_hast_js_node(js_node, builder);
+        return Err(CommandError::UnknownNodeType(format!(
+            "expected mdast node, got hast-flagged `{}`",
+            js_node.node_type
+        )));
     }
 
     let node_type = name_to_node_type(&js_node.node_type)?;
@@ -406,7 +443,7 @@ fn emit_js_node(js_node: &JsNode, builder: &mut ArenaBuilder) -> Result<(), Comm
 
     if let Some(children) = &js_node.children {
         for child in children {
-            emit_js_node(child, builder)?;
+            emit_mdast_js_node(child, builder)?;
         }
     }
 
@@ -414,7 +451,10 @@ fn emit_js_node(js_node: &JsNode, builder: &mut ArenaBuilder) -> Result<(), Comm
     Ok(())
 }
 
-fn write_js_node_data(js_node: &JsNode, builder: &mut ArenaBuilder) -> Result<(), CommandError> {
+fn write_js_node_data<K: ArenaKind>(
+    js_node: &JsNode,
+    builder: &mut ArenaBuilder<K>,
+) -> Result<(), CommandError> {
     let Some(data) = &js_node.data else {
         return Ok(());
     };
@@ -427,7 +467,7 @@ fn write_js_node_data(js_node: &JsNode, builder: &mut ArenaBuilder) -> Result<()
 fn encode_js_node_data(
     js_node: &JsNode,
     node_type: MdastNodeType,
-    builder: &mut ArenaBuilder,
+    builder: &mut ArenaBuilder<Mdast>,
 ) -> Vec<u8> {
     match node_type {
         MdastNodeType::Heading => {
@@ -533,7 +573,7 @@ fn encode_js_node_data(
 }
 
 fn encode_js_directive_attrs(
-    builder: &mut ArenaBuilder,
+    builder: &mut ArenaBuilder<Mdast>,
     attrs: Option<&satteri_ast::commands::JsNodeAttributes>,
 ) -> Vec<(StringRef, StringRef)> {
     let Some(map) = attrs.and_then(|a| a.as_directive()) else {
@@ -547,7 +587,7 @@ fn encode_js_directive_attrs(
         .collect()
 }
 
-fn alloc_opt_str(builder: &mut ArenaBuilder, s: Option<&str>) -> StringRef {
+fn alloc_opt_str<K: ArenaKind>(builder: &mut ArenaBuilder<K>, s: Option<&str>) -> StringRef {
     match s {
         Some(v) if !v.is_empty() => builder.alloc_string(v),
         _ => StringRef::empty(),
@@ -599,24 +639,28 @@ fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
 
 // HAST command handlers
 
-/// Try to handle a set-property command for a HAST node.
-///
-/// Returns `Some(Ok(()))` if the node was a known HAST type and the property
-/// was applied.  Returns `Some(Err(...))` on error.  Returns `None` if the
-/// node type is not a HAST type (caller should fall through to MDAST handling).
+/// HAST set-property: dispatches by `HastNodeType` to the matching writer.
+/// Kind-tight to `Arena<Hast>` — the MDAST field-resolver can no longer be
+/// reached from here.
 fn apply_hast_set_property(
-    arena: &mut Arena,
+    arena: &mut Arena<Hast>,
     node_id: u32,
     prop_name: &str,
     value_type: u8,
     value_str: &str,
-) -> Option<Result<(), CommandError>> {
-    let node_type = HastNodeType::from_u8(arena.get_node(node_id).node_type)?;
+) -> Result<(), CommandError> {
+    if prop_name == "data" {
+        apply_data_property(arena, node_id, value_type, value_str);
+        return Ok(());
+    }
+
+    let node_type = HastNodeType::from_u8(arena.get_node(node_id).node_type)
+        .ok_or(CommandError::UnknownField(0))?;
 
     match node_type {
-        HastNodeType::Element => Some(apply_hast_element_property(
-            arena, node_id, prop_name, value_type, value_str,
-        )),
+        HastNodeType::Element => {
+            apply_hast_element_property(arena, node_id, prop_name, value_type, value_str)
+        }
 
         HastNodeType::Text
         | HastNodeType::Comment
@@ -634,19 +678,19 @@ fn apply_hast_set_property(
                     .copy_from_slice(&sref.offset.to_le_bytes());
                 arena.type_data[data_offset + 4..data_offset + 8]
                     .copy_from_slice(&sref.len.to_le_bytes());
-                Some(Ok(()))
+                Ok(())
             } else {
-                Some(Err(CommandError::UnknownField(0)))
+                Err(CommandError::UnknownField(0))
             }
         }
 
-        _ => None,
+        _ => Err(CommandError::UnknownField(0)),
     }
 }
 
 /// Set or add a single property on a HAST element node.
 fn apply_hast_element_property(
-    arena: &mut Arena,
+    arena: &mut Arena<Hast>,
     node_id: u32,
     prop_name: &str,
     value_type: u8,
@@ -710,7 +754,10 @@ fn apply_hast_element_property(
 }
 
 /// Emit a HAST JS node (from plugin JSON) into an ArenaBuilder.
-fn emit_hast_js_node(js_node: &JsNode, builder: &mut ArenaBuilder) -> Result<(), CommandError> {
+fn emit_hast_js_node(
+    js_node: &JsNode,
+    builder: &mut ArenaBuilder<Hast>,
+) -> Result<(), CommandError> {
     let raw_type = name_to_hast_type(&js_node.node_type)
         .ok_or_else(|| CommandError::UnknownNodeType(js_node.node_type.clone()))?;
     builder.open_node_raw(raw_type as u8);
@@ -752,7 +799,7 @@ fn name_to_hast_type(name: &str) -> Option<HastNodeType> {
 fn encode_hast_js_node_data(
     js_node: &JsNode,
     node_type: HastNodeType,
-    builder: &mut ArenaBuilder,
+    builder: &mut ArenaBuilder<Hast>,
 ) -> Vec<u8> {
     match node_type {
         HastNodeType::Element => {
@@ -846,11 +893,11 @@ fn encode_hast_js_node_data(
     }
 }
 
-/// Returns (arena, keep_children).
-fn read_payload(
+/// Returns (arena, keep_children) for an MDAST sub-tree payload.
+fn read_mdast_payload(
     reader: &mut BufReader<'_>,
-    parse_markdown: &dyn Fn(&str) -> Arena,
-) -> Result<(Arena, bool), CommandError> {
+    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+) -> Result<(Arena<Mdast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
     let len = reader.read_u32()? as usize;
 
@@ -868,27 +915,62 @@ fn read_payload(
             let json_str = reader.read_str(len)?;
             let js_node: JsNode = serde_json::from_str(json_str)
                 .map_err(|e| CommandError::InvalidJson(e.to_string()))?;
-            js_node_to_arena(&js_node)
+            js_node_to_mdast_arena(&js_node)
         }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
 }
 
-/// The `parse_markdown` callback avoids a circular dependency on the `parser`
-/// crate. Set-property mutations are applied in-place on the arena;
-/// structural mutations are collected as `Patch` objects and applied via `rebuild()`.
+/// Returns (arena, keep_children) for a HAST sub-tree payload. Only
+/// `PAYLOAD_SERDE_JSON` is accepted — HAST plugins emit JSON node trees,
+/// not raw markdown or raw HTML.
+fn read_hast_payload(reader: &mut BufReader<'_>) -> Result<(Arena<Hast>, bool), CommandError> {
+    let payload_type = reader.read_u8()?;
+    let len = reader.read_u32()? as usize;
+
+    match payload_type {
+        PAYLOAD_SERDE_JSON => {
+            let json_str = reader.read_str(len)?;
+            let js_node: JsNode = serde_json::from_str(json_str)
+                .map_err(|e| CommandError::InvalidJson(e.to_string()))?;
+            js_node_to_hast_arena(&js_node)
+        }
+        other => Err(CommandError::UnknownPayloadType(other)),
+    }
+}
+
+/// Apply a command buffer to an MDAST arena. Set-property mutations are
+/// applied in-place; structural mutations are collected as `Patch<Mdast>`
+/// objects and applied via `rebuild()`.
 ///
-/// Takes ownership of the arena to avoid unnecessary cloning.
-pub fn apply_commands(
-    mut arena: Arena,
+/// `parse_markdown` avoids a circular dependency on the parser crate; it
+/// is invoked for `RAW_MARKDOWN` and `RAW_HTML` payloads.
+///
+/// Passing a HAST arena is a compile error — the prior single-dispatch
+/// `apply_commands` would silently misroute MDAST nodes into the HAST
+/// element-properties writer (numeric `node_type` values overlap between
+/// the two arenas):
+///
+/// ```compile_fail
+/// use satteri_arena::{Arena, Hast};
+/// use satteri_plugin_api::apply_mdast_commands;
+///
+/// let arena: Arena<Hast> = Arena::new(String::new());
+/// let parse_markdown = |_: &str| -> Arena<satteri_arena::Mdast> {
+///     Arena::new(String::new())
+/// };
+/// let _ = apply_mdast_commands(arena, &[], &parse_markdown);
+/// ```
+pub fn apply_mdast_commands(
+    mut arena: Arena<Mdast>,
     command_buf: &[u8],
-    parse_markdown: &dyn Fn(&str) -> Arena,
-) -> Result<Arena, CommandError> {
+    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+) -> Result<Arena<Mdast>, CommandError> {
     if command_buf.is_empty() {
         return Ok(arena);
     }
 
-    let mut patches: Vec<Patch> = Vec::new();
+    let mut patches: Vec<Patch<Mdast>> = Vec::new();
     let mut reader = BufReader::new(command_buf);
 
     while reader.remaining() > 0 {
@@ -907,24 +989,24 @@ pub fn apply_commands(
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                apply_set_property(&mut arena, node_id, name, value_type, value)?;
+                apply_mdast_set_property(&mut arena, node_id, name, value_type, value)?;
             }
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_payload(&mut reader, parse_markdown)?;
+                let (new_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_payload(&mut reader, parse_markdown)?;
+                let (new_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_payload(&mut reader, parse_markdown)?;
+                let (child_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -933,7 +1015,7 @@ pub fn apply_commands(
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_payload(&mut reader, parse_markdown)?;
+                let (child_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -942,7 +1024,7 @@ pub fn apply_commands(
 
             CMD_WRAP => {
                 let node_id = reader.read_u32()?;
-                let (parent_tree, _) = read_payload(&mut reader, parse_markdown)?;
+                let (parent_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -951,7 +1033,113 @@ pub fn apply_commands(
 
             CMD_REPLACE => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, keep_children) = read_payload(&mut reader, parse_markdown)?;
+                let (new_tree, keep_children) = read_mdast_payload(&mut reader, parse_markdown)?;
+                patches.push(Patch::Replace {
+                    node_id,
+                    new_tree,
+                    keep_children,
+                });
+            }
+
+            other => return Err(CommandError::UnknownCommand(other)),
+        }
+    }
+
+    if patches.is_empty() {
+        Ok(arena)
+    } else {
+        satteri_ast::rebuild::rebuild(&arena, &patches)
+    }
+}
+
+/// Apply a command buffer to a HAST arena. Set-property mutations are
+/// applied in-place; structural mutations are collected as `Patch<Hast>`
+/// objects and applied via `rebuild()`.
+///
+/// HAST plugins inject sub-trees via `PAYLOAD_SERDE_JSON` only — there is
+/// no `parse_markdown` callback because HAST has no source-level grammar.
+///
+/// Passing an MDAST arena is a compile error:
+///
+/// ```compile_fail
+/// use satteri_arena::{Arena, Mdast};
+/// use satteri_plugin_api::apply_hast_commands;
+///
+/// let arena: Arena<Mdast> = Arena::new(String::new());
+/// let _ = apply_hast_commands(arena, &[]);
+/// ```
+pub fn apply_hast_commands(
+    mut arena: Arena<Hast>,
+    command_buf: &[u8],
+) -> Result<Arena<Hast>, CommandError> {
+    if command_buf.is_empty() {
+        return Ok(arena);
+    }
+
+    let mut patches: Vec<Patch<Hast>> = Vec::new();
+    let mut reader = BufReader::new(command_buf);
+
+    while reader.remaining() > 0 {
+        let cmd = reader.read_u8()?;
+
+        match cmd {
+            CMD_REMOVE => {
+                let node_id = reader.read_u32()?;
+                patches.push(Patch::Remove { node_id });
+            }
+
+            CMD_SET_PROPERTY => {
+                let node_id = reader.read_u32()?;
+                let value_type = reader.read_u8()?;
+                let name_len = reader.read_u32()? as usize;
+                let name = reader.read_str(name_len)?;
+                let value_len = reader.read_u32()? as usize;
+                let value = reader.read_str(value_len)?;
+                apply_hast_set_property(&mut arena, node_id, name, value_type, value)?;
+            }
+
+            CMD_INSERT_BEFORE => {
+                let node_id = reader.read_u32()?;
+                let (new_tree, _) = read_hast_payload(&mut reader)?;
+                patches.push(Patch::InsertBefore { node_id, new_tree });
+            }
+
+            CMD_INSERT_AFTER => {
+                let node_id = reader.read_u32()?;
+                let (new_tree, _) = read_hast_payload(&mut reader)?;
+                patches.push(Patch::InsertAfter { node_id, new_tree });
+            }
+
+            CMD_PREPEND_CHILD => {
+                let node_id = reader.read_u32()?;
+                let (child_tree, _) = read_hast_payload(&mut reader)?;
+                patches.push(Patch::PrependChild {
+                    node_id,
+                    child_tree,
+                });
+            }
+
+            CMD_APPEND_CHILD => {
+                let node_id = reader.read_u32()?;
+                let (child_tree, _) = read_hast_payload(&mut reader)?;
+                patches.push(Patch::AppendChild {
+                    node_id,
+                    child_tree,
+                });
+            }
+
+            CMD_WRAP => {
+                let node_id = reader.read_u32()?;
+                let (parent_tree, _) = read_hast_payload(&mut reader)?;
+                patches.push(Patch::Wrap {
+                    node_id,
+                    parent_tree,
+                });
+            }
+
+            CMD_REPLACE => {
+                let node_id = reader.read_u32()?;
+                let (new_tree, keep_children) = read_hast_payload(&mut reader)?;
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -975,8 +1163,8 @@ mod tests {
     use super::*;
     use satteri_ast::shared::PROP_INT;
 
-    fn test_parse_markdown(source: &str) -> Arena {
-        let mut b = ArenaBuilder::new(String::new());
+    fn test_parse_markdown(source: &str) -> Arena<Mdast> {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
         b.open_node(MdastNodeType::Root as u8);
         b.open_node(MdastNodeType::Paragraph as u8);
         b.open_node(MdastNodeType::Text as u8);
@@ -1003,11 +1191,11 @@ mod tests {
         buf.extend_from_slice(value.as_bytes());
     }
 
-    fn build_hello_world() -> Arena {
+    fn build_hello_world() -> Arena<Mdast> {
         use satteri_ast::mdast::codec::{encode_heading_data, encode_string_ref_data};
 
         let source = "# Hello\n\nWorld".to_string();
-        let mut b = ArenaBuilder::new(source);
+        let mut b = ArenaBuilder::<Mdast>::new(source);
 
         b.open_node(MdastNodeType::Root as u8);
         b.set_position_current(0, 14, 1, 1, 2, 6);
@@ -1040,7 +1228,7 @@ mod tests {
     #[test]
     fn empty_command_buffer() {
         let arena = build_hello_world();
-        let result = apply_commands(arena.clone(), &[], &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &[], &test_parse_markdown).unwrap();
         assert_eq!(result.len(), arena.len());
     }
 
@@ -1052,7 +1240,7 @@ mod tests {
         buf.push(CMD_REMOVE);
         push_u32(&mut buf, heading_id);
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         assert_eq!(result.get_children(0).len(), 1);
         assert_eq!(
             result.get_node(result.get_children(0)[0]).node_type,
@@ -1068,7 +1256,7 @@ mod tests {
         let mut buf = Vec::new();
         push_set_property(&mut buf, heading_id, PROP_INT, "depth", "3");
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let heading_data = result.get_type_data(heading_id);
         let heading = decode_heading_data(heading_data);
         assert_eq!(heading.depth, 3);
@@ -1083,7 +1271,7 @@ mod tests {
         let mut buf = Vec::new();
         push_set_property(&mut buf, text_id, PROP_STRING, "value", "Goodbye");
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let text_data = result.get_type_data(text_id);
         let sref = decode_string_ref_data(text_data);
         assert_eq!(result.get_str(sref), "Goodbye");
@@ -1102,7 +1290,7 @@ mod tests {
         push_u32(&mut buf, raw_md.len() as u32);
         buf.extend_from_slice(raw_md.as_bytes());
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let root_children = result.get_children(0);
         assert!(root_children.len() >= 2);
     }
@@ -1121,7 +1309,7 @@ mod tests {
         push_u32(&mut buf, json.len() as u32);
         buf.extend_from_slice(json.as_bytes());
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let root_children = result.get_children(0);
         assert_eq!(root_children.len(), 2);
         let new_heading = root_children[0];
@@ -1150,7 +1338,7 @@ mod tests {
         push_u32(&mut buf, json.len() as u32);
         buf.extend_from_slice(json.as_bytes());
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let root_children = result.get_children(0);
         let new_para = root_children[0];
         assert_eq!(
@@ -1183,7 +1371,7 @@ mod tests {
         push_u32(&mut buf, json.len() as u32);
         buf.extend_from_slice(json.as_bytes());
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let directive = result.get_children(0)[0];
         assert_eq!(
             result.get_node(directive).node_type,
@@ -1203,7 +1391,7 @@ mod tests {
         push_set_property(&mut buf, heading_id, PROP_INT, "depth", "3");
         push_set_property(&mut buf, text_id, PROP_STRING, "value", "Hi");
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
 
         let heading_data = result.get_type_data(heading_id);
         assert_eq!(decode_heading_data(heading_data).depth, 3);
@@ -1222,7 +1410,7 @@ mod tests {
         let mut buf = Vec::new();
         push_set_property(&mut buf, text_id, PROP_NULL, "value", "");
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let text_data = result.get_type_data(text_id);
         let sref = decode_string_ref_data(text_data);
         assert_eq!(sref.len, 0);
@@ -1280,7 +1468,7 @@ mod tests {
             data: None,
         };
 
-        let (arena, _keep) = js_node_to_arena(&js).unwrap();
+        let (arena, _keep) = js_node_to_mdast_arena(&js).unwrap();
         assert_eq!(arena.len(), 2);
         assert_eq!(arena.get_node(0).node_type, MdastNodeType::Heading as u8);
         assert_eq!(arena.get_children(0).len(), 1);
@@ -1336,7 +1524,7 @@ mod tests {
         let mut buf = Vec::new();
         push_set_property(&mut buf, element_id, PROP_STRING, "class", "test");
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_hast_commands(arena.clone(), &buf).unwrap();
         let data = result.get_type_data(element_id);
         let prop_count = u32::from_le_bytes(data[8..12].try_into().unwrap());
         assert_eq!(prop_count, 1);
@@ -1361,7 +1549,7 @@ mod tests {
         let mut buf = Vec::new();
         push_set_property(&mut buf, element_id, PROP_STRING, "class", "new-value");
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_hast_commands(arena.clone(), &buf).unwrap();
         let data = result.get_type_data(element_id);
         let prop_count = u32::from_le_bytes(data[8..12].try_into().unwrap());
         assert_eq!(prop_count, 1);
@@ -1380,7 +1568,7 @@ mod tests {
         let mut buf = Vec::new();
         push_set_property(&mut buf, element_id, PROP_BOOL_TRUE, "disabled", "");
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_hast_commands(arena.clone(), &buf).unwrap();
         let data = result.get_type_data(element_id);
         let prop_count = u32::from_le_bytes(data[8..12].try_into().unwrap());
         assert_eq!(prop_count, 1);
@@ -1396,17 +1584,17 @@ mod tests {
         push_set_property(&mut buf, element_id, PROP_STRING, "class", "foo");
         push_set_property(&mut buf, element_id, PROP_STRING, "id", "bar");
 
-        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let result = apply_hast_commands(arena.clone(), &buf).unwrap();
         let data = result.get_type_data(element_id);
         let prop_count = u32::from_le_bytes(data[8..12].try_into().unwrap());
         assert_eq!(prop_count, 2);
     }
 
     /// Build a minimal HAST element arena: root(type 0) → element(type 1, tag "div")
-    fn build_hast_element(props: &[(&str, u8, &str)]) -> Arena {
+    fn build_hast_element(props: &[(&str, u8, &str)]) -> Arena<Hast> {
         use satteri_ast::hast::node::HastNodeType;
 
-        let mut b = ArenaBuilder::new(String::new());
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
         b.open_node_raw(HastNodeType::Root as u8);
         b.open_node_raw(HastNodeType::Element as u8);
         let tag_ref = b.alloc_string("div");

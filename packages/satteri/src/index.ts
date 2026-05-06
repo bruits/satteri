@@ -61,7 +61,6 @@ export {
   createHastHandle,
   createMdxHastHandle,
   convertMdastToHastHandle,
-  serializeMdastHandle,
   serializeHandle,
   renderHandle,
   compileHandle,

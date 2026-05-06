@@ -85,7 +85,7 @@ const FIELD = {
 
 // BufferHeader field offsets (all u32, little-endian):
 //   magic: [u8; 4]        @ 0
-//   version: u32           @ 4
+//   kind: u32              @ 4   (1 = mdast, 2 = hast)
 //   node_struct_size: u32  @ 8
 //   node_count: u32        @ 12
 //   nodes_offset: u32      @ 16
@@ -98,6 +98,7 @@ const FIELD = {
 //   Total: 44 bytes
 
 const MAGIC = 0x5241444d; // "MDAR" bytes [0x4d,0x44,0x41,0x52] read as little-endian u32
+const KIND_MDAST = 1;
 
 export class MdastReader {
   readonly #view: DataView;
@@ -123,12 +124,14 @@ export class MdastReader {
         `Invalid buffer: bad magic 0x${magic.toString(16)}, expected 0x${MAGIC.toString(16)}`,
       );
     }
-    const version = v.getUint32(4, true);
-    if (version !== 1) {
-      throw new Error(`Unsupported buffer version: ${version}`);
+    const kind = v.getUint32(4, true);
+    if (kind !== KIND_MDAST) {
+      throw new Error(
+        `MdastReader was handed a buffer of kind ${kind} (expected ${KIND_MDAST}). ` +
+          `MDAST and HAST node types overlap; reading the wrong kind decodes garbage.`,
+      );
     }
     return {
-      version,
       nodeStructSize: v.getUint32(8, true),
       nodeCount: v.getUint32(12, true),
       nodesOffset: v.getUint32(16, true),

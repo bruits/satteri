@@ -1,13 +1,21 @@
+use std::marker::PhantomData;
+
 use rustc_hash::FxHashMap;
 
+use crate::kind::ArenaKind;
 use crate::node::{ArenaNode, StringRef};
 
 /// The central arena that owns all nodes and associated data for one parse.
 ///
+/// `K` is a phantom marker (`Mdast` or `Hast`) that distinguishes
+/// otherwise-identical arenas at the type level so cross-kind misroutes are
+/// caught at compile time. Container ops are generic over `K`; only code
+/// that decodes `node_type` or the wire layout of `type_data` pins a kind.
+///
 /// Strings are NOT copied. The arena holds the source and nodes reference it
 /// via `StringRef` (byte offset + length into `source`).
-#[derive(Debug, Clone)]
-pub struct Arena {
+#[derive(Debug)]
+pub struct Arena<K: ArenaKind> {
     /// All nodes in order of creation.
     pub nodes: Vec<ArenaNode>,
     /// Flat array of child node IDs, indexed by node.children_start..+children_count.
@@ -22,9 +30,28 @@ pub struct Arena {
     /// The pulldown-cmark Options bits used to parse this arena.
     /// Stored so that re-parsing (e.g. after plugin mutations) uses the same options.
     pub parse_options: u32,
+    pub(crate) _kind: PhantomData<fn() -> K>,
 }
 
-impl Arena {
+impl<K: ArenaKind> Clone for Arena<K> {
+    fn clone(&self) -> Self {
+        Arena {
+            nodes: self.nodes.clone(),
+            children: self.children.clone(),
+            type_data: self.type_data.clone(),
+            source: self.source.clone(),
+            node_data: self.node_data.clone(),
+            mdx: self.mdx,
+            parse_options: self.parse_options,
+            _kind: PhantomData,
+        }
+    }
+}
+
+impl<K: ArenaKind> Arena<K> {
+    /// Construct an empty arena of the requested kind. Callers must declare
+    /// the kind explicitly, e.g. `Arena::<Mdast>::new(source)` or via a
+    /// type-annotated binding `let a: Arena<Hast> = Arena::new(source);`.
     pub fn new(source: String) -> Self {
         Arena {
             nodes: Vec::new(),
@@ -34,10 +61,12 @@ impl Arena {
             node_data: FxHashMap::default(),
             mdx: false,
             parse_options: 0,
+            _kind: PhantomData,
         }
     }
 
-    /// Create an arena with pre-allocated capacity.
+    /// Construct an empty arena of the requested kind with pre-allocated
+    /// capacity for nodes, children, and type data.
     pub fn with_capacity(
         source: String,
         node_count: usize,
@@ -52,6 +81,7 @@ impl Arena {
             node_data: FxHashMap::default(),
             mdx: false,
             parse_options: 0,
+            _kind: PhantomData,
         }
     }
 
@@ -199,17 +229,18 @@ impl Arena {
 
 /// Handle for tracking in-progress variable-length type data writes.
 pub struct TypeDataWriter {
-    node_id: u32,
-    start: u32,
+    pub(crate) node_id: u32,
+    pub(crate) start: u32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kind::Mdast;
 
     #[test]
     fn alloc_and_retrieve() {
-        let mut arena = Arena::new("hello world".to_string());
+        let mut arena: Arena<Mdast> = Arena::new("hello world".to_string());
         let id = arena.alloc_node(0);
         assert_eq!(id, 0);
         assert_eq!(arena.len(), 1);
@@ -219,7 +250,7 @@ mod tests {
 
     #[test]
     fn set_position_roundtrip() {
-        let mut arena = Arena::new(String::new());
+        let mut arena: Arena<Mdast> = Arena::new(String::new());
         let id = arena.alloc_node(0);
         arena.set_position(id, 0, 10, 1, 1, 1, 11);
         let node = arena.get_node(id);
@@ -231,7 +262,7 @@ mod tests {
 
     #[test]
     fn set_children_updates_parent() {
-        let mut arena = Arena::new(String::new());
+        let mut arena: Arena<Mdast> = Arena::new(String::new());
         let parent = arena.alloc_node(0);
         let child1 = arena.alloc_node(0);
         let child2 = arena.alloc_node(0);
@@ -244,14 +275,14 @@ mod tests {
     #[test]
     fn get_str_works() {
         let source = "Hello, world!".to_string();
-        let arena = Arena::new(source);
+        let arena: Arena<Mdast> = Arena::new(source);
         let sr = StringRef::new(7, 5);
         assert_eq!(arena.get_str(sr), "world");
     }
 
     #[test]
     fn type_data_roundtrip() {
-        let mut arena = Arena::new(String::new());
+        let mut arena: Arena<Mdast> = Arena::new(String::new());
         let id = arena.alloc_node(0);
         arena.set_type_data(id, &[2u8]);
         let node = arena.get_node(id);

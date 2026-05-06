@@ -1,12 +1,12 @@
 //! Integration tests for arena construction.
 
-use satteri_arena::{Arena, ArenaBuilder};
+use satteri_arena::{Arena, ArenaBuilder, Mdast};
 use satteri_ast::mdast::MdastNodeType;
 
 #[test]
 fn heading_with_text_child() {
     let source = "# Hello";
-    let mut builder = ArenaBuilder::new(source.to_string());
+    let mut builder = ArenaBuilder::<Mdast>::new(source.to_string());
 
     let root_id = builder.open_node(MdastNodeType::Root as u8);
     builder.set_position_current(0, 7, 1, 1, 1, 8);
@@ -46,7 +46,7 @@ fn heading_with_text_child() {
 
 #[test]
 fn multi_level_tree_children() {
-    let mut builder = ArenaBuilder::new(String::new());
+    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
 
     let root = builder.open_node(MdastNodeType::Root as u8);
     let p1 = builder.open_node(MdastNodeType::Paragraph as u8);
@@ -69,7 +69,7 @@ fn multi_level_tree_children() {
 
 #[test]
 fn parent_ids_correct() {
-    let mut builder = ArenaBuilder::new(String::new());
+    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
 
     let root = builder.open_node(MdastNodeType::Root as u8);
     let bq = builder.open_node(MdastNodeType::Blockquote as u8);
@@ -90,7 +90,7 @@ fn parent_ids_correct() {
 
 #[test]
 fn arena_direct_methods() {
-    let mut arena = Arena::new("foo bar".to_string());
+    let mut arena = Arena::<Mdast>::new("foo bar".to_string());
 
     let root = arena.alloc_node(MdastNodeType::Root as u8);
     let para = arena.alloc_node(MdastNodeType::Paragraph as u8);
@@ -111,7 +111,7 @@ fn arena_direct_methods() {
 
 #[test]
 fn deep_nesting() {
-    let mut builder = ArenaBuilder::new(String::new());
+    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
     let root = builder.open_node(MdastNodeType::Root as u8);
     let bq = builder.open_node(MdastNodeType::Blockquote as u8);
     let list = builder.open_node(MdastNodeType::List as u8);

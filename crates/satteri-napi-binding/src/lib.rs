@@ -223,14 +223,32 @@ pub fn parse_to_html(source: String, features: Option<JsFeatures>) -> Result<Str
     Ok(satteri_ast::mdast_to_html(&arena))
 }
 
-// Handle-based API: arena stays in Rust, no buffer copies to JS
+// Handle-based API: arena stays in Rust, no buffer copies to JS.
+//
+// MDAST and HAST arenas use distinct external types (`MdastHandle` /
+// `HastHandle`) so napi-rs catches mismatches on kind-sensitive entry
+// points like `render_handle` (HAST-only) or `apply_commands_to_mdast_handle`
+// (MDAST-only) at runtime via External TypeId checks.
+//
+// Kind-agnostic ops (read source, drop, (de)serialize, get/set node data)
+// take `Either<&MdastHandle, &HastHandle>` so JS callers don't need
+// duplicated entry points for operations whose Rust body is identical
+// across kinds.
 
+use napi::bindgen_prelude::Either;
 use std::sync::Mutex;
 
-type ArenaHandle = External<Mutex<satteri_arena::Arena>>;
+use satteri_arena::{Hast, Mdast};
 
-fn make_parse_fn(mdx: bool, parse_options: u32) -> impl Fn(&str) -> satteri_arena::Arena {
-    move |source: &str| -> satteri_arena::Arena {
+type MdastHandle = External<Mutex<satteri_arena::Arena<Mdast>>>;
+type HastHandle = External<Mutex<satteri_arena::Arena<Hast>>>;
+type AnyHandle<'a> = Either<&'a MdastHandle, &'a HastHandle>;
+
+fn make_parse_fn(
+    mdx: bool,
+    parse_options: u32,
+) -> impl Fn(&str) -> satteri_arena::Arena<Mdast> {
+    move |source: &str| -> satteri_arena::Arena<Mdast> {
         let opts = satteri_pulldown_cmark::Options::from_bits_truncate(parse_options);
         let (mut parsed, _errors) = satteri_pulldown_cmark::parse(source, opts);
         parsed.mdx = mdx;
@@ -248,7 +266,7 @@ pub struct JsSubscription {
 
 /// Parse markdown source into an MDAST arena handle.
 #[napi]
-pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Result<ArenaHandle> {
+pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Result<MdastHandle> {
     let opts = features_to_options(features, false);
     let (mut arena, _) = satteri_pulldown_cmark::parse(&source, opts);
     arena.mdx = false;
@@ -261,7 +279,7 @@ pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Resu
 pub fn create_mdx_mdast_handle(
     source: String,
     features: Option<JsFeatures>,
-) -> Result<ArenaHandle> {
+) -> Result<MdastHandle> {
     let opts = features_to_options(features, true);
     let (mut arena, _) = satteri_pulldown_cmark::parse(&source, opts);
     arena.mdx = true;
@@ -269,38 +287,65 @@ pub fn create_mdx_mdast_handle(
     Ok(External::new(Mutex::new(arena)))
 }
 
-/// Serialize an MDAST handle to a binary buffer (read-only snapshot for JS visitor).
+/// Serialize a handle's arena to a binary buffer. Works for both MDAST
+/// (read-only snapshot for the JS visitor) and HAST (fallback path for
+/// `transformRoot`) — the kind tag is embedded in the buffer header.
 #[napi]
-pub fn serialize_mdast_handle(handle: &ArenaHandle) -> Result<Uint8Array> {
-    let arena = handle
-        .lock()
-        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    Ok(Uint8Array::new(arena.to_raw_buffer()))
+pub fn serialize_handle(handle: AnyHandle) -> Result<Uint8Array> {
+    let buf = match handle {
+        Either::A(h) => h
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
+            .to_raw_buffer(),
+        Either::B(h) => h
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
+            .to_raw_buffer(),
+    };
+    Ok(Uint8Array::new(buf))
 }
 
-/// Get the source string from an MDAST handle.
+/// Get the source string from a handle. Kind-agnostic: source is the
+/// original markdown/MDX input and is identical across MDAST and HAST.
 #[napi]
-pub fn get_handle_source(handle: &ArenaHandle) -> Result<String> {
-    let arena = handle
-        .lock()
-        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    Ok(arena.source().to_string())
+pub fn get_handle_source(handle: AnyHandle) -> Result<String> {
+    let s = match handle {
+        Either::A(h) => h
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
+            .source()
+            .to_string(),
+        Either::B(h) => h
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
+            .source()
+            .to_string(),
+    };
+    Ok(s)
 }
 
-/// Set the `data` blob (JSON bytes) for a node in the handle's arena.
+/// Set the `data` blob (JSON bytes) for a node. Works for both MDAST and
+/// HAST handles — `node_data` is a per-node JSON blob with no kind-specific
+/// shape on the Rust side.
 #[napi]
-pub fn set_node_data(handle: &ArenaHandle, node_id: u32, json: Uint8Array) -> Result<()> {
-    let mut arena = handle
-        .lock()
-        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    arena.set_node_data(node_id, json.to_vec());
+pub fn set_node_data(handle: AnyHandle, node_id: u32, json: Uint8Array) -> Result<()> {
+    match handle {
+        Either::A(h) => h
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
+            .set_node_data(node_id, json.to_vec()),
+        Either::B(h) => h
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
+            .set_node_data(node_id, json.to_vec()),
+    }
     Ok(())
 }
 
 /// Walk an MDAST handle's arena and return matched nodes as a flat binary buffer.
 #[napi]
 pub fn walk_mdast_handle(
-    handle: &ArenaHandle,
+    handle: &MdastHandle,
     subscriptions: Vec<JsSubscription>,
 ) -> Result<Uint8Array> {
     let arena = handle
@@ -313,38 +358,42 @@ pub fn walk_mdast_handle(
             tag_filter: s.tag_filter,
         })
         .collect();
-    Ok(Uint8Array::new(
-        satteri_ast::walk::walk_and_collect_with_mode(
-            &arena,
-            &subs,
-            satteri_ast::walk::WalkMode::Mdast,
-        ),
-    ))
+    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(&arena, &subs)))
 }
 
 /// Apply a command buffer to an MDAST handle in-place.
 #[napi]
-pub fn apply_commands_to_mdast_handle(handle: &ArenaHandle, command_buf: Uint8Array) -> Result<()> {
+pub fn apply_commands_to_mdast_handle(
+    handle: &MdastHandle,
+    command_buf: Uint8Array,
+) -> Result<()> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
     let parse_markdown = make_parse_fn(arena.mdx, arena.parse_options);
-    let owned = std::mem::replace(&mut *arena, satteri_arena::Arena::new(String::new()));
-    let new_arena = satteri_plugin_api::apply_commands(owned, &command_buf, &parse_markdown)
-        .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let owned = std::mem::replace(
+        &mut *arena,
+        satteri_arena::Arena::<Mdast>::new(String::new()),
+    );
+    let new_arena =
+        satteri_plugin_api::apply_mdast_commands(owned, &command_buf, &parse_markdown)
+            .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     *arena = new_arena;
     Ok(())
 }
 
 /// Convert an MDAST handle to a HAST handle. The MDAST handle is consumed (emptied).
 #[napi]
-pub fn convert_mdast_to_hast_handle(handle: &ArenaHandle) -> Result<ArenaHandle> {
+pub fn convert_mdast_to_hast_handle(handle: &MdastHandle) -> Result<HastHandle> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
     let mdx = arena.mdx;
     let parse_options = arena.parse_options;
-    let owned = std::mem::replace(&mut *arena, satteri_arena::Arena::new(String::new()));
+    let owned = std::mem::replace(
+        &mut *arena,
+        satteri_arena::Arena::<Mdast>::new(String::new()),
+    );
     let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&owned);
     hast.mdx = mdx;
     hast.parse_options = parse_options;
@@ -355,17 +404,20 @@ pub fn convert_mdast_to_hast_handle(handle: &ArenaHandle) -> Result<ArenaHandle>
 /// The MDAST handle is consumed (emptied).
 #[napi]
 pub fn apply_commands_and_convert_to_hast_handle(
-    handle: &ArenaHandle,
+    handle: &MdastHandle,
     command_buf: Uint8Array,
-) -> Result<ArenaHandle> {
+) -> Result<HastHandle> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
     let mdx = arena.mdx;
     let parse_options = arena.parse_options;
     let parse_markdown = make_parse_fn(mdx, parse_options);
-    let owned = std::mem::replace(&mut *arena, satteri_arena::Arena::new(String::new()));
-    let mutated = satteri_plugin_api::apply_commands(owned, &command_buf, &parse_markdown)
+    let owned = std::mem::replace(
+        &mut *arena,
+        satteri_arena::Arena::<Mdast>::new(String::new()),
+    );
+    let mutated = satteri_plugin_api::apply_mdast_commands(owned, &command_buf, &parse_markdown)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let mut hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena(&mutated);
     hast_arena.mdx = mdx;
@@ -376,7 +428,7 @@ pub fn apply_commands_and_convert_to_hast_handle(
 /// Parse markdown source and convert to HAST. Returns an opaque handle.
 /// The arena stays in Rust memory, no buffer is copied to JS.
 #[napi]
-pub fn create_hast_handle(source: String, features: Option<JsFeatures>) -> Result<ArenaHandle> {
+pub fn create_hast_handle(source: String, features: Option<JsFeatures>) -> Result<HastHandle> {
     let opts = features_to_options(features, false);
     let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
     mdast.parse_options = opts.bits();
@@ -388,7 +440,10 @@ pub fn create_hast_handle(source: String, features: Option<JsFeatures>) -> Resul
 
 /// Parse MDX source and convert to HAST. Returns an opaque handle.
 #[napi]
-pub fn create_mdx_hast_handle(source: String, features: Option<JsFeatures>) -> Result<ArenaHandle> {
+pub fn create_mdx_hast_handle(
+    source: String,
+    features: Option<JsFeatures>,
+) -> Result<HastHandle> {
     let opts = features_to_options(features, true);
     let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
     mdast.parse_options = opts.bits();
@@ -398,9 +453,9 @@ pub fn create_mdx_hast_handle(source: String, features: Option<JsFeatures>) -> R
     Ok(External::new(Mutex::new(hast)))
 }
 
-/// Walk a handle's arena and return matched nodes as a flat binary buffer.
+/// Walk a HAST handle's arena and return matched nodes as a flat binary buffer.
 #[napi]
-pub fn walk_handle(handle: &ArenaHandle, subscriptions: Vec<JsSubscription>) -> Result<Uint8Array> {
+pub fn walk_handle(handle: &HastHandle, subscriptions: Vec<JsSubscription>) -> Result<Uint8Array> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -411,49 +466,38 @@ pub fn walk_handle(handle: &ArenaHandle, subscriptions: Vec<JsSubscription>) -> 
             tag_filter: s.tag_filter,
         })
         .collect();
-    Ok(Uint8Array::new(satteri_ast::walk::walk_and_collect(
-        &arena, &subs,
-    )))
+    Ok(Uint8Array::new(satteri_ast::walk::walk_hast(&arena, &subs)))
 }
 
-/// Apply a command buffer to a handle's arena in-place. No serialize/deserialize.
+/// Apply a command buffer to a HAST handle's arena in-place.
 #[napi]
-pub fn apply_commands_to_handle(handle: &ArenaHandle, command_buf: Uint8Array) -> Result<()> {
+pub fn apply_commands_to_handle(handle: &HastHandle, command_buf: Uint8Array) -> Result<()> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
 
-    let parse_markdown = make_parse_fn(arena.mdx, arena.parse_options);
-
-    // apply_commands takes ownership, so swap out the arena
-    let owned = std::mem::replace(&mut *arena, satteri_arena::Arena::new(String::new()));
-    let new_arena = satteri_plugin_api::apply_commands(owned, &command_buf, &parse_markdown)
+    let owned = std::mem::replace(
+        &mut *arena,
+        satteri_arena::Arena::<Hast>::new(String::new()),
+    );
+    let new_arena = satteri_plugin_api::apply_hast_commands(owned, &command_buf)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     *arena = new_arena;
     Ok(())
 }
 
-/// Serialize a handle's arena to a binary buffer (for fallback paths like transformRoot).
+/// Render a HAST handle's arena to HTML. Does not consume the handle.
 #[napi]
-pub fn serialize_handle(handle: &ArenaHandle) -> Result<Uint8Array> {
-    let arena = handle
-        .lock()
-        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    Ok(Uint8Array::new(arena.to_raw_buffer()))
-}
-
-/// Render a handle's HAST arena to HTML. Does not consume the handle.
-#[napi]
-pub fn render_handle(handle: &ArenaHandle) -> Result<String> {
+pub fn render_handle(handle: &HastHandle) -> Result<String> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
     Ok(satteri_ast::hast::hast_arena_to_html(&arena))
 }
 
-/// Compile a handle's HAST arena to MDX JavaScript. Does not consume the handle.
+/// Compile a HAST handle's arena to MDX JavaScript. Does not consume the handle.
 #[napi]
-pub fn compile_handle(handle: &ArenaHandle, options: Option<JsMdxOptions>) -> Result<String> {
+pub fn compile_handle(handle: &HastHandle, options: Option<JsMdxOptions>) -> Result<String> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -486,20 +530,20 @@ pub fn parse_esm(source: String) -> Option<String> {
 }
 
 /// Read the node_data JSON blob for a node. Returns null if none is set.
+/// Works for both MDAST and HAST handles.
 #[napi]
-pub fn get_node_data(handle: &ArenaHandle, node_id: u32) -> Option<String> {
-    let arena = handle
-        .lock()
-        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))
-        .ok()?;
-    let data = arena.get_node_data(node_id)?;
-    String::from_utf8(data.to_vec()).ok()
+pub fn get_node_data(handle: AnyHandle, node_id: u32) -> Option<String> {
+    let bytes = match handle {
+        Either::A(h) => h.lock().ok()?.get_node_data(node_id)?.to_vec(),
+        Either::B(h) => h.lock().ok()?.get_node_data(node_id)?.to_vec(),
+    };
+    String::from_utf8(bytes).ok()
 }
 
 /// Collect the concatenated text content of a HAST node and all its descendants.
 /// Walks entirely in Rust, no per-child NAPI round-trips.
 #[napi]
-pub fn text_content_handle(handle: &ArenaHandle, node_id: u32) -> Result<String> {
+pub fn text_content_handle(handle: &HastHandle, node_id: u32) -> Result<String> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -519,7 +563,7 @@ pub struct JsTextContentOptions {
 /// Mirrors `mdast-util-to-string`: collects value from text nodes, alt from images.
 #[napi]
 pub fn mdast_text_content_handle(
-    handle: &ArenaHandle,
+    handle: &MdastHandle,
     node_id: u32,
     options: Option<JsTextContentOptions>,
 ) -> Result<String> {
@@ -541,13 +585,23 @@ pub fn mdast_text_content_handle(
     ))
 }
 
-/// Release the arena memory held by a handle. The handle becomes empty
-/// but remains valid (subsequent calls are no-ops or return empty results).
+/// Release a handle's arena memory. The handle becomes empty but remains
+/// valid (subsequent calls are no-ops or return empty results).
 #[napi]
-pub fn drop_handle(handle: &ArenaHandle) -> Result<()> {
-    let mut arena = handle
-        .lock()
-        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    *arena = satteri_arena::Arena::new(String::new());
+pub fn drop_handle(handle: AnyHandle) -> Result<()> {
+    match handle {
+        Either::A(h) => {
+            let mut arena = h
+                .lock()
+                .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
+            *arena = satteri_arena::Arena::<Mdast>::new(String::new());
+        }
+        Either::B(h) => {
+            let mut arena = h
+                .lock()
+                .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
+            *arena = satteri_arena::Arena::<Hast>::new(String::new());
+        }
+    }
     Ok(())
 }

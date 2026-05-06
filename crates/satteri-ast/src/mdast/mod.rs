@@ -28,13 +28,16 @@ impl Default for TextContentOptions {
 /// Mirrors `mdast-util-to-string`: collects `value` from Text, InlineCode,
 /// and InlineMath nodes, `alt` from Image nodes, and recurses into children
 /// for everything else.
-pub fn text_content(arena: &satteri_arena::Arena, node_id: u32) -> String {
+pub fn text_content(
+    arena: &satteri_arena::Arena<satteri_arena::Mdast>,
+    node_id: u32,
+) -> String {
     text_content_with_options(arena, node_id, &TextContentOptions::default())
 }
 
 /// Collect concatenated text content with configurable options.
 pub fn text_content_with_options(
-    arena: &satteri_arena::Arena,
+    arena: &satteri_arena::Arena<satteri_arena::Mdast>,
     node_id: u32,
     options: &TextContentOptions,
 ) -> String {

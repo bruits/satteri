@@ -1,6 +1,6 @@
 //! Render a HAST arena to an HTML string.
 
-use satteri_arena::Arena;
+use satteri_arena::{Arena, Hast};
 
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
@@ -12,7 +12,7 @@ use crate::shared::{
 };
 
 /// Render HTML from an arena.
-pub fn hast_arena_to_html(arena: &Arena) -> String {
+pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
     let mut out = String::with_capacity(arena.source().len());
     render_node(0, arena, &mut out, false, false);
     if !out.is_empty() && !out.ends_with('\n') {
@@ -47,7 +47,13 @@ fn escape_html_attr_value(out: &mut String, value: &str) {
 /// `in_svg` selects the SVG attribute schema. Set on entry to `<svg>` and
 /// sticky for all descendants — `<foreignObject>` does NOT switch back, matching
 /// `hast-util-to-html`.
-pub fn render_node(node_id: u32, view: &Arena, out: &mut String, in_raw_text: bool, in_svg: bool) {
+pub fn render_node(
+    node_id: u32,
+    view: &Arena<Hast>,
+    out: &mut String,
+    in_raw_text: bool,
+    in_svg: bool,
+) {
     let node = view.get_node(node_id);
 
     let Some(node_type) = HastNodeType::from_u8(node.node_type) else {

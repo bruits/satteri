@@ -1,10 +1,10 @@
 use crate::commands::{Command, NewNode};
 use crate::data::{DataMap, DataValue, TypedDataMap};
-use satteri_arena::Arena;
+use satteri_arena::{Arena, Mdast};
 
 /// Context passed to Rust plugin visitor methods and before/after hooks.
 pub struct PluginContext<'a> {
-    arena: &'a Arena,
+    arena: &'a Arena<Mdast>,
     pub(crate) data_map: &'a mut DataMap,
     pub(crate) typed_data: &'a mut TypedDataMap,
     commands: Vec<Command>,
@@ -27,7 +27,7 @@ pub enum Severity {
 
 impl<'a> PluginContext<'a> {
     pub(crate) fn new(
-        arena: &'a Arena,
+        arena: &'a Arena<Mdast>,
         data_map: &'a mut DataMap,
         typed_data: &'a mut TypedDataMap,
     ) -> Self {
@@ -40,7 +40,7 @@ impl<'a> PluginContext<'a> {
         }
     }
 
-    pub fn arena(&self) -> &Arena {
+    pub fn arena(&self) -> &Arena<Mdast> {
         self.arena
     }
 

@@ -148,7 +148,7 @@ pub fn compile(
 ///
 /// Returns an error if compilation fails (e.g. invalid MDX expressions).
 pub fn compile_hast_arena(
-    arena: &satteri_arena::Arena,
+    arena: &satteri_arena::Arena<satteri_arena::Hast>,
     options: &Options,
 ) -> Result<String, message::Message> {
     let source_bytes = arena.source().as_bytes();
@@ -426,7 +426,10 @@ fn module_export_name_str_local<'a>(name: &'a ModuleExportName<'_>) -> &'a str {
 /// And converts them to `HAST_ELEMENT` nodes so they can be:
 /// - Collapsed by `optimizeStatic` into `set:html`
 /// - Rendered to HTML by `render_node`
-pub fn simplify_plain_mdx_nodes(arena: &mut satteri_arena::Arena, ignore_elements: &[String]) {
+pub fn simplify_plain_mdx_nodes(
+    arena: &mut satteri_arena::Arena<satteri_arena::Hast>,
+    ignore_elements: &[String],
+) {
     use satteri_ast::hast::HastNodeType;
     use satteri_ast::mdast::codec::{decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name};
 

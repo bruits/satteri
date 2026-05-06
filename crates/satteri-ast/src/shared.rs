@@ -17,12 +17,14 @@ pub const MDX_ATTR_EXPRESSION_PROP: u8 = 2; // name={expr}
 pub const MDX_ATTR_SPREAD: u8 = 3; // {...expr}
 
 use crate::commands::JsNodeAttribute;
-use satteri_arena::{ArenaBuilder, StringRef};
+use satteri_arena::{ArenaBuilder, ArenaKind, StringRef};
 
 /// Encode JSX attributes from a JS node into the arena tuple format.
-/// Used by both MDAST and HAST MDX JSX element paths.
-pub fn encode_js_jsx_attrs(
-    builder: &mut ArenaBuilder,
+/// Used by both MDAST and HAST MDX JSX element paths; generic over `K`
+/// since attribute encoding only needs to allocate strings into the arena
+/// and doesn't dispatch on `node_type`.
+pub fn encode_js_jsx_attrs<K: ArenaKind>(
+    builder: &mut ArenaBuilder<K>,
     attrs: Option<&[JsNodeAttribute]>,
 ) -> Vec<(u8, StringRef, StringRef)> {
     let Some(attrs) = attrs else {

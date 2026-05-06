@@ -3,7 +3,7 @@
 //! Works on any arena (MDAST or HAST) by taking a predicate that identifies
 //! which node types are text-bearing and where their StringRef lives in type_data.
 
-use satteri_arena::Arena;
+use satteri_arena::{Arena, ArenaKind};
 
 /// Collect the concatenated text content of `node_id` and all its descendants.
 ///
@@ -11,8 +11,11 @@ use satteri_arena::Arena;
 /// `Some(offset)` if the node's `type_data` contains a StringRef at that byte
 /// offset that should contribute to the output. Return `None` to recurse into
 /// children instead.
-pub fn text_content(
-    arena: &Arena,
+///
+/// Generic over `K`; the public wrappers `mdast::text_content` and
+/// `hast::text_content` pin the kind for callers.
+pub fn text_content<K: ArenaKind>(
+    arena: &Arena<K>,
     node_id: u32,
     text_offset: impl Fn(u8) -> Option<usize>,
 ) -> String {
@@ -21,8 +24,8 @@ pub fn text_content(
     out
 }
 
-fn collect(
-    arena: &Arena,
+fn collect<K: ArenaKind>(
+    arena: &Arena<K>,
     node_id: u32,
     text_offset: &dyn Fn(u8) -> Option<usize>,
     out: &mut String,
@@ -49,9 +52,9 @@ fn collect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use satteri_arena::ArenaBuilder;
+    use satteri_arena::{ArenaBuilder, Mdast};
 
-    fn make_text_type_data(builder: &mut ArenaBuilder, text: &str) -> Vec<u8> {
+    fn make_text_type_data(builder: &mut ArenaBuilder<Mdast>, text: &str) -> Vec<u8> {
         let sr = builder.alloc_string(text);
         let mut td = [0u8; 8];
         td[0..4].copy_from_slice(&sr.offset.to_le_bytes());
@@ -69,7 +72,7 @@ mod tests {
 
     #[test]
     fn single_text_node() {
-        let mut b = ArenaBuilder::new(String::new());
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
         b.open_node_raw(0);
         b.open_node_raw(2);
         let td = make_text_type_data(&mut b, "hello");
@@ -83,7 +86,7 @@ mod tests {
 
     #[test]
     fn nested_elements_with_text() {
-        let mut b = ArenaBuilder::new(String::new());
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
         b.open_node_raw(0);
         b.open_node_raw(1);
         {
@@ -108,7 +111,7 @@ mod tests {
 
     #[test]
     fn skips_non_text_nodes() {
-        let mut b = ArenaBuilder::new(String::new());
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
         b.open_node_raw(0);
         b.open_node_raw(2);
         let td = make_text_type_data(&mut b, "a");
@@ -133,7 +136,7 @@ mod tests {
 
     #[test]
     fn includes_expression_nodes() {
-        let mut b = ArenaBuilder::new(String::new());
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
         b.open_node_raw(0);
         b.open_node_raw(2);
         let td = make_text_type_data(&mut b, "Hello ");
@@ -154,7 +157,7 @@ mod tests {
     #[test]
     fn value_at_nonzero_offset() {
         // Simulate a node where the StringRef is at offset 8 (like mdast Image alt)
-        let mut b = ArenaBuilder::new(String::new());
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
         b.open_node_raw(0);
         b.open_node_raw(42); // fake node type
         let sr = b.alloc_string("alt text");

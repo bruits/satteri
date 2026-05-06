@@ -21,7 +21,6 @@ import {
   applyCommandsAndConvertToHastHandle,
   getHandleSource,
   serializeHandle,
-  serializeMdastHandle,
 } from "#binding";
 import { MdastReader } from "./mdast/mdast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
@@ -417,7 +416,7 @@ function createHastHandleFromMdast(
 /** Parse Markdown source into a materialized mdast tree. */
 export function markdownToMdast(source: string, options: { features?: Features } = {}): MdastNode {
   const handle = createMdastHandle(source, featuresToNative(options.features));
-  const buf = serializeMdastHandle(handle);
+  const buf = serializeHandle(handle);
   dropHandle(handle);
   return materializeMdastTree(new MdastReader(buf));
 }
@@ -425,7 +424,7 @@ export function markdownToMdast(source: string, options: { features?: Features }
 /** Parse MDX source into a materialized mdast tree. */
 export function mdxToMdast(source: string, options: { features?: Features } = {}): MdastNode {
   const handle = createMdxMdastHandle(source, featuresToNative(options.features));
-  const buf = serializeMdastHandle(handle);
+  const buf = serializeHandle(handle);
   dropHandle(handle);
   return materializeMdastTree(new MdastReader(buf));
 }

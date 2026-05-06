@@ -127,7 +127,6 @@ module.exports.parseExpression = __napiModule.exports.parseExpression
 module.exports.parseToHtml = __napiModule.exports.parseToHtml
 module.exports.renderHandle = __napiModule.exports.renderHandle
 module.exports.serializeHandle = __napiModule.exports.serializeHandle
-module.exports.serializeMdastHandle = __napiModule.exports.serializeMdastHandle
 module.exports.setNodeData = __napiModule.exports.setNodeData
 module.exports.textContentHandle = __napiModule.exports.textContentHandle
 module.exports.walkHandle = __napiModule.exports.walkHandle

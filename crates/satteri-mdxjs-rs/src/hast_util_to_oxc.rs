@@ -23,8 +23,8 @@ use oxc_ast::ast::{
 use oxc_span::{Atom, SPAN, Span};
 use oxc_syntax::node::NodeId;
 use rustc_hash::{FxHashMap, FxHashSet};
-use satteri_arena::Arena;
 use satteri_arena::mdx_types::{self as message, Location, MdxExpressionKind};
+use satteri_arena::{Arena, Hast};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
@@ -39,7 +39,7 @@ use satteri_ast::shared::{
 
 /// Get a Span from a HAST binary node's position data.
 /// Uses offset+1 convention so that (0,0) remains SPAN (dummy).
-fn node_span(view: &Arena, node_id: u32) -> Span {
+fn node_span(view: &Arena<Hast>, node_id: u32) -> Span {
     let node = view.get_node(node_id);
     if node.start_offset == 0 && node.end_offset == 0 && node.start_line == 0 {
         SPAN
@@ -99,7 +99,7 @@ struct Context<'a> {
     esm: Vec<Statement<'a>>,
     location: Option<&'a Location>,
     allocator: &'a Allocator,
-    view: &'a Arena,
+    view: &'a Arena<Hast>,
     /// Behind `Rc` because `all()` needs to hold the config while mutably
     /// re-borrowing the rest of Context for recursive `one()` calls.
     optimize_static: Option<Rc<OptimizeStaticConfig>>,
@@ -110,7 +110,7 @@ struct Context<'a> {
 
 /// Compile a HAST into OXC's ES AST.
 pub fn hast_util_to_oxc<'a>(
-    view: &'a Arena,
+    view: &'a Arena<Hast>,
     path: Option<String>,
     location: Option<&'a Location>,
     explicit_jsxs: &mut FxHashSet<Span>,
@@ -190,7 +190,7 @@ type ComponentOverridePrepass<'a> = (
 );
 
 fn prepare_component_overrides<'a>(
-    view: &'a Arena,
+    view: &'a Arena<Hast>,
     allocator: &'a Allocator,
     location: Option<&Location>,
     optimize_static: Option<&OptimizeStaticConfig>,
@@ -309,7 +309,7 @@ fn one<'a>(
 ///
 /// Returns `false` for any subtree containing MDX nodes (components, expressions, ESM)
 /// or elements whose tag name is in the ignore list.
-fn is_static_subtree(view: &Arena, node_id: u32, config: &OptimizeStaticConfig) -> bool {
+fn is_static_subtree(view: &Arena<Hast>, node_id: u32, config: &OptimizeStaticConfig) -> bool {
     let node = view.get_node(node_id);
     let raw_type = node.node_type;
 
@@ -341,7 +341,7 @@ fn is_static_subtree(view: &Arena, node_id: u32, config: &OptimizeStaticConfig) 
 
 /// Try to render a static subtree to an HTML string. Returns false if not static.
 fn try_render_static(
-    view: &Arena,
+    view: &Arena<Hast>,
     node_id: u32,
     config: &OptimizeStaticConfig,
     out: &mut String,

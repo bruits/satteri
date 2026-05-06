@@ -4,6 +4,7 @@
 const MAGIC = 0x5241444d; // "MDAR" bytes [0x4d,0x44,0x41,0x52] read as little-endian u32
 const NODE_STRUCT_SIZE = 52;
 const HEADER_SIZE = 44;
+const KIND_MDAST = 1;
 
 interface NodeSpec {
   id?: number;
@@ -47,9 +48,8 @@ export function buildTestBuffer({
   const view = new DataView(buf);
   const u8 = new Uint8Array(buf);
 
-  // Header
   view.setUint32(0, MAGIC, true);
-  view.setUint32(4, 1, true);
+  view.setUint32(4, KIND_MDAST, true);
   view.setUint32(8, NODE_STRUCT_SIZE, true);
   view.setUint32(12, nodes.length, true);
   view.setUint32(16, nodesOffset, true);

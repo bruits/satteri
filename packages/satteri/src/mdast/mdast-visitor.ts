@@ -4,7 +4,7 @@ import { CommandBuffer, classifyReturn } from "../command-buffer.js";
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
 import {
   walkMdastHandle,
-  serializeMdastHandle,
+  serializeHandle,
   getNodeData as napiGetNodeData,
   mdastTextContentHandle,
 } from "#binding";
@@ -359,7 +359,7 @@ class MdastLazyChildResolver {
 
   #ensure(): MdastReader {
     if (!this.#reader) {
-      this.#reader = new MdastReader(serializeMdastHandle(this.#handle));
+      this.#reader = new MdastReader(serializeHandle(this.#handle));
     }
     return this.#reader;
   }

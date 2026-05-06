@@ -1,20 +1,27 @@
 //! Raw buffer export for zero-copy transfer.
 //!
 //! Wire format: `[Header][nodes...][children u32s][type_data bytes][source UTF-8]`
+//!
+//! The header carries a `kind` u32 right after `magic` so JS readers can
+//! assert the buffer matches the kind they expect (`MdastReader` vs
+//! `HastReader`). Mismatch is loud rather than silent — without the tag,
+//! materialising an MDAST buffer through `HastReader` would decode garbage
+//! `node_type` bytes into the wrong variants because the two kinds share
+//! overlapping numeric values.
 
 use crate::arena::Arena;
+use crate::kind::ArenaKind;
 use crate::node::NODE_STRUCT_SIZE;
 
 const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
-const BUFFER_VERSION: u32 = 1;
 
 // Header field sizes (all u32 or [u8;4]):
-//   magic(4) + version(4) + node_struct_size(4) + node_count(4) + nodes_offset(4)
+//   magic(4) + kind(4) + node_struct_size(4) + node_count(4) + nodes_offset(4)
 //   + children_count(4) + children_offset(4) + type_data_len(4) + type_data_offset(4)
 //   + source_len(4) + source_offset(4) = 44 bytes
 const HEADER_SIZE: usize = 44;
 
-impl Arena {
+impl<K: ArenaKind> Arena<K> {
     /// Serialize to a flat byte buffer:
     /// `[Header][nodes][children u32s][type_data][source]`
     pub fn to_raw_buffer(&self) -> Vec<u8> {
@@ -33,7 +40,7 @@ impl Arena {
 
         // Write header fields as little-endian u32s.
         buf.extend_from_slice(&BUFFER_MAGIC);
-        buf.extend_from_slice(&BUFFER_VERSION.to_ne_bytes());
+        buf.extend_from_slice(&(K::KIND_TAG as u32).to_ne_bytes());
         buf.extend_from_slice(&(NODE_STRUCT_SIZE as u32).to_ne_bytes());
         buf.extend_from_slice(&(self.nodes.len() as u32).to_ne_bytes());
         buf.extend_from_slice(&nodes_offset.to_ne_bytes());

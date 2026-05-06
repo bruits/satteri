@@ -34,8 +34,7 @@
 //! [lang_len: u16][lang: utf8...][meta_len: u16][meta: utf8...][value_len: u32][value: utf8...]
 //! ```
 
-use satteri_arena::Arena;
-use satteri_arena::StringRef;
+use satteri_arena::{Arena, ArenaKind, Hast, Mdast, StringRef};
 
 /// A single subscription: match nodes of a given type, optionally filtered
 /// by tag name (for HAST element nodes).
@@ -49,27 +48,20 @@ use crate::hast::HastNodeType;
 
 const HAST_ELEMENT_TYPE: u8 = HastNodeType::Element as u8;
 
-/// Whether the arena contains HAST or MDAST node types.
-/// Needed because the same type numbers mean different things (e.g. 2 = HAST_TEXT vs MDAST_HEADING).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WalkMode {
-    Hast,
-    Mdast,
+/// Walk an MDAST arena and return matched nodes as a flat binary buffer.
+pub fn walk_mdast(arena: &Arena<Mdast>, subscriptions: &[Subscription]) -> Vec<u8> {
+    walk_and_collect_inner(arena, subscriptions, serialize_mdast_node_inline)
 }
 
-/// Walk the tree and return matched nodes as a flat binary buffer.
-///
-/// Returns a `Vec<u8>` containing the match index + inline data section.
-/// JS reads this with DataView, zero per-node object allocation.
-pub fn walk_and_collect(arena: &Arena, subscriptions: &[Subscription]) -> Vec<u8> {
-    walk_and_collect_with_mode(arena, subscriptions, WalkMode::Hast)
+/// Walk a HAST arena and return matched nodes as a flat binary buffer.
+pub fn walk_hast(arena: &Arena<Hast>, subscriptions: &[Subscription]) -> Vec<u8> {
+    walk_and_collect_inner(arena, subscriptions, serialize_hast_node_inline)
 }
 
-/// Walk with explicit mode (HAST or MDAST).
-pub fn walk_and_collect_with_mode(
-    arena: &Arena,
+fn walk_and_collect_inner<K: ArenaKind>(
+    arena: &Arena<K>,
     subscriptions: &[Subscription],
-    mode: WalkMode,
+    serialize: fn(&Arena<K>, u32, u8, &[u8], &mut Vec<u8>),
 ) -> Vec<u8> {
     if subscriptions.is_empty() {
         return 0u32.to_le_bytes().to_vec();
@@ -115,14 +107,7 @@ pub fn walk_and_collect_with_mode(
 
                 if matched {
                     let data_start = data_section.len() as u32;
-                    serialize_node_inline(
-                        arena,
-                        node_id,
-                        node_type,
-                        type_data,
-                        &mut data_section,
-                        mode,
-                    );
+                    serialize(arena, node_id, node_type, type_data, &mut data_section);
                     let data_len = (data_section.len() - data_start as usize) as u16;
                     matches.push((node_id, sub_idx));
                     data_offsets.push((data_start, data_len));
@@ -175,7 +160,7 @@ pub fn walk_and_collect_with_mode(
 /// [type-specific resolved data]
 /// ```
 fn serialize_mdast_node_inline(
-    arena: &Arena,
+    arena: &Arena<Mdast>,
     node_id: u32,
     node_type: u8,
     type_data: &[u8],
@@ -382,20 +367,16 @@ fn read_string_ref(data: &[u8], offset: usize) -> StringRef {
     )
 }
 
-/// Write inline node data with all strings resolved (no StringRefs).
-/// Element data includes child node IDs so plugins can reference them.
-fn serialize_node_inline(
-    arena: &Arena,
+/// HAST inline serialization: write node data with all strings resolved
+/// (no StringRefs). Element data includes child node IDs so plugins can
+/// reference them.
+fn serialize_hast_node_inline(
+    arena: &Arena<Hast>,
     node_id: u32,
     node_type: u8,
     type_data: &[u8],
     out: &mut Vec<u8>,
-    mode: WalkMode,
 ) {
-    if mode == WalkMode::Mdast {
-        return serialize_mdast_node_inline(arena, node_id, node_type, type_data, out);
-    }
-
     match node_type {
         // HAST element
         1 => {
@@ -531,8 +512,8 @@ mod tests {
     use super::*;
     use satteri_arena::ArenaBuilder;
 
-    fn build_hast_with_elements(tags: &[&str]) -> satteri_arena::Arena {
-        let mut b = ArenaBuilder::new(String::new());
+    fn build_hast_with_elements(tags: &[&str]) -> Arena<Hast> {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
         b.open_node_raw(0); // HAST root
         for tag in tags {
             b.open_node_raw(1); // HAST element
@@ -568,7 +549,7 @@ mod tests {
     #[test]
     fn walk_no_subscriptions() {
         let arena = build_hast_with_elements(&["div", "a", "p"]);
-        let buf = walk_and_collect(&arena, &[]);
+        let buf = walk_hast(&arena,&[]);
         assert_eq!(read_match_count(&buf), 0);
     }
 
@@ -579,7 +560,7 @@ mod tests {
             node_type: 1,
             tag_filter: vec![],
         }];
-        let buf = walk_and_collect(&arena, &subs);
+        let buf = walk_hast(&arena,&subs);
         assert_eq!(read_match_count(&buf), 3);
     }
 
@@ -590,7 +571,7 @@ mod tests {
             node_type: 1,
             tag_filter: vec!["a".into(), "img".into()],
         }];
-        let buf = walk_and_collect(&arena, &subs);
+        let buf = walk_hast(&arena,&subs);
         assert_eq!(read_match_count(&buf), 3); // two <a> + one <img>
     }
 
@@ -607,7 +588,7 @@ mod tests {
                 tag_filter: vec![],
             },
         ];
-        let buf = walk_and_collect(&arena, &subs);
+        let buf = walk_hast(&arena,&subs);
         // 1 <a> element + 3 text nodes = 4
         assert_eq!(read_match_count(&buf), 4);
         // First match: text inside div (sub_index=1)
@@ -623,7 +604,7 @@ mod tests {
             node_type: 1,
             tag_filter: vec![],
         }];
-        let buf = walk_and_collect(&arena, &subs);
+        let buf = walk_hast(&arena,&subs);
         assert_eq!(read_match_count(&buf), 1);
         // Read data offset and len from index
         let data_offset = u32::from_le_bytes(buf[4 + 6..4 + 10].try_into().unwrap()) as usize;

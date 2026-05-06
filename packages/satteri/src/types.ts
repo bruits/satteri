@@ -116,7 +116,6 @@ export interface MdastNodeRaw {
 }
 
 export interface BufferHeader {
-  version: number;
   nodeStructSize: number;
   nodeCount: number;
   nodesOffset: number;

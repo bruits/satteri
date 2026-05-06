@@ -1,10 +1,10 @@
-use satteri_arena::{Arena, ArenaBuilder, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
 use satteri_ast::mdast::{codec::*, MdastNodeType};
 use satteri_plugin_api::*;
 
-fn build_test_arena() -> Arena {
+fn build_test_arena() -> Arena<Mdast> {
     let source = "# Hello\n\nWorld".to_string();
-    let mut b = ArenaBuilder::new(source);
+    let mut b = ArenaBuilder::<Mdast>::new(source);
 
     b.open_node(MdastNodeType::Root as u8);
 

@@ -18,7 +18,6 @@ export {
   parseToHtml,
   renderHandle,
   serializeHandle,
-  serializeMdastHandle,
   setNodeData,
   textContentHandle,
   walkHandle,

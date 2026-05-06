@@ -1,10 +1,10 @@
-use satteri_arena::{Arena, ArenaBuilder, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
 use satteri_ast::mdast::{codec::*, MdastNodeType};
 use satteri_plugin_api::*;
 
-fn build_test_arena() -> Arena {
+fn build_test_arena() -> Arena<Mdast> {
     let source = "# Hello\n\nWorld".to_string();
-    let mut b = ArenaBuilder::new(source);
+    let mut b = ArenaBuilder::<Mdast>::new(source);
 
     b.open_node(MdastNodeType::Root as u8);
 
@@ -156,11 +156,11 @@ fn before_and_after_hooks_called() {
             PluginMeta::new("hook-tracker")
         }
 
-        fn before(&mut self, _arena: &Arena, ctx: &mut PluginContext) {
+        fn before(&mut self, _arena: &Arena<Mdast>, ctx: &mut PluginContext) {
             ctx.set_data(0, "before", DataValue::Bool(true));
         }
 
-        fn after(&mut self, _arena: &Arena, ctx: &mut PluginContext) {
+        fn after(&mut self, _arena: &Arena<Mdast>, ctx: &mut PluginContext) {
             ctx.set_data(0, "after", DataValue::Bool(true));
         }
     }
@@ -191,7 +191,7 @@ fn plugins_run_in_order() {
         fn meta(&self) -> PluginMeta {
             PluginMeta::new("set-counter")
         }
-        fn before(&mut self, _arena: &Arena, ctx: &mut PluginContext) {
+        fn before(&mut self, _arena: &Arena<Mdast>, ctx: &mut PluginContext) {
             ctx.set_data(0, "order", DataValue::Int(1));
         }
     }
@@ -201,7 +201,7 @@ fn plugins_run_in_order() {
         fn meta(&self) -> PluginMeta {
             PluginMeta::new("verify-counter")
         }
-        fn before(&mut self, _arena: &Arena, ctx: &mut PluginContext) {
+        fn before(&mut self, _arena: &Arena<Mdast>, ctx: &mut PluginContext) {
             // Should already see the data set by plugin 1
             let existing = ctx.get_data(0, "order");
             // Update to 2 to show we ran

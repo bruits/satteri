@@ -21,12 +21,12 @@ test("MdastReader rejects invalid magic", () => {
   expect(() => new MdastReader(buf)).toThrow(/bad magic/);
 });
 
-test("MdastReader rejects wrong version", () => {
+test("MdastReader rejects wrong kind", () => {
   const buf = new ArrayBuffer(44);
   const view = new DataView(buf);
   view.setUint32(0, 0x5241444d, true); // correct "MDAR" magic
-  view.setUint32(4, 99, true);
-  expect(() => new MdastReader(buf)).toThrow(/version/);
+  view.setUint32(4, 2, true); // KIND_HAST = 2, but MdastReader expects 1
+  expect(() => new MdastReader(buf)).toThrow(/kind/);
 });
 
 test("MdastReader reads node count", () => {

@@ -1,10 +1,10 @@
 //! Integration tests for raw buffer export.
 
-use satteri_arena::{ArenaBuilder, NODE_STRUCT_SIZE};
+use satteri_arena::{ArenaBuilder, Mdast, NODE_STRUCT_SIZE};
 use satteri_ast::mdast::{encode_heading_data, MdastNodeType};
 
-fn build_test_arena() -> satteri_arena::Arena {
-    let mut builder = ArenaBuilder::new("# Hello\n\nParagraph.".to_string());
+fn build_test_arena() -> satteri_arena::Arena<Mdast> {
+    let mut builder = ArenaBuilder::<Mdast>::new("# Hello\n\nParagraph.".to_string());
 
     builder.open_node(MdastNodeType::Root as u8);
     builder.set_position_current(0, 20, 1, 1, 3, 11);
@@ -35,6 +35,15 @@ fn header_magic_correct() {
 }
 
 #[test]
+fn header_kind_tag_correct() {
+    let arena = build_test_arena();
+    let buf = arena.to_raw_buffer();
+    // Kind tag for Mdast = 1 (see ArenaKind::KIND_TAG).
+    let kind = u32::from_ne_bytes(buf[4..8].try_into().unwrap());
+    assert_eq!(kind, 1);
+}
+
+#[test]
 fn header_node_struct_size_correct() {
     let arena = build_test_arena();
     let buf = arena.to_raw_buffer();
@@ -51,7 +60,7 @@ fn export_produces_non_empty_buffer() {
 
 #[test]
 fn empty_arena_exports() {
-    let arena = satteri_arena::Arena::new(String::new());
+    let arena = satteri_arena::Arena::<Mdast>::new(String::new());
     let buf = arena.to_raw_buffer();
     assert!(!buf.is_empty());
 }

@@ -3,7 +3,7 @@ import { MdastReader } from "../src/mdast/mdast-reader.js";
 import { materializeMdastTree } from "../src/mdast/mdast-materializer.js";
 import type { MdastNodeInternal } from "../src/types.js";
 import { buildHelloWorldBuffer } from "./fixtures.js";
-import { createMdxMdastHandle, serializeMdastHandle } from "../index.js";
+import { createMdxMdastHandle, serializeHandle } from "../index.js";
 
 function setup() {
   const buf = buildHelloWorldBuffer();
@@ -104,7 +104,7 @@ test("children are lazily evaluated (getter replaced by plain array after access
 // MDX JSX attribute tests
 
 function mdxSetup(source: string) {
-  const buf = serializeMdastHandle(createMdxMdastHandle(source)) as Uint8Array;
+  const buf = serializeHandle(createMdxMdastHandle(source)) as Uint8Array;
   const reader = new MdastReader(buf);
   return { reader, tree: materializeMdastTree(reader) };
 }

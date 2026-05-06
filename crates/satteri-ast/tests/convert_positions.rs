@@ -4,7 +4,7 @@
 //! (or, for synthesized leaves like the checkbox `<input>`, the parent
 //! MDAST node's position).
 
-use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder};
+use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast};
 use satteri_ast::hast::{
     codec::{decode_element_prop, decode_element_prop_count, decode_element_tag},
     mdast_arena_to_hast_arena, HastNodeType,
@@ -14,18 +14,18 @@ use satteri_ast::mdast::{
     MdastNodeType,
 };
 
-fn parse(md: &str) -> Arena {
+fn parse(md: &str) -> Arena<Mdast> {
     satteri_pulldown_cmark::parse(md, satteri_pulldown_cmark::DEFAULT_OPTIONS).0
 }
 
-fn find_mdast(arena: &Arena, target: MdastNodeType) -> u32 {
+fn find_mdast(arena: &Arena<Mdast>, target: MdastNodeType) -> u32 {
     (0..arena.len() as u32)
         .find(|&id| MdastNodeType::from_u8(arena.get_node(id).node_type) == Some(target))
         .unwrap_or_else(|| panic!("no mdast node of type {target:?}"))
 }
 
 /// Returns the value of `prop` on element `id`, or `None` if missing.
-fn element_prop<'a>(arena: &'a Arena, id: u32, prop: &str) -> Option<&'a str> {
+fn element_prop<'a>(arena: &'a Arena<Hast>, id: u32, prop: &str) -> Option<&'a str> {
     let data = arena.get_type_data(id);
     let count = decode_element_prop_count(data);
     (0..count).find_map(|i| {
@@ -38,7 +38,7 @@ fn element_prop<'a>(arena: &'a Arena, id: u32, prop: &str) -> Option<&'a str> {
     })
 }
 
-fn is_element_with_tag(arena: &Arena, id: u32, tag: &str) -> bool {
+fn is_element_with_tag(arena: &Arena<Hast>, id: u32, tag: &str) -> bool {
     let node = arena.get_node(id);
     if HastNodeType::from_u8(node.node_type) != Some(HastNodeType::Element) {
         return false;
@@ -50,29 +50,35 @@ fn is_element_with_tag(arena: &Arena, id: u32, tag: &str) -> bool {
 /// documents where only one element with that tag exists; use
 /// `find_hast_element_where` when several share the tag and you need to
 /// pick a specific one.
-fn find_hast_element(arena: &Arena, tag: &str) -> u32 {
+fn find_hast_element(arena: &Arena<Hast>, tag: &str) -> u32 {
     (0..arena.len() as u32)
         .find(|&id| is_element_with_tag(arena, id, tag))
         .unwrap_or_else(|| panic!("no hast <{tag}> element"))
 }
 
 /// Find an element whose tag matches and that also satisfies `pred`.
-fn find_hast_element_where<F>(arena: &Arena, tag: &str, pred: F) -> u32
+fn find_hast_element_where<F>(arena: &Arena<Hast>, tag: &str, pred: F) -> u32
 where
-    F: Fn(&Arena, u32) -> bool,
+    F: Fn(&Arena<Hast>, u32) -> bool,
 {
     (0..arena.len() as u32)
         .find(|&id| is_element_with_tag(arena, id, tag) && pred(arena, id))
         .unwrap_or_else(|| panic!("no hast <{tag}> element matching predicate"))
 }
 
-fn find_hast_by_type(arena: &Arena, target: HastNodeType) -> u32 {
+fn find_hast_by_type(arena: &Arena<Hast>, target: HastNodeType) -> u32 {
     (0..arena.len() as u32)
         .find(|&id| HastNodeType::from_u8(arena.get_node(id).node_type) == Some(target))
         .unwrap_or_else(|| panic!("no hast node of type {target:?}"))
 }
 
-fn assert_position_matches(hast: &Arena, hast_id: u32, mdast: &Arena, mdast_id: u32, label: &str) {
+fn assert_position_matches(
+    hast: &Arena<Hast>,
+    hast_id: u32,
+    mdast: &Arena<Mdast>,
+    mdast_id: u32,
+    label: &str,
+) {
     let h = hast.get_node(hast_id);
     let m = mdast.get_node(mdast_id);
     assert!(
@@ -292,9 +298,9 @@ fn inline_math_position_preserved() {
 /// Build a synthetic MDAST arena containing one paragraph with a single
 /// `LinkReference` or `ImageReference` child, plus a matching `Definition`
 /// sibling paragraph-level. Returns (arena, ref_node_id).
-fn synth_reference_arena(ref_type: MdastNodeType) -> (Arena, u32) {
+fn synth_reference_arena(ref_type: MdastNodeType) -> (Arena<Mdast>, u32) {
     let source = "see the page\n".to_string();
-    let mut b = ArenaBuilder::new(source);
+    let mut b = ArenaBuilder::<Mdast>::new(source);
 
     b.open_node(MdastNodeType::Root as u8);
     b.set_position_current(0, 13, 1, 1, 2, 1);

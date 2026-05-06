@@ -1,6 +1,6 @@
 //! Integration tests for type-specific data codec.
 
-use satteri_arena::{ArenaBuilder, StringRef};
+use satteri_arena::{ArenaBuilder, Mdast, StringRef};
 use satteri_ast::mdast::{
     decode_code_data, decode_heading_data, decode_link_data, decode_list_data, encode_code_data,
     encode_heading_data, encode_link_data, encode_list_data, encode_table_data, ColumnAlign,
@@ -82,7 +82,7 @@ fn encode_table_data_produces_bytes() {
 
 #[test]
 fn type_data_stored_in_arena() {
-    let mut builder = ArenaBuilder::new("# Title".to_string());
+    let mut builder = ArenaBuilder::<Mdast>::new("# Title".to_string());
     builder.open_node(MdastNodeType::Root as u8);
     let heading = builder.open_node(MdastNodeType::Heading as u8);
     builder.set_data_current(&encode_heading_data(2));

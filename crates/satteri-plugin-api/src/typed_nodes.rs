@@ -1,4 +1,4 @@
-use satteri_arena::{Arena, ArenaNode};
+use satteri_arena::{Arena, ArenaNode, Mdast};
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
 
@@ -29,7 +29,7 @@ impl NodePosition {
 /// A typed view over a Heading node in the arena.
 pub struct Heading<'a> {
     pub(crate) node_id: u32,
-    pub(crate) arena: &'a Arena,
+    pub(crate) arena: &'a Arena<Mdast>,
 }
 
 impl<'a> Heading<'a> {
@@ -54,7 +54,7 @@ impl<'a> Heading<'a> {
 /// A typed view over a Text node (also used for InlineCode and Html).
 pub struct Text<'a> {
     pub(crate) node_id: u32,
-    pub(crate) arena: &'a Arena,
+    pub(crate) arena: &'a Arena<Mdast>,
 }
 
 impl<'a> Text<'a> {
@@ -76,7 +76,7 @@ impl<'a> Text<'a> {
 /// A typed view over a Link node.
 pub struct Link<'a> {
     pub(crate) node_id: u32,
-    pub(crate) arena: &'a Arena,
+    pub(crate) arena: &'a Arena<Mdast>,
 }
 
 impl<'a> Link<'a> {
@@ -112,7 +112,7 @@ impl<'a> Link<'a> {
 /// A typed view over a Paragraph node.
 pub struct Paragraph<'a> {
     pub(crate) node_id: u32,
-    pub(crate) arena: &'a Arena,
+    pub(crate) arena: &'a Arena<Mdast>,
 }
 
 impl<'a> Paragraph<'a> {
@@ -130,7 +130,7 @@ impl<'a> Paragraph<'a> {
 /// A typed view over an Image node.
 pub struct Image<'a> {
     pub(crate) node_id: u32,
-    pub(crate) arena: &'a Arena,
+    pub(crate) arena: &'a Arena<Mdast>,
 }
 
 impl<'a> Image<'a> {
@@ -168,7 +168,7 @@ impl<'a> Image<'a> {
 /// A typed view over a Code node.
 pub struct Code<'a> {
     pub(crate) node_id: u32,
-    pub(crate) arena: &'a Arena,
+    pub(crate) arena: &'a Arena<Mdast>,
 }
 
 impl<'a> Code<'a> {
