@@ -305,7 +305,8 @@ mod tests {
 
     #[test]
     fn simple_open_close() {
-        let mut builder: ArenaBuilder<crate::kind::Mdast> = ArenaBuilder::new("# Hello".to_string());
+        let mut builder: ArenaBuilder<crate::kind::Mdast> =
+            ArenaBuilder::new("# Hello".to_string());
         let root = builder.open_node(0);
         let heading = builder.open_node(2);
         let text = builder.add_leaf(10);

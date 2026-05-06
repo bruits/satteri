@@ -161,7 +161,7 @@ fn resolve_mdast_field(node_type: u8, name: &str) -> Option<u16> {
         (10 | 13 | 7 | 25 | 26 | 28, "value") => Some(FIELD_VALUE),
         (27, "meta") => Some(FIELD_META),
         (27, "value") => Some(FIELD_VALUE),
-        (102 | 103 | 104, "value") => Some(FIELD_VALUE),
+        (102..=104, "value") => Some(FIELD_VALUE),
         (9, "url") => Some(FIELD_URL),
         (9, "title") => Some(FIELD_TITLE),
         (5, "ordered") => Some(FIELD_ORDERED),

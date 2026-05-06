@@ -724,7 +724,11 @@ fn add_void_element(builder: &mut ArenaBuilder<Hast>, tag: &str) -> u32 {
     id
 }
 
-fn add_void_element_with_props(builder: &mut ArenaBuilder<Hast>, tag: &str, props: &[PropData]) -> u32 {
+fn add_void_element_with_props(
+    builder: &mut ArenaBuilder<Hast>,
+    tag: &str,
+    props: &[PropData],
+) -> u32 {
     let id = builder.open_node_raw(HastNodeType::Element as u8);
     let tag_ref = builder.alloc_string(tag);
     write_element_data(builder, tag_ref, props);
@@ -759,7 +763,12 @@ fn add_raw_node(builder: &mut ArenaBuilder<Hast>, html: &str) -> u32 {
 
 /// Set position on a node by id, copying from the given source mdast node.
 /// Used for leaf nodes (void elements, text, raw) which can't use `set_position_current`.
-fn copy_position_to(target_id: u32, src_node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>) {
+fn copy_position_to(
+    target_id: u32,
+    src_node_id: u32,
+    view: &Arena<Mdast>,
+    builder: &mut ArenaBuilder<Hast>,
+) {
     let node = view.get_node(src_node_id);
     if node.start_line > 0 || node.start_offset > 0 {
         builder.arena_mut().set_position(
@@ -821,7 +830,12 @@ fn copy_position(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<H
     }
 }
 
-fn convert_node(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>, ctx: &ConvertCtx<'_, '_>) {
+fn convert_node(
+    node_id: u32,
+    view: &Arena<Mdast>,
+    builder: &mut ArenaBuilder<Hast>,
+    ctx: &ConvertCtx<'_, '_>,
+) {
     let node = view.get_node(node_id);
     let raw_type = node.node_type;
 
@@ -1602,7 +1616,11 @@ fn convert_children_unwrap_paragraphs_task(
 /// The HTML renderer skips whitespace-only text nodes between block elements.
 /// Emit the `<section class="footnotes">` block that remark-gfm appends to
 /// the end of a document whenever it contains any footnote definitions.
-fn emit_gfm_footnotes_section(view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>, ctx: &ConvertCtx<'_, '_>) {
+fn emit_gfm_footnotes_section(
+    view: &Arena<Mdast>,
+    builder: &mut ArenaBuilder<Hast>,
+    ctx: &ConvertCtx<'_, '_>,
+) {
     if ctx.footnote_defs.is_empty() {
         return;
     }

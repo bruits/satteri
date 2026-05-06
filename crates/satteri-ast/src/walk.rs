@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn walk_no_subscriptions() {
         let arena = build_hast_with_elements(&["div", "a", "p"]);
-        let buf = walk_hast(&arena,&[]);
+        let buf = walk_hast(&arena, &[]);
         assert_eq!(read_match_count(&buf), 0);
     }
 
@@ -560,7 +560,7 @@ mod tests {
             node_type: 1,
             tag_filter: vec![],
         }];
-        let buf = walk_hast(&arena,&subs);
+        let buf = walk_hast(&arena, &subs);
         assert_eq!(read_match_count(&buf), 3);
     }
 
@@ -571,7 +571,7 @@ mod tests {
             node_type: 1,
             tag_filter: vec!["a".into(), "img".into()],
         }];
-        let buf = walk_hast(&arena,&subs);
+        let buf = walk_hast(&arena, &subs);
         assert_eq!(read_match_count(&buf), 3); // two <a> + one <img>
     }
 
@@ -588,7 +588,7 @@ mod tests {
                 tag_filter: vec![],
             },
         ];
-        let buf = walk_hast(&arena,&subs);
+        let buf = walk_hast(&arena, &subs);
         // 1 <a> element + 3 text nodes = 4
         assert_eq!(read_match_count(&buf), 4);
         // First match: text inside div (sub_index=1)
@@ -604,7 +604,7 @@ mod tests {
             node_type: 1,
             tag_filter: vec![],
         }];
-        let buf = walk_hast(&arena,&subs);
+        let buf = walk_hast(&arena, &subs);
         assert_eq!(read_match_count(&buf), 1);
         // Read data offset and len from index
         let data_offset = u32::from_le_bytes(buf[4 + 6..4 + 10].try_into().unwrap()) as usize;

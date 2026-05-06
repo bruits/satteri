@@ -244,10 +244,7 @@ type MdastHandle = External<Mutex<satteri_arena::Arena<Mdast>>>;
 type HastHandle = External<Mutex<satteri_arena::Arena<Hast>>>;
 type AnyHandle<'a> = Either<&'a MdastHandle, &'a HastHandle>;
 
-fn make_parse_fn(
-    mdx: bool,
-    parse_options: u32,
-) -> impl Fn(&str) -> satteri_arena::Arena<Mdast> {
+fn make_parse_fn(mdx: bool, parse_options: u32) -> impl Fn(&str) -> satteri_arena::Arena<Mdast> {
     move |source: &str| -> satteri_arena::Arena<Mdast> {
         let opts = satteri_pulldown_cmark::Options::from_bits_truncate(parse_options);
         let (mut parsed, _errors) = satteri_pulldown_cmark::parse(source, opts);
@@ -358,15 +355,14 @@ pub fn walk_mdast_handle(
             tag_filter: s.tag_filter,
         })
         .collect();
-    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(&arena, &subs)))
+    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(
+        &arena, &subs,
+    )))
 }
 
 /// Apply a command buffer to an MDAST handle in-place.
 #[napi]
-pub fn apply_commands_to_mdast_handle(
-    handle: &MdastHandle,
-    command_buf: Uint8Array,
-) -> Result<()> {
+pub fn apply_commands_to_mdast_handle(handle: &MdastHandle, command_buf: Uint8Array) -> Result<()> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -375,9 +371,8 @@ pub fn apply_commands_to_mdast_handle(
         &mut *arena,
         satteri_arena::Arena::<Mdast>::new(String::new()),
     );
-    let new_arena =
-        satteri_plugin_api::apply_mdast_commands(owned, &command_buf, &parse_markdown)
-            .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let new_arena = satteri_plugin_api::apply_mdast_commands(owned, &command_buf, &parse_markdown)
+        .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     *arena = new_arena;
     Ok(())
 }
@@ -440,10 +435,7 @@ pub fn create_hast_handle(source: String, features: Option<JsFeatures>) -> Resul
 
 /// Parse MDX source and convert to HAST. Returns an opaque handle.
 #[napi]
-pub fn create_mdx_hast_handle(
-    source: String,
-    features: Option<JsFeatures>,
-) -> Result<HastHandle> {
+pub fn create_mdx_hast_handle(source: String, features: Option<JsFeatures>) -> Result<HastHandle> {
     let opts = features_to_options(features, true);
     let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
     mdast.parse_options = opts.bits();

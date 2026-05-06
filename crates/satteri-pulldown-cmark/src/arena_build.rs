@@ -2883,25 +2883,28 @@ fn split_text_on_jsx_tags(arena: &mut Arena<Mdast>, text_id: u32) {
     let base_line = node.start_line;
     let base_col = node.start_column;
 
-    let push_text =
-        |arena: &mut Arena<Mdast>, out: &mut Vec<u32>, segment: &str, seg_start: usize, seg_end: usize| {
-            if segment.is_empty() {
-                return;
-            }
-            let seg_sr = arena.alloc_string(segment);
-            let tid = arena.alloc_node(MdastNodeType::Text as u8);
-            arena.set_type_data(tid, &seg_sr.as_bytes());
-            arena.set_position(
-                tid,
-                base_start + seg_start as u32,
-                base_start + seg_end as u32,
-                base_line,
-                base_col + seg_start as u32,
-                base_line,
-                base_col + seg_end as u32,
-            );
-            out.push(tid);
-        };
+    let push_text = |arena: &mut Arena<Mdast>,
+                     out: &mut Vec<u32>,
+                     segment: &str,
+                     seg_start: usize,
+                     seg_end: usize| {
+        if segment.is_empty() {
+            return;
+        }
+        let seg_sr = arena.alloc_string(segment);
+        let tid = arena.alloc_node(MdastNodeType::Text as u8);
+        arena.set_type_data(tid, &seg_sr.as_bytes());
+        arena.set_position(
+            tid,
+            base_start + seg_start as u32,
+            base_start + seg_end as u32,
+            base_line,
+            base_col + seg_start as u32,
+            base_line,
+            base_col + seg_end as u32,
+        );
+        out.push(tid);
+    };
 
     let mut new_children: Vec<u32> = Vec::new();
     let mut cursor = 0usize;
