@@ -284,9 +284,9 @@ pub fn create_mdx_mdast_handle(
     Ok(External::new(Mutex::new(arena)))
 }
 
-/// Serialize a handle's arena to a binary buffer. Works for both MDAST
-/// (read-only snapshot for the JS visitor) and HAST (fallback path for
-/// `transformRoot`) — the kind tag is embedded in the buffer header.
+/// Serialize a handle's arena to the wire-format buffer JS instantiates a
+/// reader from. The kind tag in the header tells the JS side whether to
+/// pick `MdastReader` or `HastReader`.
 #[napi]
 pub fn serialize_handle(handle: AnyHandle) -> Result<Uint8Array> {
     let buf = match handle {

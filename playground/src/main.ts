@@ -9,7 +9,6 @@ import {
   dropHandle,
   renderHandle,
   serializeHandle,
-  serializeMdastHandle,
   MdastReader,
   materializeMdastTree,
   HastReader,
@@ -359,7 +358,7 @@ async function compile() {
       timings.push(`mdast plugins <span>${fmt(performance.now() - pluginStart)}</span>`);
     }
 
-    const { result: mdastBuf, ms: mdastSerMs } = time(() => serializeMdastHandle(mdastHandle));
+    const { result: mdastBuf, ms: mdastSerMs } = time(() => serializeHandle(mdastHandle));
     overhead += mdastSerMs;
     const { result: mdastTree, ms: mdastMatMs } = time(() =>
       materializeMdastTree(new MdastReader(mdastBuf)),
