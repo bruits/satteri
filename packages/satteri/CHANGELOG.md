@@ -1,5 +1,11 @@
 # satteri
 
+## 0.4.0 — 2026-05-07
+
+### Minor changes
+
+- [6f380d3](https://github.com/bruits/satteri/commit/6f380d346f9bc51d60213f84d51e3d8123f63a25) Added factory-shape support to `hastPlugins` and `mdastPlugins`: each entry can now be a function returning a plugin definition, called once per compile. This is useful for stateful plugins. — Thanks @Princesseuh!
+
 ## 0.3.5 — 2026-05-06
 
 ### Patch changes
