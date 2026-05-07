@@ -1,5 +1,11 @@
 # satteri-expressive-code
 
+## 0.1.2 — 2026-05-07
+
+### Patch changes
+
+- [da6b3d8](https://github.com/bruits/satteri/commit/da6b3d8aaa180d7da455db61af9683d993b7b277) Fixes broken publish — Thanks @Princesseuh!
+
 ## 0.1.1 — 2026-05-07
 
 ### Patch changes
