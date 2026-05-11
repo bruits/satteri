@@ -1,5 +1,6 @@
-# Satteri's WASI binding allocates a SharedArrayBuffer at module init,
-# which requires the page to be cross-origin isolated.
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+/_maudit/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -90,7 +90,7 @@ fn demo() -> Markup {
                         div.px-4.py-2.text-xs.uppercase.tracking-widest.text-paper.bg-ink.font-bold  {
                             "Markdown"
                         }
-                        div.relative."flex-1"."min-h-[26rem]"."md:min-h-[36rem]" {
+                        div.relative."flex-1"."min-h-[26rem]"."md:min-h-[36rem]"."max-h-[26rem]"."md:max-h-[36rem]" {
                             pre #demo-highlight .demo-editor-layer.absolute.inset-0.m-0.overflow-auto.pointer-events-none {
                                 code {}
                             }
@@ -103,7 +103,7 @@ fn demo() -> Markup {
                         div.px-4.py-2.text-xs.uppercase.tracking-widest.text-paper.bg-ink.font-bold {
                             "Rendered HTML"
                         }
-                        div #demo-output .prose."min-h-[26rem]"."md:min-h-[36rem]".overflow-auto.p-4.text-sm.leading-relaxed {}
+                        div #demo-output .prose."min-h-[26rem]"."md:min-h-[36rem]"."max-h-[26rem]"."md:max-h-[36rem]".overflow-auto.p-4.text-sm.leading-relaxed {}
                     }
                 }
 
