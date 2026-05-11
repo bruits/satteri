@@ -1,7 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": ["crates/**", "packages/satteri/bench/fixtures/**"],
-  "ignoreBinaries": ["build"],
   "workspaces": {
     "packages/satteri": {
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],
@@ -16,8 +15,13 @@
     "examples": {
       "entry": ["*.ts"]
     },
-    "playground": {
-      "ignoreDependencies": ["wrangler"]
+    "packages/vite-plugin-satteri/example": {
+      "entry": ["src/**/*.{ts,tsx,mdx}"]
+    },
+    "website": {
+      "entry": ["assets/**/*.{ts,css}"],
+      "ignoreDependencies": ["@tailwindcss/cli"],
+      "ignoreBinaries": ["maudit"]
     }
   },
   "ignoreExportsUsedInFile": {

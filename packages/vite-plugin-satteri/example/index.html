@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vite-plugin-satteri example</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 720px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.6;
+      }
+      .panel {
+        margin-bottom: 2rem;
+        padding: 1rem 1.25rem;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+      }
+      h2 {
+        margin-top: 0;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 0.5rem;
+        border-radius: 4px;
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>vite-plugin-satteri</h1>
+
+    <section class="panel">
+      <h2>Markdown (.md)</h2>
+      <div id="markdown-frontmatter"></div>
+      <div id="markdown-out"></div>
+    </section>
+
+    <section class="panel">
+      <h2>MDX (.mdx)</h2>
+      <div id="mdx-out"></div>
+    </section>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

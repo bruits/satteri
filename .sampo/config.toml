@@ -12,4 +12,4 @@ version = 1
 # show_acknowledgments = true (default)
 
 [packages]
-ignore = ["root", "examples", "satteri-bench", "satteri-playground"]
+ignore = ["root", "examples", "satteri-bench", "vite-plugin-satteri-example", "satteri-website"]

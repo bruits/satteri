@@ -27,7 +27,8 @@ import langTypescript from "shiki/langs/typescript.mjs";
 import langMarkdown from "shiki/langs/markdown.mjs";
 import langHtml from "shiki/langs/html.mjs";
 import langJavascript from "shiki/langs/javascript.mjs";
-import themeCatppuccinMocha from "shiki/themes/catppuccin-mocha.mjs";
+import themeVitesseLight from "shiki/themes/vitesse-light.mjs";
+import themeVitesseDark from "shiki/themes/vitesse-dark.mjs";
 
 type Mode = "markdown" | "mdx";
 type Tab = "mdast" | "hast" | "output" | "rendered";
@@ -86,17 +87,16 @@ let activeTab: Tab = "mdast";
 let compileGeneration = 0;
 let highlighter: HighlighterCore | null = null;
 
-// Plugin cache: avoid re-evaluating unchanged code
 let cachedMdastSource = "";
 let cachedMdastPlugins: MdastPluginDefinition[] = [];
 let cachedHastSource = "";
 let cachedHastPlugins: HastPluginDefinition[] = [];
 
-// Shiki setup
-const SHIKI_THEME = "catppuccin-mocha";
+const currentShikiTheme = () =>
+  document.documentElement.dataset.theme === "dark" ? "vitesse-dark" : "vitesse-light";
 
 createHighlighterCore({
-  themes: [themeCatppuccinMocha],
+  themes: [themeVitesseLight, themeVitesseDark],
   langs: [langJson, langTypescript, langMarkdown, langHtml, langJavascript],
   engine: createJavaScriptRegexEngine(),
 }).then((h) => {
@@ -109,7 +109,7 @@ function highlightInto(el: HTMLElement, code: string, lang: string) {
     el.textContent = code;
     return;
   }
-  const tokens = highlighter.codeToTokensBase(code, { lang, theme: SHIKI_THEME });
+  const tokens = highlighter.codeToTokensBase(code, { lang, theme: currentShikiTheme() });
   let html = "";
   for (const line of tokens) {
     for (const token of line) {
@@ -129,7 +129,7 @@ function highlightInput(textarea: HTMLTextAreaElement, pre: HTMLElement, lang: s
 }
 
 function highlightAllInputs() {
-  highlightInput(input, highlightSource, currentMode === "mdx" ? "markdown" : "markdown");
+  highlightInput(input, highlightSource, "markdown");
   highlightInput(inputMdastPlugin, highlightMdastPlugin, "typescript");
   highlightInput(inputHastPlugin, highlightHastPlugin, "typescript");
 }
@@ -205,11 +205,13 @@ function getMdxOptions() {
 function getOptimizeStatic(): MdxCompileOptions["optimizeStatic"] | undefined {
   if (currentMode !== "mdx" || !optimizeToggle.checked) return undefined;
   const ignoreRaw = osIgnoreElements.value.trim();
+  // Spread the optional fields conditionally so they're omitted (not set to
+  // undefined) when off — required by `exactOptionalPropertyTypes`.
   return {
     component: osComponent.value || "Fragment",
     prop: osProp.value || "set:html",
-    wrapPropValue: osWrapPropValue.checked || undefined,
-    ignoreElements: ignoreRaw ? ignoreRaw.split(",").map((s) => s.trim()) : undefined,
+    ...(osWrapPropValue.checked && { wrapPropValue: true }),
+    ...(ignoreRaw && { ignoreElements: ignoreRaw.split(",").map((s) => s.trim()) }),
   };
 }
 
@@ -229,7 +231,7 @@ function updateModeUI() {
 
 function switchTab(tab: Tab) {
   activeTab = tab;
-  document.querySelectorAll<HTMLElement>("#output-tabs .tab").forEach((btn) => {
+  document.querySelectorAll<HTMLElement>("#output-tabs .pg-tab").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.tab === tab);
   });
   document.querySelectorAll<HTMLElement>(".tab-pane").forEach((pane) => {
@@ -238,7 +240,7 @@ function switchTab(tab: Tab) {
 }
 
 function switchInputTab(tab: InputTab) {
-  document.querySelectorAll<HTMLElement>("#input-tabs .tab").forEach((btn) => {
+  document.querySelectorAll<HTMLElement>("#input-tabs .pg-tab").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.inputTab === tab);
   });
   document.querySelectorAll<HTMLElement>(".input-pane").forEach((pane) => {
@@ -303,7 +305,6 @@ async function compile() {
   const timings: string[] = [];
   let overhead = 0;
 
-  // Evaluate plugins (cached if unchanged)
   let mdastPlugins: MdastPluginDefinition[] = [];
   let hastPlugins: HastPluginDefinition[] = [];
   try {
@@ -321,7 +322,6 @@ async function compile() {
 
   if (gen !== compileGeneration) return;
 
-  // Count plugins with active visitors for badge display
   const activeMdastCount = mdastPlugins.filter(
     (p) => resolveMdastSubscriptions(p).length > 0,
   ).length;
@@ -331,13 +331,11 @@ async function compile() {
   const features = getFeatures();
   const totalStart = performance.now();
   try {
-    // Step 1: parse → mdast handle
     const { result: mdastHandle, ms: parseMs } = time(() =>
       isMdx ? createMdxMdastHandle(source, features) : createMdastHandle(source, features),
     );
     timings.push(`parse → mdast <span>${fmt(parseMs)}</span>`);
 
-    // Step 2: run mdast plugins (if any)
     if (activeMdastCount > 0) {
       const pluginStart = performance.now();
       const handleSource = getHandleSource(mdastHandle);
@@ -372,11 +370,9 @@ async function compile() {
     overhead += mdastDomMs;
     pendingHighlights.push({ el: tabMdast, code: mdastJson, lang: "json" });
 
-    // Step 3: mdast → hast handle
     const { result: hastHandle, ms: convertMs } = time(() => convertMdastToHastHandle(mdastHandle));
     timings.push(`mdast → hast <span>${fmt(convertMs)}</span>`);
 
-    // Step 4: run hast plugins (if any)
     if (activeHastCount > 0) {
       const pluginStart = performance.now();
       for (const plugin of hastPlugins) {
@@ -387,7 +383,6 @@ async function compile() {
       timings.push(`hast plugins <span>${fmt(performance.now() - pluginStart)}</span>`);
     }
 
-    // Serialize hast for display (post-plugin)
     const { result: hastBuf, ms: hastSerMs } = time(() => serializeHandle(hastHandle));
     overhead += hastSerMs;
     const { result: hastTree, ms: hastMatMs } = time(() =>
@@ -402,7 +397,6 @@ async function compile() {
     overhead += hastDomMs;
     pendingHighlights.push({ el: tabHast, code: hastJson, lang: "json" });
 
-    // Step 5: hast → html or js
     let outputStr: string;
     if (isMdx) {
       const mdxOptions = getMdxOptions();
@@ -425,19 +419,7 @@ async function compile() {
         const doc = renderedFrame.contentDocument;
         if (doc) {
           doc.open();
-          doc.write(`<!doctype html>
-<html>
-<head><meta charset="utf-8"><style>
-  body { font-family: system-ui, sans-serif; padding: 16px; line-height: 1.6; color: #1e1e2e; }
-  pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; }
-  code { background: #f5f5f5; padding: 2px 4px; border-radius: 2px; font-size: 0.9em; }
-  pre code { background: none; padding: 0; }
-  blockquote { border-left: 3px solid #ccc; margin: 0; padding-left: 12px; color: #555; }
-  img { max-width: 100%; }
-  table { border-collapse: collapse; } th, td { border: 1px solid #ddd; padding: 6px 10px; }
-</style></head>
-<body>${outputStr}</body>
-</html>`);
+          doc.write(renderedFrameDocument(outputStr));
           doc.close();
         }
       }
@@ -478,23 +460,104 @@ function scheduleCompile() {
   compile();
 }
 
-// Input tab clicks
+function renderedFrameDocument(body: string): string {
+  const dark = document.documentElement.dataset.theme === "dark";
+  // Inline both palettes so the iframe document is self-contained — it can't
+  // reach out to the parent's CSS variables.
+  const p = dark
+    ? {
+        bg: "#14120E",
+        text: "#D8D0BE",
+        ink: "#F2EAD3",
+        surface: "#1E1B14",
+        border: "#3A342A",
+        secondary: "#B5AB95",
+        codeBg: "#1E1B14",
+        codeText: "#D8D0BE",
+      }
+    : {
+        bg: "#F7F2E8",
+        text: "#2A2620",
+        ink: "#14110C",
+        surface: "#EDE6D6",
+        border: "#C9BFA8",
+        secondary: "#5C5446",
+        codeBg: "#14110C",
+        codeText: "#F7F2E8",
+      };
+  return `<!doctype html>
+<html>
+<head><meta charset="utf-8"><style>
+  body {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, P052, serif;
+    padding: 20px;
+    line-height: 1.65;
+    color: ${p.text};
+    background: ${p.bg};
+    max-width: 42rem;
+    margin: 0 auto;
+  }
+  h1, h2, h3, h4, h5, h6 { color: ${p.ink}; letter-spacing: -0.01em; }
+  pre {
+    background: ${p.codeBg};
+    color: ${p.codeText};
+    padding: 0.9em 1em;
+    border-radius: 3px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.55;
+    font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  }
+  code {
+    background: ${p.surface};
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.9em;
+    font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  blockquote {
+    border-left: 3px solid ${p.border};
+    margin: 0;
+    padding-left: 0.9em;
+    color: ${p.secondary};
+    font-style: italic;
+  }
+  img { max-width: 100%; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid ${p.border}; padding: 0.4em 0.7em; text-align: left; }
+  th { background: ${p.surface}; font-weight: 600; }
+  a { color: ${p.secondary}; text-decoration: underline; text-underline-offset: 0.2em; }
+</style></head>
+<body>${body}</body>
+</html>`;
+}
+
+// Re-render when the user toggles the site theme: re-highlight the editor
+// textareas with the new shiki theme, and re-run the pipeline so the output
+// panes and rendered iframe pick up the swap too.
+new MutationObserver(() => {
+  highlightAllInputs();
+  scheduleCompile();
+}).observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ["data-theme"],
+});
+
 inputTabs.addEventListener("click", (e) => {
-  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".tab");
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".pg-tab");
   if (btn?.dataset.inputTab) {
     switchInputTab(btn.dataset.inputTab as InputTab);
   }
 });
 
-// Output tab clicks
 outputTabs.addEventListener("click", (e) => {
-  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".tab");
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".pg-tab");
   if (btn?.dataset.tab) {
     switchTab(btn.dataset.tab as Tab);
   }
 });
 
-// Mode change
 document.querySelectorAll('input[name="mode"]').forEach((el) => {
   el.addEventListener("change", () => {
     updateModeUI();
@@ -503,7 +566,6 @@ document.querySelectorAll('input[name="mode"]').forEach((el) => {
   });
 });
 
-// Feature toggles
 [
   featGfm,
   featFrontmatter,
@@ -523,7 +585,6 @@ featSmartPunctuation.addEventListener("change", () => {
   el.addEventListener("change", scheduleCompile),
 );
 
-// MDX options
 [mdxJsxImportSource, mdxProviderImportSource].forEach((el) => {
   el.addEventListener("input", scheduleCompile);
 });
@@ -531,19 +592,16 @@ featSmartPunctuation.addEventListener("change", () => {
   el.addEventListener("change", scheduleCompile);
 });
 
-// optimizeStatic toggle
 optimizeToggle.addEventListener("change", () => {
   optimizeFields.classList.toggle("hidden", !optimizeToggle.checked);
   scheduleCompile();
 });
 
-// optimizeStatic field changes
 [osComponent, osProp, osWrapPropValue, osIgnoreElements].forEach((el) => {
   el.addEventListener("input", scheduleCompile);
   el.addEventListener("change", scheduleCompile);
 });
 
-// Input changes + highlight sync
 const inputPairs: [HTMLTextAreaElement, HTMLElement, string][] = [
   [input, highlightSource, "markdown"],
   [inputMdastPlugin, highlightMdastPlugin, "typescript"],
@@ -557,7 +615,6 @@ for (const [textarea, pre, lang] of inputPairs) {
   });
   textarea.addEventListener("scroll", () => syncScroll(textarea, pre));
 
-  // Tab key support
   textarea.addEventListener("keydown", (e) => {
     if (e.key === "Tab") {
       e.preventDefault();
@@ -571,11 +628,10 @@ for (const [textarea, pre, lang] of inputPairs) {
   });
 }
 
-// Init
 updateModeUI();
 
 // The WASM module loads asynchronously (top-level await in wasi-browser.js).
-// The import at the top blocks until it's ready, so if we reach here it's loaded.
+// Reaching this line means the import chain resolved; hide the overlay.
 loadingOverlay.classList.add("hidden");
 highlightAllInputs();
 compile();

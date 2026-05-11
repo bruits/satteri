@@ -169,12 +169,11 @@ function referenceHtml(md: string): string {
 }
 
 function satteriHtml(md: string): string {
-  const result = markdownToHtml(md, {
+  const { html } = markdownToHtml(md, {
     features: { directive: true, gfm: false, frontmatter: false, math: false },
     mdastPlugins: [asidesPluginSatteri()],
   });
-  if (typeof result !== "string") throw new Error("expected sync result");
-  return normalize(result);
+  return normalize(html);
 }
 
 function normalize(html: string): string {

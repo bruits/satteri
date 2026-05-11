@@ -11,20 +11,17 @@ import type {
   HastPluginInput,
 } from "./plugin.js";
 import {
-  parseToHtml,
-  compileMdx,
   createHastHandle,
   createMdxHastHandle,
   renderHandle,
   compileHandle,
-  applyCommandsToHandle,
   dropHandle,
   createMdastHandle,
   createMdxMdastHandle,
   applyCommandsToMdastHandle,
   convertMdastToHastHandle,
-  applyCommandsAndConvertToHastHandle,
   getHandleSource,
+  getMdastFrontmatter,
   serializeHandle,
 } from "#binding";
 import { MdastReader } from "./mdast/mdast-reader.js";
@@ -233,7 +230,15 @@ export interface CompileOptions {
   filename?: string;
 }
 
-export interface MdxCompileOptions extends CompileOptions {
+/**
+ * MDX-only compile options.
+ *
+ * These are the fields specific to MDX compilation, separate from the shared
+ * pipeline options in {@link CompileOptions}. Useful for wrappers (Vite/Rollup
+ * plugins, framework integrations) that want to expose MDX-specific knobs
+ * without re-exposing the shared pipeline fields.
+ */
+export interface MdxOnlyOptions {
   optimizeStatic?: OptimizeStaticConfig;
   /** Place to import automatic JSX runtimes from (e.g. "react", "preact"). Default: "react". */
   jsxImportSource?: string;
@@ -262,17 +267,85 @@ export interface MdxCompileOptions extends CompileOptions {
   outputFormat?: "program" | "function-body";
 }
 
+export interface MdxCompileOptions extends CompileOptions, MdxOnlyOptions {}
+
+/** Frontmatter block extracted from the parsed Markdown/MDX source. */
+export interface Frontmatter {
+  /** Delimiter syntax used for the block. */
+  kind: "yaml" | "toml";
+  /** Raw content between the delimiters (`---`/`+++` lines excluded). */
+  value: string;
+}
+
+/** Result of {@link markdownToHtml}. */
+export interface MarkdownToHtmlResult {
+  /** Rendered HTML string. */
+  html: string;
+  /** Frontmatter block at the start of the document, or `null` if none. */
+  frontmatter: Frontmatter | null;
+}
+
+/** Result of {@link mdxToJs}. */
+export interface MdxToJsResult {
+  /** Compiled JavaScript module source. */
+  code: string;
+  /** Frontmatter block at the start of the document, or `null` if none. */
+  frontmatter: Frontmatter | null;
+}
+
+// Type helpers: detect whether any visitor in any plugin returns a Promise.
+// Used to narrow `markdownToHtml`/`mdxToJs` to a sync return when every plugin
+// is sync, while keeping the union when at least one visitor is async.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyFn = (...args: any[]) => unknown;
+type ReturnsPromise<F> = F extends AnyFn
+  ? Extract<ReturnType<F>, Promise<unknown>> extends never
+    ? false
+    : true
+  : false;
+type FieldIsAsync<V> = V extends AnyFn
+  ? ReturnsPromise<V>
+  : V extends { visit: infer F }
+    ? ReturnsPromise<F>
+    : V extends ReadonlyArray<infer Item>
+      ? Item extends { visit: infer F }
+        ? ReturnsPromise<F>
+        : false
+      : false;
+type AnyVisitorAsync<P> = {
+  [K in keyof P]-?: FieldIsAsync<NonNullable<P[K]>>;
+}[keyof P];
+type IsPluginAsync<P> = true extends AnyVisitorAsync<P> ? true : false;
+type ResolveInput<P> = P extends () => infer D ? D : P;
+type AnyInputAsync<Ps> =
+  Ps extends ReadonlyArray<infer P>
+    ? true extends IsPluginAsync<ResolveInput<P>>
+      ? true
+      : false
+    : false;
+type OptionsAsync<O> = (
+  O extends { mdastPlugins: infer Ps } ? AnyInputAsync<Ps> : false
+) extends true
+  ? true
+  : (O extends { hastPlugins: infer Ps } ? AnyInputAsync<Ps> : false) extends true
+    ? true
+    : false;
+
+type ResultFor<O, R> = OptionsAsync<O> extends true ? Promise<R> : R;
+
+export function markdownToHtml<O extends CompileOptions>(
+  source: string,
+  options?: O,
+): ResultFor<O, MarkdownToHtmlResult>;
 export function markdownToHtml(
   source: string,
   options: CompileOptions = {},
-): string | Promise<string> {
+): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
   const { mdastPlugins = [], hastPlugins = [], features, filename = "<unknown>" } = options;
   const nativeFeatures = featuresToNative(features);
 
-  // TODO: When there's no plugins, we shouldn't go through all the steps below, we could just call parseToHtml directly.
-  // However right now pulldown-cmark's HTML output is super different from our target (unified's). So until that's fixed, we'll do the slower pipeline
-
-  const handleResult = createHastHandleFromMdast(
+  const result = createHastHandleFromMdast(
     source,
     mdastPlugins,
     false,
@@ -280,27 +353,33 @@ export function markdownToHtml(
     nativeFeatures,
   );
 
-  const finish = (hastHandle: HastHandle): string | Promise<string> => {
-    const asyncResult = runHastPluginsOnHandle(hastHandle, hastPlugins, source, filename);
-    if (asyncResult instanceof Promise) {
-      return asyncResult.then(() => {
-        const html = renderHandle(hastHandle);
-        dropHandle(hastHandle);
-        return html;
-      });
-    }
-    const html = renderHandle(hastHandle);
-    dropHandle(hastHandle);
-    return html;
+  const render = (h: HastHandle, frontmatter: Frontmatter | null): MarkdownToHtmlResult => {
+    const html = renderHandle(h);
+    dropHandle(h);
+    return { html, frontmatter };
   };
 
-  if (handleResult instanceof Promise) {
-    return handleResult.then(finish);
-  }
-  return finish(handleResult);
+  const runHastThenRender = (
+    r: HastWithFrontmatter,
+  ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> => {
+    const hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
+    if (hastResult instanceof Promise)
+      return hastResult.then(() => render(r.hastHandle, r.frontmatter));
+    return render(r.hastHandle, r.frontmatter);
+  };
+
+  if (result instanceof Promise) return result.then(runHastThenRender);
+  return runHastThenRender(result);
 }
 
-export function mdxToJs(source: string, options: MdxCompileOptions = {}): string | Promise<string> {
+export function mdxToJs<O extends MdxCompileOptions>(
+  source: string,
+  options?: O,
+): ResultFor<O, MdxToJsResult>;
+export function mdxToJs(
+  source: string,
+  options: MdxCompileOptions = {},
+): MdxToJsResult | Promise<MdxToJsResult> {
   const {
     mdastPlugins = [],
     hastPlugins = [],
@@ -311,11 +390,7 @@ export function mdxToJs(source: string, options: MdxCompileOptions = {}): string
   const mdxOptions = mdxOptionsToNative(mdxFields);
   const nativeFeatures = featuresToNative(features);
 
-  if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
-    return compileMdx(source, mdxOptions, nativeFeatures);
-  }
-
-  const handleResult = createHastHandleFromMdast(
+  const result = createHastHandleFromMdast(
     source,
     mdastPlugins,
     true,
@@ -323,24 +398,23 @@ export function mdxToJs(source: string, options: MdxCompileOptions = {}): string
     nativeFeatures,
   );
 
-  const finish = (hastHandle: HastHandle): string | Promise<string> => {
-    const asyncResult = runHastPluginsOnHandle(hastHandle, hastPlugins, source, filename);
-    if (asyncResult instanceof Promise) {
-      return asyncResult.then(() => {
-        const js = compileHandle(hastHandle, mdxOptions);
-        dropHandle(hastHandle);
-        return js;
-      });
-    }
-    const js = compileHandle(hastHandle, mdxOptions);
-    dropHandle(hastHandle);
-    return js;
+  const compile = (h: HastHandle, frontmatter: Frontmatter | null): MdxToJsResult => {
+    const code = compileHandle(h, mdxOptions);
+    dropHandle(h);
+    return { code, frontmatter };
   };
 
-  if (handleResult instanceof Promise) {
-    return handleResult.then(finish);
-  }
-  return finish(handleResult);
+  const runHastThenCompile = (
+    r: HastWithFrontmatter,
+  ): MdxToJsResult | Promise<MdxToJsResult> => {
+    const hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
+    if (hastResult instanceof Promise)
+      return hastResult.then(() => compile(r.hastHandle, r.frontmatter));
+    return compile(r.hastHandle, r.frontmatter);
+  };
+
+  if (result instanceof Promise) return result.then(runHastThenCompile);
+  return runHastThenCompile(result);
 }
 
 export interface EvaluateOptions extends Omit<MdxCompileOptions, "jsx" | "outputFormat"> {
@@ -375,17 +449,26 @@ export function evaluate(
 ): Record<string, unknown> | Promise<Record<string, unknown>> {
   const { Fragment, jsx, jsxs, jsxDEV, useMDXComponents, ...compileOpts } = options;
   const runtime = { Fragment, jsx, jsxs, jsxDEV, useMDXComponents };
-  const code = mdxToJs(source, { ...compileOpts, outputFormat: "function-body" });
-  if (code instanceof Promise) {
-    return code.then((resolved) => new Function(resolved)(runtime));
+  const result = mdxToJs(source, { ...compileOpts, outputFormat: "function-body" });
+  if (result instanceof Promise) {
+    return result.then((resolved) => new Function(resolved.code)(runtime));
   }
-  return new Function(code)(runtime);
+  return new Function(result.code)(runtime);
 }
 
 // Pipeline: parse → mdast plugins → hast conversion → hast plugins
 // All arenas stay in Rust. No intermediate buffer copies to JS.
 
-/** Parse + mdast plugins + convert to HAST handle. */
+type HastWithFrontmatter = { hastHandle: HastHandle; frontmatter: Frontmatter | null };
+
+function readFrontmatter(handle: MdastHandle): Frontmatter | null {
+  const raw = getMdastFrontmatter(handle);
+  return raw ? { kind: raw.kind === "toml" ? "toml" : "yaml", value: raw.value } : null;
+}
+
+/** Parse, run mdast plugins, capture frontmatter, then convert to HAST.
+ *  Frontmatter is read from the post-plugin MDAST so visitor mutations to
+ *  the yaml/toml node are reflected in the returned value. */
 function createHastHandleFromMdast(
   source: string,
   mdastPlugins: MdastPluginInput[],
@@ -393,29 +476,32 @@ function createHastHandleFromMdast(
   filename: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nativeFeatures?: any,
-): HastHandle | Promise<HastHandle> {
-  if (mdastPlugins.length === 0) {
-    return mdx
-      ? createMdxHastHandle(source, nativeFeatures)
-      : createHastHandle(source, nativeFeatures);
-  }
-
+): HastWithFrontmatter | Promise<HastWithFrontmatter> {
   const mdastHandle = mdx
     ? createMdxMdastHandle(source, nativeFeatures)
     : createMdastHandle(source, nativeFeatures);
+
+  if (mdastPlugins.length === 0) {
+    const frontmatter = readFrontmatter(mdastHandle);
+    const hastHandle = convertMdastToHastHandle(mdastHandle);
+    return { hastHandle, frontmatter };
+  }
+
   const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, filename);
 
-  const convert = (r: MdastPipelineResult): HastHandle => {
+  // Splits the previous fused apply+convert call so we can read frontmatter
+  // off the mutated MDAST handle before the conversion consumes it.
+  const finalize = (r: MdastPipelineResult): HastWithFrontmatter => {
     if (r.pendingCommands) {
-      return applyCommandsAndConvertToHastHandle(r.handle, r.pendingCommands);
+      applyCommandsToMdastHandle(r.handle, r.pendingCommands);
     }
-    return convertMdastToHastHandle(r.handle);
+    const frontmatter = readFrontmatter(r.handle);
+    const hastHandle = convertMdastToHastHandle(r.handle);
+    return { hastHandle, frontmatter };
   };
 
-  if (mdastResult instanceof Promise) {
-    return mdastResult.then(convert);
-  }
-  return convert(mdastResult);
+  if (mdastResult instanceof Promise) return mdastResult.then(finalize);
+  return finalize(mdastResult);
 }
 
 // Step-by-step API: individual pipeline stages with materialized trees

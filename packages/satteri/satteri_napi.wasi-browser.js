@@ -69,6 +69,7 @@ export const createMdxHastHandle = __napiModule.exports.createMdxHastHandle
 export const createMdxMdastHandle = __napiModule.exports.createMdxMdastHandle
 export const dropHandle = __napiModule.exports.dropHandle
 export const getHandleSource = __napiModule.exports.getHandleSource
+export const getMdastFrontmatter = __napiModule.exports.getMdastFrontmatter
 export const getNodeData = __napiModule.exports.getNodeData
 export const mdastTextContentHandle = __napiModule.exports.mdastTextContentHandle
 export const parseEsm = __napiModule.exports.parseEsm

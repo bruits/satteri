@@ -15,11 +15,48 @@ import type { MdastNode } from "../src/types.js";
 import type { Element } from "hast";
 import type { MdxJsxTextElementHast } from "../src/mdx-types.js";
 
+describe("frontmatter extraction", () => {
+  test("returns null when there is no frontmatter", () => {
+    const result = markdownToHtml("# Hello");
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.frontmatter).toBeNull();
+  });
+
+  test("returns yaml frontmatter raw value", () => {
+    const source = `---\ntitle: Hi\nn: 1\n---\n# Body`;
+    const result = markdownToHtml(source);
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.frontmatter).toEqual({ kind: "yaml", value: "title: Hi\nn: 1" });
+  });
+
+  test("returns toml frontmatter raw value", () => {
+    const source = `+++\ntitle = "Hi"\n+++\n# Body`;
+    const result = markdownToHtml(source);
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.frontmatter).toEqual({ kind: "toml", value: 'title = "Hi"' });
+  });
+
+  test("frontmatter is null when frontmatter feature is disabled", () => {
+    const source = `---\ntitle: Hi\n---\n# Body`;
+    const result = markdownToHtml(source, { features: { frontmatter: false } });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.frontmatter).toBeNull();
+  });
+
+  test("mdxToJs also returns frontmatter", () => {
+    const source = `---\ntitle: MDX Hi\n---\n# Body`;
+    const result = mdxToJs(source);
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.frontmatter).toEqual({ kind: "yaml", value: "title: MDX Hi" });
+    expect(result.code).toContain("MDXContent");
+  });
+});
+
 // markdownToHtml - no plugins
 
 describe("markdownToHtml", () => {
   test("basic markdown to HTML", () => {
-    const html = markdownToHtml("# Hello\n\nWorld");
+    const { html } = markdownToHtml("# Hello\n\nWorld");
     expect(html).toContain("<h1>");
     expect(html).toContain("Hello");
     expect(html).toContain("<p>");
@@ -27,23 +64,23 @@ describe("markdownToHtml", () => {
   });
 
   test("empty string produces empty output", () => {
-    const html = markdownToHtml("");
+    const { html } = markdownToHtml("");
     expect(html).toBe("");
   });
 
   test("inline formatting", () => {
-    const html = markdownToHtml("**bold** and *italic*");
+    const { html } = markdownToHtml("**bold** and *italic*");
     expect(html).toContain("<strong>bold</strong>");
     expect(html).toContain("<em>italic</em>");
   });
 
   test("link renders as anchor", () => {
-    const html = markdownToHtml("[click](https://example.com)");
+    const { html } = markdownToHtml("[click](https://example.com)");
     expect(html).toContain('<a href="https://example.com">click</a>');
   });
 
   test("code block with language", () => {
-    const html = markdownToHtml("```js\nconsole.log(1)\n```");
+    const { html } = markdownToHtml("```js\nconsole.log(1)\n```");
     expect(html).toContain('<code class="language-js">');
     expect(html).toContain("console.log(1)");
   });
@@ -58,7 +95,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Title\n\nKeep this", {
+    const { html } = markdownToHtml("# Title\n\nKeep this", {
       mdastPlugins: [removeHeadings],
     });
     expect(html).not.toContain("<h1>");
@@ -74,7 +111,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Original\n\npara", {
+    const { html } = markdownToHtml("# Original\n\npara", {
       mdastPlugins: [uppercaseHeadings],
     });
     expect(html).toContain("REPLACED");
@@ -94,7 +131,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Hello\n\nWorld", {
+    const { html } = markdownToHtml("# Hello\n\nWorld", {
       hastPlugins: [addClasses],
     });
     expect(html).toContain('<h1 class="styled">');
@@ -114,7 +151,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Gone\n\nStays", {
+    const { html } = markdownToHtml("# Gone\n\nStays", {
       hastPlugins: [removeHeadings],
     });
     expect(html).not.toContain("<h1>");
@@ -139,7 +176,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Title", {
+    const { html } = markdownToHtml("# Title", {
       hastPlugins: [replaceH1],
     });
     expect(html).toContain("<h2");
@@ -161,7 +198,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Hello", {
+    const { html } = markdownToHtml("# Hello", {
       hastPlugins: [addIds],
     });
     expect(html).toContain('id="main-title"');
@@ -178,7 +215,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Test\n\nParagraph", {
+    const { html } = markdownToHtml("# Test\n\nParagraph", {
       hastPlugins: [noopPlugin],
     });
     expect(html).toContain("<h1>");
@@ -206,7 +243,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Gone\n\nKeep", {
+    const { html } = markdownToHtml("# Gone\n\nKeep", {
       mdastPlugins: [removeHeadings],
       hastPlugins: [addClasses],
     });
@@ -238,7 +275,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Hello", {
+    const { html } = markdownToHtml("# Hello", {
       hastPlugins: [addIds, addClasses],
     });
     expect(html).toContain('id="title"');
@@ -275,7 +312,7 @@ describe("markdownToHtml", () => {
       },
     });
 
-    const html = markdownToHtml("# Title", {
+    const { html } = markdownToHtml("# Title", {
       hastPlugins: [tagFreshH2, consumeData],
     });
     expect(html).toContain("<h2");
@@ -299,8 +336,8 @@ describe("markdownToHtml", () => {
       });
     };
 
-    const docA = markdownToHtml("# A1\n\n# A2", { hastPlugins: [makePlugin] });
-    const docB = markdownToHtml("# B1\n\n# B2", { hastPlugins: [makePlugin] });
+    const { html: docA } = markdownToHtml("# A1\n\n# A2", { hastPlugins: [makePlugin] });
+    const { html: docB } = markdownToHtml("# B1\n\n# B2", { hastPlugins: [makePlugin] });
 
     expect(factoryCalls).toBe(2);
     expect(docA).toContain('data-first="yes"');
@@ -333,7 +370,7 @@ describe("markdownToHtml", () => {
       });
     };
 
-    const html = markdownToHtml("# One\n\n# Two", {
+    const { html } = markdownToHtml("# One\n\n# Two", {
       hastPlugins: [addBaseClass, addOrderAttr],
     });
     expect(html).toContain('class="base"');
@@ -363,13 +400,13 @@ describe("markdownToHtml", () => {
 
 describe("mdxToJs", () => {
   test("basic MDX compilation", () => {
-    const js = mdxToJs("# Hello\n\nWorld");
+    const { code: js } = mdxToJs("# Hello\n\nWorld");
     expect(js).toContain("function");
     expect(js).toContain("Hello");
   });
 
   test("MDX with JSX element", () => {
-    const js = mdxToJs("<MyComponent />", {});
+    const { code: js } = mdxToJs("<MyComponent />", {});
     expect(js).toContain("MyComponent");
   });
 
@@ -381,7 +418,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const js = mdxToJs("# Gone\n\nKept", {
+    const { code: js } = mdxToJs("# Gone\n\nKept", {
       mdastPlugins: [removeHeadings],
     });
     expect(js).not.toContain("Gone");
@@ -442,7 +479,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const js = mdxToJs("<Component />\n", {
+    const { code: js } = mdxToJs("<Component />\n", {
       mdastPlugins: [addAttr],
     });
     // The compiled output should reference the "added" attribute
@@ -465,7 +502,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const js = mdxToJs('<Component foo="bar" />\n', {
+    const { code: js } = mdxToJs('<Component foo="bar" />\n', {
       mdastPlugins: [stripAttrs],
     });
     expect(js).toContain("Component");
@@ -486,7 +523,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const js = mdxToJs('import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>', {
+    const { code: js } = mdxToJs('import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>', {
       hastPlugins: [injectMeta],
     });
 
@@ -510,10 +547,11 @@ describe("mdxToJs", () => {
       },
     });
 
-    const withPlugin = mdxToJs('import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>', {
-      hastPlugins: [noop],
-    });
-    const without = mdxToJs('import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>');
+    const { code: withPlugin } = mdxToJs(
+      'import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>',
+      { hastPlugins: [noop] },
+    );
+    const { code: without } = mdxToJs('import B from "./B.jsx"\n\n<B client:load foo="bar">hi</B>');
 
     expect(withPlugin).toBe(without);
   });
@@ -529,7 +567,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const js = mdxToJs('import B from "./B.jsx"\n\n<B foo="bar">hi</B>', {
+    const { code: js } = mdxToJs('import B from "./B.jsx"\n\n<B foo="bar">hi</B>', {
       hastPlugins: [overwrite],
     });
 
@@ -540,7 +578,7 @@ describe("mdxToJs", () => {
   // optimizeStatic
 
   test("optimizeStatic collapses static subtrees (Astro-style)", () => {
-    const js = mdxToJs("# Hello\n\nWorld", {
+    const { code: js } = mdxToJs("# Hello\n\nWorld", {
       optimizeStatic: {
         component: "Fragment",
         prop: "set:html",
@@ -554,7 +592,7 @@ describe("mdxToJs", () => {
   });
 
   test("optimizeStatic React-style with wrapPropValue", () => {
-    const js = mdxToJs("# Hello", {
+    const { code: js } = mdxToJs("# Hello", {
       optimizeStatic: {
         component: "div",
         prop: "dangerouslySetInnerHTML",
@@ -566,7 +604,7 @@ describe("mdxToJs", () => {
   });
 
   test("optimizeStatic preserves dynamic MDX components", () => {
-    const js = mdxToJs("# Static\n\n<Dynamic />\n\nAlso static", {
+    const { code: js } = mdxToJs("# Static\n\n<Dynamic />\n\nAlso static", {
       optimizeStatic: {
         component: "Fragment",
         prop: "set:html",
@@ -577,7 +615,7 @@ describe("mdxToJs", () => {
   });
 
   test("optimizeStatic off by default", () => {
-    const js = mdxToJs("# Hello\n\nWorld");
+    const { code: js } = mdxToJs("# Hello\n\nWorld");
     expect(js).not.toContain("set:html");
     expect(js).toContain('"h1"');
   });
@@ -592,7 +630,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const js = mdxToJs("```js\nconst x = {foo: 1}\n```", {
+    const { code: js } = mdxToJs("```js\nconst x = {foo: 1}\n```", {
       mdastPlugins: [plugin],
     });
 
@@ -615,7 +653,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const js = mdxToJs("```js\nconst x = {\n  foo: 1\n}\n```", {
+    const { code: js } = mdxToJs("```js\nconst x = {\n  foo: 1\n}\n```", {
       mdastPlugins: [plugin],
     });
 
@@ -626,18 +664,18 @@ describe("mdxToJs", () => {
   });
 
   test("MDX expression in heading is preserved", () => {
-    const js = mdxToJs("# {title}");
+    const { code: js } = mdxToJs("# {title}");
     expect(js).toContain("children: title");
   });
 
   test("MDX expression mixed with text in heading", () => {
-    const js = mdxToJs("## Hello {name}");
+    const { code: js } = mdxToJs("## Hello {name}");
     expect(js).toContain('"Hello "');
     expect(js).toContain("name");
   });
 
   test("MDX frontmatter expression in heading", () => {
-    const js = mdxToJs("# {frontmatter.title}");
+    const { code: js } = mdxToJs("# {frontmatter.title}");
     expect(js).toContain("frontmatter.title");
   });
 
@@ -652,7 +690,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("# Hello", {
+    const { html } = markdownToHtml("# Hello", {
       hastPlugins: [plugin],
     });
     expect(html).toContain('class="added"');
@@ -671,7 +709,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("# Hello\n\n[click](https://example.com)", {
+    const { html } = markdownToHtml("# Hello\n\n[click](https://example.com)", {
       hastPlugins: [plugin],
     });
     expect(html).toContain('class="link"');
@@ -691,7 +729,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("# One\n\n## Two\n\nParagraph", {
+    const { html } = markdownToHtml("# One\n\n## Two\n\nParagraph", {
       hastPlugins: [plugin],
     });
     expect(html).toContain('<h1 class="heading">');
@@ -718,7 +756,7 @@ describe("mdxToJs", () => {
       ],
     });
 
-    const html = markdownToHtml("# Title\n\n[link](https://example.com)", {
+    const { html } = markdownToHtml("# Title\n\n[link](https://example.com)", {
       hastPlugins: [plugin],
     });
     expect(html).toContain('id="title"');
@@ -741,7 +779,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("# Hello", {
+    const { html } = markdownToHtml("# Hello", {
       hastPlugins: [plugin],
     });
     // The filter still works via fallback JS walk
@@ -761,11 +799,11 @@ describe("mdxToJs", () => {
 
     const result = mdxToJs("```js\ncode\n```", { mdastPlugins: [plugin] });
     expect(result).toBeInstanceOf(Promise);
-    const js = await result;
+    const { code: js } = await result;
     expect(js).toContain("async-highlighted");
   });
 
-  test("sync MDAST plugins return string not Promise", () => {
+  test("sync MDAST plugins return synchronously", () => {
     const plugin = defineMdastPlugin({
       name: "sync-mdast",
       heading(node, ctx) {
@@ -774,7 +812,7 @@ describe("mdxToJs", () => {
     });
 
     const result = mdxToJs("# Title", { mdastPlugins: [plugin] });
-    expect(typeof result).toBe("string");
+    expect(result).not.toBeInstanceOf(Promise);
   });
 
   test("async HAST visitor - replaces element after await", async () => {
@@ -792,7 +830,7 @@ describe("mdxToJs", () => {
 
     const result = markdownToHtml("```js\ncode\n```", { hastPlugins: [plugin] });
     expect(result).toBeInstanceOf(Promise);
-    const html = await result;
+    const { html } = await result;
     expect(html).toContain("highlighted");
   });
 
@@ -812,7 +850,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = await markdownToHtml("# One\n\n## Two", { hastPlugins: [plugin] });
+    const { html } = await markdownToHtml("# One\n\n## Two", { hastPlugins: [plugin] });
     expect(html).toContain('class="processed"');
     // Both should start before either ends (parallel execution)
     expect(order[0]).toBe("start:h1");
@@ -844,12 +882,12 @@ describe("mdxToJs", () => {
     const result = markdownToHtml("# Title\n\nParagraph", {
       hastPlugins: [syncPlugin, asyncPlugin],
     });
-    const html = await result;
+    const { html } = await result;
     expect(html).toContain('id="sync"');
     expect(html).toContain('class="async"');
   });
 
-  test("sync-only plugins still return string (not Promise)", () => {
+  test("sync-only plugins return synchronously", () => {
     const plugin = defineHastPlugin({
       name: "sync-only",
       element: {
@@ -861,8 +899,9 @@ describe("mdxToJs", () => {
     });
 
     const result = markdownToHtml("# Hello", { hastPlugins: [plugin] });
-    expect(typeof result).toBe("string");
-    expect(result).toContain('id="test"');
+    expect(result).not.toBeInstanceOf(Promise);
+    if (result instanceof Promise) return;
+    expect(result.html).toContain('id="test"');
   });
 
   test("mdast setProperty + returning same node preserves mutation", () => {
@@ -876,7 +915,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("# Hello", { mdastPlugins: [plugin] });
+    const { html } = markdownToHtml("# Hello", { mdastPlugins: [plugin] });
     expect(html).toContain("<h2>");
     expect(html).not.toContain("<h1>");
   });
@@ -889,7 +928,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("hello world", { hastPlugins: [plugin] });
+    const { html } = markdownToHtml("hello world", { hastPlugins: [plugin] });
     expect(html).toContain("HELLO WORLD");
   });
 
@@ -916,7 +955,7 @@ describe("mdxToJs", () => {
     }
 
     const readingTime = createReadingTimePlugin();
-    const html = markdownToHtml(
+    const { html } = markdownToHtml(
       "# Hello\n\nThis is a paragraph with some words in it.\n\nAnother paragraph here.",
       { mdastPlugins: [readingTime.plugin] },
     );
@@ -933,7 +972,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("# Hello", { mdastPlugins: [plugin] });
+    const { html } = markdownToHtml("# Hello", { mdastPlugins: [plugin] });
     expect(html).toContain("<h2>");
     expect(html).toContain("Hello");
     expect(html).not.toContain("<h1>");
@@ -949,7 +988,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("Hello :wave: world :wave:", {
+    const { html } = markdownToHtml("Hello :wave: world :wave:", {
       mdastPlugins: [emojis],
     });
     expect(html).toContain("\u{1F44B}");
@@ -977,7 +1016,7 @@ describe("mdxToJs", () => {
       mdastPlugins: [asyncHighlight],
     });
     expect(result).toBeInstanceOf(Promise);
-    const html = await result;
+    const { html } = await result;
     expect(html).toContain("shiki");
     expect(html).toContain("console");
     expect(html).not.toContain('<code class="language-js">');
@@ -996,7 +1035,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    const html = markdownToHtml("![alt text](https://example.com/img.png)", {
+    const { html } = markdownToHtml("![alt text](https://example.com/img.png)", {
       mdastPlugins: [unwrapImages],
     });
     expect(html).toContain('<img src="https://example.com/img.png" alt="alt text">');
@@ -1071,9 +1110,9 @@ describe("smartPunctuation options", () => {
   const input = `"Hello," she said -- it was... unexpected.`;
 
   test("boolean true enables all smart punctuation", () => {
-    const html = markdownToHtml(input, {
+    const { html } = markdownToHtml(input, {
       features: { smartPunctuation: true },
-    }) as string;
+    });
     expect(html).toContain("\u201c");
     expect(html).toContain("\u201d");
     expect(html).toContain("\u2013");
@@ -1083,64 +1122,64 @@ describe("smartPunctuation options", () => {
   });
 
   test("boolean false disables all smart punctuation", () => {
-    const html = markdownToHtml(input, {
+    const { html } = markdownToHtml(input, {
       features: { smartPunctuation: false },
-    }) as string;
+    });
     expect(html).toContain('"');
     expect(html).toContain("--");
     expect(html).toContain("...");
   });
 
   test("quotes only", () => {
-    const html = markdownToHtml(input, {
+    const { html } = markdownToHtml(input, {
       features: { smartPunctuation: { quotes: true, dashes: false, ellipses: false } },
-    }) as string;
+    });
     expect(html).toContain("\u201c");
     expect(html).toContain("--");
     expect(html).toContain("...");
   });
 
   test("dashes only", () => {
-    const html = markdownToHtml(input, {
+    const { html } = markdownToHtml(input, {
       features: { smartPunctuation: { quotes: false, dashes: true, ellipses: false } },
-    }) as string;
+    });
     expect(html).toContain('"');
     expect(html).toContain("\u2013");
     expect(html).toContain("...");
   });
 
   test("ellipses only", () => {
-    const html = markdownToHtml(input, {
+    const { html } = markdownToHtml(input, {
       features: { smartPunctuation: { quotes: false, dashes: false, ellipses: true } },
-    }) as string;
+    });
     expect(html).toContain('"');
     expect(html).toContain("--");
     expect(html).toContain("\u2026");
   });
 
   test("omitted fields default to true", () => {
-    const html = markdownToHtml(input, {
+    const { html } = markdownToHtml(input, {
       features: { smartPunctuation: { dashes: false } },
-    }) as string;
+    });
     expect(html).toContain("\u201c");
     expect(html).toContain("--");
     expect(html).toContain("\u2026");
   });
 
   test("empty object enables all", () => {
-    const all = markdownToHtml(input, {
+    const { html: all } = markdownToHtml(input, {
       features: { smartPunctuation: true },
-    }) as string;
-    const empty = markdownToHtml(input, {
+    });
+    const { html: empty } = markdownToHtml(input, {
       features: { smartPunctuation: {} },
-    }) as string;
+    });
     expect(empty).toBe(all);
   });
 
   test("granular options work with mdxToJs", () => {
-    const js = mdxToJs(input, {
+    const { code: js } = mdxToJs(input, {
       features: { smartPunctuation: { dashes: false } },
-    }) as string;
+    });
     expect(js).toContain("\u201c");
     expect(js).toContain("--");
     expect(js).toContain("\u2026");

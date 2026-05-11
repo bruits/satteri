@@ -1,0 +1,11 @@
+import { Callout } from "./Callout.js";
+
+# Hello from MDX
+
+Unlike the `.md` import, this file is compiled to a **component** so it can
+embed live JSX:
+
+<Callout tone="info">Hello from Preact!</Callout>
+
+You still get the full Sätteri pipeline: the `mdastPlugins`, `hastPlugins`,
+and `features` configured in `vite.config.ts` apply to MDX too.

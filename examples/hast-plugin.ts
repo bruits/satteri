@@ -41,7 +41,7 @@ Check out [the docs](https://example.com/docs) for more info.
 Run the install command and [follow the guide](/guide).
 `;
 
-const html = markdownToHtml(source, {
+const { html } = markdownToHtml(source, {
   hastPlugins: [externalLinks, headingIds],
 });
 

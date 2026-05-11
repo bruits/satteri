@@ -11,10 +11,14 @@ export {
 export type {
   CompileOptions,
   MdxCompileOptions,
+  MdxOnlyOptions,
   EvaluateOptions,
   OptimizeStaticConfig,
   Features,
   SmartPunctuationOptions,
+  Frontmatter,
+  MarkdownToHtmlResult,
+  MdxToJsResult,
 } from "./compile.js";
 
 // Plugin definitions

@@ -1,0 +1,505 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Fraenkisch";
+  src: url("./fonts/Fraenkisch.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  /* Light mode (default) */
+  --color-paper: #f7f2e8;
+  --color-surface: #ede6d6;
+  --color-border: #c9bfa8;
+  --color-tertiary: #756d5e;
+  --color-secondary: #5c5446;
+  --color-body: #2a2620;
+  --color-ink: #14110c;
+
+  /* Modern Font Stacks — Old Style */
+  --font-serif: "Iowan Old Style", "Palatino Linotype", "URW Palladio L", P052, serif;
+  /* Modern Font Stacks — Monospace Code */
+  --font-mono:
+    ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  /* Display face for the Sätteri wordmark */
+  --font-logo: "Fraenkisch", "Iowan Old Style", serif;
+
+  /* Slightly larger body text. Iowan Old Style at the default 16px reads
+     a touch small; bump xs/sm/base/lg by ~6% but leave the title sizes
+     (xl and up) untouched so the typographic scale stays the same. */
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-base: 1.0625rem;
+  --text-lg: 1.1875rem;
+}
+
+@layer base {
+  :root,
+  [data-theme="light"] {
+    --color-paper: #f7f2e8;
+    --color-surface: #ede6d6;
+    --color-border: #c9bfa8;
+    --color-tertiary: #756d5e;
+    --color-secondary: #5c5446;
+    --color-body: #2a2620;
+    --color-ink: #14110c;
+
+    color-scheme: light;
+  }
+
+  [data-theme="dark"] {
+    --color-paper: #14120e;
+    --color-surface: #1e1b14;
+    --color-border: #3a342a;
+    --color-tertiary: #8c8270;
+    --color-secondary: #b5ab95;
+    --color-body: #d8d0be;
+    --color-ink: #f2ead3;
+
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-body);
+    font-family: var(--font-serif);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    color: var(--color-ink);
+    font-family: var(--font-serif);
+    letter-spacing: -0.01em;
+  }
+
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: var(--font-mono);
+  }
+
+  a {
+    color: var(--color-ink);
+    text-decoration: underline;
+    text-decoration-color: var(--color-border);
+    text-underline-offset: 0.2em;
+  }
+
+  a:hover {
+    text-decoration-color: var(--color-secondary);
+  }
+
+  ::selection {
+    background-color: var(--color-border);
+    color: var(--color-ink);
+  }
+}
+
+/* Shared box-model so the highlighted <pre> overlay aligns 1:1 with the
+   transparent textarea sitting on top of it. Padding, font, line-height, tab
+   stops, and wrap behaviour all have to match or the syntax colors drift
+   away from the characters. */
+.demo-editor-layer {
+  padding: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 0;
+}
+
+.demo-editor-layer::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.demo-editor-layer::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 4px;
+}
+
+/* Hide the textarea's own text but keep the caret coloured so the user can
+   still see where they're typing. Vendor-prefixed for Safari. */
+textarea.demo-editor-layer {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--color-ink);
+}
+
+/* The highlight <pre> inherits the editor box; reset code's font defaults so
+   tokens line up with the textarea's characters. */
+pre#demo-highlight code {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  background: none;
+  padding: 0;
+}
+
+/* Prose styles for rendered Markdown — used by the homepage demo output
+   and the docs articles. */
+.prose > * + * {
+  margin-top: 1em;
+}
+.prose h1 {
+  font-size: 1.6em;
+  line-height: 1.2;
+  margin-top: 0.4em;
+}
+.prose h2 {
+  font-size: 1.3em;
+  line-height: 1.25;
+  margin-top: 1.8em;
+}
+.prose h3 {
+  font-size: 1.1em;
+  line-height: 1.3;
+  margin-top: 1.4em;
+}
+.prose h1,
+.prose h2,
+.prose h3 {
+  font-weight: 600;
+}
+.prose ul {
+  padding-left: 1.4em;
+  list-style: disc;
+}
+.prose ol {
+  padding-left: 1.4em;
+  list-style: decimal;
+}
+.prose li + li {
+  margin-top: 0.25em;
+}
+.prose blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 0.9em;
+  color: var(--color-secondary);
+  font-style: italic;
+  margin: 1.4em 0;
+}
+.prose code {
+  background-color: var(--color-surface);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+.prose pre {
+  background-color: var(--color-ink);
+  color: var(--color-paper);
+  padding: 0.9em 1em;
+  border-radius: 3px;
+  overflow-x: auto;
+  font-size: 0.85em;
+  line-height: 1.55;
+  margin: 1.6em 0;
+}
+/* In dark mode the inversion (light bg + dark text on a dark page) reads
+   harshly. Drop it to surface so code blocks blend into the page. */
+[data-theme="dark"] .prose pre {
+  background-color: var(--color-surface);
+  color: var(--color-body);
+  border: 1px solid var(--color-border);
+}
+.prose pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--color-border);
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+.prose th {
+  background-color: var(--color-surface);
+  font-weight: 600;
+}
+.prose a {
+  color: var(--color-secondary);
+}
+
+/* ---------- Playground ---------- */
+
+/* Sidebar form controls. The playground sticks to mono everywhere because
+   the form labels and tab labels are technical (feature names, option keys)
+   and the serif body face would feel out of place. */
+#playground,
+#playground input,
+#playground select,
+#playground button,
+#playground textarea {
+  font-family: var(--font-mono);
+}
+
+.pg-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pg-subfieldset {
+  border: none;
+  padding: 0 0 0 1.25em;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pg-legend {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-tertiary);
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.pg-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--color-body);
+  line-height: 1.4;
+}
+
+.pg-label-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--color-tertiary);
+}
+
+.pg-input {
+  width: 100%;
+  background: var(--color-paper);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  color: var(--color-ink);
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.pg-input:focus {
+  outline: 1px solid var(--color-secondary);
+  border-color: var(--color-secondary);
+}
+
+#playground input[type="checkbox"],
+#playground input[type="radio"] {
+  accent-color: var(--color-ink);
+}
+
+/* Tab bars on the editor and output panels. */
+.pg-tabbar {
+  display: flex;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.pg-tab {
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.pg-tab:hover {
+  color: var(--color-ink);
+}
+
+.pg-tab.active {
+  color: var(--color-ink);
+  border-bottom-color: var(--color-ink);
+}
+
+/* Editor textarea / highlight pair, same overlay trick as the homepage demo. */
+.input-pane {
+  position: absolute;
+  inset: 0;
+  display: none;
+}
+
+.input-pane.active {
+  display: block;
+}
+
+.pg-input-textarea,
+.pg-input-highlight {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  background: var(--color-paper);
+}
+
+.pg-input-textarea {
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--color-ink);
+  border: none;
+  z-index: 1;
+  -webkit-text-fill-color: transparent;
+  width: 100%;
+  height: 100%;
+}
+
+.pg-input-textarea:focus {
+  outline: none;
+}
+
+.pg-input-highlight {
+  z-index: 0;
+  color: var(--color-body);
+  pointer-events: none;
+}
+
+.pg-input-highlight code {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  background: none;
+  padding: 0;
+}
+
+/* Output tab panes (mdast / hast / html JSON dump). */
+.tab-pane {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: none;
+  background: var(--color-paper);
+  color: var(--color-body);
+  margin: 0;
+}
+
+.tab-pane.active {
+  display: block;
+}
+
+.pg-rendered-pane {
+  padding: 0;
+}
+
+#rendered-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--color-paper);
+}
+
+.pg-status-bar {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--color-tertiary);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  line-height: 1.6;
+  font-family: var(--font-mono);
+}
+
+.pg-status-bar span {
+  color: var(--color-ink);
+}
+
+.pg-status-bar .overhead {
+  color: var(--color-tertiary);
+  cursor: help;
+  border-bottom: 1px dotted var(--color-tertiary);
+}
+
+.pg-status-bar .error {
+  color: #b53737;
+}
+
+.tab-pane.error {
+  color: #b53737;
+}
+
+.pg-loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-paper) 92%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  font-size: 14px;
+  font-family: var(--font-mono);
+  color: var(--color-secondary);
+}
+
+.pg-loading-overlay.hidden {
+  display: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ---------- Theme toggle ---------- */
+
+/* Show one icon per mode. The button starts hidden until the boot script has
+   picked a theme so neither icon flashes on the wrong background. */
+.theme-icon-sun,
+.theme-icon-moon {
+  display: none;
+}
+[data-theme="dark"] .theme-icon-sun {
+  display: block;
+}
+[data-theme="light"] .theme-icon-moon {
+  display: block;
+}

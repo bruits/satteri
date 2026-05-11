@@ -53,7 +53,7 @@ describe("HAST plugin data round-trip (existing-node path via setProperty)", () 
         },
       },
     });
-    const html = markdownToHtml("# Hi", { hastPlugins: [tag, consume] });
+    const { html } = markdownToHtml("# Hi", { hastPlugins: [tag, consume] });
     expect(html).toContain('data-origin="h1-tag"');
   });
 

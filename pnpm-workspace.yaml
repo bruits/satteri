@@ -1,7 +1,8 @@
 packages:
   - packages/*
+  - packages/vite-plugin-satteri/example
   - examples
-  - playground
+  - website
 
 onlyBuiltDependencies:
   - "@parcel/watcher"

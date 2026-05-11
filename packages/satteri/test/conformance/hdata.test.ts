@@ -46,12 +46,11 @@ function referenceHtml(md: string, plugin: RemarkPluginAndSatteri["remark"]): st
 }
 
 function satteriHtml(md: string, plugin: MdastPluginFactory): string {
-  const result = markdownToHtml(md, {
+  const { html } = markdownToHtml(md, {
     features: { directive: true, gfm: true, frontmatter: false, math: false },
     mdastPlugins: [defineMdastPlugin({ name: "hdata-test", ...plugin() })],
   });
-  if (typeof result !== "string") throw new Error("expected sync result");
-  return normalize(result);
+  return normalize(html);
 }
 
 function normalize(html: string): string {

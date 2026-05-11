@@ -1,18 +1,19 @@
 {
-  "name": "satteri-playground",
+  "name": "vite-plugin-satteri-example",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
+    "preact": "^10.27.4",
     "satteri": "workspace:*",
-    "shiki": "^4.0.2"
+    "vite-plugin-satteri": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6",
-    "vite": "^8",
-    "wrangler": "^4.81.1"
+    "vite": "^8"
   }
 }

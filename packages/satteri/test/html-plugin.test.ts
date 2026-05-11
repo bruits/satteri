@@ -35,14 +35,14 @@ function markdownToHtmlWithMdastPlugins(
   plugins: { instance: MdastPluginInstance; name: string }[],
 ): string {
   const mdastPlugins = plugins.map((p) => defineMdastPlugin({ name: p.name, ...p.instance }));
-  return markdownToHtml(source, { mdastPlugins }) as string;
+  return markdownToHtml(source, { mdastPlugins }).html;
 }
 
 // PART 1: MDAST plugins that affect the Markdown → HTML result
 
 describe("MDAST plugins affecting HTML output", () => {
   test("no plugins: simple markdown renders correct HTML", () => {
-    const html = markdownToHtml("# Hello\n\nWorld");
+    const { html } = markdownToHtml("# Hello\n\nWorld");
     expect(html).toContain("<h1>");
     expect(html).toContain("Hello");
     expect(html).toContain("<p>");
@@ -144,7 +144,7 @@ describe("MDAST plugins affecting HTML output", () => {
 
 describe("HAST plugins affecting HTML output", () => {
   test("no HAST plugin: basic rendering is correct", () => {
-    const html = markdownToHtml("**bold** and *italic*");
+    const { html } = markdownToHtml("**bold** and *italic*");
     expect(html).toContain("<strong>");
     expect(html).toContain("bold");
     expect(html).toContain("<em>");
@@ -354,7 +354,7 @@ describe("Handle-based HAST pipeline", () => {
   });
 
   test("full pipeline handles HTML entities and special characters", () => {
-    const html = markdownToHtml('Use `<div>` and `"quotes"` & ampersands');
+    const { html } = markdownToHtml('Use `<div>` and `"quotes"` & ampersands');
     // Text content should be escaped
     expect(html).toContain("&amp;");
     // Code content should be escaped
@@ -363,7 +363,7 @@ describe("Handle-based HAST pipeline", () => {
 
   test("full pipeline handles tables", () => {
     const md = "| A | B |\n|---|---|\n| 1 | 2 |";
-    const html = markdownToHtml(md);
+    const { html } = markdownToHtml(md);
     expect(html).toContain("<table>");
     expect(html).toContain("<th>");
     expect(html).toContain("<td>");
@@ -371,7 +371,7 @@ describe("Handle-based HAST pipeline", () => {
 
   test("full pipeline handles nested lists", () => {
     const md = "- a\n  - b\n    - c";
-    const html = markdownToHtml(md);
+    const { html } = markdownToHtml(md);
     expect(html).toContain("<ul>");
     expect(html).toContain("<li>");
   });
@@ -388,7 +388,7 @@ describe("Handle-based HAST pipeline", () => {
 
 describe("combined MDAST + HAST plugin scenarios", () => {
   test("MDAST plugin removes heading, HAST tree reflects the removal", () => {
-    const html = markdownToHtml("# Gone\n\nStays", {
+    const { html } = markdownToHtml("# Gone\n\nStays", {
       mdastPlugins: [
         defineMdastPlugin({
           name: "remove-headings",
@@ -405,7 +405,7 @@ describe("combined MDAST + HAST plugin scenarios", () => {
   });
 
   test("MDAST plugin replaces heading → HAST sees paragraph instead of h1", () => {
-    const html = markdownToHtml("# Was Heading\n\nParagraph", {
+    const { html } = markdownToHtml("# Was Heading\n\nParagraph", {
       mdastPlugins: [
         defineMdastPlugin({
           name: "heading-to-paragraph",
@@ -423,7 +423,7 @@ describe("combined MDAST + HAST plugin scenarios", () => {
   });
 
   test("HAST visitor can inspect the result of MDAST plugin transforms", () => {
-    const html = markdownToHtml("See [link](https://example.com) here", {
+    const { html } = markdownToHtml("See [link](https://example.com) here", {
       mdastPlugins: [
         defineMdastPlugin({
           name: "remove-links",

@@ -22,7 +22,8 @@ async function processMarkdown(
   markdown: string,
   options?: SatteriExpressiveCodeOptions,
 ): Promise<string> {
-  return markdownToHtml(markdown, { hastPlugins: [expressiveCode(options)] });
+  const result = await markdownToHtml(markdown, { hastPlugins: [expressiveCode(options)] });
+  return result.html;
 }
 
 const sampleCodeMarkdown = `
@@ -126,8 +127,8 @@ describe("Usage inside satteri", () => {
   });
   test("Re-emits base styles and scripts when the same plugin processes multiple documents", async () => {
     const plugin = expressiveCode();
-    const first = await markdownToHtml(sampleCodeMarkdown, { hastPlugins: [plugin] });
-    const second = await markdownToHtml(sampleCodeMarkdown, { hastPlugins: [plugin] });
+    const first = (await markdownToHtml(sampleCodeMarkdown, { hastPlugins: [plugin] })).html;
+    const second = (await markdownToHtml(sampleCodeMarkdown, { hastPlugins: [plugin] })).html;
     expect(first).toContain("<style>");
     expect(first).toContain("<script ");
     expect(second).toContain("<style>");

@@ -6,7 +6,9 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "dist"
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "noEmit": true
   },
   "include": ["src", "vite.config.ts"]
 }

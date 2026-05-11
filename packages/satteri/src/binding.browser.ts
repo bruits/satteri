@@ -12,6 +12,7 @@ export {
   createMdxMdastHandle,
   dropHandle,
   getHandleSource,
+  getMdastFrontmatter,
   getNodeData,
   mdastTextContentHandle,
   parseEsm,

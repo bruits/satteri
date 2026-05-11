@@ -1,4 +1,4 @@
-name: Deploy Playground
+name: Deploy Website
 
 on:
   workflow_dispatch:
@@ -6,10 +6,10 @@ on:
     branches:
       - main
     paths:
-      - "playground/**"
+      - "website/**"
       - "packages/satteri/**"
       - "crates/satteri-napi-binding/**"
-      - ".github/workflows/deploy-playground.yml"
+      - ".github/workflows/deploy-website.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -47,7 +47,8 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: rust-playground-cargo-${{ hashFiles('**/Cargo.lock') }}
+            website/target/
+          key: rust-website-cargo-${{ hashFiles('**/Cargo.lock', 'website/Cargo.toml') }}
 
       - name: Build WASM binding
         run: pnpm build:wasm
@@ -57,12 +58,12 @@ jobs:
         run: pnpm build:ts
         working-directory: packages/satteri
 
-      - name: Build Playground
-        run: pnpm build
-        working-directory: playground
+      - name: Build Website
+        run: cargo run --release
+        working-directory: website
 
       - name: Deploy
         uses: cloudflare/wrangler-action@v3
         with:
-          workingDirectory: ./playground
+          workingDirectory: ./website
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

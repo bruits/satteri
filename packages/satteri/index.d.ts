@@ -49,6 +49,12 @@ export declare function dropHandle(handle: AnyHandle): void
 export declare function getHandleSource(handle: AnyHandle): string
 
 /**
+ * Return the first YAML or TOML frontmatter block in the MDAST arena, if any.
+ * Walks the root node's direct children and returns the first yaml/toml literal.
+ */
+export declare function getMdastFrontmatter(handle: MdastHandle): JsFrontmatter | null
+
+/**
  * Read the node_data JSON blob for a node. Returns null if none is set.
  * Works for both MDAST and HAST handles.
  */
@@ -76,6 +82,14 @@ export interface JsFeatures {
   smartPunctuation?: boolean
   /** Granular smart-punctuation control (overrides `smart_punctuation`). */
   smartPunctuationOptions?: JsSmartPunctuationOptions
+}
+
+/** Frontmatter extracted from an MDAST arena. */
+export interface JsFrontmatter {
+  /** Either `"yaml"` or `"toml"`. */
+  kind: string
+  /** Raw frontmatter content between the delimiters (no `---`/`+++` lines). */
+  value: string
 }
 
 /** MDX compile options passed from JavaScript. */

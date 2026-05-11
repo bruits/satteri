@@ -29,7 +29,7 @@ const source = `
 Some text :wave: more text
 `;
 
-const html = markdownToHtml(source, {
+const { html } = markdownToHtml(source, {
   mdastPlugins: [emojis, unwrapImages],
 });
 

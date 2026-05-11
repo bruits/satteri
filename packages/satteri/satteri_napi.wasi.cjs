@@ -120,6 +120,7 @@ module.exports.createMdxHastHandle = __napiModule.exports.createMdxHastHandle
 module.exports.createMdxMdastHandle = __napiModule.exports.createMdxMdastHandle
 module.exports.dropHandle = __napiModule.exports.dropHandle
 module.exports.getHandleSource = __napiModule.exports.getHandleSource
+module.exports.getMdastFrontmatter = __napiModule.exports.getMdastFrontmatter
 module.exports.getNodeData = __napiModule.exports.getNodeData
 module.exports.mdastTextContentHandle = __napiModule.exports.mdastTextContentHandle
 module.exports.parseEsm = __napiModule.exports.parseEsm

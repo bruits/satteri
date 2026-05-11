@@ -579,7 +579,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { applyCommandsAndConvertToHastHandle, applyCommandsToHandle, applyCommandsToMdastHandle, compileHandle, compileMdx, convertMdastToHastHandle, createHastHandle, createMdastHandle, createMdxHastHandle, createMdxMdastHandle, dropHandle, getHandleSource, getNodeData, mdastTextContentHandle, parseEsm, parseExpression, parseToHtml, renderHandle, serializeHandle, setNodeData, textContentHandle, walkHandle, walkMdastHandle } = nativeBinding
+const { applyCommandsAndConvertToHastHandle, applyCommandsToHandle, applyCommandsToMdastHandle, compileHandle, compileMdx, convertMdastToHastHandle, createHastHandle, createMdastHandle, createMdxHastHandle, createMdxMdastHandle, dropHandle, getHandleSource, getMdastFrontmatter, getNodeData, mdastTextContentHandle, parseEsm, parseExpression, parseToHtml, renderHandle, serializeHandle, setNodeData, textContentHandle, walkHandle, walkMdastHandle } = nativeBinding
 export { applyCommandsAndConvertToHastHandle }
 export { applyCommandsToHandle }
 export { applyCommandsToMdastHandle }
@@ -592,6 +592,7 @@ export { createMdxHastHandle }
 export { createMdxMdastHandle }
 export { dropHandle }
 export { getHandleSource }
+export { getMdastFrontmatter }
 export { getNodeData }
 export { mdastTextContentHandle }
 export { parseEsm }

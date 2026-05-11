@@ -278,10 +278,62 @@ pub fn create_mdx_mdast_handle(
     features: Option<JsFeatures>,
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, true);
-    let (mut arena, _) = satteri_pulldown_cmark::parse(&source, opts);
+    let (mut arena, mdx_errors) = satteri_pulldown_cmark::parse(&source, opts);
+    if let Some((offset, msg)) = mdx_errors.first() {
+        return Err(napi::Error::from_reason(format!(
+            "MDX parse error at byte {offset}: {msg}"
+        )));
+    }
     arena.mdx = true;
     arena.parse_options = opts.bits();
     Ok(External::new(Mutex::new(arena)))
+}
+
+/// Frontmatter extracted from an MDAST arena.
+#[napi(object)]
+pub struct JsFrontmatter {
+    /// Either `"yaml"` or `"toml"`.
+    pub kind: String,
+    /// Raw frontmatter content between the delimiters (no `---`/`+++` lines).
+    pub value: String,
+}
+
+/// Return the first YAML or TOML frontmatter block in the MDAST arena, if any.
+/// Walks the root node's direct children and returns the first yaml/toml literal.
+#[napi]
+pub fn get_mdast_frontmatter(handle: &MdastHandle) -> Result<Option<JsFrontmatter>> {
+    use satteri_arena::StringRef;
+    use satteri_ast::mdast::node::MdastNodeType;
+
+    let arena = handle
+        .lock()
+        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
+    if arena.is_empty() {
+        return Ok(None);
+    }
+    let root = arena.get_node(0);
+    let children_start = root.children_start as usize;
+    let children_end = children_start + root.children_count as usize;
+    for i in children_start..children_end {
+        let child_id = arena.children[i];
+        let node = arena.get_node(child_id);
+        let kind = match MdastNodeType::from_u8(node.node_type) {
+            Some(MdastNodeType::Yaml) => "yaml",
+            Some(MdastNodeType::Toml) => "toml",
+            _ => continue,
+        };
+        let type_data = arena.get_type_data(child_id);
+        if type_data.len() < 8 {
+            continue;
+        }
+        let sr = StringRef::from_bytes(&type_data[0..8]);
+        let value = arena.get_str(sr).to_string();
+        return Ok(Some(JsFrontmatter {
+            kind: kind.to_string(),
+            value,
+        }));
+    }
+    Ok(None)
 }
 
 /// Serialize a handle's arena to the wire-format buffer JS instantiates a

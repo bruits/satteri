@@ -69,12 +69,11 @@ function satteriHtmlWithMdastPatch(
       ctx.setProperty(node, "data", next);
     }) as MdastPluginInstance["paragraph"],
   });
-  const result = markdownToHtml(md, {
+  const { html } = markdownToHtml(md, {
     features: { gfm: true, frontmatter: false, math: false },
     mdastPlugins: [plugin],
   });
-  if (typeof result !== "string") throw new Error("expected sync result");
-  return result.trim();
+  return html.trim();
 }
 
 function path(properties: Record<string, unknown>): ElementContent {
@@ -263,12 +262,12 @@ describe("SVG attribute conformance via _hast plugin emit path", () => {
         },
       },
     });
-    const html = markdownToHtml("# Hi", { hastPlugins: [replace] }) as string;
+    const { html } = markdownToHtml("# Hi", { hastPlugins: [replace] });
     expect(html).toContain(expectedHtmlForSubtree(svgNode));
   });
 
   test("numeric-only properties survive on a fresh HAST element", () => {
-    const html = markdownToHtml("# Hi", {
+    const { html } = markdownToHtml("# Hi", {
       hastPlugins: [
         defineHastPlugin({
           name: "replace-with-numeric",
@@ -285,13 +284,13 @@ describe("SVG attribute conformance via _hast plugin emit path", () => {
           },
         }),
       ],
-    }) as string;
+    });
     expect(html).toContain('width="16"');
     expect(html).toContain('height="16"');
   });
 
   test("xLinkHref namespaced through _hast emit path", () => {
-    const html = markdownToHtml("# Hi", {
+    const { html } = markdownToHtml("# Hi", {
       hastPlugins: [
         defineHastPlugin({
           name: "replace-with-use",
@@ -315,7 +314,7 @@ describe("SVG attribute conformance via _hast plugin emit path", () => {
           },
         }),
       ],
-    }) as string;
+    });
     expect(html).toContain('xlink:href="#sym"');
   });
 });

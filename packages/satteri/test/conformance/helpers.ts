@@ -185,9 +185,8 @@ export function satteriMathHast(md: string): unknown {
 }
 
 export function satteriMathHtml(md: string): string {
-  const result = markdownToHtml(md, { features: MATH_FEATURES });
-  if (typeof result !== "string") throw new Error("expected sync result");
-  return normalizeHtmlForComparison(result);
+  const { html } = markdownToHtml(md, { features: MATH_FEATURES });
+  return normalizeHtmlForComparison(html);
 }
 
 const fmMdastProcessor = buildMdastProcessor(["frontmatter"]);
@@ -220,9 +219,8 @@ export function satteriFmHast(md: string): unknown {
 }
 
 export function satteriFmHtml(md: string): string {
-  const result = markdownToHtml(md, { features: FM_FEATURES });
-  if (typeof result !== "string") throw new Error("expected sync result");
-  return normalizeHtmlForComparison(result);
+  const { html } = markdownToHtml(md, { features: FM_FEATURES });
+  return normalizeHtmlForComparison(html);
 }
 
 export function assertMdastConformance(md: string): void {
@@ -293,9 +291,8 @@ export function referenceHtml(md: string): string {
 }
 
 export function satteriHtml(md: string): string {
-  const result = markdownToHtml(md, { features: BASE_FEATURES });
-  if (typeof result !== "string") throw new Error("markdownToHtml returned a promise");
-  return normalizeHtmlForComparison(result);
+  const { html } = markdownToHtml(md, { features: BASE_FEATURES });
+  return normalizeHtmlForComparison(html);
 }
 
 function normalizeHtml(html: string): string {
