@@ -74,3 +74,39 @@ if (button && menu && sourceTemplate) {
     close();
   });
 }
+
+// Package-manager tabs (emitted by the `install` shortcode). Clicking a tab
+// switches every install snippet on the page at once and persists the choice
+// so the reader's preferred manager sticks across pages.
+const PM_KEY = "pkgManager";
+const DEFAULT_PM = "pnpm";
+
+function setActivePm(pm: string) {
+  document.querySelectorAll<HTMLElement>("[data-pkg-tabs]").forEach((group) => {
+    group.querySelectorAll<HTMLElement>(".pkg-tab").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.pkg === pm);
+    });
+    group.querySelectorAll<HTMLElement>(".pkg-tab-panel").forEach((panel) => {
+      panel.classList.toggle("active", panel.dataset.pkg === pm);
+    });
+  });
+}
+
+let initialPm = DEFAULT_PM;
+try {
+  initialPm = localStorage.getItem(PM_KEY) || DEFAULT_PM;
+} catch {}
+if (initialPm !== DEFAULT_PM) setActivePm(initialPm);
+
+document.querySelectorAll<HTMLElement>("[data-pkg-tabs]").forEach((group) => {
+  group.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>(".pkg-tab");
+    if (!btn) return;
+    const pm = btn.dataset.pkg;
+    if (!pm) return;
+    setActivePm(pm);
+    try {
+      localStorage.setItem(PM_KEY, pm);
+    } catch {}
+  });
+});

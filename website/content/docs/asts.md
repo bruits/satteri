@@ -5,7 +5,7 @@ section: "concepts"
 order: 10
 ---
 
-Sätteri parses your Markdown into an **MDAST** (Markdown Abstract Syntax
+Sätteri parses Markdown into an **MDAST** (Markdown Abstract Syntax
 Tree), then converts it to a **HAST** (Hypertext Abstract Syntax Tree)
 before serializing to HTML. Plugins can hook into either stage.
 

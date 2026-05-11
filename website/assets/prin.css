@@ -234,6 +234,63 @@ pre#demo-highlight code {
   color: var(--color-secondary);
 }
 
+/* Install command tabs (the `install` shortcode). Tab bar and bash panel
+   share one rounded container so the active tab visually anchors to the
+   code below. Choice is persisted in localStorage so every install snippet
+   on the page (and across pages) stays in sync. */
+.prose .pkg-tabs {
+  margin: 1.6em 0;
+  background: var(--color-ink);
+  color: var(--color-paper);
+  border-radius: 3px;
+  overflow: hidden;
+  font-size: 0.85em;
+}
+[data-theme="dark"] .prose .pkg-tabs {
+  background: var(--color-surface);
+  color: var(--color-body);
+  border: 1px solid var(--color-border);
+}
+.pkg-tabbar {
+  display: flex;
+  padding: 0 0.5em;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+.pkg-tab {
+  padding: 0.5em 0.85em;
+  margin-bottom: -1px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.pkg-tab:hover {
+  color: currentColor;
+}
+.pkg-tab.active {
+  color: currentColor;
+  border-bottom-color: currentColor;
+}
+.pkg-tab-panel {
+  display: none;
+}
+.pkg-tab-panel.active {
+  display: block;
+}
+.prose .pkg-tab-panel pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+}
+
 /* ---------- Playground ---------- */
 
 /* Sidebar form controls. The playground sticks to mono everywhere because

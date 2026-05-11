@@ -5,6 +5,15 @@ section: "getting-started"
 order: 20
 ---
 
+## Install
+
+{{ install pkg="satteri" /}}
+
+See [Installation](/docs/installation/) for runtime support and browser
+notes.
+
+## Compile a document
+
 Pass a Markdown string to `markdownToHtml`. You get back the rendered HTML
 and any frontmatter the document had.
 

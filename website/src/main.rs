@@ -4,6 +4,7 @@ mod content;
 mod docs_layout;
 mod layout;
 mod routes;
+mod shortcodes;
 
 use routes::{Chat, DocsIndex, DocsPage, Index, Playground};
 

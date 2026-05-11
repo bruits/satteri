@@ -10,17 +10,7 @@ native binaries via napi-rs, so you don't need a toolchain to use it.
 
 ## Install
 
-```bash
-pnpm add satteri
-```
-
-```bash
-npm install satteri
-```
-
-```bash
-yarn add satteri
-```
+{{ install pkg="satteri" /}}
 
 ## Supported runtimes
 
@@ -36,18 +26,21 @@ WASI build.
 ## Browser usage
 
 In a browser bundle, the WASI build replaces the native binding
-automatically. Two caveats:
+automatically. The WASI runtime needs `SharedArrayBuffer`, so the page
+must be cross-origin isolated using the following headers:
 
-- The WASI runtime needs `SharedArrayBuffer`, which requires the page to
-  be cross-origin isolated. Serve it with `Cross-Origin-Opener-Policy:
-same-origin` and `Cross-Origin-Embedder-Policy: require-corp`.
-- The WASM file is a few MB; serve it with gzip or brotli compression and
-  a long `Cache-Control` so the first compile isn't blocked on the
-  download.
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
 
-The WASI binding initializes lazily on first import. Defer that import
-(via `import()` inside an event handler or `requestIdleCallback`) so the
-WASM download doesn't fight initial page paint.
+See [napi-rs's server configuration
+guide](https://napi.rs/docs/concepts/webassembly#server-configuration)
+for more information.
+
+## Using with Vite
+
+`vite-plugin-satteri` lets you `import` `.md` and `.mdx` files directly in your Vite project. See [Usage with Vite](/docs/vite/) for more information.
 
 ## Versioning
 

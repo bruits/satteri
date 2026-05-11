@@ -1,9 +1,12 @@
 use maud::{PreEscaped, Render};
 use maudit::content::{
     ContentSources, MarkdownOptions, glob_markdown_with_options, markdown_entry,
+    shortcodes::MarkdownShortcodes,
 };
 use maudit::content_sources;
 use serde::Deserialize;
+
+use crate::shortcodes;
 
 #[derive(Deserialize, Eq, PartialEq, PartialOrd, Hash, Clone)]
 #[serde(rename_all = "kebab-case")]
@@ -56,10 +59,18 @@ pub fn content_sources() -> ContentSources {
     content_sources![
         "docs" => glob_markdown_with_options::<DocsContent>(
             "content/docs/*.md",
-            MarkdownOptions {
-                highlight_theme: "base16-eighties.dark".into(),
-                ..Default::default()
-            },
+            docs_markdown_options(),
         )
     ]
+}
+
+fn docs_markdown_options() -> MarkdownOptions {
+    let mut docs_shortcodes = MarkdownShortcodes::default();
+    shortcodes::register(&mut docs_shortcodes);
+
+    MarkdownOptions {
+        highlight_theme: "base16-eighties.dark".into(),
+        shortcodes: docs_shortcodes,
+        ..Default::default()
+    }
 }

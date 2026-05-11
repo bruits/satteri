@@ -20,7 +20,7 @@ impl Default for SeoMeta {
     fn default() -> Self {
         Self {
             title: "Sätteri".to_string(),
-            description: "Sätteri is a Rust Markdown engine with a JavaScript plugin API over HAST and MDAST."
+            description: "Sätteri puts flexible JavaScript plugins on top of a fast Rust Markdown / MDX engine. Best of both worlds."
                 .to_string(),
         }
     }

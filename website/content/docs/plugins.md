@@ -32,8 +32,8 @@ const emojis = defineMdastPlugin({
 const { html } = markdownToHtml("Hi :wave:", { mdastPlugins: [emojis] });
 ```
 
-Return a node from the visitor to replace the visited one. Useful for
-swapping one type for another:
+Return a node from the visitor to replace the visited one. This lets
+you swap one type for another:
 
 ```js
 const unwrapImages = defineMdastPlugin({
@@ -72,23 +72,11 @@ const externalLinks = defineHastPlugin({
 const { html } = markdownToHtml(source, { hastPlugins: [externalLinks] });
 ```
 
-`ctx.textContent(node)` walks the subtree and concatenates text. Useful
-for generating heading IDs.
+`ctx.textContent(node)` walks the subtree and concatenates text, which
+is what you want for generating heading IDs.
 
-## Mutation API
-
-Both `ctx` objects share the same shape:
-
-| Method                              | Effect                            |
-| ----------------------------------- | --------------------------------- |
-| `ctx.setProperty(node, key, value)` | Replace one field on the node     |
-| `ctx.replaceNode(node, newNode)`    | Swap the node for a different one |
-| `ctx.removeNode(node)`              | Drop the node from its parent     |
-| `ctx.insertBefore(node, newNode)`   | Insert a sibling before the node  |
-| `ctx.insertAfter(node, newNode)`    | Insert a sibling after the node   |
-
-Mutations are queued and applied after the visit completes, so it's safe
-to mutate while iterating.
+See the [Plugin API](/docs/plugin-api/) reference for the full list of
+`ctx` methods.
 
 ## Plugin order
 
