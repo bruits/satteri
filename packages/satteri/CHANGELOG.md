@@ -1,5 +1,25 @@
 # satteri
 
+## 0.5.0 — 2026-05-12
+
+### Minor changes
+
+- [adeb321](https://github.com/bruits/satteri/commit/adeb321c9a7c83c60cfa54fb5e886445d640721c) `markdownToHtml` and `mdxToJs` now return an object instead of a bare string. The first field carries the rendered output (`html`, or `code` for MDX), and a new `frontmatter` field exposes the first YAML or TOML frontmatter block in the document, or `null` if none.
+  
+  ```js
+  // Before
+  const html = markdownToHtml(source);
+  
+  // After
+  const { html, frontmatter } = markdownToHtml(source);
+  ```
+  
+  This makes it easier to then pass the frontmatter to a YAML / TOML library of your choice, without needing to extract it using a plugin. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [26f2c22](https://github.com/bruits/satteri/commit/26f2c22945cf0998e69c88fc450c89a23f291c36) Add a fallback for WebContainer that downloads `@bruits/satteri-wasm32-wasi` on demand when none of the native or WASI bindings are reachable in the install. — Thanks @Princesseuh!
+
 ## 0.4.0 — 2026-05-07
 
 ### Minor changes
