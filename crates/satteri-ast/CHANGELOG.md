@@ -1,5 +1,11 @@
 # satteri-ast
 
+## 0.2.6 — 2026-05-12
+
+### Patch changes
+
+- [4a189f7](https://github.com/bruits/satteri/commit/4a189f77bdf55ab7b238810673ef88e6374d02a5) Fixed plugin-inserted MDX JSX elements compiling as literal HTML tags instead of routing through `_components`, which prevented user overrides via the `components` prop. — Thanks @Princesseuh!
+
 ## 0.2.5 — 2026-05-06
 
 ### Patch changes
