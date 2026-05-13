@@ -3,7 +3,7 @@ satteri-arena = { version = "0.1.4", path = "../satteri-arena" }
 satteri-ast = { version = "0.2.6", path = "../satteri-ast" }
 satteri-pulldown-cmark = { version = "0.3.6", path = "../satteri-pulldown-cmark" }
 rustc-hash = "2"
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
 oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true, features = ["serialize"] }
 oxc_codegen = { workspace = true }

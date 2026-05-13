@@ -40,7 +40,7 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-features -- -D warnings
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

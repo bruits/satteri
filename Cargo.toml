@@ -1,29 +1,15 @@
 [workspace]
+resolver = "2"
 members = [
+  "crates/bench",
+  "crates/satteri",
   "crates/satteri-arena",
   "crates/satteri-ast",
-  "crates/bench",
+  "crates/satteri-mdxjs-rs",
   "crates/satteri-napi-binding",
   "crates/satteri-plugin-api",
-  "crates/satteri-mdxjs-rs",
   "crates/satteri-pulldown-cmark",
-  "crates/satteri",
 ]
-resolver = "2"
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-strip = "symbols"
-debug = false
-panic = "abort"
-
-[profile.profiling]
-inherits = "release"
-strip = false
-debug = true
-panic = "unwind"
 
 [workspace.dependencies]
 oxc_allocator = "0.121.0"
@@ -33,3 +19,19 @@ oxc_estree = "0.121.0"
 oxc_parser = "0.121.0"
 oxc_span = "0.121.0"
 oxc_syntax = "0.121.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+debug = false
+strip = "symbols"
+lto = "fat"
+panic = "abort"
+codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+panic = "unwind"

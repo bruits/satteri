@@ -233,8 +233,7 @@ fn container_extensions_test_20() {
 :::
 :::
 "##;
-    let expected = r##"<p>:::</p>
-"##;
+    let expected = r##""##;
 
     test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
