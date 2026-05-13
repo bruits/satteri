@@ -1,23 +1,23 @@
+crates/satteri-pulldown-cmark/Cargo.toml
+  7e9d113c74b965df 4-8,21-26,28-31,36-37
 crates/satteri-pulldown-cmark/build.rs
   7e9d113c74b965df 54,62-63,120-121
 crates/satteri-mdxjs-rs/Cargo.toml
   7e9d113c74b965df 6
-crates/satteri-plugin-api/Cargo.toml
-  7e9d113c74b965df 12-13
-.github/workflows/ci.yml
-  7e9d113c74b965df 43
-crates/satteri-pulldown-cmark/tests/suite/container_extensions.rs
-  7e9d113c74b965df 236
-crates/satteri-pulldown-cmark/tests/suite/regression.rs
-  7e9d113c74b965df 3071,3385,3393,3398-3399
-crates/satteri-pulldown-cmark/Cargo.toml
-  7e9d113c74b965df 4-8,21-26,28-31,36-37
-crates/satteri-ast/Cargo.toml
-  7e9d113c74b965df 11-12
-crates/satteri-pulldown-cmark/tests/suite/table.rs
-  7e9d113c74b965df 772,789-790,805-806,826
 Cargo.toml
   7e9d113c74b965df 2,4-5,8,13-23,28-29,31,36
+crates/satteri-pulldown-cmark/tests/suite/container_extensions.rs
+  7e9d113c74b965df 236
+crates/satteri-plugin-api/Cargo.toml
+  7e9d113c74b965df 12-13
+crates/satteri-pulldown-cmark/tests/suite/table.rs
+  7e9d113c74b965df 772,789-790,805-806,826
+crates/satteri-pulldown-cmark/tests/suite/regression.rs
+  7e9d113c74b965df 3071,3385,3393,3398-3399
+.github/workflows/ci.yml
+  7e9d113c74b965df 43
+crates/satteri-ast/Cargo.toml
+  7e9d113c74b965df 11-12
 ---
 {
   "schema_version": "authorship/3.0.0",
