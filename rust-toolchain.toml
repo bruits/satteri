@@ -3,3 +3,5 @@
 # https://rust-lang.github.io/rustup/concepts/profiles.html
 profile = "default"
 channel = "1.95.0"
+targets = ["aarch64-apple-darwin", "wasm32-wasip1-threads"]
+
