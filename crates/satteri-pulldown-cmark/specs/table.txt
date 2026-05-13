@@ -928,7 +928,7 @@ even though I know they support pipe tables.
 | Table | Header |
 |-------|--------|
 | Table | Body   |
-|→
+|
 | Not   | Enough |
 .
 <table>
@@ -943,10 +943,16 @@ even though I know they support pipe tables.
 <td>Table</td>
 <td>Body</td>
 </tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Not</td>
+<td>Enough</td>
+</tr>
 </tbody>
 </table>
-<p>|
-| Not   | Enough |</p>
 <table>
 <thead>
 <tr>
@@ -959,10 +965,16 @@ even though I know they support pipe tables.
 <td>Table</td>
 <td>Body</td>
 </tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Not</td>
+<td>Enough</td>
+</tr>
 </tbody>
 </table>
-<p>|
-| Not   | Enough |</p>
 ````````````````````````````````
 
 ```````````````````````````````` example
@@ -977,8 +989,13 @@ even though I know they support pipe tables.
 <th>Header</th>
 </tr>
 </thead>
+<tbody>
+<tr>
+<td></td>
+<td></td>
+</tr>
+</tbody>
 </table>
-<p>|</p>
 ````````````````````````````````
 
 ```````````````````````````````` example

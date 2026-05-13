@@ -2630,7 +2630,6 @@ ISSUE 662
 <li>
 <pre><code>&lt;div&gt;
 </code></pre>
-
    <div>
 </li>
 </ul>
@@ -2882,19 +2881,18 @@ We instead set the limit at 32, which is the same limit used by cmark-gfm and ma
 [40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))
 .
 <p><a href="https://rust.org/something%3A((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))">30</a>
-[40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))</p>
+[40](<a href="https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))">https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))</a>)</p>
 ````````````````````````````````
 
 ISSUE #921
 
 ```````````````````````````````` example_metadata_blocks
-- [x]		
+- [x]
 \
 -
 .
 <ul class="contains-task-list">
-<li class="task-list-item"><input type="checkbox" checked disabled> 
-\</li>
+<li class="task-list-item"><input type="checkbox" checked disabled> \</li>
 <li></li>
 </ul>
 ````````````````````````````````

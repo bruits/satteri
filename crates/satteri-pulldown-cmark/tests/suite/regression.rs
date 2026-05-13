@@ -3058,9 +3058,6 @@ fn regression_test_174() {
     test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
 }
 
-// cmark-gfm's expected had a blank line between the indented code block
-// and the trailing HTML block inside the list item; remark (and we) emit
-// a single newline, so the expected is updated to match remark.
 #[test]
 fn regression_test_175() {
     let original = r##"*
@@ -3378,10 +3375,6 @@ fn regression_test_196() {
     test_markdown_html(original, expected, 11358, false, true, false, false, false, false);
 }
 
-// Both we and remark cap inline-link paren-balance at 32, so `[40](…)`
-// fails as a link. cmark-gfm left the entire URL as raw text; remark
-// (and we, via the GFM autolink-literal post-pass) re-tokenise the URL
-// inside the parens as a bare link. Expected updated to match remark.
 #[test]
 fn regression_test_197() {
     let original = r##"[30](https://rust.org/something%3A((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))
@@ -3394,10 +3387,6 @@ fn regression_test_197() {
     test_markdown_html(original, expected, 11358, false, true, false, false, false, false);
 }
 
-// Task-list item where the marker line ends in newline and the next
-// line carries lazy-continuation content. Both we and remark recognise
-// the marker and attach `\` as the item's content; the original cmark-gfm
-// expected had an extra `\n` that remark doesn't produce.
 #[test]
 fn regression_test_198() {
     let original = r##"- [x]

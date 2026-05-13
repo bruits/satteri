@@ -1,5 +1,10 @@
 import { describe, test } from "vitest";
-import { assertHastConformance, assertHtmlConformance, assertMdastConformance } from "./helpers.js";
+import {
+  assertExtHastConformance,
+  assertHastConformance,
+  assertHtmlConformance,
+  assertMdastConformance,
+} from "./helpers.js";
 
 describe("CommonMark spec deltas: HTML blocks with following content", () => {
   test("spec 148: HTML block in table cell with following paragraph", () => {
@@ -122,24 +127,46 @@ describe("CommonMark spec deltas: fuzz-discovered regressions", () => {
   });
 });
 
+describe("GFM autolink-literal: over-parenthesised URL", () => {
+  // remark re-tokenises an over-balanced `[40](…)` URL via the GFM autolink-literal
+  // post-pass (above the 32-paren inline-link cap); cmark-gfm leaves it raw.
+  test("over-balanced parens URL re-autolinked as literal", () => {
+    assertHtmlConformance(
+      "[30](https://rust.org/something%3A((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))\n" +
+        "[40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))\n",
+    );
+  });
+});
+
+describe("GFM tables: stray pipe-only lines", () => {
+  test("bare-pipe line continues the table as empty-cell row", () => {
+    assertHtmlConformance(
+      "| Table | Header |\n|-------|--------|\n| Table | Body   |\n|\n| Not   | Enough |\n",
+    );
+  });
+
+  test("bare-pipe line right after delimiter row is a body row, not a paragraph", () => {
+    assertHtmlConformance("| Table | Header |\n|-------|--------|\n|\n");
+  });
+});
+
+describe("Directive: nested same-fence closer", () => {
+  test("single `:::` closes nested same-length fences, trailing `:::` becomes paragraph", () => {
+    assertExtHastConformance(":::a\n:::b\n\n:::\n:::\n", ["directive"]);
+  });
+});
+
 describe("GFM list-item edge cases", () => {
-  // regression_test_175: indented code block followed by an HTML block inside
-  // a list item — remark emits a single newline between the `<pre>` and the
-  // HTML block, not a blank line.
+  // remark emits a single newline between the indented code block and the trailing HTML block, not a blank line.
   test("indented code block then HTML block inside list item", () => {
     assertHtmlConformance("*\n      <div>\n     <div>\n");
   });
 
-  // regression_test_198: `- [x]` whose marker line ends in newline, with the
-  // next line carrying paragraph content (a `\` hard-break). The task marker
-  // is recognised and the next-line content lazily continues the item.
   test("task-list marker ends line, next line carries lazy paragraph content", () => {
     assertHtmlConformance("- [x]\n\\\n-\n");
   });
 
-  // regression_test_210: same shape but the lazy-continuation line is a
-  // paragraph interrupt (nested list / blockquote). Then the `[x]` is NOT a
-  // task marker; the item becomes plain text + a nested block.
+  // When the next line is a paragraph interrupt (nested list / blockquote), the `[x]` is NOT a task marker; the item becomes plain text + a nested block.
   test("task-list marker ends line, next line is a paragraph interrupt", () => {
     assertHtmlConformance(
       "- [x] * some text\n- [ ] > some text\n- [x]\n  * some text\n- [ ]\n  > some text\n",

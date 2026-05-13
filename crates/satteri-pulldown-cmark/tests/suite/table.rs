@@ -759,9 +759,6 @@ fn table_test_18() {
 
 #[test]
 fn table_test_19() {
-    // remark-gfm accepts a stray `|`-only line as a row with a single empty
-    // cell rather than terminating the table. Update from the old
-    // pulldown-cmark behaviour so mid-table `|` lines continue the table.
     let original = r##"| Table | Header |
 |-------|--------|
 | Table | Body   |
@@ -826,8 +823,6 @@ fn table_test_19() {
 
 #[test]
 fn table_test_20() {
-    // remark-gfm: a `|` immediately after the delimiter row is a first
-    // body row with a single empty cell, not a paragraph.
     let original = r##"| Table | Header |
 |-------|--------|
 |

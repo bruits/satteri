@@ -195,6 +195,7 @@ Multiple containers:
 :::
 :::
 .
+<p>:::</p>
 ````````````````````````````````
 
 Longer opening/closing fence:
