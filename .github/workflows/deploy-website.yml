@@ -41,12 +41,8 @@ jobs:
           cache-target: release
           target-dirs: target, website/target
 
-      - name: Build WASM binding
+      - name: Build TypeScript and WASM binding
         run: pnpm build:wasm
-        working-directory: packages/satteri
-
-      - name: Build TypeScript
-        run: pnpm build:ts
         working-directory: packages/satteri
 
       - name: Build Website

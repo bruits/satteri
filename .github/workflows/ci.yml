@@ -82,12 +82,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build NAPI binding
-        run: pnpm run build:native:debug
-        working-directory: packages/satteri
-
       - name: Build TypeScript
         run: pnpm run build:ts
+        working-directory: packages/satteri
+
+      - name: Build NAPI binding
+        run: pnpm run build:binary:native:debug
         working-directory: packages/satteri
 
       - name: Test
