@@ -123,7 +123,7 @@ fn render_sidebar(ctx: &mut PageContext) -> Markup {
     }
 
     html! {
-        nav.text-base {
+        nav.text-base aria-label="Documentation" {
             @if let Some(row) = prologue {
                 @let active = row.url == current_path;
                 ul.mb-6 {

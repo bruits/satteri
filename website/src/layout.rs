@@ -110,7 +110,7 @@ fn header() -> Markup {
                 a.no-underline.text-ink.font-logo.text-3xl.leading-none.transition-opacity.hover:opacity-70 href="/" {
                     "Sätteri"
                 }
-                nav.hidden."md:flex".items-center.gap-6.text-base.text-secondary.relative."top-px" {
+                nav.hidden."md:flex".items-center.gap-6.text-base.text-secondary.relative."top-px" aria-label="Main" {
                     @for (href, label) in NAV_LINKS {
                         a.no-underline.transition-colors.hover:text-ink.hover:underline.decoration-current.underline-offset-4 href=(href) { (label) }
                     }
