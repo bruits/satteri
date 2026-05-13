@@ -1,6 +1,9 @@
 extern crate satteri_mdxjs;
 use pretty_assertions::assert_eq;
-use satteri_mdxjs::{JsxRuntime, OptimizeStaticConfig, Options, OutputFormat, compile};
+use satteri_mdxjs::{
+    ElementAttributeNameCase, JsxRuntime, OptimizeStaticConfig, Options, OutputFormat,
+    StylePropertyNameCase, compile,
+};
 
 const MDX_OPTS: satteri_pulldown_cmark::Options = satteri_pulldown_cmark::MDX_OPTIONS;
 
@@ -105,6 +108,158 @@ export default MDXContent;
         "should support `options.jsx: true`",
     );
 
+    Ok(())
+}
+
+#[test]
+fn layout_export_default_from() -> Result<(), satteri_arena::mdx_types::Message> {
+    // `export { default } from` lowers to a layout import; the wrapper
+    // destructure would otherwise shadow it to `undefined`.
+    let result = compile(
+        "export { default } from './Layout.astro';\n\n# Hello\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("import { default as MDXLayout } from \"./Layout.astro\""),
+        "should rewrite `export {{ default }} from` as an MDXLayout import: {result}"
+    );
+    assert!(
+        !result.contains("wrapper: MDXLayout"),
+        "MDXContent must not destructure `wrapper: MDXLayout` when MDXLayout is imported: {result}"
+    );
+    assert!(
+        !result.contains("MDXLayout ?"),
+        "MDXContent must not use a conditional when there is an internal layout: {result}"
+    );
+    assert!(
+        result.contains(
+            "return _jsx(MDXLayout, Object.assign({}, props, { children: _jsx(_createMdxContent, props) }));"
+        ),
+        "MDXContent must wrap with MDXLayout directly: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn element_attribute_name_case_react_default()
+-> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "```js\nconsole.log(1);\n```\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("className: \"language-js\""),
+        "default casing should be React-cased `className`: {result}"
+    );
+    assert!(
+        !result.contains("class: \"language-js\""),
+        "default casing should not emit `class`: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn element_attribute_name_case_html() -> Result<(), satteri_arena::mdx_types::Message> {
+    let opts = MDX_OPTS | satteri_pulldown_cmark::Options::ENABLE_FOOTNOTES;
+    let result = compile(
+        "```js\nconsole.log(1);\n```\n\na[^1]\n\n[^1]: note\n",
+        &Options {
+            element_attribute_name_case: ElementAttributeNameCase::Html,
+            ..Default::default()
+        },
+        opts,
+    )?;
+    assert!(
+        result.contains("class: \"language-js\""),
+        "`html` casing should emit `class`: {result}"
+    );
+    assert!(
+        !result.contains("className:"),
+        "`html` casing should not emit `className`: {result}"
+    );
+    assert!(
+        result.contains("class: \"footnotes\""),
+        "footnote section class should be lowercased to `class`: {result}"
+    );
+    // `data-*` / `aria-*` are already kebab-cased in both modes, but confirm
+    // they're still present (these come from a regular String, not via the
+    // React mapping table).
+    assert!(
+        result.contains("\"data-footnote-ref\""),
+        "data-* attrs should survive: {result}"
+    );
+    assert!(
+        result.contains("\"aria-describedby\""),
+        "aria-* attrs should survive: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn style_property_name_case_dom_default() -> Result<(), satteri_arena::mdx_types::Message> {
+    let opts = MDX_OPTS | satteri_pulldown_cmark::Options::ENABLE_TABLES;
+    let result = compile(
+        "| a | b |\n|:--|--:|\n| c | d |\n",
+        &Options::default(),
+        opts,
+    )?;
+    assert!(
+        result.contains("style: { textAlign: \"right\" }"),
+        "default style casing should be DOM (camelCase): {result}"
+    );
+    assert!(
+        result.contains("style: { textAlign: \"left\" }"),
+        "default style casing should be DOM (camelCase): {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn style_property_name_case_css() -> Result<(), satteri_arena::mdx_types::Message> {
+    let opts = MDX_OPTS | satteri_pulldown_cmark::Options::ENABLE_TABLES;
+    let result = compile(
+        "| a | b |\n|:--|--:|\n| c | d |\n",
+        &Options {
+            style_property_name_case: StylePropertyNameCase::Css,
+            ..Default::default()
+        },
+        opts,
+    )?;
+    // `text-align` is not a valid JS identifier so it becomes a string key.
+    assert!(
+        result.contains("\"text-align\": \"right\""),
+        "css casing should kebab-case the style key: {result}"
+    );
+    assert!(
+        result.contains("\"text-align\": \"left\""),
+        "css casing should kebab-case the style key: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn layout_export_default_function() -> Result<(), satteri_arena::mdx_types::Message> {
+    // `export default function Layout(...)` lowers to `const MDXLayout = function Layout(...) {...}`.
+    // Same scope rule applies: no wrapper destructure, no conditional.
+    let result = compile(
+        "export default function Layout(props) { return <section {...props} /> }\n\na\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("const MDXLayout = function Layout"),
+        "should rewrite `export default function` as `const MDXLayout = ...`: {result}"
+    );
+    assert!(
+        !result.contains("wrapper: MDXLayout"),
+        "MDXContent must not destructure `wrapper: MDXLayout` when MDXLayout is a top-level const: {result}"
+    );
+    assert!(
+        !result.contains("MDXLayout ?"),
+        "MDXContent must not use a conditional when there is an internal layout: {result}"
+    );
     Ok(())
 }
 

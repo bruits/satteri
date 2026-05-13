@@ -45,7 +45,8 @@ use satteri_arena::mdx_types::{self as message, Location};
 use std::cell::Cell;
 
 pub use crate::configuration::{
-    MdxConstructs, MdxParseOptions, OptimizeStaticConfig, Options, OutputFormat,
+    ElementAttributeNameCase, MdxConstructs, MdxParseOptions, OptimizeStaticConfig, Options,
+    OutputFormat, StylePropertyNameCase,
 };
 pub use crate::mdx_plugin_recma_document::JsxRuntime;
 
@@ -162,6 +163,8 @@ pub fn compile_hast_arena(
         &mut explicit_jsxs,
         &allocator,
         options.optimize_static.as_ref(),
+        options.element_attribute_name_case,
+        options.style_property_name_case,
     )?;
     mdx_plugin_recma_document(&mut program, options, Some(&location), &allocator)?;
     mdx_plugin_recma_jsx_rewrite(

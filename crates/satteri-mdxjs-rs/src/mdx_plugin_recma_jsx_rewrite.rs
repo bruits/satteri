@@ -77,28 +77,14 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
     let mut need_missing_reference = false;
     let mut need_missing_reference_with_place = false;
 
-    // Collect all names bound by top-level import declarations. These are
-    // already in scope for every function in the module and must not be
-    // treated as dynamic components that need to be destructured from
-    // `_components` / `props.components`.
-    let mut top_level_imports: FxHashSet<String> = FxHashSet::default();
+    // Names bound at the top of the module shadow dynamic components, and
+    // suppress `MDXContent`'s `wrapper: MDXLayout` destructure when
+    // `MDXLayout` is already bound (`recma-document` lowers a layout import
+    // or `export default` into a top-level `MDXLayout`). Mirrors `inScope`
+    // in `@mdx-js/mdx`.
+    let mut top_level_bindings: FxHashSet<String> = FxHashSet::default();
     for stmt in &program.program.body {
-        if let Statement::ImportDeclaration(import) = stmt
-            && let Some(specifiers) = &import.specifiers
-        {
-            for spec in specifiers {
-                let local_name = match spec {
-                    ImportDeclarationSpecifier::ImportSpecifier(s) => s.local.name.to_string(),
-                    ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
-                        s.local.name.to_string()
-                    }
-                    ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
-                        s.local.name.to_string()
-                    }
-                };
-                top_level_imports.insert(local_name);
-            }
-        }
+        collect_defined_names(stmt, &mut top_level_bindings);
     }
 
     // Process the program body. We walk through each top-level statement.
@@ -133,21 +119,24 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
         };
 
         if is_mdx_content {
-            // For MDXContent: add `const { wrapper: MDXLayout } = ...` at the top of the body.
-            let components_init = if has_provider {
-                create_components_merge_expr(allocator)
-            } else {
-                create_props_components_or_empty(allocator)
-            };
-            let layout_decl = create_wrapper_destructure(allocator, components_init);
+            // Skip when `MDXLayout` is already a top-level binding (layout
+            // import or `export default`); re-declaring would shadow it to `undefined`.
+            if !top_level_bindings.contains("MDXLayout") {
+                let components_init = if has_provider {
+                    create_components_merge_expr(allocator)
+                } else {
+                    create_props_components_or_empty(allocator)
+                };
+                let layout_decl = create_wrapper_destructure(allocator, components_init);
 
-            let stmt = &mut program.program.body[i];
-            let body = get_function_body_mut(stmt);
-            if let Some(body) = body {
-                let existing: Vec<Statement<'a>> = body.statements.drain(..).collect();
-                body.statements.push(layout_decl);
-                for s in existing {
-                    body.statements.push(s);
+                let stmt = &mut program.program.body[i];
+                let body = get_function_body_mut(stmt);
+                if let Some(body) = body {
+                    let existing: Vec<Statement<'a>> = body.statements.drain(..).collect();
+                    body.statements.push(layout_decl);
+                    for s in existing {
+                        body.statements.push(s);
+                    }
                 }
             }
             continue;
@@ -174,7 +163,7 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
         defaults.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, span) in &scope.components {
-            if !scope.defined.contains(name.as_str()) && !top_level_imports.contains(name.as_str())
+            if !scope.defined.contains(name.as_str()) && !top_level_bindings.contains(name.as_str())
             {
                 dynamic_components.push((name.clone(), *span));
             }
@@ -182,7 +171,7 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
 
         for name in &scope.objects {
             if !scope.defined.contains(name.as_str())
-                && !top_level_imports.contains(name.as_str())
+                && !top_level_bindings.contains(name.as_str())
                 && !dynamic_components.iter().any(|(n, _)| n == name)
             {
                 dynamic_objects.push(name.clone());

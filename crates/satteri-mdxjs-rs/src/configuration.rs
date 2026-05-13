@@ -317,6 +317,18 @@ pub struct Options {
     /// - `FunctionBody`: Function body that reads runtime from `arguments[0]`
     ///   and returns `{ default: MDXContent, ...exports }`.
     pub output_format: OutputFormat,
+
+    /// Casing for HTML/SVG attribute names on plain (rehype-produced)
+    /// elements (default: [`ElementAttributeNameCase::React`]).
+    ///
+    /// Does not affect attributes on user-written MDX JSX; those are emitted
+    /// as the author wrote them.
+    pub element_attribute_name_case: ElementAttributeNameCase,
+
+    /// Casing for keys in `style` objects parsed from `style="…"` strings
+    /// on plain (rehype-produced) elements (default:
+    /// [`StylePropertyNameCase::Dom`]).
+    pub style_property_name_case: StylePropertyNameCase,
 }
 
 /// Output format for MDX compilation.
@@ -327,6 +339,34 @@ pub enum OutputFormat {
     #[default]
     Program,
     FunctionBody,
+}
+
+/// Casing for HTML/SVG attribute names emitted on plain elements (those
+/// produced from markdown / rehype, not user-written MDX JSX).
+///
+/// - `React` (default): `className`, `htmlFor`, `strokeLinecap`, `xmlLang`
+/// - `Html`: `class`, `for`, `stroke-linecap`, `xml:lang`
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serializable", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serializable", serde(rename_all = "camelCase"))]
+pub enum ElementAttributeNameCase {
+    #[default]
+    React,
+    Html,
+}
+
+/// Casing for keys in `style={{…}}` objects parsed from `style="…"`
+/// attributes on plain elements.
+///
+/// - `Dom` (default): `backgroundColor`, `WebkitLineClamp`
+/// - `Css`: `background-color`, `-webkit-line-clamp`
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serializable", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serializable", serde(rename_all = "camelCase"))]
+pub enum StylePropertyNameCase {
+    #[default]
+    Dom,
+    Css,
 }
 
 impl Default for Options {
@@ -346,6 +386,8 @@ impl Default for Options {
             filepath: None,
             optimize_static: None,
             output_format: OutputFormat::default(),
+            element_attribute_name_case: ElementAttributeNameCase::default(),
+            style_property_name_case: StylePropertyNameCase::default(),
         }
     }
 }

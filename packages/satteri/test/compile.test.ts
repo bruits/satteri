@@ -649,6 +649,98 @@ describe("mdxToJs", () => {
     expect(js).toContain('"h1"');
   });
 
+  // elementAttributeNameCase
+
+  test("elementAttributeNameCase defaults to React casing", () => {
+    const { code: js } = mdxToJs("```js\nconsole.log(1);\n```\n");
+    expect(js).toContain('className: "language-js"');
+    expect(js).not.toContain('class: "language-js"');
+  });
+
+  test("elementAttributeNameCase: 'html' emits HTML attribute names", () => {
+    const { code: js } = mdxToJs(
+      "```js\nconsole.log(1);\n```\n\na[^1]\n\n[^1]: note\n",
+      { elementAttributeNameCase: "html", features: { gfm: true } },
+    );
+    expect(js).toContain('class: "language-js"');
+    expect(js).not.toContain("className:");
+    // GFM footnotes inject className + data-*/aria-*; the latter are already
+    // kebab in both modes, but className must lowercase to class.
+    expect(js).toContain('class: "footnotes"');
+    expect(js).toContain('"data-footnote-ref"');
+    expect(js).toContain('"aria-describedby"');
+  });
+
+  test("elementAttributeNameCase only affects HAST elements, not MDX-written JSX", () => {
+    // User-written `className` on MDX-JSX is preserved verbatim regardless
+    // of the casing option (mirrors @mdx-js/mdx).
+    const { code: js } = mdxToJs('<div className="x">hi</div>\n', {
+      elementAttributeNameCase: "html",
+    });
+    expect(js).toContain('className: "x"');
+  });
+
+  // stylePropertyNameCase
+
+  test("style attribute parses into an object by default (DOM casing)", () => {
+    const { code: js } = mdxToJs("| a | b |\n|:--|--:|\n| c | d |\n", {
+      features: { gfm: true },
+    });
+    expect(js).toContain('style: { textAlign: "right" }');
+    expect(js).toContain('style: { textAlign: "left" }');
+    expect(js).not.toContain('style: "text-align');
+  });
+
+  test("stylePropertyNameCase: 'css' keeps kebab-case keys", () => {
+    const { code: js } = mdxToJs("| a | b |\n|:--|--:|\n| c | d |\n", {
+      features: { gfm: true },
+      stylePropertyNameCase: "css",
+    });
+    // `text-align` is not a valid JS identifier so it serializes as a string.
+    expect(js).toContain('"text-align": "right"');
+    expect(js).toContain('"text-align": "left"');
+    expect(js).not.toContain("textAlign:");
+  });
+
+  test("stylePropertyNameCase via hast plugin: vendor prefixes and custom properties", () => {
+    // Attach a complex style string via a plugin so we exercise the parsing
+    // on something other than table-align.
+    const setStyle = defineHastPlugin({
+      name: "set-style",
+      element: {
+        filter: ["p"],
+        visit(node, ctx) {
+          ctx.setProperty(
+            node,
+            "style",
+            "background-color: red; -webkit-line-clamp: 2; --x: 1",
+          );
+        },
+      },
+    });
+
+    const dom = mdxToJs("hi\n", { hastPlugins: [setStyle] }).code;
+    expect(dom).toContain('backgroundColor: "red"');
+    expect(dom).toContain('WebkitLineClamp: "2"');
+    // Custom properties are kept verbatim under both casings.
+    expect(dom).toContain('"--x": "1"');
+
+    const css = mdxToJs("hi\n", {
+      hastPlugins: [setStyle],
+      stylePropertyNameCase: "css",
+    }).code;
+    expect(css).toContain('"background-color": "red"');
+    expect(css).toContain('"-webkit-line-clamp": "2"');
+    expect(css).toContain('"--x": "1"');
+  });
+
+  test("style on MDX-written JSX is preserved as a string", () => {
+    // Matches @mdx-js/mdx: only HAST elements get string-to-object conversion.
+    const { code: js } = mdxToJs('<div style="color: red">hi</div>\n');
+    expect(js).toContain('style: "color: red"');
+    expect(js).not.toContain("style: {");
+  });
+
   test("rawHtml preserves curly braces as literal text", () => {
     const plugin = defineMdastPlugin({
       name: "raw-html-braces",

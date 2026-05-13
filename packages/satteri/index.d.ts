@@ -123,6 +123,18 @@ export interface JsMdxOptions {
   pragmaImportSource?: string
   /** Output format: "program" (default) or "function-body". */
   outputFormat?: string
+  /**
+   * Casing for HTML/SVG attribute names on plain (rehype-produced)
+   * elements. "react" (default) emits `className`, `htmlFor`, etc.;
+   * "html" emits `class`, `for`, `stroke-linecap`, etc.
+   */
+  elementAttributeNameCase?: string
+  /**
+   * Casing for keys in `style` objects parsed from `style="…"` strings.
+   * "dom" (default) emits `{backgroundColor: …}`; "css" emits
+   * `{"background-color": …}`.
+   */
+  stylePropertyNameCase?: string
 }
 
 /** Static optimization config passed from JavaScript. */

@@ -148,6 +148,14 @@ pub struct JsMdxOptions {
     pub pragma_import_source: Option<String>,
     /// Output format: "program" (default) or "function-body".
     pub output_format: Option<String>,
+    /// Casing for HTML/SVG attribute names on plain (rehype-produced)
+    /// elements. "react" (default) emits `className`, `htmlFor`, etc.;
+    /// "html" emits `class`, `for`, `stroke-linecap`, etc.
+    pub element_attribute_name_case: Option<String>,
+    /// Casing for keys in `style` objects parsed from `style="…"` strings.
+    /// "dom" (default) emits `{backgroundColor: …}`; "css" emits
+    /// `{"background-color": …}`.
+    pub style_property_name_case: Option<String>,
 }
 
 fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
@@ -192,6 +200,18 @@ fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
             options.output_format = match fmt.as_str() {
                 "function-body" => satteri_mdxjs::OutputFormat::FunctionBody,
                 _ => satteri_mdxjs::OutputFormat::Program,
+            };
+        }
+        if let Some(case) = js.element_attribute_name_case {
+            options.element_attribute_name_case = match case.as_str() {
+                "html" => satteri_mdxjs::ElementAttributeNameCase::Html,
+                _ => satteri_mdxjs::ElementAttributeNameCase::React,
+            };
+        }
+        if let Some(case) = js.style_property_name_case {
+            options.style_property_name_case = match case.as_str() {
+                "css" => satteri_mdxjs::StylePropertyNameCase::Css,
+                _ => satteri_mdxjs::StylePropertyNameCase::Dom,
             };
         }
     }

@@ -2,11 +2,11 @@
 //!
 //! Reads from an `Arena` (owned arena).
 
-use crate::configuration::OptimizeStaticConfig;
+use crate::configuration::{ElementAttributeNameCase, OptimizeStaticConfig, StylePropertyNameCase};
 use crate::oxc::{parse_esm_to_tree, parse_expression_to_tree, serialize};
 use crate::oxc_utils::{
-    create_jsx_attr_name_from_str, create_jsx_name_from_str, inter_element_whitespace,
-    is_literal_name,
+    create_jsx_attr_name_from_str, create_jsx_name_from_str, create_object_expression,
+    create_prop_name, create_string_literal, inter_element_whitespace, is_literal_name,
 };
 use core::str;
 use std::cell::Cell;
@@ -17,8 +17,8 @@ use oxc_ast::ast::{
     BindingPattern, Declaration, Expression, ExpressionStatement, JSXAttribute, JSXAttributeItem,
     JSXAttributeValue, JSXChild, JSXClosingElement, JSXClosingFragment, JSXElement,
     JSXEmptyExpression, JSXExpression, JSXExpressionContainer, JSXFragment, JSXOpeningElement,
-    JSXOpeningFragment, JSXSpreadAttribute, ObjectPropertyKind, Program, PropertyKey, Statement,
-    StringLiteral, VariableDeclarationKind,
+    JSXOpeningFragment, JSXSpreadAttribute, ObjectProperty, ObjectPropertyKind, Program,
+    PropertyKey, PropertyKind, Statement, StringLiteral, VariableDeclarationKind,
 };
 use oxc_span::{Atom, SPAN, Span};
 use oxc_syntax::node::NodeId;
@@ -107,9 +107,12 @@ struct Context<'a> {
     /// Populated by the component-override prepass so `transform_mdxjs_esm`
     /// can reuse already-parsed programs instead of parsing the same source twice.
     pre_parsed_esm: FxHashMap<u32, Program<'a>>,
+    element_attribute_name_case: ElementAttributeNameCase,
+    style_property_name_case: StylePropertyNameCase,
 }
 
 /// Compile a HAST into OXC's ES AST.
+#[allow(clippy::too_many_arguments)]
 pub fn hast_util_to_oxc<'a>(
     view: &'a Arena<Hast>,
     path: Option<String>,
@@ -117,6 +120,8 @@ pub fn hast_util_to_oxc<'a>(
     explicit_jsxs: &mut FxHashSet<Span>,
     allocator: &'a Allocator,
     optimize_static: Option<&OptimizeStaticConfig>,
+    element_attribute_name_case: ElementAttributeNameCase,
+    style_property_name_case: StylePropertyNameCase,
 ) -> Result<MdxProgram<'a>, message::Message> {
     let (effective_optimize_static, pre_parsed_esm) =
         prepare_component_overrides(view, allocator, location, optimize_static)?;
@@ -130,6 +135,8 @@ pub fn hast_util_to_oxc<'a>(
         view,
         optimize_static: effective_optimize_static,
         pre_parsed_esm,
+        element_attribute_name_case,
+        style_property_name_case,
     };
     let expr = match one(&mut context, 0, explicit_jsxs)? {
         Some(JSXChild::Fragment(x)) => Some(Expression::JSXFragment(x)),
@@ -534,9 +541,38 @@ fn transform_element<'a>(
     let mut attrs = OxcVec::new_in(alloc);
 
     let prop_count = decode_element_prop_count(data);
+    let in_svg = context.space == Space::Svg;
+    let attr_case = context.element_attribute_name_case;
+    let style_case = context.style_property_name_case;
     for i in 0..prop_count {
         let (name_ref, value_kind, value_ref) = decode_element_prop(data, i);
         let name = context.view.get_str(name_ref);
+
+        // `style="…"` parses into a JSX expression object regardless of
+        // attribute-name casing; key casing is controlled separately.
+        if name == "style"
+            && matches!(value_kind, PROP_STRING | PROP_SPACE_SEP | PROP_COMMA_SEP)
+        {
+            let raw = context.view.get_str(value_ref);
+            let object = build_style_object(alloc, raw, style_case);
+            attrs.push(JSXAttributeItem::Attribute(OxcBox::new_in(
+                JSXAttribute {
+                    node_id: Cell::new(NodeId::DUMMY),
+                    span: SPAN,
+                    name: create_jsx_attr_name_from_str(alloc, "style"),
+                    value: Some(JSXAttributeValue::ExpressionContainer(OxcBox::new_in(
+                        JSXExpressionContainer {
+                            node_id: Cell::new(NodeId::DUMMY),
+                            span: SPAN,
+                            expression: JSXExpression::from(object),
+                        },
+                        alloc,
+                    ))),
+                },
+                alloc,
+            )));
+            continue;
+        }
 
         let value = match value_kind {
             PROP_BOOL_TRUE => None,
@@ -556,7 +592,12 @@ fn transform_element<'a>(
             _ => continue,
         };
 
-        let attr_name = prop_to_attr_name(name);
+        let attr_name = match attr_case {
+            ElementAttributeNameCase::React => prop_to_attr_name(name),
+            ElementAttributeNameCase::Html => {
+                satteri_ast::hast::properties::property_to_attribute(name, in_svg).into_owned()
+            }
+        };
         attrs.push(JSXAttributeItem::Attribute(OxcBox::new_in(
             JSXAttribute {
                 node_id: Cell::new(NodeId::DUMMY),
@@ -1042,3 +1083,200 @@ const PROP_TO_ATTR_EXCEPTIONS_SHARED: [(&str, &str); 48] = [
     ("ariaValueNow", "aria-valuenow"),
     ("ariaValueText", "aria-valuetext"),
 ];
+
+/// Parse a `style="…"` string into a JSX object expression with one
+/// property per declaration. Keys are emitted in DOM casing (default) or
+/// CSS casing depending on `case`.
+fn build_style_object<'a>(
+    alloc: &'a Allocator,
+    raw: &str,
+    case: StylePropertyNameCase,
+) -> Expression<'a> {
+    let mut properties = OxcVec::new_in(alloc);
+    for (key_css, value) in parse_style_declarations(raw) {
+        let key_str = match case {
+            StylePropertyNameCase::Dom => css_to_dom_case(&key_css),
+            StylePropertyNameCase::Css => key_css,
+        };
+        let key = create_prop_name(alloc, &key_str);
+        let value_expr = Expression::StringLiteral(OxcBox::new_in(
+            create_string_literal(alloc, &value),
+            alloc,
+        ));
+        properties.push(ObjectPropertyKind::ObjectProperty(OxcBox::new_in(
+            ObjectProperty {
+                node_id: Cell::new(NodeId::DUMMY),
+                span: SPAN,
+                kind: PropertyKind::Init,
+                key,
+                value: value_expr,
+                shorthand: false,
+                method: false,
+                computed: false,
+            },
+            alloc,
+        )));
+    }
+    create_object_expression(alloc, properties)
+}
+
+/// Split a CSS declaration list into `(property, value)` pairs in their CSS
+/// (kebab-cased / vendor-prefixed) form. Respects single/double quotes and
+/// parenthesised groups (e.g. `url(...)`) so semicolons inside them aren't
+/// treated as separators.
+fn parse_style_declarations(input: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut buf = String::new();
+    let mut quote: Option<char> = None;
+    let mut paren_depth: u32 = 0;
+    let bytes = input.as_bytes();
+
+    let push_decl = |buf: &mut String, out: &mut Vec<(String, String)>| {
+        let decl = buf.trim();
+        if !decl.is_empty()
+            && let Some(colon) = decl.find(':')
+        {
+            let property = decl[..colon].trim().to_ascii_lowercase();
+            let value = decl[colon + 1..].trim().to_string();
+            if !property.is_empty() && !value.is_empty() {
+                out.push((property, value));
+            }
+        }
+        buf.clear();
+    };
+
+    for &b in bytes {
+        let c = b as char;
+        if let Some(q) = quote {
+            buf.push(c);
+            if c == q {
+                quote = None;
+            }
+        } else {
+            match c {
+                '"' | '\'' => {
+                    quote = Some(c);
+                    buf.push(c);
+                }
+                '(' => {
+                    paren_depth += 1;
+                    buf.push(c);
+                }
+                ')' => {
+                    paren_depth = paren_depth.saturating_sub(1);
+                    buf.push(c);
+                }
+                ';' if paren_depth == 0 => {
+                    push_decl(&mut buf, &mut out);
+                }
+                _ => buf.push(c),
+            }
+        }
+    }
+    push_decl(&mut buf, &mut out);
+    out
+}
+
+/// CSS kebab/vendor-prefixed property name to DOM (React) casing.
+/// `background-color` becomes `backgroundColor`, `-webkit-line-clamp` becomes
+/// `WebkitLineClamp`, `-ms-transform` becomes `msTransform` (lowercase `ms`
+/// is a React quirk), and `--my-var` is preserved.
+fn css_to_dom_case(s: &str) -> String {
+    if s.starts_with("--") {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    let mut capitalize_next;
+    if let Some(rest) = s.strip_prefix("-ms-") {
+        // React quirk: -ms-* keeps lowercase `ms`, not `Ms`.
+        out.push_str("ms");
+        chars = rest.chars();
+        capitalize_next = true;
+    } else if let Some(rest) = s.strip_prefix('-') {
+        chars = rest.chars();
+        capitalize_next = true;
+    } else {
+        capitalize_next = false;
+    }
+    for c in chars {
+        if c == '-' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            for u in c.to_uppercase() {
+                out.push(u);
+            }
+            capitalize_next = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn css_to_dom_basic() {
+        assert_eq!(css_to_dom_case("color"), "color");
+        assert_eq!(css_to_dom_case("background-color"), "backgroundColor");
+        assert_eq!(css_to_dom_case("text-align"), "textAlign");
+    }
+
+    #[test]
+    fn css_to_dom_vendor_prefixes() {
+        // `-webkit-`, `-moz-`, `-o-` capitalize the prefix.
+        assert_eq!(css_to_dom_case("-webkit-line-clamp"), "WebkitLineClamp");
+        assert_eq!(css_to_dom_case("-moz-user-select"), "MozUserSelect");
+        // `-ms-` is the React quirk: lowercase `ms`.
+        assert_eq!(css_to_dom_case("-ms-transform"), "msTransform");
+    }
+
+    #[test]
+    fn css_to_dom_custom_property() {
+        assert_eq!(css_to_dom_case("--my-var"), "--my-var");
+        assert_eq!(css_to_dom_case("--theme-color-1"), "--theme-color-1");
+    }
+
+    #[test]
+    fn parse_style_simple() {
+        let pairs = parse_style_declarations("color: red; font-size: 14px");
+        assert_eq!(
+            pairs,
+            vec![
+                ("color".to_string(), "red".to_string()),
+                ("font-size".to_string(), "14px".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_style_trailing_semicolon_and_whitespace() {
+        let pairs = parse_style_declarations("  color : red ;  ");
+        assert_eq!(pairs, vec![("color".to_string(), "red".to_string())]);
+    }
+
+    #[test]
+    fn parse_style_respects_quotes_and_parens() {
+        // Semicolons inside `url(...)` and quoted strings must not split.
+        let pairs = parse_style_declarations(
+            r#"background: url("a;b.png"); content: ";"; color: red"#,
+        );
+        assert_eq!(
+            pairs,
+            vec![
+                ("background".to_string(), r#"url("a;b.png")"#.to_string()),
+                ("content".to_string(), r#"";""#.to_string()),
+                ("color".to_string(), "red".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_style_lowercases_property() {
+        let pairs = parse_style_declarations("COLOR: red");
+        assert_eq!(pairs, vec![("color".to_string(), "red".to_string())]);
+    }
+}

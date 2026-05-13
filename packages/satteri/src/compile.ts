@@ -148,6 +148,8 @@ function mdxOptionsToNative(opts: {
   pragmaFrag?: string;
   pragmaImportSource?: string;
   outputFormat?: "program" | "function-body";
+  elementAttributeNameCase?: "react" | "html";
+  stylePropertyNameCase?: "dom" | "css";
 }) {
   const hasAny =
     opts.optimizeStatic ||
@@ -159,7 +161,9 @@ function mdxOptionsToNative(opts: {
     opts.pragma !== undefined ||
     opts.pragmaFrag !== undefined ||
     opts.pragmaImportSource !== undefined ||
-    opts.outputFormat !== undefined;
+    opts.outputFormat !== undefined ||
+    opts.elementAttributeNameCase !== undefined ||
+    opts.stylePropertyNameCase !== undefined;
   if (!hasAny) return undefined;
   const result: Record<string, any> = {};
   if (opts.optimizeStatic) result.optimizeStatic = opts.optimizeStatic;
@@ -173,6 +177,10 @@ function mdxOptionsToNative(opts: {
   if (opts.pragmaFrag !== undefined) result.pragmaFrag = opts.pragmaFrag;
   if (opts.pragmaImportSource !== undefined) result.pragmaImportSource = opts.pragmaImportSource;
   if (opts.outputFormat !== undefined) result.outputFormat = opts.outputFormat;
+  if (opts.elementAttributeNameCase !== undefined)
+    result.elementAttributeNameCase = opts.elementAttributeNameCase;
+  if (opts.stylePropertyNameCase !== undefined)
+    result.stylePropertyNameCase = opts.stylePropertyNameCase;
   return result;
 }
 
@@ -265,6 +273,24 @@ export interface MdxOnlyOptions {
    *   `new Function()` or `evaluate()`.
    */
   outputFormat?: "program" | "function-body";
+  /**
+   * Casing for HTML/SVG attribute names on plain (rehype-produced) elements.
+   *
+   * - `"react"` (default): `className`, `htmlFor`, `strokeLinecap`, `xmlLang`.
+   * - `"html"`: `class`, `for`, `stroke-linecap`, `xml:lang`.
+   *
+   * Does not affect attributes on user-written MDX JSX; those are emitted as
+   * the author wrote them.
+   */
+  elementAttributeNameCase?: "react" | "html";
+  /**
+   * Casing for keys in `style` objects parsed from `style="…"` strings on
+   * plain (rehype-produced) elements.
+   *
+   * - `"dom"` (default): `{backgroundColor: …, WebkitLineClamp: …}`.
+   * - `"css"`: `{"background-color": …, "-webkit-line-clamp": …}`.
+   */
+  stylePropertyNameCase?: "dom" | "css";
 }
 
 export interface MdxCompileOptions extends CompileOptions, MdxOnlyOptions {}
