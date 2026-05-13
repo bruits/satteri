@@ -3079,6 +3079,7 @@ fn regression_test_175() {
 <li>
 <pre><code>&lt;div&gt;
 </code></pre>
+
    <div>
 </li>
 </ul>
@@ -3392,7 +3393,7 @@ fn regression_test_197() {
 [40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))
 "##;
     let expected = r##"<p><a href="https://rust.org/something%3A((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))">30</a>
-[40](<a href="https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))">https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))</a>)</p>
+[40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))</p>
 "##;
 
     test_markdown_html(original, expected, 11358, false, true, false, false, false, false);
@@ -3400,12 +3401,13 @@ fn regression_test_197() {
 
 #[test]
 fn regression_test_198() {
-    let original = r##"- [x]
+    let original = r##"- [x]		
 \
 -
 "##;
     let expected = r##"<ul class="contains-task-list">
-<li class="task-list-item"><input type="checkbox" checked disabled> \</li>
+<li class="task-list-item"><input type="checkbox" checked disabled> 
+\</li>
 <li></li>
 </ul>
 "##;

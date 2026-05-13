@@ -20,13 +20,11 @@ path = "src/html_compare.rs"
 
 
 [dependencies]
-satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" }
-satteri-ast = { path = "../satteri-ast" }
+satteri-pulldown-cmark = { workspace = true }
+satteri-ast = { workspace = true }
 
 [dev-dependencies]
 divan = { version = "4", package = "codspeed-divan-compat" }
-satteri-ast = { path = "../satteri-ast" }
 satteri-mdxjs = { path = "../satteri-mdxjs-rs" }
 oxc_allocator = { workspace = true }
-rustc-hash = "2"
-satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" }
+rustc-hash = { workspace = true }

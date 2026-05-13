@@ -1,24 +1,3 @@
-[dependencies]
-satteri-arena = { version = "0.2.0", path = "../satteri-arena" }
-satteri-ast = { version = "0.2.7", path = "../satteri-ast" }
-satteri-pulldown-cmark = { version = "0.4.1", path = "../satteri-pulldown-cmark" }
-rustc-hash = "2"
-serde = { workspace = true }
-oxc_allocator = { workspace = true }
-oxc_ast = { workspace = true, features = ["serialize"] }
-oxc_codegen = { workspace = true }
-oxc_estree = { workspace = true, features = ["serialize"] }
-oxc_parser = { workspace = true }
-oxc_span = { workspace = true }
-oxc_syntax = { workspace = true }
-unicode-id-start = "1"
-
-[dev-dependencies]
-pretty_assertions = "1"
-
-[features]
-serializable = []
-
 [package]
 authors = ["Bruits", "Titus Wormer <tituswormer@gmail.com>"]
 categories = ["compilers", "text-processing"]
@@ -32,3 +11,24 @@ name = "satteri-mdxjs"
 repository = "https://github.com/bruits/satteri"
 rust-version = "1.91.0"
 version = "0.2.3"
+
+[dependencies]
+oxc_allocator = { workspace = true }
+oxc_ast = { workspace = true, features = ["serialize"] }
+oxc_codegen = { workspace = true }
+oxc_estree = { workspace = true, features = ["serialize"] }
+oxc_parser = { workspace = true }
+oxc_span = { workspace = true }
+oxc_syntax = { workspace = true }
+rustc-hash = { workspace = true }
+satteri-arena = { workspace = true }
+satteri-ast = { workspace = true }
+satteri-pulldown-cmark = { workspace = true }
+serde = { workspace = true }
+unicode-id-start = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = "1"
+
+[features]
+serializable = []
