@@ -3839,7 +3839,7 @@ mod simd {
 
         if bytes.len() > ix {
             // shift off the bytes at start we have already scanned
-            let mask = compute_mask(lut, bytes, upperbound) >> ix - upperbound;
+            let mask = compute_mask(lut, bytes, upperbound) >> (ix - upperbound);
             if let Err((end_ix, val)) = process_mask(mask, bytes, ix, &mut callback) {
                 return (end_ix, val);
             }

@@ -769,7 +769,7 @@ fn table_test_19() {
 | Table | Header |
 |-------|--------|
 | Table | Body   |
-|	
+|
 | Not   | Enough |
 "##;
     let expected = r##"<table>
@@ -784,10 +784,16 @@ fn table_test_19() {
 <td>Table</td>
 <td>Body</td>
 </tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Not</td>
+<td>Enough</td>
+</tr>
 </tbody>
 </table>
-<p>|
-| Not   | Enough |</p>
 <table>
 <thead>
 <tr>
@@ -800,10 +806,16 @@ fn table_test_19() {
 <td>Table</td>
 <td>Body</td>
 </tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Not</td>
+<td>Enough</td>
+</tr>
 </tbody>
 </table>
-<p>|
-| Not   | Enough |</p>
 "##;
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, false);
@@ -822,8 +834,13 @@ fn table_test_20() {
 <th>Header</th>
 </tr>
 </thead>
+<tbody>
+<tr>
+<td></td>
+<td></td>
+</tr>
+</tbody>
 </table>
-<p>|</p>
 "##;
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, false);
