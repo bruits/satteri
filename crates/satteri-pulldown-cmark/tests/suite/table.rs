@@ -445,18 +445,40 @@ b
 |  a  |  b  |
 | --- | --- |
 |  c  |  d  |</p>
-<p>table c
-a  |  b
---- | ---
-c  |  d</p>
+<p>table c</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
 <p>table d
 a | b
 --|--
 c | d</p>
-<p>table e
-a | b
---|--
-c | d</p>
+<p>table e</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
 <p>table f</p>
 <table>
 <thead>
@@ -472,14 +494,34 @@ c | d</p>
 </tr>
 </tbody>
 </table>
-<p>table g
-a  |  b
---- | ---
-c  |  d</p>
-<p>table h
-a
-|-|
-b</p>
+<p>table g</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
+<p>table h</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>b</td>
+</tr>
+</tbody>
+</table>
 <p>table i</p>
 <table>
 <thead>

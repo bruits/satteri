@@ -294,10 +294,21 @@ A | B
 ---|---
 foo | bar
 .
-<p>lorem ipsum
-A | B
----|---
-foo | bar</p>
+<p>lorem ipsum</p>
+<table>
+<thead>
+<tr>
+<th>A</th>
+<th>B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>foo</td>
+<td>bar</td>
+</tr>
+</tbody>
+</table>
 ````````````````````````````````
 
 ISSUE #318 (note the trailing whitespace on the first line)
@@ -483,10 +494,10 @@ ISSUE #336
 
 ```````````````````````````````` example
 <foo bar =
- "hi"> 
+ "hi">
 .
 <p><foo bar =
- "hi"></p>
+"hi"></p>
 ````````````````````````````````
 
 EMPHASIS ACROSS PARAGRAPHS

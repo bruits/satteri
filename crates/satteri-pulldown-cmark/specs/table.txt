@@ -394,7 +394,7 @@ implementations that support pipe tables at all[^1]:
 
 | Implementation     -> | a | b | c | d | e | f | g | h | i | j |
 | --------------------- | - | - | - | - | - | - | - | - | - | - |
-| **pulldown-cmark**    | ✓ | x | x | x | x | ✓ | x | x | ✓ | x |
+| **pulldown-cmark**    | ✓ | x | ✓ | x | ✓ | ✓ | ✓ | ✓ | ✓ | x |
 | github/cmark-gfm      | ✓ | x | ✓ | x | ✓ | ✓ | ✓ | ✓ | ✓ | x |
 | pycmarkgfm            | ✓ | x | ✓ | x | ✓ | ✓ | ✓ | ✓ | ✓ | x |
 | DFM[^2]               | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | - | - | x |
@@ -410,9 +410,10 @@ implementations that support pipe tables at all[^1]:
 | pandoc                | x | x | x | x | x | x | x | x | x | x |
 | multimarkdown         | x | x | x | x | x | x | x | x | x | x |
 
-While pulldown-cmark could probably afford to align itself with GFM, tables
-interrupting paragraphs is not a portable feature, and anyone trying to write
-widely-compatible markdown syntax can't rely on it.
+Sätteri aligns with GFM/cmark-gfm here: a paragraph can be interrupted by a
+"light" table (a header line followed by a valid delimiter row, no leading
+pipe required). Tables interrupting paragraphs still isn't portable across
+all implementations, so widely-compatible markdown shouldn't rely on it.
 
 [^1]:
     Implementations that "support pipe tables at all" were identified by
@@ -506,18 +507,40 @@ b
 |  a  |  b  |
 | --- | --- |
 |  c  |  d  |</p>
-<p>table c
-a  |  b
---- | ---
-c  |  d</p>
+<p>table c</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
 <p>table d
 a | b
 --|--
 c | d</p>
-<p>table e
-a | b
---|--
-c | d</p>
+<p>table e</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
 <p>table f</p>
 <table>
 <thead>
@@ -533,14 +556,34 @@ c | d</p>
 </tr>
 </tbody>
 </table>
-<p>table g
-a  |  b
---- | ---
-c  |  d</p>
-<p>table h
-a
-|-|
-b</p>
+<p>table g</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
+<p>table h</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>b</td>
+</tr>
+</tbody>
+</table>
 <p>table i</p>
 <table>
 <thead>

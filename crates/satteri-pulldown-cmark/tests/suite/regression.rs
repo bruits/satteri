@@ -342,10 +342,21 @@ A | B
 ---|---
 foo | bar
 "##;
-    let expected = r##"<p>lorem ipsum
-A | B
----|---
-foo | bar</p>
+    let expected = r##"<p>lorem ipsum</p>
+<table>
+<thead>
+<tr>
+<th>A</th>
+<th>B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>foo</td>
+<td>bar</td>
+</tr>
+</tbody>
+</table>
 "##;
 
     test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
@@ -559,10 +570,10 @@ fn regression_test_36() {
 #[test]
 fn regression_test_37() {
     let original = r##"<foo bar =
- "hi"> 
+ "hi">
 "##;
     let expected = r##"<p><foo bar =
- "hi"></p>
+"hi"></p>
 "##;
 
     test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
