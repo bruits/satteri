@@ -148,10 +148,10 @@ const footnoteRef = fc.tuple(INLINE_TEXT, WORD).map(([text, id]) => `${text}[^${
 const footnoteDef = fc.tuple(WORD, INLINE_TEXT).map(([id, text]) => `[^${id}]: ${text}`);
 
 const nestedList = fc
-  .array(
-    fc.tuple(INLINE_TEXT, fc.array(INLINE_TEXT, { minLength: 0, maxLength: 3 })),
-    { minLength: 1, maxLength: 3 },
-  )
+  .array(fc.tuple(INLINE_TEXT, fc.array(INLINE_TEXT, { minLength: 0, maxLength: 3 })), {
+    minLength: 1,
+    maxLength: 3,
+  })
   .map((items) =>
     items
       .map(([parent, children]) =>

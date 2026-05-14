@@ -1503,14 +1503,17 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
             Some(node_id)
         } else if node.node_type == HastNodeType::Element as u8 {
             let children = arena.get_children(node_id);
-            children.first().copied().filter(|&id| {
-                arena.get_node(id).node_type == HastNodeType::Text as u8
-            })
+            children
+                .first()
+                .copied()
+                .filter(|&id| arena.get_node(id).node_type == HastNodeType::Text as u8)
         } else {
             None
         }
     };
-    let Some(text_id) = target_id else { return; };
+    let Some(text_id) = target_id else {
+        return;
+    };
     let (data_off, data_len) = {
         let node = arena.get_node(text_id);
         (node.data_offset as usize, node.data_len as usize)

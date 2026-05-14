@@ -1316,11 +1316,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // Allow up to 3 spaces of leading indent: a line
                             // like ` - …` is a valid bullet (and lists win
                             // over table delimiter recognition).
-                            let leading_spaces = delim
-                                .iter()
-                                .take(3)
-                                .take_while(|&&b| b == b' ')
-                                .count();
+                            let leading_spaces =
+                                delim.iter().take(3).take_while(|&&b| b == b' ').count();
                             let delim_is_list_item =
                                 scan_listitem(&delim[leading_spaces..]).is_some();
                             let (table_head_bytes, alignment) = if delim_is_list_item {
@@ -2037,8 +2034,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let mut ix = meta_start + scan_nextline(&bytes[meta_start..]);
         // Only strip the trailing newline; preserve any trailing spaces/tabs
         // in the meta string (remark keeps them verbatim).
-        let meta_end =
-            ix - scan_rev_while(&bytes[meta_start..ix], |c| c == b'\n' || c == b'\r');
+        let meta_end = ix - scan_rev_while(&bytes[meta_start..ix], |c| c == b'\n' || c == b'\r');
         let meta_string = if meta_start < meta_end {
             unescape(&self.text[meta_start..meta_end], self.tree.is_in_table())
         } else {
@@ -3386,10 +3382,7 @@ fn delim_run_can_open(
     // See the matching comment in `delim_run_can_close`: the
     // `prev_char == '~'` shortcut bypasses standard flanking and lets pairing
     // walk across escaped tildes, so it's now gated on subscript mode only.
-    if delim == b'~'
-        && options.contains(Options::ENABLE_SUBSCRIPT)
-        && !is_punctuation(next_char)
-    {
+    if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) && !is_punctuation(next_char) {
         return true;
     }
     if delim == b'~' && options.contains(Options::ENABLE_STRIKETHROUGH) && run_len == 1 {

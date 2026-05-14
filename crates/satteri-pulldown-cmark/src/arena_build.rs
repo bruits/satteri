@@ -257,14 +257,10 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                                         // `newlines_skipped`. Anything else
                                         // ends the extension.
                                         let mut p = pos;
-                                        while p < src.len()
-                                            && (src[p] == b' ' || src[p] == b'\t')
-                                        {
+                                        while p < src.len() && (src[p] == b' ' || src[p] == b'\t') {
                                             p += 1;
                                         }
-                                        if p < src.len()
-                                            && (src[p] == b'\r' || src[p] == b'\n')
-                                        {
+                                        if p < src.len() && (src[p] == b'\r' || src[p] == b'\n') {
                                             pos = p;
                                             continue;
                                         }
@@ -300,20 +296,15 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                                         let mut data =
                                             builder.arena_ref().get_type_data(id).to_vec();
                                         if data.len() >= 24 {
-                                            let mut extended = String::with_capacity(
-                                                content.len() + extra,
-                                            );
+                                            let mut extended =
+                                                String::with_capacity(content.len() + extra);
                                             extended.push_str(&content);
                                             for _ in 0..extra {
                                                 extended.push('\n');
                                             }
                                             let sr2 = builder.alloc_string(&extended);
-                                            data = builder
-                                                .arena_ref()
-                                                .get_type_data(id)
-                                                .to_vec();
-                                            data[16..24]
-                                                .copy_from_slice(&sr2.as_bytes());
+                                            data = builder.arena_ref().get_type_data(id).to_vec();
+                                            data[16..24].copy_from_slice(&sr2.as_bytes());
                                             builder.set_data_current(&data);
                                         }
                                     }
