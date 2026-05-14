@@ -1,7 +1,7 @@
 use maud::{DOCTYPE, html};
 use maudit::route::prelude::*;
 
-const DISCORD_URL: &str = "https://discord.gg/9DJyQBPgMj";
+const DISCORD_URL: &str = "https://discord.com/invite/84pd4QtmzA";
 
 #[route("/chat/")]
 pub struct Chat;
