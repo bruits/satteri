@@ -263,6 +263,12 @@ impl<'a> LineStart<'a> {
     }
 
     pub(crate) fn scan_blockquote_marker(&mut self) -> bool {
+        // A `>` preceded by leftover tab whitespace is at column ≥4, which is
+        // too much indentation to be a marker. Refuse to consume it so the
+        // line falls through to lazy continuation / indented code instead.
+        if self.spaces_remaining > 0 {
+            return false;
+        }
         if self.scan_ch(b'>') {
             let _ = self.scan_space(1);
             true
@@ -576,9 +582,8 @@ pub(crate) fn scan_math_fence(data: &[u8]) -> Option<usize> {
 }
 
 pub(crate) fn scan_closing_math_fence(bytes: &[u8], n_fence_char: usize) -> Option<usize> {
-    if bytes.is_empty() {
-        return Some(0);
-    }
+    // EOF is handled by parse_math_block's loop-top EOF check; here we only
+    // match an actual `$$+` fence.
     let num_fence_chars_found = scan_ch_repeat(bytes, b'$');
     if num_fence_chars_found < n_fence_char {
         return None;
@@ -718,6 +723,14 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
     let mut found_pipe = false;
     let mut found_hyphen = false;
     let mut found_hyphen_in_col = false;
+    let mut found_colon = false;
+    // Per GFM each cell is `:?-+:?`: at most one leading colon, then hyphens,
+    // then at most one trailing colon, no internal whitespace.
+    // `cell_after_trailing_ws` flags ws between content (e.g. `- -`).
+    // `cell_has_trailing_colon` flags that we've already seen a trailing
+    // colon, so any further `:` or `-` invalidates the cell (e.g. `-::-`).
+    let mut cell_after_trailing_ws = false;
+    let mut cell_has_trailing_colon = false;
     if data[i] == b'|' {
         i += 1;
         found_pipe = true;
@@ -728,17 +741,36 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
             break;
         }
         match *c {
-            b' ' | b'\t' => (),
+            b' ' | b'\t' => {
+                if !start_col {
+                    cell_after_trailing_ws = true;
+                }
+            }
             b':' => {
+                if cell_after_trailing_ws {
+                    return (0, vec![]);
+                }
                 active_col = match (start_col, active_col) {
                     (true, Alignment::None) => Alignment::Left,
-                    (false, Alignment::Left) => Alignment::Center,
-                    (false, Alignment::None) => Alignment::Right,
-                    _ => active_col,
+                    (false, Alignment::Left) => {
+                        cell_has_trailing_colon = true;
+                        Alignment::Center
+                    }
+                    (false, Alignment::None) => {
+                        cell_has_trailing_colon = true;
+                        Alignment::Right
+                    }
+                    // Already had a trailing colon, or some other invalid
+                    // combination. Reject.
+                    _ => return (0, vec![]),
                 };
+                found_colon = true;
                 start_col = false;
             }
             b'-' => {
+                if cell_after_trailing_ws || cell_has_trailing_colon {
+                    return (0, vec![]);
+                }
                 start_col = false;
                 found_hyphen = true;
                 found_hyphen_in_col = true;
@@ -746,6 +778,8 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
             b'|' => {
                 start_col = true;
                 found_pipe = true;
+                cell_after_trailing_ws = false;
+                cell_has_trailing_colon = false;
                 cols.push(active_col);
                 active_col = Alignment::None;
                 if !found_hyphen_in_col {
@@ -765,9 +799,10 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
     if !start_col {
         cols.push(active_col);
     }
-    if !found_pipe || !found_hyphen {
-        // It isn't a table head if it doesn't have a least one pipe or hyphen.
-        // It's a list, a header, or a thematic break.
+    // Require a hyphen; either a pipe (unambiguous table) or a colon
+    // disambiguates from setext underlines / thematic breaks (which never use
+    // `:`), so 1-col delimiters like `:-` or `-:` count.
+    if !found_hyphen || (!found_pipe && !found_colon) {
         return (0, vec![]);
     }
 

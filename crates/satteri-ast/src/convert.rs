@@ -1474,9 +1474,67 @@ fn convert_children(
     ctx: &ConvertCtx<'_, '_>,
 ) {
     let children = view.get_children(node_id);
+    let mut prev_was_break = false;
+    let break_ty = MdastNodeType::Break as u8;
     for &child_id in children {
+        let before_count = builder.current_pending_children().len();
         convert_node(child_id, view, builder, ctx);
+        if prev_was_break {
+            let pending = builder.current_pending_children();
+            if pending.len() > before_count {
+                let first_new = pending[before_count];
+                trim_leading_ws_after_break(builder, first_new);
+            }
+        }
+        prev_was_break = view.get_node(child_id).node_type == break_ty;
     }
+}
+
+/// After a `Break` mdast sibling, trim leading spaces and tabs from the text
+/// content of the next sibling's hast output. Matches mdast-util-to-hast's
+/// post-break `trimMarkdownSpaceStart` pass: only the directly-emitted text
+/// node (for text mdast nodes) or the first text child of the emitted element
+/// is touched. No deeper recursion.
+fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
+    let arena = builder.arena_mut();
+    let target_id = {
+        let node = arena.get_node(node_id);
+        if node.node_type == HastNodeType::Text as u8 {
+            Some(node_id)
+        } else if node.node_type == HastNodeType::Element as u8 {
+            let children = arena.get_children(node_id);
+            children.first().copied().filter(|&id| {
+                arena.get_node(id).node_type == HastNodeType::Text as u8
+            })
+        } else {
+            None
+        }
+    };
+    let Some(text_id) = target_id else { return; };
+    let (data_off, data_len) = {
+        let node = arena.get_node(text_id);
+        (node.data_offset as usize, node.data_len as usize)
+    };
+    if data_len < 8 {
+        return;
+    }
+    let sref = StringRef::from_bytes(&arena.type_data[data_off..data_off + 8]);
+    let s_off = sref.offset as usize;
+    let s_len = sref.len as usize;
+    let source_bytes = arena.source.as_bytes();
+    if s_off + s_len > source_bytes.len() {
+        return;
+    }
+    let slice = &source_bytes[s_off..s_off + s_len];
+    let mut i = 0;
+    while i < slice.len() && (slice[i] == b' ' || slice[i] == b'\t') {
+        i += 1;
+    }
+    if i == 0 {
+        return;
+    }
+    let new_ref = StringRef::new((s_off + i) as u32, (s_len - i) as u32);
+    arena.type_data[data_off..data_off + 8].copy_from_slice(&new_ref.as_bytes());
 }
 
 /// Convert children with `\n` text nodes between them.

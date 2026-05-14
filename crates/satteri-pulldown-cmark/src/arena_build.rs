@@ -88,6 +88,23 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     let mut jsx_stack: Vec<(String, u32)> = Vec::new();
     let mut mdx_errors: Vec<(usize, String)> = Vec::new();
 
+    // Refdefs in source order. Each container close pass claims the defs whose
+    // source range lies inside it; the rest get emitted at root. `emitted`
+    // tracks which ones have already been placed.
+    let mut refdefs_pending: Vec<PendingRefdef> = inner
+        .allocs
+        .refdefs_all
+        .iter()
+        .map(|(label, def)| PendingRefdef {
+            label: label.as_ref().to_string(),
+            dest: def.dest.to_string(),
+            title: def.title.as_ref().map(|t| t.to_string()),
+            span: def.span.clone(),
+        })
+        .collect();
+    refdefs_pending.sort_by_key(|r| r.span.start);
+    let mut refdef_emitted: Vec<bool> = vec![false; refdefs_pending.len()];
+
     // Walk the tree iteratively.
     loop {
         match inner.tree.cur() {
@@ -114,12 +131,25 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
 
                 let item = inner.tree[ix].item;
                 let mut end = item.end as u32;
-                if item.body.is_block_level() {
+                // Trim trailing newlines from the block's position span. A
+                // few block kinds need special handling: math blocks at EOF
+                // keep their trailing newline; non-EOF math strips a single
+                // newline; fenced code at EOF mirrors math at EOF (remark
+                // preserves the final line ending in the position span).
+                let is_math = matches!(item.body, ItemBody::MathBlock(_));
+                let math_at_eof = is_math && end as usize >= source.len();
+                let fenced_at_eof = matches!(item.body, ItemBody::FencedCodeBlock(_))
+                    && end as usize >= source.len();
+                if item.body.is_block_level() && !math_at_eof && !fenced_at_eof {
                     let src = source.as_bytes();
                     while end > item.start as u32
                         && matches!(src.get(end as usize - 1), Some(b'\n' | b'\r'))
                     {
                         end -= 1;
+                        // Math: only strip a single line terminator.
+                        if is_math {
+                            break;
+                        }
                     }
                 }
                 let (end_line, end_col) = cursor.offset_to_line_col(end);
@@ -198,22 +228,49 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             if matches!(inner.tree[ix].item.body, ItemBody::IndentCodeBlock) {
                                 let src = source.as_bytes();
                                 let mut pos = code_end as usize;
-                                while pos < src.len() {
-                                    if src[pos] == b'\r' {
-                                        pos += 1;
-                                    }
-                                    if pos < src.len() && src[pos] == b'\n' {
-                                        pos += 1;
+                                let mut last_indented_end: Option<usize> = None;
+                                let mut last_indented_newlines = 0usize;
+                                let mut newlines_skipped = 0usize;
+                                loop {
+                                    while pos < src.len()
+                                        && (src[pos] == b'\r' || src[pos] == b'\n')
+                                    {
+                                        if src[pos] == b'\r' {
+                                            pos += 1;
+                                            if pos < src.len() && src[pos] == b'\n' {
+                                                pos += 1;
+                                            }
+                                        } else {
+                                            pos += 1;
+                                        }
+                                        newlines_skipped += 1;
                                     }
                                     if pos >= src.len() {
                                         break;
                                     }
-                                    let line_start = pos;
                                     let is_indented = matches!(src.get(pos), Some(b'\t'))
                                         || src[pos..].starts_with(b"    ");
                                     if !is_indented {
+                                        // A plain blank line (≤3 ws chars
+                                        // followed by EOL) sits between chunks
+                                        // and its newline contributes to
+                                        // `newlines_skipped`. Anything else
+                                        // ends the extension.
+                                        let mut p = pos;
+                                        while p < src.len()
+                                            && (src[p] == b' ' || src[p] == b'\t')
+                                        {
+                                            p += 1;
+                                        }
+                                        if p < src.len()
+                                            && (src[p] == b'\r' || src[p] == b'\n')
+                                        {
+                                            pos = p;
+                                            continue;
+                                        }
                                         break;
                                     }
+                                    let line_start = pos;
                                     while pos < src.len() && src[pos] != b'\n' && src[pos] != b'\r'
                                     {
                                         pos += 1;
@@ -224,10 +281,42 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                                     if !all_ws {
                                         break;
                                     }
-                                    code_end = pos as u32;
+                                    last_indented_end = Some(pos);
+                                    last_indented_newlines = newlines_skipped;
+                                }
+                                if let Some(end) = last_indented_end {
+                                    code_end = end as u32;
                                     let (el, ec) = cursor.offset_to_line_col(code_end);
                                     code_end_line = el;
                                     code_end_col = ec;
+                                    // The first walked newline originally
+                                    // followed the last chunk and was already
+                                    // trimmed above. Any further newlines are
+                                    // blank lines between chunks; put them
+                                    // back.
+                                    let extra = last_indented_newlines.saturating_sub(1);
+                                    if extra > 0 {
+                                        let id = builder.current_node_id();
+                                        let mut data =
+                                            builder.arena_ref().get_type_data(id).to_vec();
+                                        if data.len() >= 24 {
+                                            let mut extended = String::with_capacity(
+                                                content.len() + extra,
+                                            );
+                                            extended.push_str(&content);
+                                            for _ in 0..extra {
+                                                extended.push('\n');
+                                            }
+                                            let sr2 = builder.alloc_string(&extended);
+                                            data = builder
+                                                .arena_ref()
+                                                .get_type_data(id)
+                                                .to_vec();
+                                            data[16..24]
+                                                .copy_from_slice(&sr2.as_bytes());
+                                            builder.set_data_current(&data);
+                                        }
+                                    }
                                 }
                             }
                             let node = builder.arena_ref().get_node(id);
@@ -344,6 +433,21 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                     }
                     ItemBody::ListItem(_, item_spread) => {
                         let id = builder.current_node_id();
+                        let node = builder.arena_ref().get_node(id);
+                        let orig_start_offset = node.start_offset;
+                        // Pull in any refdefs whose source range falls inside
+                        // this list item before we evaluate spread / position.
+                        if emit_refdefs_in_container(
+                            &mut builder,
+                            &mut cursor,
+                            source,
+                            &refdefs_pending,
+                            &mut refdef_emitted,
+                            orig_start_offset as usize,
+                            item.end,
+                        ) {
+                            builder.sort_current_pending_children_by_start_offset();
+                        }
                         let is_spread = *item_spread || {
                             let mut found = false;
                             let mut prev_end_line: Option<u32> = None;
@@ -454,6 +558,24 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         let orig_start = node.start_offset;
                         let orig_start_line = node.start_line;
                         let orig_start_col = node.start_column;
+                        // Claim refdefs nested in this container before its
+                        // children are finalized.
+                        if matches!(
+                            item.body,
+                            ItemBody::BlockQuote(..)
+                                | ItemBody::ContainerDirective(..)
+                                | ItemBody::FootnoteDefinition(..)
+                        ) && emit_refdefs_in_container(
+                            &mut builder,
+                            &mut cursor,
+                            source,
+                            &refdefs_pending,
+                            &mut refdef_emitted,
+                            orig_start as usize,
+                            item.end,
+                        ) {
+                            builder.sort_current_pending_children_by_start_offset();
+                        }
                         let use_last_child = matches!(
                             item.body,
                             ItemBody::BlockQuote(..) | ItemBody::ContainerDirective(..)
@@ -743,7 +865,10 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                                 reference_end(source, &mut cursor, end, kind);
                             let label_src =
                                 extract_reference_label(source, start, ref_end, kind, false);
-                            let label_ref = builder.alloc_string(label_src);
+                            let label_ref = match unescape_label_backslashes(label_src) {
+                                Some(unescaped) => builder.alloc_string(&unescaped),
+                                None => builder.alloc_string(label_src),
+                            };
                             let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
                             builder.open_node(MdastNodeType::LinkReference as u8);
                             builder.set_position_current(
@@ -798,7 +923,10 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                                 reference_end(source, &mut cursor, end, kind);
                             let label_src =
                                 extract_reference_label(source, start, ref_end, kind, true);
-                            let label_ref = builder.alloc_string(label_src);
+                            let label_ref = match unescape_label_backslashes(label_src) {
+                                Some(unescaped) => builder.alloc_string(&unescaped),
+                                None => builder.alloc_string(label_src),
+                            };
                             let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
                             builder.open_node(MdastNodeType::ImageReference as u8);
                             builder.set_position_current(
@@ -1226,7 +1354,11 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::InlineHtml => {
-                        let sr = StringRef::new(start, end - start);
+                        let slice = &source[start as usize..end as usize];
+                        let sr = match normalize_inline_html_wrap(slice) {
+                            Some(normalized) => builder.alloc_string(&normalized),
+                            None => StringRef::new(start, end - start),
+                        };
                         builder.add_leaf_full(
                             MdastNodeType::Html as u8,
                             start,
@@ -1548,60 +1680,17 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         mdx_errors.sort_by_key(|(offset, _)| *offset);
     }
 
-    // Emit `definition` nodes for every refdef pulldown-cmark consumed during
-    // parsing. They're collected by label in `allocs.refdefs` and we splice
-    // them back into the root in source order to match remark's mdast.
-    //
-    // NB: pulldown-cmark doesn't track the containing block, so a definition
-    // that lived inside e.g. a blockquote will land at root here. Plain
-    // root-level definitions — the overwhelmingly common case — round-trip
-    // exactly.
-    let mut refdefs: Vec<(String, String, Option<String>, core::ops::Range<usize>)> = inner
-        .allocs
-        .refdefs
-        .0
-        .iter()
-        .map(|(label, def)| {
-            (
-                label.as_ref().to_string(),
-                def.dest.to_string(),
-                def.title.as_ref().map(|t| t.to_string()),
-                def.span.clone(),
-            )
-        })
-        .collect();
-    refdefs.sort_by_key(|(_, _, _, span)| span.start);
-    for (label, dest, title, span) in refdefs {
-        let start = span.start as u32;
-        let end = span.end as u32;
-        let (sl, sc) = cursor.offset_to_line_col(start);
-        let (el, ec) = cursor.offset_to_line_col(end);
-        let url_ref = builder.alloc_string(&dest);
-        let title_ref = match &title {
-            Some(t) => builder.alloc_string(t),
-            None => StringRef::empty(),
-        };
-        let label_ref = builder.alloc_string(&label);
-        let identifier_ref = builder.alloc_string(&normalize_identifier(&label));
-        let data = DefinitionData {
-            url: url_ref,
-            title: title_ref,
-            identifier: identifier_ref,
-            label: label_ref,
+    // Root-level refdefs: anything not already emitted inside a container.
+    // Interleaved with the other root children in source order.
+    let mut emitted_any_at_root = false;
+    for (i, rd) in refdefs_pending.iter().enumerate() {
+        if refdef_emitted[i] {
+            continue;
         }
-        .to_bytes();
-        builder.add_leaf_full(
-            MdastNodeType::Definition as u8,
-            start,
-            end,
-            sl,
-            sc,
-            el,
-            ec,
-            &data,
-        );
+        emit_pending_refdef(&mut builder, &mut cursor, source, rd);
+        emitted_any_at_root = true;
     }
-    if !inner.allocs.refdefs.0.is_empty() {
+    if emitted_any_at_root {
         builder.sort_current_pending_children_by_start_offset();
     }
 
@@ -3091,6 +3180,140 @@ fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
 /// is "consumed" by the parser but not included in the span. Remark's mdast
 /// includes the whole `[...][]`, so extend by 2 bytes when the source bytes
 /// there actually are `[]`.
+struct PendingRefdef {
+    label: String,
+    dest: String,
+    title: Option<String>,
+    span: core::ops::Range<usize>,
+}
+
+fn emit_pending_refdef(
+    builder: &mut ArenaBuilder<Mdast>,
+    cursor: &mut satteri_arena::LineIndexCursor<'_>,
+    source: &str,
+    rd: &PendingRefdef,
+) {
+    let start = rd.span.start as u32;
+    let end = rd.span.end as u32;
+    let (sl, sc) = cursor.offset_to_line_col(start);
+    let (el, ec) = cursor.offset_to_line_col(end);
+    let url_ref = builder.alloc_string(&rd.dest);
+    let title_ref = match &rd.title {
+        Some(t) => builder.alloc_string(t),
+        None => StringRef::empty(),
+    };
+    let raw_label = extract_definition_label(source, start).unwrap_or(rd.label.as_str());
+    let label_ref = match unescape_label_backslashes(raw_label) {
+        Some(unescaped) => builder.alloc_string(&unescaped),
+        None => builder.alloc_string(raw_label),
+    };
+    let identifier_ref = builder.alloc_string(&normalize_identifier(&rd.label));
+    let data = DefinitionData {
+        url: url_ref,
+        title: title_ref,
+        identifier: identifier_ref,
+        label: label_ref,
+    }
+    .to_bytes();
+    builder.add_leaf_full(
+        MdastNodeType::Definition as u8,
+        start,
+        end,
+        sl,
+        sc,
+        el,
+        ec,
+        &data,
+    );
+}
+
+/// Emit any not-yet-emitted refdefs whose source range falls inside the
+/// container span `[container_start, container_end)`. Returns true if at
+/// least one was emitted, so the caller knows it should re-sort the
+/// container's pending children to keep source order.
+fn emit_refdefs_in_container(
+    builder: &mut ArenaBuilder<Mdast>,
+    cursor: &mut satteri_arena::LineIndexCursor<'_>,
+    source: &str,
+    pending: &[PendingRefdef],
+    emitted: &mut [bool],
+    container_start: usize,
+    container_end: usize,
+) -> bool {
+    let mut any = false;
+    for (i, rd) in pending.iter().enumerate() {
+        if emitted[i] {
+            continue;
+        }
+        if rd.span.start >= container_start && rd.span.start < container_end {
+            emit_pending_refdef(builder, cursor, source, rd);
+            emitted[i] = true;
+            any = true;
+        }
+    }
+    any
+}
+
+/// Normalize wrapped-line leading whitespace inside an inline HTML span:
+/// micromark drops up to 3 columns of indent at the start of each continuation
+/// line (tabs counted as 4-column stops, with any overflow re-emitted as
+/// spaces). Returns `None` when the slice has no continuation line that would
+/// change.
+fn normalize_inline_html_wrap(src: &str) -> Option<String> {
+    let bytes = src.as_bytes();
+    let first_nl = bytes.iter().position(|&b| b == b'\n' || b == b'\r')?;
+    let mut out = String::with_capacity(src.len());
+    out.push_str(&src[..first_nl]);
+    let mut i = first_nl;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' {
+            out.push('\r');
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'\n' {
+                out.push('\n');
+                i += 1;
+            }
+        } else if bytes[i] == b'\n' {
+            out.push('\n');
+            i += 1;
+        }
+        let mut col = 0usize;
+        while col < 3 && i < bytes.len() {
+            match bytes[i] {
+                b' ' => {
+                    col += 1;
+                    i += 1;
+                }
+                b'\t' => {
+                    let tab_cols = 4 - (col % 4);
+                    if col + tab_cols <= 3 {
+                        col += tab_cols;
+                        i += 1;
+                    } else {
+                        let leftover = col + tab_cols - 3;
+                        for _ in 0..leftover {
+                            out.push(' ');
+                        }
+                        i += 1;
+                        col = 3;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let line_start = i;
+        while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
+            i += 1;
+        }
+        out.push_str(&src[line_start..i]);
+    }
+    if out == src {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 fn reference_end(
     source: &str,
     cursor: &mut satteri_arena::LineIndexCursor<'_>,
@@ -3117,6 +3340,59 @@ fn reference_end(
 ///
 /// `end` must already be the adjusted end from `reference_end` (so Collapsed
 /// extends past `[]`).
+/// Extract the verbatim text between `[` and the matching `]` for a link
+/// reference definition, treating `\X` as a 2-byte escape (so an escaped `]`
+/// inside the label doesn't terminate the scan).
+/// Resolve `\X` escape sequences for ASCII punctuation in a definition or
+/// reference label, matching remark's behaviour. Returns `None` when there's
+/// nothing to change so the caller can keep using the source slice directly.
+fn unescape_label_backslashes(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if !bytes.contains(&b'\\') {
+        return None;
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    let mut i = 0;
+    let mut changed = false;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 1 < bytes.len()
+            && crate::puncttable::is_ascii_punctuation(bytes[i + 1])
+        {
+            out.push_str(&s[last..i]);
+            out.push(bytes[i + 1] as char);
+            i += 2;
+            last = i;
+            changed = true;
+        } else {
+            i += 1;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    out.push_str(&s[last..]);
+    Some(out)
+}
+
+fn extract_definition_label(source: &str, start: u32) -> Option<&str> {
+    let bytes = source.as_bytes();
+    let open = start as usize;
+    if open >= bytes.len() || bytes[open] != b'[' {
+        return None;
+    }
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if i + 1 < bytes.len() => i += 2,
+            b']' => return Some(&source[open + 1..i]),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 fn extract_reference_label(source: &str, start: u32, end: u32, kind: u8, is_image: bool) -> &str {
     let bytes = source.as_bytes();
     let inner_start = if is_image {

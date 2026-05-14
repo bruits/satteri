@@ -2213,6 +2213,11 @@ pub(crate) struct DirectiveAttrData<'a> {
 #[derive(Clone)]
 pub(crate) struct Allocations<'a> {
     pub refdefs: RefDefs<'a>,
+    /// Every refdef occurrence in source order, including duplicates that
+    /// `refdefs` drops (it's a map and only keeps the first per label, since
+    /// resolution picks the first match per CommonMark). Used to emit every
+    /// definition as its own mdast `definition` node.
+    pub refdefs_all: Vec<(LinkLabel<'a>, LinkDef<'a>)>,
     pub footdefs: FootnoteDefs<'a>,
     links: Vec<(LinkType, CowStr<'a>, CowStr<'a>, CowStr<'a>)>,
     cows: Vec<CowStr<'a>>,
@@ -2271,6 +2276,7 @@ impl<'a> Allocations<'a> {
     pub fn new() -> Self {
         Self {
             refdefs: RefDefs::default(),
+            refdefs_all: Vec::new(),
             footdefs: FootnoteDefs::default(),
             links: Vec::with_capacity(128),
             cows: Vec::new(),

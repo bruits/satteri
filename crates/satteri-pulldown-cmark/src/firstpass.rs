@@ -248,6 +248,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.options.contains(Options::ENABLE_DEFINITION_LIST),
                                     self.options.contains(Options::ENABLE_MDX),
                                     self.options.contains(Options::ENABLE_MATH),
+                                    self.options.contains(Options::ENABLE_DIRECTIVE),
                                     &self.tree,
                                     self.tree.spine_len(),
                                 ))
@@ -265,6 +266,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.options.contains(Options::ENABLE_DEFINITION_LIST),
                                     self.options.contains(Options::ENABLE_MDX),
                                     self.options.contains(Options::ENABLE_MATH),
+                                    self.options.contains(Options::ENABLE_DIRECTIVE),
                                     &self.tree,
                                     self.tree.spine_len(),
                                 ))
@@ -766,6 +768,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         while let Some((bytecount, label, link_def)) =
             self.parse_refdef_total(start_ix + line_start.bytes_scanned())
         {
+            self.allocs
+                .refdefs_all
+                .push((label.clone(), link_def.clone()));
             self.allocs.refdefs.0.entry(label).or_insert(link_def);
             let container_start = start_ix + line_start.bytes_scanned();
             let mut ix = container_start + bytecount;
@@ -1007,6 +1012,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.options.contains(Options::ENABLE_DEFINITION_LIST),
             self.options.contains(Options::ENABLE_MDX),
             self.options.contains(Options::ENABLE_MATH),
+            self.options.contains(Options::ENABLE_DIRECTIVE),
             &self.tree,
             tree_position,
         ) {
@@ -1307,7 +1313,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             }
                             let table_head_ix = next_line_ix + line_start.bytes_scanned();
                             let delim = &bytes[table_head_ix..];
-                            let delim_is_list_item = scan_listitem(delim).is_some();
+                            // Allow up to 3 spaces of leading indent: a line
+                            // like ` - …` is a valid bullet (and lists win
+                            // over table delimiter recognition).
+                            let leading_spaces = delim
+                                .iter()
+                                .take(3)
+                                .take_while(|&&b| b == b' ')
+                                .count();
+                            let delim_is_list_item =
+                                scan_listitem(&delim[leading_spaces..]).is_some();
                             let (table_head_bytes, alignment) = if delim_is_list_item {
                                 (0, vec![])
                             } else {
@@ -1475,11 +1490,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             })
                         };
 
+                    // `backslash_escaped` applies to the `$` itself only when
+                    // the escape sits directly before it (`\$`, pending text
+                    // run empty). For `\\$` or `\X$` the escape is consumed by
+                    // the earlier char and must not bleed into the delimiter.
+                    let dollar_escaped = backslash_escaped && begin_text == ix;
                     self.tree.append_text(begin_text, ix, backslash_escaped);
                     self.tree.append(Item {
                         start: ix,
                         end: ix + 1,
-                        body: ItemBody::MaybeMath(backslash_escaped, brace_context),
+                        body: ItemBody::MaybeMath(dollar_escaped, brace_context),
                     });
                     begin_text = ix + 1;
                     backslash_escaped = false;
@@ -1923,7 +1943,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
             ix = next_line_ix;
             remaining_space = line_start.remaining_space();
-            self.last_line_blank = scan_blank_line(&bytes[ix..]).is_some();
+            // Only treat the post-strip line as blank when nothing but EOL is
+            // left. Lines whose whitespace survives the strip (e.g. `\t\t` →
+            // `\t`) still belong to the code block; remark keeps them.
+            self.last_line_blank = scan_eol(&bytes[ix..]).is_some();
         }
 
         // Trim trailing blank lines.
@@ -2012,7 +2035,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let mut meta_start = start_ix + n_fence_char;
         meta_start += scan_whitespace_no_nl(&bytes[meta_start..]);
         let mut ix = meta_start + scan_nextline(&bytes[meta_start..]);
-        let meta_end = ix - scan_rev_while(&bytes[meta_start..ix], is_ascii_whitespace);
+        // Only strip the trailing newline; preserve any trailing spaces/tabs
+        // in the meta string (remark keeps them verbatim).
+        let meta_end =
+            ix - scan_rev_while(&bytes[meta_start..ix], |c| c == b'\n' || c == b'\r');
         let meta_string = if meta_start < meta_end {
             unescape(&self.text[meta_start..meta_end], self.tree.is_in_table())
         } else {
@@ -2025,6 +2051,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         });
         self.tree.push();
         loop {
+            if ix >= bytes.len() {
+                // EOF without a closing fence. Pop here so the position
+                // covers all trailing content (e.g. the final line in `$$\n`,
+                // or a whitespace-only line after the meta).
+                self.pop(ix);
+                return ix;
+            }
             let mut line_start = LineStart::new(&bytes[ix..]);
             let n_containers = scan_containers(&self.tree, &mut line_start, self.options);
             if n_containers < self.tree.spine_len() {
@@ -2340,12 +2373,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if !bytes.starts_with(b"[^") {
             return None;
         }
-        // GitHub doesn't allow footnote definition labels to contain line
-        // breaks. It actually does allow this for link definitions under
-        // certain circumstances, but for this it's simpler to avoid it.
+        // GFM footnote labels can't be empty or contain whitespace.
+        // `[^a b]` and `[^]` fall through to the regular refdef path.
         let (mut i, label) =
             scan_link_label_rest(&self.text[start + 2..], &|_| None, self.tree.is_in_table())?;
-        if label.bytes().any(|b| b == b'\r' || b == b'\n') {
+        if label.is_empty()
+            || label
+                .bytes()
+                .any(|b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
+        {
             return None;
         }
         i += 2;
@@ -2551,13 +2587,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let dest = unescape(dest, self.tree.is_in_table());
         i += dest_length;
 
+        // remark folds trailing same-line whitespace after the URL into the
+        // definition's source span even with no title. Extend the no-title
+        // fallback to match.
+        let span_end = i + scan_whitespace_no_nl(&bytes[i..]);
+
         // no title
         let mut backup = (
-            i - start,
+            span_end - start,
             LinkDef {
                 dest,
                 title: None,
-                span: span_start..i,
+                span: span_start..span_end,
             },
         );
 
@@ -2624,13 +2665,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.options.contains(Options::ENABLE_DEFINITION_LIST),
             self.options.contains(Options::ENABLE_MDX),
             self.options.contains(Options::ENABLE_MATH),
+            self.options.contains(Options::ENABLE_DIRECTIVE),
             &self.tree,
             tree_position,
         ) {
             return true;
         }
-        // pulldown-cmark allows heavy tables, that have a `|` on the header row,
-        // to interrupt paragraphs.
+        // pulldown-cmark traditionally only interrupted paragraphs on "heavy"
+        // table headers (lines starting with `|`). remark-gfm also lets a
+        // "light" table interrupt: any header line followed by a valid
+        // delimiter row, provided the header isn't a lazy-continuation line
+        // (lazy lines can't open new blocks).
         //
         // ```markdown
         // This is a table
@@ -2638,12 +2683,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // |---|---|---|
         // | d | e | f |
         //
-        // This is not a table
+        // Also a table
         //  a | b | c
         // ---|---|---
-        //  d | e | f
         // ```
-        if !self.options.contains(Options::ENABLE_TABLES) || !bytes.starts_with(b"|") {
+        if !self.options.contains(Options::ENABLE_TABLES) {
+            return false;
+        }
+        if !bytes.starts_with(b"|") && !current_container {
             return false;
         }
 
@@ -2798,6 +2845,7 @@ fn scan_paragraph_interrupt_no_table(
     definition_list: bool,
     mdx: bool,
     math: bool,
+    directive: bool,
     tree: &Tree<Item>,
     tree_position: usize,
 ) -> bool {
@@ -2806,7 +2854,7 @@ fn scan_paragraph_interrupt_no_table(
         || scan_atx_heading(bytes).is_some()
         || scan_code_fence(bytes).is_some()
         || (math && scan_math_fence(bytes).is_some())
-        || scan_interrupting_container_extensions_fence(bytes)
+        || (directive && scan_interrupting_container_extensions_fence(bytes))
         || scan_blockquote_start(bytes).is_some()
         || scan_listitem(bytes).is_some_and(|(ix, delim, index, _)| {
             ! current_container ||
@@ -3335,8 +3383,11 @@ fn delim_run_can_open(
         return true;
     }
     let prev_char = s[..ix].chars().last().unwrap();
+    // See the matching comment in `delim_run_can_close`: the
+    // `prev_char == '~'` shortcut bypasses standard flanking and lets pairing
+    // walk across escaped tildes, so it's now gated on subscript mode only.
     if delim == b'~'
-        && (prev_char == '~' || options.contains(Options::ENABLE_SUBSCRIPT))
+        && options.contains(Options::ENABLE_SUBSCRIPT)
         && !is_punctuation(next_char)
     {
         return true;
@@ -3389,7 +3440,11 @@ fn delim_run_can_close(
     if delim == b'~' && run_len > 1 && !is_punctuation(prev_char) {
         return true;
     }
-    if delim == b'~' && (prev_char == '~' || options.contains(Options::ENABLE_SUBSCRIPT)) {
+    // The `prev_char == '~'` shortcut historically let any `~`-adjacent run
+    // close, but that bypasses GFM's strict flanking rules and lets a run
+    // pair across an escaped (literal) `~`. Subscript mode depends on the
+    // relaxed pairing, so gate the shortcut on it.
+    if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) {
         return true;
     }
     if delim == b'~' && options.contains(Options::ENABLE_STRIKETHROUGH) && run_len == 1 {

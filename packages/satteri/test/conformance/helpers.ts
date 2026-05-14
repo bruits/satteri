@@ -276,14 +276,19 @@ export function assertExtHastConformance(md: string, extensions: ExtensionSet[])
 }
 
 function normalizeHtmlForComparison(html: string): string {
-  return html
-    .replace(/<br>/g, "<br />")
-    .replace(/<br\/>/g, "<br />")
-    .replace(/<hr>/g, "<hr />")
-    .replace(/<hr\/>/g, "<hr />")
-    .replace(/&#x3C;/g, "&lt;")
-    .replace(/&gt;/g, ">")
-    .trim();
+  return (
+    html
+      .replace(/<br>/g, "<br />")
+      .replace(/<br\/>/g, "<br />")
+      .replace(/<hr>/g, "<hr />")
+      .replace(/<hr\/>/g, "<hr />")
+      .replace(/&#x3C;/g, "&lt;")
+      .replace(/&gt;/g, ">")
+      // remark+rehype emits the legacy `align="X"` attribute on table cells;
+      // satteri emits modern `style="text-align: X"`. Canonicalize for diff.
+      .replace(/ align="(left|right|center)"/g, ' style="text-align: $1"')
+      .trim()
+  );
 }
 
 export function referenceHtml(md: string): string {
