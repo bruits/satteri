@@ -1,6 +1,5 @@
 import fc from "fast-check";
 import { pathToFileURL } from "node:url";
-import { existsSync, readFileSync, appendFileSync } from "node:fs";
 import { expect } from "vitest";
 import { mdxToMdast, mdxToHast, evaluate as satteriEvaluate } from "../../../src/index.js";
 import { evaluate as mdxEvaluate } from "@mdx-js/mdx";
@@ -472,7 +471,7 @@ export type FuzzLevel =
   | "fm-hast"
   | "fm-html";
 
-export type FuzzSource = "structured" | "chaos" | "corpus";
+export type FuzzSource = "structured" | "chaos";
 
 export interface FuzzIssue {
   input: string;
@@ -662,43 +661,6 @@ export function collectIssues(
   return issues;
 }
 
-export function loadCorpus(corpusPath: URL): string[] {
-  if (!existsSync(corpusPath)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const line of readFileSync(corpusPath, "utf-8").split("\n")) {
-    if (!line || seen.has(line)) continue;
-    seen.add(line);
-    try {
-      out.push(JSON.parse(line) as string);
-    } catch {
-      // skip malformed lines silently — corpus is best-effort
-    }
-  }
-  return out;
-}
-
-export function replayCorpus(inputs: string[], levels: FuzzLevel[]): FuzzIssue[] {
-  const issues: FuzzIssue[] = [];
-  for (const input of inputs) {
-    for (const level of levels) {
-      const issue = compareSingle(input, level, "corpus");
-      if (issue) issues.push(issue);
-    }
-  }
-  return issues;
-}
-
-export function appendCorpus(corpusPath: URL, inputs: string[]): void {
-  if (inputs.length === 0) return;
-  const existing = new Set(loadCorpus(corpusPath).map((s) => JSON.stringify(s)));
-  const fresh = [...new Set(inputs.map((i) => JSON.stringify(i)))].filter(
-    (line) => !existing.has(line),
-  );
-  if (fresh.length === 0) return;
-  appendFileSync(corpusPath, fresh.join("\n") + "\n");
-}
-
 function diffFingerprint(expected: unknown, actual: unknown, path = ""): string[] {
   if (typeof expected !== typeof actual)
     return [`${path}: type ${typeof expected} vs ${typeof actual}`];
@@ -767,7 +729,7 @@ function normalizeHtml(html: string): string {
 
 export interface MdxEvalIssue {
   input: string;
-  source: "structured" | "chaos" | "corpus";
+  source: "structured" | "chaos";
   kind: "mismatch" | "satteri-error" | "both-error-disagree";
   referenceHtml?: string | undefined;
   satteriHtml?: string | undefined;
@@ -841,15 +803,6 @@ export async function collectMdxEvalIssues(
     }),
     FC_OPTIONS_EVAL,
   );
-  return issues;
-}
-
-export async function replayMdxEvalCorpus(inputs: string[]): Promise<MdxEvalIssue[]> {
-  const issues: MdxEvalIssue[] = [];
-  for (const input of inputs) {
-    const issue = await compareMdxEval(input, "corpus");
-    if (issue) issues.push(issue);
-  }
   return issues;
 }
 

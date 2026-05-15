@@ -6,18 +6,11 @@ import {
   collectIssues,
   deduplicateIssues,
   formatIssue,
-  loadCorpus,
-  replayCorpus,
-  appendCorpus,
 } from "./shared.js";
 
 describe("fuzz: frontmatter conformance", () => {
   test("collect and report frontmatter issues", () => {
-    const corpusPath = new URL("./corpus/fm.txt", import.meta.url);
-    const corpus = loadCorpus(corpusPath);
-
     const allIssues = [
-      ...replayCorpus(corpus, ["fm-mdast", "fm-hast", "fm-html"]),
       ...collectIssues(fmDocument, "fm-mdast", "structured"),
       ...collectIssues(fmDocument, "fm-hast", "structured"),
       ...collectIssues(fmDocument, "fm-html", "structured"),
@@ -39,11 +32,6 @@ describe("fuzz: frontmatter conformance", () => {
 
       const issuesPath = new URL("./FUZZ-ISSUES-FM.md", import.meta.url);
       writeFileSync(issuesPath, report + "\n");
-
-      appendCorpus(
-        corpusPath,
-        unique.filter((i) => i.source !== "corpus").map((i) => i.input),
-      );
 
       const hard = unique.filter((i) => i.kind !== "position-only");
       const inputs = hard.map((i) => JSON.stringify(i.input));

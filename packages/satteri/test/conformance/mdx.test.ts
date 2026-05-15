@@ -529,6 +529,16 @@ describe("MDX conformance: fuzz regressions", () => {
   test("`<` then newline then `>` is rejected", async () => {
     await assertBothReject("<\n>");
   });
+  test("bare `<` at end of input is rejected", async () => {
+    await assertBothReject("<");
+  });
+  test("`<` then newline then `}` (non-setext, non-`>`) stays as text", async () => {
+    // The setext-only check on `<\n…` should not fire on arbitrary chars.
+    await assertMdxConformance("<\n}");
+  });
+  test("fragment `<\\t>` followed by trailing punctuation parses", async () => {
+    await assertMdxConformance("<\t>}x#");
+  });
 
   // Validate expression bodies as JS via oxc at mdast time (mdx-js uses
   // acorn). Catches `{h<}`, `{return 1}`, etc. at parse time instead of
@@ -542,6 +552,17 @@ describe("MDX conformance: fuzz regressions", () => {
     // output is comparable; the key point is that both parsers accept the
     // `{}/2` body as expression-context division.
     await assertMdxConformance("#{{}/2}*");
+  });
+  test("regex literal in expression body followed by newline+tab+close", async () => {
+    // After a regex literal `/^=/`, the scanner must continue past
+    // whitespace (incl. newline+tab) to find the matching `}`.
+    await assertMdxConformance("{!/^=/\n\t}>");
+  });
+  test("regex then division in expression body parses without consuming close", async () => {
+    // `/]/` is a regex literal; the following `/5` is division. Without
+    // `prev_was_value` tracking, the second `/` would re-enter regex mode
+    // and swallow `5}`, leaving the expression unclosed.
+    await assertMdxConformance("4{/]//5}");
   });
 
   // Text-position `{` (preceded by paragraph content on the line) follows

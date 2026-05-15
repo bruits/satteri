@@ -6,18 +6,11 @@ import {
   collectMdxEvalIssues,
   deduplicateMdxEvalIssues,
   formatMdxEvalIssue,
-  loadCorpus,
-  replayMdxEvalCorpus,
-  appendCorpus,
 } from "./shared.js";
 
 describe("fuzz: MDX eval conformance", () => {
   test("collect and report MDX eval issues", async () => {
-    const corpusPath = new URL("./corpus/mdx-eval.txt", import.meta.url);
-    const corpus = loadCorpus(corpusPath);
-
     const allIssues = [
-      ...(await replayMdxEvalCorpus(corpus)),
       ...(await collectMdxEvalIssues(mdxDocument, "structured")),
       ...(await collectMdxEvalIssues(mdxChaos, "chaos")),
     ];
@@ -34,11 +27,6 @@ describe("fuzz: MDX eval conformance", () => {
 
       const issuesPath = new URL("./FUZZ-ISSUES-MDX-EVAL.md", import.meta.url);
       writeFileSync(issuesPath, report + "\n");
-
-      appendCorpus(
-        corpusPath,
-        unique.filter((i) => i.source !== "corpus").map((i) => i.input),
-      );
 
       const hard = unique.filter((i) => i.kind !== "both-error-disagree");
       const inputs = hard.map((i) => JSON.stringify(i.input));

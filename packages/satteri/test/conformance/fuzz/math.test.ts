@@ -6,18 +6,11 @@ import {
   collectIssues,
   deduplicateIssues,
   formatIssue,
-  loadCorpus,
-  replayCorpus,
-  appendCorpus,
 } from "./shared.js";
 
 describe("fuzz: math conformance", () => {
   test("collect and report math issues", () => {
-    const corpusPath = new URL("./corpus/math.txt", import.meta.url);
-    const corpus = loadCorpus(corpusPath);
-
     const allIssues = [
-      ...replayCorpus(corpus, ["math-mdast", "math-hast", "math-html"]),
       ...collectIssues(mathDocument, "math-mdast", "structured"),
       ...collectIssues(mathDocument, "math-hast", "structured"),
       ...collectIssues(mathDocument, "math-html", "structured"),
@@ -39,11 +32,6 @@ describe("fuzz: math conformance", () => {
 
       const issuesPath = new URL("./FUZZ-ISSUES-MATH.md", import.meta.url);
       writeFileSync(issuesPath, report + "\n");
-
-      appendCorpus(
-        corpusPath,
-        unique.filter((i) => i.source !== "corpus").map((i) => i.input),
-      );
 
       const hard = unique.filter((i) => i.kind !== "position-only");
       const inputs = hard.map((i) => JSON.stringify(i.input));
