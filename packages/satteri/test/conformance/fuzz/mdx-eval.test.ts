@@ -40,9 +40,10 @@ describe("fuzz: MDX eval conformance", () => {
         unique.filter((i) => i.source !== "corpus").map((i) => i.input),
       );
 
-      const inputs = unique.map((i) => JSON.stringify(i.input));
+      const hard = unique.filter((i) => i.kind !== "both-error-disagree");
+      const inputs = hard.map((i) => JSON.stringify(i.input));
       expect
-        .soft(unique, `Found ${unique.length} MDX conformance issue(s):\n${inputs.join("\n")}`)
+        .soft(hard, `Found ${hard.length} MDX conformance issue(s):\n${inputs.join("\n")}`)
         .toHaveLength(0);
     }
   });

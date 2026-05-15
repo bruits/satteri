@@ -489,7 +489,12 @@ pub fn create_hast_handle(source: String, features: Option<JsFeatures>) -> Resul
 #[napi]
 pub fn create_mdx_hast_handle(source: String, features: Option<JsFeatures>) -> Result<HastHandle> {
     let opts = features_to_options(features, true);
-    let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
+    let (mut mdast, mdx_errors) = satteri_pulldown_cmark::parse(&source, opts);
+    if let Some((offset, msg)) = mdx_errors.first() {
+        return Err(napi::Error::from_reason(format!(
+            "MDX parse error at byte {offset}: {msg}"
+        )));
+    }
     mdast.parse_options = opts.bits();
     let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
     hast.mdx = true;

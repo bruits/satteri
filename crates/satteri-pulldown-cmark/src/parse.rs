@@ -529,9 +529,101 @@ impl<'input> ParserInner<'input> {
                             continue;
                         }
 
-                        // In MDX, `<` followed by a letter, `/`, or `>` must be
-                        // valid JSX.  If the JSX scan failed, record an error.
-                        if matches!(next_byte, Some(b'a'..=b'z' | b'A'..=b'Z' | b'/' | b'>')) {
+                        // mdx-js fallback rule:
+                        //   `<` + space/tab → always literal `<` (text).
+                        //   `<` + newline   → JSX tag may span lines; treat
+                        //                      as text only if the next
+                        //                      non-whitespace byte is benign
+                        //                      (not `>`, not EOF/blank-line)
+                        //                      AND the line containing it
+                        //                      isn't a setext underline
+                        //                      (`-`+ or `=`+), which would
+                        //                      promote the `<` into a heading
+                        //                      whose JSX validation fails.
+                        //   `<` + anything else (incl. EOF) → parse error
+                        //                      (`<\`, `<,`, `<{`, `<<`, `<.`,
+                        //                       …).
+                        let bytes_block = block_text.as_bytes();
+                        let is_text_fallback = match next_byte {
+                            Some(b' ' | b'\t') => true,
+                            Some(b'\n' | b'\r') => {
+                                let mut probe = start + 1;
+                                while probe < bytes_block.len()
+                                    && matches!(
+                                        bytes_block[probe],
+                                        b' ' | b'\t' | b'\n' | b'\r'
+                                    )
+                                {
+                                    probe += 1;
+                                }
+                                if probe >= bytes_block.len() || bytes_block[probe] == b'>' {
+                                    false
+                                } else {
+                                    // Reject if `probe`'s line is a setext
+                                    // underline (only `-` or only `=`, then
+                                    // optional whitespace to EOL/EOF) AND
+                                    // would actually promote the `<`-line
+                                    // to a heading. Inside a blockquote
+                                    // container the underline line is
+                                    // typically a lazy continuation (no
+                                    // `>` prefix) and doesn't promote, so
+                                    // skip the rejection.
+                                    let underline_char = bytes_block[probe];
+                                    if !matches!(underline_char, b'-' | b'=') {
+                                        true
+                                    } else {
+                                        let mut q = probe;
+                                        while q < bytes_block.len()
+                                            && bytes_block[q] == underline_char
+                                        {
+                                            q += 1;
+                                        }
+                                        while q < bytes_block.len()
+                                            && matches!(bytes_block[q], b' ' | b'\t')
+                                        {
+                                            q += 1;
+                                        }
+                                        let at_eol = q >= bytes_block.len()
+                                            || matches!(bytes_block[q], b'\n' | b'\r');
+                                        if !at_eol {
+                                            true
+                                        } else {
+                                            // Container check: a blockquote
+                                            // `>` (possibly after up to 3
+                                            // spaces) on the line opening
+                                            // the `<` means the underline
+                                            // line would need the same
+                                            // prefix to actually promote a
+                                            // setext heading. Without it,
+                                            // the underline is lazy
+                                            // paragraph continuation, so
+                                            // accept as text.
+                                            let mut ls = start;
+                                            while ls > 0
+                                                && !matches!(
+                                                    bytes_block[ls - 1],
+                                                    b'\n' | b'\r'
+                                                )
+                                            {
+                                                ls -= 1;
+                                            }
+                                            let mut k = ls;
+                                            let mut sp = 0;
+                                            while k < start
+                                                && bytes_block[k] == b' '
+                                                && sp < 3
+                                            {
+                                                k += 1;
+                                                sp += 1;
+                                            }
+                                            k < start && bytes_block[k] == b'>'
+                                        }
+                                    }
+                                }
+                            }
+                            _ => false,
+                        };
+                        if !is_text_fallback {
                             self.mdx_errors.push((
                                 start,
                                 "Unexpected character after `<`, expected a valid JSX tag \
@@ -1679,7 +1771,15 @@ pub(crate) fn scan_containers(
         match tree[node_ix].item.body {
             ItemBody::BlockQuote(..) => {
                 let save = line_start.clone();
-                let _ = line_start.scan_space(3);
+                // In MDX mode indented code blocks are disabled, so the
+                // ≤3-space cap on blockquote prefix indent doesn't apply —
+                // tab- or 4+-space-indented `>` should still continue the
+                // blockquote (matches micromark + remark-mdx).
+                if options.contains(Options::ENABLE_MDX) {
+                    line_start.scan_all_space();
+                } else {
+                    let _ = line_start.scan_space(3);
+                }
                 if !line_start.scan_blockquote_marker() {
                     *line_start = save;
                     break;

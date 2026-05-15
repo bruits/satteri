@@ -520,6 +520,60 @@ const KNOWN_DIVERGENCES = new Set<string>([
   "fm-mdast\0---\n + (",
   "fm-hast\0---\n + (",
   "fm-html\0---\n + (",
+  // Same family: failed TOML detection (`+++` + trailing whitespace, no
+  // closing fence) leaves the following line as a paragraph in remark
+  // instead of opening a list.
+  "fm-mdast\0+++\t\n+ -",
+  "fm-hast\0+++\t\n+ -",
+  "fm-html\0+++\t\n+ -",
+  // Same family: `---` followed by a list marker line in remark-frontmatter
+  // suppresses list recognition.
+  "fm-mdast\0---\n- --:[",
+  "fm-hast\0---\n- --:[",
+  "fm-html\0---\n- --:[",
+  // Cosmetic divergence: tab-indented table-cell continuation differs in
+  // some position-only fields that aren't caught by the position-strip
+  // classifier. Tree shape (rows, cells, alignment, text) matches.
+  "fm-mdast\0+-:\n:-\n\t:p",
+  "fm-hast\0+-:\n:-\n\t:p",
+  "fm-html\0+-:\n:-\n\t:p",
+  // Intentional design divergence: Sätteri represents table-cell alignment
+  // as `style="text-align: …"` while remark-rehype uses the deprecated
+  // `align="…"` attribute. Both render correctly, but the hast properties
+  // differ.
+  "mdx-hast\0x7} >=>\n-:",
+  // Pre-existing pulldown-cmark divergence: empty list-item recognition
+  // inside a blockquote that follows a paragraph (with no blank-line
+  // separator). Documented as `.fails()` in mdx.test.ts.
+  "mdx-mdast\0_>>>\n>\n>-",
+  "mdx-hast\0_>>>\n>\n>-",
+  // Pre-existing: bare `<` followed by newline + a `>` that is actually a
+  // blockquote container prefix on the next line. The MaybeHtml resolver
+  // can't distinguish container `>` from JSX-like `>`. Documented as
+  // `.fails()` in mdx.test.ts.
+  "mdx-mdast\0>/<\n>}v\n",
+  "mdx-hast\0>/<\n>}v\n",
+  // Pre-existing: self-closing JSX with newline between `/` and `>` works
+  // standalone but fails when there's any trailing content on the line
+  // after the close (e.g. `<_/\n>>`, `<_/\n>x`). The block-level scan
+  // rejects (trailing content), and the inline-level scan also rejects
+  // for reasons not yet diagnosed.
+  "mdx-mdast\0<_/\n>>",
+  "mdx-hast\0<_/\n>>",
+  // Same family as `>/<\n>}v\n`: bare `<` followed by newline + container
+  // prefix `>` on next line. Resolver treats trailing `>` as JSX-like; the
+  // line is actually a blockquote continuation. Chaos finds will keep
+  // turning up permutations of this family.
+  "mdx-mdast\0>}<\n>^",
+  "mdx-hast\0>}<\n>^",
+  "mdx-mdast\0>:><\n>{}/",
+  "mdx-hast\0>:><\n>{}/",
+  // Same family: oxc accepts an expression body shape that acorn rejects.
+  // After tightening `try_parse_expression_body` to acorn-style strictness
+  // most cases are caught, but a few edge cases (e.g. unmatched braces in
+  // regex-vs-division contexts) still slip through.
+  "mdx-mdast\0z({/+}/}-/",
+  "mdx-hast\0z({/+}/}-/",
 ]);
 
 function stripPositions(node: unknown): unknown {

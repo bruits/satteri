@@ -41,6 +41,7 @@ pub(crate) fn run_first_pass(
         brace_context_next: 0,
         brace_context_stack: Vec::new(),
         mdx_errors: Vec::new(),
+        mdx_expr_allocator: oxc_allocator::Allocator::default(),
     };
     first_pass.run()
 }
@@ -71,6 +72,10 @@ pub(crate) struct FirstPass<'a, 'b> {
     brace_context_next: usize,
     /// MDX errors collected during first pass.
     pub(crate) mdx_errors: Vec<(usize, String)>,
+    /// Reusable bump allocator for oxc parses (expression-body validation,
+    /// ESM completeness checks). Avoids `Allocator::default()` heap alloc
+    /// on every expression — the allocator is `reset()` between parses.
+    pub(crate) mdx_expr_allocator: oxc_allocator::Allocator,
 }
 
 impl<'a, 'b> FirstPass<'a, 'b> {
@@ -1513,17 +1518,59 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         LoopInstruction::ContinueAndSkip(0)
                     } else {
                         // MDX inline expression: try to scan balanced braces.
+                        // Lazy-paragraph continuation rules differ between
+                        // text- and flow-position `{`. mdx-js's text
+                        // tokenizer (`{` after content on a paragraph line)
+                        // sets `allowLazy: true`, so body chars on a lazy
+                        // line are kept. Its flow tokenizer (`{` first on a
+                        // line in a container) sets `allowLazy: false` and
+                        // errors. The block-level pass already tried flow;
+                        // fall-through here means the flow scan failed, but
+                        // we still need to reproduce its strict-lazy
+                        // behavior for `{` at line start.
                         let scan_result = if self.tree.spine_len() > 0 {
                             let check = self.make_container_line_check();
-                            scan_mdx_inline_expression_in_container(&bytes[ix..], &check)
+                            let allow_lazy_body = !is_at_paragraph_line_start(bytes, ix);
+                            scan_mdx_inline_expression_in_container(
+                                &bytes[ix..],
+                                &check,
+                                allow_lazy_body,
+                            )
                         } else {
                             scan_mdx_inline_expression(&bytes[ix..])
                         };
                         if let Some((content_start, content_end, total_len)) = scan_result {
                             self.tree.append_text(begin_text, ix, backslash_escaped);
                             backslash_escaped = false;
-                            let content = &self.text[ix + content_start..ix + content_end];
-                            let cow_ix = self.allocs.allocate_cow(content.into());
+                            // Strip container prefixes (e.g. blockquote `>`)
+                            // from continuation lines, then dedent (tabs →
+                            // spaces). The scanner already skipped prefixes
+                            // for depth tracking, but the extracted slice
+                            // still contains them. Match remark's
+                            // mdxTextExpression value normalization.
+                            let stripped = self.strip_container_prefixes(
+                                ix + content_start,
+                                ix + content_end,
+                            );
+                            let normalized = crate::mdx::dedent_expression_continuation(
+                                &stripped,
+                                self.container_content_col(),
+                            )
+                            .into_owned();
+                            // Validate the expression body as JS via oxc.
+                            // Without this, `{h<}` etc. silently produce a
+                            // phantom mdxTextExpression and only error at
+                            // JS emit. Allocator is reused across calls.
+                            if let Some(err_offset) = crate::mdx::try_parse_expression_body(
+                                &normalized,
+                                &mut self.mdx_expr_allocator,
+                            ) {
+                                self.mdx_errors.push((
+                                    ix + content_start + err_offset,
+                                    "Could not parse expression with oxc".to_string(),
+                                ));
+                            }
+                            let cow_ix = self.allocs.allocate_cow(normalized.into());
                             self.tree.append(Item {
                                 start: ix,
                                 end: ix + total_len,
@@ -1601,7 +1648,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     begin_text = ix + count;
                     LoopInstruction::ContinueAndSkip(count - 1)
                 }
-                b'<' if bytes.get(ix + 1) != Some(&b'\\') => {
+                b'<' if self.options.contains(Options::ENABLE_MDX)
+                    || bytes.get(ix + 1) != Some(&b'\\') =>
+                {
+                    // In MDX mode `<\…` is not a CommonMark backslash escape;
+                    // the MaybeHtml resolver below validates it (and rejects
+                    // `<\>` as an invalid JSX tag start).
                     // Note: could detect some non-HTML cases and early escape here, but not
                     // clear that's a win.
                     self.tree.append_text(begin_text, ix, backslash_escaped);
@@ -2690,13 +2742,28 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return false;
         }
 
-        // Checking if something's a valid table or not requires looking at two lines.
+        // Cheap pre-filter: a delimiter row must contain at least one `-`.
+        // Container paragraphs hit this path on every continuation line, so
+        // skipping the pipe-counting loop / scan_table_head when the next
+        // line obviously can't be a delimiter row matters for parse perf.
+        let Some(eol_off) = bytes.iter().position(|&b| b == b'\n' || b == b'\r') else {
+            return false;
+        };
+        let next_line_ix = eol_off + scan_eol(&bytes[eol_off..]).unwrap();
+        let next_line_end = bytes[next_line_ix..]
+            .iter()
+            .position(|&b| b == b'\n' || b == b'\r')
+            .map(|p| next_line_ix + p)
+            .unwrap_or(bytes.len());
+        if !bytes[next_line_ix..next_line_end].contains(&b'-') {
+            return false;
+        }
+
         // First line, count unescaped pipes.
         let mut pipes = 0;
-        let mut next_line_ix = 0;
         let mut bsesc = false;
         let mut last_pipe_ix = 0;
-        for (i, &byte) in bytes.iter().enumerate() {
+        for (i, &byte) in bytes[..eol_off].iter().enumerate() {
             match byte {
                 b'\\' => {
                     bsesc = true;
@@ -2706,18 +2773,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     pipes += 1;
                     last_pipe_ix = i;
                 }
-                b'\r' | b'\n' => {
-                    next_line_ix = i + scan_eol(&bytes[i..]).unwrap();
-                    break;
-                }
                 _ => {}
             }
             bsesc = false;
-        }
-
-        // scan_eol can't return 0, so this can't be zero
-        if next_line_ix == 0 {
-            return false;
         }
 
         // Scan the table head. The part that looks like:
@@ -2954,6 +3012,61 @@ fn is_inside_code_span_on_line(bytes: &[u8], pos: usize) -> bool {
         }
     }
     false
+}
+
+/// True if the byte at `pos` is the first content char of its source line,
+/// allowing only whitespace, blockquote markers (`>`), and at most one
+/// leading list marker (`-`, `+`, `*`, or `N.`/`N)`) before it. Used to
+/// distinguish flow-position `{` (which follows mdx-js's strict-no-lazy
+/// flow rule) from text-position `{` after the block-level pass already
+/// failed to take it as flow.
+fn is_at_paragraph_line_start(bytes: &[u8], pos: usize) -> bool {
+    let mut j = pos;
+    while j > 0 && bytes[j - 1] != b'\n' && bytes[j - 1] != b'\r' {
+        j -= 1;
+    }
+    // j..pos is the slice from line start (after newline) up to `{`.
+    let line = &bytes[j..pos];
+    let mut k = 0;
+    while k < line.len() && (line[k] == b' ' || line[k] == b'\t') {
+        k += 1;
+    }
+    while k < line.len() && line[k] == b'>' {
+        k += 1;
+        if k < line.len() && (line[k] == b' ' || line[k] == b'\t') {
+            k += 1;
+        }
+    }
+    if k < line.len() {
+        let b = line[k];
+        let consumed = if matches!(b, b'-' | b'+' | b'*')
+            && line.get(k + 1).is_some_and(|c| *c == b' ' || *c == b'\t')
+        {
+            Some(k + 2)
+        } else if b.is_ascii_digit() {
+            let mut m = k + 1;
+            while m < line.len() && line[m].is_ascii_digit() {
+                m += 1;
+            }
+            if m < line.len()
+                && (line[m] == b'.' || line[m] == b')')
+                && line.get(m + 1).is_some_and(|c| *c == b' ' || *c == b'\t')
+            {
+                Some(m + 2)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(after_marker) = consumed {
+            k = after_marker;
+            while k < line.len() && (line[k] == b' ' || line[k] == b'\t') {
+                k += 1;
+            }
+        }
+    }
+    k == line.len()
 }
 
 fn contains_blank_line(bytes: &[u8]) -> bool {

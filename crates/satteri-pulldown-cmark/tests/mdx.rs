@@ -952,7 +952,10 @@ fn jsx_text_multiline_expr_attr() {
 
 #[test]
 fn jsx_text_multiline_spread() {
-    let ev = mdx_events("a <b {c\nd} /> e");
+    // A bare `{c\nd}` in attribute position is invalid JSX (mdx-js rejects
+    // with "Could not parse expression with acorn"). Use a real multi-line
+    // spread instead.
+    let ev = mdx_events("a <b {...\nc} /> e");
     assert!(
         has(&ev, |e| matches!(
             e,

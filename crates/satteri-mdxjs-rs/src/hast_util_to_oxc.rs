@@ -35,7 +35,7 @@ use satteri_ast::mdast::codec::{
 };
 use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
-    PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_SPACE_SEP, PROP_STRING,
+    PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_SPACE_SEP, PROP_STRING,
 };
 
 /// Get a Span from a HAST binary node's position data.
@@ -540,7 +540,7 @@ fn transform_element<'a>(
 
         let value = match value_kind {
             PROP_BOOL_TRUE => None,
-            PROP_STRING | PROP_SPACE_SEP | PROP_COMMA_SEP => {
+            PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP => {
                 let v = context.view.get_str(value_ref);
                 Some(JSXAttributeValue::StringLiteral(OxcBox::new_in(
                     StringLiteral {
