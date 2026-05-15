@@ -568,12 +568,16 @@ const KNOWN_DIVERGENCES = new Set<string>([
   "mdx-hast\0>}<\n>^",
   "mdx-mdast\0>:><\n>{}/",
   "mdx-hast\0>:><\n>{}/",
+  "mdx-mdast\0><\n>d|",
+  "mdx-hast\0><\n>d|",
   // Same family: oxc accepts an expression body shape that acorn rejects.
   // After tightening `try_parse_expression_body` to acorn-style strictness
   // most cases are caught, but a few edge cases (e.g. unmatched braces in
   // regex-vs-division contexts) still slip through.
   "mdx-mdast\0z({/+}/}-/",
   "mdx-hast\0z({/+}/}-/",
+  "mdx-mdast\0}\t{/xp+)/}",
+  "mdx-hast\0}\t{/xp+)/}",
 ]);
 
 function stripPositions(node: unknown): unknown {

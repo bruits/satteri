@@ -225,11 +225,22 @@ fn decode_attr_entities(s: &str) -> alloc::borrow::Cow<'_, str> {
 }
 
 fn is_mdx_unicode_whitespace(s: &[u8], ix: usize) -> bool {
-    if s[ix].is_ascii_whitespace() {
+    let b = s[ix];
+    if b.is_ascii_whitespace() {
         return true;
     }
-    let rest = &s[ix..];
-    let Ok(text) = core::str::from_utf8(rest) else {
+    // Non-ASCII path: validate only the bytes for the current code point
+    // (at most 4 bytes). Validating the rest of the document via
+    // `from_utf8` was a hot-path cost in the JSX scanner.
+    if b < 0x80 {
+        return false;
+    }
+    let len = char_len_utf8(b);
+    let end = ix + len;
+    if end > s.len() {
+        return false;
+    }
+    let Ok(text) = core::str::from_utf8(&s[ix..end]) else {
         return false;
     };
     let c = text.chars().next().unwrap();
@@ -1209,13 +1220,8 @@ pub(crate) fn scan_mdx_inline_expression_in_container(
     // (first content of a paragraph line in a container) follows the
     // `allowLazy: false` flow tokenizer; the lazy line is consumed but
     // body content there fails the scan.
-    let total = scan_mdx_expression_end_inner(
-        bytes,
-        true,
-        Some(container_check),
-        true,
-        allow_lazy_body,
-    )?;
+    let total =
+        scan_mdx_expression_end_inner(bytes, true, Some(container_check), true, allow_lazy_body)?;
     Some((1, total - 1, total))
 }
 
@@ -1848,7 +1854,8 @@ fn parse_jsx_attrs<'a>(text: &'a str, container_content_col: usize) -> Vec<JsxAt
     // elsewhere); without it `<$Foo/>` would re-enter the attribute branch
     // and synthesize a phantom `Foo` boolean attribute.
     while i < len
-        && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'.' | b'-' | b':' | b'_' | b'$'))
+        && (bytes[i].is_ascii_alphanumeric()
+            || matches!(bytes[i], b'.' | b'-' | b':' | b'_' | b'$'))
     {
         i += 1;
     }

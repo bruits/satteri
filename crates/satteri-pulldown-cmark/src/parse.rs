@@ -549,10 +549,7 @@ impl<'input> ParserInner<'input> {
                             Some(b'\n' | b'\r') => {
                                 let mut probe = start + 1;
                                 while probe < bytes_block.len()
-                                    && matches!(
-                                        bytes_block[probe],
-                                        b' ' | b'\t' | b'\n' | b'\r'
-                                    )
+                                    && matches!(bytes_block[probe], b' ' | b'\t' | b'\n' | b'\r')
                                 {
                                     probe += 1;
                                 }
@@ -600,19 +597,13 @@ impl<'input> ParserInner<'input> {
                                             // accept as text.
                                             let mut ls = start;
                                             while ls > 0
-                                                && !matches!(
-                                                    bytes_block[ls - 1],
-                                                    b'\n' | b'\r'
-                                                )
+                                                && !matches!(bytes_block[ls - 1], b'\n' | b'\r')
                                             {
                                                 ls -= 1;
                                             }
                                             let mut k = ls;
                                             let mut sp = 0;
-                                            while k < start
-                                                && bytes_block[k] == b' '
-                                                && sp < 3
-                                            {
+                                            while k < start && bytes_block[k] == b' ' && sp < 3 {
                                                 k += 1;
                                                 sp += 1;
                                             }

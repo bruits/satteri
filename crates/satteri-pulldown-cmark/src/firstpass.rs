@@ -1548,10 +1548,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // for depth tracking, but the extracted slice
                             // still contains them. Match remark's
                             // mdxTextExpression value normalization.
-                            let stripped = self.strip_container_prefixes(
-                                ix + content_start,
-                                ix + content_end,
-                            );
+                            let stripped =
+                                self.strip_container_prefixes(ix + content_start, ix + content_end);
                             let normalized = crate::mdx::dedent_expression_continuation(
                                 &stripped,
                                 self.container_content_col(),
@@ -2746,16 +2744,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Container paragraphs hit this path on every continuation line, so
         // skipping the pipe-counting loop / scan_table_head when the next
         // line obviously can't be a delimiter row matters for parse perf.
-        let Some(eol_off) = bytes.iter().position(|&b| b == b'\n' || b == b'\r') else {
+        // Use SIMD-backed `memchr2` rather than a `position` closure — this
+        // path runs on every paragraph continuation line.
+        let Some(eol_off) = memchr::memchr2(b'\n', b'\r', bytes) else {
             return false;
         };
         let next_line_ix = eol_off + scan_eol(&bytes[eol_off..]).unwrap();
-        let next_line_end = bytes[next_line_ix..]
-            .iter()
-            .position(|&b| b == b'\n' || b == b'\r')
+        let next_line_end = memchr::memchr2(b'\n', b'\r', &bytes[next_line_ix..])
             .map(|p| next_line_ix + p)
             .unwrap_or(bytes.len());
-        if !bytes[next_line_ix..next_line_end].contains(&b'-') {
+        if memchr::memchr(b'-', &bytes[next_line_ix..next_line_end]).is_none() {
             return false;
         }
 
