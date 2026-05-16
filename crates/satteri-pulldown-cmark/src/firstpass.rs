@@ -62,12 +62,7 @@ impl MdastPositions {
 pub(crate) fn run_first_pass(
     text: &str,
     options: Options,
-) -> (
-    Tree<Item>,
-    Allocations<'_>,
-    Vec<(usize, String)>,
-    MdastPositions,
-) {
+) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
     // This is a very naive heuristic for the number of nodes
     // we'll need.
     let start_capacity = max(128, text.len() / 32);
@@ -88,9 +83,14 @@ pub(crate) fn run_first_pass(
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
         pending_lazy_blockquote_close: false,
     };
-    let (tree, allocs, mdx_errors) = first_pass.run();
-    let positions = compute_mdast_positions(&tree, text.as_bytes());
-    (tree, allocs, mdx_errors, positions)
+    first_pass.run()
+}
+
+/// MDAST position overrides, computed on demand from a finished firstpass
+/// tree. Only the arena_build path needs these; the Event iterator path
+/// (`Parser::new`) skips this O(n) walk entirely.
+pub(crate) fn build_mdast_positions(tree: &Tree<Item>, source: &[u8]) -> MdastPositions {
+    compute_mdast_positions(tree, source)
 }
 
 /// Walk the firstpass tree and compute MDAST `position.end` for every
@@ -101,7 +101,7 @@ pub(crate) fn run_first_pass(
 /// computation, arena_build only reads.
 fn compute_mdast_positions(tree: &Tree<Item>, source: &[u8]) -> MdastPositions {
     let mut out = MdastPositions::default();
-    walk_compute(tree, source, tree.first(), &mut out);
+    walk_compute(tree, source, tree.first(), None, &mut out);
     out
 }
 
@@ -109,6 +109,7 @@ fn walk_compute(
     tree: &Tree<Item>,
     source: &[u8],
     start: Option<TreeIndex>,
+    parent: Option<TreeIndex>,
     out: &mut MdastPositions,
 ) {
     let mut cur = start;
@@ -117,50 +118,18 @@ fn walk_compute(
         // before any parent rule consults them.
         let child = tree[ix].child;
         if child.is_some() {
-            walk_compute(tree, source, child, out);
+            walk_compute(tree, source, child, Some(ix), out);
         }
-        compute_for_node(tree, source, ix, out);
+        let item = tree[ix].item;
+        if item.body.is_block_level() {
+            let parent_body = parent.map(|p| tree[p].item.body);
+            let end = mdast_position_end(&item, source, parent_body.as_ref());
+            if end != item.end as u32 {
+                out.set(ix, end);
+            }
+        }
         cur = tree[ix].next;
     }
-}
-
-fn compute_for_node(tree: &Tree<Item>, source: &[u8], ix: TreeIndex, out: &mut MdastPositions) {
-    let item = tree[ix].item;
-    if !item.body.is_block_level() {
-        return;
-    }
-    // For now, the side-table only carries the *trim* result. The other
-    // extensions in this file (list-item/next-sibling, inner-bq/outer-
-    // markers, list-in-bq/marker-lines) operate on arena_build's
-    // `cont_end` — derived from the built MDAST children, which can
-    // differ from `item.end` — so they're applied at the call site.
-    let parent_body = find_parent(tree, ix).map(|p| tree[p].item.body);
-    let end = mdast_position_end(&item, source, parent_body.as_ref());
-    if end != item.end as u32 {
-        out.set(ix, end);
-    }
-}
-
-fn find_parent(tree: &Tree<Item>, target: TreeIndex) -> Option<TreeIndex> {
-    fn dfs(
-        tree: &Tree<Item>,
-        cur: Option<TreeIndex>,
-        target: TreeIndex,
-        parent: Option<TreeIndex>,
-    ) -> Option<TreeIndex> {
-        let mut c = cur;
-        while let Some(ix) = c {
-            if ix == target {
-                return parent;
-            }
-            if let Some(found) = dfs(tree, tree[ix].child, target, Some(ix)) {
-                return Some(found);
-            }
-            c = tree[ix].next;
-        }
-        None
-    }
-    dfs(tree, tree.first(), target, None)
 }
 
 // Each level of brace nesting adds another entry to a hash table.

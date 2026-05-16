@@ -1720,7 +1720,16 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     let mut arena = builder.finish();
     arena.parse_options = options.bits();
 
-    if options.contains(Options::ENABLE_MDX) {
+    // Source-level early exits: post-passes scan the arena to find
+    // candidate nodes, but if the construct's trigger char(s) don't
+    // appear in the source at all, no candidate can exist. The memchr
+    // probes are conservative supersets (e.g. `@` matches both emails
+    // and unrelated literal text); the actual passes still validate.
+    let source_bytes = source.as_bytes();
+
+    if options.contains(Options::ENABLE_MDX)
+        && memchr::memchr2(b'<', b'{', source_bytes).is_some()
+    {
         crate::post_passes::mdx_mark_and_unravel(&mut arena);
     }
 
@@ -1733,10 +1742,14 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         // remark handles this cleanly because its autolink tokenizer runs
         // before the directive check; we're a post-pass, so we re-merge the
         // split first and then run the autolink scan.
-        if options.contains(Options::ENABLE_DIRECTIVE) {
+        if options.contains(Options::ENABLE_DIRECTIVE)
+            && memchr::memmem::find(source_bytes, b"://").is_some()
+        {
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
-        crate::post_passes::gfm_autolink_literal_pass(&mut arena);
+        if memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some() {
+            crate::post_passes::gfm_autolink_literal_pass(&mut arena);
+        }
     }
 
     if options.contains(Options::ENABLE_DIRECTIVE) {
@@ -1744,8 +1757,12 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         // inline-parses them so constructs like `` `code` `` inside
         // `:::tip[Set a \`baseUrl\`]` end up as inlineCode. We mirror the
         // common case (backticks) here as a post-pass.
-        crate::post_passes::directive_label_inline_code_pass(&mut arena);
-        if options.contains(Options::ENABLE_MDX) {
+        if memchr::memchr(b'`', source_bytes).is_some() {
+            crate::post_passes::directive_label_inline_code_pass(&mut arena);
+        }
+        if options.contains(Options::ENABLE_MDX)
+            && memchr::memchr2(b'<', b'{', source_bytes).is_some()
+        {
             // Same idea for JSX tags inside a directive label —
             // `:::note[The <code>x</code> property]`.
             crate::post_passes::directive_label_jsx_pass(&mut arena);

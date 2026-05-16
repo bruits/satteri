@@ -315,8 +315,7 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
     ///
     /// See the [`ParserCallbacks`] trait for a list of callbacks that can be overridden.
     pub fn new_with_callbacks(text: &'input str, options: Options, callbacks: CB) -> Self {
-        let (mut tree, allocs, _firstpass_mdx_errors, mdast_positions) =
-            run_first_pass(text, options);
+        let (mut tree, allocs, _firstpass_mdx_errors) = run_first_pass(text, options);
         tree.reset();
         let inline_stack = Default::default();
         let link_stack = Default::default();
@@ -330,7 +329,9 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
                 options,
                 tree,
                 allocs,
-                mdast_positions,
+                // Event iterator doesn't consult mdast_positions; default
+                // empty avoids the O(n) firstpass walk.
+                mdast_positions: Default::default(),
                 inline_stack,
                 link_stack,
                 wikilink_stack,
@@ -387,8 +388,8 @@ impl<'input, F> Parser<'input, BrokenLinkCallback<F>> {
 
 impl<'input> ParserInner<'input> {
     pub(crate) fn new(text: &'input str, options: Options) -> Self {
-        let (mut tree, allocs, firstpass_mdx_errors, mdast_positions) =
-            run_first_pass(text, options);
+        let (mut tree, allocs, firstpass_mdx_errors) = run_first_pass(text, options);
+        let mdast_positions = crate::firstpass::build_mdast_positions(&tree, text.as_bytes());
         tree.reset();
         ParserInner {
             text,
