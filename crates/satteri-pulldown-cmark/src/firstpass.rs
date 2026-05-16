@@ -19,52 +19,10 @@ use crate::{
     HeadingLevel, MetadataBlockKind, Options,
 };
 
-/// Runs the first pass, which resolves the block structure of the document,
-/// and returns the resulting tree.
-/// Per-tree-index MDAST `position.end` overrides. The parser's
-/// `item.end` is the byte offset of the next-block cursor (past the
-/// trailing line terminator); MDAST wants the visible end, sometimes
-/// trimmed (paragraphs/headings strip the trailing `\n`) and sometimes
-/// extended (indented code absorbs trailing blank lines, an inner
-/// blockquote absorbs outer-marker-only continuation lines, etc.).
-///
-/// Two distinct semantics → two distinct values. The parser computes
-/// both during firstpass; arena_build is a thin reader.
-#[derive(Default, Clone)]
-pub(crate) struct MdastPositions {
-    // Sparse: ends[node_ix.get()] = mdast position end, 0 means "use
-    // item.end as-is". Sized to tree.nodes_len() after finalize.
-    ends: Vec<u32>,
-}
-
-impl MdastPositions {
-    /// Returns the MDAST end for `ix` if one has been recorded; else
-    /// falls back to the parser-cursor end on the item.
-    pub(crate) fn end_for(&self, ix: TreeIndex, item: &Item) -> u32 {
-        let raw = self
-            .ends
-            .get(ix.get())
-            .copied()
-            .filter(|&v| v != 0)
-            .unwrap_or(item.end as u32);
-        raw
-    }
-
-    fn set(&mut self, ix: TreeIndex, end: u32) {
-        let slot = ix.get();
-        if slot >= self.ends.len() {
-            self.ends.resize(slot + 1, 0);
-        }
-        self.ends[slot] = end;
-    }
-}
-
 pub(crate) fn run_first_pass(
     text: &str,
     options: Options,
 ) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
-    // This is a very naive heuristic for the number of nodes
-    // we'll need.
     let start_capacity = max(128, text.len() / 32);
     let lookup_table = &create_lut(&options);
     let first_pass = FirstPass {
@@ -84,52 +42,6 @@ pub(crate) fn run_first_pass(
         pending_lazy_blockquote_close: false,
     };
     first_pass.run()
-}
-
-/// MDAST position overrides, computed on demand from a finished firstpass
-/// tree. Only the arena_build path needs these; the Event iterator path
-/// (`Parser::new`) skips this O(n) walk entirely.
-pub(crate) fn build_mdast_positions(tree: &Tree<Item>, source: &[u8]) -> MdastPositions {
-    compute_mdast_positions(tree, source)
-}
-
-/// Walk the firstpass tree and compute MDAST `position.end` for every
-/// block-level item, recording the result in [`MdastPositions`].
-///
-/// This consolidates the trim/extension logic that used to live in
-/// arena_build's close handlers — firstpass owns the position
-/// computation, arena_build only reads.
-fn compute_mdast_positions(tree: &Tree<Item>, source: &[u8]) -> MdastPositions {
-    let mut out = MdastPositions::default();
-    walk_compute(tree, source, tree.first(), None, &mut out);
-    out
-}
-
-fn walk_compute(
-    tree: &Tree<Item>,
-    source: &[u8],
-    start: Option<TreeIndex>,
-    parent: Option<TreeIndex>,
-    out: &mut MdastPositions,
-) {
-    let mut cur = start;
-    while let Some(ix) = cur {
-        // Children first (post-order) so descendant ends are settled
-        // before any parent rule consults them.
-        let child = tree[ix].child;
-        if child.is_some() {
-            walk_compute(tree, source, child, Some(ix), out);
-        }
-        let item = tree[ix].item;
-        if item.body.is_block_level() {
-            let parent_body = parent.map(|p| tree[p].item.body);
-            let end = mdast_position_end(&item, source, parent_body.as_ref());
-            if end != item.end as u32 {
-                out.set(ix, end);
-            }
-        }
-        cur = tree[ix].next;
-    }
 }
 
 // Each level of brace nesting adds another entry to a hash table.
@@ -214,13 +126,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             let line_is_blank = scan_blank_line(&bytes[probe_ix..]).is_some();
             if !line_is_blank
                 && !self.pending_lazy_blockquote_close
-                && (i..self.tree.spine_len()).rev().any(|d| {
-                    self.tree.walk_spine().nth(d).is_some_and(|ix| {
-                        matches!(
-                            self.tree[*ix].item.body,
-                            ItemBody::BlockQuote(..) | ItemBody::ListItem(..)
-                        )
-                    })
+                && self.tree.walk_spine().skip(i).any(|&ix| {
+                    matches!(
+                        self.tree[ix].item.body,
+                        ItemBody::BlockQuote(..) | ItemBody::ListItem(..)
+                    )
                 })
             {
                 self.pending_lazy_blockquote_close = true;

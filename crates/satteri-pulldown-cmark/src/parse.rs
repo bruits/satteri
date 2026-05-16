@@ -218,10 +218,6 @@ pub(crate) struct ParserInner<'input> {
     pub(crate) options: Options,
     pub(crate) tree: Tree<Item>,
     pub(crate) allocs: Allocations<'input>,
-    /// MDAST `position.end` overrides for block-level items, computed
-    /// by firstpass. Read by arena_build; `item.end` (the parser
-    /// cursor) remains untouched.
-    pub(crate) mdast_positions: crate::firstpass::MdastPositions,
     html_scan_guard: HtmlScanGuard,
 
     // https://github.com/pulldown-cmark/pulldown-cmark/issues/844
@@ -329,9 +325,6 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
                 options,
                 tree,
                 allocs,
-                // Event iterator doesn't consult mdast_positions; default
-                // empty avoids the O(n) firstpass walk.
-                mdast_positions: Default::default(),
                 inline_stack,
                 link_stack,
                 wikilink_stack,
@@ -389,14 +382,12 @@ impl<'input, F> Parser<'input, BrokenLinkCallback<F>> {
 impl<'input> ParserInner<'input> {
     pub(crate) fn new(text: &'input str, options: Options) -> Self {
         let (mut tree, allocs, firstpass_mdx_errors) = run_first_pass(text, options);
-        let mdast_positions = crate::firstpass::build_mdast_positions(&tree, text.as_bytes());
         tree.reset();
         ParserInner {
             text,
             options,
             tree,
             allocs,
-            mdast_positions,
             inline_stack: Default::default(),
             link_stack: Default::default(),
             wikilink_stack: Default::default(),

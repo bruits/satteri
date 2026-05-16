@@ -29,25 +29,6 @@ const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
 const HEADER_SIZE: usize = 52;
 
 impl<K: ArenaKind> Arena<K> {
-    /// Clone the node vec with `start_offset`/`end_offset` rewritten as
-    /// code-point offsets (using a one-shot `LineIndex` over the source).
-    /// Only called on the non-ASCII serialization path.
-    fn nodes_with_cp_offsets(&self) -> Vec<crate::node::ArenaNode> {
-        let line_index = LineIndex::from_source(&self.source);
-        let mut cursor = line_index.cursor();
-        let mut out = Vec::with_capacity(self.nodes.len());
-        for node in &self.nodes {
-            let mut n = *node;
-            // Empty positions (line == 0 && offset == 0) stay empty.
-            if !(n.start_line == 0 && n.start_offset == 0) {
-                n.start_offset = cursor.byte_to_cp_offset(n.start_offset);
-                n.end_offset = cursor.byte_to_cp_offset(n.end_offset);
-            }
-            out.push(n);
-        }
-        out
-    }
-
     /// Serialize to a flat byte buffer:
     /// `[Header][nodes][children u32s][type_data][source][node_data]`
     pub fn to_raw_buffer(&self) -> Vec<u8> {
@@ -92,23 +73,34 @@ impl<K: ArenaKind> Arena<K> {
 
         // The arena tracks `start_offset`/`end_offset` as **byte** offsets
         // (the parser works in bytes). remark/micromark report code-point
-        // offsets in `position`, so to match the reference shape we
-        // convert here at serialization time. Columns and lines are
-        // already in code-point units (set via `LineIndexCursor` which
-        // counts code points). Convert by cloning the node vec and
-        // patching the two offset fields.
-        let cp_nodes;
-        let nodes_slice: &[u8] = if self.source.is_ascii() {
-            // ASCII fast path: byte offsets == code-point offsets, no work.
-            unsafe { std::slice::from_raw_parts(self.nodes.as_ptr() as *const u8, nodes_bytes) }
-        } else {
-            cp_nodes = self.nodes_with_cp_offsets();
-            unsafe { std::slice::from_raw_parts(cp_nodes.as_ptr() as *const u8, nodes_bytes) }
-        };
-        // SAFETY: ArenaNode is #[repr(C)] with all fields explicitly defined
-        // (no implicit padding, _pad is explicit). The buffer is only read back
-        // on the same platform via the JS DataView, never deserialized into Rust.
+        // offsets in `position`, so we convert here at serialization time.
+        // Columns and lines are already in code-point units.
+        // SAFETY: ArenaNode is #[repr(C)] with explicit padding; same-process
+        // serialization, never deserialized back into Rust.
+        let nodes_slice: &[u8] =
+            unsafe { std::slice::from_raw_parts(self.nodes.as_ptr() as *const u8, nodes_bytes) };
+        let nodes_buf_start = buf.len();
         buf.extend_from_slice(nodes_slice);
+        if !self.source.is_ascii() {
+            // ArenaNode field offsets are fixed by `#[repr(C)]`:
+            // start_offset @ 12, end_offset @ 16.
+            const START_OFF_FIELD: usize = 12;
+            const END_OFF_FIELD: usize = 16;
+            let line_index = LineIndex::from_source(&self.source);
+            let mut cursor = line_index.cursor();
+            for (i, node) in self.nodes.iter().enumerate() {
+                if node.start_line == 0 && node.start_offset == 0 {
+                    continue;
+                }
+                let cp_start = cursor.byte_to_cp_offset(node.start_offset);
+                let cp_end = cursor.byte_to_cp_offset(node.end_offset);
+                let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
+                buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
+                    .copy_from_slice(&cp_start.to_ne_bytes());
+                buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
+                    .copy_from_slice(&cp_end.to_ne_bytes());
+            }
+        }
 
         // SAFETY: u32 has no padding or alignment concerns for ne bytes.
         let children_slice: &[u8] = unsafe {

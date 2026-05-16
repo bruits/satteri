@@ -128,7 +128,12 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                 }
 
                 let item = inner.tree[ix].item;
-                let end = inner.mdast_positions.end_for(ix, &item);
+                let parent_body = inner.tree.peek_up().map(|p| inner.tree[p].item.body);
+                let end = crate::firstpass::mdast_position_end(
+                    &item,
+                    source.as_bytes(),
+                    parent_body.as_ref(),
+                );
                 let (end_line, end_col) = cursor.offset_to_line_col(end);
 
                 match &inner.tree[ix].item.body {

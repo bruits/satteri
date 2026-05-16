@@ -158,17 +158,6 @@ impl<T: Default> Tree<T> {
         self.spine.len()
     }
 
-    /// Returns the first top-level node, if any. Top-level items are
-    /// not linked from the dummy root's `child`; they're created as a
-    /// sibling chain starting at index 1.
-    pub(crate) fn first(&self) -> Option<TreeIndex> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(TreeIndex::new(1))
-        }
-    }
-
     /// Resets the focus to the first node added to the tree, if it exists.
     pub(crate) fn reset(&mut self) {
         self.cur = if self.is_empty() {
