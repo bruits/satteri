@@ -369,10 +369,7 @@ pub(crate) fn try_parse_expression_body(
                 i += 1;
             }
             if !closed {
-                return Some((
-                    comment_start,
-                    "Unterminated block comment".to_string(),
-                ));
+                return Some((comment_start, "Unterminated block comment".to_string()));
             }
         } else {
             if !matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
@@ -827,8 +824,7 @@ fn scan_mdx_expression_end_inner(
                     || bytes[ix + 1] == b'>') =>
             {
                 reject_if_lazy!();
-                if let Some(end) =
-                    scan_mdx_jsx_tag_end_inner(&bytes[ix..], None, nesting_depth + 1)
+                if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[ix..], None, nesting_depth + 1)
                 {
                     ix += end;
                     mark_value!();

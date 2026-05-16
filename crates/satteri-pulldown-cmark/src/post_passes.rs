@@ -939,87 +939,87 @@ fn split_text_with_autolinks(arena: &mut Arena<Mdast>, text_id: u32, strict_doma
             }
             Some(map)
         } else {
-        let mut map = Vec::with_capacity(bytes.len() + 1);
-        let mut s = 0usize;
-        let mut t = 0usize;
-        let mut ok = true;
-        while t < bytes.len() {
-            if s >= source_slice.len() {
-                ok = false;
-                break;
-            }
-            if source_slice[s] == b'\\'
-                && s + 1 < source_slice.len()
-                && source_slice[s + 1].is_ascii_punctuation()
-            {
-                s += 1;
-            }
-            // Skip trailing whitespace before a line ending — micromark
-            // trims these out of the inline text but the source bytes
-            // still occupy positions. Without skipping, the map would
-            // mismatch (text `\n` at where source has ` `) and the whole
-            // map would be discarded.
-            while s < source_slice.len()
-                && matches!(source_slice[s], b' ' | b'\t')
-                && bytes[t] != source_slice[s]
-            {
-                let mut peek = s + 1;
-                while peek < source_slice.len() && matches!(source_slice[peek], b' ' | b'\t') {
-                    peek += 1;
-                }
-                if peek < source_slice.len() && matches!(source_slice[peek], b'\n' | b'\r') {
-                    s += 1;
-                } else {
+            let mut map = Vec::with_capacity(bytes.len() + 1);
+            let mut s = 0usize;
+            let mut t = 0usize;
+            let mut ok = true;
+            while t < bytes.len() {
+                if s >= source_slice.len() {
+                    ok = false;
                     break;
                 }
-            }
-            // Also skip leading whitespace right after a line ending —
-            // continuation lines in a paragraph drop their indentation
-            // when collapsed into the inline text (e.g. `z\n i}@…` →
-            // text `z\ni}@…`). Without skipping, source position would
-            // diverge from text position past the wrap.
-            if t > 0
-                && matches!(bytes[t - 1], b'\n' | b'\r')
-                && matches!(source_slice[s], b' ' | b'\t')
-                && bytes[t] != source_slice[s]
-            {
-                while s < source_slice.len() && matches!(source_slice[s], b' ' | b'\t') {
+                if source_slice[s] == b'\\'
+                    && s + 1 < source_slice.len()
+                    && source_slice[s + 1].is_ascii_punctuation()
+                {
                     s += 1;
                 }
-            }
-            // Blockquote-prefix skip: after a line ending, the source
-            // may carry a `>` marker (optionally with `>` chains and
-            // trailing whitespace) that's stripped from the collapsed
-            // inline text. Without this skip, the map would diverge as
-            // soon as a blockquote continuation line carried real
-            // content (`>bar\n> baz` collapsed to `bar\nbaz` — text[4]
-            // is `b`, source[4] is `>`).
-            if t > 0
-                && matches!(bytes[t - 1], b'\n' | b'\r')
-                && source_slice[s] == b'>'
-                && bytes[t] != b'>'
-            {
-                while s < source_slice.len() && source_slice[s] == b'>' {
-                    s += 1;
+                // Skip trailing whitespace before a line ending — micromark
+                // trims these out of the inline text but the source bytes
+                // still occupy positions. Without skipping, the map would
+                // mismatch (text `\n` at where source has ` `) and the whole
+                // map would be discarded.
+                while s < source_slice.len()
+                    && matches!(source_slice[s], b' ' | b'\t')
+                    && bytes[t] != source_slice[s]
+                {
+                    let mut peek = s + 1;
+                    while peek < source_slice.len() && matches!(source_slice[peek], b' ' | b'\t') {
+                        peek += 1;
+                    }
+                    if peek < source_slice.len() && matches!(source_slice[peek], b'\n' | b'\r') {
+                        s += 1;
+                    } else {
+                        break;
+                    }
+                }
+                // Also skip leading whitespace right after a line ending —
+                // continuation lines in a paragraph drop their indentation
+                // when collapsed into the inline text (e.g. `z\n i}@…` →
+                // text `z\ni}@…`). Without skipping, source position would
+                // diverge from text position past the wrap.
+                if t > 0
+                    && matches!(bytes[t - 1], b'\n' | b'\r')
+                    && matches!(source_slice[s], b' ' | b'\t')
+                    && bytes[t] != source_slice[s]
+                {
                     while s < source_slice.len() && matches!(source_slice[s], b' ' | b'\t') {
                         s += 1;
                     }
                 }
+                // Blockquote-prefix skip: after a line ending, the source
+                // may carry a `>` marker (optionally with `>` chains and
+                // trailing whitespace) that's stripped from the collapsed
+                // inline text. Without this skip, the map would diverge as
+                // soon as a blockquote continuation line carried real
+                // content (`>bar\n> baz` collapsed to `bar\nbaz` — text[4]
+                // is `b`, source[4] is `>`).
+                if t > 0
+                    && matches!(bytes[t - 1], b'\n' | b'\r')
+                    && source_slice[s] == b'>'
+                    && bytes[t] != b'>'
+                {
+                    while s < source_slice.len() && source_slice[s] == b'>' {
+                        s += 1;
+                        while s < source_slice.len() && matches!(source_slice[s], b' ' | b'\t') {
+                            s += 1;
+                        }
+                    }
+                }
+                if s >= source_slice.len() || source_slice[s] != bytes[t] {
+                    ok = false;
+                    break;
+                }
+                map.push(s);
+                s += 1;
+                t += 1;
             }
-            if s >= source_slice.len() || source_slice[s] != bytes[t] {
-                ok = false;
-                break;
+            if ok {
+                map.push(s);
+                Some(map)
+            } else {
+                None
             }
-            map.push(s);
-            s += 1;
-            t += 1;
-        }
-        if ok {
-            map.push(s);
-            Some(map)
-        } else {
-            None
-        }
         }
     };
 

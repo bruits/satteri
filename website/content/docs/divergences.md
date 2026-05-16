@@ -61,13 +61,13 @@ GFM tables with column alignment produce different HAST properties.
 ```markdown
 | right |
 | ----: |
-| 1     |
+|     1 |
 ```
 
-| Parser        | HAST output                                   |
-| ------------- | --------------------------------------------- |
-| Sätteri       | `<th style="text-align: right">right</th>`    |
-| remark-rehype | `<th align="right">right</th>`                |
+| Parser        | HAST output                                |
+| ------------- | ------------------------------------------ |
+| Sätteri       | `<th style="text-align: right">right</th>` |
+| remark-rehype | `<th align="right">right</th>`             |
 
 The HTML renders identically. `align` is deprecated in HTML5 and
 `style` is the modern equivalent, so Sätteri emits `style`. A HAST

@@ -1031,9 +1031,9 @@ const KNOWN_DIVERGENCES = new Set<string>([
   // as a tag-like construct, while satteri follows the strict CM
   // attribute grammar (unquoted values can't contain `=`) and falls
   // back to paragraph text. Satteri's behaviour is closer to the spec.
-  "mdast\0<img src=title=\"*\"/>\n",
-  "hast\0<img src=title=\"*\"/>\n",
-  "html\0<img src=title=\"*\"/>\n",
+  'mdast\0<img src=title="*"/>\n',
+  'hast\0<img src=title="*"/>\n',
+  'html\0<img src=title="*"/>\n',
   // Lenient unclosed `{` recovery: satteri intentionally suppresses
   // expression scanning when `{` sits inside a link URL `(...)` so an
   // unmatched `{` doesn't hard-error (see `is_inside_link_url_parens`).
@@ -1554,7 +1554,7 @@ const KNOWN_MDX_EVAL_DIVERGENCES = new Set<string>([
   // blockquote contains JSX flow without spec-compliant blank-line
   // separation. Satteri accepts the block and parses the JSX inside.
   "><Box>\n  - a list\n  - inside\n</Box>",
-  "><Box>\n  <Tag name=\"a\">first</Tag>\n  <Tag name=\"b\">second</Tag>\n</Box>",
+  '><Box>\n  <Tag name="a">first</Tag>\n  <Tag name="b">second</Tag>\n</Box>',
   "><Box>\n  child\n</Box>",
   "><Box>\n  # heading inside\n\n  paragraph inside\n</Box>",
   // mdx-js disallows known HTML tags (script, style, …) when MDX mode
@@ -1562,10 +1562,10 @@ const KNOWN_MDX_EVAL_DIVERGENCES = new Set<string>([
   "<script>\nfoo\n</script>1. *bar*\n",
   // Brace inside a link title triggers mdx-js's expression scanner;
   // satteri's link tokenizer keeps the `{` as literal title text.
-  "\\\n     bar\n[link](/uri \"ti\\0{w)",
+  '\\\n     bar\n[link](/uri "ti\\0{w)',
   // Trailing non-whitespace after a JSX flow close is rejected by
   // mdx-js's strict flow scoping; satteri's pair-resolver is lenient.
-  "<Box>\n  <Tag name=\"a\">first</Tag>\n  <Tag name=\"b\">second</Tag>\n</Box>3c",
+  '<Box>\n  <Tag name="a">first</Tag>\n  <Tag name="b">second</Tag>\n</Box>3c',
   // mdx-js requires expressions to be balanced on the same logical
   // construct line; satteri accepts soft-wrapped expression bodies.
   "# {1 +\n2}q",
