@@ -47,7 +47,7 @@ fn strikethrough_test_4() {
 fn strikethrough_test_5() {
     let original = r##"Here I strike out an exclamation point~~!~~.
 "##;
-    let expected = r##"<p>Here I strike out an exclamation point<del>!</del>.</p>
+    let expected = r##"<p>Here I strike out an exclamation point~~!~~.</p>
 "##;
 
     test_markdown_html(original, expected, 2056, false, false, false, false, false, false);

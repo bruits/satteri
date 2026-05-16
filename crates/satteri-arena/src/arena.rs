@@ -30,6 +30,13 @@ pub struct Arena<K: ArenaKind> {
     /// The pulldown-cmark Options bits used to parse this arena.
     /// Stored so that re-parsing (e.g. after plugin mutations) uses the same options.
     pub parse_options: u32,
+    /// Per-node `(cp_start, cp_end)` parallel to `nodes`. Populated by
+    /// `arena_build` at end-of-parse (skipped for ASCII sources where
+    /// cp == byte). Read by `to_raw_buffer` to skip the second
+    /// `LineIndex` build + per-node `byte_to_cp_offset` lookup that
+    /// would otherwise re-traverse the source. Empty means "not
+    /// precomputed" — readers fall back to live conversion.
+    pub cp_offsets: Vec<(u32, u32)>,
     pub(crate) _kind: PhantomData<fn() -> K>,
 }
 
@@ -43,6 +50,7 @@ impl<K: ArenaKind> Clone for Arena<K> {
             node_data: self.node_data.clone(),
             mdx: self.mdx,
             parse_options: self.parse_options,
+            cp_offsets: self.cp_offsets.clone(),
             _kind: PhantomData,
         }
     }
@@ -61,6 +69,7 @@ impl<K: ArenaKind> Arena<K> {
             node_data: FxHashMap::default(),
             mdx: false,
             parse_options: 0,
+            cp_offsets: Vec::new(),
             _kind: PhantomData,
         }
     }
@@ -81,6 +90,7 @@ impl<K: ArenaKind> Arena<K> {
             node_data: FxHashMap::default(),
             mdx: false,
             parse_options: 0,
+            cp_offsets: Vec::new(),
             _kind: PhantomData,
         }
     }
@@ -110,6 +120,8 @@ impl<K: ArenaKind> Arena<K> {
         node.start_column = start_column;
         node.end_line = end_line;
         node.end_column = end_column;
+        // Position mutation invalidates the cached byte→cp offsets.
+        self.cp_offsets.clear();
     }
 
     /// Appends to the shared flat children array, calling this more than

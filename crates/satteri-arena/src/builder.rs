@@ -248,14 +248,17 @@ impl<K: ArenaKind> ArenaBuilder<K> {
         &self.pending_children[children_start..]
     }
 
-    /// Stable-sort the current (still-open) node's pending children by
-    /// `start_offset`. Used by the pulldown-cmark adapter to splice in
-    /// `Definition` nodes — which pulldown-cmark consumes during parsing and
-    /// only surfaces after the walk — at their source-order positions.
-    pub fn sort_current_pending_children_by_start_offset(&mut self) {
+    /// Stable-sort the current node's pending children into source order,
+    /// keyed by `(end_offset, start_offset)`. End is the faithful proxy
+    /// because some block starts get extended *back* (e.g. a setext
+    /// heading inheriting a preceding definition's start).
+    pub fn sort_current_pending_children_by_source_order(&mut self) {
         let children_start = self.stack.last().map(|(_, cs)| *cs as usize).unwrap_or(0);
         let nodes = &self.arena.nodes;
-        self.pending_children[children_start..].sort_by_key(|&id| nodes[id as usize].start_offset);
+        self.pending_children[children_start..].sort_by_key(|&id| {
+            let n = &nodes[id as usize];
+            (n.end_offset, n.start_offset)
+        });
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -517,3 +517,30 @@ describe("MDAST conformance: closing code fence whitespace", () => {
     assertMdastConformance("```js\nfoo\n```  \n");
   });
 });
+
+describe("MDAST conformance: fuzz regressions", () => {
+  // GFM strikethrough requires the opening `~~` to be left-flanking per
+  // CommonMark emphasis rules: a `~~` preceded by an alphanumeric and
+  // followed by punctuation isn't left-flanking and shouldn't open.
+  test("strikethrough flanking: alnum before, punct after rejects", () => {
+    assertMdastConformance("=l0u~~!~~");
+  });
+
+  // Strikethrough/emphasis interleaving: `_/~z)*~*nf` should parse as
+  // `_/~z)` text + `*~*` emphasis. Our single-pass inline resolver
+  // mimics micromark's phase ordering (emphasis first, then strikethrough)
+  // by refusing to match `~`/`^` across an unmatched `*`/`_` opener on
+  // the stack — that way the `*…*` pair claims its span before the
+  // strikethrough pairer sees the inner `~`.
+  test("strikethrough/emphasis nesting crossing", () => {
+    assertMdastConformance("_/~z)*~*nf");
+  });
+
+  // Underscore emphasis nesting: in `\\ \`_@_b__=` the reference parses
+  // `_@_b_` as an outer emphasis containing inner `_b_`. Used to be a known
+  // bug; fixed when the emphasis pairer learned to re-check rule 9 with
+  // remaining run lengths (one `<strong>`/`<em>` per inner-loop pass).
+  test("nested underscore emphasis around intraword", () => {
+    assertMdastConformance("\\ `_@_b__=");
+  });
+});

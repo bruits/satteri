@@ -35,12 +35,14 @@ jobs:
         uses: moonrepo/setup-rust@v1
         with:
           components: clippy, rustfmt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cargo fmt
         run: cargo fmt -- --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-features -- -D warnings
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -66,6 +68,8 @@ jobs:
 
       - name: Install Rust
         uses: moonrepo/setup-rust@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Rust tests
         run: cargo test
@@ -82,12 +86,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build NAPI binding
-        run: pnpm run build:native:debug
-        working-directory: packages/satteri
-
       - name: Build TypeScript
         run: pnpm run build:ts
+        working-directory: packages/satteri
+
+      - name: Build NAPI binding
+        run: pnpm run build:binary:native:debug
         working-directory: packages/satteri
 
       - name: Test

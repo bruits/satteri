@@ -10,6 +10,12 @@ use crate::{
     strings::CowStr,
 };
 
+/// Max mutual-recursion depth between `scan_mdx_expression_end_inner` and
+/// `scan_mdx_jsx_tag_end_inner` for inputs like `<a {<b {<c …}/>}/>`. Bounds
+/// the parser stack; once exceeded the scanner returns `None` and the `<` or
+/// `{` is left for the caller to handle as a parse error.
+const MAX_MDX_NESTING: u32 = 32;
+
 /// Strip the micromark `indentSize = 2` prefix from each continuation
 /// line of an MDX expression. Matches `micromark-factory-mdx-expression`
 /// which consumes up to 2 columns of whitespace after a line ending
@@ -20,7 +26,7 @@ use crate::{
 /// list/blockquote's content begins — continuation lines are conceptually
 /// at that column, which affects tab-stop math when a tab straddles the
 /// container prefix boundary.
-fn dedent_expression_continuation(
+pub(crate) fn dedent_expression_continuation(
     s: &str,
     container_content_col: usize,
 ) -> alloc::borrow::Cow<'_, str> {
@@ -225,11 +231,22 @@ fn decode_attr_entities(s: &str) -> alloc::borrow::Cow<'_, str> {
 }
 
 fn is_mdx_unicode_whitespace(s: &[u8], ix: usize) -> bool {
-    if s[ix].is_ascii_whitespace() {
+    let b = s[ix];
+    if b.is_ascii_whitespace() {
         return true;
     }
-    let rest = &s[ix..];
-    let Ok(text) = core::str::from_utf8(rest) else {
+    // Non-ASCII path: validate only the bytes for the current code point
+    // (at most 4 bytes). Validating the rest of the document via
+    // `from_utf8` was a hot-path cost in the JSX scanner.
+    if b < 0x80 {
+        return false;
+    }
+    let len = char_len_utf8(b);
+    let end = ix + len;
+    if end > s.len() {
+        return false;
+    }
+    let Ok(text) = core::str::from_utf8(&s[ix..end]) else {
         return false;
     };
     let c = text.chars().next().unwrap();
@@ -266,7 +283,11 @@ fn is_jsx_name_start(s: &[u8], ix: usize) -> bool {
 fn is_jsx_name_continue(s: &[u8], ix: usize) -> bool {
     let b = s[ix];
     if b < 0x80 {
-        return b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'$');
+        // `.` and `:` are member/namespace separators handled at a higher
+        // level in the tag-name scanner; treating them as continuation chars
+        // here lets garbage like `<a..b>` or `<a:b.c>` through, which
+        // micromark-extension-mdx-jsx rejects.
+        return b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'$');
     }
     decode_utf8_char(s, ix).is_some_and(unicode_id_start::is_id_continue)
 }
@@ -278,10 +299,89 @@ pub(crate) enum EsmParseResult {
     Error,
 }
 
-/// Try to parse an ESM block to check completeness.
-///
-/// Accepts a reusable allocator to avoid repeated allocation in the
-/// blank-line retry loop.
+/// Validate an MDX expression body as JS via oxc, mirroring
+/// `acorn.parseExpressionAt` in mdx-js. Wraps as `(body)` so `{}/m` reads
+/// as `{} / m` and multi-statement bodies (`{a;b}`) get rejected. Falls
+/// back to a manual scan for comment-only bodies since `(/* foo */)` is
+/// itself invalid. Returns `(offset, detail)` for the first error.
+pub(crate) fn try_parse_expression_body(
+    value: &str,
+    allocator: &mut Allocator,
+) -> Option<(usize, String)> {
+    let source_type = SourceType::mjs().with_jsx(true);
+
+    // Empty / whitespace-only bodies (`{}`, `{ }`, `{\n}`) are valid per
+    // mdx-js's allowEmpty.
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Primary check: parse the body in expression context by wrapping it
+    // in parens. mdx-js uses acorn `parseExpressionAt`, which rejects
+    // multi-statement bodies like `{a;b}` or `{y\n a}` even though both
+    // would parse as a program. The wrap also forces `{}/m` to be read as
+    // an empty-object division rather than a block + unterminated regex.
+    allocator.reset();
+    let wrapped = alloc::format!("({value})");
+    let source = allocator.alloc_str(&wrapped);
+    let ret = Parser::new(allocator, source, source_type)
+        .with_options(ParseOptions::default())
+        .parse();
+    if ret.errors.is_empty() {
+        return None;
+    }
+
+    // Fallback: comment-only bodies (`{/* foo */}`) trip the wrapped
+    // parser since `(/* foo */)` is invalid. Walk past comments and
+    // accept if nothing non-whitespace remains.
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    let mut has_non_ws = false;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            let comment_start = i;
+            i += 2;
+            let mut closed = false;
+            while i + 1 < bytes.len() {
+                if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                    closed = true;
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            if !closed {
+                return Some((comment_start, "Unterminated block comment".to_string()));
+            }
+        } else {
+            if !matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
+                has_non_ws = true;
+            }
+            i += 1;
+        }
+    }
+    if !has_non_ws {
+        return None;
+    }
+
+    let first = ret.errors.first()?;
+    let err_offset = first
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.first().map(|l| l.offset()))
+        // The parens wrap shifts offsets by 1; subtract to map back to
+        // body coordinates.
+        .map(|o| o.saturating_sub(1))
+        .unwrap_or(value.len());
+    Some((err_offset, first.message.to_string()))
+}
+
 pub(crate) fn try_parse_esm(value: &str, allocator: &mut Allocator) -> EsmParseResult {
     allocator.reset();
     let source_type = SourceType::mjs().with_jsx(true);
@@ -413,6 +513,17 @@ fn is_blank_line_next(bytes: &[u8], ix: usize) -> bool {
 /// the line as a lazy continuation.
 pub(crate) type ContainerLineCheck<'a> = &'a dyn Fn(&[u8]) -> Option<usize>;
 
+/// Outcome of a per-newline container prefix check inside an inline scan.
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum LineMode {
+    /// Container prefix matched: continuation line is fully part of the block.
+    Strict,
+    /// Container prefix missing: line is a lazy paragraph continuation. Inline
+    /// expressions only allow the closing `}` (and surrounding whitespace) on
+    /// such a line — any body content here is rejected by the caller.
+    Lazy,
+}
+
 /// After advancing past a newline, check the container prefix on the new line.
 /// Returns `Some(())` if OK (and advances `ix`), or `None` to reject.
 fn check_container_after_newline(
@@ -432,8 +543,29 @@ fn check_container_after_newline(
     Some(())
 }
 
+/// Like `check_container_after_newline`, but on a missing prefix accepts the
+/// line as lazy (no skip) and reports the mode back to the caller. Used by
+/// inline expression scans where the enclosing paragraph allows lazy
+/// continuation but body content on the lazy line must be rejected.
+fn check_container_after_newline_lazy(
+    bytes: &[u8],
+    ix: &mut usize,
+    container_check: &Option<ContainerLineCheck<'_>>,
+) -> LineMode {
+    if let Some(check) = container_check {
+        if *ix < bytes.len() {
+            if let Some(skip) = check(&bytes[*ix..]) {
+                *ix += skip;
+                return LineMode::Strict;
+            }
+            return LineMode::Lazy;
+        }
+    }
+    LineMode::Strict
+}
+
 fn scan_mdx_expression_end(bytes: &[u8], inline: bool) -> Option<usize> {
-    scan_mdx_expression_end_inner(bytes, inline, None)
+    scan_mdx_expression_end_inner(bytes, inline, None, false, true, 0)
 }
 
 /// Scan an MDX expression `{...}`, finding the matching closing `}`.
@@ -450,13 +582,55 @@ fn scan_mdx_expression_end_inner(
     bytes: &[u8],
     inline: bool,
     container_check: Option<ContainerLineCheck<'_>>,
+    // When true, a continuation line whose container prefix is missing is
+    // treated as a lazy paragraph continuation. The closing `}` (and
+    // surrounding whitespace) may appear on the lazy line, but body
+    // content there follows `allow_lazy_body` (set true for text
+    // expressions, false for flow expressions — see
+    // micromark-extension-mdx-expression's "Unexpected lazy line" rule).
+    lazy_mode: bool,
+    allow_lazy_body: bool,
+    nesting_depth: u32,
 ) -> Option<usize> {
+    if nesting_depth > MAX_MDX_NESTING {
+        return None;
+    }
     if bytes.is_empty() || bytes[0] != b'{' {
         return None;
     }
 
     let mut ix = 1;
     let mut depth: usize = 1;
+    // Tracks "current line entered via lazy continuation"; only consulted
+    // when `lazy_mode && !allow_lazy_body`, which is the flow-expression
+    // case where body chars on a lazy line must abort the scan.
+    let mut current_line_lazy = false;
+    // Tracks whether the previous semantically-relevant token produced a
+    // value: identifier, literal, regex close, `)`, `]`, `}`. When true, a
+    // following `/` is division; otherwise it's a regex literal. Whitespace
+    // and comments preserve the prior value. Without this, the existing
+    // position-based heuristic in `slash_is_regex` mis-classifies `/` after
+    // a regex close (`/x/ /y/`) and `/` after a `}` (object literal close,
+    // e.g. `{}/_`) as new regexes, eating the rest of the expression body.
+    let mut prev_was_value = false;
+    macro_rules! mark_value {
+        () => {
+            prev_was_value = true;
+        };
+    }
+    macro_rules! mark_op {
+        () => {
+            prev_was_value = false;
+        };
+    }
+
+    macro_rules! reject_if_lazy {
+        () => {
+            if lazy_mode && !allow_lazy_body && current_line_lazy {
+                return None;
+            }
+        };
+    }
 
     while ix < bytes.len() && depth > 0 {
         match bytes[ix] {
@@ -465,7 +639,13 @@ fn scan_mdx_expression_end_inner(
                     return None;
                 }
                 ix += 1;
-                check_container_after_newline(bytes, &mut ix, &container_check)?;
+                if lazy_mode {
+                    current_line_lazy =
+                        check_container_after_newline_lazy(bytes, &mut ix, &container_check)
+                            == LineMode::Lazy;
+                } else {
+                    check_container_after_newline(bytes, &mut ix, &container_check)?;
+                }
             }
             b'\r' => {
                 if inline && is_blank_line_next(bytes, ix) {
@@ -475,18 +655,36 @@ fn scan_mdx_expression_end_inner(
                 if ix < bytes.len() && bytes[ix] == b'\n' {
                     ix += 1;
                 }
-                check_container_after_newline(bytes, &mut ix, &container_check)?;
+                if lazy_mode {
+                    current_line_lazy =
+                        check_container_after_newline_lazy(bytes, &mut ix, &container_check)
+                            == LineMode::Lazy;
+                } else {
+                    check_container_after_newline(bytes, &mut ix, &container_check)?;
+                }
+            }
+            b' ' | b'\t' => {
+                ix += 1;
             }
             b'{' => {
+                reject_if_lazy!();
                 depth += 1;
                 ix += 1;
+                mark_op!();
             }
             b'}' => {
                 depth -= 1;
                 if depth == 0 {
+                    // Flow-position expressions (strict-lazy) reject the
+                    // closing brace too when it lands on a lazy line —
+                    // matches micromark's `allowLazy: false` rule, which
+                    // errors on *any* token while the line is lazy.
+                    reject_if_lazy!();
                     return Some(ix + 1);
                 }
+                reject_if_lazy!();
                 ix += 1;
+                mark_value!();
             }
             // String literals (cannot span lines in JS). A `'` preceded by an
             // identifier char is almost certainly an apostrophe inside JSX
@@ -494,6 +692,7 @@ fn scan_mdx_expression_end_inner(
             // couldn't be a valid JS expression anyway. Skip it as a regular
             // char so the apostrophe doesn't swallow the rest of the line.
             b'"' | b'\'' => {
+                reject_if_lazy!();
                 if bytes[ix] == b'\''
                     && ix > 0
                     && (bytes[ix - 1].is_ascii_alphanumeric() || bytes[ix - 1] == b'_')
@@ -516,9 +715,11 @@ fn scan_mdx_expression_end_inner(
                 if ix < bytes.len() && bytes[ix] == quote {
                     ix += 1;
                 }
+                mark_value!();
             }
             // Template literals with ${} nesting.
             b'`' => {
+                reject_if_lazy!();
                 ix += 1;
                 let mut template_depth: usize = 0;
                 while ix < bytes.len() {
@@ -545,9 +746,11 @@ fn scan_mdx_expression_end_inner(
                     }
                     ix += 1;
                 }
+                mark_value!();
             }
             // Line comment
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'/' => {
+                reject_if_lazy!();
                 ix += 2;
                 while ix < bytes.len() && bytes[ix] != b'\n' {
                     ix += 1;
@@ -555,6 +758,7 @@ fn scan_mdx_expression_end_inner(
             }
             // Block comment.
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'*' => {
+                reject_if_lazy!();
                 ix += 2;
                 while ix + 1 < bytes.len() {
                     if bytes[ix] == b'*' && bytes[ix + 1] == b'/' {
@@ -570,12 +774,36 @@ fn scan_mdx_expression_end_inner(
                     ix += 1;
                 }
             }
-            // Regex literal
-            b'/' if slash_is_regex(bytes, ix) => {
+            // Regex vs division: defer to `slash_is_regex` (which handles
+            // regex-introducing keywords like `return`/`yield`) when the
+            // prior byte is an identifier; otherwise trust `prev_was_value`
+            // so `}/` and `/x/ /y/` read as division.
+            b'/' if {
+                let prev_is_ident_char = {
+                    let mut j = ix;
+                    while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
+                        j -= 1;
+                    }
+                    j > 0
+                        && (bytes[j - 1].is_ascii_alphanumeric()
+                            || bytes[j - 1] == b'_'
+                            || bytes[j - 1] == b'$')
+                };
+                let force_division = prev_was_value && !prev_is_ident_char;
+                !force_division && slash_is_regex(bytes, ix)
+            } =>
+            {
+                reject_if_lazy!();
                 ix = scan_regex(bytes, ix);
+                mark_value!();
             }
             // JSX tags — skip `<tag ...>` and `</tag>` so their `/` and `{}`
-            // don't interfere with brace/regex tracking.
+            // don't interfere with brace/regex tracking. When the lookahead
+            // doesn't form a valid JSX tag, treat the `<` as a less-than
+            // operator: mark_op so a following `/` is read as a regex (the
+            // acorn interpretation), not as division. Without this, an
+            // expression like `l</:/}` mis-parses the trailing `/}` as a
+            // regex literal and swallows the closing brace.
             b'<' if ix + 1 < bytes.len()
                 && (bytes[ix + 1].is_ascii_alphabetic()
                     || bytes[ix + 1] == b'_'
@@ -583,13 +811,31 @@ fn scan_mdx_expression_end_inner(
                     || bytes[ix + 1] == b'/'
                     || bytes[ix + 1] == b'>') =>
             {
-                if let Some(end) = scan_mdx_jsx_tag_end(&bytes[ix..]) {
+                reject_if_lazy!();
+                if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[ix..], None, nesting_depth + 1)
+                {
                     ix += end;
+                    mark_value!();
                 } else {
                     ix += 1;
+                    mark_op!();
                 }
             }
-            _ => ix += 1,
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' | b'0'..=b'9' => {
+                reject_if_lazy!();
+                ix += 1;
+                mark_value!();
+            }
+            b')' | b']' => {
+                reject_if_lazy!();
+                ix += 1;
+                mark_value!();
+            }
+            _ => {
+                reject_if_lazy!();
+                ix += 1;
+                mark_op!();
+            }
         }
     }
     None
@@ -606,13 +852,17 @@ fn scan_to_line_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// Scan a JSX tag from `<` to `>` or `/>`, returning the byte offset
 /// immediately after the closing `>`. Does NOT scan to EOL.
 fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
-    scan_mdx_jsx_tag_end_inner(bytes, None)
+    scan_mdx_jsx_tag_end_inner(bytes, None, 0)
 }
 
 fn scan_mdx_jsx_tag_end_inner(
     bytes: &[u8],
     container_check: Option<ContainerLineCheck<'_>>,
+    nesting_depth: u32,
 ) -> Option<usize> {
+    if nesting_depth > MAX_MDX_NESTING {
+        return None;
+    }
     let mut ix = 1; // skip `<`
 
     // Skip `/` for closing tags
@@ -637,9 +887,27 @@ fn scan_mdx_jsx_tag_end_inner(
     }
     ix += char_len_utf8(bytes[ix]);
 
-    // Scan tag name body
+    // Scan tag name body. JSX names are either a plain name, a namespaced
+    // name (`a:b` — exactly one `:`, no member chain after), or a member
+    // chain (`a.b.c` — any number of `.` segments, each a fresh name-start).
+    // Mixing namespace and member (`a:b.c`) is rejected by mdx-js, and so
+    // is a name-continue char following `.` (e.g. `a..b`, `a.1`).
+    let mut saw_namespace = false;
     while ix < bytes.len() {
         if bytes[ix] == b':' {
+            if saw_namespace {
+                return None;
+            }
+            saw_namespace = true;
+            ix += 1;
+            if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
+                return None;
+            }
+            ix += char_len_utf8(bytes[ix]);
+        } else if bytes[ix] == b'.' {
+            if saw_namespace {
+                return None;
+            }
             ix += 1;
             if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
                 return None;
@@ -661,57 +929,203 @@ fn scan_mdx_jsx_tag_end_inner(
         }
     }
 
-    while ix < bytes.len() {
+    // Attribute area. Closing tags accept only whitespace before `>`;
+    // opening tags accept attribute names, attribute values, and spread
+    // expressions. The previous catch-all (`_ => ix += 1`) silently
+    // tolerated arbitrary garbage like `<a 1x/>` or `<a x=foo/>`, which
+    // mdx-js rejects. Now we validate each attribute structurally.
+    loop {
+        // Skip inter-attribute whitespace (incl. newlines).
+        while ix < bytes.len() {
+            match bytes[ix] {
+                b' ' | b'\t' => ix += 1,
+                b'\n' | b'\r' => {
+                    let was_cr = bytes[ix] == b'\r';
+                    ix += 1;
+                    if was_cr && ix < bytes.len() && bytes[ix] == b'\n' {
+                        ix += 1;
+                    }
+                    check_container_after_newline(bytes, &mut ix, &container_check)?;
+                }
+                _ if is_mdx_unicode_whitespace(bytes, ix) => {
+                    ix += char_len_utf8(bytes[ix]);
+                }
+                _ => break,
+            }
+        }
+        if ix >= bytes.len() {
+            return None;
+        }
         match bytes[ix] {
             b'>' => return Some(ix + 1),
-            b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'>' => {
-                return Some(ix + 2);
+            // Closing tags allow only whitespace before `>` — no attrs, no
+            // self-close marker. Reject before the `/` arm so `</a />` and
+            // `</a/ >` aren't treated as self-closing.
+            _ if is_closing => return None,
+            // Self-close marker: `/` followed (possibly across whitespace
+            // or a newline+container-prefix) by `>`. mdx-js accepts e.g.
+            // `<g/\n>` and `<a / >`.
+            b'/' => {
+                let mut j = ix + 1;
+                while j < bytes.len() {
+                    match bytes[j] {
+                        b' ' | b'\t' => j += 1,
+                        b'\n' | b'\r' => {
+                            let was_cr = bytes[j] == b'\r';
+                            j += 1;
+                            if was_cr && j < bytes.len() && bytes[j] == b'\n' {
+                                j += 1;
+                            }
+                            check_container_after_newline(bytes, &mut j, &container_check)?;
+                        }
+                        _ if is_mdx_unicode_whitespace(bytes, j) => {
+                            j += char_len_utf8(bytes[j]);
+                        }
+                        _ => break,
+                    }
+                }
+                if j < bytes.len() && bytes[j] == b'>' {
+                    return Some(j + 1);
+                }
+                return None;
             }
+            // Spread or shorthand expression — must be `{...expr}` for a
+            // spread; bare `{expr}` is rejected by mdx-js.
             b'{' => {
-                // Attribute expression — use lexer to find the matching `}`.
-                // Blank lines inside the attribute body do NOT abort: the JSX
-                // tag hasn't closed yet, and remark-mdx keeps capturing until
-                // the matching `}`. This matters for multi-line `params={{…}}`
-                // expressions that contain backtick template literals with
-                // embedded empty lines.
-                let expr_len = scan_mdx_expression_end(&bytes[ix..], false)?;
+                if !looks_like_spread(&bytes[ix..]) {
+                    return None;
+                }
+                let expr_len = scan_mdx_expression_end_inner(
+                    &bytes[ix..],
+                    false,
+                    None,
+                    false,
+                    true,
+                    nesting_depth + 1,
+                )?;
                 ix += expr_len;
             }
-            b'"' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'"' {
-                    if bytes[ix] == b'\\' {
+            // Attribute name + optional value.
+            _ if is_jsx_name_start(bytes, ix) => {
+                ix += char_len_utf8(bytes[ix]);
+                let mut attr_saw_namespace = false;
+                while ix < bytes.len() {
+                    if bytes[ix] == b':' {
+                        if attr_saw_namespace {
+                            return None;
+                        }
+                        attr_saw_namespace = true;
                         ix += 1;
+                        if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
+                            return None;
+                        }
+                        ix += char_len_utf8(bytes[ix]);
+                    } else if is_jsx_name_continue(bytes, ix) {
+                        ix += char_len_utf8(bytes[ix]);
+                    } else {
+                        break;
                     }
-                    ix += 1;
                 }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
-            b'\'' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'\'' {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
+                let mut peek = ix;
+                while peek < bytes.len() {
+                    match bytes[peek] {
+                        b' ' | b'\t' => peek += 1,
+                        b'\n' | b'\r' => {
+                            let was_cr = bytes[peek] == b'\r';
+                            peek += 1;
+                            if was_cr && peek < bytes.len() && bytes[peek] == b'\n' {
+                                peek += 1;
+                            }
+                            check_container_after_newline(bytes, &mut peek, &container_check)?;
+                        }
+                        _ if is_mdx_unicode_whitespace(bytes, peek) => {
+                            peek += char_len_utf8(bytes[peek]);
+                        }
+                        _ => break,
                     }
-                    ix += 1;
                 }
-                if ix < bytes.len() {
-                    ix += 1;
+                if peek < bytes.len() && bytes[peek] == b'=' {
+                    ix = peek + 1;
+                    while ix < bytes.len() {
+                        match bytes[ix] {
+                            b' ' | b'\t' => ix += 1,
+                            b'\n' | b'\r' => {
+                                let was_cr = bytes[ix] == b'\r';
+                                ix += 1;
+                                if was_cr && ix < bytes.len() && bytes[ix] == b'\n' {
+                                    ix += 1;
+                                }
+                                check_container_after_newline(bytes, &mut ix, &container_check)?;
+                            }
+                            _ if is_mdx_unicode_whitespace(bytes, ix) => {
+                                ix += char_len_utf8(bytes[ix]);
+                            }
+                            _ => break,
+                        }
+                    }
+                    if ix >= bytes.len() {
+                        return None;
+                    }
+                    match bytes[ix] {
+                        b'"' => {
+                            ix += 1;
+                            while ix < bytes.len() && bytes[ix] != b'"' {
+                                if bytes[ix] == b'\\' {
+                                    ix += 1;
+                                }
+                                ix += 1;
+                            }
+                            if ix >= bytes.len() {
+                                return None;
+                            }
+                            ix += 1;
+                        }
+                        b'\'' => {
+                            ix += 1;
+                            while ix < bytes.len() && bytes[ix] != b'\'' {
+                                if bytes[ix] == b'\\' {
+                                    ix += 1;
+                                }
+                                ix += 1;
+                            }
+                            if ix >= bytes.len() {
+                                return None;
+                            }
+                            ix += 1;
+                        }
+                        b'{' => {
+                            let expr_len = scan_mdx_expression_end_inner(
+                                &bytes[ix..],
+                                false,
+                                None,
+                                false,
+                                true,
+                                nesting_depth + 1,
+                            )?;
+                            ix += expr_len;
+                        }
+                        // Bare-word attribute values (`<a x=foo/>`) are
+                        // rejected by mdx-js.
+                        _ => return None,
+                    }
                 }
             }
-            b'\n' | b'\r' => {
-                ix += 1;
-                if ix < bytes.len() && bytes[ix - 1] == b'\r' && bytes[ix] == b'\n' {
-                    ix += 1;
-                }
-                check_container_after_newline(bytes, &mut ix, &container_check)?;
-            }
-            _ => ix += 1,
+            _ => return None,
         }
     }
-    None // Unclosed tag
+}
+
+/// Cheap lookahead: does `bytes` (starting at a `{`) look like a spread
+/// expression `{...expr}`? Used to reject `<a {x}/>` (bare expression in
+/// attribute position) at scan time. Whitespace between `{` and `...` is
+/// tolerated to mirror `acorn`'s leniency.
+fn looks_like_spread(bytes: &[u8]) -> bool {
+    debug_assert_eq!(bytes.first(), Some(&b'{'));
+    let mut i = 1;
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    i + 2 < bytes.len() && &bytes[i..i + 3] == b"..."
 }
 
 /// Scan for an MDX ESM block (`import ...` or `export ...`).
@@ -791,7 +1205,7 @@ pub(crate) fn scan_mdx_jsx_block(
         if !is_jsx_name_start(bytes, name_start) {
             return None;
         }
-        scan_mdx_jsx_tag_end_inner(bytes, container_check)?
+        scan_mdx_jsx_tag_end_inner(bytes, container_check, 0)?
     };
 
     // Consume any subsequent JSX tags or expressions on the same line.
@@ -808,7 +1222,7 @@ pub(crate) fn scan_mdx_jsx_block(
             break;
         }
         if bytes[pos] == b'<' {
-            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check) {
+            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check, 0) {
                 pos += end;
                 last_was_jsx = true;
                 continue;
@@ -836,7 +1250,7 @@ pub(crate) fn scan_mdx_expression_block(
     bytes: &[u8],
     container_check: Option<ContainerLineCheck<'_>>,
 ) -> Option<usize> {
-    let mut ix = scan_mdx_expression_end_inner(bytes, false, container_check)?;
+    let mut ix = scan_mdx_expression_end_inner(bytes, false, container_check, false, true, 0)?;
     let mut last_was_jsx = false;
 
     loop {
@@ -847,7 +1261,7 @@ pub(crate) fn scan_mdx_expression_block(
             break;
         }
         if bytes[ix] == b'<' {
-            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[ix..], container_check) {
+            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[ix..], container_check, 0) {
                 ix += end;
                 last_was_jsx = true;
                 continue;
@@ -889,8 +1303,22 @@ pub(crate) fn scan_mdx_inline_expression(bytes: &[u8]) -> Option<(usize, usize, 
 pub(crate) fn scan_mdx_inline_expression_in_container(
     bytes: &[u8],
     container_check: ContainerLineCheck<'_>,
+    allow_lazy_body: bool,
 ) -> Option<(usize, usize, usize)> {
-    let total = scan_mdx_expression_end_inner(bytes, true, Some(container_check))?;
+    // `allow_lazy_body`: text-position expressions (preceded by content on
+    // the line) follow micromark's `allowLazy: true` text tokenizer and
+    // accept body content on lazy continuation lines. Flow-position `{`
+    // (first content of a paragraph line in a container) follows the
+    // `allowLazy: false` flow tokenizer; the lazy line is consumed but
+    // body content there fails the scan.
+    let total = scan_mdx_expression_end_inner(
+        bytes,
+        true,
+        Some(container_check),
+        true,
+        allow_lazy_body,
+        0,
+    )?;
     Some((1, total - 1, total))
 }
 
@@ -933,8 +1361,22 @@ fn scan_mdx_inline_jsx_inner(
     }
 
     let mut ix = name_start + char_len_utf8(bytes[name_start]);
+    let mut saw_namespace = false;
     while ix < bytes.len() {
         if bytes[ix] == b':' {
+            if saw_namespace {
+                return None;
+            }
+            saw_namespace = true;
+            ix += 1;
+            if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
+                return None;
+            }
+            ix += char_len_utf8(bytes[ix]);
+        } else if bytes[ix] == b'.' {
+            if saw_namespace {
+                return None;
+            }
             ix += 1;
             if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
                 return None;
@@ -957,58 +1399,168 @@ fn scan_mdx_inline_jsx_inner(
         }
     }
 
-    // Scan to closing `>` or `/>` handling balanced braces and strings
-    let mut brace_depth: usize = 0;
-
-    while ix < bytes.len() {
+    // Attribute area. Mirrors `scan_mdx_jsx_tag_end_inner`: each iteration
+    // skips whitespace, then expects `>` / `/>`, a spread `{...expr}`, or a
+    // valid attribute name (with optional `="value"` / `={expr}`). Closing
+    // tags accept only whitespace before `>`.
+    loop {
+        while ix < bytes.len() {
+            match bytes[ix] {
+                b' ' | b'\t' => ix += 1,
+                b'\n' | b'\r' => {
+                    let was_cr = bytes[ix] == b'\r';
+                    ix += 1;
+                    if was_cr && ix < bytes.len() && bytes[ix] == b'\n' {
+                        ix += 1;
+                    }
+                    check_container_after_newline(bytes, &mut ix, &container_check)?;
+                }
+                _ if is_mdx_unicode_whitespace(bytes, ix) => {
+                    ix += char_len_utf8(bytes[ix]);
+                }
+                _ => break,
+            }
+        }
+        if ix >= bytes.len() {
+            return None;
+        }
         match bytes[ix] {
-            b'>' if brace_depth == 0 => return Some(ix + 1),
-            b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'>' && brace_depth == 0 => {
-                return Some(ix + 2);
+            b'>' => return Some(ix + 1),
+            // Closing tags accept only whitespace before `>` — reject before
+            // the `/` arm so `</a />` doesn't slip through as self-closing.
+            _ if is_closing => return None,
+            b'/' => {
+                let mut j = ix + 1;
+                while j < bytes.len() {
+                    match bytes[j] {
+                        b' ' | b'\t' => j += 1,
+                        b'\n' | b'\r' => {
+                            let was_cr = bytes[j] == b'\r';
+                            j += 1;
+                            if was_cr && j < bytes.len() && bytes[j] == b'\n' {
+                                j += 1;
+                            }
+                            check_container_after_newline(bytes, &mut j, &container_check)?;
+                        }
+                        _ if is_mdx_unicode_whitespace(bytes, j) => {
+                            j += char_len_utf8(bytes[j]);
+                        }
+                        _ => break,
+                    }
+                }
+                if j < bytes.len() && bytes[j] == b'>' {
+                    return Some(j + 1);
+                }
+                return None;
             }
             b'{' => {
-                brace_depth += 1;
-                ix += 1;
+                if !looks_like_spread(&bytes[ix..]) {
+                    return None;
+                }
+                let expr_len = scan_mdx_expression_end(&bytes[ix..], false)?;
+                ix += expr_len;
             }
-            b'}' => {
-                brace_depth = brace_depth.saturating_sub(1);
-                ix += 1;
-            }
-            b'"' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'"' {
-                    if bytes[ix] == b'\\' {
+            _ if is_jsx_name_start(bytes, ix) => {
+                ix += char_len_utf8(bytes[ix]);
+                let mut attr_saw_namespace = false;
+                while ix < bytes.len() {
+                    if bytes[ix] == b':' {
+                        if attr_saw_namespace {
+                            return None;
+                        }
+                        attr_saw_namespace = true;
                         ix += 1;
+                        if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
+                            return None;
+                        }
+                        ix += char_len_utf8(bytes[ix]);
+                    } else if is_jsx_name_continue(bytes, ix) {
+                        ix += char_len_utf8(bytes[ix]);
+                    } else {
+                        break;
                     }
-                    ix += 1;
                 }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
-            b'\'' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'\'' {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
+                // mdx-js accepts whitespace on either side of `=`, e.g.
+                // `<Foo bar = "x"/>` or `<Foo bar =\n  {1}/>`. Peek past
+                // whitespace to find an `=` that belongs to this attribute.
+                let mut peek = ix;
+                while peek < bytes.len() {
+                    match bytes[peek] {
+                        b' ' | b'\t' => peek += 1,
+                        b'\n' | b'\r' => {
+                            let was_cr = bytes[peek] == b'\r';
+                            peek += 1;
+                            if was_cr && peek < bytes.len() && bytes[peek] == b'\n' {
+                                peek += 1;
+                            }
+                            check_container_after_newline(bytes, &mut peek, &container_check)?;
+                        }
+                        _ if is_mdx_unicode_whitespace(bytes, peek) => {
+                            peek += char_len_utf8(bytes[peek]);
+                        }
+                        _ => break,
                     }
-                    ix += 1;
                 }
-                if ix < bytes.len() {
-                    ix += 1;
+                if peek < bytes.len() && bytes[peek] == b'=' {
+                    ix = peek + 1;
+                    while ix < bytes.len() {
+                        match bytes[ix] {
+                            b' ' | b'\t' => ix += 1,
+                            b'\n' | b'\r' => {
+                                let was_cr = bytes[ix] == b'\r';
+                                ix += 1;
+                                if was_cr && ix < bytes.len() && bytes[ix] == b'\n' {
+                                    ix += 1;
+                                }
+                                check_container_after_newline(bytes, &mut ix, &container_check)?;
+                            }
+                            _ if is_mdx_unicode_whitespace(bytes, ix) => {
+                                ix += char_len_utf8(bytes[ix]);
+                            }
+                            _ => break,
+                        }
+                    }
+                    if ix >= bytes.len() {
+                        return None;
+                    }
+                    match bytes[ix] {
+                        b'"' => {
+                            ix += 1;
+                            while ix < bytes.len() && bytes[ix] != b'"' {
+                                if bytes[ix] == b'\\' {
+                                    ix += 1;
+                                }
+                                ix += 1;
+                            }
+                            if ix >= bytes.len() {
+                                return None;
+                            }
+                            ix += 1;
+                        }
+                        b'\'' => {
+                            ix += 1;
+                            while ix < bytes.len() && bytes[ix] != b'\'' {
+                                if bytes[ix] == b'\\' {
+                                    ix += 1;
+                                }
+                                ix += 1;
+                            }
+                            if ix >= bytes.len() {
+                                return None;
+                            }
+                            ix += 1;
+                        }
+                        b'{' => {
+                            let expr_len = scan_mdx_expression_end(&bytes[ix..], false)?;
+                            ix += expr_len;
+                        }
+                        _ => return None,
+                    }
                 }
             }
-            b'\n' | b'\r' => {
-                ix += 1;
-                if ix < bytes.len() && bytes[ix - 1] == b'\r' && bytes[ix] == b'\n' {
-                    ix += 1;
-                }
-                check_container_after_newline(bytes, &mut ix, &container_check)?;
-            }
-            _ => ix += 1,
+            _ => return None,
         }
     }
-    None
 }
 
 impl<'a, 'b> FirstPass<'a, 'b> {
@@ -1101,11 +1653,20 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
             let remaining = &raw.as_bytes()[pos..];
             if remaining[0] == b'<' {
+                // On scan failure, emit a recovery node spanning the rest
+                // of the block rather than erroring — the dispatcher
+                // already committed to JSX flow.
                 let tag_end = scan_mdx_jsx_tag_end(remaining).unwrap_or(raw.len() - pos);
                 let tag_raw = &raw[pos..pos + tag_end];
                 let container_content_col = self.container_content_col();
                 let jsx_data =
                     parse_jsx_tag_with_column(tag_raw, container_content_col).into_static();
+                validate_jsx_expressions(
+                    &jsx_data.attrs,
+                    stripped_to_orig(pos),
+                    &mut self.mdx_expr_allocator,
+                    &mut self.mdx_errors,
+                );
                 let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
                 self.tree.append(Item {
                     start: stripped_to_orig(pos),
@@ -1120,6 +1681,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     dedent_expression_continuation(inner_raw, self.container_content_col())
                         .into_owned(),
                 );
+                // Validate the expression body as JS. mdx-js calls acorn
+                // here; we use oxc for parity. Without this, garbage like
+                // `{h<}` produces a phantom `mdxFlowExpression` that only
+                // errors at JS emit, not at mdast. Allocator is reused.
+                if let Some((err_offset, detail)) =
+                    try_parse_expression_body(&inner, &mut self.mdx_expr_allocator)
+                {
+                    self.mdx_errors.push((
+                        stripped_to_orig(pos + 1) + err_offset,
+                        alloc::format!("Could not parse expression with oxc: {detail}"),
+                    ));
+                }
                 let cow_ix = self.allocs.allocate_cow(inner);
                 self.tree.append(Item {
                     start: stripped_to_orig(pos),
@@ -1137,7 +1710,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     /// Compute the column (1-indexed) at which the innermost list/blockquote
     /// container's content begins. Used for attribute-expression continuation
     /// line indent stripping.
-    fn container_content_col(&self) -> usize {
+    pub(crate) fn container_content_col(&self) -> usize {
         use crate::parse::ItemBody;
         let mut col = 1usize;
         for &node_ix in self.tree.walk_spine() {
@@ -1157,9 +1730,101 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         col
     }
 
+    /// Combined container-prefix strip + 2-column indent dedent for an
+    /// inline MDX expression body. The dedent's tab-stop math depends on
+    /// whether each line was strict (prefix matched, column = base_col - 1)
+    /// or lazy (no prefix, column = 0), so strip and dedent must share
+    /// one walk — separating them loses that per-line info.
+    pub(crate) fn inline_expression_value(
+        &self,
+        start_ix: usize,
+        end_ix: usize,
+    ) -> alloc::string::String {
+        const INDENT: usize = 2;
+        const TAB_SIZE: usize = 4;
+        let base_col = self.container_content_col().max(1);
+        let bytes = self.text.as_bytes();
+        let mut out = alloc::string::String::with_capacity(end_ix - start_ix);
+        let mut pos = start_ix;
+
+        // First line: copy verbatim (the `{` is consumed by caller; this
+        // line starts mid-line so it has no indent to dedent).
+        let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
+            .map(|i| pos + i)
+            .unwrap_or(end_ix);
+        out.push_str(&self.text[pos..line_end]);
+        pos = line_end;
+
+        while pos < end_ix {
+            if bytes[pos] == b'\r' {
+                out.push('\r');
+                pos += 1;
+            }
+            if pos < end_ix && bytes[pos] == b'\n' {
+                out.push('\n');
+                pos += 1;
+            }
+            if pos >= end_ix {
+                break;
+            }
+
+            let (post_prefix_col, partial_spaces) = if self.tree.spine_len() == 0 {
+                (0usize, 0usize)
+            } else {
+                let mut ls = LineStart::new(&bytes[pos..end_ix]);
+                let matched = scan_containers(&self.tree, &mut ls, self.options);
+                pos += ls.bytes_scanned();
+                let partial = ls.remaining_space();
+                // Strict: prefix matched, post-prefix column = base_col - 1.
+                // Lazy: no match, line starts at column 0.
+                let col = if matched == self.tree.spine_len() {
+                    base_col - 1
+                } else {
+                    0
+                };
+                (col, partial)
+            };
+            for _ in 0..partial_spaces {
+                out.push(' ');
+            }
+
+            // 2-column indent dedent. column tracks the absolute source
+            // column (0-indexed) so tab-stop math is correct.
+            let mut stripped = 0usize;
+            let mut column = post_prefix_col;
+            while pos < end_ix && stripped < INDENT {
+                let b = bytes[pos];
+                if b == b' ' {
+                    stripped += 1;
+                    column += 1;
+                    pos += 1;
+                } else if b == b'\t' {
+                    let next_col = (column / TAB_SIZE + 1) * TAB_SIZE;
+                    let tab_width = next_col - column;
+                    let to_strip = (INDENT - stripped).min(tab_width);
+                    stripped += to_strip;
+                    for _ in 0..(tab_width - to_strip) {
+                        out.push(' ');
+                    }
+                    column = next_col;
+                    pos += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
+                .map(|i| pos + i)
+                .unwrap_or(end_ix);
+            out.push_str(&self.text[pos..line_end]);
+            pos = line_end;
+        }
+        out
+    }
+
     /// Strip container prefixes from continuation lines in a raw text span.
     /// Returns the original text if not inside a container.
-    fn strip_container_prefixes(
+    pub(crate) fn strip_container_prefixes(
         &self,
         start_ix: usize,
         end_ix: usize,
@@ -1319,8 +1984,22 @@ pub(crate) fn parse_jsx_tag_with_column<'a>(
         };
     }
 
-    // Self-closing: ends with />
-    let ends_self_close = s.ends_with("/>");
+    // Self-closing: a `/` precedes the closing `>`, possibly separated by
+    // ASCII whitespace (`<g/\n>`, `<utj/ >`). The simple `ends_with("/>")`
+    // would miss those cases and route the tag through the opening-tag arm,
+    // which then errors because no matching close tag exists.
+    let ends_self_close = {
+        let bytes = s.as_bytes();
+        if bytes.last() == Some(&b'>') {
+            let mut j = bytes.len() - 1;
+            while j > 0 && matches!(bytes[j - 1], b' ' | b'\t' | b'\n' | b'\r') {
+                j -= 1;
+            }
+            j > 0 && bytes[j - 1] == b'/'
+        } else {
+            false
+        }
+    };
 
     // Extract name, skip leading '<'
     let name = extract_tag_name(&s[1..]);
@@ -1409,11 +2088,17 @@ fn parse_jsx_attrs<'a>(text: &'a str, container_content_col: usize) -> Vec<JsxAt
         i += 1;
     }
 
-    // Skip tag name
-    while i < len
-        && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'.' | b'-' | b':' | b'_'))
-    {
-        i += 1;
+    // Skip tag name. Use the shared JSX identifier rules (which know about
+    // `$` and Unicode `is_id_start` / `is_id_continue`) and additionally
+    // accept the JSX tag-name separators `.` (member) and `:` (namespace).
+    while i < len {
+        if matches!(bytes[i], b'.' | b':') {
+            i += 1;
+        } else if is_jsx_name_continue(bytes, i) {
+            i += char_len_utf8(bytes[i]);
+        } else {
+            break;
+        }
     }
 
     loop {
@@ -1456,12 +2141,18 @@ fn parse_jsx_attrs<'a>(text: &'a str, container_content_col: usize) -> Vec<JsxAt
             continue;
         }
 
-        // Attribute name
+        // Attribute name. Use the shared JSX identifier rules (which include
+        // `$` and Unicode identifier chars), plus `:` for namespace separators
+        // (e.g. `xlink:href`).
         let name_start = i;
-        while i < len
-            && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b':' | b'_'))
-        {
-            i += 1;
+        while i < len {
+            if bytes[i] == b':' {
+                i += 1;
+            } else if is_jsx_name_continue(bytes, i) {
+                i += char_len_utf8(bytes[i]);
+            } else {
+                break;
+            }
         }
         if i == name_start {
             i += 1;
@@ -1541,4 +2232,37 @@ fn parse_jsx_attrs<'a>(text: &'a str, container_content_col: usize) -> Vec<JsxAt
     }
 
     attrs
+}
+
+/// Validate JSX attribute expression bodies (`x={…}`) and spread bodies
+/// (`{...x}`) via oxc, mirroring what mdx-js does with acorn at parse time.
+/// Without this, only the brace-counting scanner runs on these — garbage
+/// like `<a x={1 +}/>` survives until JS emit. Errors are recorded against
+/// `tag_offset` (the source byte where the opening `<` sits); per-attr
+/// positions aren't tracked through `parse_jsx_attrs`.
+pub(crate) fn validate_jsx_expressions(
+    attrs: &[JsxAttr<'_>],
+    tag_offset: usize,
+    allocator: &mut Allocator,
+    mdx_errors: &mut Vec<(usize, alloc::string::String)>,
+) {
+    for attr in attrs {
+        let body: alloc::borrow::Cow<'_, str> = match attr {
+            JsxAttr::Expression(_, v) => alloc::borrow::Cow::Borrowed(v.as_ref()),
+            JsxAttr::Spread(v) => {
+                let trimmed = v.as_ref().trim_start();
+                match trimmed.strip_prefix("...") {
+                    Some(operand) => alloc::borrow::Cow::Borrowed(operand),
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+        if let Some((_off, detail)) = try_parse_expression_body(&body, allocator) {
+            mdx_errors.push((
+                tag_offset,
+                alloc::format!("Could not parse expression with oxc: {detail}"),
+            ));
+        }
+    }
 }

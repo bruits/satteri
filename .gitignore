@@ -17,4 +17,4 @@ plans/
 
 # Fuzz-discovered conformance issues are written by the fuzz suite on demand;
 # they describe transient findings, not source of truth.
-packages/satteri/test/conformance/FUZZ-ISSUES*.md
+packages/satteri/test/conformance/fuzz/FUZZ-ISSUES*.md

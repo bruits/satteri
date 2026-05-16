@@ -445,18 +445,40 @@ b
 |  a  |  b  |
 | --- | --- |
 |  c  |  d  |</p>
-<p>table c
-a  |  b
---- | ---
-c  |  d</p>
+<p>table c</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
 <p>table d
 a | b
 --|--
 c | d</p>
-<p>table e
-a | b
---|--
-c | d</p>
+<p>table e</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
 <p>table f</p>
 <table>
 <thead>
@@ -472,14 +494,34 @@ c | d</p>
 </tr>
 </tbody>
 </table>
-<p>table g
-a  |  b
---- | ---
-c  |  d</p>
-<p>table h
-a
-|-|
-b</p>
+<p>table g</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+<th>b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c</td>
+<td>d</td>
+</tr>
+</tbody>
+</table>
+<p>table h</p>
+<table>
+<thead>
+<tr>
+<th>a</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>b</td>
+</tr>
+</tbody>
+</table>
 <p>table i</p>
 <table>
 <thead>
@@ -759,9 +801,6 @@ fn table_test_18() {
 
 #[test]
 fn table_test_19() {
-    // remark-gfm accepts a stray `|`-only line as a row with a single empty
-    // cell rather than terminating the table. Update from the old
-    // pulldown-cmark behaviour so mid-table `|` lines continue the table.
     let original = r##"| Table | Header |
 |-------|--------|
 | Table | Body   |
@@ -826,8 +865,6 @@ fn table_test_19() {
 
 #[test]
 fn table_test_20() {
-    // remark-gfm: a `|` immediately after the delimiter row is a first
-    // body row with a single empty cell, not a paragraph.
     let original = r##"| Table | Header |
 |-------|--------|
 |

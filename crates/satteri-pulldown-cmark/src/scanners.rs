@@ -189,13 +189,12 @@ impl<'a> LineStart<'a> {
         n_space
     }
 
-    /// Scan all available ASCII whitespace (not including eol).
+    /// Scan all available ASCII whitespace (not including eol). Routes
+    /// through `scan_space_inner` so `tab_start` advances with each tab —
+    /// callers that follow up with column-aware scans need the updated
+    /// tab-stop offset.
     pub(crate) fn scan_all_space(&mut self) {
-        self.spaces_remaining = 0;
-        self.ix += self.bytes[self.ix..]
-            .iter()
-            .take_while(|&&b| b == b' ' || b == b'\t')
-            .count();
+        let _ = self.scan_space_inner(usize::MAX);
     }
 
     /// Determine whether we're at end of line (includes end of file).
@@ -263,6 +262,12 @@ impl<'a> LineStart<'a> {
     }
 
     pub(crate) fn scan_blockquote_marker(&mut self) -> bool {
+        // A `>` preceded by leftover tab whitespace is at column ≥4, which is
+        // too much indentation to be a marker. Refuse to consume it so the
+        // line falls through to lazy continuation / indented code instead.
+        if self.spaces_remaining > 0 {
+            return false;
+        }
         if self.scan_ch(b'>') {
             let _ = self.scan_space(1);
             true
@@ -312,14 +317,20 @@ impl<'a> LineStart<'a> {
         }
     }
 
-    /// Scan a list marker.
+    /// Scan a list marker, with explicit control over the post-marker space
+    /// clamp. CommonMark clamps at 4 (anything beyond becomes part of an
+    /// indented code block in the list item). MDX disables indented code
+    /// blocks entirely, so callers in MDX mode pass `clamp=false` to absorb
+    /// all post-marker spaces into the indent — matching micromark's behavior
+    /// of using the actual content column rather than `marker_width + 1`.
     ///
     /// Return value is the character, the start index, and the indent in spaces.
     /// For ordered list markers, the character will be one of b'.' or b')'. For
     /// bullet list markers, it will be one of b'-', b'+', or b'*'.
-    pub(crate) fn scan_list_marker_with_indent(
+    pub(crate) fn scan_list_marker_with_indent_and_clamp(
         &mut self,
         indent: usize,
+        clamp: bool,
     ) -> Option<(u8, u64, usize)> {
         let save = self.clone();
         if self.ix < self.bytes.len() {
@@ -336,7 +347,7 @@ impl<'a> LineStart<'a> {
                 }
                 self.ix += 1;
                 if self.scan_space(1) || self.is_at_eol() {
-                    return self.finish_list_marker(c, 0, indent + 2);
+                    return self.finish_list_marker(c, 0, indent + 2, clamp);
                 }
             } else if c.is_ascii_digit() {
                 let start_ix = self.ix;
@@ -350,7 +361,12 @@ impl<'a> LineStart<'a> {
                     } else if c == b')' || c == b'.' {
                         self.ix = ix;
                         if self.scan_space(1) || self.is_at_eol() {
-                            return self.finish_list_marker(c, val, indent + 1 + ix - start_ix);
+                            return self.finish_list_marker(
+                                c,
+                                val,
+                                indent + 1 + ix - start_ix,
+                                clamp,
+                            );
                         } else {
                             break;
                         }
@@ -369,6 +385,7 @@ impl<'a> LineStart<'a> {
         c: u8,
         start: u64,
         mut indent: usize,
+        clamp: bool,
     ) -> Option<(u8, u64, usize)> {
         let save = self.clone();
 
@@ -377,11 +394,21 @@ impl<'a> LineStart<'a> {
             return Some((c, start, indent));
         }
 
-        let post_indent = self.scan_space_upto(4);
-        if post_indent < 4 {
-            indent += post_indent;
+        if clamp {
+            let post_indent = self.scan_space_upto(4);
+            if post_indent < 4 {
+                indent += post_indent;
+            } else {
+                *self = save;
+            }
         } else {
-            *self = save;
+            // MDX: no indented code blocks, so the full run of post-marker
+            // spaces is part of the list item's content column. Without
+            // this, `1.     foo\n   bar` would stay in the list (clamped
+            // content col 4) instead of becoming a sibling paragraph
+            // (actual content col 8) like micromark/mdx-js produces.
+            let post_indent = self.scan_space_upto(usize::MAX);
+            indent += post_indent;
         }
         Some((c, start, indent))
     }
@@ -540,9 +567,6 @@ pub(crate) fn scan_closing_code_fence(
     fence_char: u8,
     n_fence_char: usize,
 ) -> Option<usize> {
-    if bytes.is_empty() {
-        return Some(0);
-    }
     let mut i = 0;
     let num_fence_chars_found = scan_ch_repeat(&bytes[i..], fence_char);
     if num_fence_chars_found < n_fence_char {
@@ -576,9 +600,8 @@ pub(crate) fn scan_math_fence(data: &[u8]) -> Option<usize> {
 }
 
 pub(crate) fn scan_closing_math_fence(bytes: &[u8], n_fence_char: usize) -> Option<usize> {
-    if bytes.is_empty() {
-        return Some(0);
-    }
+    // EOF is handled by parse_math_block's loop-top EOF check; here we only
+    // match an actual `$$+` fence.
     let num_fence_chars_found = scan_ch_repeat(bytes, b'$');
     if num_fence_chars_found < n_fence_char {
         return None;
@@ -718,6 +741,14 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
     let mut found_pipe = false;
     let mut found_hyphen = false;
     let mut found_hyphen_in_col = false;
+    let mut found_colon = false;
+    // Per GFM each cell is `:?-+:?`: at most one leading colon, then hyphens,
+    // then at most one trailing colon, no internal whitespace.
+    // `cell_after_trailing_ws` flags ws between content (e.g. `- -`).
+    // `cell_has_trailing_colon` flags that we've already seen a trailing
+    // colon, so any further `:` or `-` invalidates the cell (e.g. `-::-`).
+    let mut cell_after_trailing_ws = false;
+    let mut cell_has_trailing_colon = false;
     if data[i] == b'|' {
         i += 1;
         found_pipe = true;
@@ -728,17 +759,36 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
             break;
         }
         match *c {
-            b' ' | b'\t' => (),
+            b' ' | b'\t' => {
+                if !start_col {
+                    cell_after_trailing_ws = true;
+                }
+            }
             b':' => {
+                if cell_after_trailing_ws {
+                    return (0, vec![]);
+                }
                 active_col = match (start_col, active_col) {
                     (true, Alignment::None) => Alignment::Left,
-                    (false, Alignment::Left) => Alignment::Center,
-                    (false, Alignment::None) => Alignment::Right,
-                    _ => active_col,
+                    (false, Alignment::Left) => {
+                        cell_has_trailing_colon = true;
+                        Alignment::Center
+                    }
+                    (false, Alignment::None) => {
+                        cell_has_trailing_colon = true;
+                        Alignment::Right
+                    }
+                    // Already had a trailing colon, or some other invalid
+                    // combination. Reject.
+                    _ => return (0, vec![]),
                 };
+                found_colon = true;
                 start_col = false;
             }
             b'-' => {
+                if cell_after_trailing_ws || cell_has_trailing_colon {
+                    return (0, vec![]);
+                }
                 start_col = false;
                 found_hyphen = true;
                 found_hyphen_in_col = true;
@@ -746,6 +796,8 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
             b'|' => {
                 start_col = true;
                 found_pipe = true;
+                cell_after_trailing_ws = false;
+                cell_has_trailing_colon = false;
                 cols.push(active_col);
                 active_col = Alignment::None;
                 if !found_hyphen_in_col {
@@ -763,11 +815,19 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
     }
 
     if !start_col {
+        // Each cell of a delimiter row must contain at least one `-`. The
+        // inter-cell check at `|` already rejects empty cells, but the LAST
+        // cell needs the same guarantee here (e.g. `-|:` is invalid: the
+        // first cell is `-`, the second is `:` only).
+        if !found_hyphen_in_col {
+            return (0, vec![]);
+        }
         cols.push(active_col);
     }
-    if !found_pipe || !found_hyphen {
-        // It isn't a table head if it doesn't have a least one pipe or hyphen.
-        // It's a list, a header, or a thematic break.
+    // Require a hyphen; either a pipe (unambiguous table) or a colon
+    // disambiguates from setext underlines / thematic breaks (which never use
+    // `:`), so 1-col delimiters like `:-` or `-:` count.
+    if !found_hyphen || (!found_pipe && !found_colon) {
         return (0, vec![]);
     }
 
@@ -1544,18 +1604,28 @@ pub(crate) fn scan_inline_html_comment(
             None
         }
         // A CDATA section consists of the string `<![CDATA[`, a string of characters not
-        // including the string `]]>`, and the string `]]>`.
+        // including the string `]]>`, and the string `]]>`. Requires AT LEAST
+        // two `]`s before `>` — `<![CDATA[…]>` (one `]`) is not a complete
+        // CDATA close per CommonMark, even though `]]>` appears as a
+        // substring of any valid close.
         b'[' if bytes[ix..].starts_with(b"CDATA[") && ix > scan_guard.cdata => {
             ix += b"CDATA[".len();
-            ix = memchr(b']', &bytes[ix..]).map_or(bytes.len(), |x| ix + x);
-            let close_brackets = scan_ch_repeat(&bytes[ix..], b']');
-            ix += close_brackets;
-
-            if close_brackets == 0 || bytes.get(ix) != Some(&b'>') {
+            loop {
+                let Some(x) = memchr(b']', &bytes[ix..]) else {
+                    // No more `]` in this slice: subsequent CDATA scans
+                    // over the same span would re-walk the same bytes.
+                    // Advance the guard so they short-circuit, matching
+                    // the comment/declaration arms above.
+                    scan_guard.cdata = bytes.len();
+                    return None;
+                };
+                ix += x;
                 scan_guard.cdata = ix;
-                None
-            } else {
-                Some(ix + 1)
+                let close_brackets = scan_ch_repeat(&bytes[ix..], b']');
+                if close_brackets >= 2 && bytes.get(ix + close_brackets) == Some(&b'>') {
+                    return Some(ix + close_brackets + 1);
+                }
+                ix += close_brackets.max(1);
             }
         }
         // A declaration consists of the string `<!`, an ASCII letter, zero or more characters not

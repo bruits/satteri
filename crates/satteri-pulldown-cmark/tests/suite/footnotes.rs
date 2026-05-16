@@ -464,10 +464,6 @@ Songs that simply loop are a popular way to annoy people. [^examples3]
     test_markdown_html(original, expected, 2052, false, false, false, false, false, false);
 }
 
-// Bracket-resolution: cmark-gfm leaves the URL after `]:` as raw text
-// when the line isn't a valid reference definition (label contains
-// unescaped brackets). Both we and remark autolink the URL via the GFM
-// extension, so the expected output is updated to match remark.
 #[test]
 fn footnotes_test_16() {
     let original = r##"My [cmark-gfm][^c].
@@ -556,10 +552,6 @@ fn footnotes_test_19() {
     test_markdown_html(original, expected, 2052, false, false, false, false, false, false);
 }
 
-// Indented GFM tables at the document root: the original cmark-gfm
-// expected emitted these as paragraphs with literal pipes. We (and
-// remark-gfm) now recognise both runs as proper tables, so the expected
-// HTML is regenerated from current remark output.
 #[test]
 fn footnotes_test_20() {
     let original = r##"* First

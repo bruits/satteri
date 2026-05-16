@@ -171,6 +171,27 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
       break;
   }
 
+  // Plugins can set `data` on any node type, so rehydrate generically
+  // (see website/content/docs/divergences.md for the code-block case).
+  const rawData = reader.getNodeData(nodeId);
+  if (rawData !== null) {
+    try {
+      const parsed = JSON.parse(rawData) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
+        Object.defineProperty(node, "data", {
+          value: parsed,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`materializeHastNode: malformed node_data for nodeId=${nodeId}`, err);
+      }
+    }
+  }
+
   return node;
 }
 

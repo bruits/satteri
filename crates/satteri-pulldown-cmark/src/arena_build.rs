@@ -1,7 +1,7 @@
 //! Direct arena builder: walks the pulldown-cmark internal tree and builds
 //! a `satteri_arena::Arena` without going through the Event iterator.
 
-use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
 use satteri_ast::mdast::{
     encode_directive_data, encode_image_reference_data, encode_mdx_jsx_element_data,
     encode_reference_data, encode_table_data, CodeData, ColumnAlign, DefinitionData,
@@ -15,10 +15,7 @@ use satteri_ast::shared::{
 use crate::parse::{DefaultParserCallbacks, ItemBody, JsxAttr, ParserInner};
 use crate::{Alignment, HeadingLevel, LinkType, Options};
 
-/// `node.data` marker matching `@mdx-js/mdx`'s `_mdxExplicitJsx: true`,
-/// attached to every source-parsed mdxJsx node. Read at hast→recma time to
-/// keep authored JSX as a literal tag (vs routing through `_components`).
-const MDX_EXPLICIT_JSX_DATA: &[u8] = b"{\"_mdxExplicitJsx\":true}";
+use crate::post_passes::MDX_EXPLICIT_JSX_DATA;
 
 /// Default options: GFM (tables, strikethrough, task lists, autolink-literal),
 /// footnotes, math, YAML metadata.
@@ -87,6 +84,24 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     // JSX tag pairing state.
     let mut jsx_stack: Vec<(String, u32)> = Vec::new();
     let mut mdx_errors: Vec<(usize, String)> = Vec::new();
+    let mut paragraph_open_depth: Vec<usize> = Vec::new();
+
+    // Refdefs in source order. Each container close pass claims the defs whose
+    // source range lies inside it; the rest get emitted at root. `emitted`
+    // tracks which ones have already been placed.
+    let mut refdefs_pending: Vec<PendingRefdef> = inner
+        .allocs
+        .refdefs_all
+        .iter()
+        .map(|(label, def)| PendingRefdef {
+            label: label.as_ref().to_string(),
+            dest: def.dest.to_string(),
+            title: def.title.as_ref().map(|t| t.to_string()),
+            span: def.span.clone(),
+        })
+        .collect();
+    refdefs_pending.sort_by_key(|r| r.span.start);
+    let mut refdef_emitted: Vec<bool> = vec![false; refdefs_pending.len()];
 
     // Walk the tree iteratively.
     loop {
@@ -113,15 +128,12 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                 }
 
                 let item = inner.tree[ix].item;
-                let mut end = item.end as u32;
-                if item.body.is_block_level() {
-                    let src = source.as_bytes();
-                    while end > item.start as u32
-                        && matches!(src.get(end as usize - 1), Some(b'\n' | b'\r'))
-                    {
-                        end -= 1;
-                    }
-                }
+                let parent_body = inner.tree.peek_up().map(|p| inner.tree[p].item.body);
+                let end = crate::firstpass::mdast_position_end(
+                    &item,
+                    source.as_bytes(),
+                    parent_body.as_ref(),
+                );
                 let (end_line, end_col) = cursor.offset_to_line_col(end);
 
                 match &inner.tree[ix].item.body {
@@ -174,7 +186,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         }
                     }
                     // Code block close: write accumulated content.
-                    ItemBody::FencedCodeBlock(_) | ItemBody::IndentCodeBlock => {
+                    ItemBody::FencedCodeBlock(_) | ItemBody::IndentCodeBlock(_) => {
                         if let Some(mut content) = code_block_buf.take() {
                             // Drop the trailing line terminator (remark keeps
                             // CRLF inside the value but strips the one right
@@ -195,39 +207,36 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             let mut code_end = end;
                             let mut code_end_line = end_line;
                             let mut code_end_col = end_col;
-                            if matches!(inner.tree[ix].item.body, ItemBody::IndentCodeBlock) {
-                                let src = source.as_bytes();
-                                let mut pos = code_end as usize;
-                                while pos < src.len() {
-                                    if src[pos] == b'\r' {
-                                        pos += 1;
+                            let code_start_column = builder.arena_ref().get_node(id).start_column;
+                            let parent_body =
+                                inner.tree.peek_up().map(|p| &inner.tree[p].item.body);
+                            if let Some(ext) = crate::firstpass::extend_indented_code_block(
+                                &inner.tree[ix].item,
+                                source.as_bytes(),
+                                parent_body,
+                                code_start_column,
+                                end,
+                            ) {
+                                code_end = ext.end_offset;
+                                let (el, ec) = cursor.offset_to_line_col(code_end);
+                                code_end_line = el;
+                                code_end_col = ec;
+                                if ext.extra_blank_lines > 0 {
+                                    let id = builder.current_node_id();
+                                    let mut data = builder.arena_ref().get_type_data(id).to_vec();
+                                    if data.len() >= 24 {
+                                        let mut extended = String::with_capacity(
+                                            content.len() + ext.extra_blank_lines,
+                                        );
+                                        extended.push_str(&content);
+                                        for _ in 0..ext.extra_blank_lines {
+                                            extended.push('\n');
+                                        }
+                                        let sr2 = builder.alloc_string(&extended);
+                                        data = builder.arena_ref().get_type_data(id).to_vec();
+                                        data[16..24].copy_from_slice(&sr2.as_bytes());
+                                        builder.set_data_current(&data);
                                     }
-                                    if pos < src.len() && src[pos] == b'\n' {
-                                        pos += 1;
-                                    }
-                                    if pos >= src.len() {
-                                        break;
-                                    }
-                                    let line_start = pos;
-                                    let is_indented = matches!(src.get(pos), Some(b'\t'))
-                                        || src[pos..].starts_with(b"    ");
-                                    if !is_indented {
-                                        break;
-                                    }
-                                    while pos < src.len() && src[pos] != b'\n' && src[pos] != b'\r'
-                                    {
-                                        pos += 1;
-                                    }
-                                    let line_content = &src[line_start..pos];
-                                    let all_ws =
-                                        line_content.iter().all(|&b| b == b' ' || b == b'\t');
-                                    if !all_ws {
-                                        break;
-                                    }
-                                    code_end = pos as u32;
-                                    let (el, ec) = cursor.offset_to_line_col(code_end);
-                                    code_end_line = el;
-                                    code_end_col = ec;
                                 }
                             }
                             let node = builder.arena_ref().get_node(id);
@@ -245,11 +254,14 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             builder.close_node();
                         }
                     }
-                    // HTML block close: write accumulated content.
-                    ItemBody::HtmlBlock(is_type_6_or_7) => {
+                    // HTML block close: write accumulated content. The bool
+                    // says whether to trim a trailing newline — true for
+                    // type 6/7 (always) and for type 1-5 that hit their
+                    // closer pattern; false for type 1-5 that ran to EOF
+                    // without a closer (then the trailing `\n` is content).
+                    ItemBody::HtmlBlock(trim_trailing) => {
                         if let Some(content) = html_block_buf.take() {
-                            let at_eof = item.end >= source.len();
-                            let trimmed = if *is_type_6_or_7 || !at_eof {
+                            let trimmed = if *trim_trailing {
                                 content.trim_end_matches('\n')
                             } else {
                                 content.as_str()
@@ -344,6 +356,21 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                     }
                     ItemBody::ListItem(_, item_spread) => {
                         let id = builder.current_node_id();
+                        let node = builder.arena_ref().get_node(id);
+                        let orig_start_offset = node.start_offset;
+                        // Pull in any refdefs whose source range falls inside
+                        // this list item before we evaluate spread / position.
+                        if emit_refdefs_in_container(
+                            &mut builder,
+                            &mut cursor,
+                            source,
+                            &refdefs_pending,
+                            &mut refdef_emitted,
+                            orig_start_offset as usize,
+                            item.end,
+                        ) {
+                            builder.sort_current_pending_children_by_source_order();
+                        }
                         let is_spread = *item_spread || {
                             let mut found = false;
                             let mut prev_end_line: Option<u32> = None;
@@ -371,7 +398,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         let orig_start = node.start_offset;
                         let orig_start_line = node.start_line;
                         let orig_start_col = node.start_column;
-                        let (cont_end, cont_end_line, cont_end_col) =
+                        let (mut cont_end, mut cont_end_line, mut cont_end_col) =
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
                                 (lc.end_offset, lc.end_line, lc.end_column)
@@ -387,6 +414,19 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                                 let (el, ec) = cursor.offset_to_line_col(first_nl);
                                 (first_nl, el, ec)
                             };
+                        if let Some(extended) =
+                            crate::firstpass::extend_list_item_to_next_sibling_content(
+                                &inner.tree,
+                                ix,
+                                source.as_bytes(),
+                                cont_end,
+                            )
+                        {
+                            cont_end = extended;
+                            let (el, ec) = cursor.offset_to_line_col(cont_end);
+                            cont_end_line = el;
+                            cont_end_col = ec;
+                        }
                         builder.set_position_current(
                             orig_start,
                             cont_end,
@@ -403,13 +443,26 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         let orig_start = node.start_offset;
                         let orig_start_line = node.start_line;
                         let orig_start_col = node.start_column;
-                        let (cont_end, cont_end_line, cont_end_col) =
+                        let (mut cont_end, mut cont_end_line, mut cont_end_col) =
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
                                 (lc.end_offset, lc.end_line, lc.end_column)
                             } else {
                                 (end, end_line, end_col)
                             };
+                        if let Some(extended) =
+                            crate::firstpass::extend_list_in_blockquote_through_marker_lines(
+                                &inner.tree,
+                                ix,
+                                source.as_bytes(),
+                                cont_end,
+                            )
+                        {
+                            cont_end = extended;
+                            let (el, ec) = cursor.offset_to_line_col(cont_end);
+                            cont_end_line = el;
+                            cont_end_col = ec;
+                        }
                         builder.set_position_current(
                             orig_start,
                             cont_end,
@@ -449,16 +502,61 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                     }
                     // Regular container close.
                     _ => {
+                        // If this is a Paragraph close, drain any inline JSX
+                        // that was opened inside the paragraph but never
+                        // matched. micromark-mdx errors in this situation
+                        // ("Expected a closing tag for `<X>` … before the
+                        // end of `paragraph`"); we mirror the error rather
+                        // than silently produce an invalid tree where the
+                        // would-be paragraph-close ends up closing the
+                        // dangling JSX node.
+                        if matches!(item.body, ItemBody::Paragraph | ItemBody::TightParagraph) {
+                            if let Some(opened_at) = paragraph_open_depth.pop() {
+                                while builder.stack_depth() > opened_at {
+                                    if let Some((name, offset)) = jsx_stack.pop() {
+                                        let loc = byte_offset_to_line_col(source, offset as usize);
+                                        mdx_errors.push((
+                                            offset as usize,
+                                            format!(
+                                                "Expected a closing tag for `<{name}>` ({loc}) before the end of `paragraph`"
+                                            ),
+                                        ));
+                                    }
+                                    builder.close_node();
+                                }
+                            }
+                        }
                         let id = builder.current_node_id();
                         let node = builder.arena_ref().get_node(id);
                         let orig_start = node.start_offset;
                         let orig_start_line = node.start_line;
                         let orig_start_col = node.start_column;
+                        // Claim refdefs nested in this container before its
+                        // children are finalized.
+                        if matches!(
+                            item.body,
+                            ItemBody::BlockQuote(..)
+                                | ItemBody::ContainerDirective(..)
+                                | ItemBody::FootnoteDefinition(..)
+                        ) && emit_refdefs_in_container(
+                            &mut builder,
+                            &mut cursor,
+                            source,
+                            &refdefs_pending,
+                            &mut refdef_emitted,
+                            orig_start as usize,
+                            item.end,
+                        ) {
+                            builder.sort_current_pending_children_by_source_order();
+                        }
                         let use_last_child = matches!(
                             item.body,
                             ItemBody::BlockQuote(..) | ItemBody::ContainerDirective(..)
                         );
-                        let (cont_end, cont_end_line, cont_end_col) = if use_last_child {
+                        let use_last_child_strict =
+                            matches!(item.body, ItemBody::FootnoteDefinition(..));
+                        let (mut cont_end, mut cont_end_line, mut cont_end_col) = if use_last_child
+                        {
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
                                 if lc.end_offset >= end {
@@ -469,9 +567,35 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             } else {
                                 (end, end_line, end_col)
                             }
+                        } else if use_last_child_strict {
+                            // FootnoteDefinition: end at the last child's end
+                            // (don't absorb trailing blank lines / whitespace
+                            // beyond the content — matches remark, which
+                            // trims trailing source-whitespace from the
+                            // definition's span).
+                            if let Some(last_child) = builder.last_sibling_id() {
+                                let lc = builder.arena_ref().get_node(last_child);
+                                (lc.end_offset, lc.end_line, lc.end_column)
+                            } else {
+                                (end, end_line, end_col)
+                            }
                         } else {
                             (end, end_line, end_col)
                         };
+
+                        if let Some(extended) =
+                            crate::firstpass::extend_inner_blockquote_through_outer_markers(
+                                &inner.tree,
+                                ix,
+                                source.as_bytes(),
+                                cont_end,
+                            )
+                        {
+                            cont_end = extended;
+                            let (el, ec) = cursor.offset_to_line_col(cont_end);
+                            cont_end_line = el;
+                            cont_end_col = ec;
+                        }
                         builder.set_position_current(
                             orig_start,
                             cont_end,
@@ -559,6 +683,15 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         ItemBody::SynthesizeChar(c) => {
                             buf.push(*c);
                         }
+                        // mdx-js extends CommonMark's "alt = stripped visible
+                        // content" rule by also concatenating the literal
+                        // body of `{...}` expressions. e.g. `![{1+2}](u)` →
+                        // alt = "1+2".
+                        ItemBody::MdxTextExpression(cow_ix)
+                        | ItemBody::MdxFlowExpression(cow_ix) => {
+                            let cow = inner.allocs.take_cow(*cow_ix);
+                            buf.push_str(&cow);
+                        }
                         ItemBody::Image(_) => {
                             image_depth += 1;
                             inner.tree.push();
@@ -584,6 +717,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
+                        paragraph_open_depth.push(builder.stack_depth());
                         inner.tree.push();
                     }
                     ItemBody::Heading(level, _) => {
@@ -643,7 +777,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
                     }
-                    ItemBody::IndentCodeBlock => {
+                    ItemBody::IndentCodeBlock(_) => {
                         builder.open_node(MdastNodeType::Code as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
@@ -743,7 +877,10 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                                 reference_end(source, &mut cursor, end, kind);
                             let label_src =
                                 extract_reference_label(source, start, ref_end, kind, false);
-                            let label_ref = builder.alloc_string(label_src);
+                            let label_ref = match unescape_label_backslashes(label_src) {
+                                Some(unescaped) => builder.alloc_string(&unescaped),
+                                None => builder.alloc_string(label_src),
+                            };
                             let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
                             builder.open_node(MdastNodeType::LinkReference as u8);
                             builder.set_position_current(
@@ -798,7 +935,10 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                                 reference_end(source, &mut cursor, end, kind);
                             let label_src =
                                 extract_reference_label(source, start, ref_end, kind, true);
-                            let label_ref = builder.alloc_string(label_src);
+                            let label_ref = match unescape_label_backslashes(label_src) {
+                                Some(unescaped) => builder.alloc_string(&unescaped),
+                                None => builder.alloc_string(label_src),
+                            };
                             let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
                             builder.open_node(MdastNodeType::ImageReference as u8);
                             builder.set_position_current(
@@ -847,15 +987,25 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                     }
                     ItemBody::FootnoteDefinition(cow_ix) => {
                         let label_cow = inner.allocs.take_cow(cow_ix);
-                        let sr = builder.alloc_string(&label_cow);
+                        // `identifier` is the normalized form (case-folded,
+                        // whitespace-collapsed); `label` is the human-
+                        // readable form with backslash escapes resolved.
+                        // Mirrors mdast-util-from-markdown's
+                        // footnoteDefinition handler (and our Definition
+                        // emission in `emit_pending_refdef`).
+                        let id_sr = builder.alloc_string(&normalize_identifier(&label_cow));
+                        let label_sr = match unescape_label_backslashes(&label_cow) {
+                            Some(unescaped) => builder.alloc_string(&unescaped),
+                            None => builder.alloc_string(&label_cow),
+                        };
                         builder.open_node(MdastNodeType::FootnoteDefinition as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
                         builder.set_data_current(
                             &FootnoteDefinitionData {
-                                identifier: sr,
-                                label: sr,
+                                identifier: id_sr,
+                                label: label_sr,
                             }
                             .to_bytes(),
                         );
@@ -1185,7 +1335,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                     }
                     ItemBody::SynthesizeText(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
-                        emit_text_merging(
+                        crate::post_passes::emit_text_merging(
                             &mut builder,
                             &cow,
                             start,
@@ -1199,7 +1349,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                     }
                     ItemBody::SynthesizeChar(c) => {
                         let s = String::from(c);
-                        emit_text_merging(
+                        crate::post_passes::emit_text_merging(
                             &mut builder,
                             &s,
                             start,
@@ -1226,7 +1376,11 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::InlineHtml => {
-                        let sr = StringRef::new(start, end - start);
+                        let slice = &source[start as usize..end as usize];
+                        let sr = match normalize_inline_html_wrap(slice) {
+                            Some(normalized) => builder.alloc_string(&normalized),
+                            None => StringRef::new(start, end - start),
+                        };
                         builder.add_leaf_full(
                             MdastNodeType::Html as u8,
                             start,
@@ -1372,10 +1526,14 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                     }
                     ItemBody::FootnoteReference(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
-                        let sr = builder.alloc_string(&cow);
+                        // Identifier is normalized (case-folded + whitespace-
+                        // collapsed); label keeps the raw source form. Same
+                        // pattern as FootnoteDefinition.
+                        let id_sr = builder.alloc_string(&normalize_identifier(&cow));
+                        let label_sr = builder.alloc_string(&cow);
                         let data = ReferenceData {
-                            identifier: sr,
-                            label: sr,
+                            identifier: id_sr,
+                            label: label_sr,
                             reference_kind: 0,
                             _pad: [0; 3],
                         }
@@ -1548,61 +1706,18 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         mdx_errors.sort_by_key(|(offset, _)| *offset);
     }
 
-    // Emit `definition` nodes for every refdef pulldown-cmark consumed during
-    // parsing. They're collected by label in `allocs.refdefs` and we splice
-    // them back into the root in source order to match remark's mdast.
-    //
-    // NB: pulldown-cmark doesn't track the containing block, so a definition
-    // that lived inside e.g. a blockquote will land at root here. Plain
-    // root-level definitions — the overwhelmingly common case — round-trip
-    // exactly.
-    let mut refdefs: Vec<(String, String, Option<String>, core::ops::Range<usize>)> = inner
-        .allocs
-        .refdefs
-        .0
-        .iter()
-        .map(|(label, def)| {
-            (
-                label.as_ref().to_string(),
-                def.dest.to_string(),
-                def.title.as_ref().map(|t| t.to_string()),
-                def.span.clone(),
-            )
-        })
-        .collect();
-    refdefs.sort_by_key(|(_, _, _, span)| span.start);
-    for (label, dest, title, span) in refdefs {
-        let start = span.start as u32;
-        let end = span.end as u32;
-        let (sl, sc) = cursor.offset_to_line_col(start);
-        let (el, ec) = cursor.offset_to_line_col(end);
-        let url_ref = builder.alloc_string(&dest);
-        let title_ref = match &title {
-            Some(t) => builder.alloc_string(t),
-            None => StringRef::empty(),
-        };
-        let label_ref = builder.alloc_string(&label);
-        let identifier_ref = builder.alloc_string(&normalize_identifier(&label));
-        let data = DefinitionData {
-            url: url_ref,
-            title: title_ref,
-            identifier: identifier_ref,
-            label: label_ref,
+    // Root-level refdefs: anything not already emitted inside a container.
+    // Interleaved with the other root children in source order.
+    let mut emitted_any_at_root = false;
+    for (i, rd) in refdefs_pending.iter().enumerate() {
+        if refdef_emitted[i] {
+            continue;
         }
-        .to_bytes();
-        builder.add_leaf_full(
-            MdastNodeType::Definition as u8,
-            start,
-            end,
-            sl,
-            sc,
-            el,
-            ec,
-            &data,
-        );
+        emit_pending_refdef(&mut builder, &mut cursor, source, rd);
+        emitted_any_at_root = true;
     }
-    if !inner.allocs.refdefs.0.is_empty() {
-        builder.sort_current_pending_children_by_start_offset();
+    if emitted_any_at_root {
+        builder.sort_current_pending_children_by_source_order();
     }
 
     // Close root.
@@ -1610,8 +1725,16 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     let mut arena = builder.finish();
     arena.parse_options = options.bits();
 
-    if options.contains(Options::ENABLE_MDX) {
-        mdx_mark_and_unravel(&mut arena);
+    // Source-level early exits: post-passes scan the arena to find
+    // candidate nodes, but if the construct's trigger char(s) don't
+    // appear in the source at all, no candidate can exist. The memchr
+    // probes are conservative supersets (e.g. `@` matches both emails
+    // and unrelated literal text); the actual passes still validate.
+    let source_bytes = source.as_bytes();
+
+    if options.contains(Options::ENABLE_MDX) && memchr::memchr2(b'<', b'{', source_bytes).is_some()
+    {
+        crate::post_passes::mdx_mark_and_unravel(&mut arena);
     }
 
     // GFM extension: promote bare URLs (http://…, https://…, www.…) inside
@@ -1623,10 +1746,14 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         // remark handles this cleanly because its autolink tokenizer runs
         // before the directive check; we're a post-pass, so we re-merge the
         // split first and then run the autolink scan.
-        if options.contains(Options::ENABLE_DIRECTIVE) {
-            merge_directive_port_splits(&mut arena);
+        if options.contains(Options::ENABLE_DIRECTIVE)
+            && memchr::memmem::find(source_bytes, b"://").is_some()
+        {
+            crate::post_passes::merge_directive_port_splits(&mut arena);
         }
-        gfm_autolink_literal_pass(&mut arena);
+        if memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some() {
+            crate::post_passes::gfm_autolink_literal_pass(&mut arena);
+        }
     }
 
     if options.contains(Options::ENABLE_DIRECTIVE) {
@@ -1634,1466 +1761,177 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         // inline-parses them so constructs like `` `code` `` inside
         // `:::tip[Set a \`baseUrl\`]` end up as inlineCode. We mirror the
         // common case (backticks) here as a post-pass.
-        directive_label_inline_code_pass(&mut arena);
-        if options.contains(Options::ENABLE_MDX) {
+        if memchr::memchr(b'`', source_bytes).is_some() {
+            crate::post_passes::directive_label_inline_code_pass(&mut arena);
+        }
+        if options.contains(Options::ENABLE_MDX)
+            && memchr::memchr2(b'<', b'{', source_bytes).is_some()
+        {
             // Same idea for JSX tags inside a directive label —
             // `:::note[The <code>x</code> property]`.
-            directive_label_jsx_pass(&mut arena);
+            crate::post_passes::directive_label_jsx_pass(&mut arena);
         }
+    }
+
+    // Precompute per-node code-point offsets so `to_raw_buffer` skips a
+    // second `LineIndex` build + per-node `byte_to_cp_offset` lookup.
+    // ASCII sources skip — `cp == byte` and `to_raw_buffer` won't touch
+    // the cache. The cursor is already warm from the arena walk.
+    if !source.is_ascii() {
+        let mut cp_offsets = Vec::with_capacity(arena.nodes.len());
+        for node in &arena.nodes {
+            let pair = if node.start_line == 0 && node.start_offset == 0 {
+                (0u32, 0u32)
+            } else {
+                (
+                    cursor.byte_to_cp_offset(node.start_offset),
+                    cursor.byte_to_cp_offset(node.end_offset),
+                )
+            };
+            cp_offsets.push(pair);
+        }
+        arena.cp_offsets = cp_offsets;
     }
 
     (arena, mdx_errors)
 }
-
-/// Scan a text buffer for a GFM autolink literal starting at `ix`.
-/// Returns `(url_start, url_end, url_string)` when a literal matches.
-///
-/// A match starts at one of `http://`, `https://`, `ftp://`, `www.` and
-/// extends through non-whitespace characters, with trailing punctuation
-/// trimmed per the GFM spec.
-/// Returns (start, raw_end, end, url) where `raw_end` is the position before
-/// trailing punctuation was trimmed back, and `end` is the final URL boundary.
-/// Callers that care about the trimmed-back tail (e.g. remark's text-node
-/// split when the surrounding context has an unclosed `[`) need `raw_end`.
-fn scan_autolink_literal(bytes: &[u8], ix: usize) -> Option<(usize, usize, usize, String)> {
-    // Scheme. remark-gfm's autolink-literal extension handles http(s) and
-    // `www.`, but not ftp — so we match that set exactly.
-    let (proto_len, is_www) = if bytes[ix..].starts_with(b"http://") {
-        (7, false)
-    } else if bytes[ix..].starts_with(b"https://") {
-        (8, false)
-    } else if bytes[ix..].starts_with(b"www.") {
-        (4, true)
-    } else {
-        return None;
-    };
-
-    // Preceding-character rule. `mdast-util-gfm-autolink-literal`'s transform
-    // — which this post-pass mirrors — requires start-of-input, whitespace, or
-    // unicode punctuation before the match. So `"http://…` (quote) is valid
-    // but `abchttp://…` (letter) is not.
-    if ix > 0 {
-        let prev = bytes[ix - 1];
-        let ok = if prev < 0x80 {
-            prev.is_ascii_whitespace() || prev.is_ascii_punctuation()
-        } else {
-            // Non-ASCII: treat as "not-letter" ⇒ accept (matches remark's
-            // unicodeWhitespace || unicodePunctuation for the common cases we
-            // see — a full Unicode category check would be overkill here).
-            match core::str::from_utf8(&bytes[ix.saturating_sub(4)..ix]) {
-                Ok(s) => {
-                    let c = s.chars().last().unwrap_or(' ');
-                    c.is_whitespace() || !c.is_alphanumeric()
-                }
-                Err(_) => true,
-            }
-        };
-        if !ok {
-            return None;
-        }
-    }
-
-    // Collect the URL body: everything until whitespace, `<`, ASCII control, or end.
-    // Per GFM, valid URLs exclude control characters; matching remark's behavior
-    // here avoids autolinking e.g. `http://\x07>` inside a broken `<...>`.
-    let mut end = ix + proto_len;
-    while end < bytes.len() {
-        let b = bytes[end];
-        if b <= b' ' || b == 0x7F || b == b'<' {
-            break;
-        }
-        end += 1;
-    }
-
-    // Must have at least one char past the scheme.
-    if end == ix + proto_len {
-        return None;
-    }
-
-    // The GFM spec allows `.`, but a `www.` match must have a valid domain
-    // (one more `.`-separated segment beyond `www.`). Reject `www.` alone.
-    if is_www {
-        let rest = &bytes[ix + proto_len..end];
-        if rest.is_empty() {
-            return None;
-        }
-    }
-
-    let raw_end = end;
-
-    // Trim trailing punctuation. Set mirrors micromark-gfm-autolink-literal's
-    // trail tokenizer: `!"'*,.:;<?]_~` plus unbalanced `)` plus `&;`-
-    // terminated entities. Interleaved so that e.g. trailing `")` is fully
-    // stripped (`)` via balance, then `"` via the punctuation set).
-    loop {
-        if end <= ix + proto_len {
-            break;
-        }
-        let last = bytes[end - 1];
-        if matches!(
-            last,
-            b'!' | b'"'
-                | b'\''
-                | b'*'
-                | b','
-                | b'.'
-                | b':'
-                | b';'
-                | b'<'
-                | b'?'
-                | b']'
-                | b'_'
-                | b'~'
-        ) {
-            end -= 1;
-            continue;
-        }
-        if last == b')' {
-            let segment = &bytes[ix..end];
-            let opens = segment.iter().filter(|&&b| b == b'(').count();
-            let closes = segment.iter().filter(|&&b| b == b')').count();
-            if closes > opens {
-                end -= 1;
-                continue;
-            }
-        }
-        break;
-    }
-
-    // Trim a trailing `;` only when it closes an HTML entity (`&...;`).
-    if end > ix + proto_len && bytes[end - 1] == b';' {
-        // Walk back looking for `&` before whitespace. If we find `&`, trim the entity.
-        let mut j = end - 2;
-        while j > ix {
-            let c = bytes[j];
-            if c == b'&' {
-                end = j;
-                break;
-            }
-            if !(c.is_ascii_alphanumeric() || c == b'#') {
-                break;
-            }
-            j -= 1;
-        }
-    }
-
-    if end <= ix + proto_len {
-        return None;
-    }
-
-    // The domain (up to first `/`, `?`, `#`, or end) must contain a `.`
-    // so that `https://localhost` or `www.` alone don't match — matching
-    // remark-gfm's behavior (they DO match http/https/ftp without `.`,
-    // but remark-gfm requires a `.` for the literal extension). To align
-    // with the reference, allow http/https/ftp without `.` (remark accepts
-    // them) but require a `.` for `www.`.
-    let body = &bytes[ix + proto_len..end];
-    if is_www {
-        let domain_end = body
-            .iter()
-            .position(|&b| matches!(b, b'/' | b'?' | b'#'))
-            .unwrap_or(body.len());
-        if !body[..domain_end].contains(&b'.') {
-            return None;
-        }
-    }
-
-    let url_str = core::str::from_utf8(&bytes[ix..end]).ok()?;
-    let full_url = if is_www {
-        format!("http://{url_str}")
-    } else {
-        url_str.to_string()
-    };
-    Some((ix, raw_end, end, full_url))
+struct PendingRefdef {
+    label: String,
+    dest: String,
+    title: Option<String>,
+    span: core::ops::Range<usize>,
 }
 
-#[inline]
-fn is_email_local_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-' | b'_')
-}
-
-/// GFM extended email autolink. Given `@` at `at_ix`, walk backward for the
-/// local-part and forward for the domain. Returns `(start, end, "mailto:...")`.
-/// Mirrors `mdast-util-gfm-autolink-literal`: requires a `.` in the domain,
-/// the TLD (last dot-segment) must contain at least one letter, and trailing
-/// `.`/`-`/`_` are trimmed.
-fn scan_email_autolink(bytes: &[u8], at_ix: usize) -> Option<(usize, usize, String)> {
-    if at_ix >= bytes.len() || bytes[at_ix] != b'@' {
-        return None;
-    }
-    // Walk backward to find the local-part start.
-    let mut start = at_ix;
-    while start > 0 && is_email_local_char(bytes[start - 1]) {
-        start -= 1;
-    }
-    if start == at_ix {
-        return None;
-    }
-    // Local-part cannot start with `.`, `-`, `_`, or `+` per remark's trimming.
-    // Trim leading punctuation from the local-part.
-    while start < at_ix && matches!(bytes[start], b'.' | b'-' | b'_' | b'+') {
-        start += 1;
-    }
-    if start == at_ix {
-        return None;
-    }
-    // Preceding char must be start-of-input, whitespace, or punctuation — not
-    // another email-like char. Since the backward walk already consumes all
-    // `is_email_local_char` bytes, the prev byte (if any) is guaranteed non-
-    // local; just reject an immediate `@` or `/` that would indicate we're
-    // inside another URL/email.
-    if start > 0 {
-        let prev = bytes[start - 1];
-        if prev == b'@' || prev == b'/' {
-            return None;
-        }
-    }
-    // Forward: scan domain.
-    let mut end = at_ix + 1;
-    while end < bytes.len() {
-        let b = bytes[end];
-        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_') {
-            end += 1;
-        } else {
-            break;
-        }
-    }
-    if end == at_ix + 1 {
-        return None;
-    }
-    // Trim trailing `.`, `_`, `-` per remark: an email can't end on those.
-    while end > at_ix + 1 {
-        let last = bytes[end - 1];
-        if matches!(last, b'.' | b'_' | b'-') {
-            end -= 1;
-        } else {
-            break;
-        }
-    }
-    if end == at_ix + 1 {
-        return None;
-    }
-    // Domain must contain at least one `.`.
-    let domain = &bytes[at_ix + 1..end];
-    let last_dot = domain.iter().rposition(|&b| b == b'.')?;
-    // TLD (last dot-segment) must contain at least one ASCII letter.
-    let tld = &domain[last_dot + 1..];
-    if tld.is_empty() || !tld.iter().any(|&b| b.is_ascii_alphabetic()) {
-        return None;
-    }
-    // Underscore in the last two segments is invalid per remark
-    // (`mdast-util-gfm-autolink-literal`'s `emailWithUnderscoreAtEnd` check).
-    if tld.contains(&b'_') {
-        return None;
-    }
-    if let Some(second_last_dot) = domain[..last_dot].iter().rposition(|&b| b == b'.') {
-        if domain[second_last_dot + 1..last_dot].contains(&b'_') {
-            return None;
-        }
-    } else if domain[..last_dot].contains(&b'_') {
-        return None;
-    }
-    let email_str = core::str::from_utf8(&bytes[start..end]).ok()?;
-    Some((start, end, format!("mailto:{email_str}")))
-}
-
-/// Re-merge `text + textDirective + text` sibling runs when the text ends
-/// with a URL scheme and the directive's name is purely numeric (i.e. a port
-/// number that got split off by the directive parser).
-///
-/// This is the inverse of the split that happens during inline parsing for
-/// `http://host:4321/path`: the `:4321` looks like a textDirective, so the
-/// inline parser emits `[text("..http://host"), textDirective("4321"), text("/path")]`.
-/// GFM autolink would normally consume the whole URL as a single token before
-/// the directive parser sees it, but since satteri's autolink runs as a post-
-/// pass we reconstruct the original run here so autolink can find the URL.
-/// Mirror of mdast-util-gfm-autolink-literal's `isCorrectDomain`: the URL's
-/// domain (between `//` and the first `/`, `?`, `#`, or end) must contain a
-/// dot to count as a valid autolink. Applied only in strict mode — see the
-/// caller.
-fn domain_has_dot(url: &str) -> bool {
-    let after_scheme = match url.find("://") {
-        Some(p) => &url[p + 3..],
-        None => url,
-    };
-    let domain_end = after_scheme
-        .find(['/', '?', '#'])
-        .unwrap_or(after_scheme.len());
-    after_scheme[..domain_end].contains('.')
-}
-
-/// Fold the bracket-depth running total forward over one string of text.
-/// Returns `true` after consuming `s` iff there's a `[` (or `![`) with no
-/// matching `]` so far. Backslash-escaped brackets are ignored.
-fn update_bracket_depth(was_open: bool, s: &str) -> bool {
-    let mut depth: i32 = if was_open { 1 } else { 0 };
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'\\' {
-            i += 2;
-            continue;
-        }
-        match c {
-            b'[' => depth += 1,
-            b']' if depth > 0 => depth -= 1,
-            _ => {}
-        }
-        i += 1;
-    }
-    depth > 0
-}
-
-fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
-    // Explicitly skip Link / LinkReference — a bracketed link's label text
-    // intentionally preserves `text + textDirective + text` splits (remark
-    // keeps them because autolink doesn't recurse into labels).
-    let parent_ids: Vec<u32> = (0..arena.len() as u32)
-        .filter(|&id| {
-            let n = arena.get_node(id);
-            matches!(
-                MdastNodeType::from_u8(n.node_type),
-                Some(
-                    MdastNodeType::Paragraph
-                        | MdastNodeType::Heading
-                        | MdastNodeType::Emphasis
-                        | MdastNodeType::Strong
-                        | MdastNodeType::Delete
-                        | MdastNodeType::TableCell
-                )
-            )
-        })
-        .collect();
-
-    for parent_id in parent_ids {
-        let children = arena.get_children(parent_id).to_vec();
-        if children.len() < 2 {
-            continue;
-        }
-        let mut new_children: Vec<u32> = Vec::with_capacity(children.len());
-        let mut i = 0;
-        // When a potential link-label `[` remains unclosed in earlier siblings,
-        // remark's autolink-literal never tokenizes URLs in the following text
-        // and its post-transformer rejects no-dot domains. Merging back would
-        // then resurrect URLs remark deliberately leaves alone (see
-        // `docs/src/content/docs/ru/guides/testing.mdx` in the conformance
-        // check). Track the running bracket depth across preceding siblings so
-        // we can bail when we're inside a broken label attempt.
-        let mut unmatched_open_bracket = false;
-        while i < children.len() {
-            let text_id = children[i];
-            let text_node = arena.get_node(text_id);
-            // Track bracket depth across every text node we visit so the
-            // unmatched-`[` gate below sees a correct running total.
-            let is_text = text_node.node_type == MdastNodeType::Text as u8;
-            if is_text {
-                let d = arena.get_type_data(text_id);
-                if !d.is_empty() {
-                    let s = arena.get_str(StringRef::from_bytes(d));
-                    unmatched_open_bracket = update_bracket_depth(unmatched_open_bracket, s);
-                }
-            }
-            // Need a text node whose value ends with `://<host>` (no path yet).
-            if !is_text || i + 1 >= children.len() {
-                new_children.push(text_id);
-                i += 1;
-                continue;
-            }
-            if unmatched_open_bracket {
-                new_children.push(text_id);
-                i += 1;
-                continue;
-            }
-            let dir_id = children[i + 1];
-            let dir_node = arena.get_node(dir_id);
-            if dir_node.node_type != MdastNodeType::TextDirective as u8 {
-                new_children.push(text_id);
-                i += 1;
-                continue;
-            }
-            // Directive name must be all ASCII digits (port number).
-            let dir_data = arena.get_type_data(dir_id);
-            if dir_data.len() < 8 {
-                new_children.push(text_id);
-                i += 1;
-                continue;
-            }
-            let dir_name_sr = StringRef::from_bytes(&dir_data[..8]);
-            let dir_name = arena.get_str(dir_name_sr).to_string();
-            if dir_name.is_empty() || !dir_name.bytes().all(|b| b.is_ascii_digit()) {
-                new_children.push(text_id);
-                i += 1;
-                continue;
-            }
-
-            // Text must end with `://<host>` — check by looking for `://`
-            // after the last whitespace and then any non-whitespace host.
-            let text_data = arena.get_type_data(text_id);
-            let text_sr = StringRef::from_bytes(text_data);
-            let text_val = arena.get_str(text_sr).to_string();
-            let looks_like_url_host = {
-                let after_ws = text_val
-                    .rsplit(|c: char| c.is_whitespace())
-                    .next()
-                    .unwrap_or("");
-                after_ws.contains("://")
-            };
-            if !looks_like_url_host {
-                new_children.push(text_id);
-                i += 1;
-                continue;
-            }
-
-            // Build merged value. Trailing text (i+2) is merged too if present
-            // and starts with a URL-path char, or we leave it standalone.
-            let mut merged = text_val;
-            merged.push(':');
-            merged.push_str(&dir_name);
-
-            let mut consumed = 2; // text + directive
-            if i + 2 < children.len() {
-                let after_id = children[i + 2];
-                let after_node = arena.get_node(after_id);
-                if after_node.node_type == MdastNodeType::Text as u8 {
-                    let after_data = arena.get_type_data(after_id);
-                    let after_sr = StringRef::from_bytes(after_data);
-                    let after_val = arena.get_str(after_sr);
-                    merged.push_str(after_val);
-                    consumed = 3;
-                }
-            }
-
-            let merged_sr = arena.alloc_string(&merged);
-            let text_node_start = arena.get_node(text_id).start_offset;
-            let last_id = children[i + consumed - 1];
-            let last_node = arena.get_node(last_id);
-            let end_offset = last_node.end_offset;
-            let end_line = last_node.end_line;
-            let end_column = last_node.end_column;
-            let start_line = arena.get_node(text_id).start_line;
-            let start_column = arena.get_node(text_id).start_column;
-
-            // Reuse the first text node as the merged one.
-            arena.set_type_data(text_id, &merged_sr.as_bytes());
-            arena.set_position(
-                text_id,
-                text_node_start,
-                end_offset,
-                start_line,
-                start_column,
-                end_line,
-                end_column,
-            );
-            // The leading text's brackets were already folded into
-            // `unmatched_open_bracket` at the top of the loop; fold in the
-            // remaining text (if any) from the trailing sibling we consumed.
-            if consumed == 3 {
-                let tail_sr = StringRef::from_bytes(arena.get_type_data(children[i + 2]));
-                let tail = arena.get_str(tail_sr);
-                unmatched_open_bracket = update_bracket_depth(unmatched_open_bracket, tail);
-            }
-            new_children.push(text_id);
-            i += consumed;
-        }
-        if new_children.len() != children.len() {
-            arena.set_children(parent_id, &new_children);
-        }
-    }
-}
-
-fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>) {
-    let len = arena.len() as u32;
-    // First collect the set of Text nodes containing URL candidates to avoid
-    // mutating while iterating in a way that shifts indices. Alongside each
-    // candidate we track whether we're inside a broken link-label attempt —
-    // remark's autolink-literal skips such text during tokenization, and its
-    // post-transformer then requires a `.` in the domain to match, so we mirror
-    // that "require dot" rule only in the broken-label case.
-    let mut candidates: Vec<(u32, bool)> = Vec::new();
-    // Per-parent running bracket depth. Indexed by node id, sized to the
-    // arena once: avoids the per-text-node HashMap entry/get hot in profiles.
-    let mut bracket_depth_by_parent: Vec<i32> = vec![0; len as usize];
-    let text_ty = MdastNodeType::Text as u8;
-    for id in 0..len {
-        let node = arena.get_node(id);
-        if node.node_type != text_ty {
-            continue;
-        }
-        let parent_id = node.parent;
-        if parent_id == u32::MAX || parent_id >= len {
-            continue;
-        }
-        let parent_type = MdastNodeType::from_u8(arena.get_node(parent_id).node_type);
-        // Skip text inside link (would nest), code, imports, expressions, or
-        // frontmatter.
-        if matches!(
-            parent_type,
-            Some(
-                MdastNodeType::Link
-                    | MdastNodeType::InlineCode
-                    | MdastNodeType::Code
-                    | MdastNodeType::MdxjsEsm
-                    | MdastNodeType::MdxFlowExpression
-                    | MdastNodeType::MdxTextExpression
-                    | MdastNodeType::Yaml
-                    | MdastNodeType::Toml
-            )
-        ) {
-            continue;
-        }
-        let tracks_brackets = matches!(
-            parent_type,
-            Some(
-                MdastNodeType::Paragraph
-                    | MdastNodeType::Heading
-                    | MdastNodeType::Emphasis
-                    | MdastNodeType::Strong
-                    | MdastNodeType::Delete
-                    | MdastNodeType::TableCell
-            )
-        );
-        let data = arena.get_type_data(id);
-        if data.is_empty() {
-            continue;
-        }
-        let sr = StringRef::from_bytes(data);
-        let text = arena.get_str(sr);
-        let bytes = text.as_bytes();
-        let mut matched = false;
-        let mut search_from = 0;
-        while let Some(rel) = memchr::memchr3(b'h', b'w', b'@', &bytes[search_from..]) {
-            let i = search_from + rel;
-            let b = bytes[i];
-            if (b == b'h' || b == b'w') && scan_autolink_literal(bytes, i).is_some() {
-                matched = true;
-                break;
-            }
-            if b == b'@' && scan_email_autolink(bytes, i).is_some() {
-                matched = true;
-                break;
-            }
-            search_from = i + 1;
-        }
-        if tracks_brackets {
-            let slot = &mut bracket_depth_by_parent[parent_id as usize];
-            let was_open = *slot > 0;
-            if matched {
-                candidates.push((id, was_open));
-            }
-            if memchr::memchr2(b'[', b']', bytes).is_some() {
-                let now_open = update_bracket_depth(was_open, text);
-                *slot = if now_open { 1 } else { 0 };
-            }
-        } else if matched {
-            candidates.push((id, false));
-        }
-    }
-
-    for (node_id, strict) in candidates {
-        split_text_with_autolinks(arena, node_id, strict);
-    }
-}
-
-fn split_text_with_autolinks(arena: &mut Arena<Mdast>, text_id: u32, strict_domain: bool) {
-    let node = arena.get_node(text_id);
-    let start_offset = node.start_offset;
-    let start_line = node.start_line;
-    let start_column = node.start_column;
-    let data = arena.get_type_data(text_id);
-    if data.is_empty() {
-        return;
-    }
-    let sr = StringRef::from_bytes(data);
-    let text = arena.get_str(sr).to_string();
-    let bytes = text.as_bytes();
-
-    let mut replacements: Vec<(usize, usize, usize, String)> = Vec::new(); // (start, raw_end, end, url)
-    let mut i = 0;
-    while let Some(rel) = memchr::memchr3(b'h', b'w', b'@', &bytes[i..]) {
-        i += rel;
-        let b = bytes[i];
-        if b == b'h' || b == b'w' {
-            if let Some((s, raw_e, e, url)) = scan_autolink_literal(bytes, i) {
-                if strict_domain && !domain_has_dot(&url) {
-                    i += 1;
-                    continue;
-                }
-                replacements.push((s, raw_e, e, url));
-                i = raw_e;
-                continue;
-            }
-        } else if let Some((s, e, url)) = scan_email_autolink(bytes, i) {
-            // Don't double-match if the local-part overlaps an already-
-            // emitted replacement.
-            if replacements
-                .last()
-                .is_none_or(|&(_, _, prev_e, _)| s >= prev_e)
-            {
-                replacements.push((s, e, e, url));
-            }
-            i = e;
-            continue;
-        }
-        i += 1;
-    }
-
-    if replacements.is_empty() {
-        return;
-    }
-
-    // Remark-gfm keeps the trailing trim-back chars (e.g. `),` stripped from
-    // the URL) as their own text node — rather than merging with the post-URL
-    // tail — when the preceding text contains an unclosed `[` or `![`. This
-    // mirrors a micromark quirk where the failed label/link attempt around the
-    // autolink leaves fragmented text tokens that never coalesce.
-    let preceded_by_open_bracket: Vec<bool> = replacements
-        .iter()
-        .map(|&(s, _, _, _)| {
-            let mut depth: i32 = 0;
-            let mut j = 0;
-            while j < s {
-                let c = bytes[j];
-                if c == b'\\' {
-                    j += 2;
-                    continue;
-                }
-                match c {
-                    b'[' => depth += 1,
-                    b']' if depth > 0 => depth -= 1,
-                    _ => {}
-                }
-                j += 1;
-            }
-            depth > 0
-        })
-        .collect();
-
-    // Build the replacement nodes in order.
-    let mut new_children: Vec<u32> = Vec::new();
-    let mut cursor = 0usize;
-
-    for (idx, (s, raw_e, e, url)) in replacements.into_iter().enumerate() {
-        if s > cursor {
-            let chunk = &text[cursor..s];
-            let new_text_id = arena.alloc_node(MdastNodeType::Text as u8);
-            let chunk_sr = arena.alloc_string(chunk);
-            arena.set_type_data(new_text_id, &chunk_sr.as_bytes());
-            arena.set_position(
-                new_text_id,
-                start_offset + cursor as u32,
-                start_offset + s as u32,
-                start_line,
-                start_column + cursor as u32,
-                start_line,
-                start_column + s as u32,
-            );
-            new_children.push(new_text_id);
-        }
-
-        // Link node.
-        let link_id = arena.alloc_node(MdastNodeType::Link as u8);
-        let url_sr = arena.alloc_string(&url);
-        let link_data = LinkData {
-            url: url_sr,
-            title: StringRef::empty(),
-        };
-        arena.set_type_data(link_id, &link_data.to_bytes());
-        arena.set_position(
-            link_id,
-            start_offset + s as u32,
-            start_offset + e as u32,
-            start_line,
-            start_column + s as u32,
-            start_line,
-            start_column + e as u32,
-        );
-        // Link text child = the displayed URL (without the synthetic http://).
-        let displayed = &text[s..e];
-        let link_text_id = arena.alloc_node(MdastNodeType::Text as u8);
-        let disp_sr = arena.alloc_string(displayed);
-        arena.set_type_data(link_text_id, &disp_sr.as_bytes());
-        arena.set_position(
-            link_text_id,
-            start_offset + s as u32,
-            start_offset + e as u32,
-            start_line,
-            start_column + s as u32,
-            start_line,
-            start_column + e as u32,
-        );
-        arena.set_children(link_id, &[link_text_id]);
-        new_children.push(link_id);
-
-        if preceded_by_open_bracket[idx] && raw_e > e {
-            let chunk = &text[e..raw_e];
-            let new_text_id = arena.alloc_node(MdastNodeType::Text as u8);
-            let chunk_sr = arena.alloc_string(chunk);
-            arena.set_type_data(new_text_id, &chunk_sr.as_bytes());
-            arena.set_position(
-                new_text_id,
-                start_offset + e as u32,
-                start_offset + raw_e as u32,
-                start_line,
-                start_column + e as u32,
-                start_line,
-                start_column + raw_e as u32,
-            );
-            new_children.push(new_text_id);
-            cursor = raw_e;
-        } else {
-            cursor = e;
-        }
-    }
-
-    if cursor < bytes.len() {
-        let chunk = &text[cursor..];
-        let new_text_id = arena.alloc_node(MdastNodeType::Text as u8);
-        let chunk_sr = arena.alloc_string(chunk);
-        arena.set_type_data(new_text_id, &chunk_sr.as_bytes());
-        arena.set_position(
-            new_text_id,
-            start_offset + cursor as u32,
-            start_offset + bytes.len() as u32,
-            start_line,
-            start_column + cursor as u32,
-            start_line,
-            start_column + bytes.len() as u32,
-        );
-        new_children.push(new_text_id);
-    }
-
-    arena.replace_node_with_children(text_id, &new_children);
-}
-
-/// Append a text value as an MDAST Text leaf, merging with the previous
-/// sibling text node when possible. Matches the behavior remark inherits
-/// from `mdast-util-from-markdown`, which coalesces adjacent text nodes
-/// that result from entity decoding, character synthesis, etc.
-#[allow(clippy::too_many_arguments)]
-fn emit_text_merging(
+fn emit_pending_refdef(
     builder: &mut ArenaBuilder<Mdast>,
-    text_value: &str,
-    start: u32,
-    end: u32,
-    start_line: u32,
-    start_col: u32,
-    end_line: u32,
-    end_col: u32,
+    cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
+    source: &str,
+    rd: &PendingRefdef,
 ) {
-    if let Some(pid) = builder.last_sibling_id() {
-        let prev = builder.arena_ref().get_node(pid);
-        if prev.node_type == MdastNodeType::Text as u8 {
-            let prev_data = builder.arena_ref().get_type_data(pid);
-            if prev_data.len() >= 8 {
-                let prev_sr = StringRef::from_bytes(prev_data);
-                let prev_text = builder.arena_ref().get_str(prev_sr);
-                let combined = [prev_text, text_value].concat();
-                let new_sr = builder.alloc_string(&combined);
-                let pn = builder.arena_ref().get_node(pid);
-                builder.update_leaf_full(
-                    pid,
-                    pn.start_offset,
-                    end,
-                    pn.start_line,
-                    pn.start_column,
-                    end_line,
-                    end_col,
-                    &new_sr.as_bytes(),
-                );
-                return;
-            }
-        }
+    let start = rd.span.start as u32;
+    let end = rd.span.end as u32;
+    let (sl, sc) = cursor.offset_to_line_col(start);
+    let (el, ec) = cursor.offset_to_line_col(end);
+    let url_ref = builder.alloc_string(&rd.dest);
+    let title_ref = match &rd.title {
+        Some(t) => builder.alloc_string(t),
+        None => StringRef::empty(),
+    };
+    let raw_label = extract_definition_label(source, start).unwrap_or(rd.label.as_str());
+    let label_ref = match unescape_label_backslashes(raw_label) {
+        Some(unescaped) => builder.alloc_string(&unescaped),
+        None => builder.alloc_string(raw_label),
+    };
+    let identifier_ref = builder.alloc_string(&normalize_identifier(&rd.label));
+    let data = DefinitionData {
+        url: url_ref,
+        title: title_ref,
+        identifier: identifier_ref,
+        label: label_ref,
     }
-    let sr = builder.alloc_string(text_value);
+    .to_bytes();
     builder.add_leaf_full(
-        MdastNodeType::Text as u8,
+        MdastNodeType::Definition as u8,
         start,
         end,
-        start_line,
-        start_col,
-        end_line,
-        end_col,
-        &sr.as_bytes(),
+        sl,
+        sc,
+        el,
+        ec,
+        &data,
     );
 }
 
-/// For each `Text` node that lives directly under a directive's label, scan
-/// for balanced backtick runs and split the text into `text + inlineCode + text`
-/// pieces. This matches the common `:::tip[Set a \`baseUrl\`]` pattern without
-/// needing to re-run the full inline parser on the label substring.
-fn directive_label_inline_code_pass(arena: &mut Arena<Mdast>) {
-    // Collect candidate text node ids first (pair: parent id, text id).
-    let mut candidates: Vec<u32> = Vec::new();
-    for id in 0..arena.len() as u32 {
-        let node = arena.get_node(id);
-        if node.node_type != MdastNodeType::Text as u8 {
+/// Emit any not-yet-emitted refdefs whose source range falls inside the
+/// container span `[container_start, container_end)`. Returns true if at
+/// least one was emitted, so the caller knows it should re-sort the
+/// container's pending children to keep source order.
+fn emit_refdefs_in_container(
+    builder: &mut ArenaBuilder<Mdast>,
+    cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
+    source: &str,
+    pending: &[PendingRefdef],
+    emitted: &mut [bool],
+    container_start: usize,
+    container_end: usize,
+) -> bool {
+    let mut any = false;
+    for (i, rd) in pending.iter().enumerate() {
+        if emitted[i] {
             continue;
         }
-        // Text value must contain a backtick to be worth processing.
-        let data = arena.get_type_data(id);
-        if data.is_empty() {
-            continue;
+        if rd.span.start >= container_start && rd.span.start < container_end {
+            emit_pending_refdef(builder, cursor, source, rd);
+            emitted[i] = true;
+            any = true;
         }
-        let sr = StringRef::from_bytes(data);
-        let text = arena.get_str(sr);
-        if !text.contains('`') {
-            continue;
-        }
-
-        let parent_id = node.parent;
-        let parent = arena.get_node(parent_id);
-        let parent_type = MdastNodeType::from_u8(parent.node_type);
-
-        let is_directive_label = match parent_type {
-            // Text directly under a leaf/text directive — the directive's
-            // children ARE the label.
-            Some(MdastNodeType::LeafDirective | MdastNodeType::TextDirective) => true,
-            // Paragraph under a container directive is the label iff it has
-            // the `directiveLabel:true` marker.
-            Some(MdastNodeType::Paragraph) => {
-                let node_data = arena.get_node_data(parent_id);
-                node_data
-                    .map(|d| d.starts_with(b"{\"directiveLabel\":true}"))
-                    .unwrap_or(false)
-            }
-            _ => false,
-        };
-        if !is_directive_label {
-            continue;
-        }
-        candidates.push(id);
     }
-
-    for text_id in candidates {
-        split_text_on_backticks(arena, text_id);
-    }
+    any
 }
 
-/// Split a `Text` node's value into `text + inlineCode + text …` on balanced
-/// backtick runs. Only handles the simple case (same-length opening/closing
-/// runs, single-line), which is what directive labels carry in practice.
-fn split_text_on_backticks(arena: &mut Arena<Mdast>, text_id: u32) {
-    let data = arena.get_type_data(text_id);
-    if data.is_empty() {
-        return;
-    }
-    let sr = StringRef::from_bytes(data);
-    let text = arena.get_str(sr).to_string();
-    let bytes = text.as_bytes();
-
-    // Find all balanced backtick pairs.
-    #[derive(Clone, Copy)]
-    struct Pair {
-        open_start: usize,
-        open_end: usize,
-        close_start: usize,
-        close_end: usize,
-    }
-    let mut pairs: Vec<Pair> = Vec::new();
-    let mut i = 0;
+/// Normalize wrapped-line leading whitespace inside an inline HTML span:
+/// micromark drops up to 3 columns of indent at the start of each continuation
+/// line (tabs counted as 4-column stops, with any overflow re-emitted as
+/// spaces). Returns `None` when the slice has no continuation line that would
+/// change.
+fn normalize_inline_html_wrap(src: &str) -> Option<String> {
+    let bytes = src.as_bytes();
+    let first_nl = bytes.iter().position(|&b| b == b'\n' || b == b'\r')?;
+    let mut out = String::with_capacity(src.len());
+    out.push_str(&src[..first_nl]);
+    let mut i = first_nl;
     while i < bytes.len() {
-        if bytes[i] != b'`' {
+        if bytes[i] == b'\r' {
+            out.push('\r');
             i += 1;
-            continue;
-        }
-        // Count run length.
-        let open_start = i;
-        while i < bytes.len() && bytes[i] == b'`' {
-            i += 1;
-        }
-        let open_end = i;
-        let run_len = open_end - open_start;
-        // Find matching closing run of the same length.
-        let mut j = i;
-        let matched_close: Option<(usize, usize)> = loop {
-            if j >= bytes.len() {
-                break None;
+            if i < bytes.len() && bytes[i] == b'\n' {
+                out.push('\n');
+                i += 1;
             }
-            if bytes[j] == b'`' {
-                let close_start = j;
-                while j < bytes.len() && bytes[j] == b'`' {
-                    j += 1;
+        } else if bytes[i] == b'\n' {
+            out.push('\n');
+            i += 1;
+        }
+        let mut col = 0usize;
+        while col < 3 && i < bytes.len() {
+            match bytes[i] {
+                b' ' => {
+                    col += 1;
+                    i += 1;
                 }
-                let close_end = j;
-                if close_end - close_start == run_len {
-                    break Some((close_start, close_end));
-                }
-                // Not a match; skip this run and continue searching.
-                continue;
-            }
-            j += 1;
-        };
-        if let Some((cs, ce)) = matched_close {
-            pairs.push(Pair {
-                open_start,
-                open_end,
-                close_start: cs,
-                close_end: ce,
-            });
-            i = ce;
-        }
-    }
-
-    if pairs.is_empty() {
-        return;
-    }
-
-    // Build the replacement child list.
-    let node = arena.get_node(text_id);
-    let base_start = node.start_offset;
-    let base_line = node.start_line;
-    let base_col = node.start_column;
-
-    let mut new_children: Vec<u32> = Vec::new();
-    let mut cursor = 0usize;
-    for p in pairs {
-        // Leading plain text.
-        if p.open_start > cursor {
-            let segment = &text[cursor..p.open_start];
-            if !segment.is_empty() {
-                let seg_sr = arena.alloc_string(segment);
-                let tid = arena.alloc_node(MdastNodeType::Text as u8);
-                arena.set_type_data(tid, &seg_sr.as_bytes());
-                arena.set_position(
-                    tid,
-                    base_start + cursor as u32,
-                    base_start + p.open_start as u32,
-                    base_line,
-                    base_col + cursor as u32,
-                    base_line,
-                    base_col + p.open_start as u32,
-                );
-                new_children.push(tid);
-            }
-        }
-        // Inline code.
-        let code_value = &text[p.open_end..p.close_start];
-        let code_sr = arena.alloc_string(code_value);
-        let cid = arena.alloc_node(MdastNodeType::InlineCode as u8);
-        arena.set_type_data(cid, &code_sr.as_bytes());
-        arena.set_position(
-            cid,
-            base_start + p.open_start as u32,
-            base_start + p.close_end as u32,
-            base_line,
-            base_col + p.open_start as u32,
-            base_line,
-            base_col + p.close_end as u32,
-        );
-        new_children.push(cid);
-        cursor = p.close_end;
-    }
-    // Trailing plain text.
-    if cursor < text.len() {
-        let segment = &text[cursor..];
-        let seg_sr = arena.alloc_string(segment);
-        let tid = arena.alloc_node(MdastNodeType::Text as u8);
-        arena.set_type_data(tid, &seg_sr.as_bytes());
-        arena.set_position(
-            tid,
-            base_start + cursor as u32,
-            base_start + text.len() as u32,
-            base_line,
-            base_col + cursor as u32,
-            base_line,
-            base_col + text.len() as u32,
-        );
-        new_children.push(tid);
-    }
-
-    arena.replace_node_with_children(text_id, &new_children);
-}
-
-/// Post-pass matching `directive_label_inline_code_pass` for JSX tags. For
-/// each `Text` node directly under a directive label, split on balanced
-/// `<Name>…</Name>` (or self-closing `<Name/>`) runs and emit
-/// `mdxJsxTextElement` children. Also splits on balanced `{…}` spans and
-/// emits `mdxTextExpression` nodes.
-fn directive_label_jsx_pass(arena: &mut Arena<Mdast>) {
-    let mut candidates: Vec<u32> = Vec::new();
-    for id in 0..arena.len() as u32 {
-        let node = arena.get_node(id);
-        if node.node_type != MdastNodeType::Text as u8 {
-            continue;
-        }
-        let data = arena.get_type_data(id);
-        if data.is_empty() {
-            continue;
-        }
-        let sr = StringRef::from_bytes(data);
-        let text = arena.get_str(sr);
-        if !text.contains('<') && !text.contains('{') {
-            continue;
-        }
-        let parent_id = node.parent;
-        let parent = arena.get_node(parent_id);
-        let parent_type = MdastNodeType::from_u8(parent.node_type);
-        let is_directive_label = match parent_type {
-            Some(MdastNodeType::LeafDirective | MdastNodeType::TextDirective) => true,
-            Some(MdastNodeType::Paragraph) => arena
-                .get_node_data(parent_id)
-                .map(|d| d.starts_with(b"{\"directiveLabel\":true}"))
-                .unwrap_or(false),
-            _ => false,
-        };
-        if !is_directive_label {
-            continue;
-        }
-        candidates.push(id);
-    }
-    for text_id in candidates {
-        split_text_on_jsx_tags(arena, text_id);
-    }
-    // Second pass picks up text nodes created by the first split and emits
-    // MDX text expressions for `{…}` runs.
-    let mut expr_candidates: Vec<u32> = Vec::new();
-    for id in 0..arena.len() as u32 {
-        let node = arena.get_node(id);
-        if node.node_type != MdastNodeType::Text as u8 {
-            continue;
-        }
-        let data = arena.get_type_data(id);
-        if data.is_empty() {
-            continue;
-        }
-        let sr = StringRef::from_bytes(data);
-        let text = arena.get_str(sr);
-        if !text.contains('{') {
-            continue;
-        }
-        let parent_id = node.parent;
-        let parent = arena.get_node(parent_id);
-        let parent_type = MdastNodeType::from_u8(parent.node_type);
-        let in_label = match parent_type {
-            Some(MdastNodeType::LeafDirective | MdastNodeType::TextDirective) => true,
-            Some(MdastNodeType::Paragraph) => arena
-                .get_node_data(parent_id)
-                .map(|d| d.starts_with(b"{\"directiveLabel\":true}"))
-                .unwrap_or(false),
-            // Also handle the children of a JSX text element created by the
-            // first pass — they also live under a directive label.
-            Some(MdastNodeType::MdxJsxTextElement) => {
-                let grandparent_id = parent.parent;
-                if grandparent_id == u32::MAX {
-                    false
-                } else {
-                    let grandparent = arena.get_node(grandparent_id);
-                    let gp_type = MdastNodeType::from_u8(grandparent.node_type);
-                    matches!(
-                        gp_type,
-                        Some(MdastNodeType::LeafDirective | MdastNodeType::TextDirective)
-                    ) || (gp_type == Some(MdastNodeType::Paragraph)
-                        && arena
-                            .get_node_data(grandparent_id)
-                            .map(|d| d.starts_with(b"{\"directiveLabel\":true}"))
-                            .unwrap_or(false))
-                }
-            }
-            _ => false,
-        };
-        if !in_label {
-            continue;
-        }
-        expr_candidates.push(id);
-    }
-    for text_id in expr_candidates {
-        split_text_on_mdx_expressions(arena, text_id);
-    }
-}
-
-/// Split a `Text` node on `{…}` spans (balanced braces, JS-aware) and emit
-/// `mdxTextExpression` nodes for the matched spans.
-fn split_text_on_mdx_expressions(arena: &mut Arena<Mdast>, text_id: u32) {
-    use crate::mdx::scan_mdx_inline_expression;
-    let data = arena.get_type_data(text_id);
-    if data.is_empty() {
-        return;
-    }
-    let sr = StringRef::from_bytes(data);
-    let text = arena.get_str(sr).to_string();
-    let bytes = text.as_bytes();
-    let mut spans: Vec<(usize, usize, usize, usize)> = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'{' {
-            i += 1;
-            continue;
-        }
-        let Some((content_start, content_end, total_len)) = scan_mdx_inline_expression(&bytes[i..])
-        else {
-            i += 1;
-            continue;
-        };
-        spans.push((i, i + total_len, i + content_start, i + content_end));
-        i += total_len;
-    }
-    if spans.is_empty() {
-        return;
-    }
-    let node = arena.get_node(text_id);
-    let base_start = node.start_offset;
-    let base_line = node.start_line;
-    let base_col = node.start_column;
-
-    let mut new_children: Vec<u32> = Vec::new();
-    let mut cursor = 0usize;
-    for (span_start, span_end, content_start, content_end) in spans {
-        if span_start > cursor {
-            let seg = &text[cursor..span_start];
-            let seg_sr = arena.alloc_string(seg);
-            let tid = arena.alloc_node(MdastNodeType::Text as u8);
-            arena.set_type_data(tid, &seg_sr.as_bytes());
-            arena.set_position(
-                tid,
-                base_start + cursor as u32,
-                base_start + span_start as u32,
-                base_line,
-                base_col + cursor as u32,
-                base_line,
-                base_col + span_start as u32,
-            );
-            new_children.push(tid);
-        }
-        let content = &text[content_start..content_end];
-        let content_sr = arena.alloc_string(content);
-        let eid = arena.alloc_node(MdastNodeType::MdxTextExpression as u8);
-        arena.set_type_data(eid, &content_sr.as_bytes());
-        arena.set_position(
-            eid,
-            base_start + span_start as u32,
-            base_start + span_end as u32,
-            base_line,
-            base_col + span_start as u32,
-            base_line,
-            base_col + span_end as u32,
-        );
-        new_children.push(eid);
-        cursor = span_end;
-    }
-    if cursor < text.len() {
-        let seg = &text[cursor..];
-        let seg_sr = arena.alloc_string(seg);
-        let tid = arena.alloc_node(MdastNodeType::Text as u8);
-        arena.set_type_data(tid, &seg_sr.as_bytes());
-        arena.set_position(
-            tid,
-            base_start + cursor as u32,
-            base_start + text.len() as u32,
-            base_line,
-            base_col + cursor as u32,
-            base_line,
-            base_col + text.len() as u32,
-        );
-        new_children.push(tid);
-    }
-    arena.replace_node_with_children(text_id, &new_children);
-}
-
-/// Split a `Text` node on `<Name>…</Name>` / `<Name/>` spans, producing
-/// `mdxJsxTextElement` nodes for the matched spans. The inner content of a
-/// matched open/close pair becomes a child `Text` node (no recursion — nested
-/// JSX inside a directive label is rare enough that a single-level split
-/// covers the conformance cases).
-fn split_text_on_jsx_tags(arena: &mut Arena<Mdast>, text_id: u32) {
-    use crate::mdx::{parse_jsx_tag, scan_mdx_inline_jsx};
-    let data = arena.get_type_data(text_id);
-    if data.is_empty() {
-        return;
-    }
-    let sr = StringRef::from_bytes(data);
-    let text = arena.get_str(sr).to_string();
-    let bytes = text.as_bytes();
-
-    #[derive(Clone)]
-    enum Span {
-        SelfClosing {
-            start: usize,
-            end: usize,
-            name: alloc::string::String,
-        },
-        Paired {
-            start: usize,
-            open_end: usize,
-            close_start: usize,
-            end: usize,
-            name: alloc::string::String,
-        },
-    }
-
-    let mut spans: Vec<Span> = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'<' {
-            i += 1;
-            continue;
-        }
-        let Some(tag_end) = scan_mdx_inline_jsx(&bytes[i..]) else {
-            i += 1;
-            continue;
-        };
-        let tag_raw = &text[i..i + tag_end];
-        let jsx = parse_jsx_tag(tag_raw);
-        if jsx.is_closing {
-            i += tag_end;
-            continue;
-        }
-        if jsx.is_self_closing {
-            spans.push(Span::SelfClosing {
-                start: i,
-                end: i + tag_end,
-                name: jsx.name.to_string(),
-            });
-            i += tag_end;
-            continue;
-        }
-        // Opening tag — scan forward for a matching `</name>`.
-        let name = jsx.name.to_string();
-        let open_end = i + tag_end;
-        let mut j = open_end;
-        let mut close_span: Option<(usize, usize)> = None;
-        while j < bytes.len() {
-            if bytes[j] != b'<' {
-                j += 1;
-                continue;
-            }
-            let Some(inner_tag_end) = scan_mdx_inline_jsx(&bytes[j..]) else {
-                j += 1;
-                continue;
-            };
-            let inner_tag = &text[j..j + inner_tag_end];
-            let inner_jsx = parse_jsx_tag(inner_tag);
-            if inner_jsx.is_closing && inner_jsx.name.as_ref() == name.as_str() {
-                close_span = Some((j, j + inner_tag_end));
-                break;
-            }
-            j += inner_tag_end;
-        }
-        if let Some((close_start, close_end)) = close_span {
-            spans.push(Span::Paired {
-                start: i,
-                open_end,
-                close_start,
-                end: close_end,
-                name,
-            });
-            i = close_end;
-        } else {
-            i = open_end;
-        }
-    }
-
-    if spans.is_empty() {
-        return;
-    }
-
-    let node = arena.get_node(text_id);
-    let base_start = node.start_offset;
-    let base_line = node.start_line;
-    let base_col = node.start_column;
-
-    let push_text = |arena: &mut Arena<Mdast>,
-                     out: &mut Vec<u32>,
-                     segment: &str,
-                     seg_start: usize,
-                     seg_end: usize| {
-        if segment.is_empty() {
-            return;
-        }
-        let seg_sr = arena.alloc_string(segment);
-        let tid = arena.alloc_node(MdastNodeType::Text as u8);
-        arena.set_type_data(tid, &seg_sr.as_bytes());
-        arena.set_position(
-            tid,
-            base_start + seg_start as u32,
-            base_start + seg_end as u32,
-            base_line,
-            base_col + seg_start as u32,
-            base_line,
-            base_col + seg_end as u32,
-        );
-        out.push(tid);
-    };
-
-    let mut new_children: Vec<u32> = Vec::new();
-    let mut cursor = 0usize;
-    for span in spans {
-        match span {
-            Span::SelfClosing { start, end, name } => {
-                push_text(
-                    arena,
-                    &mut new_children,
-                    &text[cursor..start],
-                    cursor,
-                    start,
-                );
-                let name_sr = arena.alloc_string(&name);
-                let jsx_data = satteri_ast::mdast::encode_mdx_jsx_element_data(name_sr, &[], true);
-                let jid = arena.alloc_node(MdastNodeType::MdxJsxTextElement as u8);
-                arena.set_type_data(jid, &jsx_data);
-                arena.set_node_data(jid, MDX_EXPLICIT_JSX_DATA.to_vec());
-                arena.set_position(
-                    jid,
-                    base_start + start as u32,
-                    base_start + end as u32,
-                    base_line,
-                    base_col + start as u32,
-                    base_line,
-                    base_col + end as u32,
-                );
-                new_children.push(jid);
-                cursor = end;
-            }
-            Span::Paired {
-                start,
-                open_end,
-                close_start,
-                end,
-                name,
-            } => {
-                push_text(
-                    arena,
-                    &mut new_children,
-                    &text[cursor..start],
-                    cursor,
-                    start,
-                );
-                let name_sr = arena.alloc_string(&name);
-                let jsx_data = satteri_ast::mdast::encode_mdx_jsx_element_data(name_sr, &[], true);
-                let jid = arena.alloc_node(MdastNodeType::MdxJsxTextElement as u8);
-                arena.set_type_data(jid, &jsx_data);
-                arena.set_node_data(jid, MDX_EXPLICIT_JSX_DATA.to_vec());
-                arena.set_position(
-                    jid,
-                    base_start + start as u32,
-                    base_start + end as u32,
-                    base_line,
-                    base_col + start as u32,
-                    base_line,
-                    base_col + end as u32,
-                );
-                // Inner text child.
-                let inner = &text[open_end..close_start];
-                if !inner.is_empty() {
-                    let inner_sr = arena.alloc_string(inner);
-                    let cid = arena.alloc_node(MdastNodeType::Text as u8);
-                    arena.set_type_data(cid, &inner_sr.as_bytes());
-                    arena.set_position(
-                        cid,
-                        base_start + open_end as u32,
-                        base_start + close_start as u32,
-                        base_line,
-                        base_col + open_end as u32,
-                        base_line,
-                        base_col + close_start as u32,
-                    );
-                    arena.set_children(jid, &[cid]);
-                }
-                new_children.push(jid);
-                cursor = end;
-            }
-        }
-    }
-    push_text(
-        arena,
-        &mut new_children,
-        &text[cursor..],
-        cursor,
-        text.len(),
-    );
-
-    arena.replace_node_with_children(text_id, &new_children);
-}
-
-fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
-    let len = arena.len() as u32;
-    // Only paragraphs containing inline MDX nodes can be promoted; without
-    // any in the arena the per-paragraph work below is guaranteed wasted.
-    let has_inline_mdx = (0..len).any(|id| {
-        matches!(
-            MdastNodeType::from_u8(arena.get_node(id).node_type),
-            Some(MdastNodeType::MdxJsxTextElement | MdastNodeType::MdxTextExpression),
-        )
-    });
-    if !has_inline_mdx {
-        return;
-    }
-    for id in 0..len {
-        let node = arena.get_node(id);
-        if node.node_type != MdastNodeType::Paragraph as u8 {
-            continue;
-        }
-        let children = arena.get_children(id).to_vec();
-        if children.is_empty() {
-            continue;
-        }
-        let mut all_mdx = true;
-        let mut has_mdx = false;
-        for &child_id in &children {
-            let child = arena.get_node(child_id);
-            match MdastNodeType::from_u8(child.node_type) {
-                Some(MdastNodeType::MdxJsxTextElement | MdastNodeType::MdxTextExpression) => {
-                    has_mdx = true;
-                }
-                Some(MdastNodeType::Text) => {
-                    let data = arena.get_type_data(child_id);
-                    if !data.is_empty() {
-                        let sr = decode_string_ref_data(data);
-                        let text = arena.get_str(sr);
-                        if !text.chars().all(|c| c.is_ascii_whitespace()) {
-                            all_mdx = false;
-                            break;
+                b'\t' => {
+                    let tab_cols = 4 - (col % 4);
+                    if col + tab_cols <= 3 {
+                        col += tab_cols;
+                        i += 1;
+                    } else {
+                        let leftover = col + tab_cols - 3;
+                        for _ in 0..leftover {
+                            out.push(' ');
                         }
+                        i += 1;
+                        col = 3;
                     }
                 }
-                _ => {
-                    all_mdx = false;
-                    break;
-                }
+                _ => break,
             }
         }
-        if !all_mdx || !has_mdx {
-            continue;
+        let line_start = i;
+        while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
+            i += 1;
         }
-        let mut promoted: Vec<u32> = Vec::new();
-        for &child_id in &children {
-            let child = arena.get_node(child_id);
-            match MdastNodeType::from_u8(child.node_type) {
-                Some(MdastNodeType::MdxJsxTextElement) => {
-                    arena.get_node_mut(child_id).node_type = MdastNodeType::MdxJsxFlowElement as u8;
-                    promoted.push(child_id);
-                }
-                Some(MdastNodeType::MdxTextExpression) => {
-                    arena.get_node_mut(child_id).node_type = MdastNodeType::MdxFlowExpression as u8;
-                    promoted.push(child_id);
-                }
-                Some(MdastNodeType::Text) => {
-                    let data = arena.get_type_data(child_id);
-                    if !data.is_empty() {
-                        let sr = decode_string_ref_data(data);
-                        let text = arena.get_str(sr);
-                        if !text.chars().all(|c| c.is_ascii_whitespace()) {
-                            promoted.push(child_id);
-                        }
-                    }
-                }
-                _ => {
-                    promoted.push(child_id);
-                }
-            }
-        }
-        arena.replace_node_with_children(id, &promoted);
+        out.push_str(&src[line_start..i]);
+    }
+    if out == src {
+        None
+    } else {
+        Some(out)
     }
 }
 
-/// Pulldown-cmark sets the Link/Image node's `item.end` to the end of the
-/// *shortcut* label (first `]`) for Collapsed references — the trailing `[]`
-/// is "consumed" by the parser but not included in the span. Remark's mdast
-/// includes the whole `[...][]`, so extend by 2 bytes when the source bytes
-/// there actually are `[]`.
 fn reference_end(
     source: &str,
-    cursor: &mut satteri_arena::LineIndexCursor<'_>,
+    cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     end: u32,
     kind: u8,
 ) -> (u32, u32, u32) {
@@ -3117,6 +1955,59 @@ fn reference_end(
 ///
 /// `end` must already be the adjusted end from `reference_end` (so Collapsed
 /// extends past `[]`).
+/// Extract the verbatim text between `[` and the matching `]` for a link
+/// reference definition, treating `\X` as a 2-byte escape (so an escaped `]`
+/// inside the label doesn't terminate the scan).
+/// Resolve `\X` escape sequences for ASCII punctuation in a definition or
+/// reference label, matching remark's behaviour. Returns `None` when there's
+/// nothing to change so the caller can keep using the source slice directly.
+fn unescape_label_backslashes(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if !bytes.contains(&b'\\') {
+        return None;
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    let mut i = 0;
+    let mut changed = false;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 1 < bytes.len()
+            && crate::puncttable::is_ascii_punctuation(bytes[i + 1])
+        {
+            out.push_str(&s[last..i]);
+            out.push(bytes[i + 1] as char);
+            i += 2;
+            last = i;
+            changed = true;
+        } else {
+            i += 1;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    out.push_str(&s[last..]);
+    Some(out)
+}
+
+fn extract_definition_label(source: &str, start: u32) -> Option<&str> {
+    let bytes = source.as_bytes();
+    let open = start as usize;
+    if open >= bytes.len() || bytes[open] != b'[' {
+        return None;
+    }
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if i + 1 < bytes.len() => i += 2,
+            b']' => return Some(&source[open + 1..i]),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 fn extract_reference_label(source: &str, start: u32, end: u32, kind: u8, is_image: bool) -> &str {
     let bytes = source.as_bytes();
     let inner_start = if is_image {
@@ -3126,10 +2017,22 @@ fn extract_reference_label(source: &str, start: u32, end: u32, kind: u8, is_imag
     };
     if kind == 2 {
         // Full `[text][label]`: walk back from `end` (past closing `]`) to
-        // find the matching `[`.
+        // find the matching `[`. Skip escaped `\[` — a bracket is escaped
+        // when preceded by an odd number of backslashes.
         let close2 = end as usize - 1; // position of the second `]`
         let mut open2 = close2;
-        while open2 > inner_start && bytes[open2 - 1] != b'[' {
+        while open2 > inner_start {
+            if bytes[open2 - 1] == b'[' {
+                let mut bs = 0usize;
+                let mut k = open2 - 1;
+                while k > inner_start && bytes[k - 1] == b'\\' {
+                    bs += 1;
+                    k -= 1;
+                }
+                if bs.is_multiple_of(2) {
+                    break;
+                }
+            }
             open2 -= 1;
         }
         return &source[open2..close2];

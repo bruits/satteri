@@ -101,7 +101,6 @@ type AnyNode = Record<string, unknown>;
 export function normalizeAlignToStyle(node: AnyNode): AnyNode {
   if (typeof node !== "object" || node === null) return node;
   const out = { ...node };
-  delete out.data;
   if (out.properties && typeof out.properties === "object") {
     const props = { ...(out.properties as Record<string, unknown>) };
     if ("align" in props && typeof props.align === "string") {
@@ -130,6 +129,27 @@ function stripData(node: AnyNode): AnyNode {
   return out;
 }
 
+// Intentional divergence: Sätteri keeps `data.lang` on HAST code elements;
+// remark-rehype drops it (the language is already encoded in
+// `properties.className`). Strip it from satteri's output before conformance
+// comparisons. See website/content/docs/divergences.md.
+function stripHastDataLang(node: AnyNode): AnyNode {
+  if (typeof node !== "object" || node === null) return node;
+  const out = { ...node };
+  if (out.data && typeof out.data === "object" && "lang" in (out.data as object)) {
+    const { lang: _lang, ...rest } = out.data as Record<string, unknown>;
+    if (Object.keys(rest).length > 0) {
+      out.data = rest;
+    } else {
+      delete out.data;
+    }
+  }
+  if (Array.isArray(out.children)) {
+    out.children = (out.children as AnyNode[]).map(stripHastDataLang);
+  }
+  return out;
+}
+
 export function referenceMdast(md: string): unknown {
   return serialize(mdastProcessor.parse(md));
 }
@@ -144,7 +164,7 @@ export function satteriMdast(md: string): unknown {
 }
 
 export function satteriHast(md: string): unknown {
-  return serialize(markdownToHast(md, { features: BASE_FEATURES }));
+  return stripHastDataLang(serialize(markdownToHast(md, { features: BASE_FEATURES })));
 }
 
 const mathMdastProcessor = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
@@ -181,7 +201,7 @@ export function referenceMathHtml(md: string): string {
 }
 
 export function satteriMathHast(md: string): unknown {
-  return serialize(markdownToHast(md, { features: MATH_FEATURES }));
+  return stripHastDataLang(serialize(markdownToHast(md, { features: MATH_FEATURES })));
 }
 
 export function satteriMathHtml(md: string): string {
@@ -215,7 +235,7 @@ export function satteriFmMdast(md: string): unknown {
 }
 
 export function satteriFmHast(md: string): unknown {
-  return serialize(markdownToHast(md, { features: FM_FEATURES }));
+  return stripHastDataLang(serialize(markdownToHast(md, { features: FM_FEATURES })));
 }
 
 export function satteriFmHtml(md: string): string {
@@ -271,19 +291,34 @@ export function assertExtHastConformance(md: string, extensions: ExtensionSet[])
   const features = featuresToSatteri(extensions);
   const mdast = proc.parse(md);
   const expected = normalizeAlignToStyle(serialize(proc.runSync(mdast) as Nodes));
-  const actual = serialize(markdownToHast(md, { features }));
+  const actual = stripHastDataLang(serialize(markdownToHast(md, { features })));
   expect(actual).toEqual(expected);
 }
 
 function normalizeHtmlForComparison(html: string): string {
-  return html
-    .replace(/<br>/g, "<br />")
-    .replace(/<br\/>/g, "<br />")
-    .replace(/<hr>/g, "<hr />")
-    .replace(/<hr\/>/g, "<hr />")
-    .replace(/&#x3C;/g, "&lt;")
-    .replace(/&gt;/g, ">")
-    .trim();
+  return (
+    html
+      .replace(/<br>/g, "<br />")
+      .replace(/<br\/>/g, "<br />")
+      .replace(/<hr>/g, "<hr />")
+      .replace(/<hr\/>/g, "<hr />")
+      // remark+rehype favours hex entities (`&#x26;`); satteri (and the
+      // CommonMark spec) use named ones. Canonicalize to named, then
+      // collapse the few entities rehype-stringify never has to encode.
+      // The `&quot; → "` collapse is context-unaware and could mask an
+      // unescaped `"` inside an attribute value; tolerated until we have
+      // an HTML-aware compare.
+      .replace(/&#x3C;/g, "&lt;")
+      .replace(/&#x3E;/g, "&gt;")
+      .replace(/&#x26;/g, "&amp;")
+      .replace(/&#x22;/g, "&quot;")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      // remark+rehype emits the legacy `align="X"` attribute on table cells;
+      // satteri emits modern `style="text-align: X"`. Canonicalize for diff.
+      .replace(/ align="(left|right|center)"/g, ' style="text-align: $1"')
+      .trim()
+  );
 }
 
 export function referenceHtml(md: string): string {

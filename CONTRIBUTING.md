@@ -37,7 +37,18 @@ Any issue, PR, or discussion that violates our [code of conduct](./CODE_OF_CONDU
 
 ## Getting Started
 
-Sätteri is a Rust + TypeScript monorepo. The Rust workspace lives at the repository root (`Cargo.toml`), and the npm package lives under `packages/satteri`. Prerequisites: latest stable [Rust](https://www.rust-lang.org/), [Node.js](https://nodejs.org/) (latest LTS), and [pnpm](https://pnpm.io/).
+Sätteri is a Rust + TypeScript monorepo. The Rust workspace lives at the repository root (`Cargo.toml`), and the npm package lives under `packages/satteri`.
+
+### Prerequisites
+
+- latest stable [Rust](https://www.rust-lang.org/)
+- [Node.js](https://nodejs.org/) (latest LTS)
+- [pnpm](https://pnpm.io/)
+
+### Initial set-up
+
+- Install Node dependencies by running `pnpm install`
+- Build the project by running `cargo build`
 
 ### Project Structure
 

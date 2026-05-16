@@ -176,10 +176,10 @@ export function materializeNode(reader: MdastReader, nodeId: number): MdastNode 
   const nodeType = rawNode.type;
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
-  const node = {
-    type: typeName,
-    position: rawNode.position,
-  } as MdastNode;
+  const node = { type: typeName } as MdastNode;
+  if (rawNode.position !== undefined) {
+    (node as { position: typeof rawNode.position }).position = rawNode.position;
+  }
 
   // _nodeId: non-enumerable internal reference
   Object.defineProperty(node, "_nodeId", {
@@ -191,6 +191,27 @@ export function materializeNode(reader: MdastReader, nodeId: number): MdastNode 
 
   // Type-specific lazy properties
   addTypeProperties(node, reader, nodeId, nodeType);
+
+  // Plugin-set `data` survives the visitor walk via its own getter but
+  // would be dropped when materialized from a serialized handle.
+  const rawData = reader.getNodeData(nodeId);
+  if (rawData !== null) {
+    try {
+      const parsed = JSON.parse(rawData) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
+        Object.defineProperty(node, "data", {
+          value: parsed,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`materializeNode: malformed node_data for nodeId=${nodeId}`, err);
+      }
+    }
+  }
 
   // children: lazy getter (only for non-leaf nodes)
   if (!LEAF_TYPES.has(nodeType)) {

@@ -33,12 +33,14 @@ This~~is~~stricken
 ````````````````````````````````
 
 Punctuation is ignored for purposes of determining
-flankingness on two tildes:
+flankingness on two tildes by cmark-gfm, but remark/micromark
+applies the standard delimiter-run rule and keeps `~~!~~` literal.
+satteri targets remark conformance.
 
 ```````````````````````````````` example
 Here I strike out an exclamation point~~!~~.
 .
-<p>Here I strike out an exclamation point<del>!</del>.</p>
+<p>Here I strike out an exclamation point~~!~~.</p>
 ````````````````````````````````
 
 # One tilde

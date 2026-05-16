@@ -42,6 +42,8 @@ jobs:
         with:
           cache-target: release
           bins: cargo-codspeed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build the benchmark target(s)
         run: cargo codspeed build -p satteri-bench
@@ -61,6 +63,8 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: moonrepo/setup-rust@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -75,12 +79,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build NAPI binding
-        run: pnpm run build:native
-        working-directory: packages/satteri
-
-      - name: Build TypeScript
-        run: pnpm run build:ts
+      - name: Build TypeScript and NAPI binding
+        run: pnpm run build
         working-directory: packages/satteri
 
       - name: Run the benchmarks

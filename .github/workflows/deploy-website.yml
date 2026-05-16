@@ -11,6 +11,9 @@ on:
       - "crates/satteri-napi-binding/**"
       - ".github/workflows/deploy-website.yml"
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -40,13 +43,11 @@ jobs:
           targets: wasm32-wasip1-threads
           cache-target: release
           target-dirs: target, website/target
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build WASM binding
+      - name: Build TypeScript and WASM binding
         run: pnpm build:wasm
-        working-directory: packages/satteri
-
-      - name: Build TypeScript
-        run: pnpm build:ts
         working-directory: packages/satteri
 
       - name: Build Website

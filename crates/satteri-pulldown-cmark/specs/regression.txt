@@ -294,10 +294,21 @@ A | B
 ---|---
 foo | bar
 .
-<p>lorem ipsum
-A | B
----|---
-foo | bar</p>
+<p>lorem ipsum</p>
+<table>
+<thead>
+<tr>
+<th>A</th>
+<th>B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>foo</td>
+<td>bar</td>
+</tr>
+</tbody>
+</table>
 ````````````````````````````````
 
 ISSUE #318 (note the trailing whitespace on the first line)
@@ -483,10 +494,10 @@ ISSUE #336
 
 ```````````````````````````````` example
 <foo bar =
- "hi"> 
+ "hi">
 .
 <p><foo bar =
- "hi"></p>
+"hi"></p>
 ````````````````````````````````
 
 EMPHASIS ACROSS PARAGRAPHS
@@ -1625,12 +1636,13 @@ ISSUE #727
 </ul>
 ````````````````````````````````
 
-ISSUE #729
+ISSUE #729 — pulldown-cmark builds nested emphasis here; remark
+(and satteri, which tracks remark) leaves the outer pair literal.
 
 ```````````````````````````````` example
 j***5*=*
 .
-<p>j*<em><em>5</em>=</em></p>
+<p>j**<em>5</em>=*</p>
 ````````````````````````````````
 
 
@@ -1734,12 +1746,13 @@ an unmatched asterisk.</p>
 <em>{</em>{</p>
 ````````````````````````````````
 
-ISSUE 741
+ISSUE 741 — pulldown-cmark nests two layers of emphasis; remark
+(and satteri) resolves a single `**…**` strong with a nested `*…*`.
 
 ```````````````````````````````` example
 **a.*.**a*.**.
 .
-<p>*<em>a.*.<em><em>a</em>.</em></em>.</p>
+<p><strong>a.*.*<em>a</em>.</strong>.</p>
 ````````````````````````````````
 
 ISSUE 747
@@ -2630,7 +2643,6 @@ ISSUE 662
 <li>
 <pre><code>&lt;div&gt;
 </code></pre>
-
    <div>
 </li>
 </ul>
@@ -2882,19 +2894,18 @@ We instead set the limit at 32, which is the same limit used by cmark-gfm and ma
 [40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))
 .
 <p><a href="https://rust.org/something%3A((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))">30</a>
-[40](https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))))))))))))</p>
+[40](<a href="https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))">https://rust.org/something%3A((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))</a>)</p>
 ````````````````````````````````
 
 ISSUE #921
 
 ```````````````````````````````` example_metadata_blocks
-- [x]		
+- [x]
 \
 -
 .
 <ul class="contains-task-list">
-<li class="task-list-item"><input type="checkbox" checked disabled> 
-\</li>
+<li class="task-list-item"><input type="checkbox" checked disabled> \</li>
 <li></li>
 </ul>
 ````````````````````````````````

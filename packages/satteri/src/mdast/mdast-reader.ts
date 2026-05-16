@@ -141,7 +141,33 @@ export class MdastReader {
       typeDataOffset: v.getUint32(32, true),
       sourceLen: v.getUint32(36, true),
       sourceOffset: v.getUint32(40, true),
+      nodeDataCount: v.getUint32(44, true),
+      nodeDataOffset: v.getUint32(48, true),
     };
+  }
+
+  #nodeDataTable: Map<number, string> | null = null;
+
+  /** Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
+   * side). Lazy-builds a `Map<id, string>` on first call so materialization
+   * of a data-heavy tree stays O(nodes) rather than O(nodes × entries). */
+  getNodeData(nodeId: number): string | null {
+    if (this.#header.nodeDataCount === 0) return null;
+    if (this.#nodeDataTable === null) {
+      this.#nodeDataTable = new Map();
+      const v = this.#view;
+      let pos = this.#header.nodeDataOffset;
+      for (let i = 0; i < this.#header.nodeDataCount; i++) {
+        const id = v.getUint32(pos, true);
+        pos += 4;
+        const len = v.getUint32(pos, true);
+        pos += 4;
+        const slice = new Uint8Array(this.#view.buffer, this.#view.byteOffset + pos, len);
+        this.#nodeDataTable.set(id, this.#textDecoder.decode(slice));
+        pos += len;
+      }
+    }
+    return this.#nodeDataTable.get(nodeId) ?? null;
   }
 
   get nodeCount(): number {
@@ -183,23 +209,32 @@ export class MdastReader {
     const base = nodesOffset + nodeId * nodeStructSize;
     const v = this.#view;
     const type = v.getUint8(base + FIELD.node_type);
+    const startLine = v.getUint32(base + FIELD.start_line, true);
+    const startOffset = v.getUint32(base + FIELD.start_offset, true);
+    // Sentinel: nodes with both line=0 and offset=0 are synthesized
+    // without source position (e.g. GFM autolink-literal nodes that
+    // remark-gfm produces via mdast-util-find-and-replace).
+    const position =
+      startLine === 0 && startOffset === 0
+        ? undefined
+        : {
+            start: {
+              offset: startOffset,
+              line: startLine,
+              column: v.getUint32(base + FIELD.start_column, true),
+            },
+            end: {
+              offset: v.getUint32(base + FIELD.end_offset, true),
+              line: v.getUint32(base + FIELD.end_line, true),
+              column: v.getUint32(base + FIELD.end_column, true),
+            },
+          };
     return {
       id: v.getUint32(base + FIELD.id, true),
       type,
       typeName: NodeTypeName[type] ?? `Unknown(${type})`,
       parent: v.getUint32(base + FIELD.parent, true),
-      position: {
-        start: {
-          offset: v.getUint32(base + FIELD.start_offset, true),
-          line: v.getUint32(base + FIELD.start_line, true),
-          column: v.getUint32(base + FIELD.start_column, true),
-        },
-        end: {
-          offset: v.getUint32(base + FIELD.end_offset, true),
-          line: v.getUint32(base + FIELD.end_line, true),
-          column: v.getUint32(base + FIELD.end_column, true),
-        },
-      },
+      position,
       childrenStart: v.getUint32(base + FIELD.children_start, true),
       childrenCount: v.getUint32(base + FIELD.children_count, true),
       dataOffset: v.getUint32(base + FIELD.data_offset, true),

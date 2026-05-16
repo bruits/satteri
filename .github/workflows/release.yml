@@ -22,25 +22,25 @@ jobs:
           # -- macOS --
           - host: macos-latest
             target: x86_64-apple-darwin
-            build: pnpm run build:native --target x86_64-apple-darwin
+            build: pnpm run build:binary:native --target x86_64-apple-darwin
           - host: macos-latest
             target: aarch64-apple-darwin
-            build: pnpm run build:native --target aarch64-apple-darwin
+            build: pnpm run build:binary:native --target aarch64-apple-darwin
 
           # -- Windows --
           - host: windows-latest
             target: x86_64-pc-windows-msvc
-            build: pnpm run build:native --target x86_64-pc-windows-msvc
+            build: pnpm run build:binary:native --target x86_64-pc-windows-msvc
 
           # -- Linux GNU --
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            build: pnpm run build:native --target x86_64-unknown-linux-gnu
+            build: pnpm run build:binary:native --target x86_64-unknown-linux-gnu
 
           # -- WASM --
           - host: ubuntu-latest
             target: wasm32-wasip1-threads
-            build: pnpm run build:native --target wasm32-wasip1-threads
+            build: pnpm run build:binary:wasm
 
     name: Build - ${{ matrix.settings.target }}
     runs-on: ${{ matrix.settings.host }}
@@ -72,6 +72,8 @@ jobs:
           targets: ${{ matrix.settings.target }}
           cache-target: release
           cache-extra-identifier: ${{ matrix.settings.target }}-${{ matrix.settings.host }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         run: pnpm install
@@ -161,7 +163,7 @@ jobs:
         run: pnpm napi pre-publish -t npm --skip-optional-publish --no-gh-release
         working-directory: packages/satteri
 
-      - uses: bruits/sampo/crates/sampo-github-action@main
+      - uses: bruits/sampo/crates/sampo-github-action@f7241754458e1be4073902b2860596340c7d089c # sampo-v0.17.4
         with:
           command: auto
           cargo-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}

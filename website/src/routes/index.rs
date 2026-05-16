@@ -62,6 +62,7 @@ fn hero() -> Markup {
 }
 
 fn demo() -> Markup {
+    let markdown_input_id = "demo-input";
     html! {
         section #demo .border-b.border-border.bg-surface {
             div.max-w-7xl.mx-auto.px-6.py-16 {
@@ -88,19 +89,21 @@ fn demo() -> Markup {
                 div.grid.grid-cols-1.md:grid-cols-2.border.border-border.rounded-sm.overflow-hidden.bg-paper {
                     div.flex.flex-col.border-b.md:border-b-0.md:border-r.border-border {
                         div.px-4.py-2.text-xs.uppercase.tracking-widest.text-paper.bg-ink.font-bold  {
-                            "Markdown"
+                            label for=(markdown_input_id) {
+                                "Markdown"
+                            }
                         }
                         div.relative."flex-1"."min-h-[26rem]"."md:min-h-[36rem]"."max-h-[26rem]"."md:max-h-[36rem]" {
                             pre #demo-highlight .demo-editor-layer.absolute.inset-0.m-0.overflow-auto.pointer-events-none {
                                 code {}
                             }
-                            textarea #demo-input
+                            textarea id=(markdown_input_id)
                                 spellcheck="false"
                                 class="demo-editor-layer absolute inset-0 m-0 resize-none w-full h-full bg-transparent text-transparent caret-ink focus:outline-none" {}
                         }
                     }
                     div.flex.flex-col {
-                        div.px-4.py-2.text-xs.uppercase.tracking-widest.text-paper.bg-ink.font-bold {
+                        h3.px-4.py-2.text-xs.uppercase.tracking-widest.text-paper.bg-ink.font-bold {
                             "Rendered HTML"
                         }
                         div #demo-output .prose."min-h-[26rem]"."md:min-h-[36rem]"."max-h-[26rem]"."md:max-h-[36rem]".overflow-auto.p-4.text-sm.leading-relaxed {}
