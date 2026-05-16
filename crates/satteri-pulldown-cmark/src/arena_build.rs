@@ -1774,6 +1774,26 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         }
     }
 
+    // Precompute per-node code-point offsets so `to_raw_buffer` skips a
+    // second `LineIndex` build + per-node `byte_to_cp_offset` lookup.
+    // ASCII sources skip — `cp == byte` and `to_raw_buffer` won't touch
+    // the cache. The cursor is already warm from the arena walk.
+    if !source.is_ascii() {
+        let mut cp_offsets = Vec::with_capacity(arena.nodes.len());
+        for node in &arena.nodes {
+            let pair = if node.start_line == 0 && node.start_offset == 0 {
+                (0u32, 0u32)
+            } else {
+                (
+                    cursor.byte_to_cp_offset(node.start_offset),
+                    cursor.byte_to_cp_offset(node.end_offset),
+                )
+            };
+            cp_offsets.push(pair);
+        }
+        arena.cp_offsets = cp_offsets;
+    }
+
     (arena, mdx_errors)
 }
 struct PendingRefdef {

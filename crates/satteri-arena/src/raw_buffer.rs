@@ -86,19 +86,37 @@ impl<K: ArenaKind> Arena<K> {
             // start_offset @ 12, end_offset @ 16.
             const START_OFF_FIELD: usize = 12;
             const END_OFF_FIELD: usize = 16;
-            let line_index = LineIndex::from_source(&self.source);
-            let mut cursor = line_index.cursor();
-            for (i, node) in self.nodes.iter().enumerate() {
-                if node.start_line == 0 && node.start_offset == 0 {
-                    continue;
+            let cached = self.cp_offsets.len() == self.nodes.len();
+            if cached {
+                for (i, &(cp_start, cp_end)) in self.cp_offsets.iter().enumerate() {
+                    let node = &self.nodes[i];
+                    if node.start_line == 0 && node.start_offset == 0 {
+                        continue;
+                    }
+                    let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
+                    buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
+                        .copy_from_slice(&cp_start.to_ne_bytes());
+                    buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
+                        .copy_from_slice(&cp_end.to_ne_bytes());
                 }
-                let cp_start = cursor.byte_to_cp_offset(node.start_offset);
-                let cp_end = cursor.byte_to_cp_offset(node.end_offset);
-                let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
-                buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                    .copy_from_slice(&cp_start.to_ne_bytes());
-                buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                    .copy_from_slice(&cp_end.to_ne_bytes());
+            } else {
+                // Fallback: no precomputed cache (e.g. arena assembled
+                // outside `arena_build`, or after plugin mutation). Build
+                // a one-shot LineIndex and convert per node.
+                let line_index = LineIndex::from_source(&self.source);
+                let mut cursor = line_index.cursor();
+                for (i, node) in self.nodes.iter().enumerate() {
+                    if node.start_line == 0 && node.start_offset == 0 {
+                        continue;
+                    }
+                    let cp_start = cursor.byte_to_cp_offset(node.start_offset);
+                    let cp_end = cursor.byte_to_cp_offset(node.end_offset);
+                    let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
+                    buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
+                        .copy_from_slice(&cp_start.to_ne_bytes());
+                    buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
+                        .copy_from_slice(&cp_end.to_ne_bytes());
+                }
             }
         }
 
