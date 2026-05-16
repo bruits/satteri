@@ -369,7 +369,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             orig_start_offset as usize,
                             item.end,
                         ) {
-                            builder.sort_current_pending_children_by_start_offset();
+                            builder.sort_current_pending_children_by_source_order();
                         }
                         let is_spread = *item_spread || {
                             let mut found = false;
@@ -547,7 +547,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             orig_start as usize,
                             item.end,
                         ) {
-                            builder.sort_current_pending_children_by_start_offset();
+                            builder.sort_current_pending_children_by_source_order();
                         }
                         let use_last_child = matches!(
                             item.body,
@@ -1717,7 +1717,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         emitted_any_at_root = true;
     }
     if emitted_any_at_root {
-        builder.sort_current_pending_children_by_start_offset();
+        builder.sort_current_pending_children_by_source_order();
     }
 
     // Close root.

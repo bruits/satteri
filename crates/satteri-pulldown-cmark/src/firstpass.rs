@@ -1825,13 +1825,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // Without this, `{h<}` etc. silently produce a
                             // phantom mdxTextExpression and only error at
                             // JS emit. Allocator is reused across calls.
-                            if let Some(err_offset) = crate::mdx::try_parse_expression_body(
-                                &normalized,
-                                &mut self.mdx_expr_allocator,
-                            ) {
+                            if let Some((err_offset, detail)) =
+                                crate::mdx::try_parse_expression_body(
+                                    &normalized,
+                                    &mut self.mdx_expr_allocator,
+                                )
+                            {
                                 self.mdx_errors.push((
                                     ix + content_start + err_offset,
-                                    "Could not parse expression with oxc".to_string(),
+                                    format!("Could not parse expression with oxc: {detail}"),
                                 ));
                             }
                             let cow_ix = self.allocs.allocate_cow(normalized.into());
@@ -3363,31 +3365,28 @@ fn scan_paragraph_interrupt_no_table(
 /// state up to the enclosing list when a multi-line flow block (JSX or
 /// expression) is consumed atomically.
 /// Return `true` if `pos` sits between two backtick runs of matching length
-/// on the current line. Used to give code spans priority over MDX inline
-/// expressions — `` `{foo}` `` is a code span containing the text `{foo}`,
-/// not an inline expression.
+/// within the current paragraph. Used to give code spans priority over MDX
+/// inline expressions — `` `{foo}` `` is a code span containing the text
+/// `{foo}`, not an inline expression. Code spans can cross newlines, so we
+/// scan the full paragraph (bounded by blank lines) rather than just the
+/// current line.
 fn is_inside_code_span_on_line(bytes: &[u8], pos: usize) -> bool {
-    // Scan backward for the start of the current line.
-    let mut line_start = pos;
-    while line_start > 0 && bytes[line_start - 1] != b'\n' && bytes[line_start - 1] != b'\r' {
-        line_start -= 1;
-    }
-    // Scan forward for the end of the current line.
-    let mut line_end = pos;
-    while line_end < bytes.len() && bytes[line_end] != b'\n' && bytes[line_end] != b'\r' {
-        line_end += 1;
-    }
-    // Collect backtick runs on this line, skipping backslash-escaped ones.
+    // Walk backward to the start of the current paragraph: the first line
+    // after a blank line (or start of input).
+    let para_start = paragraph_start(bytes, pos);
+    let para_end = paragraph_end(bytes, pos);
+    // Collect backtick runs in the paragraph, skipping backslash-escaped
+    // ones.
     let mut runs: Vec<(usize, usize)> = Vec::new(); // (start, count)
-    let mut i = line_start;
-    while i < line_end {
-        if bytes[i] == b'\\' && i + 1 < line_end {
+    let mut i = para_start;
+    while i < para_end {
+        if bytes[i] == b'\\' && i + 1 < para_end {
             i += 2;
             continue;
         }
         if bytes[i] == b'`' {
             let start = i;
-            while i < line_end && bytes[i] == b'`' {
+            while i < para_end && bytes[i] == b'`' {
                 i += 1;
             }
             runs.push((start, i - start));
@@ -3422,6 +3421,68 @@ fn is_inside_code_span_on_line(bytes: &[u8], pos: usize) -> bool {
         }
     }
     false
+}
+
+/// Find the byte offset of the start of the current paragraph (the first
+/// non-blank line going backward, or start of input).
+fn paragraph_start(bytes: &[u8], pos: usize) -> usize {
+    let mut line_start = pos;
+    while line_start > 0 && bytes[line_start - 1] != b'\n' && bytes[line_start - 1] != b'\r' {
+        line_start -= 1;
+    }
+    while line_start > 0 {
+        // Previous line start.
+        let mut prev_line_start = line_start - 1;
+        if prev_line_start > 0
+            && bytes[prev_line_start] == b'\n'
+            && bytes[prev_line_start - 1] == b'\r'
+        {
+            prev_line_start -= 1;
+        }
+        while prev_line_start > 0
+            && bytes[prev_line_start - 1] != b'\n'
+            && bytes[prev_line_start - 1] != b'\r'
+        {
+            prev_line_start -= 1;
+        }
+        // Is the previous line blank?
+        let prev_line = &bytes[prev_line_start..line_start - 1];
+        if prev_line.iter().all(|&b| b == b' ' || b == b'\t') {
+            return line_start;
+        }
+        line_start = prev_line_start;
+    }
+    line_start
+}
+
+/// Find the byte offset of the end of the current paragraph (just before a
+/// blank line, or end of input).
+fn paragraph_end(bytes: &[u8], pos: usize) -> usize {
+    let mut i = pos;
+    // To end of current line.
+    while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b'\r' {
+        i += 1;
+    }
+    while i < bytes.len() {
+        // Past the line ending.
+        let after_eol = if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+            i + 2
+        } else {
+            i + 1
+        };
+        // Find next line ending.
+        let mut next_eol = after_eol;
+        while next_eol < bytes.len() && bytes[next_eol] != b'\n' && bytes[next_eol] != b'\r' {
+            next_eol += 1;
+        }
+        // Is the line between after_eol and next_eol blank?
+        let line = &bytes[after_eol..next_eol];
+        if line.iter().all(|&b| b == b' ' || b == b'\t') {
+            return i;
+        }
+        i = next_eol;
+    }
+    i
 }
 
 /// True if the byte at `pos` sits inside a CommonMark link URL `[...](...)`
@@ -3673,14 +3734,13 @@ fn is_inside_gfm_autolink_url(bytes: &[u8], pos: usize) -> bool {
             b']' if bracket_depth > 0 => bracket_depth -= 1,
             _ => {}
         }
-        // Look for `http`, `https`, `ftp`, or `www`. Keep the prefix scan
-        // narrow — `scan_autolink_literal` will reject false positives
-        // (e.g. preceding-character rule, missing scheme separator) so we
-        // don't need to fully replicate that logic here.
+        // `scan_autolink_literal` rejects false positives, so the prefix
+        // scan only needs to recognize `http(s)` and `www.`. TODO(layering):
+        // move the scanner to a shared module so firstpass doesn't reach
+        // into `post_passes`.
         let prefix_match = bracket_depth == 0
             && ((b == b'h'
                 && (bytes[i..].starts_with(b"http://") || bytes[i..].starts_with(b"https://")))
-                || (b == b'f' && bytes[i..].starts_with(b"ftp://"))
                 || (b == b'w' && bytes[i..].starts_with(b"www.")));
         if prefix_match {
             if let Some((_, raw_end, _, _, _)) = crate::post_passes::scan_autolink_literal(bytes, i)

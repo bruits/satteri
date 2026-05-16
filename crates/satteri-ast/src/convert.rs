@@ -908,12 +908,26 @@ fn encode_code_node_data(lang: &str, meta: &str) -> Vec<u8> {
         }
     }
 
+    // Emit only the keys that have content so plugin-set `data.meta = ""`
+    // can round-trip independently of the converter's behaviour.
     let mut buf = Vec::with_capacity(32 + lang.len() + meta.len());
-    buf.extend_from_slice(b"{\"lang\":\"");
-    json_escape(lang, &mut buf);
-    buf.extend_from_slice(b"\",\"meta\":\"");
-    json_escape(meta, &mut buf);
-    buf.extend_from_slice(b"\"}");
+    buf.push(b'{');
+    let mut first = true;
+    if !lang.is_empty() {
+        buf.extend_from_slice(b"\"lang\":\"");
+        json_escape(lang, &mut buf);
+        buf.push(b'"');
+        first = false;
+    }
+    if !meta.is_empty() {
+        if !first {
+            buf.push(b',');
+        }
+        buf.extend_from_slice(b"\"meta\":\"");
+        json_escape(meta, &mut buf);
+        buf.push(b'"');
+    }
+    buf.push(b'}');
     buf
 }
 

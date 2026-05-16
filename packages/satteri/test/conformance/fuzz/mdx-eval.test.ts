@@ -32,10 +32,12 @@ describe("fuzz: MDX eval conformance", () => {
       const issuesPath = new URL("./FUZZ-ISSUES-MDX-EVAL.md", import.meta.url);
       writeFileSync(issuesPath, report + "\n");
 
-      const hard = unique.filter((i) => i.kind !== "both-error-disagree");
-      const inputs = hard.map((i) => JSON.stringify(i.input));
+      // All kinds count as failures, including `both-error-disagree`
+      // (mdx-js rejects, satteri evaluates) — those are real coverage
+      // gaps unless explicitly listed in `KNOWN_MDX_EVAL_DIVERGENCES`.
+      const inputs = unique.map((i) => `${i.kind}: ${JSON.stringify(i.input)}`);
       expect
-        .soft(hard, `Found ${hard.length} MDX conformance issue(s):\n${inputs.join("\n")}`)
+        .soft(unique, `Found ${unique.length} MDX conformance issue(s):\n${inputs.join("\n")}`)
         .toHaveLength(0);
     },
     FUZZ_TIMEOUT_MS,

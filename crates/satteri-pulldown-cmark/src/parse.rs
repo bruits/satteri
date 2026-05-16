@@ -2114,24 +2114,7 @@ impl InlineStack {
             self.stack.len(),
             self.get_lowerbound(c, current_count, both),
         );
-        // For `~`/`^` (strikethrough/sub/superscript): walking down the stack
-        // from the top, stop at the first unmatched `*`/`_` opener. Matching
-        // a `~` across an open `*`/`_` would consume the `*`/`_` opener into
-        // the strikethrough body, breaking a candidate emphasis that could
-        // still close later. Micromark gets this for free by phase order:
-        // emphasis resolves before strikethrough, so by the time strikethrough
-        // looks, intervening `*`/`_` have already either matched or been
-        // abandoned. Our single-pass resolver fakes that here.
-        let stop = if c == b'~' || c == b'^' {
-            self.stack[lowerbound..]
-                .iter()
-                .rposition(|el| el.c == b'*' || el.c == b'_')
-                .map(|p| lowerbound + p + 1)
-                .unwrap_or(lowerbound)
-        } else {
-            lowerbound
-        };
-        let res = self.stack[stop..]
+        let res = self.stack[lowerbound..]
             .iter()
             .cloned()
             .enumerate()
@@ -2150,7 +2133,24 @@ impl InlineStack {
             });
 
         if let Some((matching_ix, matching_el)) = res {
-            let matching_ix = matching_ix + stop;
+            let matching_ix = matching_ix + lowerbound;
+            // Phase-ordering approximation for single-`~`/`^` (GFM
+            // strikethrough's `~..~` form and the subscript extension).
+            // Micromark resolves emphasis before these single-char
+            // markers; if the matched `~`/`^` opener has an unmatched
+            // `*`/`_` opener earlier on the stack, that opener was
+            // already pending when `~` opened, so emphasis claims its
+            // pair first. `~~` strikethrough has standalone priority
+            // (matches GFM's two-pass `~~..~~` recognition) and is
+            // unaffected.
+            if (c == b'~' || c == b'^')
+                && run_length == 1
+                && self.stack[..matching_ix]
+                    .iter()
+                    .any(|el| el.c == b'*' || el.c == b'_')
+            {
+                return None;
+            }
             for el in &self.stack[(matching_ix + 1)..] {
                 for i in 0..el.count {
                     tree[el.start + i].item.body = ItemBody::Text {

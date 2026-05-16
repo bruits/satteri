@@ -930,6 +930,15 @@ fn split_text_with_autolinks(arena: &mut Arena<Mdast>, text_id: u32, strict_doma
     // Returns `None` if the bytes diverge in any way other than backslash
     // escapes; we then fall back to text bytes (better-than-nothing).
     let text_to_source: Option<Vec<usize>> = {
+        // Fast-path: text and source slice are identical → identity map,
+        // skip the `bytes.len() + 1` allocation and full walk.
+        if !source_slice.is_empty() && source_slice == bytes {
+            let mut map = Vec::with_capacity(bytes.len() + 1);
+            for i in 0..=bytes.len() {
+                map.push(i);
+            }
+            Some(map)
+        } else {
         let mut map = Vec::with_capacity(bytes.len() + 1);
         let mut s = 0usize;
         let mut t = 0usize;
@@ -1010,6 +1019,7 @@ fn split_text_with_autolinks(arena: &mut Arena<Mdast>, text_id: u32, strict_doma
             Some(map)
         } else {
             None
+        }
         }
     };
 
@@ -1782,6 +1792,10 @@ fn split_text_on_backticks(arena: &mut Arena<Mdast>, text_id: u32) {
         return;
     }
     let sr = StringRef::from_bytes(data);
+    // Fast-path: no backtick anywhere → nothing to split, skip the clone.
+    if memchr::memchr(b'`', arena.get_str(sr).as_bytes()).is_none() {
+        return;
+    }
     let text = arena.get_str(sr).to_string();
     let bytes = text.as_bytes();
 
@@ -2014,6 +2028,10 @@ fn split_text_on_mdx_expressions(arena: &mut Arena<Mdast>, text_id: u32) {
         return;
     }
     let sr = StringRef::from_bytes(data);
+    // Fast-path: no `{` anywhere → no expression spans possible.
+    if memchr::memchr(b'{', arena.get_str(sr).as_bytes()).is_none() {
+        return;
+    }
     let text = arena.get_str(sr).to_string();
     let bytes = text.as_bytes();
     let mut spans: Vec<(usize, usize, usize, usize)> = Vec::new();
@@ -2105,6 +2123,10 @@ fn split_text_on_jsx_tags(arena: &mut Arena<Mdast>, text_id: u32) {
         return;
     }
     let sr = StringRef::from_bytes(data);
+    // Fast-path: no `<` anywhere → no JSX tag spans possible.
+    if memchr::memchr(b'<', arena.get_str(sr).as_bytes()).is_none() {
+        return;
+    }
     let text = arena.get_str(sr).to_string();
     let bytes = text.as_bytes();
 

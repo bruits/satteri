@@ -189,13 +189,12 @@ impl<'a> LineStart<'a> {
         n_space
     }
 
-    /// Scan all available ASCII whitespace (not including eol).
+    /// Scan all available ASCII whitespace (not including eol). Routes
+    /// through `scan_space_inner` so `tab_start` advances with each tab —
+    /// callers that follow up with column-aware scans need the updated
+    /// tab-stop offset.
     pub(crate) fn scan_all_space(&mut self) {
-        self.spaces_remaining = 0;
-        self.ix += self.bytes[self.ix..]
-            .iter()
-            .take_while(|&&b| b == b' ' || b == b'\t')
-            .count();
+        let _ = self.scan_space_inner(usize::MAX);
     }
 
     /// Determine whether we're at end of line (includes end of file).
@@ -1612,8 +1611,16 @@ pub(crate) fn scan_inline_html_comment(
         b'[' if bytes[ix..].starts_with(b"CDATA[") && ix > scan_guard.cdata => {
             ix += b"CDATA[".len();
             loop {
-                let x = memchr(b']', &bytes[ix..])?;
+                let Some(x) = memchr(b']', &bytes[ix..]) else {
+                    // No more `]` in this slice: subsequent CDATA scans
+                    // over the same span would re-walk the same bytes.
+                    // Advance the guard so they short-circuit, matching
+                    // the comment/declaration arms above.
+                    scan_guard.cdata = bytes.len();
+                    return None;
+                };
                 ix += x;
+                scan_guard.cdata = ix;
                 let close_brackets = scan_ch_repeat(&bytes[ix..], b']');
                 if close_brackets >= 2 && bytes.get(ix + close_brackets) == Some(&b'>') {
                     return Some(ix + close_brackets + 1);

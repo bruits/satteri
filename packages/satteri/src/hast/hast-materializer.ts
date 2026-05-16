@@ -127,30 +127,6 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
         configurable: true,
         enumerable: true,
       });
-      // Optional `data` field — currently set by the mdast→hast converter
-      // for code blocks (`data.lang` + `data.meta` from the fenced info
-      // string). remark-rehype drops `lang` (it's redundant with
-      // `properties.className`); we keep it as an intentional divergence
-      // (see website/content/docs/divergences.md).
-      const rawData = reader.getNodeData(nodeId);
-      if (rawData !== null) {
-        try {
-          const parsed = JSON.parse(rawData) as Record<string, unknown>;
-          if (parsed && typeof parsed === "object" && "meta" in parsed && parsed.meta === "") {
-            delete parsed.meta;
-          }
-          if (parsed && Object.keys(parsed).length > 0) {
-            Object.defineProperty(node, "data", {
-              value: parsed,
-              writable: true,
-              configurable: true,
-              enumerable: true,
-            });
-          }
-        } catch {
-          /* malformed JSON — silently drop */
-        }
-      }
       break;
     }
 
@@ -193,6 +169,27 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
         value: lazyProp("value", () => reader.getTextValue(nodeId)),
       });
       break;
+  }
+
+  // Plugins can set `data` on any node type, so rehydrate generically
+  // (see website/content/docs/divergences.md for the code-block case).
+  const rawData = reader.getNodeData(nodeId);
+  if (rawData !== null) {
+    try {
+      const parsed = JSON.parse(rawData) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
+        Object.defineProperty(node, "data", {
+          value: parsed,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`materializeHastNode: malformed node_data for nodeId=${nodeId}`, err);
+      }
+    }
   }
 
   return node;

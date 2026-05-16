@@ -6,7 +6,7 @@ order: 50
 
 Sätteri aims to be as compatible as possible with `remark`, `@mdx-js/mdx` and the greater `unified` ecosystem with regards to the ASTs and results generated.
 
-Typically, differences are unwanted and are bugs to be fixed. However, in certain cases the differences might be more beneficial. For example, `remark`'s might have some sort of old quirk or bugs that wasn't found, or couldn't be fixed easily for some reason. In such cases, Sätteri might choose to diverge from the reference behaviour.
+Typically, differences are unwanted and are bugs to be fixed. However, in certain cases the differences might be more beneficial. For example, `remark` might have some sort of old quirk or a bug that wasn't found, or couldn't be fixed easily for some reason. In such cases, Sätteri might choose to diverge from the reference behaviour.
 
 ## AST
 
@@ -58,16 +58,16 @@ out of the class name can read `data.lang` directly.
 
 GFM tables with column alignment produce different HAST properties.
 
-```html
-<!-- Input -->
-| right | | ----: | | 1 |
-
-<!-- Sätteri -->
-<th style="text-align: right">right</th>
-
-<!-- remark-rehype -->
-<th align="right">right</th>
+```markdown
+| right |
+| ----: |
+| 1     |
 ```
+
+| Parser        | HAST output                                   |
+| ------------- | --------------------------------------------- |
+| Sätteri       | `<th style="text-align: right">right</th>`    |
+| remark-rehype | `<th align="right">right</th>`                |
 
 The HTML renders identically. `align` is deprecated in HTML5 and
 `style` is the modern equivalent, so Sätteri emits `style`. A HAST

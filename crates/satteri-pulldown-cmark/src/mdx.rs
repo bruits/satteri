@@ -10,6 +10,12 @@ use crate::{
     strings::CowStr,
 };
 
+/// Max mutual-recursion depth between `scan_mdx_expression_end_inner` and
+/// `scan_mdx_jsx_tag_end_inner` for inputs like `<a {<b {<c …}/>}/>`. Bounds
+/// the parser stack; once exceeded the scanner returns `None` and the `<` or
+/// `{` is left for the caller to handle as a parse error.
+const MAX_MDX_NESTING: u32 = 32;
+
 /// Strip the micromark `indentSize = 2` prefix from each continuation
 /// line of an MDX expression. Matches `micromark-factory-mdx-expression`
 /// which consumes up to 2 columns of whitespace after a line ending
@@ -298,8 +304,10 @@ pub(crate) enum EsmParseResult {
 /// Accepts a reusable allocator to avoid repeated allocation in the
 /// blank-line retry loop.
 /// Validate an MDX expression body (the bytes between `{` and `}`) as JS.
-/// Returns `Some(offset_within_body)` for the first oxc error, or `None` if
-/// the body parses cleanly.
+/// Returns `Some((offset_within_body, detail))` for the first oxc error, or
+/// `None` if the body parses cleanly. `detail` is the bare oxc message; the
+/// caller prefixes `"Could not parse expression with oxc: "` to match the
+/// `satteri-mdxjs-rs` format.
 ///
 /// We try both parses: a plain program (so `1 + 2`, `{a: 1, b: 2}` after
 /// hoisting via object literal context, statement-bodied things, and
@@ -308,7 +316,10 @@ pub(crate) enum EsmParseResult {
 /// of being misread as `{}` block + unterminated regex). The body is
 /// accepted if either parses cleanly. This mirrors mdx-js, which uses
 /// acorn in expression mode.
-pub(crate) fn try_parse_expression_body(value: &str, allocator: &mut Allocator) -> Option<usize> {
+pub(crate) fn try_parse_expression_body(
+    value: &str,
+    allocator: &mut Allocator,
+) -> Option<(usize, String)> {
     let source_type = SourceType::mjs().with_jsx(true);
 
     // Empty / whitespace-only bodies (`{}`, `{ }`, `{\n}`) are valid per
@@ -334,13 +345,11 @@ pub(crate) fn try_parse_expression_body(value: &str, allocator: &mut Allocator) 
     }
 
     // Fallback: comment-only bodies (`{/* foo */}`) trip the wrapped
-    // parser since `(/* foo */)` is invalid. Strip line + block comments
-    // and recheck against trimmed-empty. Unterminated `/*` rejects rather
-    // than absorbing the rest of the body — matches acorn's behaviour
-    // (mdx-js uses acorn).
-    let mut stripped = String::with_capacity(value.len());
+    // parser since `(/* foo */)` is invalid. Walk past comments and
+    // accept if nothing non-whitespace remains.
     let bytes = value.as_bytes();
     let mut i = 0;
+    let mut has_non_ws = false;
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
             i += 2;
@@ -360,27 +369,32 @@ pub(crate) fn try_parse_expression_body(value: &str, allocator: &mut Allocator) 
                 i += 1;
             }
             if !closed {
-                return Some(comment_start);
+                return Some((
+                    comment_start,
+                    "Unterminated block comment".to_string(),
+                ));
             }
         } else {
-            stripped.push(bytes[i] as char);
+            if !matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
+                has_non_ws = true;
+            }
             i += 1;
         }
     }
-    if stripped.trim().is_empty() {
+    if !has_non_ws {
         return None;
     }
 
-    let err_offset = ret
-        .errors
-        .first()
-        .and_then(|e| e.labels.as_ref())
+    let first = ret.errors.first()?;
+    let err_offset = first
+        .labels
+        .as_ref()
         .and_then(|labels| labels.first().map(|l| l.offset()))
         // The parens wrap shifts offsets by 1; subtract to map back to
         // body coordinates.
         .map(|o| o.saturating_sub(1))
         .unwrap_or(value.len());
-    Some(err_offset)
+    Some((err_offset, first.message.to_string()))
 }
 
 pub(crate) fn try_parse_esm(value: &str, allocator: &mut Allocator) -> EsmParseResult {
@@ -566,7 +580,7 @@ fn check_container_after_newline_lazy(
 }
 
 fn scan_mdx_expression_end(bytes: &[u8], inline: bool) -> Option<usize> {
-    scan_mdx_expression_end_inner(bytes, inline, None, false, true)
+    scan_mdx_expression_end_inner(bytes, inline, None, false, true, 0)
 }
 
 /// Scan an MDX expression `{...}`, finding the matching closing `}`.
@@ -591,7 +605,11 @@ fn scan_mdx_expression_end_inner(
     // micromark-extension-mdx-expression's "Unexpected lazy line" rule).
     lazy_mode: bool,
     allow_lazy_body: bool,
+    nesting_depth: u32,
 ) -> Option<usize> {
+    if nesting_depth > MAX_MDX_NESTING {
+        return None;
+    }
     if bytes.is_empty() || bytes[0] != b'{' {
         return None;
     }
@@ -747,6 +765,7 @@ fn scan_mdx_expression_end_inner(
             }
             // Line comment
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'/' => {
+                reject_if_lazy!();
                 ix += 2;
                 while ix < bytes.len() && bytes[ix] != b'\n' {
                     ix += 1;
@@ -754,6 +773,7 @@ fn scan_mdx_expression_end_inner(
             }
             // Block comment.
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'*' => {
+                reject_if_lazy!();
                 ix += 2;
                 while ix + 1 < bytes.len() {
                     if bytes[ix] == b'*' && bytes[ix + 1] == b'/' {
@@ -769,10 +789,25 @@ fn scan_mdx_expression_end_inner(
                     ix += 1;
                 }
             }
-            // Regex vs division: prefer division when the previous token
-            // produced a value (regex close, identifier, `)`, `]`, `}`).
-            // Otherwise fall back to the position-based `slash_is_regex`.
-            b'/' if !prev_was_value && slash_is_regex(bytes, ix) => {
+            // Regex vs division: defer to `slash_is_regex` (which handles
+            // regex-introducing keywords like `return`/`yield`) when the
+            // prior byte is an identifier; otherwise trust `prev_was_value`
+            // so `}/` and `/x/ /y/` read as division.
+            b'/' if {
+                let prev_is_ident_char = {
+                    let mut j = ix;
+                    while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
+                        j -= 1;
+                    }
+                    j > 0
+                        && (bytes[j - 1].is_ascii_alphanumeric()
+                            || bytes[j - 1] == b'_'
+                            || bytes[j - 1] == b'$')
+                };
+                let force_division = prev_was_value && !prev_is_ident_char;
+                !force_division && slash_is_regex(bytes, ix)
+            } =>
+            {
                 reject_if_lazy!();
                 ix = scan_regex(bytes, ix);
                 mark_value!();
@@ -792,7 +827,9 @@ fn scan_mdx_expression_end_inner(
                     || bytes[ix + 1] == b'>') =>
             {
                 reject_if_lazy!();
-                if let Some(end) = scan_mdx_jsx_tag_end(&bytes[ix..]) {
+                if let Some(end) =
+                    scan_mdx_jsx_tag_end_inner(&bytes[ix..], None, nesting_depth + 1)
+                {
                     ix += end;
                     mark_value!();
                 } else {
@@ -831,13 +868,17 @@ fn scan_to_line_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// Scan a JSX tag from `<` to `>` or `/>`, returning the byte offset
 /// immediately after the closing `>`. Does NOT scan to EOL.
 fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
-    scan_mdx_jsx_tag_end_inner(bytes, None)
+    scan_mdx_jsx_tag_end_inner(bytes, None, 0)
 }
 
 fn scan_mdx_jsx_tag_end_inner(
     bytes: &[u8],
     container_check: Option<ContainerLineCheck<'_>>,
+    nesting_depth: u32,
 ) -> Option<usize> {
+    if nesting_depth > MAX_MDX_NESTING {
+        return None;
+    }
     let mut ix = 1; // skip `<`
 
     // Skip `/` for closing tags
@@ -933,6 +974,10 @@ fn scan_mdx_jsx_tag_end_inner(
         }
         match bytes[ix] {
             b'>' => return Some(ix + 1),
+            // Closing tags allow only whitespace before `>` — no attrs, no
+            // self-close marker. Reject before the `/` arm so `</a />` and
+            // `</a/ >` aren't treated as self-closing.
+            _ if is_closing => return None,
             // Self-close marker: `/` followed (possibly across whitespace
             // or a newline+container-prefix) by `>`. mdx-js accepts e.g.
             // `<g/\n>` and `<a / >`.
@@ -960,16 +1005,20 @@ fn scan_mdx_jsx_tag_end_inner(
                 }
                 return None;
             }
-            // Closing tags allow only whitespace before `>` — no attrs, no
-            // self-close marker.
-            _ if is_closing => return None,
             // Spread or shorthand expression — must be `{...expr}` for a
             // spread; bare `{expr}` is rejected by mdx-js.
             b'{' => {
                 if !looks_like_spread(&bytes[ix..]) {
                     return None;
                 }
-                let expr_len = scan_mdx_expression_end(&bytes[ix..], false)?;
+                let expr_len = scan_mdx_expression_end_inner(
+                    &bytes[ix..],
+                    false,
+                    None,
+                    false,
+                    true,
+                    nesting_depth + 1,
+                )?;
                 ix += expr_len;
             }
             // Attribute name + optional value.
@@ -1061,7 +1110,14 @@ fn scan_mdx_jsx_tag_end_inner(
                             ix += 1;
                         }
                         b'{' => {
-                            let expr_len = scan_mdx_expression_end(&bytes[ix..], false)?;
+                            let expr_len = scan_mdx_expression_end_inner(
+                                &bytes[ix..],
+                                false,
+                                None,
+                                false,
+                                true,
+                                nesting_depth + 1,
+                            )?;
                             ix += expr_len;
                         }
                         // Bare-word attribute values (`<a x=foo/>`) are
@@ -1165,7 +1221,7 @@ pub(crate) fn scan_mdx_jsx_block(
         if !is_jsx_name_start(bytes, name_start) {
             return None;
         }
-        scan_mdx_jsx_tag_end_inner(bytes, container_check)?
+        scan_mdx_jsx_tag_end_inner(bytes, container_check, 0)?
     };
 
     // Consume any subsequent JSX tags or expressions on the same line.
@@ -1182,7 +1238,7 @@ pub(crate) fn scan_mdx_jsx_block(
             break;
         }
         if bytes[pos] == b'<' {
-            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check) {
+            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check, 0) {
                 pos += end;
                 last_was_jsx = true;
                 continue;
@@ -1210,7 +1266,7 @@ pub(crate) fn scan_mdx_expression_block(
     bytes: &[u8],
     container_check: Option<ContainerLineCheck<'_>>,
 ) -> Option<usize> {
-    let mut ix = scan_mdx_expression_end_inner(bytes, false, container_check, false, true)?;
+    let mut ix = scan_mdx_expression_end_inner(bytes, false, container_check, false, true, 0)?;
     let mut last_was_jsx = false;
 
     loop {
@@ -1221,7 +1277,7 @@ pub(crate) fn scan_mdx_expression_block(
             break;
         }
         if bytes[ix] == b'<' {
-            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[ix..], container_check) {
+            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[ix..], container_check, 0) {
                 ix += end;
                 last_was_jsx = true;
                 continue;
@@ -1271,8 +1327,14 @@ pub(crate) fn scan_mdx_inline_expression_in_container(
     // (first content of a paragraph line in a container) follows the
     // `allowLazy: false` flow tokenizer; the lazy line is consumed but
     // body content there fails the scan.
-    let total =
-        scan_mdx_expression_end_inner(bytes, true, Some(container_check), true, allow_lazy_body)?;
+    let total = scan_mdx_expression_end_inner(
+        bytes,
+        true,
+        Some(container_check),
+        true,
+        allow_lazy_body,
+        0,
+    )?;
     Some((1, total - 1, total))
 }
 
@@ -1380,6 +1442,9 @@ fn scan_mdx_inline_jsx_inner(
         }
         match bytes[ix] {
             b'>' => return Some(ix + 1),
+            // Closing tags accept only whitespace before `>` — reject before
+            // the `/` arm so `</a />` doesn't slip through as self-closing.
+            _ if is_closing => return None,
             b'/' => {
                 let mut j = ix + 1;
                 while j < bytes.len() {
@@ -1404,7 +1469,6 @@ fn scan_mdx_inline_jsx_inner(
                 }
                 return None;
             }
-            _ if is_closing => return None,
             b'{' => {
                 if !looks_like_spread(&bytes[ix..]) {
                     return None;
@@ -1605,6 +1669,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
             let remaining = &raw.as_bytes()[pos..];
             if remaining[0] == b'<' {
+                // On scan failure, emit a recovery node spanning the rest
+                // of the block rather than erroring — the dispatcher
+                // already committed to JSX flow.
                 let tag_end = scan_mdx_jsx_tag_end(remaining).unwrap_or(raw.len() - pos);
                 let tag_raw = &raw[pos..pos + tag_end];
                 let container_content_col = self.container_content_col();
@@ -1628,12 +1695,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // here; we use oxc for parity. Without this, garbage like
                 // `{h<}` produces a phantom `mdxFlowExpression` that only
                 // errors at JS emit, not at mdast. Allocator is reused.
-                if let Some(err_offset) =
+                if let Some((err_offset, detail)) =
                     try_parse_expression_body(&inner, &mut self.mdx_expr_allocator)
                 {
                     self.mdx_errors.push((
                         stripped_to_orig(pos + 1) + err_offset,
-                        "Could not parse expression with oxc".to_string(),
+                        alloc::format!("Could not parse expression with oxc: {detail}"),
                     ));
                 }
                 let cow_ix = self.allocs.allocate_cow(inner);

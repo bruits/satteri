@@ -518,7 +518,7 @@ describe("MDAST conformance: closing code fence whitespace", () => {
   });
 });
 
-describe("MDAST conformance: known divergences", () => {
+describe("MDAST conformance: fuzz regressions", () => {
   // GFM strikethrough requires the opening `~~` to be left-flanking per
   // CommonMark emphasis rules: a `~~` preceded by an alphanumeric and
   // followed by punctuation isn't left-flanking and shouldn't open.
