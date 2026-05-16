@@ -3646,26 +3646,32 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize) -> bool {
         prev_line_start -= 1;
     }
     let line = &bytes[prev_line_start..prev_line_end];
+    // Lines without `<` (or `\`) can't open a JSX tag — skip them outright.
+    // For lines that do contain `<`, memchr to each candidate; a per-byte
+    // walk dominated the profile for long-line documents.
+    if memchr::memchr2(b'<', b'\\', line).is_none() {
+        return false;
+    }
     let mut offset = 0;
     while offset < line.len() {
-        // Backslash-escape neutralizes the next byte: `\<Foo` does not open
-        // a JSX tag, so don't suppress would-be paragraph interrupts on the
-        // following line just because the line contains `\<`.
-        if line[offset] == b'\\' && offset + 1 < line.len() {
-            offset += 2;
+        // memchr to the next interesting byte (`<` or `\`). `\<Foo` is a
+        // literal `<` (backslash neutralizes the next byte), so we treat
+        // `\` as a skip-2 escape.
+        let Some(rel) = memchr::memchr2(b'<', b'\\', &line[offset..]) else {
+            return false;
+        };
+        let i = offset + rel;
+        if line[i] == b'\\' {
+            offset = i + 2;
             continue;
         }
-        if line[offset] != b'<' {
-            offset += 1;
-            continue;
-        }
-        let pos = prev_line_start + offset;
+        let pos = prev_line_start + i;
         if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..]) {
             if pos + len > ix {
                 return true;
             }
         }
-        offset += 1;
+        offset = i + 1;
     }
     false
 }
@@ -3700,21 +3706,22 @@ fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
     }
     let mut i = line_start;
     while i < pos {
-        // Backslash escapes neutralize the next byte (e.g. `\<` is literal
-        // `<`, not a JSX tag opener). Skip the pair so we don't mis-detect
-        // `[r\<Foo bar={1}...` as having an open inline JSX tag at `{1}`.
-        if bytes[i] == b'\\' && i + 1 < bytes.len() {
-            i += 2;
+        // memchr to the next `<` or `\` candidate. `\<` is a literal `<`
+        // (backslash neutralizes the next byte), so we skip-2 on `\`.
+        let Some(rel) = memchr::memchr2(b'<', b'\\', &bytes[i..pos]) else {
+            return false;
+        };
+        let j = i + rel;
+        if bytes[j] == b'\\' {
+            i = j + 2;
             continue;
         }
-        if bytes[i] == b'<' {
-            if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[i..]) {
-                if i + len > pos {
-                    return true;
-                }
+        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[j..]) {
+            if j + len > pos {
+                return true;
             }
         }
-        i += 1;
+        i = j + 1;
     }
     false
 }
