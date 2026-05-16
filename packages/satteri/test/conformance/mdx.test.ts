@@ -110,6 +110,20 @@ describe("MDX conformance: JSX", () => {
     await assertMdxConformance("<Foo\n  bar={1}/>", { Foo });
   });
 
+  // The attribute-name parser used to be ASCII-only and dropped any name
+  // whose start char wasn't `[a-zA-Z_]` — including `$` and Unicode
+  // identifier starts that acorn accepts.
+  test("JSX attribute name starting with `$`", async () => {
+    const z = () => null;
+    await assertMdxConformance(" <z $/>x", { z });
+    await assertMdxConformance(" <z\n$/>x", { z });
+  });
+
+  test("JSX attribute name with Unicode identifier", async () => {
+    const z = () => null;
+    await assertMdxConformance("<z café/>", { z });
+  });
+
   test("spread with object literal", async () => {
     const Tag = (props: any) => createElement("span", null, props.x);
     await assertMdxConformance("<Tag {...{x: 'hi'}}/>", { Tag });
@@ -360,6 +374,27 @@ describe("MDX conformance: markdown elements", () => {
 
   test("image", async () => {
     await assertMdxConformance("![alt](https://example.com/img.png)");
+  });
+
+  // mdx-js extends CommonMark's "alt = stripped visible content" rule by
+  // also concatenating the literal body of `{...}` expressions. Without the
+  // fix in arena_build, the expression contributed nothing to alt.
+  test("image alt with expression body", async () => {
+    await assertMdxConformance("![{1+2}](https://x.test/i.png)");
+    await assertMdxConformance("![pre {x} mid {y} end](https://x.test/i.png)");
+  });
+
+  // mdx-js does not evaluate expressions inside link URLs — `{...}` in URL
+  // position is literal text. Our firstpass used to eagerly scan `{` as an
+  // expression start and hard-error on unmatched `{` (e.g. `[a]({)`).
+  // Suppressing the scan in URL position fixes the crash and removes a
+  // brittle reliance on the link resolver to reabsorb stray expression
+  // tokens for the matched case.
+  test("`{` inside link URL is literal text", async () => {
+    await assertMdxConformance("[a]({foo})");
+    await assertMdxConformance("[a]({1+2})");
+    await assertMdxConformance("[a](b{c}d)");
+    await assertMdxConformance("[a]({)"); // previously crashed
   });
 
   test("inline code", async () => {
@@ -621,18 +656,12 @@ describe("MDX conformance: fuzz regressions", () => {
   // mdx-js + plain remark both produce a list. Pre-existing pulldown-cmark
   // behaviour around empty list-item recognition inside containers; tracked
   // as `.fails` so a future fix flips the test green.
-  test.fails(
-    "[known divergence] empty list marker inside blockquote after preceding paragraph",
-    async () => {
-      await assertMdxConformance("_\n>\n>-");
-    },
-  );
-  test.fails(
-    "[known divergence] empty list marker inside nested blockquote after preceding paragraph",
-    async () => {
-      await assertMdxConformance("_>>>\n>\n>-");
-    },
-  );
+  test.fails("[known divergence] empty list marker inside blockquote after preceding paragraph", async () => {
+    await assertMdxConformance("_\n>\n>-");
+  });
+  test.fails("[known divergence] empty list marker inside nested blockquote after preceding paragraph", async () => {
+    await assertMdxConformance("_>>>\n>\n>-");
+  });
 
   // Validating the expression body in parens-wrapped (expression) context
   // rejects multi-statement bodies that the previous program-mode pass
@@ -661,27 +690,29 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertMdxConformance("{ }");
   });
 
-  // Known divergence: a bare `<` followed by newline + `>` (the blockquote
-  // container prefix on the next line) is treated as text by mdx-js but
-  // rejected by us — the `<` resolver doesn't know whether the post-newline
-  // `>` is a JSX-like marker or a container prefix. Pre-existing edge case
-  // surfaced by deeper fuzzing.
-  test.fails(
-    "[known divergence] bare `<` followed by newline + blockquote prefix",
-    async () => {
-      await assertMdxConformance(">/<\n>}v\n");
-    },
-  );
+  // The `<` resolver skips blockquote container prefixes when probing
+  // past `\n` for the next significant byte. Without this, a `>` on the
+  // continuation line (which is just the blockquote marker, not a JSX
+  // delimiter) incorrectly triggered the `<\n>` rejection rule.
+  test("bare `<` followed by newline + blockquote prefix stays as text", async () => {
+    await assertMdxConformance(">/<\n>}v\n");
+  });
 
-  // Known divergence: self-closing JSX with a newline between `/` and `>`
-  // works on its own but rejects when followed by trailing content on the
-  // line. Block-level rejects (trailing content), and inline-level also
-  // rejects (reason not diagnosed).
-  test.fails(
-    "[known divergence] self-closing JSX `<x/\\n>` followed by trailing content",
-    async () => {
-      await assertMdxConformance("<_/\n>>");
-    },
-  );
+  // Self-closing JSX with a newline between `/` and `>` followed by
+  // trailing content. The `>` is the JSX close, the second `>` is text.
+  // Without suppression the `>>` line would be read as a new blockquote.
+  test("self-closing JSX `<x/\\n>` followed by trailing content", async () => {
+    const _ = () => null;
+    await assertMdxConformance("<_/\n>>", { _ });
+  });
 
+  // Text-position expression in a blockquote whose body ends with `\n\t`
+  // before the close `}`: remark applies its dedent rule (tab → 2 spaces)
+  // to the continuation line and produces value `q\n  `. We keep `\n`
+  // only and emit the trailing whitespace+`}` as text. The dedent path
+  // doesn't run for text-position expressions ending mid-line before
+  // another `}`.
+  test.fails("[known bug] text-position expression dedents trailing tab before close", async () => {
+    await assertMdxConformance(">o{q\n\t}}");
+  });
 });

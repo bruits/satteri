@@ -6,24 +6,28 @@ import {
   collectIssues,
   deduplicateIssues,
   formatIssue,
+  FUZZ_TIMEOUT_MS,
 } from "./shared.js";
 
 describe("fuzz: MDX conformance", () => {
-  test("collect and report MDX mdast/hast issues", () => {
-    const allIssues = [
-      ...collectIssues(mdxDocument, "mdx-mdast", "structured"),
-      ...collectIssues(mdxDocument, "mdx-hast", "structured"),
-      ...collectIssues(mdxChaos, "mdx-mdast", "chaos"),
-      ...collectIssues(mdxChaos, "mdx-hast", "chaos"),
-    ];
+  test(
+    "collect and report MDX mdast/hast issues",
+    () => {
+      const allIssues = [
+        ...collectIssues(mdxDocument, "mdx-mdast", "structured"),
+        ...collectIssues(mdxDocument, "mdx-hast", "structured"),
+        ...collectIssues(mdxChaos, "mdx-mdast", "chaos"),
+        ...collectIssues(mdxChaos, "mdx-hast", "chaos"),
+      ];
 
-    const unique = deduplicateIssues(allIssues);
+      const unique = deduplicateIssues(allIssues);
 
-    if (unique.length > 0) {
       const report = [
         "# MDX mdast/hast fuzz-discovered conformance issues",
         "",
-        `Found ${unique.length} unique issue(s) across ${allIssues.length} total failure(s).`,
+        unique.length === 0
+          ? "No issues found in the latest run."
+          : `Found ${unique.length} unique issue(s) across ${allIssues.length} total failure(s).`,
         "",
         ...unique.map(formatIssue),
       ].join("\n");
@@ -36,6 +40,7 @@ describe("fuzz: MDX conformance", () => {
       expect
         .soft(hard, `Found ${hard.length} MDX conformance issue(s):\n${inputs.join("\n")}`)
         .toHaveLength(0);
-    }
-  });
+    },
+    FUZZ_TIMEOUT_MS,
+  );
 });

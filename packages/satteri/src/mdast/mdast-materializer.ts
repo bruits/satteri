@@ -176,10 +176,10 @@ export function materializeNode(reader: MdastReader, nodeId: number): MdastNode 
   const nodeType = rawNode.type;
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
-  const node = {
-    type: typeName,
-    position: rawNode.position,
-  } as MdastNode;
+  const node = { type: typeName } as MdastNode;
+  if (rawNode.position !== undefined) {
+    (node as { position: typeof rawNode.position }).position = rawNode.position;
+  }
 
   // _nodeId: non-enumerable internal reference
   Object.defineProperty(node, "_nodeId", {

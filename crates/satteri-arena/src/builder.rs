@@ -255,7 +255,17 @@ impl<K: ArenaKind> ArenaBuilder<K> {
     pub fn sort_current_pending_children_by_start_offset(&mut self) {
         let children_start = self.stack.last().map(|(_, cs)| *cs as usize).unwrap_or(0);
         let nodes = &self.arena.nodes;
-        self.pending_children[children_start..].sort_by_key(|&id| nodes[id as usize].start_offset);
+        // Sort by (end_offset, start_offset). End-offset takes priority
+        // because some block positions are extended *back* (e.g. a
+        // setext heading inheriting the start of a preceding definition
+        // run); the original "where did this content actually end"
+        // remains the most faithful proxy for source order. Ties broken
+        // by start_offset so shorter-span siblings still come first
+        // when they share an end.
+        self.pending_children[children_start..].sort_by_key(|&id| {
+            let n = &nodes[id as usize];
+            (n.end_offset, n.start_offset)
+        });
     }
 
     #[allow(clippy::too_many_arguments)]

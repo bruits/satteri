@@ -45,9 +45,13 @@ fn strikethrough_test_4() {
 
 #[test]
 fn strikethrough_test_5() {
+    // Per GFM strikethrough flanking rules (matching remark / micromark),
+    // a `~~` opener can't be followed by punctuation — `~~!` doesn't
+    // open a strikethrough run. The original cmark-gfm test expected
+    // `<del>!</del>` here; we now match remark's stricter intraword rule.
     let original = r##"Here I strike out an exclamation point~~!~~.
 "##;
-    let expected = r##"<p>Here I strike out an exclamation point<del>!</del>.</p>
+    let expected = r##"<p>Here I strike out an exclamation point~~!~~.</p>
 "##;
 
     test_markdown_html(original, expected, 2056, false, false, false, false, false, false);

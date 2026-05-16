@@ -108,7 +108,7 @@ export interface MdastNodeRaw {
   type: number;
   typeName: string;
   parent: number;
-  position: Position;
+  position: Position | undefined;
   childrenStart: number;
   childrenCount: number;
   dataOffset: number;
@@ -125,4 +125,8 @@ export interface BufferHeader {
   typeDataOffset: number;
   sourceLen: number;
   sourceOffset: number;
+  /** Number of nodes that carry an extra JSON `data` blob. */
+  nodeDataCount: number;
+  /** Offset of the node-data section: `[id u32][len u32][bytes...]` repeated. */
+  nodeDataOffset: number;
 }

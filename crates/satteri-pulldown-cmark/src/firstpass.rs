@@ -21,10 +21,53 @@ use crate::{
 
 /// Runs the first pass, which resolves the block structure of the document,
 /// and returns the resulting tree.
+/// Per-tree-index MDAST `position.end` overrides. The parser's
+/// `item.end` is the byte offset of the next-block cursor (past the
+/// trailing line terminator); MDAST wants the visible end, sometimes
+/// trimmed (paragraphs/headings strip the trailing `\n`) and sometimes
+/// extended (indented code absorbs trailing blank lines, an inner
+/// blockquote absorbs outer-marker-only continuation lines, etc.).
+///
+/// Two distinct semantics → two distinct values. The parser computes
+/// both during firstpass; arena_build is a thin reader.
+#[derive(Default, Clone)]
+pub(crate) struct MdastPositions {
+    // Sparse: ends[node_ix.get()] = mdast position end, 0 means "use
+    // item.end as-is". Sized to tree.nodes_len() after finalize.
+    ends: Vec<u32>,
+}
+
+impl MdastPositions {
+    /// Returns the MDAST end for `ix` if one has been recorded; else
+    /// falls back to the parser-cursor end on the item.
+    pub(crate) fn end_for(&self, ix: TreeIndex, item: &Item) -> u32 {
+        let raw = self
+            .ends
+            .get(ix.get())
+            .copied()
+            .filter(|&v| v != 0)
+            .unwrap_or(item.end as u32);
+        raw
+    }
+
+    fn set(&mut self, ix: TreeIndex, end: u32) {
+        let slot = ix.get();
+        if slot >= self.ends.len() {
+            self.ends.resize(slot + 1, 0);
+        }
+        self.ends[slot] = end;
+    }
+}
+
 pub(crate) fn run_first_pass(
     text: &str,
     options: Options,
-) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
+) -> (
+    Tree<Item>,
+    Allocations<'_>,
+    Vec<(usize, String)>,
+    MdastPositions,
+) {
     // This is a very naive heuristic for the number of nodes
     // we'll need.
     let start_capacity = max(128, text.len() / 32);
@@ -35,6 +78,7 @@ pub(crate) fn run_first_pass(
         begin_list_item: None,
         last_line_blank: false,
         list_interrupted_paragraph: false,
+        refdef_interrupted_paragraph: false,
         allocs: Allocations::new(),
         options,
         lookup_table,
@@ -42,8 +86,81 @@ pub(crate) fn run_first_pass(
         brace_context_stack: Vec::new(),
         mdx_errors: Vec::new(),
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
+        pending_lazy_blockquote_close: false,
     };
-    first_pass.run()
+    let (tree, allocs, mdx_errors) = first_pass.run();
+    let positions = compute_mdast_positions(&tree, text.as_bytes());
+    (tree, allocs, mdx_errors, positions)
+}
+
+/// Walk the firstpass tree and compute MDAST `position.end` for every
+/// block-level item, recording the result in [`MdastPositions`].
+///
+/// This consolidates the trim/extension logic that used to live in
+/// arena_build's close handlers — firstpass owns the position
+/// computation, arena_build only reads.
+fn compute_mdast_positions(tree: &Tree<Item>, source: &[u8]) -> MdastPositions {
+    let mut out = MdastPositions::default();
+    walk_compute(tree, source, tree.first(), &mut out);
+    out
+}
+
+fn walk_compute(
+    tree: &Tree<Item>,
+    source: &[u8],
+    start: Option<TreeIndex>,
+    out: &mut MdastPositions,
+) {
+    let mut cur = start;
+    while let Some(ix) = cur {
+        // Children first (post-order) so descendant ends are settled
+        // before any parent rule consults them.
+        let child = tree[ix].child;
+        if child.is_some() {
+            walk_compute(tree, source, child, out);
+        }
+        compute_for_node(tree, source, ix, out);
+        cur = tree[ix].next;
+    }
+}
+
+fn compute_for_node(tree: &Tree<Item>, source: &[u8], ix: TreeIndex, out: &mut MdastPositions) {
+    let item = tree[ix].item;
+    if !item.body.is_block_level() {
+        return;
+    }
+    // For now, the side-table only carries the *trim* result. The other
+    // extensions in this file (list-item/next-sibling, inner-bq/outer-
+    // markers, list-in-bq/marker-lines) operate on arena_build's
+    // `cont_end` — derived from the built MDAST children, which can
+    // differ from `item.end` — so they're applied at the call site.
+    let parent_body = find_parent(tree, ix).map(|p| tree[p].item.body);
+    let end = mdast_position_end(&item, source, parent_body.as_ref());
+    if end != item.end as u32 {
+        out.set(ix, end);
+    }
+}
+
+fn find_parent(tree: &Tree<Item>, target: TreeIndex) -> Option<TreeIndex> {
+    fn dfs(
+        tree: &Tree<Item>,
+        cur: Option<TreeIndex>,
+        target: TreeIndex,
+        parent: Option<TreeIndex>,
+    ) -> Option<TreeIndex> {
+        let mut c = cur;
+        while let Some(ix) = c {
+            if ix == target {
+                return parent;
+            }
+            if let Some(found) = dfs(tree, tree[ix].child, target, Some(ix)) {
+                return Some(found);
+            }
+            c = tree[ix].next;
+        }
+        None
+    }
+    dfs(tree, tree.first(), target, None)
 }
 
 // Each level of brace nesting adds another entry to a hash table.
@@ -64,6 +181,13 @@ pub(crate) struct FirstPass<'a, 'b> {
     begin_list_item: Option<usize>,
     last_line_blank: bool,
     list_interrupted_paragraph: bool,
+    // Narrower variant set after a link reference definition: the def's
+    // residual paragraph state interrupts only ordered-list markers
+    // whose index ≠ 1. Unlike `list_interrupted_paragraph`, it must not
+    // suppress blank-after-marker list items, which mdx-js/micromark
+    // still accept after a refdef (`[r]: /x\n\n-\n- b` → list with
+    // empty + filled items, not paragraph + list).
+    refdef_interrupted_paragraph: bool,
     pub(crate) allocs: Allocations<'a>,
     pub(crate) options: Options,
     lookup_table: &'b LookupTable,
@@ -72,6 +196,13 @@ pub(crate) struct FirstPass<'a, 'b> {
     brace_context_next: usize,
     /// MDX errors collected during first pass.
     pub(crate) mdx_errors: Vec<(usize, String)>,
+    /// Mirrors micromark's `lazy[line]` for indented-code-after-blockquote-
+    /// close. Set when `parse_block` pops a blockquote due to failed
+    /// continuation; consumed (and cleared) by the next indented code block,
+    /// which becomes one-line-only — matching `furtherStart`'s lazy-line
+    /// rejection. Without this, `>\n    bar\n    baz` would merge `bar`
+    /// and `baz` into one code block instead of splitting.
+    pending_lazy_blockquote_close: bool,
     /// Reusable bump allocator for oxc parses (expression-body validation,
     /// ESM completeness checks). Avoids `Allocator::default()` heap alloc
     /// on every expression — the allocator is `reset()` between parses.
@@ -102,6 +233,29 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let i = scan_containers(&self.tree, &mut line_start, self.options);
         if i < self.tree.spine_len() {
             self.list_interrupted_paragraph = false;
+            self.refdef_interrupted_paragraph = false;
+            // If any popped container was a blockquote AND the current line
+            // is non-blank, the next indented code block on this line is
+            // "lazy" wrt the blockquote — micromark would limit it to one
+            // line. Skip the marker on blank lines: a blank line that pops
+            // the blockquote is a *proper* close, after which subsequent
+            // indented code blocks merge normally (e.g. `> Foo\n\n    bar
+            // \n    baz` keeps `bar\nbaz` as one code block).
+            let probe_ix = start_ix + line_start.bytes_scanned();
+            let line_is_blank = scan_blank_line(&bytes[probe_ix..]).is_some();
+            if !line_is_blank
+                && !self.pending_lazy_blockquote_close
+                && (i..self.tree.spine_len()).rev().any(|d| {
+                    self.tree.walk_spine().nth(d).is_some_and(|ix| {
+                        matches!(
+                            self.tree[*ix].item.body,
+                            ItemBody::BlockQuote(..) | ItemBody::ListItem(..)
+                        )
+                    })
+                })
+            {
+                self.pending_lazy_blockquote_close = true;
+            }
         }
         for _ in i..self.tree.spine_len() {
             self.pop(start_ix);
@@ -183,8 +337,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
             }
             let container_start = start_ix + line_start.bytes_scanned();
-            if let Some((ch, index, indent)) = line_start.scan_list_marker_with_indent(outer_indent)
-            {
+            if let Some((ch, index, indent)) = line_start.scan_list_marker_with_indent_and_clamp(
+                outer_indent,
+                !self.options.contains(Options::ENABLE_MDX),
+            ) {
                 let after_marker_index = start_ix + line_start.bytes_scanned();
                 let already_in_list = self
                     .tree
@@ -196,6 +352,28 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 };
                 if self.list_interrupted_paragraph && !already_in_list && after_marker_blank {
                     self.list_interrupted_paragraph = false;
+                    line_start = save;
+                    break;
+                }
+                // micromark's list construct rejects start != 1 when
+                // `self.interrupt` is set (mirrors `currentConstruct` lingering
+                // after the previous block). After an indented code block,
+                // `2. b` becomes a paragraph rather than starting a fresh
+                // ordered list (`    code\n\n2. b` → `[code, paragraph]`).
+                // Index-1 starts are always allowed.
+                //
+                // This applies even when *nested* inside an existing list —
+                // after `[ref]: /uri\n1. - 2. foo` the `2.` inside the inner
+                // unordered list-item also fails the interrupt check, so it
+                // stays as paragraph text instead of opening a new ordered
+                // list. (Index-1 markers and any markers with a clear flag
+                // are unaffected.)
+                if (self.list_interrupted_paragraph || self.refdef_interrupted_paragraph)
+                    && (ch == b'.' || ch == b')')
+                    && index != 1
+                {
+                    self.list_interrupted_paragraph = false;
+                    self.refdef_interrupted_paragraph = false;
                     line_start = save;
                     break;
                 }
@@ -528,6 +706,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let ix = start_ix + line_start.bytes_scanned();
 
         if let Some(n) = scan_blank_line(&bytes[ix..]) {
+            // A blank line breaks the "lazy-immediately-after-close"
+            // restriction: micromark's `furtherStart` only rejects lazy
+            // lines that directly follow the implicit close, not ones with
+            // a blank line in between. Clearing here lets a subsequent
+            // indented code block parse as a normal multi-line block.
+            self.pending_lazy_blockquote_close = false;
             if let Some(node_ix) = self.tree.peek_up() {
                 match &mut self.tree[node_ix].item.body {
                     ItemBody::ContainerDirective(..) => {
@@ -577,7 +761,34 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // strip the right amount from their content lines.
                 indent += line_start.scan_space_upto(usize::MAX);
             } else {
+                // If finish_list will pop an EMPTY list item (marker
+                // followed by blank, no content), the subsequent indented
+                // code block becomes "lazy" — mirrors micromark's
+                // `furtherStart` restriction. Without this,
+                // `*\n\n      bar\n      baz` would merge into one code
+                // block; remark separates them. The `begin_list_item`
+                // flag distinguishes the empty case (set on blank-after-
+                // marker open) from list items whose first content is
+                // still being processed (`-             bbb` has 12+
+                // spaces of post-marker indent that's an indented code
+                // block, but the list item is NOT empty in source).
+                // Only fire when a real blank line separates the marker
+                // from the indented content (`*\n\n    foo` → split). For
+                // the directly-following case (`-\n             bbb` →
+                // indented code stays IN the list item), don't fire.
+                // begin_list_item records the byte right after the
+                // marker's line ending; if start_ix > that, a blank line
+                // sat between.
+                let empty_listitem_will_close =
+                    self.begin_list_item.is_some_and(|bli| start_ix > bli)
+                        && self.tree.peek_up().is_some_and(|ix| {
+                            matches!(self.tree[ix].item.body, ItemBody::ListItem(..))
+                                && self.tree[ix].child.is_none()
+                        });
                 self.finish_list(start_ix);
+                if empty_listitem_will_close {
+                    self.pending_lazy_blockquote_close = true;
+                }
                 let ix = start_ix + line_start.bytes_scanned();
                 let remaining_space = line_start.remaining_space();
                 return self.parse_indented_code_block(content_start_ix, ix, remaining_space);
@@ -798,6 +1009,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 ix += nl;
             } else {
                 self.finish_list(start_ix);
+                // Refdefs share micromark's paragraph token: the def's
+                // residual paragraph state lingers after the def's bytes
+                // are consumed. When the next line opens a new block,
+                // ordered-list markers with start != 1 are rejected.
+                // Use the narrower `refdef_interrupted_paragraph` flag so
+                // blank-after-marker bullets like `-\n` are still
+                // recognized as list items.
+                self.refdef_interrupted_paragraph = true;
                 return ix;
             }
             if let Some(lazy_line_start) = self.scan_next_line_or_lazy_continuation(&bytes[ix..]) {
@@ -805,6 +1024,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 start_ix = ix;
             } else {
                 self.finish_list(start_ix);
+                self.refdef_interrupted_paragraph = true;
                 return ix;
             }
         }
@@ -961,16 +1181,26 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return None;
         }
 
-        // Don't fill missing cells in MDAST: GFM HTML rendering pads rows to
-        // the header width, but `mdast-util-gfm-table` keeps the source cell
-        // count (HAST padding happens downstream in `mdast-util-to-hast`).
-        // Match remark-gfm's mdast shape.
+        // `mdast-util-gfm-table` keeps the source cell count exactly — neither
+        // truncated to the header width nor padded with empties. HAST padding
+        // happens downstream in `mdast-util-to-hast`, and overflow cells are
+        // discarded there too.
         let _ = row_cells;
         let _ = missing_empty_cells;
 
-        // Extend the last cell's end to include the trailing `|` and
-        // whitespace, matching remark's convention.
-        if let Some(cell_ix) = final_cell_ix {
+        // Extend the final cell's end to include any trailing `|` and
+        // whitespace, matching remark's convention. With overflow preserved,
+        // the final cell is the last parsed cell, not the header-column cell.
+        let last_cell_ix = {
+            let mut walker = self.tree[row_ix].child;
+            let mut last = None;
+            while let Some(c) = walker {
+                last = Some(c);
+                walker = self.tree[c].next;
+            }
+            last
+        };
+        if let Some(cell_ix) = last_cell_ix {
             let row_end = ix;
             let mut cell_end = self.tree[cell_ix].item.end;
             let bytes = self.text.as_bytes();
@@ -983,11 +1213,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
             self.tree[cell_ix].item.end = cell_end;
         }
-
-        // drop excess cells
-        if let Some(cell_ix) = final_cell_ix {
-            self.tree[cell_ix].next = None;
-        }
+        let _ = final_cell_ix;
 
         self.pop(ix);
 
@@ -1133,12 +1359,70 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // first check for non-empty lists, then for other interrupts
                 let suffix = &bytes[ix_new..];
                 if self.scan_paragraph_interrupt(suffix, current_container, tree_position) {
-                    if let Some(pos) = trailing_backslash_pos {
-                        self.tree.append_text(pos, pos + 1, false);
+                    // MDX-only suppression: if the previous line opened an
+                    // inline JSX tag whose body spans into this line, the
+                    // tag is still open and the line's would-be interrupt
+                    // is actually part of the JSX (typically the closing
+                    // `>`). Don't break the paragraph here — let the inline
+                    // resolver pick up the JSX.
+                    if !(self.options.contains(Options::ENABLE_MDX)
+                        && prev_line_has_open_inline_jsx(bytes, ix))
+                    {
+                        if let Some(pos) = trailing_backslash_pos {
+                            self.tree.append_text(pos, pos + 1, false);
+                        }
+                        self.list_interrupted_paragraph = scan_listitem(suffix).is_some()
+                            || scan_blockquote_start(suffix).is_some();
+                        // Type-7 HTML block on a lazy-continuation line is
+                        // a special case in remark/micromark: the new HTML
+                        // block opens INSIDE the still-open container (the
+                        // line is fed through the container's child flow
+                        // parser, where type-7 is allowed). Open it inline
+                        // for BlockQuote and ListItem parents so the HTML
+                        // becomes a sibling of the open paragraph instead
+                        // of popping the container.
+                        //
+                        // Exception: if the html line is at EOF without a
+                        // trailing newline, micromark's lazy handling treats
+                        // it as an incomplete line and the html ends up at
+                        // root (e.g. `- a\n<a>` → `[list, html]`, vs
+                        // `- a\n<a>\n` → `[list[item[para,html]]]`).
+                        if !self.options.contains(Options::ENABLE_MDX)
+                            && !current_container
+                            && suffix.starts_with(b"<")
+                            && scan_html_type_7(suffix).is_some()
+                            && !starts_html_block_type_6(&suffix[1..])
+                            && get_html_end_tag(&suffix[1..]).is_none()
+                        {
+                            // Find end of the html line. If there's no
+                            // newline anywhere in `suffix`, the line is at
+                            // EOF without a trailing newline — fall through
+                            // to the normal break path so containers pop.
+                            let line_terminated = suffix.iter().any(|&b| b == b'\n' || b == b'\r');
+                            // `tree_position` is the count of spine items
+                            // that matched container prefixes. The container
+                            // we're STILL inside is at spine index
+                            // `tree_position` (the first one that did NOT
+                            // match), since lazy continuation keeps the
+                            // unmatched container open.
+                            let parent_is_container =
+                                self.tree.walk_spine().nth(tree_position).is_some_and(|ix| {
+                                    matches!(
+                                        self.tree[*ix].item.body,
+                                        ItemBody::BlockQuote(..) | ItemBody::ListItem(..)
+                                    )
+                                });
+                            if parent_is_container && line_terminated {
+                                self.pop(ix);
+                                return self.parse_html_block_type_6_or_7(
+                                    ix_new,
+                                    line_start.remaining_space(),
+                                    0,
+                                );
+                            }
+                        }
+                        break;
                     }
-                    self.list_interrupted_paragraph =
-                        scan_listitem(suffix).is_some() || scan_blockquote_start(suffix).is_some();
-                    break;
                 }
                 if self.options.contains(Options::ENABLE_DIRECTIVE)
                     && !current_container
@@ -1257,6 +1541,96 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             level,
             attrs.map(|attrs| self.allocs.allocate_heading(attrs)),
         );
+
+        // remark/micromark quirk: when a setext heading directly follows a
+        // run of link reference definitions (no blank line separating
+        // any of them), the heading's position extends back to the start
+        // of the FIRST definition in that adjacent run. Micromark opens
+        // one paragraph token spanning the whole chain; each definition
+        // splits off as its own node but the heading inherits the
+        // chain's original start.
+        let bytes = self.text.as_bytes();
+        let is_adjacent = |prev_end: usize, next_start: usize| -> bool {
+            if next_start <= prev_end {
+                return false;
+            }
+            // Allow exactly one newline (the def's line terminator)
+            // plus any amount of leading whitespace on the next line.
+            // Indented-code can't interrupt the def's still-open
+            // paragraph, so even 4+ space indents are valid paragraph
+            // continuations and qualify for chain-back.
+            let mut newlines = 0;
+            for &b in &bytes[prev_end..next_start] {
+                if b == b'\n' {
+                    if newlines > 0 {
+                        return false;
+                    }
+                    newlines += 1;
+                } else if b == b'\r' {
+                    if newlines > 0 {
+                        return false;
+                    }
+                } else if b == b' ' || b == b'\t' {
+                    if newlines == 0 {
+                        return false;
+                    }
+                    // OK: whitespace after the line break is the
+                    // next line's leading indent.
+                } else {
+                    return false;
+                }
+            }
+            newlines == 1
+        };
+        let original_start = self.tree[node_ix].item.start;
+        // Don't chain back when the heading's *first* content line is
+        // itself shaped like a setext underline (≤3 leading spaces, then
+        // only `-` or `=`, then optional trailing whitespace). Micromark
+        // tries to interpret such a line as an underline for the def's
+        // residual paragraph, which fails and resets the paragraph
+        // token — so the heading no longer inherits the def's start.
+        // Other content-line shapes (plain text, `*`, `+`, …) leave the
+        // paragraph token intact and the chain-back applies.
+        let first_line_end = bytes[original_start..ix]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|p| original_start + p)
+            .unwrap_or(ix);
+        let first_line = &bytes[original_start..first_line_end];
+        let is_setext_underline_shape = {
+            let mut p = 0;
+            while p < first_line.len() && first_line[p] == b' ' && p < 3 {
+                p += 1;
+            }
+            if p < first_line.len() && (first_line[p] == b'-' || first_line[p] == b'=') {
+                let c = first_line[p];
+                let mut q = p + 1;
+                while q < first_line.len() && first_line[q] == c {
+                    q += 1;
+                }
+                while q < first_line.len() && (first_line[q] == b' ' || first_line[q] == b'\t') {
+                    q += 1;
+                }
+                q == first_line.len()
+            } else {
+                false
+            }
+        };
+        if !is_setext_underline_shape {
+            let mut cur_start = original_start;
+            for def in self.allocs.refdefs_all.iter().rev() {
+                let def_end = def.1.span.end;
+                let def_start = def.1.span.start;
+                if is_adjacent(def_end, cur_start) {
+                    cur_start = def_start;
+                } else {
+                    break;
+                }
+            }
+            if cur_start < original_start {
+                self.tree[node_ix].item.start = cur_start;
+            }
+        }
 
         Some(ix + n)
     }
@@ -1514,7 +1888,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // remark. Skip inline-expression detection so the `{` is
                     // consumed as literal text (the enclosing code span will
                     // pick it up when backtick pairing resolves).
-                    if is_inside_code_span_on_line(bytes, ix) {
+                    //
+                    // Same treatment for `{` inside a CommonMark link URL
+                    // `[...](...)`: mdx-js does not evaluate expressions in
+                    // URLs (`[a]({x})` round-trips with URL "{x}", literal),
+                    // so treat the `{` as plain text and let the link
+                    // resolver claim the bytes. This also avoids a hard
+                    // parse error on unmatched `{` like `[a]({)`.
+                    if is_inside_code_span_on_line(bytes, ix)
+                        || is_inside_link_url_parens(bytes, ix)
+                        || is_inside_open_inline_jsx_tag(bytes, ix)
+                    {
                         LoopInstruction::ContinueAndSkip(0)
                     } else {
                         // MDX inline expression: try to scan balanced braces.
@@ -1635,16 +2019,28 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     LoopInstruction::ContinueAndSkip(0)
                 }
                 b'`' => {
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    backslash_escaped = false;
                     let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'`');
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + count,
-                        body: ItemBody::MaybeCode(count, false),
-                    });
-                    begin_text = ix + count;
-                    LoopInstruction::ContinueAndSkip(count - 1)
+                    // Only suppress as text when this backtick would land
+                    // inside a literalAutolink URL *and* couldn't possibly
+                    // pair with an earlier backtick of the same length to
+                    // form a code span (which would have fired before the
+                    // URL construct in micromark's text-construct order).
+                    let suppressed = self.options.contains(Options::ENABLE_GFM)
+                        && is_inside_gfm_autolink_url(bytes, ix)
+                        && !has_earlier_backtick_run(bytes, ix, count);
+                    if suppressed {
+                        LoopInstruction::ContinueAndSkip(count - 1)
+                    } else {
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        backslash_escaped = false;
+                        self.tree.append(Item {
+                            start: ix,
+                            end: ix + count,
+                            body: ItemBody::MaybeCode(count, false),
+                        });
+                        begin_text = ix + count;
+                        LoopInstruction::ContinueAndSkip(count - 1)
+                    }
                 }
                 b'<' if self.options.contains(Options::ENABLE_MDX)
                     || bytes.get(ix + 1) != Some(&b'\\') =>
@@ -1861,7 +2257,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         mut remaining_space: usize,
         mut indent: usize,
     ) -> usize {
-        self.tree.append(Item {
+        // Tree-position of the just-appended HtmlBlock — patched below to
+        // record whether the closer pattern was found (so the value gets its
+        // trailing newline trimmed) or the block ran to EOF without one.
+        let block_node = self.tree.append(Item {
             start: start_ix,
             end: 0, // set later
             body: ItemBody::HtmlBlock(false),
@@ -1871,7 +2270,69 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let bytes = self.text.as_bytes();
         let mut ix = start_ix;
         let end_ix;
+        // Two distinct close paths:
+        //   * `closer_pattern_found`: the `html_end_tag` matched on a line —
+        //     remark trims the trailing newline of the close line.
+        //   * container exit / EOF: the block was terminated externally
+        //     (parent list item ended, document ended). The trailing newline
+        //     of the LAST html line is content per remark, so we don't trim.
+        let mut closer_pattern_found = false;
+        // Spine depth above the HTML block itself — if we drop below this,
+        // a parent container has ended (e.g. list item closed by blank
+        // line + outdent). The HTML block ends WITHOUT consuming the
+        // boundary line (matches micromark, which has the parent close
+        // before the HTML block's continuation rule fires).
+        let parent_spine_len = self.tree.spine_len() - 1;
+        // Whether the immediate parent container is a blockquote. micromark
+        // treats the line ending right before a blockquote-close (blank
+        // line + outdent) as part of the blockquote's separator, not the
+        // HTML block content — so single-line `> <style\n\nfoo` emits
+        // `<style` (no trailing `\n`). List items keep the `\n`. EOF or
+        // continuation-marker close ALSO keeps the `\n` for both. The flag
+        // below is only true when we exit via the blank-line peek path.
+        let parent_is_blockquote = if parent_spine_len > 0 {
+            let parent_ix = self.tree.walk_spine().nth(parent_spine_len - 1).copied();
+            parent_ix.is_some_and(|ix| matches!(self.tree[ix].item.body, ItemBody::BlockQuote(..)))
+        } else {
+            false
+        };
+        // Block ended via two different external close paths:
+        //   * lazy: a non-blank line breaks container indent (`* <!-- foo\nbar` —
+        //     `bar` at col 0 doesn't satisfy list item indent). REF trims for
+        //     ANY parent.
+        //   * blank: a blank line ends the parent container. REF trims for
+        //     blockquote but KEEPS for list item.
+        let mut closed_via_blank = false;
+        let mut closed_via_lazy = false;
         loop {
+            // Before consuming the current line, peek for a container exit.
+            // If we're inside a list/blockquote and the current line is
+            // blank, look ahead to the next non-blank line to see if the
+            // parent closes there. If yes, end the HTML block now (don't
+            // append the blank line).
+            if parent_spine_len > 0 && scan_blank_line(&bytes[ix..]).is_some() {
+                let mut peek_ix = ix;
+                while peek_ix < bytes.len() {
+                    if let Some(adv) = scan_blank_line(&bytes[peek_ix..]) {
+                        peek_ix += adv;
+                    } else {
+                        break;
+                    }
+                }
+                if peek_ix == bytes.len() {
+                    end_ix = ix;
+                    closed_via_blank = true;
+                    break;
+                }
+                let mut peek_line_start = LineStart::new(&bytes[peek_ix..]);
+                let n_peek = scan_containers(&self.tree, &mut peek_line_start, self.options);
+                if n_peek <= parent_spine_len {
+                    end_ix = ix;
+                    closed_via_blank = true;
+                    break;
+                }
+            }
+
             let line_start_ix = ix;
             ix += scan_nextline(&bytes[ix..]);
             self.append_html_line(remaining_space.max(indent), line_start_ix, ix);
@@ -1880,11 +2341,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             let n_containers = scan_containers(&self.tree, &mut line_start, self.options);
             if n_containers < self.tree.spine_len() {
                 end_ix = ix;
+                if scan_blank_line(&bytes[ix..]).is_some() {
+                    closed_via_blank = true;
+                } else {
+                    closed_via_lazy = true;
+                }
                 break;
             }
 
             if self.text[line_start_ix..ix].contains(html_end_tag) {
                 end_ix = ix;
+                closer_pattern_found = true;
                 break;
             }
 
@@ -1896,6 +2363,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             ix = next_line_ix;
             remaining_space = line_start.remaining_space();
             indent = 0;
+        }
+        // Trim trailing `\n` from the html value when:
+        //   * the html_end_tag closed the block on its own line
+        //   * a lazy line broke the parent container (any parent)
+        //   * a blank line closed a blockquote-parented block
+        // Don't trim when the block ended via EOF after a continuation
+        // marker, or via blank inside a list item.
+        let trim_trailing =
+            closer_pattern_found || closed_via_lazy || (parent_is_blockquote && closed_via_blank);
+        if trim_trailing {
+            self.tree[block_node].item.body = ItemBody::HtmlBlock(true);
         }
         self.pop(end_ix);
         ix
@@ -1952,10 +2430,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         start_ix: usize,
         mut remaining_space: usize,
     ) -> usize {
+        // Consume the lazy-after-blockquote-close marker. When set, this
+        // code block is one-line only — micromark's `furtherStart` for
+        // `codeIndented` rejects lazy lines, so an indented line that
+        // follows the implicitly-closed blockquote can't extend across
+        // subsequent (also-lazy) lines. Cleared after consumption so a
+        // following code block (e.g. after a blank line) parses normally.
+        let lazy_one_line = self.pending_lazy_blockquote_close;
+        self.pending_lazy_blockquote_close = false;
+
         self.tree.append(Item {
             start: line_start_ix,
             end: 0, // will get set later
-            body: ItemBody::IndentCodeBlock,
+            body: ItemBody::IndentCodeBlock(lazy_one_line),
         });
         self.tree.push();
         let bytes = self.text.as_bytes();
@@ -1975,6 +2462,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 last_nonblank_child = self.tree.cur();
                 last_nonblank_ix = ix;
                 end_ix = ix;
+            }
+
+            if lazy_one_line {
+                break;
             }
 
             let mut line_start = LineStart::new(&bytes[ix..]);
@@ -2030,11 +2521,22 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         });
         self.tree.push();
         loop {
+            // EOF reached without a closing fence — pop and end the block.
+            // arena_build.rs strips the final \n later; no extra trim here.
+            if ix >= bytes.len() {
+                self.pop(ix);
+                return ix;
+            }
             let mut line_start = LineStart::new(&bytes[ix..]);
             let n_containers = scan_containers(&self.tree, &mut line_start, self.options);
             if n_containers < self.tree.spine_len() {
-                // this line will get parsed again as not being part of the code
-                // if it's blank, it should be parsed as a blank line
+                // Container outdent ends the code block. The blank line
+                // immediately before the outdent acts as the container's
+                // separator (not code content), so we strip one extra \n
+                // here. arena_build.rs strips the last content line's \n
+                // afterward — together that's 2 \n's stripped, matching
+                // remark's `- ```\n  foo\n\noo` → code value `foo`.
+                trim_trailing_newlines_from_code_block(&mut self.tree, bytes, 1);
                 self.pop(ix);
                 return ix;
             }
@@ -2311,6 +2813,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             end: ix + hrule_size,
             body: ItemBody::Rule,
         });
+        // A thematic break is a block-terminator. The "list interrupted
+        // paragraph" suppression from the previous block (e.g. indented
+        // code) no longer applies — a new list after the rule can be
+        // empty and still open.
+        self.list_interrupted_paragraph = false;
         ix + hrule_size
     }
 
@@ -2423,10 +2930,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // `[^a b]` and `[^]` fall through to the regular refdef path.
         let (mut i, label) =
             scan_link_label_rest(&self.text[start + 2..], &|_| None, self.tree.is_in_table())?;
-        if label.is_empty()
-            || label
-                .bytes()
-                .any(|b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
+        // GFM/micromark's labelInside rejects whitespace CHARACTER-BY-CHARACTER.
+        // Any space/tab/eol — including leading whitespace stripped by
+        // scan_link_label_rest's trim — invalidates the footnote definition
+        // (it falls through to a regular reference definition). Inspect the
+        // raw source bytes between `[^` and `]`, not the trimmed `label`.
+        let raw_label = &self.text.as_bytes()[start + 2..start + 2 + i.saturating_sub(1)];
+        if raw_label.is_empty()
+            || raw_label
+                .iter()
+                .any(|&b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
         {
             return None;
         }
@@ -2670,8 +3183,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if let Some((title_length, title)) = self.scan_refdef_title(&self.text[i..]) {
             i += title_length;
             if scan_blank_line(&bytes[i..]).is_some() {
+                // remark folds trailing same-line whitespace after the
+                // title into the definition's source span (matches the
+                // behavior already applied above in the no-title path).
+                let span_end = i + scan_whitespace_no_nl(&bytes[i..]);
                 backup.0 = i - start;
-                backup.1.span = span_start..i;
+                backup.1.span = span_start..span_end;
                 backup.1.title = Some(unescape(title, self.tree.is_in_table()));
                 return Some(backup);
             }
@@ -2918,6 +3435,19 @@ fn scan_paragraph_interrupt_no_table(
         })
         || bytes.starts_with(b"<")
             && (get_html_end_tag(&bytes[1..]).is_some() || starts_html_block_type_6(&bytes[1..]))
+        // Type-7 HTML blocks normally can't interrupt a paragraph, but
+        // micromark/remark close the paragraph when a type-7 start appears
+        // on a *lazy-continuation* line of a container (typically a
+        // blockquote without `>` on the next line). Mirror that quirk:
+        // accept type-7 only when we're not inside the current container,
+        // so plain-paragraph cases (`oo\n<a href="bar">`) keep the inline
+        // HTML behavior the spec requires. MDX disables HTML blocks
+        // entirely (everything `<...>` is JSX), so don't trigger the
+        // quirk in MDX mode either.
+        || (!mdx
+            && !current_container
+            && bytes.starts_with(b"<")
+            && scan_html_type_7(bytes).is_some())
         // MDX JSX flow elements also interrupt paragraphs
         || (mdx && bytes.starts_with(b"<") && scan_mdx_jsx_block(bytes, None).is_some())
         // MDX flow expressions (`{ ... }` spanning the full line) also interrupt
@@ -3012,6 +3542,62 @@ fn is_inside_code_span_on_line(bytes: &[u8], pos: usize) -> bool {
     false
 }
 
+/// True if the byte at `pos` sits inside a CommonMark link URL `[...](...)`
+/// — i.e. there is an unmatched `(` between `pos` and the start of the
+/// current line, immediately preceded by `]`, and that `]` is balanced by
+/// an earlier `[` on the same line. mdx-js does not evaluate expressions
+/// in link URLs (URL `{x}` is literal text, URL-encoded at render time),
+/// so we treat `{` here as plain text rather than an expression start.
+/// This both avoids a hard error on unmatched `{` (e.g. `[a]({)`) and
+/// removes a brittle dance where the link resolver previously had to
+/// reabsorb a stray `MdxTextExpression` token.
+///
+/// CommonMark forbids URLs from spanning a blank line, so a backward scan
+/// stopping at newlines is sufficient. We also require the `]` to have a
+/// matching `[` so bare `](` (no link to form) doesn't suppress the
+/// expression scan — mdx-js still errors on `]({` for that reason.
+fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
+    let mut paren_depth: i32 = 0;
+    let mut i = pos;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b'\n' | b'\r' => return false,
+            b')' => paren_depth += 1,
+            b'(' => {
+                if paren_depth == 0 {
+                    // Unmatched `(` to our left. It must be immediately
+                    // preceded by `]`, and that `]` must have a matching
+                    // `[` earlier on the same line.
+                    if i == 0 || bytes[i - 1] != b']' {
+                        return false;
+                    }
+                    let mut j = i - 1; // position of `]`
+                    let mut bracket_depth: i32 = 1;
+                    while j > 0 {
+                        j -= 1;
+                        match bytes[j] {
+                            b'\n' | b'\r' => return false,
+                            b']' => bracket_depth += 1,
+                            b'[' => {
+                                bracket_depth -= 1;
+                                if bracket_depth == 0 {
+                                    return true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    return false;
+                }
+                paren_depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// True if the byte at `pos` is the first content char of its source line,
 /// allowing only whitespace, blockquote markers (`>`), and at most one
 /// leading list marker (`-`, `+`, `*`, or `N.`/`N)`) before it. Used to
@@ -3065,6 +3651,218 @@ fn is_at_paragraph_line_start(bytes: &[u8], pos: usize) -> bool {
         }
     }
     k == line.len()
+}
+
+/// True if the line ending at `ix - 1` contains an `<` that opens an inline
+/// MDX JSX tag whose scan extends past `ix`. Used to suppress paragraph
+/// interrupts on the line beginning at `ix` when a multi-line JSX tag from
+/// the previous line is still open — the would-be interrupt char (e.g. the
+/// closing `>`) actually belongs to the JSX tag.
+fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize) -> bool {
+    if ix == 0 || ix > bytes.len() {
+        return false;
+    }
+    let mut prev_line_end = ix - 1;
+    if !matches!(bytes[prev_line_end], b'\n' | b'\r') {
+        return false;
+    }
+    if prev_line_end > 0 && bytes[prev_line_end] == b'\n' && bytes[prev_line_end - 1] == b'\r' {
+        prev_line_end -= 1;
+    }
+    let mut prev_line_start = prev_line_end;
+    while prev_line_start > 0 && !matches!(bytes[prev_line_start - 1], b'\n' | b'\r') {
+        prev_line_start -= 1;
+    }
+    let line = &bytes[prev_line_start..prev_line_end];
+    let mut offset = 0;
+    while offset < line.len() {
+        // Backslash-escape neutralizes the next byte: `\<Foo` does not open
+        // a JSX tag, so don't suppress would-be paragraph interrupts on the
+        // following line just because the line contains `\<`.
+        if line[offset] == b'\\' && offset + 1 < line.len() {
+            offset += 2;
+            continue;
+        }
+        if line[offset] != b'<' {
+            offset += 1;
+            continue;
+        }
+        let pos = prev_line_start + offset;
+        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..]) {
+            if pos + len > ix {
+                return true;
+            }
+        }
+        offset += 1;
+    }
+    false
+}
+
+/// True if `pos` falls inside the opening or closing tag of an inline MDX
+/// JSX element on the same source line (back to the previous newline). Used
+/// to suppress the first-pass `MdxTextExpression` handler for `{` that
+/// actually belongs to a JSX attribute spread or attribute value — those
+/// braces will be consumed by the inline JSX scanner in the second pass.
+fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
+    if pos == 0 || pos > bytes.len() {
+        return false;
+    }
+    // Walk back to the start of the enclosing block: a blank line (two
+    // consecutive line endings) or the start of input. Inline JSX tags
+    // can span multiple paragraph-continuation lines, so stopping at a
+    // single newline mis-classifies `{...}` on a continuation line as
+    // text-position when it's actually inside an open JSX attribute.
+    let mut line_start = pos;
+    let mut seen_newline = false;
+    while line_start > 0 {
+        let b = bytes[line_start - 1];
+        if matches!(b, b'\n' | b'\r') {
+            if seen_newline {
+                break;
+            }
+            seen_newline = true;
+        } else if !matches!(b, b' ' | b'\t') {
+            seen_newline = false;
+        }
+        line_start -= 1;
+    }
+    let mut i = line_start;
+    while i < pos {
+        // Backslash escapes neutralize the next byte (e.g. `\<` is literal
+        // `<`, not a JSX tag opener). Skip the pair so we don't mis-detect
+        // `[r\<Foo bar={1}...` as having an open inline JSX tag at `{1}`.
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'<' {
+            if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[i..]) {
+                if i + len > pos {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True if `pos` falls inside a GFM autolink URL on the current source line
+/// that micromark's `literalAutolink` construct would have tokenized — i.e.
+/// no unbalanced `[` / `![` precedes it. When micromark *does* tokenize the
+/// autolink, backticks (and other potential inline tokens) inside the URL
+/// are consumed as part of the URL, not as code-span markers. We'd
+/// otherwise let inline code break `https://foo.bar.\`baz>\``.
+///
+/// When there *is* an unbalanced `[`, micromark's `previousUnbalanced`
+/// check disables the autolink construct, so backticks must still tokenize
+/// as code spans (and `mdast-util-find-and-replace` later picks the URL
+/// out of the broken-label text). We mirror that here.
+fn is_inside_gfm_autolink_url(bytes: &[u8], pos: usize) -> bool {
+    if pos == 0 || pos >= bytes.len() {
+        return false;
+    }
+    let mut line_start = pos;
+    while line_start > 0 && !matches!(bytes[line_start - 1], b'\n' | b'\r') {
+        line_start -= 1;
+    }
+    // Track unbalanced `[` (and `![`) the way micromark does: if there's
+    // one open ahead of the URL, the literalAutolink construct doesn't fire.
+    let mut bracket_depth: i32 = 0;
+    let mut i = line_start;
+    while i < pos {
+        let b = bytes[i];
+        // Skip ONLY valid backslash escapes (`\` + ASCII punct). `\h` etc.
+        // is literal text — the URL `\http://...` starts at the `h`, so we
+        // mustn't blindly skip past the next byte.
+        if b == b'\\' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_punctuation() {
+            i += 2;
+            continue;
+        }
+        match b {
+            b'[' => bracket_depth += 1,
+            b']' if bracket_depth > 0 => bracket_depth -= 1,
+            _ => {}
+        }
+        // Look for `http`, `https`, `ftp`, or `www`. Keep the prefix scan
+        // narrow — `scan_autolink_literal` will reject false positives
+        // (e.g. preceding-character rule, missing scheme separator) so we
+        // don't need to fully replicate that logic here.
+        let prefix_match = bracket_depth == 0
+            && ((b == b'h'
+                && (bytes[i..].starts_with(b"http://") || bytes[i..].starts_with(b"https://")))
+                || (b == b'f' && bytes[i..].starts_with(b"ftp://"))
+                || (b == b'w' && bytes[i..].starts_with(b"www.")));
+        if prefix_match {
+            if let Some((_, raw_end, _, _, _)) = crate::post_passes::scan_autolink_literal(bytes, i)
+            {
+                if raw_end > pos {
+                    return true;
+                }
+                i = raw_end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True if there's a backtick run of exactly `count` length earlier on the
+/// same line as `pos`. Used by the autolink-vs-code-span tie-break in the
+/// firstpass: if a backtick *could* close a code span opened earlier, we
+/// must let the normal MaybeCode logic decide — micromark fires code-span
+/// constructs at the opener position before any later URL ever gets a
+/// chance to tokenize.
+fn has_earlier_backtick_run(bytes: &[u8], pos: usize, count: usize) -> bool {
+    if pos == 0 {
+        return false;
+    }
+    // Code spans extend across line breaks, so walk back to the start of
+    // the paragraph (the previous blank line or start-of-input). A line-
+    // scoped check would miss a backtick opener on a previous line and
+    // wrongly suppress a closing backtick that micromark would have
+    // matched.
+    let mut search_start = 0;
+    {
+        let mut i = pos;
+        while i > 0 {
+            i -= 1;
+            // Detect blank line: scan back to find line start, then check
+            // whether everything from there to the previous newline is ws.
+            if matches!(bytes[i], b'\n' | b'\r') {
+                let line_end = i;
+                let mut j = if i > 0 { i - 1 } else { 0 };
+                while j > 0 && !matches!(bytes[j - 1], b'\n' | b'\r') {
+                    j -= 1;
+                }
+                let line_is_blank = bytes[j..line_end]
+                    .iter()
+                    .all(|&b| matches!(b, b' ' | b'\t'));
+                if line_is_blank {
+                    search_start = i + 1;
+                    break;
+                }
+            }
+        }
+    }
+    let mut i = search_start;
+    while i < pos {
+        if bytes[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'`' {
+            let run = 1 + scan_ch_repeat(&bytes[(i + 1)..], b'`');
+            if run == count {
+                return true;
+            }
+            i += run;
+            continue;
+        }
+        i += 1;
+    }
+    false
 }
 
 fn contains_blank_line(bytes: &[u8]) -> bool {
@@ -3411,6 +4209,45 @@ fn get_html_end_tag(text_bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Strip up to `max_newlines` trailing `\n` (or `\r`) chars from the
+/// current fenced-code-block's content. The current tree position is
+/// inside the code block (the loop hasn't popped yet); we shrink the
+/// last child text node's range to drop the trailing line endings.
+/// `bytes` is the full source byte slice — needed to peek at the last
+/// byte before shrinking.
+fn trim_trailing_newlines_from_code_block(
+    tree: &mut Tree<Item>,
+    bytes: &[u8],
+    max_newlines: usize,
+) {
+    let Some(last_child) = tree.cur() else { return };
+    if !matches!(tree[last_child].item.body, ItemBody::Text { .. }) {
+        return;
+    }
+    let mut stripped = 0;
+    while stripped < max_newlines {
+        let start = tree[last_child].item.start;
+        let end = tree[last_child].item.end;
+        if end <= start {
+            break;
+        }
+        let last = bytes[end - 1];
+        if last == b'\n' {
+            tree[last_child].item.end = end - 1;
+            // Treat `\r\n` as one newline.
+            if end >= 2 && bytes[end - 2] == b'\r' {
+                tree[last_child].item.end = end - 2;
+            }
+            stripped += 1;
+        } else if last == b'\r' {
+            tree[last_child].item.end = end - 1;
+            stripped += 1;
+        } else {
+            break;
+        }
+    }
+}
+
 fn surgerize_tight_list(tree: &mut Tree<Item>, list_ix: TreeIndex) {
     let mut list_item = tree[list_ix].child;
     while let Some(listitem_ix) = list_item {
@@ -3486,7 +4323,12 @@ fn delim_run_can_open(
     if (delim == b'*' || delim == b'^') && !is_punctuation(next_char) {
         return true;
     }
-    if delim == b'~' && run_len > 1 {
+    // `~~` (and longer) follows the same flanking rules as `**`: it can open
+    // when followed by a non-punctuation char, OR when followed by punctuation
+    // BUT preceded by whitespace/punctuation (handled by the fall-through at
+    // the end of this function). Previously we returned `true` unconditionally
+    // here, which let `a~~/foo~~` open a strikethrough — GFM rejects that.
+    if delim == b'~' && run_len > 1 && !is_punctuation(next_char) {
         return true;
     }
     let prev_char = s[..ix].chars().last().unwrap();
@@ -3625,6 +4467,436 @@ enum LoopInstruction<T> {
     ContinueAndSkip(usize),
     /// Break looping immediately, returning with the given index and value.
     BreakAtWith(usize, T),
+}
+
+/// Result of `extend_indented_code_block`: the position end the block
+/// should advertise and how many blank lines (line terminators) to
+/// append to its `value` to match remark's behavior.
+pub(crate) struct IndentCodeExtension {
+    pub end_offset: u32,
+    pub extra_blank_lines: usize,
+}
+
+/// Walk forward from `item.end` past blank/whitespace lines that meet
+/// the indented-code-block indent threshold, returning the extended
+/// end and the number of blank lines to fold back into the body.
+///
+/// Returns `None` when:
+///   * the item isn't an indented code block, or
+///   * the block was opened as a lazy continuation
+///     (`IndentCodeBlock(true)`), or
+///   * the parent is a blockquote — the blank lines downstream would
+///     need to carry the `>` marker to extend, and firstpass already
+///     produces the correct end for that case.
+pub(crate) fn extend_indented_code_block(
+    item: &Item,
+    source: &[u8],
+    parent_body: Option<&ItemBody>,
+    start_column: u32,
+    // Where to begin scanning forward — pass the mdast-trimmed end
+    // (typically `mdast_position_end(item, source, parent_body)`) so
+    // the initial `\n` between the code body and the first blank line
+    // is correctly counted toward `extra_blank_lines`.
+    start_from: u32,
+) -> Option<IndentCodeExtension> {
+    if !matches!(item.body, ItemBody::IndentCodeBlock(_)) {
+        return None;
+    }
+    if matches!(item.body, ItemBody::IndentCodeBlock(true)) {
+        return None;
+    }
+    if matches!(parent_body, Some(ItemBody::BlockQuote(_))) {
+        return None;
+    }
+
+    // A blank-or-content line continues *this* code block only when
+    // its tab-expanded indent reaches the chunk-content column
+    // (start_column + 3): at top level col 4 of indent, inside a
+    // list-item with content-col 3 it's col 6, etc.
+    let required_indent_cols = (start_column as usize).saturating_add(3);
+    let line_indent_cols = |bytes: &[u8], from: usize| -> usize {
+        let mut p = from;
+        let mut cols = 0usize;
+        while p < bytes.len() {
+            match bytes[p] {
+                b' ' => cols += 1,
+                b'\t' => cols += 4 - (cols % 4),
+                _ => break,
+            }
+            p += 1;
+        }
+        cols
+    };
+
+    let mut pos = start_from as usize;
+    let mut last_indented_end: Option<usize> = None;
+    let mut last_indented_newlines = 0usize;
+    let mut newlines_skipped = 0usize;
+    loop {
+        while pos < source.len() && (source[pos] == b'\r' || source[pos] == b'\n') {
+            if source[pos] == b'\r' {
+                pos += 1;
+                if pos < source.len() && source[pos] == b'\n' {
+                    pos += 1;
+                }
+            } else {
+                pos += 1;
+            }
+            newlines_skipped += 1;
+        }
+        if pos >= source.len() {
+            break;
+        }
+        let is_indented = line_indent_cols(source, pos) >= required_indent_cols;
+        if !is_indented {
+            // Whitespace-only line that doesn't meet the threshold
+            // still sits between chunks — its newline contributes to
+            // `newlines_skipped`. Anything else ends the extension.
+            let mut p = pos;
+            while p < source.len() && (source[p] == b' ' || source[p] == b'\t') {
+                p += 1;
+            }
+            if p < source.len() && (source[p] == b'\r' || source[p] == b'\n') {
+                pos = p;
+                continue;
+            }
+            break;
+        }
+        let line_start = pos;
+        while pos < source.len() && source[pos] != b'\n' && source[pos] != b'\r' {
+            pos += 1;
+        }
+        let line_content = &source[line_start..pos];
+        if !line_content.iter().all(|&b| b == b' ' || b == b'\t') {
+            break;
+        }
+        last_indented_end = Some(pos);
+        last_indented_newlines = newlines_skipped;
+    }
+
+    last_indented_end.map(|end| IndentCodeExtension {
+        end_offset: end as u32,
+        // The first walked newline followed the last chunk and is
+        // already accounted for by the body content. Any additional
+        // newlines are blank inter-chunk lines that need to be folded
+        // back into the value.
+        extra_blank_lines: last_indented_newlines.saturating_sub(1),
+    })
+}
+
+/// remark quirk: when a list-item's `cont_end` (the end derived from its
+/// children) lands on a line terminator AND a sibling list-item follows,
+/// the list-item's position extends through the next item's marker to
+/// that item's first content column.
+///
+/// Example: `- \`\`\`\n- d` — listItem 1 ends at the content column of
+/// listItem 2 (start of `d`), not after its own fenced-code body.
+///
+/// Returns the extended end offset when the rule applies; otherwise
+/// `None`.
+pub(crate) fn extend_list_item_to_next_sibling_content(
+    tree: &Tree<Item>,
+    ix: TreeIndex,
+    source: &[u8],
+    cont_end: u32,
+) -> Option<u32> {
+    if cont_end == 0 {
+        return None;
+    }
+    if !matches!(source.get(cont_end as usize - 1), Some(b'\n' | b'\r')) {
+        return None;
+    }
+    let next_ix = tree[ix].next?;
+    if !matches!(tree[next_ix].item.body, ItemBody::ListItem(..)) {
+        return None;
+    }
+    let child_ix = tree[next_ix].child?;
+    let child_start = tree[child_ix].item.start as u32;
+    if child_start > cont_end {
+        Some(child_start)
+    } else {
+        None
+    }
+}
+
+/// Nested-blockquote extension: when an inner BlockQuote sits inside
+/// outer BlockQuote(s) and the next line(s) carry the outer `>`
+/// marker(s) but NOT this inner one's, the inner bq's end extends
+/// through the outer markers. Matches micromark's lazy-bq position:
+/// the inner bq absorbs trailing marker-only lines that its parent
+/// still claims.
+///
+/// Skipped when this bq has a next sibling — those marker-only lines
+/// then belong to the outer bq's space *between* siblings, not to
+/// this inner one.
+///
+/// Returns the extended `cont_end` when the rule fires, else `None`.
+pub(crate) fn extend_inner_blockquote_through_outer_markers(
+    tree: &Tree<Item>,
+    ix: TreeIndex,
+    source: &[u8],
+    cont_end: u32,
+) -> Option<u32> {
+    if !matches!(tree[ix].item.body, ItemBody::BlockQuote(..)) {
+        return None;
+    }
+    if tree[ix].next.is_some() {
+        return None;
+    }
+    let outer_bq_count = tree
+        .walk_spine()
+        .filter(|&&i| matches!(tree[i].item.body, ItemBody::BlockQuote(_)))
+        .count();
+    if outer_bq_count == 0 {
+        return None;
+    }
+    let next_start = tree[ix]
+        .next
+        .map(|n| tree[n].item.start)
+        .unwrap_or(source.len());
+    let mut pos = cont_end as usize;
+    let mut new_end: Option<u32> = None;
+    while pos < next_start {
+        if pos < source.len() && source[pos] == b'\r' {
+            pos += 1;
+            if pos < source.len() && source[pos] == b'\n' {
+                pos += 1;
+            }
+        } else if pos < source.len() && source[pos] == b'\n' {
+            pos += 1;
+        }
+        if pos >= next_start || pos >= source.len() {
+            break;
+        }
+        let mut scan = pos;
+        let mut markers = 0usize;
+        while markers < outer_bq_count && scan < source.len() {
+            while scan < source.len() && matches!(source[scan], b' ' | b'\t') {
+                scan += 1;
+            }
+            if scan < source.len() && source[scan] == b'>' {
+                scan += 1;
+                markers += 1;
+            } else {
+                break;
+            }
+        }
+        if markers < outer_bq_count {
+            break;
+        }
+        // After the outer markers we must NOT see this inner bq's `>` —
+        // and we must NOT see content. If we do, the inner bq either
+        // continues normally (let firstpass handle it) or the next
+        // block belongs to the outer bq, not to this inner one.
+        let mut p = scan;
+        while p < source.len() && matches!(source[p], b' ' | b'\t') {
+            p += 1;
+        }
+        if p < source.len() && source[p] == b'>' {
+            break;
+        }
+        if p < source.len() && !matches!(source[p], b'\n' | b'\r') {
+            break;
+        }
+        new_end = Some(scan as u32);
+        pos = p;
+    }
+    new_end
+}
+
+/// remark/micromark quirk: when a list inside a blockquote is followed
+/// by more blockquote content (e.g. `>>- one\n>>\n  >  > two`), the
+/// list "absorbs" the blank `>>` continuation lines between it and the
+/// next sibling block. The list's end extends to right after the
+/// parent blockquote markers on the last blank continuation line.
+///
+/// Only fires when the spine above this list is *pure* blockquotes
+/// (no enclosing list-item) — see comments inline.
+///
+/// Returns the extended `cont_end` when the rule fires, else `None`.
+pub(crate) fn extend_list_in_blockquote_through_marker_lines(
+    tree: &Tree<Item>,
+    ix: TreeIndex,
+    source: &[u8],
+    cont_end: u32,
+) -> Option<u32> {
+    if !matches!(tree[ix].item.body, ItemBody::List(..)) {
+        return None;
+    }
+    let bq_count = tree
+        .walk_spine()
+        .filter(|&&i| matches!(tree[i].item.body, ItemBody::BlockQuote(_)))
+        .count();
+    if bq_count == 0 {
+        return None;
+    }
+    let any_outer_listitem = tree
+        .walk_spine()
+        .any(|&i| matches!(tree[i].item.body, ItemBody::ListItem(..)));
+    if any_outer_listitem {
+        return None;
+    }
+    let next_start = tree[ix]
+        .next
+        .map(|n| tree[n].item.start)
+        .unwrap_or(source.len());
+    if next_start <= cont_end as usize {
+        return None;
+    }
+
+    let mut pos = cont_end as usize;
+    let mut new_end = cont_end;
+    let mut saw_blank = false;
+    let mut stop = false;
+    while pos < next_start && !stop {
+        if pos < source.len() && source[pos] == b'\r' {
+            pos += 1;
+            if pos < source.len() && source[pos] == b'\n' {
+                pos += 1;
+            }
+        } else if pos < source.len() && source[pos] == b'\n' {
+            pos += 1;
+        }
+        if pos >= next_start {
+            break;
+        }
+        // CommonMark: a blockquote continuation line allows 0–3 spaces
+        // of leading indent. 4+ spaces would make the line an indented
+        // code block at the outer scope.
+        {
+            let mut leading_cols = 0usize;
+            let mut ws = pos;
+            while ws < source.len() && matches!(source[ws], b' ' | b'\t') && leading_cols < 4 {
+                leading_cols += if source[ws] == b'\t' {
+                    4 - (leading_cols % 4)
+                } else {
+                    1
+                };
+                ws += 1;
+            }
+            if leading_cols >= 4 {
+                break;
+            }
+        }
+        let mut markers_found = 0usize;
+        let mut scan = pos;
+        while markers_found < bq_count && scan < source.len() {
+            while scan < source.len() && matches!(source[scan], b' ' | b'\t') {
+                scan += 1;
+            }
+            if scan < source.len() && source[scan] == b'>' {
+                scan += 1;
+                markers_found += 1;
+            } else {
+                break;
+            }
+        }
+        if markers_found < bq_count {
+            break;
+        }
+        let after_markers = scan;
+        let mut p = after_markers;
+        while p < source.len() && matches!(source[p], b' ' | b'\t') {
+            p += 1;
+        }
+        let blank = p >= source.len() || matches!(source[p], b'\n' | b'\r');
+        if blank {
+            // Extend through trailing whitespace on the marker line.
+            new_end = p as u32;
+            saw_blank = true;
+            pos = p;
+        } else if !saw_blank && source.get(p) == Some(&b'>') {
+            // First line, deeper-nested bq that doesn't continue this
+            // list. Include the outer markers in the list span, stop.
+            new_end = after_markers as u32;
+            stop = true;
+        } else if !saw_blank {
+            // First line, regular text — sibling paragraph in same bq.
+            stop = true;
+        } else {
+            // Blank lines preceded content — don't include its markers.
+            stop = true;
+        }
+    }
+
+    if new_end > cont_end {
+        Some(new_end)
+    } else {
+        None
+    }
+}
+
+/// Compute the MDAST `position.end` byte offset for a block item.
+///
+/// The first-pass tree records each block's `item.end` as the offset just
+/// past the block's bytes — which for most blocks includes the trailing
+/// line terminator. The mdast representation, however, follows remark's
+/// rules: most blocks strip all trailing line terminators, but math and
+/// fenced-code at EOF preserve them; in-blockquote fenced code at EOF
+/// trims; an unclosed list-item fenced code only keeps its trailing `\n`
+/// when the outdent line opens a new container marker.
+///
+/// `parent_body` is the body of the spine parent (the block one level up)
+/// at the time the block closes — needed for the blockquote-at-EOF and
+/// list-item-fenced-code carve-outs.
+pub(crate) fn mdast_position_end(
+    item: &Item,
+    source: &[u8],
+    parent_body: Option<&ItemBody>,
+) -> u32 {
+    let end = item.end as u32;
+    if !item.body.is_block_level() {
+        return end;
+    }
+    let is_math = matches!(item.body, ItemBody::MathBlock(_));
+    let math_at_eof = is_math && end as usize >= source.len();
+    let is_fenced = matches!(item.body, ItemBody::FencedCodeBlock(_));
+    let fenced_at_eof = is_fenced && end as usize >= source.len();
+    let parent_is_bq = matches!(parent_body, Some(ItemBody::BlockQuote(_)));
+    let parent_is_listitem = matches!(parent_body, Some(ItemBody::ListItem(..)));
+    // Blockquote-parented fenced code at EOF: the blockquote closed
+    // because the next non-existent line carries no `>` marker, so
+    // the trailing `\n` belongs to neither the code nor the blockquote
+    // (`>\`\`\`\n` → bq/code end before the `\n`, not after).
+    let fenced_at_eof_in_bq = fenced_at_eof && parent_is_bq;
+    // Unclosed fenced code in a list-item ended by container outdent:
+    // the trailing `\n` at end-1 belongs to the fenced code ONLY when
+    // the outdent line opens a new container (list marker or `>`).
+    // When the next block is a leaf (paragraph, heading, indented
+    // code), remark drops the `\n`.
+    let fenced_unclosed_in_listitem = is_fenced
+        && !fenced_at_eof
+        && end > 1
+        && matches!(source.get(end as usize - 1), Some(b'\n' | b'\r'))
+        && !matches!(source.get(end as usize - 2), Some(b'\n' | b'\r'))
+        && parent_is_listitem
+        && {
+            match source.get(end as usize).copied() {
+                Some(b'-' | b'*' | b'+' | b'>') => true,
+                Some(c) if c.is_ascii_digit() => {
+                    let mut p = end as usize + 1;
+                    while p < source.len() && source[p].is_ascii_digit() {
+                        p += 1;
+                    }
+                    matches!(source.get(p), Some(b'.' | b')'))
+                }
+                _ => false,
+            }
+        };
+    let skip_trim =
+        (math_at_eof || fenced_at_eof || fenced_unclosed_in_listitem) && !fenced_at_eof_in_bq;
+    if skip_trim {
+        return end;
+    }
+    let mut e = end;
+    while e > item.start as u32 && matches!(source.get(e as usize - 1), Some(b'\n' | b'\r')) {
+        e -= 1;
+        // Math/fenced code: only strip a single line terminator.
+        if is_math || is_fenced {
+            break;
+        }
+    }
+    e
 }
 
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]

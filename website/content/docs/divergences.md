@@ -32,6 +32,28 @@ remark behaviour isn't specified anywhere and isn't useful.
 
 ## Rendering
 
+### Code block `data.lang`
+
+Sätteri keeps the fenced-code info-string language on the HAST element as
+`data.lang`. remark-rehype drops it, on the grounds that it's already
+encoded as `properties.className` (`language-rust`).
+
+````markdown
+```rust title=foo.rs
+fn main() {}
+```
+````
+
+| Parser        | HAST `data`                              |
+| ------------- | ---------------------------------------- |
+| remark-rehype | `{ meta: "title=foo.rs" }`               |
+| Sätteri       | `{ lang: "rust", meta: "title=foo.rs" }` |
+
+Both still emit `class="language-rust"` on the `<code>` element, so
+syntax-highlighting plugins that read `properties.className` are
+unaffected. Plugins that want the raw language without parsing it back
+out of the class name can read `data.lang` directly.
+
 ### Table cell alignment
 
 GFM tables with column alignment produce different HAST properties.

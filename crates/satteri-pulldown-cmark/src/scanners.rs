@@ -318,14 +318,20 @@ impl<'a> LineStart<'a> {
         }
     }
 
-    /// Scan a list marker.
+    /// Scan a list marker, with explicit control over the post-marker space
+    /// clamp. CommonMark clamps at 4 (anything beyond becomes part of an
+    /// indented code block in the list item). MDX disables indented code
+    /// blocks entirely, so callers in MDX mode pass `clamp=false` to absorb
+    /// all post-marker spaces into the indent — matching micromark's behavior
+    /// of using the actual content column rather than `marker_width + 1`.
     ///
     /// Return value is the character, the start index, and the indent in spaces.
     /// For ordered list markers, the character will be one of b'.' or b')'. For
     /// bullet list markers, it will be one of b'-', b'+', or b'*'.
-    pub(crate) fn scan_list_marker_with_indent(
+    pub(crate) fn scan_list_marker_with_indent_and_clamp(
         &mut self,
         indent: usize,
+        clamp: bool,
     ) -> Option<(u8, u64, usize)> {
         let save = self.clone();
         if self.ix < self.bytes.len() {
@@ -342,7 +348,7 @@ impl<'a> LineStart<'a> {
                 }
                 self.ix += 1;
                 if self.scan_space(1) || self.is_at_eol() {
-                    return self.finish_list_marker(c, 0, indent + 2);
+                    return self.finish_list_marker(c, 0, indent + 2, clamp);
                 }
             } else if c.is_ascii_digit() {
                 let start_ix = self.ix;
@@ -356,7 +362,12 @@ impl<'a> LineStart<'a> {
                     } else if c == b')' || c == b'.' {
                         self.ix = ix;
                         if self.scan_space(1) || self.is_at_eol() {
-                            return self.finish_list_marker(c, val, indent + 1 + ix - start_ix);
+                            return self.finish_list_marker(
+                                c,
+                                val,
+                                indent + 1 + ix - start_ix,
+                                clamp,
+                            );
                         } else {
                             break;
                         }
@@ -375,6 +386,7 @@ impl<'a> LineStart<'a> {
         c: u8,
         start: u64,
         mut indent: usize,
+        clamp: bool,
     ) -> Option<(u8, u64, usize)> {
         let save = self.clone();
 
@@ -383,11 +395,21 @@ impl<'a> LineStart<'a> {
             return Some((c, start, indent));
         }
 
-        let post_indent = self.scan_space_upto(4);
-        if post_indent < 4 {
-            indent += post_indent;
+        if clamp {
+            let post_indent = self.scan_space_upto(4);
+            if post_indent < 4 {
+                indent += post_indent;
+            } else {
+                *self = save;
+            }
         } else {
-            *self = save;
+            // MDX: no indented code blocks, so the full run of post-marker
+            // spaces is part of the list item's content column. Without
+            // this, `1.     foo\n   bar` would stay in the list (clamped
+            // content col 4) instead of becoming a sibling paragraph
+            // (actual content col 8) like micromark/mdx-js produces.
+            let post_indent = self.scan_space_upto(usize::MAX);
+            indent += post_indent;
         }
         Some((c, start, indent))
     }
@@ -546,9 +568,6 @@ pub(crate) fn scan_closing_code_fence(
     fence_char: u8,
     n_fence_char: usize,
 ) -> Option<usize> {
-    if bytes.is_empty() {
-        return Some(0);
-    }
     let mut i = 0;
     let num_fence_chars_found = scan_ch_repeat(&bytes[i..], fence_char);
     if num_fence_chars_found < n_fence_char {
@@ -797,6 +816,13 @@ pub(crate) fn scan_table_head(data: &[u8]) -> (usize, Vec<Alignment>) {
     }
 
     if !start_col {
+        // Each cell of a delimiter row must contain at least one `-`. The
+        // inter-cell check at `|` already rejects empty cells, but the LAST
+        // cell needs the same guarantee here (e.g. `-|:` is invalid: the
+        // first cell is `-`, the second is `:` only).
+        if !found_hyphen_in_col {
+            return (0, vec![]);
+        }
         cols.push(active_col);
     }
     // Require a hyphen; either a pipe (unambiguous table) or a colon
@@ -1579,18 +1605,20 @@ pub(crate) fn scan_inline_html_comment(
             None
         }
         // A CDATA section consists of the string `<![CDATA[`, a string of characters not
-        // including the string `]]>`, and the string `]]>`.
+        // including the string `]]>`, and the string `]]>`. Requires AT LEAST
+        // two `]`s before `>` — `<![CDATA[…]>` (one `]`) is not a complete
+        // CDATA close per CommonMark, even though `]]>` appears as a
+        // substring of any valid close.
         b'[' if bytes[ix..].starts_with(b"CDATA[") && ix > scan_guard.cdata => {
             ix += b"CDATA[".len();
-            ix = memchr(b']', &bytes[ix..]).map_or(bytes.len(), |x| ix + x);
-            let close_brackets = scan_ch_repeat(&bytes[ix..], b']');
-            ix += close_brackets;
-
-            if close_brackets == 0 || bytes.get(ix) != Some(&b'>') {
-                scan_guard.cdata = ix;
-                None
-            } else {
-                Some(ix + 1)
+            loop {
+                let x = memchr(b']', &bytes[ix..])?;
+                ix += x;
+                let close_brackets = scan_ch_repeat(&bytes[ix..], b']');
+                if close_brackets >= 2 && bytes.get(ix + close_brackets) == Some(&b'>') {
+                    return Some(ix + close_brackets + 1);
+                }
+                ix += close_brackets.max(1);
             }
         }
         // A declaration consists of the string `<!`, an ASCII letter, zero or more characters not

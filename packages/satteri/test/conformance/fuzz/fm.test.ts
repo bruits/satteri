@@ -6,26 +6,30 @@ import {
   collectIssues,
   deduplicateIssues,
   formatIssue,
+  FUZZ_TIMEOUT_MS,
 } from "./shared.js";
 
 describe("fuzz: frontmatter conformance", () => {
-  test("collect and report frontmatter issues", () => {
-    const allIssues = [
-      ...collectIssues(fmDocument, "fm-mdast", "structured"),
-      ...collectIssues(fmDocument, "fm-hast", "structured"),
-      ...collectIssues(fmDocument, "fm-html", "structured"),
-      ...collectIssues(fmChaos, "fm-mdast", "chaos"),
-      ...collectIssues(fmChaos, "fm-hast", "chaos"),
-      ...collectIssues(fmChaos, "fm-html", "chaos"),
-    ];
+  test(
+    "collect and report frontmatter issues",
+    () => {
+      const allIssues = [
+        ...collectIssues(fmDocument, "fm-mdast", "structured"),
+        ...collectIssues(fmDocument, "fm-hast", "structured"),
+        ...collectIssues(fmDocument, "fm-html", "structured"),
+        ...collectIssues(fmChaos, "fm-mdast", "chaos"),
+        ...collectIssues(fmChaos, "fm-hast", "chaos"),
+        ...collectIssues(fmChaos, "fm-html", "chaos"),
+      ];
 
-    const unique = deduplicateIssues(allIssues);
+      const unique = deduplicateIssues(allIssues);
 
-    if (unique.length > 0) {
       const report = [
         "# Frontmatter fuzz-discovered conformance issues",
         "",
-        `Found ${unique.length} unique issue(s) across ${allIssues.length} total failure(s).`,
+        unique.length === 0
+          ? "No issues found in the latest run."
+          : `Found ${unique.length} unique issue(s) across ${allIssues.length} total failure(s).`,
         "",
         ...unique.map(formatIssue),
       ].join("\n");
@@ -36,11 +40,9 @@ describe("fuzz: frontmatter conformance", () => {
       const hard = unique.filter((i) => i.kind !== "position-only");
       const inputs = hard.map((i) => JSON.stringify(i.input));
       expect
-        .soft(
-          hard,
-          `Found ${hard.length} frontmatter conformance issue(s):\n${inputs.join("\n")}`,
-        )
+        .soft(hard, `Found ${hard.length} frontmatter conformance issue(s):\n${inputs.join("\n")}`)
         .toHaveLength(0);
-    }
-  });
+    },
+    FUZZ_TIMEOUT_MS,
+  );
 });

@@ -109,8 +109,13 @@ pub(crate) enum ItemBody {
     Heading(HeadingLevel, Option<HeadingIndex>), // heading level
     FencedCodeBlock(CowIndex),
     MathBlock(CowIndex), // meta string (info after $$)
-    IndentCodeBlock,
-    HtmlBlock(bool), // true = type 6/7 (blank-line-terminated)
+    // bool: true = lazy/no-extend (block was opened as a single-line
+    // synthetic split, e.g. after an empty list item closed via blank
+    // line); arena_build's trailing-indent extension must skip it.
+    IndentCodeBlock(bool),
+    HtmlBlock(bool), // true = trim trailing newline from value (type 6/7
+    // always; type 1-5 only when their closer pattern was found, not when
+    // the block ran out of input at EOF)
     BlockQuote(Option<BlockQuoteKind>),
     ContainerDirective(u8, DirectiveIndex), // (fence length, directive data)
     LeafDirective(DirectiveIndex),
@@ -213,6 +218,10 @@ pub(crate) struct ParserInner<'input> {
     pub(crate) options: Options,
     pub(crate) tree: Tree<Item>,
     pub(crate) allocs: Allocations<'input>,
+    /// MDAST `position.end` overrides for block-level items, computed
+    /// by firstpass. Read by arena_build; `item.end` (the parser
+    /// cursor) remains untouched.
+    pub(crate) mdast_positions: crate::firstpass::MdastPositions,
     html_scan_guard: HtmlScanGuard,
 
     // https://github.com/pulldown-cmark/pulldown-cmark/issues/844
@@ -306,7 +315,8 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
     ///
     /// See the [`ParserCallbacks`] trait for a list of callbacks that can be overridden.
     pub fn new_with_callbacks(text: &'input str, options: Options, callbacks: CB) -> Self {
-        let (mut tree, allocs, _firstpass_mdx_errors) = run_first_pass(text, options);
+        let (mut tree, allocs, _firstpass_mdx_errors, mdast_positions) =
+            run_first_pass(text, options);
         tree.reset();
         let inline_stack = Default::default();
         let link_stack = Default::default();
@@ -320,6 +330,7 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
                 options,
                 tree,
                 allocs,
+                mdast_positions,
                 inline_stack,
                 link_stack,
                 wikilink_stack,
@@ -376,13 +387,15 @@ impl<'input, F> Parser<'input, BrokenLinkCallback<F>> {
 
 impl<'input> ParserInner<'input> {
     pub(crate) fn new(text: &'input str, options: Options) -> Self {
-        let (mut tree, allocs, firstpass_mdx_errors) = run_first_pass(text, options);
+        let (mut tree, allocs, firstpass_mdx_errors, mdast_positions) =
+            run_first_pass(text, options);
         tree.reset();
         ParserInner {
             text,
             options,
             tree,
             allocs,
+            mdast_positions,
             inline_stack: Default::default(),
             link_stack: Default::default(),
             wikilink_stack: Default::default(),
@@ -547,11 +560,45 @@ impl<'input> ParserInner<'input> {
                         let is_text_fallback = match next_byte {
                             Some(b' ' | b'\t') => true,
                             Some(b'\n' | b'\r') => {
+                                // Skip whitespace + container prefixes when
+                                // probing for the first significant byte
+                                // after `\n`. A `>` at line start inside a
+                                // blockquote is the container marker, not a
+                                // JSX-like delimiter.
+                                let bq_depth = self
+                                    .tree
+                                    .walk_spine()
+                                    .filter(|&&ix| {
+                                        matches!(self.tree[ix].item.body, ItemBody::BlockQuote(..))
+                                    })
+                                    .count();
                                 let mut probe = start + 1;
-                                while probe < bytes_block.len()
-                                    && matches!(bytes_block[probe], b' ' | b'\t' | b'\n' | b'\r')
-                                {
-                                    probe += 1;
+                                loop {
+                                    while probe < bytes_block.len()
+                                        && matches!(
+                                            bytes_block[probe],
+                                            b' ' | b'\t' | b'\n' | b'\r'
+                                        )
+                                    {
+                                        probe += 1;
+                                    }
+                                    if bq_depth == 0
+                                        || probe >= bytes_block.len()
+                                        || bytes_block[probe] != b'>'
+                                    {
+                                        break;
+                                    }
+                                    let mut consumed = 0;
+                                    while consumed < bq_depth
+                                        && probe < bytes_block.len()
+                                        && bytes_block[probe] == b'>'
+                                    {
+                                        probe += 1;
+                                        if probe < bytes_block.len() && bytes_block[probe] == b' ' {
+                                            probe += 1;
+                                        }
+                                        consumed += 1;
+                                    }
                                 }
                                 if probe >= bytes_block.len() || bytes_block[probe] == b'>' {
                                     false
@@ -657,7 +704,22 @@ impl<'input> ParserInner<'input> {
                         prev = cur;
                         cur = node;
                         if let Some(node_ix) = cur {
-                            self.tree[node_ix].item.start = max(self.tree[node_ix].item.start, ix);
+                            let orig_start = self.tree[node_ix].item.start;
+                            let new_start = max(orig_start, ix);
+                            self.tree[node_ix].item.start = new_start;
+                            // When the autolink's closing `>` consumed the byte
+                            // that was the target of a preceding `\` escape,
+                            // the trailing text's `backslash_escaped` flag is
+                            // stale — clear it so arena_build doesn't extend
+                            // the text node's source span back over bytes the
+                            // link now owns. Mirrors the inline-link fix.
+                            if new_start > orig_start {
+                                if let ItemBody::Text { backslash_escaped } =
+                                    &mut self.tree[node_ix].item.body
+                                {
+                                    *backslash_escaped = false;
+                                }
+                            }
                         }
                         continue;
                     } else {
@@ -683,8 +745,21 @@ impl<'input> ParserInner<'input> {
                             prev = cur;
                             cur = node;
                             if let Some(node_ix) = cur {
-                                self.tree[node_ix].item.start =
-                                    max(self.tree[node_ix].item.start, ix);
+                                let orig_start = self.tree[node_ix].item.start;
+                                let new_start = max(orig_start, ix);
+                                self.tree[node_ix].item.start = new_start;
+                                // Inline HTML may consume bytes that a `\X`
+                                // escape was attached to (e.g. `\*` inside
+                                // an attribute value). Clear the stale flag
+                                // so arena_build doesn't extend the trail
+                                // back over bytes the HTML now owns.
+                                if new_start > orig_start {
+                                    if let ItemBody::Text { backslash_escaped } =
+                                        &mut self.tree[node_ix].item.body
+                                    {
+                                        *backslash_escaped = false;
+                                    }
+                                }
                             }
                             continue;
                         }
@@ -913,8 +988,24 @@ impl<'input> ParserInner<'input> {
                             self.tree[cur_ix].next = next_node;
                             self.tree[cur_ix].item.end = next_ix;
                             if let Some(next_node_ix) = next_node {
-                                self.tree[next_node_ix].item.start =
-                                    max(self.tree[next_node_ix].item.start, next_ix);
+                                let orig_start = self.tree[next_node_ix].item.start;
+                                let new_start = max(orig_start, next_ix);
+                                self.tree[next_node_ix].item.start = new_start;
+                                // If the text node's start was advanced past
+                                // its original position (the link's URL or
+                                // title consumed the bytes the escape was
+                                // attached to), the `backslash_escaped`
+                                // flag no longer applies — clear it so the
+                                // arena-build position fixup doesn't extend
+                                // the text node's source span back over
+                                // bytes already owned by the link.
+                                if new_start > orig_start {
+                                    if let ItemBody::Text { backslash_escaped } =
+                                        &mut self.tree[next_node_ix].item.body
+                                    {
+                                        *backslash_escaped = false;
+                                    }
+                                }
                             }
 
                             if tos.ty == LinkStackTy::Link {
@@ -1007,6 +1098,12 @@ impl<'input> ParserInner<'input> {
                                 // literal and let `[^Y]` be parsed as a footnote on
                                 // its own MaybeLinkClose iteration.
                                 RefScan::UnexpectedFootnote => continue,
+                                // `[text][invalid_label]` — the `[` after `[text]`
+                                // started a label slot but it wasn't a valid label
+                                // (e.g. unescaped `[` inside). Spec: a shortcut link
+                                // can't be followed by `[`, so don't fall back to
+                                // shortcut. Leave both brackets literal.
+                                RefScan::FailedInvalidLabel => continue,
                                 // [shortcut]
                                 //
                                 // [shortcut]: /blah
@@ -1028,6 +1125,7 @@ impl<'input> ParserInner<'input> {
                                 }
                                 RefScan::Collapsed(..)
                                 | RefScan::Failed
+                                | RefScan::FailedInvalidLabel
                                 | RefScan::UnexpectedFootnote => {
                                     // No label? maybe it is a shortcut reference
                                     let label_start = self.tree[tos.node].item.end - 1;
@@ -1252,13 +1350,21 @@ impl<'input> ParserInner<'input> {
                     if can_close {
                         while let Some(el) =
                             self.inline_stack
-                                .find_match(&mut self.tree, c, run_length, both)
+                                .find_match(&mut self.tree, c, run_length, count, both)
                         {
                             // have a match!
                             if let Some(prev_ix) = prev {
                                 self.tree[prev_ix].next = None;
                             }
-                            let match_count = min(count, el.count);
+                            // Consume at most two markers per inner-loop pass
+                            // (one `<strong>`/`<em>` per match), matching
+                            // micromark's `use = open>1 && close>1 ? 2 : 1`.
+                            // The outer `while let` then drives nesting by
+                            // re-running `find_match` with the leftover
+                            // counts, which is how `***foo***` becomes
+                            // `<em><strong>foo</strong></em>` instead of one
+                            // flat match.
+                            let match_count = min(2, min(count, el.count));
                             // start, end are tree node indices
                             let mut end = cur_ix - 1;
                             let mut start = el.start + el.count;
@@ -1584,7 +1690,22 @@ impl<'input> ParserInner<'input> {
                 ix += 1;
                 let buf = buf.get_or_insert_with(|| String::with_capacity(spanned_bytes.len()));
                 buf.push_str(&spanned_text[start_ix..ix]);
-                ix += skip_container_prefixes(&self.tree, &spanned_bytes[ix..], self.options);
+                // Use the full source bytes from this position (not just
+                // the span slice) so scan_containers can see the real
+                // line content past the closing backtick. With only the
+                // span slice, a partial-indent line followed by buffer
+                // end (e.g. `    ` + closing) was misread as EOL by
+                // is_at_eol — letting the ListItem container "match" the
+                // 4 spaces of a 5-indent item and over-strip the code
+                // span's trailing whitespace.
+                let from = span_start + ix;
+                let scanned = skip_container_prefixes(
+                    &self.tree,
+                    &self.text.as_bytes()[from..],
+                    self.options,
+                );
+                let scanned = scanned.min(spanned_bytes.len() - ix);
+                ix += scanned;
                 start_ix = ix;
             } else if c == b'\\'
                 && spanned_bytes.get(ix + 1) == Some(&b'|')
@@ -1657,7 +1778,22 @@ impl<'input> ParserInner<'input> {
                 if c == b'\r' && spanned_bytes.get(ix) == Some(&b'\n') {
                     ix += 1;
                 }
-                ix += skip_container_prefixes(&self.tree, &spanned_bytes[ix..], self.options);
+                // Use the full source bytes from this position (not just
+                // the span slice) so scan_containers can see the real
+                // line content past the closing backtick. With only the
+                // span slice, a partial-indent line followed by buffer
+                // end (e.g. `    ` + closing) was misread as EOL by
+                // is_at_eol — letting the ListItem container "match" the
+                // 4 spaces of a 5-indent item and over-strip the code
+                // span's trailing whitespace.
+                let from = span_start + ix;
+                let scanned = skip_container_prefixes(
+                    &self.tree,
+                    &self.text.as_bytes()[from..],
+                    self.options,
+                );
+                let scanned = scanned.min(spanned_bytes.len() - ix);
+                ix += scanned;
                 start_ix = ix;
             } else if c == b'\\'
                 && spanned_bytes.get(ix + 1) == Some(&b'|')
@@ -1953,14 +2089,39 @@ impl InlineStack {
         }
     }
 
+    /// Find an opener that can match `c` of original `run_length`.
+    ///
+    /// `current_count` is the **remaining** length of the closer being
+    /// processed (chars not yet consumed by earlier inner-loop matches).
+    /// We use it for CommonMark rule 9 (the "mod 3" both-side rule) so
+    /// that after a partial consumption like `3*foo *bar**` the outer `*`
+    /// can pair with what's left of the `**` — micromark re-evaluates the
+    /// rule using only the *current* run lengths on each side.
+    ///
+    /// `run_length` is the original closer length; it stays stable across
+    /// inner-loop iterations and is what the lower-bounds optimisation and
+    /// the strict tilde/caret length check key off.
     fn find_match(
         &mut self,
         tree: &mut Tree<Item>,
         c: u8,
         run_length: usize,
+        current_count: usize,
         both: bool,
     ) -> Option<InlineEl> {
-        let lowerbound = min(self.stack.len(), self.get_lowerbound(c, run_length, both));
+        // Use current_count (the post-partial-consumption remaining length)
+        // for the rule-9 mod-3 lowerbound key, not run_length. After an
+        // inner-loop pass consumes part of the closer, the remaining
+        // length sits in a different mod-3 bucket and may now satisfy
+        // rule 9 with openers the earlier (longer) attempt failed
+        // against. Keying on run_length would carry over the earlier
+        // failure into the new bucket and block valid matches like the
+        // outer `*` in `cz*x` `*foo***bar***baz` (closer `***` partial
+        // remainder 1 should still reach the opener at offset 2).
+        let lowerbound = min(
+            self.stack.len(),
+            self.get_lowerbound(c, current_count, both),
+        );
         let res = self.stack[lowerbound..]
             .iter()
             .cloned()
@@ -1969,10 +2130,14 @@ impl InlineStack {
                 if (c == b'~' || c == b'^') && run_length != el.run_length {
                     return false;
                 }
+                // Rule 9 (mod-3): for `*`/`_`, the openers on the stack are
+                // checked against the *current* lengths — `el.count` reflects
+                // remaining-after-partial-consumption when an opener has been
+                // re-pushed, and `current_count` is the remaining closer.
                 el.c == c
                     && (!both && !el.both
-                        || !(run_length + el.run_length).is_multiple_of(3)
-                        || run_length.is_multiple_of(3))
+                        || !(current_count + el.count).is_multiple_of(3)
+                        || current_count.is_multiple_of(3))
             });
 
         if let Some((matching_ix, matching_el)) = res {
@@ -1992,9 +2157,12 @@ impl InlineStack {
             // closers with the same count. Tildes/carets match strictly by
             // equal run-length, so a failure at run-length 2 must not close
             // the door on a later run-length 1 closer matching an earlier
-            // run-length 1 opener still on the stack.
+            // run-length 1 opener still on the stack. Key the bound by
+            // `current_count` (the post-partial-consumption length) so it
+            // applies only to closers whose remaining bucket actually
+            // shares this failure mode.
             if c != b'~' && c != b'^' {
-                self.set_lowerbound(c, run_length, both, self.stack.len());
+                self.set_lowerbound(c, current_count, both, self.stack.len());
             }
             None
         }
@@ -2022,6 +2190,11 @@ enum RefScan<'a> {
     Collapsed(Option<TreeIndex>),
     UnexpectedFootnote,
     Failed,
+    // `[text][...]` where `[...]` started but is an invalid label
+    // (e.g. contains unescaped `[`). The shortcut form for `[text]` is
+    // suppressed because the spec says a shortcut link must NOT be
+    // followed by `[` — even if that `[` doesn't form a valid label.
+    FailedInvalidLabel,
 }
 
 /// Skips forward within a block to a node which spans (ends inclusive) the given
@@ -2083,6 +2256,25 @@ fn scan_reference<'b>(
     let start = tree[cur_ix].item.start;
     let tail = &text.as_bytes()[start..];
 
+    // If the `[` opening the candidate label was escaped in source
+    // (preceded by an odd run of backslashes), it's a literal `[` and
+    // can't start a reference label. Without this check the label
+    // scanner walks raw source, which doesn't know that pulldown-cmark
+    // already absorbed the `\` into a backslash-escape token, and it
+    // would falsely consume `\[foo]` as `[foo]`.
+    if tail.first() == Some(&b'[') && start > 0 {
+        let src = text.as_bytes();
+        let mut backslashes = 0usize;
+        let mut j = start;
+        while j > 0 && src[j - 1] == b'\\' {
+            backslashes += 1;
+            j -= 1;
+        }
+        if backslashes % 2 == 1 {
+            return RefScan::Failed;
+        }
+    }
+
     if tail.starts_with(b"[]") {
         // The trailing `]` of the collapsed reference must already exist as a
         // tree node — pulldown-cmark emits each bracket as its own item, and
@@ -2097,7 +2289,17 @@ fn scan_reference<'b>(
         match label {
             Some((ix, ReferenceLabel::Link(label))) => RefScan::LinkLabel(label, start + ix),
             Some((_ix, ReferenceLabel::Footnote(_label))) => RefScan::UnexpectedFootnote,
-            None => RefScan::Failed,
+            None => {
+                // If `[text]` is followed by `[` that looked like a label
+                // opener, the shortcut form is suppressed even though the
+                // label parse failed (CommonMark requires shortcut links
+                // not be followed by `[`).
+                if tail.starts_with(b"[") {
+                    RefScan::FailedInvalidLabel
+                } else {
+                    RefScan::Failed
+                }
+            }
         }
     }
 }
@@ -2670,7 +2872,7 @@ fn body_to_tag_end(body: &ItemBody) -> TagEnd {
         ItemBody::Link(..) => TagEnd::Link,
         ItemBody::Image(..) => TagEnd::Image,
         ItemBody::Heading(level, _) => TagEnd::Heading(level),
-        ItemBody::IndentCodeBlock | ItemBody::FencedCodeBlock(..) | ItemBody::MathBlock(..) => {
+        ItemBody::IndentCodeBlock(..) | ItemBody::FencedCodeBlock(..) | ItemBody::MathBlock(..) => {
             TagEnd::CodeBlock
         }
         ItemBody::ContainerDirective(..) => TagEnd::Directive(DirectiveKind::Container),
@@ -2760,7 +2962,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::FencedCodeBlock(cow_ix) => {
             Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
         }
-        ItemBody::IndentCodeBlock => Tag::CodeBlock(CodeBlockKind::Indented),
+        ItemBody::IndentCodeBlock(..) => Tag::CodeBlock(CodeBlockKind::Indented),
         ItemBody::ContainerDirective(_, dir_ix)
         | ItemBody::LeafDirective(dir_ix)
         | ItemBody::TextDirective(dir_ix) => {

@@ -335,7 +335,9 @@ pub(crate) fn try_parse_expression_body(value: &str, allocator: &mut Allocator) 
 
     // Fallback: comment-only bodies (`{/* foo */}`) trip the wrapped
     // parser since `(/* foo */)` is invalid. Strip line + block comments
-    // and recheck against trimmed-empty.
+    // and recheck against trimmed-empty. Unterminated `/*` rejects rather
+    // than absorbing the rest of the body — matches acorn's behaviour
+    // (mdx-js uses acorn).
     let mut stripped = String::with_capacity(value.len());
     let bytes = value.as_bytes();
     let mut i = 0;
@@ -346,11 +348,20 @@ pub(crate) fn try_parse_expression_body(value: &str, allocator: &mut Allocator) 
                 i += 1;
             }
         } else if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            let comment_start = i;
             i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+            let mut closed = false;
+            while i + 1 < bytes.len() {
+                if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                    closed = true;
+                    i += 2;
+                    break;
+                }
                 i += 1;
             }
-            i = (i + 2).min(bytes.len());
+            if !closed {
+                return Some(comment_start);
+            }
         } else {
             stripped.push(bytes[i] as char);
             i += 1;
@@ -767,7 +778,12 @@ fn scan_mdx_expression_end_inner(
                 mark_value!();
             }
             // JSX tags — skip `<tag ...>` and `</tag>` so their `/` and `{}`
-            // don't interfere with brace/regex tracking.
+            // don't interfere with brace/regex tracking. When the lookahead
+            // doesn't form a valid JSX tag, treat the `<` as a less-than
+            // operator: mark_op so a following `/` is read as a regex (the
+            // acorn interpretation), not as division. Without this, an
+            // expression like `l</:/}` mis-parses the trailing `/}` as a
+            // regex literal and swallows the closing brace.
             b'<' if ix + 1 < bytes.len()
                 && (bytes[ix + 1].is_ascii_alphabetic()
                     || bytes[ix + 1] == b'_'
@@ -778,10 +794,11 @@ fn scan_mdx_expression_end_inner(
                 reject_if_lazy!();
                 if let Some(end) = scan_mdx_jsx_tag_end(&bytes[ix..]) {
                     ix += end;
+                    mark_value!();
                 } else {
                     ix += 1;
+                    mark_op!();
                 }
-                mark_value!();
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' | b'0'..=b'9' => {
                 reject_if_lazy!();
@@ -976,9 +993,43 @@ fn scan_mdx_jsx_tag_end_inner(
                         break;
                     }
                 }
-                // Optional `=value`.
-                if ix < bytes.len() && bytes[ix] == b'=' {
-                    ix += 1;
+                let mut peek = ix;
+                while peek < bytes.len() {
+                    match bytes[peek] {
+                        b' ' | b'\t' => peek += 1,
+                        b'\n' | b'\r' => {
+                            let was_cr = bytes[peek] == b'\r';
+                            peek += 1;
+                            if was_cr && peek < bytes.len() && bytes[peek] == b'\n' {
+                                peek += 1;
+                            }
+                            check_container_after_newline(bytes, &mut peek, &container_check)?;
+                        }
+                        _ if is_mdx_unicode_whitespace(bytes, peek) => {
+                            peek += char_len_utf8(bytes[peek]);
+                        }
+                        _ => break,
+                    }
+                }
+                if peek < bytes.len() && bytes[peek] == b'=' {
+                    ix = peek + 1;
+                    while ix < bytes.len() {
+                        match bytes[ix] {
+                            b' ' | b'\t' => ix += 1,
+                            b'\n' | b'\r' => {
+                                let was_cr = bytes[ix] == b'\r';
+                                ix += 1;
+                                if was_cr && ix < bytes.len() && bytes[ix] == b'\n' {
+                                    ix += 1;
+                                }
+                                check_container_after_newline(bytes, &mut ix, &container_check)?;
+                            }
+                            _ if is_mdx_unicode_whitespace(bytes, ix) => {
+                                ix += char_len_utf8(bytes[ix]);
+                            }
+                            _ => break,
+                        }
+                    }
                     if ix >= bytes.len() {
                         return None;
                     }
@@ -1381,8 +1432,46 @@ fn scan_mdx_inline_jsx_inner(
                         break;
                     }
                 }
-                if ix < bytes.len() && bytes[ix] == b'=' {
-                    ix += 1;
+                // mdx-js accepts whitespace on either side of `=`, e.g.
+                // `<Foo bar = "x"/>` or `<Foo bar =\n  {1}/>`. Peek past
+                // whitespace to find an `=` that belongs to this attribute.
+                let mut peek = ix;
+                while peek < bytes.len() {
+                    match bytes[peek] {
+                        b' ' | b'\t' => peek += 1,
+                        b'\n' | b'\r' => {
+                            let was_cr = bytes[peek] == b'\r';
+                            peek += 1;
+                            if was_cr && peek < bytes.len() && bytes[peek] == b'\n' {
+                                peek += 1;
+                            }
+                            check_container_after_newline(bytes, &mut peek, &container_check)?;
+                        }
+                        _ if is_mdx_unicode_whitespace(bytes, peek) => {
+                            peek += char_len_utf8(bytes[peek]);
+                        }
+                        _ => break,
+                    }
+                }
+                if peek < bytes.len() && bytes[peek] == b'=' {
+                    ix = peek + 1;
+                    while ix < bytes.len() {
+                        match bytes[ix] {
+                            b' ' | b'\t' => ix += 1,
+                            b'\n' | b'\r' => {
+                                let was_cr = bytes[ix] == b'\r';
+                                ix += 1;
+                                if was_cr && ix < bytes.len() && bytes[ix] == b'\n' {
+                                    ix += 1;
+                                }
+                                check_container_after_newline(bytes, &mut ix, &container_check)?;
+                            }
+                            _ if is_mdx_unicode_whitespace(bytes, ix) => {
+                                ix += char_len_utf8(bytes[ix]);
+                            }
+                            _ => break,
+                        }
+                    }
                     if ix >= bytes.len() {
                         return None;
                     }
@@ -1850,14 +1939,17 @@ fn parse_jsx_attrs<'a>(text: &'a str, container_content_col: usize) -> Vec<JsxAt
         i += 1;
     }
 
-    // Skip tag name. JSX names can include `$` (handled by `is_jsx_name_*`
-    // elsewhere); without it `<$Foo/>` would re-enter the attribute branch
-    // and synthesize a phantom `Foo` boolean attribute.
-    while i < len
-        && (bytes[i].is_ascii_alphanumeric()
-            || matches!(bytes[i], b'.' | b'-' | b':' | b'_' | b'$'))
-    {
-        i += 1;
+    // Skip tag name. Use the shared JSX identifier rules (which know about
+    // `$` and Unicode `is_id_start` / `is_id_continue`) and additionally
+    // accept the JSX tag-name separators `.` (member) and `:` (namespace).
+    while i < len {
+        if matches!(bytes[i], b'.' | b':') {
+            i += 1;
+        } else if is_jsx_name_continue(bytes, i) {
+            i += char_len_utf8(bytes[i]);
+        } else {
+            break;
+        }
     }
 
     loop {
@@ -1900,12 +1992,18 @@ fn parse_jsx_attrs<'a>(text: &'a str, container_content_col: usize) -> Vec<JsxAt
             continue;
         }
 
-        // Attribute name
+        // Attribute name. Use the shared JSX identifier rules (which include
+        // `$` and Unicode identifier chars), plus `:` for namespace separators
+        // (e.g. `xlink:href`).
         let name_start = i;
-        while i < len
-            && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b':' | b'_'))
-        {
-            i += 1;
+        while i < len {
+            if bytes[i] == b':' {
+                i += 1;
+            } else if is_jsx_name_continue(bytes, i) {
+                i += char_len_utf8(bytes[i]);
+            } else {
+                break;
+            }
         }
         if i == name_start {
             i += 1;

@@ -127,6 +127,30 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
         configurable: true,
         enumerable: true,
       });
+      // Optional `data` field — currently set by the mdast→hast converter
+      // for code blocks (`data.lang` + `data.meta` from the fenced info
+      // string). remark-rehype drops `lang` (it's redundant with
+      // `properties.className`); we keep it as an intentional divergence
+      // (see website/content/docs/divergences.md).
+      const rawData = reader.getNodeData(nodeId);
+      if (rawData !== null) {
+        try {
+          const parsed = JSON.parse(rawData) as Record<string, unknown>;
+          if (parsed && typeof parsed === "object" && "meta" in parsed && parsed.meta === "") {
+            delete parsed.meta;
+          }
+          if (parsed && Object.keys(parsed).length > 0) {
+            Object.defineProperty(node, "data", {
+              value: parsed,
+              writable: true,
+              configurable: true,
+              enumerable: true,
+            });
+          }
+        } catch {
+          /* malformed JSON — silently drop */
+        }
+      }
       break;
     }
 

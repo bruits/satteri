@@ -103,7 +103,34 @@ export class HastReader {
       typeDataOffset: v.getUint32(32, true),
       sourceLen: v.getUint32(36, true),
       sourceOffset: v.getUint32(40, true),
+      nodeDataCount: v.getUint32(44, true),
+      nodeDataOffset: v.getUint32(48, true),
     };
+  }
+
+  /**
+   * Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
+   * side). Returns `null` when the node has no entry. Linear scan over the
+   * sorted-by-id node-data section — cheap because it's only consulted by
+   * the materialiser for nodes that actually need a `data` field.
+   */
+  getNodeData(nodeId: number): string | null {
+    if (this.#header.nodeDataCount === 0) return null;
+    const v = this.#view;
+    let pos = this.#header.nodeDataOffset;
+    for (let i = 0; i < this.#header.nodeDataCount; i++) {
+      const id = v.getUint32(pos, true);
+      pos += 4;
+      const len = v.getUint32(pos, true);
+      pos += 4;
+      if (id === nodeId) {
+        const slice = new Uint8Array(this.#view.buffer, this.#view.byteOffset + pos, len);
+        return this.#textDecoder.decode(slice);
+      }
+      if (id > nodeId) return null; // entries are id-sorted
+      pos += len;
+    }
+    return null;
   }
 
   get nodeCount(): number {

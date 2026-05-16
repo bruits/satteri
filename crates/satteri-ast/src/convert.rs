@@ -279,12 +279,31 @@ fn emit_h_child(builder: &mut ArenaBuilder<Hast>, child: &serde_json::Value) {
 }
 
 fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
-    if url.bytes().all(is_url_safe) {
+    let bytes = url.as_bytes();
+    // A `%` is only "safe" when it's the start of a valid percent-encoding
+    // (followed by two hex digits). An invalid `%2X` (X not hex) means the
+    // `%` itself should be encoded as `%25` — matches remark's behavior.
+    let pct_safe = |i: usize| -> bool {
+        i + 2 < bytes.len() && is_hex_digit(bytes[i + 1]) && is_hex_digit(bytes[i + 2])
+    };
+    let needs_encode = bytes.iter().enumerate().any(|(i, &b)| {
+        if b == b'%' {
+            !pct_safe(i)
+        } else {
+            !is_url_safe(b)
+        }
+    });
+    if !needs_encode {
         return builder.alloc_string(url);
     }
     let mut encoded = String::with_capacity(url.len() * 2);
-    for byte in url.bytes() {
-        if is_url_safe(byte) {
+    for (i, &byte) in bytes.iter().enumerate() {
+        let safe = if byte == b'%' {
+            pct_safe(i)
+        } else {
+            is_url_safe(byte)
+        };
+        if safe {
             encoded.push(byte as char);
         } else {
             encoded.push('%');
@@ -295,13 +314,16 @@ fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
     builder.alloc_string(&encoded)
 }
 
+fn is_hex_digit(b: u8) -> bool {
+    b.is_ascii_hexdigit()
+}
+
 fn is_url_safe(b: u8) -> bool {
     matches!(b,
         b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
         | b'-' | b'.' | b'_' | b'~'
         | b':' | b'/' | b'?' | b'#' | b'@'
         | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'='
-        | b'%'
     )
 }
 
@@ -386,20 +408,19 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     let mut defs: FxHashMap<&str, Definition> = FxHashMap::default();
     let mut fn_def_nodes: FxHashMap<&str, u32> = FxHashMap::default();
 
-    // Pass 1: link/image reference defs + map every footnote identifier to
-    // its definition node, if any.
+    // First-wins for duplicate identifiers means *source order*, not
+    // node-id order: top-level refdefs are appended at the end of the
+    // root after blockquote-nested defs have already been allocated, so
+    // their IDs come later even though they appear earlier in the
+    // document. Collect Definition node ids first, then sort by source
+    // position before inserting.
+    let mut def_nodes: Vec<u32> = Vec::new();
     for id in 0..view.len() as u32 {
         let node = view.get_node(id);
         let data = view.get_type_data(id);
         match MdastNodeType::from_u8(node.node_type) {
             Some(MdastNodeType::Definition) if data.len() >= 32 => {
-                let dd = decode_definition_data(data);
-                let identifier = view.get_str(dd.identifier);
-                // remark uses first-wins for duplicate identifiers.
-                defs.entry(identifier).or_insert_with(|| Definition {
-                    url: dd.url,
-                    title: dd.title,
-                });
+                def_nodes.push(id);
             }
             Some(MdastNodeType::FootnoteDefinition) if data.len() >= 16 => {
                 let fd = decode_footnote_definition_data(data);
@@ -408,6 +429,16 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
             }
             _ => {}
         }
+    }
+    def_nodes.sort_by_key(|&id| view.get_node(id).start_offset);
+    for id in &def_nodes {
+        let data = view.get_type_data(*id);
+        let dd = decode_definition_data(data);
+        let identifier = view.get_str(dd.identifier);
+        defs.entry(identifier).or_insert_with(|| Definition {
+            url: dd.url,
+            title: dd.title,
+        });
     }
 
     // No footnote definitions ⇒ no references can resolve, so the rest of
@@ -741,6 +772,76 @@ fn add_text_node(builder: &mut ArenaBuilder<Hast>, text: &str) -> u32 {
     add_text_node_with_ref(builder, text_ref)
 }
 
+/// Mirror `trim-lines`: strip spaces/tabs adjacent to line breaks inside the
+/// value. The very first character and the very last character are preserved
+/// (only line ENDS for non-final lines and line STARTS for non-first lines
+/// get trimmed). Returns `Cow::Borrowed` when the value is unchanged so the
+/// caller can reuse the original `StringRef`.
+fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
+    let bytes = value.as_bytes();
+    // Quick scan: any line break with adjacent ws? If not, nothing to trim.
+    let mut needs_trim = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\n' || b == b'\r' {
+            if i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+                needs_trim = true;
+                break;
+            }
+            let after = if b == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                i + 2
+            } else {
+                i + 1
+            };
+            if after < bytes.len() && (bytes[after] == b' ' || bytes[after] == b'\t') {
+                needs_trim = true;
+                break;
+            }
+            i = after;
+            continue;
+        }
+        i += 1;
+    }
+    if !needs_trim {
+        return std::borrow::Cow::Borrowed(value);
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut last = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\n' || b == b'\r' {
+            // Trim trailing ws on the line ending here (interior line end).
+            let mut line_end = i;
+            while line_end > last && (bytes[line_end - 1] == b' ' || bytes[line_end - 1] == b'\t') {
+                line_end -= 1;
+            }
+            out.push_str(&value[last..line_end]);
+            // Append the line break itself.
+            let lb_end = if b == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                i + 2
+            } else {
+                i + 1
+            };
+            out.push_str(&value[i..lb_end]);
+            // Skip leading ws on the next line (interior line start).
+            let mut next_start = lb_end;
+            while next_start < bytes.len()
+                && (bytes[next_start] == b' ' || bytes[next_start] == b'\t')
+            {
+                next_start += 1;
+            }
+            last = next_start;
+            i = next_start;
+            continue;
+        }
+        i += 1;
+    }
+    out.push_str(&value[last..]);
+    std::borrow::Cow::Owned(out)
+}
+
 /// Add a text leaf reusing a StringRef from the source arena that seeded the
 /// builder; only valid because the builder's source pool starts as a clone of
 /// the view's source, so source-derived offsets address the same bytes.
@@ -1040,7 +1141,17 @@ fn convert_node(
         Some(MdastNodeType::Text) => {
             let data = view.get_type_data(node_id);
             let string_ref = decode_string_ref_data(data);
-            let id = add_text_node_with_ref(builder, string_ref);
+            // mdast-util-to-hast applies `trim-lines`: strip spaces/tabs at
+            // line-break boundaries inside the text value (interior line
+            // ends and starts), but preserve leading whitespace of the first
+            // line and trailing whitespace of the last line. Handles soft-
+            // wraps where a continuation line starts with `&#9;` (decoded
+            // to a tab in mdast) — the tab vanishes in hast.
+            let raw_value = view.get_str(string_ref);
+            let id = match trim_lines_for_hast(raw_value) {
+                std::borrow::Cow::Borrowed(_) => add_text_node_with_ref(builder, string_ref),
+                std::borrow::Cow::Owned(s) => add_text_node(builder, &s),
+            };
             copy_position_to(id, node_id, view, builder);
         }
 
@@ -1332,6 +1443,7 @@ fn convert_node(
                     ],
                 );
                 open_element_with_props(builder, "a", &a_props);
+                copy_position(node_id, view, builder);
                 add_text_node(builder, &number.to_string());
                 builder.close_node(); // a
                 builder.close_node(); // sup
@@ -1736,6 +1848,9 @@ fn emit_gfm_footnotes_section(
         let li_id_ref = builder.alloc_string(&li_id);
         let li_props = build_props(builder, &[("id", PROP_STRING, li_id_ref)]);
         open_element_with_props(builder, "li", &li_props);
+        // Carry position from the source FootnoteDefinition so the
+        // generated `<li>` lines up with the original `[^id]: ...` span.
+        copy_position(def_id, view, builder);
         add_text_node_with_ref(builder, ctx.newline_ref);
 
         let children: Vec<u32> = view.get_children(def_id).to_vec();
@@ -1815,7 +1930,10 @@ fn emit_paragraph_with_backrefs(
                 let sr = StringRef::from_bytes(data);
                 let value = view.get_str(sr);
                 let with_space = format!("{} ", value);
-                add_text_node(builder, &with_space);
+                let leaf_id = add_text_node(builder, &with_space);
+                // Position comes from the original text node (the synthesized
+                // trailing space is not represented in source).
+                copy_position_to(leaf_id, last_id, view, builder);
             } else {
                 convert_node(last_id, view, builder, ctx);
                 add_text_node(builder, " ");
@@ -1933,7 +2051,12 @@ fn convert_table_row(
     open_element(builder, "tr");
     copy_position(row_id, view, builder);
     add_text_node_with_ref(builder, ctx.newline_ref);
-    let cell_ids = view.get_children(row_id);
+    let all_cells = view.get_children(row_id);
+    // mdast-util-to-hast truncates source cells past the header column count
+    // (HAST padding fills underflow; this drops overflow). The MDAST tree
+    // keeps all source cells per `mdast-util-gfm-table`.
+    let max_cells = all_cells.len().min(alignments.len());
+    let cell_ids = &all_cells[..max_cells];
     let cell_tag = if is_header { "th" } else { "td" };
     for (col_idx, &cell_id) in cell_ids.iter().enumerate() {
         let align = alignments

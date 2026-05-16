@@ -92,6 +92,7 @@ mod firstpass;
 mod linklabel;
 mod mdx;
 mod parse;
+pub(crate) mod post_passes;
 mod puncttable;
 mod scanners;
 mod strings;
