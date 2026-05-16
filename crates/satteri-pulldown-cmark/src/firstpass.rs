@@ -722,7 +722,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // item spread.
                         self.mark_enclosing_listitem_spread();
                     }
-                    ItemBody::BlockQuote(..) => (),
+                    ItemBody::BlockQuote(..) => {
+                        // Blank `>` line inside a blockquote separates whatever
+                        // closed the outer paragraph from the next block within
+                        // the blockquote. Clear `list_interrupted_paragraph`
+                        // so an empty `-` marker on the following blockquote
+                        // line opens a fresh list (matches mdx-js/micromark:
+                        // `_\n>\n>-` → paragraph + blockquote(list(empty))).
+                        self.list_interrupted_paragraph = false;
+                    }
                     ItemBody::ListItem(indent, _) | ItemBody::DefinitionListDefinition(indent)
                         if self.begin_list_item.is_some() =>
                     {
@@ -1927,18 +1935,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             self.tree.append_text(begin_text, ix, backslash_escaped);
                             backslash_escaped = false;
                             // Strip container prefixes (e.g. blockquote `>`)
-                            // from continuation lines, then dedent (tabs →
-                            // spaces). The scanner already skipped prefixes
-                            // for depth tracking, but the extracted slice
-                            // still contains them. Match remark's
-                            // mdxTextExpression value normalization.
-                            let stripped =
-                                self.strip_container_prefixes(ix + content_start, ix + content_end);
-                            let normalized = crate::mdx::dedent_expression_continuation(
-                                &stripped,
-                                self.container_content_col(),
-                            )
-                            .into_owned();
+                            // from continuation lines and apply the 2-col
+                            // indent dedent. Combined in one walk so the
+                            // tab-stop math sees the correct per-line
+                            // starting column (lazy lines start at col 0;
+                            // strict lines start at the post-prefix column).
+                            let normalized = self
+                                .inline_expression_value(ix + content_start, ix + content_end);
                             // Validate the expression body as JS via oxc.
                             // Without this, `{h<}` etc. silently produce a
                             // phantom mdxTextExpression and only error at

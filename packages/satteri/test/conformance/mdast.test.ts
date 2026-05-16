@@ -527,11 +527,12 @@ describe("MDAST conformance: known divergences", () => {
   });
 
   // Strikethrough/emphasis interleaving: `_/~z)*~*nf` should parse as
-  // `_/~z)` text + `*~*` emphasis. We greedily grab `~z)*` as a
-  // strikethrough run instead. Requires per-resolver phase ordering
-  // (emphasis before strikethrough) to enforce CommonMark's
-  // inner-most-wins crossing rule.
-  test.fails("[known bug] strikethrough/emphasis nesting interleaves wrong", () => {
+  // `_/~z)` text + `*~*` emphasis. Our single-pass inline resolver
+  // mimics micromark's phase ordering (emphasis first, then strikethrough)
+  // by refusing to match `~`/`^` across an unmatched `*`/`_` opener on
+  // the stack — that way the `*…*` pair claims its span before the
+  // strikethrough pairer sees the inner `~`.
+  test("strikethrough/emphasis nesting crossing", () => {
     assertMdastConformance("_/~z)*~*nf");
   });
 

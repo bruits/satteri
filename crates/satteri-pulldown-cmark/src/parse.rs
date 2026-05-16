@@ -2122,7 +2122,24 @@ impl InlineStack {
             self.stack.len(),
             self.get_lowerbound(c, current_count, both),
         );
-        let res = self.stack[lowerbound..]
+        // For `~`/`^` (strikethrough/sub/superscript): walking down the stack
+        // from the top, stop at the first unmatched `*`/`_` opener. Matching
+        // a `~` across an open `*`/`_` would consume the `*`/`_` opener into
+        // the strikethrough body, breaking a candidate emphasis that could
+        // still close later. Micromark gets this for free by phase order:
+        // emphasis resolves before strikethrough, so by the time strikethrough
+        // looks, intervening `*`/`_` have already either matched or been
+        // abandoned. Our single-pass resolver fakes that here.
+        let stop = if c == b'~' || c == b'^' {
+            self.stack[lowerbound..]
+                .iter()
+                .rposition(|el| el.c == b'*' || el.c == b'_')
+                .map(|p| lowerbound + p + 1)
+                .unwrap_or(lowerbound)
+        } else {
+            lowerbound
+        };
+        let res = self.stack[stop..]
             .iter()
             .cloned()
             .enumerate()
@@ -2141,7 +2158,7 @@ impl InlineStack {
             });
 
         if let Some((matching_ix, matching_el)) = res {
-            let matching_ix = matching_ix + lowerbound;
+            let matching_ix = matching_ix + stop;
             for el in &self.stack[(matching_ix + 1)..] {
                 for i in 0..el.count {
                     tree[el.start + i].item.body = ItemBody::Text {

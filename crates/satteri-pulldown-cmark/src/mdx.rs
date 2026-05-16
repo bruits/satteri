@@ -1673,6 +1673,98 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         col
     }
 
+    /// Combined container-prefix strip + 2-column indent dedent for an
+    /// inline MDX expression body. The dedent's tab-stop math depends on
+    /// whether each line was strict (prefix matched, column = base_col - 1)
+    /// or lazy (no prefix, column = 0), so strip and dedent must share
+    /// one walk — separating them loses that per-line info.
+    pub(crate) fn inline_expression_value(
+        &self,
+        start_ix: usize,
+        end_ix: usize,
+    ) -> alloc::string::String {
+        const INDENT: usize = 2;
+        const TAB_SIZE: usize = 4;
+        let base_col = self.container_content_col().max(1);
+        let bytes = self.text.as_bytes();
+        let mut out = alloc::string::String::with_capacity(end_ix - start_ix);
+        let mut pos = start_ix;
+
+        // First line: copy verbatim (the `{` is consumed by caller; this
+        // line starts mid-line so it has no indent to dedent).
+        let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
+            .map(|i| pos + i)
+            .unwrap_or(end_ix);
+        out.push_str(&self.text[pos..line_end]);
+        pos = line_end;
+
+        while pos < end_ix {
+            if bytes[pos] == b'\r' {
+                out.push('\r');
+                pos += 1;
+            }
+            if pos < end_ix && bytes[pos] == b'\n' {
+                out.push('\n');
+                pos += 1;
+            }
+            if pos >= end_ix {
+                break;
+            }
+
+            let (post_prefix_col, partial_spaces) = if self.tree.spine_len() == 0 {
+                (0usize, 0usize)
+            } else {
+                let mut ls = LineStart::new(&bytes[pos..end_ix]);
+                let matched = scan_containers(&self.tree, &mut ls, self.options);
+                pos += ls.bytes_scanned();
+                let partial = ls.remaining_space();
+                // Strict: prefix matched, post-prefix column = base_col - 1.
+                // Lazy: no match, line starts at column 0.
+                let col = if matched == self.tree.spine_len() {
+                    base_col - 1
+                } else {
+                    0
+                };
+                (col, partial)
+            };
+            for _ in 0..partial_spaces {
+                out.push(' ');
+            }
+
+            // 2-column indent dedent. column tracks the absolute source
+            // column (0-indexed) so tab-stop math is correct.
+            let mut stripped = 0usize;
+            let mut column = post_prefix_col;
+            while pos < end_ix && stripped < INDENT {
+                let b = bytes[pos];
+                if b == b' ' {
+                    stripped += 1;
+                    column += 1;
+                    pos += 1;
+                } else if b == b'\t' {
+                    let next_col = (column / TAB_SIZE + 1) * TAB_SIZE;
+                    let tab_width = next_col - column;
+                    let to_strip = (INDENT - stripped).min(tab_width);
+                    stripped += to_strip;
+                    for _ in 0..(tab_width - to_strip) {
+                        out.push(' ');
+                    }
+                    column = next_col;
+                    pos += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
+                .map(|i| pos + i)
+                .unwrap_or(end_ix);
+            out.push_str(&self.text[pos..line_end]);
+            pos = line_end;
+        }
+        out
+    }
+
     /// Strip container prefixes from continuation lines in a raw text span.
     /// Returns the original text if not inside a container.
     pub(crate) fn strip_container_prefixes(

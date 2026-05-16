@@ -650,16 +650,15 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertMdxConformance("c>l}>\n>\n\t>");
   });
 
-  // Known divergence: when a paragraph immediately precedes a blockquote
-  // (no blank line between), an empty `-` list marker on a subsequent
-  // blockquote line is parsed as paragraph text instead of an empty list.
-  // mdx-js + plain remark both produce a list. Pre-existing pulldown-cmark
-  // behaviour around empty list-item recognition inside containers; tracked
-  // as `.fails` so a future fix flips the test green.
-  test.fails("[known divergence] empty list marker inside blockquote after preceding paragraph", async () => {
+  // A blank `>` line between the outer paragraph close and an empty `-`
+  // marker resets the paragraph-interrupt — the marker opens a fresh list
+  // inside the blockquote (matches mdx-js/micromark; `currentConstruct`
+  // lingers only across non-blank lines, and inside a blockquote a `>`-
+  // only line counts as blank for that purpose).
+  test("empty list marker inside blockquote after preceding paragraph", async () => {
     await assertMdxConformance("_\n>\n>-");
   });
-  test.fails("[known divergence] empty list marker inside nested blockquote after preceding paragraph", async () => {
+  test("empty list marker inside nested blockquote after preceding paragraph", async () => {
     await assertMdxConformance("_>>>\n>\n>-");
   });
 
@@ -707,12 +706,12 @@ describe("MDX conformance: fuzz regressions", () => {
   });
 
   // Text-position expression in a blockquote whose body ends with `\n\t`
-  // before the close `}`: remark applies its dedent rule (tab → 2 spaces)
-  // to the continuation line and produces value `q\n  `. We keep `\n`
-  // only and emit the trailing whitespace+`}` as text. The dedent path
-  // doesn't run for text-position expressions ending mid-line before
-  // another `}`.
-  test.fails("[known bug] text-position expression dedents trailing tab before close", async () => {
-    await assertMdxConformance(">o{q\n\t}}");
+  // before the close `}`: remark applies micromark-factory-mdx-expression's
+  // 2-column dedent to the continuation line — tab at column 0 yields
+  // expression value `1+2\n  ` (the leftover 2 columns become literal
+  // spaces). Lazy lines (no `>` prefix) start the dedent at column 0
+  // rather than `container_content_col - 1`.
+  test("text-position expression dedents trailing tab before close", async () => {
+    await assertMdxConformance(">o{1+2\n\t}}");
   });
 });
