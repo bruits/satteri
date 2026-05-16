@@ -34,8 +34,10 @@ describe("fuzz: frontmatter conformance", () => {
         ...unique.map(formatIssue),
       ].join("\n");
 
-      const issuesPath = new URL("./FUZZ-ISSUES-FM.md", import.meta.url);
-      writeFileSync(issuesPath, report + "\n");
+      if (unique.length > 0) {
+        const issuesPath = new URL("./FUZZ-ISSUES-FM.md", import.meta.url);
+        writeFileSync(issuesPath, report + "\n");
+      }
 
       const hard = unique.filter((i) => i.kind !== "position-only");
       const inputs = hard.map((i) => JSON.stringify(i.input));

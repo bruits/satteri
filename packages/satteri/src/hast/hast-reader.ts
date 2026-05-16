@@ -108,29 +108,31 @@ export class HastReader {
     };
   }
 
+  #nodeDataTable: Map<number, string> | null = null;
+
   /**
    * Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
-   * side). Returns `null` when the node has no entry. Linear scan over the
-   * sorted-by-id node-data section — cheap because it's only consulted by
-   * the materialiser for nodes that actually need a `data` field.
+   * side). Returns `null` when the node has no entry. Lazy-builds a
+   * `Map<id, string>` on first call so a materialization pass on a
+   * data-heavy tree stays O(nodes) rather than O(nodes × entries).
    */
   getNodeData(nodeId: number): string | null {
     if (this.#header.nodeDataCount === 0) return null;
-    const v = this.#view;
-    let pos = this.#header.nodeDataOffset;
-    for (let i = 0; i < this.#header.nodeDataCount; i++) {
-      const id = v.getUint32(pos, true);
-      pos += 4;
-      const len = v.getUint32(pos, true);
-      pos += 4;
-      if (id === nodeId) {
+    if (this.#nodeDataTable === null) {
+      this.#nodeDataTable = new Map();
+      const v = this.#view;
+      let pos = this.#header.nodeDataOffset;
+      for (let i = 0; i < this.#header.nodeDataCount; i++) {
+        const id = v.getUint32(pos, true);
+        pos += 4;
+        const len = v.getUint32(pos, true);
+        pos += 4;
         const slice = new Uint8Array(this.#view.buffer, this.#view.byteOffset + pos, len);
-        return this.#textDecoder.decode(slice);
+        this.#nodeDataTable.set(id, this.#textDecoder.decode(slice));
+        pos += len;
       }
-      if (id > nodeId) return null; // entries are id-sorted
-      pos += len;
     }
-    return null;
+    return this.#nodeDataTable.get(nodeId) ?? null;
   }
 
   get nodeCount(): number {

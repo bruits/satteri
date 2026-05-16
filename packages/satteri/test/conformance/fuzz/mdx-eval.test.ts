@@ -29,8 +29,10 @@ describe("fuzz: MDX eval conformance", () => {
         ...unique.map(formatMdxEvalIssue),
       ].join("\n");
 
-      const issuesPath = new URL("./FUZZ-ISSUES-MDX-EVAL.md", import.meta.url);
-      writeFileSync(issuesPath, report + "\n");
+      if (unique.length > 0) {
+        const issuesPath = new URL("./FUZZ-ISSUES-MDX-EVAL.md", import.meta.url);
+        writeFileSync(issuesPath, report + "\n");
+      }
 
       // All kinds count as failures, including `both-error-disagree`
       // (mdx-js rejects, satteri evaluates) — those are real coverage

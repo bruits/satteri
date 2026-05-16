@@ -299,23 +299,11 @@ pub(crate) enum EsmParseResult {
     Error,
 }
 
-/// Try to parse an ESM block to check completeness.
-///
-/// Accepts a reusable allocator to avoid repeated allocation in the
-/// blank-line retry loop.
-/// Validate an MDX expression body (the bytes between `{` and `}`) as JS.
-/// Returns `Some((offset_within_body, detail))` for the first oxc error, or
-/// `None` if the body parses cleanly. `detail` is the bare oxc message; the
-/// caller prefixes `"Could not parse expression with oxc: "` to match the
-/// `satteri-mdxjs-rs` format.
-///
-/// We try both parses: a plain program (so `1 + 2`, `{a: 1, b: 2}` after
-/// hoisting via object literal context, statement-bodied things, and
-/// comment-only bodies all work) and an expression-wrapped form `(body)`
-/// (so `{}/m` parses as `{} / m` — empty object divided by `m` — instead
-/// of being misread as `{}` block + unterminated regex). The body is
-/// accepted if either parses cleanly. This mirrors mdx-js, which uses
-/// acorn in expression mode.
+/// Validate an MDX expression body as JS via oxc, mirroring
+/// `acorn.parseExpressionAt` in mdx-js. Wraps as `(body)` so `{}/m` reads
+/// as `{} / m` and multi-statement bodies (`{a;b}`) get rejected. Falls
+/// back to a manual scan for comment-only bodies since `(/* foo */)` is
+/// itself invalid. Returns `(offset, detail)` for the first error.
 pub(crate) fn try_parse_expression_body(
     value: &str,
     allocator: &mut Allocator,
@@ -1673,6 +1661,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 let container_content_col = self.container_content_col();
                 let jsx_data =
                     parse_jsx_tag_with_column(tag_raw, container_content_col).into_static();
+                validate_jsx_expressions(
+                    &jsx_data.attrs,
+                    stripped_to_orig(pos),
+                    &mut self.mdx_expr_allocator,
+                    &mut self.mdx_errors,
+                );
                 let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
                 self.tree.append(Item {
                     start: stripped_to_orig(pos),
@@ -2238,4 +2232,37 @@ fn parse_jsx_attrs<'a>(text: &'a str, container_content_col: usize) -> Vec<JsxAt
     }
 
     attrs
+}
+
+/// Validate JSX attribute expression bodies (`x={…}`) and spread bodies
+/// (`{...x}`) via oxc, mirroring what mdx-js does with acorn at parse time.
+/// Without this, only the brace-counting scanner runs on these — garbage
+/// like `<a x={1 +}/>` survives until JS emit. Errors are recorded against
+/// `tag_offset` (the source byte where the opening `<` sits); per-attr
+/// positions aren't tracked through `parse_jsx_attrs`.
+pub(crate) fn validate_jsx_expressions(
+    attrs: &[JsxAttr<'_>],
+    tag_offset: usize,
+    allocator: &mut Allocator,
+    mdx_errors: &mut Vec<(usize, alloc::string::String)>,
+) {
+    for attr in attrs {
+        let body: alloc::borrow::Cow<'_, str> = match attr {
+            JsxAttr::Expression(_, v) => alloc::borrow::Cow::Borrowed(v.as_ref()),
+            JsxAttr::Spread(v) => {
+                let trimmed = v.as_ref().trim_start();
+                match trimmed.strip_prefix("...") {
+                    Some(operand) => alloc::borrow::Cow::Borrowed(operand),
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+        if let Some((_off, detail)) = try_parse_expression_body(&body, allocator) {
+            mdx_errors.push((
+                tag_offset,
+                alloc::format!("Could not parse expression with oxc: {detail}"),
+            ));
+        }
+    }
 }

@@ -58,18 +58,18 @@ impl<K: ArenaKind> Arena<K> {
 
         // Write header fields as little-endian u32s.
         buf.extend_from_slice(&BUFFER_MAGIC);
-        buf.extend_from_slice(&(K::KIND_TAG as u32).to_ne_bytes());
-        buf.extend_from_slice(&(NODE_STRUCT_SIZE as u32).to_ne_bytes());
-        buf.extend_from_slice(&(self.nodes.len() as u32).to_ne_bytes());
-        buf.extend_from_slice(&nodes_offset.to_ne_bytes());
-        buf.extend_from_slice(&(self.children.len() as u32).to_ne_bytes());
-        buf.extend_from_slice(&children_offset.to_ne_bytes());
-        buf.extend_from_slice(&(self.type_data.len() as u32).to_ne_bytes());
-        buf.extend_from_slice(&type_data_offset.to_ne_bytes());
-        buf.extend_from_slice(&(self.source.len() as u32).to_ne_bytes());
-        buf.extend_from_slice(&source_offset.to_ne_bytes());
-        buf.extend_from_slice(&node_data_count.to_ne_bytes());
-        buf.extend_from_slice(&node_data_offset.to_ne_bytes());
+        buf.extend_from_slice(&(K::KIND_TAG as u32).to_le_bytes());
+        buf.extend_from_slice(&(NODE_STRUCT_SIZE as u32).to_le_bytes());
+        buf.extend_from_slice(&(self.nodes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&nodes_offset.to_le_bytes());
+        buf.extend_from_slice(&(self.children.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&children_offset.to_le_bytes());
+        buf.extend_from_slice(&(self.type_data.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&type_data_offset.to_le_bytes());
+        buf.extend_from_slice(&(self.source.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&source_offset.to_le_bytes());
+        buf.extend_from_slice(&node_data_count.to_le_bytes());
+        buf.extend_from_slice(&node_data_offset.to_le_bytes());
 
         // The arena tracks `start_offset`/`end_offset` as **byte** offsets
         // (the parser works in bytes). remark/micromark report code-point
@@ -95,9 +95,9 @@ impl<K: ArenaKind> Arena<K> {
                     }
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
                     buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                        .copy_from_slice(&cp_start.to_ne_bytes());
+                        .copy_from_slice(&cp_start.to_le_bytes());
                     buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                        .copy_from_slice(&cp_end.to_ne_bytes());
+                        .copy_from_slice(&cp_end.to_le_bytes());
                 }
             } else {
                 // Fallback: no precomputed cache (e.g. arena assembled
@@ -113,14 +113,18 @@ impl<K: ArenaKind> Arena<K> {
                     let cp_end = cursor.byte_to_cp_offset(node.end_offset);
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
                     buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                        .copy_from_slice(&cp_start.to_ne_bytes());
+                        .copy_from_slice(&cp_start.to_le_bytes());
                     buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                        .copy_from_slice(&cp_end.to_ne_bytes());
+                        .copy_from_slice(&cp_end.to_le_bytes());
                 }
             }
         }
 
-        // SAFETY: u32 has no padding or alignment concerns for ne bytes.
+        // SAFETY: u32 has no padding. Note: this is a native-endian raw
+        // dump of the children array; on big-endian targets it'd need
+        // per-element to_le_bytes to match the wire format. Same caveat
+        // applies to the nodes_slice dump above. Acceptable today since
+        // all supported targets are little-endian.
         let children_slice: &[u8] = unsafe {
             std::slice::from_raw_parts(self.children.as_ptr() as *const u8, children_bytes)
         };
@@ -131,8 +135,8 @@ impl<K: ArenaKind> Arena<K> {
 
         // node_data entries: [id:u32][len:u32][bytes...]
         for (id, data) in node_data_entries {
-            buf.extend_from_slice(&id.to_ne_bytes());
-            buf.extend_from_slice(&(data.len() as u32).to_ne_bytes());
+            buf.extend_from_slice(&id.to_le_bytes());
+            buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
             buf.extend_from_slice(data);
         }
 

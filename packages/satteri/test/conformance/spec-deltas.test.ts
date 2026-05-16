@@ -173,3 +173,21 @@ describe("GFM list-item edge cases", () => {
     );
   });
 });
+
+// pulldown-cmark and cmark-gfm produce different emphasis/strikethrough
+// trees than remark/micromark for the cases below. satteri tracks remark.
+describe("Emphasis: remark vs cmark divergences", () => {
+  test("regression 729: triple asterisk run keeps outer `*` literal", () => {
+    assertHtmlConformance("j***5*=*\n");
+  });
+
+  test("regression 741: `**a.*.**a*.**.` resolves as single strong + nested em", () => {
+    assertHtmlConformance("**a.*.**a*.**.\n");
+  });
+});
+
+describe("GFM strikethrough: remark flanking rule", () => {
+  test("`~~!~~` against intraword punctuation stays literal", () => {
+    assertHtmlConformance("Here I strike out an exclamation point~~!~~.\n");
+  });
+});

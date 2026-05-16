@@ -1194,16 +1194,35 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
   let actual: unknown;
   let expected: unknown;
   let refError: string | null = null;
+  let actualError: string | null = null;
   try {
     actual = parse(input);
-  } catch {
+  } catch (e: any) {
     actual = "PARSE_ERROR";
+    actualError = String(e?.message ?? e ?? "");
   }
   try {
     expected = ref(input);
   } catch (e: any) {
     expected = "PARSE_ERROR";
     refError = String(e?.message ?? e ?? "");
+  }
+  // Surface satteri internal crashes when both sides error — otherwise
+  // panics hide behind the both-PARSE_ERROR agreement.
+  if (
+    actual === "PARSE_ERROR" &&
+    expected === "PARSE_ERROR" &&
+    actualError &&
+    !/^MDX parse error at byte \d+:/.test(actualError)
+  ) {
+    return {
+      input,
+      level,
+      source,
+      kind: "content",
+      expected,
+      actual: `INTERNAL_ERROR: ${actualError}`,
+    };
   }
   try {
     expect(actual).toEqual(expected);
@@ -1596,6 +1615,7 @@ async function compareMdxEval(
 
   let satHtml: string | undefined;
   let satError = false;
+  let satErrorMessage: string | null = null;
   try {
     const { default: SatComponent } = await satteriEvaluate(input, {
       ...runtime,
@@ -1604,11 +1624,30 @@ async function compareMdxEval(
     satHtml = normalizeHtml(
       renderToStaticMarkup(createElement(SatComponent as any, { components: jsxComponents })),
     );
-  } catch {
+  } catch (e: any) {
     satError = true;
+    satErrorMessage = String(e?.message ?? e ?? "");
   }
 
-  if (refError && satError) return null;
+  // If both sides threw, suppress only when satteri's error looks like a
+  // legitimate rejection (parse error or a runtime exception from the
+  // compiled component). Rust-side panics surface so they don't hide.
+  if (refError && satError) {
+    if (
+      satErrorMessage &&
+      /panic|unreachable|index out of bounds|unwrap\(\) on|RuntimeError/i.test(satErrorMessage)
+    ) {
+      return {
+        input,
+        source,
+        kind: "satteri-error",
+        referenceHtml: refHtml,
+        satteriHtml: satHtml,
+        error: `satteri internal error (both threw): ${satErrorMessage}`,
+      };
+    }
+    return null;
+  }
 
   if (refError !== satError) {
     return {
@@ -1618,7 +1657,7 @@ async function compareMdxEval(
       referenceHtml: refHtml,
       satteriHtml: satHtml,
       error: satError
-        ? "satteri threw but @mdx-js/mdx succeeded"
+        ? `satteri threw but @mdx-js/mdx succeeded${satErrorMessage ? `: ${satErrorMessage}` : ""}`
         : "@mdx-js/mdx threw but satteri succeeded",
     };
   }

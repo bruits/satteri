@@ -120,6 +120,8 @@ impl<K: ArenaKind> Arena<K> {
         node.start_column = start_column;
         node.end_line = end_line;
         node.end_column = end_column;
+        // Position mutation invalidates the cached byte→cp offsets.
+        self.cp_offsets.clear();
     }
 
     /// Appends to the shared flat children array, calling this more than

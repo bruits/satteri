@@ -24,12 +24,6 @@ const specPath = fileURLToPath(
 );
 const examples = JSON.parse(readFileSync(specPath, "utf8")) as SpecExample[];
 
-// CommonMark spec.json normalized U+00A0 (NBSP) to ASCII space in a handful
-// of examples whose spec.txt sources use NBSP to test space-preservation
-// rules. The on-disk JSON is internally inconsistent for these — see
-// `crates/satteri-pulldown-cmark/tests/commonmark_spec_json.rs` for context.
-const SPEC_JSON_NBSP_NORMALIZED = new Set([25, 333, 353, 507]);
-
 // spec.json is plain CommonMark — disable every extension on both sides so
 // the comparison stays apples-to-apples. (The default helpers in `./helpers`
 // enable GFM, which would skew strikethrough/table/autolink-literal cases.)
@@ -148,8 +142,6 @@ function collect(level: Level): Divergence[] {
   const out: Divergence[] = [];
   const { satteri, remark } = RUNNERS[level];
   for (const ex of examples) {
-    if (SPEC_JSON_NBSP_NORMALIZED.has(ex.example)) continue;
-
     let actual: unknown;
     let expected: unknown;
     try {

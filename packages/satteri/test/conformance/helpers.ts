@@ -305,6 +305,9 @@ function normalizeHtmlForComparison(html: string): string {
       // remark+rehype favours hex entities (`&#x26;`); satteri (and the
       // CommonMark spec) use named ones. Canonicalize to named, then
       // collapse the few entities rehype-stringify never has to encode.
+      // The `&quot; → "` collapse is context-unaware and could mask an
+      // unescaped `"` inside an attribute value; tolerated until we have
+      // an HTML-aware compare.
       .replace(/&#x3C;/g, "&lt;")
       .replace(/&#x3E;/g, "&gt;")
       .replace(/&#x26;/g, "&amp;")

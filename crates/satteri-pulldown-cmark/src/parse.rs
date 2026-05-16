@@ -521,6 +521,13 @@ impl<'input> ParserInner<'input> {
                             let raw = &block_text[start..end];
                             let col = crate::mdx::column_at(block_text.as_bytes(), start);
                             let jsx_data = crate::mdx::parse_jsx_tag_with_column(raw, col);
+                            let mut allocator = oxc_allocator::Allocator::default();
+                            crate::mdx::validate_jsx_expressions(
+                                &jsx_data.attrs,
+                                start,
+                                &mut allocator,
+                                &mut self.mdx_errors,
+                            );
                             let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
                             self.tree[cur_ix].item.body = ItemBody::MdxJsxTextElement(jsx_ix);
                             self.tree[cur_ix].item.end = end;

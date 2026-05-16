@@ -1636,12 +1636,13 @@ ISSUE #727
 </ul>
 ````````````````````````````````
 
-ISSUE #729
+ISSUE #729 — pulldown-cmark builds nested emphasis here; remark
+(and satteri, which tracks remark) leaves the outer pair literal.
 
 ```````````````````````````````` example
 j***5*=*
 .
-<p>j*<em><em>5</em>=</em></p>
+<p>j**<em>5</em>=*</p>
 ````````````````````````````````
 
 
@@ -1745,12 +1746,13 @@ an unmatched asterisk.</p>
 <em>{</em>{</p>
 ````````````````````````````````
 
-ISSUE 741
+ISSUE 741 — pulldown-cmark nests two layers of emphasis; remark
+(and satteri) resolves a single `**…**` strong with a nested `*…*`.
 
 ```````````````````````````````` example
 **a.*.**a*.**.
 .
-<p>*<em>a.*.<em><em>a</em>.</em></em>.</p>
+<p><strong>a.*.*<em>a</em>.</strong>.</p>
 ````````````````````````````````
 
 ISSUE 747
