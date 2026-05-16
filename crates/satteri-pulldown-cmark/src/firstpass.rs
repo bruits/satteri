@@ -1819,8 +1819,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // tab-stop math sees the correct per-line
                             // starting column (lazy lines start at col 0;
                             // strict lines start at the post-prefix column).
-                            let normalized = self
-                                .inline_expression_value(ix + content_start, ix + content_end);
+                            let normalized =
+                                self.inline_expression_value(ix + content_start, ix + content_end);
                             // Validate the expression body as JS via oxc.
                             // Without this, `{h<}` etc. silently produce a
                             // phantom mdxTextExpression and only error at

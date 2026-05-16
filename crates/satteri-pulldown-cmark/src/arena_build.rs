@@ -1732,8 +1732,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     // and unrelated literal text); the actual passes still validate.
     let source_bytes = source.as_bytes();
 
-    if options.contains(Options::ENABLE_MDX)
-        && memchr::memchr2(b'<', b'{', source_bytes).is_some()
+    if options.contains(Options::ENABLE_MDX) && memchr::memchr2(b'<', b'{', source_bytes).is_some()
     {
         crate::post_passes::mdx_mark_and_unravel(&mut arena);
     }
