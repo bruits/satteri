@@ -605,7 +605,7 @@ impl<'input> ParserInner<'input> {
                             let node = scan_nodes_to_ix(&self.tree, self.tree[cur_ix].next, end);
                             let raw = &block_text[start..end];
                             let col = crate::mdx::column_at(block_text.as_bytes(), start);
-                            let jsx_data = crate::mdx::parse_jsx_tag_with_column(raw, col);
+                            let jsx_data = crate::mdx::parse_jsx_tag_with_column(raw, col, 0);
                             let mut allocator = oxc_allocator::Allocator::default();
                             crate::mdx::validate_jsx_expressions(
                                 &jsx_data.attrs,
@@ -752,10 +752,7 @@ impl<'input> ParserInner<'input> {
                                                 // Underline line start.
                                                 let mut us = probe;
                                                 while us > 0
-                                                    && !matches!(
-                                                        bytes_block[us - 1],
-                                                        b'\n' | b'\r'
-                                                    )
+                                                    && !matches!(bytes_block[us - 1], b'\n' | b'\r')
                                                 {
                                                     us -= 1;
                                                 }
@@ -768,22 +765,22 @@ impl<'input> ParserInner<'input> {
                                                 let listitem_indent = self
                                                     .tree
                                                     .walk_spine()
-                                                    .filter_map(|&ix| match self.tree[ix].item.body
-                                                    {
-                                                        ItemBody::ListItem(indent, _) => {
-                                                            Some(indent)
+                                                    .filter_map(|&ix| {
+                                                        match self.tree[ix].item.body {
+                                                            ItemBody::ListItem(indent, _) => {
+                                                                Some(indent)
+                                                            }
+                                                            _ => None,
                                                         }
-                                                        _ => None,
                                                     })
                                                     .next();
-                                                let in_blockquote = self.tree.walk_spine().any(
-                                                    |&ix| {
+                                                let in_blockquote =
+                                                    self.tree.walk_spine().any(|&ix| {
                                                         matches!(
                                                             self.tree[ix].item.body,
                                                             ItemBody::BlockQuote(..)
                                                         )
-                                                    },
-                                                );
+                                                    });
                                                 // BlockQuote container: an
                                                 // underline line missing the
                                                 // `>` prefix is lazy
@@ -795,9 +792,7 @@ impl<'input> ParserInner<'input> {
                                                 // prefix).
                                                 let bq_lazy = if in_blockquote {
                                                     underline_col < 1
-                                                        || !bytes_block[us..probe]
-                                                            .iter()
-                                                            .any(|&b| b == b'>')
+                                                        || !bytes_block[us..probe].contains(&b'>')
                                                 } else {
                                                     false
                                                 };
@@ -1482,11 +1477,6 @@ impl<'input> ParserInner<'input> {
         None
     }
 
-    fn handle_emphasis_and_hard_break(&mut self) {
-        let start = self.tree.cur();
-        self.handle_emphasis_in_scope(start);
-    }
-
     fn handle_emphasis_in_scope(&mut self, start: Option<TreeIndex>) {
         let mut prev = None;
         let mut prev_ix: TreeIndex;
@@ -1698,11 +1688,14 @@ impl<'input> ParserInner<'input> {
                     let mut remaining = count;
                     if can_close {
                         while remaining > 0 {
-                            let res = stack.iter().enumerate().rfind(|(_, el)| {
-                                el.c == c && el.run_length == run_length
-                            });
-                            let Some((matching_ix, matching_el)) = res else { break };
-                            let matching_el = matching_el.clone();
+                            let res = stack
+                                .iter()
+                                .enumerate()
+                                .rfind(|(_, el)| el.c == c && el.run_length == run_length);
+                            let Some((matching_ix, matching_el)) = res else {
+                                break;
+                            };
+                            let matching_el = *matching_el;
                             if let Some(prev_ix) = prev {
                                 self.tree[prev_ix].next = None;
                             }
@@ -1716,11 +1709,14 @@ impl<'input> ParserInner<'input> {
                                 }
                             }
                             stack.truncate(matching_ix);
-                            let match_count = core::cmp::min(2, core::cmp::min(remaining, matching_el.count));
+                            let match_count =
+                                core::cmp::min(2, core::cmp::min(remaining, matching_el.count));
                             let mut end = cur_ix - 1;
                             let mut sub_start = matching_el.start + matching_el.count;
                             while sub_start > matching_el.start + matching_el.count - match_count {
-                                let inc = if sub_start > matching_el.start + matching_el.count - match_count + 1 {
+                                let inc = if sub_start
+                                    > matching_el.start + matching_el.count - match_count + 1
+                                {
                                     2
                                 } else {
                                     1
@@ -1730,19 +1726,25 @@ impl<'input> ParserInner<'input> {
                                         if self.options.contains(Options::ENABLE_STRIKETHROUGH) {
                                             ItemBody::Strikethrough
                                         } else {
-                                            ItemBody::Text { backslash_escaped: false }
+                                            ItemBody::Text {
+                                                backslash_escaped: false,
+                                            }
                                         }
                                     } else if self.options.contains(Options::ENABLE_SUBSCRIPT) {
                                         ItemBody::Subscript
                                     } else if self.options.contains(Options::ENABLE_STRIKETHROUGH) {
                                         ItemBody::Strikethrough
                                     } else {
-                                        ItemBody::Text { backslash_escaped: false }
+                                        ItemBody::Text {
+                                            backslash_escaped: false,
+                                        }
                                     }
                                 } else if self.options.contains(Options::ENABLE_SUPERSCRIPT) {
                                     ItemBody::Superscript
                                 } else {
-                                    ItemBody::Text { backslash_escaped: false }
+                                    ItemBody::Text {
+                                        backslash_escaped: false,
+                                    }
                                 };
                                 let root = sub_start - inc;
                                 end = end + inc;
@@ -2849,6 +2851,12 @@ pub(crate) struct DirectiveAttrData<'a> {
     pub attributes: Vec<(CowStr<'a>, CowStr<'a>)>,
     pub label_start: usize,
     pub label_end: usize,
+    /// Cols of leading whitespace before `:::` on the opening line, after
+    /// outer-container prefix stripping. Mirrors micromark-extension-directive's
+    /// `initialSize`, which controls how much the directive body's per-line
+    /// linePrefix is stripped (up to `initialSize + 1` cols). Only meaningful
+    /// for container directives — leaf/text directives leave this 0.
+    pub initial_size: u8,
 }
 
 #[derive(Clone)]
@@ -2994,6 +3002,7 @@ impl<'a> Allocations<'a> {
                 attributes: Vec::new(),
                 label_start: 0,
                 label_end: 0,
+                initial_size: 0,
             },
         )
     }

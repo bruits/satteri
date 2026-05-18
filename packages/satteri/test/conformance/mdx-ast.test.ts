@@ -107,6 +107,25 @@ describe("MDX MDAST conformance", () => {
     assertMdastConformance("<Foo bar={1}/><Bar baz={2}/>\n");
   });
 
+  // mdast `value` for a multi-line attribute expression keeps the original
+  // indentation verbatim — the dedent only happens for the JS handed to the
+  // parser. Regression for the phantom-space pipeline.
+  test("multi-line JSX attribute expression preserves indent in mdast value", () => {
+    assertMdastConformance("<Foo bar={\n  1 +\n    2\n}/>\n");
+  });
+
+  test("multi-line JSX child flow expression preserves indent in mdast value", () => {
+    assertMdastConformance("<Box>\n  {\n    1 +\n      2\n  }\n</Box>\n");
+  });
+
+  // Tab-indented continuation lines hit the partial-tab dedent path: a tab
+  // covers up to TAB_WIDTH=4 cols, and only the first INDENT=2 are stripped.
+  // Reference and Sätteri have to agree on how the leftover columns appear
+  // in the mdast `value`.
+  test("multi-line JSX attribute expression with tab indent", () => {
+    assertMdastConformance("<Foo bar={\n\t1 +\n\t2\n}/>\n");
+  });
+
   test("balanced open/close", () => {
     assertMdastConformance("<a></a>\n");
   });

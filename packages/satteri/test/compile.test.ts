@@ -649,8 +649,6 @@ describe("mdxToJs", () => {
     expect(js).toContain('"h1"');
   });
 
-  // elementAttributeNameCase
-
   test("elementAttributeNameCase defaults to React casing", () => {
     const { code: js } = mdxToJs("```js\nconsole.log(1);\n```\n");
     expect(js).toContain('className: "language-js"');
@@ -679,8 +677,6 @@ describe("mdxToJs", () => {
     });
     expect(js).toContain('className: "x"');
   });
-
-  // stylePropertyNameCase
 
   test("style attribute parses into an object by default (DOM casing)", () => {
     const { code: js } = mdxToJs("| a | b |\n|:--|--:|\n| c | d |\n", {

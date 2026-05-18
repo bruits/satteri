@@ -110,6 +110,28 @@ describe("MDX conformance: JSX", () => {
     await assertMdxConformance("<Foo\n  bar={1}/>", { Foo });
   });
 
+  // HTML entities in JSX text content (e.g. `<li>foo &gt; bar</li>`) must be
+  // decoded before reaching the runtime — otherwise the literal `&` gets
+  // re-escaped to `&amp;` on render, producing `&amp;gt;`. Discovered while
+  // running mdx-eval conformance against the cloudflare-docs corpus.
+  test("HTML entity in JSX text content", async () => {
+    await assertMdxConformance("<p>tab &gt; arrow</p>");
+    await assertMdxConformance("<p>amp &amp; sand</p>");
+    await assertMdxConformance("<p>numeric &#62; ref</p>");
+  });
+
+  test("HTML entity in JSX text inside flow expression", async () => {
+    await assertMdxConformance("{ true && (<ol><li>foo &gt; bar</li></ol>) }");
+  });
+
+  // Multi-line JSX attribute expressions go through a dedent pass: the
+  // expression value carries the original indentation for mdast/hast output,
+  // but the JS handed to the parser has container-imposed indent stripped.
+  // Regression for the U+F002 phantom-space sentinel pipeline.
+  test("multi-line JSX attribute expression with indent", async () => {
+    await assertMdxConformance("<Foo bar={\n  1 +\n    2\n}/>", { Foo });
+  });
+
   // The attribute-name parser used to be ASCII-only and dropped any name
   // whose start char wasn't `[a-zA-Z_]` — including `$` and Unicode
   // identifier starts that acorn accepts.

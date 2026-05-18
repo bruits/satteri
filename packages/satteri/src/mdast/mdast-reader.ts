@@ -551,14 +551,14 @@ export class MdastReader {
             name: this.getString(attrNameRef.offset, attrNameRef.len),
             value: {
               type: "mdxJsxAttributeValueExpression",
-              value: this.getString(attrValueRef.offset, attrValueRef.len),
+              value: this.getString(attrValueRef.offset, attrValueRef.len).replaceAll("", " "),
             },
           });
           break;
         case 3: // Spread
           attributes.push({
             type: "mdxJsxExpressionAttribute",
-            value: this.getString(attrValueRef.offset, attrValueRef.len),
+            value: this.getString(attrValueRef.offset, attrValueRef.len).replaceAll("", " "),
           });
           break;
       }
@@ -605,7 +605,7 @@ export class MdastReader {
   getExpressionValue(nodeId: number): string {
     const data = this.getTypeData(nodeId);
     const valueRef = this.readStringRef(data, 0);
-    return this.getString(valueRef.offset, valueRef.len);
+    return this.getString(valueRef.offset, valueRef.len).replaceAll("", " ");
   }
 
   /**

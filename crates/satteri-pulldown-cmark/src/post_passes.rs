@@ -944,9 +944,8 @@ fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_
     // construct-level autolink tokenizer didn't fire (e.g. autolinks
     // preceded by `[`). Don't emit positions on the new nodes.
     let _ = source_bytes;
-    let pos_for = |_chunk_lo: usize, _chunk_hi: usize| -> Option<(u32, u32, u32, u32, u32, u32)> {
-        None
-    };
+    let pos_for =
+        |_chunk_lo: usize, _chunk_hi: usize| -> Option<(u32, u32, u32, u32, u32, u32)> { None };
 
     let mut new_children: Vec<u32> = Vec::new();
     let mut cursor = 0usize;

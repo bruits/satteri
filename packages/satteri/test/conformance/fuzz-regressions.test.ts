@@ -1031,7 +1031,7 @@ describe("fuzz regressions: HTML attribute leniency for type-7 blocks", () => {
   // remark/micromark allow an unquoted attribute value to chain `=value`
   // segments (`src=title="*"`, `foo=a=b`). `scan_attribute_value` matches
   // that leniency.
-  test("`<img src=title=\"*\"/>` parses as HTML block", () => {
+  test('`<img src=title="*"/>` parses as HTML block', () => {
     assertMdastConformance('<img src=title="*"/>\n');
     assertHastConformance('<img src=title="*"/>\n');
     assertHtmlConformance('<img src=title="*"/>\n');
@@ -1857,9 +1857,7 @@ describe("fuzz regressions: ordered list interrupt requires textual `1.`", () =>
   });
 
   test("the mdx fuzz finding: `tx\\n01.      indented code\\n…`", () => {
-    assertMdastConformance(
-      "tx\n01.      indented code\n\n   paragraph\n\n       more code\n",
-    );
+    assertMdastConformance("tx\n01.      indented code\n\n   paragraph\n\n       more code\n");
   });
 });
 
@@ -1980,9 +1978,7 @@ describe("fuzz regressions: refdef label decodes HTML entities and backslash esc
   });
 
   test("multi-line label with mixed entities + literal `&S` (invalid)", () => {
-    assertMdastConformance(
-      "[ẞ]\n\n[S&nbsp; &amp; &copy; &AElig; &Dcaron;\n&frac34; &S]: /url\n",
-    );
+    assertMdastConformance("[ẞ]\n\n[S&nbsp; &amp; &copy; &AElig; &Dcaron;\n&frac34; &S]: /url\n");
   });
 });
 
@@ -1990,10 +1986,8 @@ describe("fuzz regressions: image alt preserves inline HTML verbatim", () => {
   // remark's "alt = stripped visible content" rule keeps inline HTML
   // verbatim in the alt: `![foo<div>bar](u)` → `alt: "foo<div>bar"`.
   // OUR was dropping the inline HTML.
-  test("`![foo<div>\\n bar](/u \"title\")` keeps `<div>` in alt", () => {
-    assertMdastConformance(
-      'm(q\n~k}y ![foo<div>\n bar](/path/to/train.jpg  "title"   )\n',
-    );
+  test('`![foo<div>\\n bar](/u "title")` keeps `<div>` in alt', () => {
+    assertMdastConformance('m(q\n~k}y ![foo<div>\n bar](/path/to/train.jpg  "title"   )\n');
   });
 
   test("simpler: `![a<i>b](u)` keeps `<i>`", () => {
@@ -2038,11 +2032,11 @@ describe("fuzz regressions: GFM autolink trail split based on trim-set kind", ()
     assertMdastConformance("https://../>\n</script>");
   });
 
-  test("trail `!\";` + newline + html → merge into one text node", () => {
+  test('trail `!";` + newline + html → merge into one text node', () => {
     assertMdastConformance('a<https://foo.bar/?a!";\n</script>');
   });
 
-  test("trail `!\";` + newline + paragraph → merge", () => {
+  test('trail `!";` + newline + paragraph → merge', () => {
     assertMdastConformance('a<https://x/?a!";\nfoo');
   });
 
@@ -2064,9 +2058,7 @@ describe("fuzz regressions: MDX JSX namespace allows whitespace around `:`", () 
 
   test("`b<acz :circle/>` inline JSX keeps the namespace", async () => {
     const { satteriMdxMdast, referenceMdxMdast } = await import("./fuzz/shared.js");
-    expect(satteriMdxMdast("b<acz :circle/>")).toEqual(
-      referenceMdxMdast("b<acz :circle/>"),
-    );
+    expect(satteriMdxMdast("b<acz :circle/>")).toEqual(referenceMdxMdast("b<acz :circle/>"));
   });
 });
 
@@ -2152,9 +2144,7 @@ describe("fuzz known-fails: complex structural divergences (md)", () => {
   // setext heading. REF keeps the fence and the trailing setext h2
   // separate; Sätteri collapses them.
   test.fails("4-tick fence in listitem, then root setext", () => {
-    assertMdastConformance(
-      "* !!f~````\naaa\n```\n``````\n    Foo\n    ---\n\n    Foo\n---",
-    );
+    assertMdastConformance("* !!f~````\naaa\n```\n``````\n    Foo\n    ---\n\n    Foo\n---");
   });
 
   // `www.     indented code\n\n   paragraph\n\n       more code\n` — `www`

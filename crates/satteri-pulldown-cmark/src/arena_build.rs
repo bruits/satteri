@@ -273,7 +273,11 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                     ItemBody::HtmlBlock(trim_trailing) => {
                         if let Some(content) = html_block_buf.take() {
                             let trimmed = if *trim_trailing {
-                                content.trim_end_matches('\n')
+                                let s = content.trim_end_matches('\n');
+                                // CRLF source: the final `\r\n` is just the
+                                // newline; without dropping the `\r` too the
+                                // block value would end in a stray CR.
+                                s.trim_end_matches('\r')
                             } else {
                                 content.as_str()
                             };
@@ -818,8 +822,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        container_jsx_snapshot
-                            .push((MdastNodeType::Blockquote, jsx_stack.len()));
+                        container_jsx_snapshot.push((MdastNodeType::Blockquote, jsx_stack.len()));
                         inner.tree.push();
                     }
                     ItemBody::MathBlock(_) => {
@@ -901,8 +904,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             start, end, start_line, start_col, end_line, end_col,
                         );
                         builder.set_data_current(&ListItemData { checked: 2, spread }.to_bytes());
-                        container_jsx_snapshot
-                            .push((MdastNodeType::ListItem, jsx_stack.len()));
+                        container_jsx_snapshot.push((MdastNodeType::ListItem, jsx_stack.len()));
                         inner.tree.push();
                     }
                     ItemBody::Table(align_ix) => {

@@ -1341,12 +1341,7 @@ fn scan_attribute_value(
                             }
                         }
                     }
-                    Some(c)
-                        if !matches!(
-                            c,
-                            b' ' | b'=' | b'>' | b'<' | b'`' | b'\n' | b'\r'
-                        ) =>
-                    {
+                    Some(c) if !matches!(c, b' ' | b'=' | b'>' | b'<' | b'`' | b'\n' | b'\r') => {
                         i += 1;
                         i += scan_attr_value_chars(&data[i..]);
                     }

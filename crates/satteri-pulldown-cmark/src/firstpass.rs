@@ -41,6 +41,7 @@ pub(crate) fn run_first_pass(
         mdx_errors: Vec::new(),
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
         pending_lazy_blockquote_close: false,
+        doc_start: 0,
     };
     first_pass.run()
 }
@@ -89,11 +90,25 @@ pub(crate) struct FirstPass<'a, 'b> {
     /// ESM completeness checks). Avoids `Allocator::default()` heap alloc
     /// on every expression — the allocator is `reset()` between parses.
     pub(crate) mdx_expr_allocator: oxc_allocator::Allocator,
+    /// Byte offset where the document's parseable content begins — 3 when
+    /// a UTF-8 BOM is stripped, 0 otherwise. Used to gate
+    /// "must-be-at-doc-start" constructs (frontmatter) without anchoring
+    /// them at literal byte 0.
+    pub(crate) doc_start: usize,
 }
 
 impl<'a, 'b> FirstPass<'a, 'b> {
     fn run(mut self) -> (Tree<Item>, Allocations<'a>, Vec<(usize, String)>) {
+        // Skip a leading UTF-8 BOM (`U+FEFF` = EF BB BF). micromark treats it
+        // as a zero-width prefix, not part of the first block — without this,
+        // `\u{FEFF}# Title` becomes a paragraph because the `#` isn't at the
+        // line start. Positions are byte offsets into the original source so
+        // skipping bytes is fine; downstream nodes just won't reference [0..3).
         let mut ix = 0;
+        if self.text.as_bytes().starts_with(b"\xEF\xBB\xBF") {
+            ix = 3;
+            self.doc_start = 3;
+        }
         while ix < self.text.len() {
             ix = self.parse_block(ix);
         }
@@ -488,9 +503,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // Container directive (:::+)
                     let fence_length = core::cmp::min(colon_count, u8::MAX as usize);
                     let after_colons = colon_start + colon_count;
-                    if let Some((dir_data, content_end)) =
+                    if let Some((mut dir_data, content_end)) =
                         parse_directive_after_colons(self.text, bytes, after_colons)
                     {
+                        // initialSize per micromark-extension-directive: cols of
+                        // leading whitespace before `:::` *after* outer-container
+                        // prefix stripping. Drives the dedent for multi-line MDX
+                        // expression attribute values nested in the body.
+                        dir_data.initial_size = outer_indent.min(u8::MAX as usize) as u8;
                         // Close any open list before opening a sibling directive,
                         // matching how blockquote handles the same transition.
                         self.finish_list(start_ix);
@@ -706,8 +726,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let ix = start_ix + line_start.bytes_scanned();
 
         // Metadata blocks cannot be indented, and — matching remark-frontmatter
-        // — only match at the very start of the document.
-        if indent == 0 && ix == 0 && self.tree.spine_len() == 0 {
+        // — only match at the very start of the document. `doc_start` is 0
+        // normally, or 3 when a UTF-8 BOM was stripped.
+        if indent == 0 && ix == self.doc_start && self.tree.spine_len() == 0 {
             if let Some((_n, metadata_block_ch)) = scan_metadata_block(
                 &bytes[ix..],
                 self.options
@@ -728,9 +749,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // container that would forbid ESM. The list will close before
             // the ESM block.
             let at_root_for_esm = indent == 0
-                && self.tree.walk_spine().all(|&ix| {
-                    matches!(self.tree[ix].item.body, ItemBody::List(..))
-                });
+                && self
+                    .tree
+                    .walk_spine()
+                    .all(|&ix| matches!(self.tree[ix].item.body, ItemBody::List(..)));
             if at_root_for_esm {
                 if let Some(end_ix) = scan_mdx_esm(&bytes[ix..]) {
                     let mut final_end = end_ix;
@@ -852,32 +874,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // pattern
             if let Some(html_end_tag) = get_html_end_tag(&bytes[(ix + 1)..]) {
                 self.finish_list(start_ix);
-                return self.parse_html_block_type_1_to_5(
-                    content_start_ix,
-                    html_end_tag,
-                    synth,
-                    0,
-                );
+                return self.parse_html_block_type_1_to_5(content_start_ix, html_end_tag, synth, 0);
             }
 
             // Detect type 6
             if starts_html_block_type_6(&bytes[(ix + 1)..]) {
                 self.finish_list(start_ix);
-                return self.parse_html_block_type_6_or_7(
-                    content_start_ix,
-                    synth,
-                    0,
-                );
+                return self.parse_html_block_type_6_or_7(content_start_ix, synth, 0);
             }
 
             // Detect type 7
             if let Some(_html_bytes) = scan_html_type_7(&bytes[ix..]) {
                 self.finish_list(start_ix);
-                return self.parse_html_block_type_6_or_7(
-                    content_start_ix,
-                    synth,
-                    0,
-                );
+                return self.parse_html_block_type_6_or_7(content_start_ix, synth, 0);
             }
         }
 
@@ -904,11 +913,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
 
         // parse refdef
-        // A blank line between the refdef and the next interrupting block
-        // means micromark has already closed the refdef's residual paragraph
-        // before that next block opens — so the new block isn't "interrupting"
-        // an open paragraph and `refdef_interrupted_paragraph` must not fire.
-        let mut refdef_terminated_by_blank = false;
         while let Some((bytecount, label, link_def)) =
             self.parse_refdef_total(start_ix + line_start.bytes_scanned())
         {
@@ -918,6 +922,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.allocs.refdefs.0.entry(label).or_insert(link_def);
             let container_start = start_ix + line_start.bytes_scanned();
             let mut ix = container_start + bytecount;
+            // A blank line between the refdef and the next interrupting block
+            // means micromark has already closed the refdef's residual paragraph
+            // before that next block opens — so the new block isn't "interrupting"
+            // an open paragraph and `refdef_interrupted_paragraph` must not fire.
+            let refdef_terminated_by_blank;
             // Refdefs act as if they were contained within a paragraph, for purposes of lazy
             // continuations. For example:
             //
@@ -939,8 +948,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // distinguishes "refdef\nnext-block" (still in paragraph)
                 // from "refdef\n\nnext-block" (paragraph closed).
                 let after_terminator = ix + nl;
-                refdef_terminated_by_blank =
-                    scan_blank_line(&bytes[after_terminator..]).is_some();
+                refdef_terminated_by_blank = scan_blank_line(&bytes[after_terminator..]).is_some();
                 ix = after_terminator;
             } else {
                 self.finish_list(start_ix);
@@ -957,7 +965,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if let Some(lazy_line_start) = self.scan_next_line_or_lazy_continuation(&bytes[ix..]) {
                 line_start = lazy_line_start;
                 start_ix = ix;
-                refdef_terminated_by_blank = false;
             } else {
                 self.finish_list(start_ix);
                 // Only carry the interrupt state forward when the refdef wasn't
@@ -1814,11 +1821,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     "".into(),
                                     "".into(),
                                 );
-                                self.tree.append_text(
-                                    begin_text,
-                                    email_start,
-                                    backslash_escaped,
-                                );
+                                self.tree
+                                    .append_text(begin_text, email_start, backslash_escaped);
                                 backslash_escaped = false;
                                 let link_node_ix = self.tree.append(Item {
                                     start: email_start,
@@ -2170,8 +2174,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // Only escaped when an odd number of backslashes precedes
                     // the pipe. `\|` → escaped; `\\|` → literal `\` then
                     // separator pipe.
-                    let preceding_backslashes =
-                        scan_rev_while(&bytes[..ix], |b| b == b'\\');
+                    let preceding_backslashes = scan_rev_while(&bytes[..ix], |b| b == b'\\');
                     if preceding_backslashes % 2 == 1 {
                         LoopInstruction::ContinueAndSkip(0)
                     } else if let TableParseMode::Active = mode {
@@ -2261,9 +2264,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
                     LoopInstruction::ContinueAndSkip(0)
                 }
-                b'h' | b'H' | b'w' | b'W' | b'@'
-                    if self.options.contains(Options::ENABLE_GFM) =>
-                {
+                b'h' | b'H' | b'w' | b'W' | b'@' if self.options.contains(Options::ENABLE_GFM) => {
                     // GFM literal autolink: protocol/www/email. Runs during
                     // inline tokenization so URL bytes are consumed before
                     // bracket/image resolution claims them. Mirrors
@@ -2426,8 +2427,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // lazy line (paragraph/heading/etc.) trims it.
                     let next_line_ix = ix + line_start.bytes_scanned();
                     let rest = &bytes[next_line_ix..];
-                    let opens_container = scan_blockquote_start(rest).is_some()
-                        || scan_listitem(rest).is_some();
+                    let opens_container =
+                        scan_blockquote_start(rest).is_some() || scan_listitem(rest).is_some();
                     if !opens_container {
                         closed_via_lazy = true;
                     }
@@ -2647,8 +2648,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // the blank line(s) as code content.
                 let next_line_ix = ix + line_start.bytes_scanned();
                 let rest = &bytes[next_line_ix..];
-                let line_starts_container = scan_blockquote_start(rest).is_some()
-                    || scan_listitem(rest).is_some();
+                let line_starts_container =
+                    scan_blockquote_start(rest).is_some() || scan_listitem(rest).is_some();
                 let extra = if line_starts_container { 0 } else { 1 };
                 if extra > 0 {
                     trim_trailing_newlines_from_code_block(&mut self.tree, bytes, extra);
@@ -4398,6 +4399,7 @@ fn is_email_local_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'_')
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_emit_gfm_autolink<'a>(
     bytes: &[u8],
     ix: usize,
@@ -4485,8 +4487,7 @@ fn try_emit_gfm_autolink<'a>(
             // `scan_autolink_literal` (loose check: prev not ASCII
             // alphabetic). `fnr_only=false` means the *construct* path
             // accepted — exactly the case the inline tokenizer fires on.
-            let (start, _raw_end, end, full_url, fnr_only) =
-                scan_autolink_literal(bytes, ix)?;
+            let (start, _raw_end, end, full_url, fnr_only) = scan_autolink_literal(bytes, ix)?;
             if fnr_only {
                 return None;
             }
@@ -4525,8 +4526,7 @@ fn try_emit_gfm_autolink<'a>(
             // back over an already-emitted Maybe* item, defer to the
             // post-pass (which sees the resolved/flat text and runs
             // find-and-replace if the construct rejected it).
-            let (email_start, email_end, full_url, retry_needed) =
-                scan_email_autolink(bytes, ix)?;
+            let (email_start, email_end, full_url, retry_needed) = scan_email_autolink(bytes, ix)?;
             if retry_needed {
                 return None;
             }
@@ -4555,12 +4555,8 @@ fn try_emit_gfm_autolink<'a>(
                 .strip_prefix("mailto:")
                 .map(str::to_owned)
                 .unwrap_or(full_url);
-            let link_ix = allocs.allocate_link(
-                LinkType::Email,
-                email_addr.into(),
-                "".into(),
-                "".into(),
-            );
+            let link_ix =
+                allocs.allocate_link(LinkType::Email, email_addr.into(), "".into(), "".into());
             tree.append_text(begin_text, email_start, backslash_escaped);
             let link_node_ix = tree.append(Item {
                 start: email_start,
@@ -4592,6 +4588,64 @@ fn try_emit_gfm_autolink<'a>(
 /// brackets, runs to EOF without `)`), micromark's labelEnd attempt
 /// fails and the destination bytes fall back to text context — the
 /// autolink construct *should* fire there.
+/// Does the line starting at `pos` open a block-level construct that would
+/// break paragraph continuation? Conservative: only matches markers that
+/// can't appear mid-paragraph (fenced code, ATX heading, blockquote, list
+/// marker, thematic break). Used by `is_inside_link_destination` to decide
+/// whether `[…]` can span across the line.
+fn line_starts_block(bytes: &[u8], pos: usize) -> bool {
+    let mut i = pos;
+    // Skip up to 3 cols of leading space (≥4 would be indented code, but
+    // that doesn't apply mid-paragraph either — punt and treat as block).
+    let mut sp = 0;
+    while i < bytes.len() && bytes[i] == b' ' && sp < 4 {
+        sp += 1;
+        i += 1;
+    }
+    if sp == 4 {
+        return true;
+    }
+    let Some(&c) = bytes.get(i) else {
+        return false;
+    };
+    match c {
+        b'>' => true,
+        b'#' => {
+            // ATX heading: 1-6 `#` then space/eol.
+            let mut h = 0;
+            while bytes.get(i + h) == Some(&b'#') && h < 7 {
+                h += 1;
+            }
+            (1..=6).contains(&h)
+                && matches!(bytes.get(i + h), None | Some(b' ' | b'\t' | b'\n' | b'\r'))
+        }
+        b'`' | b'~' => {
+            // Fenced code: 3+ identical fence chars.
+            let mut n = 0;
+            while bytes.get(i + n) == Some(&c) {
+                n += 1;
+            }
+            n >= 3
+        }
+        b'-' | b'_' | b'*' => {
+            // Thematic break: 3+ of the same char, only `- _ *` and spaces.
+            let mut j = i;
+            let mut count = 0;
+            while j < bytes.len() {
+                match bytes[j] {
+                    b' ' | b'\t' => {}
+                    x if x == c => count += 1,
+                    b'\n' | b'\r' => break,
+                    _ => return false,
+                }
+                j += 1;
+            }
+            count >= 3
+        }
+        _ => false,
+    }
+}
+
 fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
     if pos < 2 {
         return false;
@@ -4634,24 +4688,39 @@ fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
     let Some(paren_start) = paren_start else {
         return false;
     };
-    // Verify the `]` immediately before `(` has a matching `[` on the
-    // same line. A `]` without a same-line opener can't form a link
-    // (CommonMark requires `[…]` and `(…)` to be in the same paragraph
-    // AND on contiguous lines that the bracket resolver can pair). When
-    // a fence/block break sits between `[` and the `]`, the link can't
-    // form — so the URL bytes are free for the GFM literal-autolink
-    // construct to claim.
+    // Verify the `]` immediately before `(` has a matching `[` within the
+    // same paragraph. A `]` without an opener in the same paragraph can't
+    // form a link. CommonMark allows `[…]` to span multiple lines, but a
+    // blank line — or a line that opens a block-level construct (fenced
+    // code, ATX heading, blockquote, list marker, …) — terminates the
+    // paragraph and prevents the link from forming.
     let rbracket = paren_start - 1;
     {
         let mut k = rbracket;
         let mut depth: i32 = 1;
         let mut matched = false;
+        let mut just_saw_newline = false;
         while k > 0 {
             k -= 1;
             let b = bytes[k];
             if matches!(b, b'\n' | b'\r') {
-                break;
+                if just_saw_newline {
+                    break;
+                }
+                just_saw_newline = true;
+                // After `\n` (walking back), bytes[k+1..] is the line that
+                // came AFTER this newline (closer to `]`). If that line opens
+                // a new block, the paragraph carrying `[` can't continue
+                // into it, so the link can't form.
+                if line_starts_block(bytes, k + 1) {
+                    break;
+                }
+                continue;
             }
+            if b == b' ' || b == b'\t' {
+                continue;
+            }
+            just_saw_newline = false;
             if k > 0 && bytes[k - 1] == b'\\' {
                 let mut bs = 0;
                 let mut j = k;
@@ -4731,9 +4800,7 @@ fn has_unbalanced_bracket_from(bytes: &[u8], floor: usize, pos: usize) -> bool {
             i -= 1;
             if matches!(bytes[i], b'\n' | b'\r') {
                 let mut line_start = i;
-                while line_start > floor
-                    && !matches!(bytes[line_start - 1], b'\n' | b'\r')
-                {
+                while line_start > floor && !matches!(bytes[line_start - 1], b'\n' | b'\r') {
                     line_start -= 1;
                 }
                 let line_is_blank = bytes[line_start..i]
@@ -5160,6 +5227,7 @@ fn parse_directive_after_colons<'a>(
             attributes,
             label_start,
             label_end,
+            initial_size: 0,
         },
         pos,
     ))
@@ -5895,12 +5963,10 @@ pub(crate) fn mdast_position_end(
         };
     let fenced_unclosed_in_listitem = is_fenced && !fenced_at_eof && next_line_opens_container;
     let math_unclosed_in_listitem = is_math && !math_at_eof && next_line_opens_container;
-    let skip_trim = (math_at_eof
-        || fenced_at_eof
-        || fenced_unclosed_in_listitem
-        || math_unclosed_in_listitem)
-        && !fenced_at_eof_in_bq
-        && !math_at_eof_in_bq;
+    let skip_trim =
+        (math_at_eof || fenced_at_eof || fenced_unclosed_in_listitem || math_unclosed_in_listitem)
+            && !fenced_at_eof_in_bq
+            && !math_at_eof_in_bq;
     if skip_trim {
         return end;
     }

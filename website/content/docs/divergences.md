@@ -4,7 +4,7 @@ section: "reference"
 order: 50
 ---
 
-Sätteri aims to be as compatible as possible with `remark`, `@mdx-js/mdx` and the greater `unified` ecosystem with regards to the ASTs and results generated.
+Sätteri aims to match `remark`, `@mdx-js/mdx`, and the wider `unified` ecosystem in the ASTs and output it produces.
 
 Typically, differences are unwanted and are bugs to be fixed. However, in certain cases the differences might be more beneficial. For example, `remark` might have some sort of old quirk or a bug that wasn't found, or couldn't be fixed easily for some reason. In such cases, Sätteri might choose to diverge from the reference behaviour.
 
@@ -27,15 +27,12 @@ rest of the document. Sätteri doesn't.
 | `remark-parse` + `remark-frontmatter` | thematicBreak + paragraph(`- this …`) |
 | Sätteri (with frontmatter feature on) | thematicBreak + list                  |
 
-A real document either closes the frontmatter or doesn't open one. The
-remark behaviour isn't specified anywhere and isn't useful.
-
 ## Rendering
 
 ### Code block `data.lang`
 
 Sätteri keeps the fenced-code info-string language on the HAST element as
-`data.lang`. remark-rehype drops it, on the grounds that it's already
+`data.lang`. remark-rehype drops it, presumably on the grounds that it's already
 encoded as `properties.className` (`language-rust`).
 
 ````markdown
@@ -53,6 +50,32 @@ Both still emit `class="language-rust"` on the `<code>` element, so
 syntax-highlighting plugins that read `properties.className` are
 unaffected. Plugins that want the raw language without parsing it back
 out of the class name can read `data.lang` directly.
+
+### Unknown directives in HAST
+
+Sätteri drops `containerDirective`, `leafDirective`, and `textDirective`
+nodes when converting mdast → hast unless the node has `data.hName` set
+(typically by a custom remark plugin). `mdast-util-to-hast`'s
+`defaultUnknownHandler` instead wraps unknown nodes in a `<div>` and
+recurses into their children.
+
+```markdown
+:::tip[Title]
+content
+:::
+```
+
+| Pipeline                                                                | HTML                                    |
+| ----------------------------------------------------------------------- | --------------------------------------- |
+| `remark-directive` + default `mdast-util-to-hast` (incl. `@mdx-js/mdx`) | `<div><p>Title</p><p>content</p></div>` |
+| Sätteri                                                                 | _(empty, node dropped)_                 |
+
+Generic directives without a handler aren't meant to render anything
+meaningful (`remark-directive`'s own README says "Doesn't handle the
+directives: create your own plugin to do that"), and the `<div>` wrapper
+discards the directive's `name`, so the resulting HTML is no more useful
+than dropping the node. Plugins that _do_ set `data.hName` work
+identically on both sides.
 
 ### Table cell alignment
 
@@ -78,4 +101,4 @@ plugin that reads `properties.align` won't find anything; read
 
 ### oxc vs acorn differences
 
-Sätteri uses `oxc` to parse MDX expressions, while `@mdx-js/mdx` uses `acorn`. This can naturally lead to some differences in regard to handling particular edge cases. We generally believe that `oxc` is correct, and do not consider these differences to be bugs.
+Sätteri parses MDX expressions with `oxc`; `@mdx-js/mdx` uses `acorn`. The two disagree on some edge cases. We treat `oxc`'s behaviour as correct and don't consider these differences bugs.

@@ -9,10 +9,52 @@
 //!   Its author proposed the solution in
 //!   <https://github.com/raphlinus/pulldown-cmark/issues/708>.
 
+use alloc::borrow::Cow;
 use alloc::string::String;
 use core::ops::Range;
 
 use crate::{CowStr, Event};
+
+/// Decode HTML5 character references (`&gt;`, `&amp;`, `&#x3C;`, `&#123;`, …)
+/// inside a string. Unrecognised `&foo` runs are left as-is.
+///
+/// JSX text and JSX literal attribute values both go through HTML entity
+/// decoding before reaching the runtime: `<p>&gt;</p>` and `<p title="&gt;"/>`
+/// both materialise as a `>` character. This helper is shared so the two
+/// call sites agree on the entity table.
+pub fn decode_html_entities(s: &str) -> Cow<'_, str> {
+    if !s.contains('&') {
+        return Cow::Borrowed(s);
+    }
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            let (consumed, replacement) = crate::scanners::scan_entity(&bytes[i..]);
+            if consumed > 0 {
+                if let Some(rep) = replacement {
+                    out.push_str(&rep);
+                }
+                i += consumed;
+                continue;
+            }
+        }
+        let b = bytes[i];
+        let ch_len = if b < 0xC0 {
+            1
+        } else if b < 0xE0 {
+            2
+        } else if b < 0xF0 {
+            3
+        } else {
+            4
+        };
+        out.push_str(&s[i..i + ch_len]);
+        i += ch_len;
+    }
+    Cow::Owned(out)
+}
 
 /// Merge consecutive `Event::Text` events into only one.
 #[derive(Debug)]

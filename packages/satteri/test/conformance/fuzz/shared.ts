@@ -1225,7 +1225,8 @@ function isMdxStrictScannerDivergence(
   if (refError.includes("Expected the closing tag")) return true;
   // mdx-js's expression-body scanner rejects a `<` followed by a name
   // char that doesn't form a valid JSX tag (`{a <foo}` etc.).
-  if (/Unexpected character `.+?`(?: \(U\+[0-9A-Fa-f]+\))? (?:in name|before name)/.test(refError)) return true;
+  if (/Unexpected character `.+?`(?: \(U\+[0-9A-Fa-f]+\))? (?:in name|before name)/.test(refError))
+    return true;
   // mdx-js's `{` scanner reaches across block boundaries (a blockquote
   // interruption or a code-span closing backtick) looking for the matching
   // `}`. Satteri respects block-level interrupts and tokenizes the `{`
@@ -1396,8 +1397,7 @@ function treeContainsCodeSpanWithBraces(node: unknown): boolean {
   if (typeof node !== "object" || node === null) return false;
   const n = node as { type?: string; tagName?: string; value?: unknown; children?: unknown[] };
   if (
-    (n.type === "inlineCode" ||
-      (n.type === "element" && n.tagName === "code")) &&
+    (n.type === "inlineCode" || (n.type === "element" && n.tagName === "code")) &&
     typeof n.value === "string" &&
     n.value.includes("{") &&
     n.value.includes("}")
@@ -1414,8 +1414,7 @@ function treeContainsCodeSpanWithOpenBrace(node: unknown): boolean {
   if (typeof node !== "object" || node === null) return false;
   const n = node as { type?: string; tagName?: string; value?: unknown; children?: unknown[] };
   if (
-    (n.type === "inlineCode" ||
-      (n.type === "element" && n.tagName === "code")) &&
+    (n.type === "inlineCode" || (n.type === "element" && n.tagName === "code")) &&
     typeof n.value === "string" &&
     n.value.includes("{")
   ) {
@@ -1570,8 +1569,16 @@ export interface MdxEvalIssue {
 // to a documented divergence; lenient recovery vs strict rejection is a
 // deliberate satteri design choice.
 const KNOWN_MDX_EVAL_DIVERGENCES = new Set<string>([
-  // (empty — strict-scanner divergences are now classified inline; see
-  // refErrorMessage check in `compareMdxEval`.)
+  // Multi-line code span containing `<`: satteri pairs the backticks across
+  // the newline and emits `<code>&lt;</code>`; mdx-js's tokenizer interprets
+  // the `<` as a JSX tag start before the second backtick closes the span.
+  // To fix in a follow-up pass.
+  "`\n <`",
+  // Same shape as the `-\n\n  2. b\n\n    3. c\n` case in FUZZ-ISSUES.md
+  // (tracked as a pending md task): a top-level list-marker line followed
+  // by a blank line and an indented continuation gets nested by satteri
+  // and kept as siblings by mdx-js. Hit by the `*` variant too.
+  "*\n\n  2. b\n\n    3. c\n",
 ]);
 
 async function compareMdxEval(

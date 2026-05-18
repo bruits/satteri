@@ -22,6 +22,7 @@ use oxc_ast::ast::{
 use oxc_span::{SPAN, Span};
 use oxc_syntax::node::NodeId;
 use satteri_arena::mdx_types::{self as message, Location, Message};
+use satteri_pulldown_cmark::utils::decode_html_entities;
 use std::cell::Cell;
 
 /// Configuration.
@@ -2515,5 +2516,12 @@ fn jsx_text_to_value(value: &str) -> String {
         result.push_str(str::from_utf8(&bytes[start..]).unwrap());
     }
 
-    result
+    // JSX text content carries HTML entities — `&gt;`, `&amp;`, `&#123;`, … —
+    // that the runtime expects to see decoded ("foo > bar", not "foo &gt; bar").
+    // Apply after whitespace normalisation so a literal `&#32;` doesn't get
+    // folded into surrounding whitespace.
+    match decode_html_entities(&result) {
+        std::borrow::Cow::Borrowed(_) => result,
+        std::borrow::Cow::Owned(decoded) => decoded,
+    }
 }

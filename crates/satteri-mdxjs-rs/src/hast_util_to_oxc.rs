@@ -687,7 +687,17 @@ fn transform_mdx_jsx_element<'a>(
             }
             MDX_ATTR_EXPRESSION_PROP => {
                 let attr_name = context.view.get_str(attr_name_ref);
-                let expr_value = context.view.get_str(attr_value_ref);
+                let raw_value = context.view.get_str(attr_value_ref);
+                // Drop phantom-space sentinels (U+F002, see
+                // `satteri-pulldown-cmark::mdx::PHANTOM_SPACE`) before parsing
+                // so they don't bleed into template-literal cooked values.
+                let owned_buf;
+                let expr_value: &str = if raw_value.contains('\u{F002}') {
+                    owned_buf = raw_value.replace('\u{F002}', "");
+                    &owned_buf
+                } else {
+                    raw_value
+                };
                 let expr = parse_expression_to_tree(
                     expr_value,
                     &MdxExpressionKind::AttributeValueExpression,
@@ -762,10 +772,19 @@ fn transform_mdx_expression<'a>(
     node_id: u32,
 ) -> Result<Option<JSXChild<'a>>, message::Message> {
     let data = context.view.get_type_data(node_id);
-    let value = if data.len() >= 8 {
+    let raw_value = if data.len() >= 8 {
         context.view.get_str(decode_text_data(data))
     } else {
         ""
+    };
+    // Drop phantom-space sentinels (U+F002) before handing the expression
+    // body to oxc — see `satteri-pulldown-cmark::mdx::PHANTOM_SPACE`.
+    let owned_buf;
+    let value: &str = if raw_value.contains('\u{F002}') {
+        owned_buf = raw_value.replace('\u{F002}', "");
+        &owned_buf
+    } else {
+        raw_value
     };
 
     let alloc = context.allocator;

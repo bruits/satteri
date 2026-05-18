@@ -368,14 +368,14 @@ export class HastReader {
             name: this.getString(attrNameRef.offset, attrNameRef.len),
             value: {
               type: "mdxJsxAttributeValueExpression",
-              value: this.getString(attrValueRef.offset, attrValueRef.len),
+              value: this.getString(attrValueRef.offset, attrValueRef.len).replaceAll("", " "),
             },
           });
           break;
         case MDX_ATTR_SPREAD:
           attributes.push({
             type: "mdxJsxExpressionAttribute",
-            value: this.getString(attrValueRef.offset, attrValueRef.len),
+            value: this.getString(attrValueRef.offset, attrValueRef.len).replaceAll("", " "),
           });
           break;
       }
