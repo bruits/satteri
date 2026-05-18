@@ -1057,7 +1057,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "satteri"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "satteri-ast",
  "satteri-mdxjs",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-mdxjs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-napi"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-pulldown-cmark"
-version = "0.3.6"
+version = "0.4.0"
 dependencies = [
  "bincode",
  "bitflags",

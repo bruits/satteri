@@ -1,5 +1,11 @@
 # satteri-pulldown-cmark
 
+## 0.4.0 — 2026-05-18
+
+### Minor changes
+
+- [e8f7974](https://github.com/bruits/satteri/commit/e8f7974149d5a6f40391520059b174cae5665ff2) Fix borked publish — Thanks @Princesseuh!
+
 ## 0.3.6 — 2026-05-12
 
 ### Patch changes
