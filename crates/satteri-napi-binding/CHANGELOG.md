@@ -1,5 +1,15 @@
 # satteri-napi
 
+## 0.2.0 — 2026-05-18
+
+### Minor changes
+
+- [f12e64e](https://github.com/bruits/satteri/commit/f12e64e12a5b6cc765252633c16b38f8c21e9282) Added `elementAttributeNameCase` and `stylePropertyNameCase` options. Set `elementAttributeNameCase: "html"` to emit `class`/`for` instead of `className`/`htmlFor`, and `stylePropertyNameCase: "css"` to keep kebab-case keys in `style` objects. Defaults stay React-compatible. — Thanks @Princesseuh!
+
+### Patch changes
+
+- Updated dependencies: satteri-mdxjs (Cargo)@0.2.0
+
 ## 0.1.15 — 2026-05-12
 
 ### Patch changes
