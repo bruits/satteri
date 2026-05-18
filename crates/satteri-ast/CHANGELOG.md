@@ -1,5 +1,12 @@
 # satteri-ast
 
+## 0.2.7 — 2026-05-18
+
+### Patch changes
+
+- [43b5d8e](https://github.com/bruits/satteri/commit/43b5d8ed221591de11cf19008be09413425c9612) Fix URL percent-encoding to re-encode bare `%` that isn't a valid escape, and resolve duplicate-identifier reference definitions by source position (first-wins matches remark). — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.2.0
+
 ## 0.2.6 — 2026-05-12
 
 ### Patch changes

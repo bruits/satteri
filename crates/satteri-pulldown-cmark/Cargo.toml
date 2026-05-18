@@ -1,6 +1,6 @@
 [package]
 name = "satteri-pulldown-cmark"
-version = "0.4.0"
+version = "0.4.1"
 authors = [
   "Raph Levien <raph.levien@gmail.com>",
   "Marcus Klaas de Vries <mail@marcusklaas.nl>",
@@ -21,8 +21,8 @@ oxc_ast_visit = { workspace = true }
 oxc_parser = { workspace = true }
 oxc_span = { workspace = true }
 rustc-hash = "2"
-satteri-arena = { path = "../satteri-arena", version = "0.1.4" }
-satteri-ast = { path = "../satteri-ast", version = "0.2.6" }
+satteri-arena = { path = "../satteri-arena", version = "0.2.0" }
+satteri-ast = { path = "../satteri-ast", version = "0.2.7" }
 serde = { workspace = true, optional = true }
 unicase = "2.6"
 unicode-id-start = "1"

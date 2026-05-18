@@ -1,7 +1,7 @@
 [dependencies]
-satteri-arena = { version = "0.1.4", path = "../satteri-arena" }
-satteri-ast = { version = "0.2.6", path = "../satteri-ast" }
-satteri-pulldown-cmark = { version = "0.4.0", path = "../satteri-pulldown-cmark" }
+satteri-arena = { version = "0.2.0", path = "../satteri-arena" }
+satteri-ast = { version = "0.2.7", path = "../satteri-ast" }
+satteri-pulldown-cmark = { version = "0.4.1", path = "../satteri-pulldown-cmark" }
 rustc-hash = "2"
 serde = { workspace = true }
 oxc_allocator = { workspace = true }
@@ -31,4 +31,4 @@ license = "MIT"
 name = "satteri-mdxjs"
 repository = "https://github.com/bruits/satteri"
 rust-version = "1.91.0"
-version = "0.2.1"
+version = "0.2.2"

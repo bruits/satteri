@@ -1,12 +1,12 @@
 [package]
 name = "satteri-ast"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 description = "MDAST and HAST node types, codecs, tree operations, and conversion for Sätteri"
 license = "MIT"
 
 [dependencies]
-satteri-arena = { version = "0.1.4", path = "../satteri-arena" }
+satteri-arena = { version = "0.2.0", path = "../satteri-arena" }
 rustc-hash = "2"
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }

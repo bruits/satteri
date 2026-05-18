@@ -1,13 +1,13 @@
 [package]
 name = "satteri-plugin-api"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
 description = "Rust plugin trait, typed visitors, and runner for Sätteri"
 license = "MIT"
 
 [dependencies]
-satteri-arena = { version = "0.1.4", path = "../satteri-arena" }
-satteri-ast = { version = "0.2.6", path = "../satteri-ast" }
+satteri-arena = { version = "0.2.0", path = "../satteri-arena" }
+satteri-ast = { version = "0.2.7", path = "../satteri-ast" }
 rustc-hash = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
