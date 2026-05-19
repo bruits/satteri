@@ -1,5 +1,11 @@
 # satteri-mdxjs
 
+## 0.2.3 — 2026-05-19
+
+### Patch changes
+
+- [befcaf0](https://github.com/bruits/satteri/commit/befcaf044787316c7f86a98667719a41d79da849) Fix a crash when an MDX file defines a component with `export const`, `export function`, or `export class` and then uses it as a JSX tag. Previously the component would be treated as if it had to come from `props.components`, and rendering threw "Expected component X to be defined" unless you also passed it in. It now resolves to the locally-defined component as expected. — Thanks @Princesseuh!
+
 ## 0.2.2 — 2026-05-18
 
 ### Patch changes
