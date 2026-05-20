@@ -1,5 +1,11 @@
 # satteri-expressive-code
 
+## 0.1.7 — 2026-05-20
+
+### Patch changes
+
+- Updated dependencies: satteri (npm)@0.6.2
+
 ## 0.1.6 — 2026-05-19
 
 ### Patch changes

@@ -1,5 +1,11 @@
 # satteri
 
+## 0.6.2 — 2026-05-20
+
+### Patch changes
+
+- [82928b3](https://github.com/bruits/satteri/commit/82928b32c79cf95141d4996a6a5ae82e1c02bccd) Export the MDX node types (`MdxJsxFlowElement`, `MdxJsxFlowElementHast`, and the rest) — Thanks @Princesseuh!
+
 ## 0.6.1 — 2026-05-19
 
 ### Patch changes
