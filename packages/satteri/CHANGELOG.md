@@ -1,5 +1,11 @@
 # satteri
 
+## 0.6.3 — 2026-05-21
+
+### Patch changes
+
+- [1c7b915](https://github.com/bruits/satteri/commit/1c7b915176669e12d9b93cb9d3ab0dc2b56f4b4a) Type `parseExpression()` as an actual ESTree `Program` instead of `Record<string, any>`. — Thanks @Princesseuh!
+
 ## 0.6.2 — 2026-05-20
 
 ### Patch changes
