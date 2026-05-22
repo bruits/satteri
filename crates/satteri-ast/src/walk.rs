@@ -645,8 +645,7 @@ mod tests {
         assert!(data_len > 0);
         // Skip prelude: [data_len=0: 4B][position: 24B][child_count=1: 2B][child_id: 4B] = 34B
         let tag_off = data_offset + 4 + 24 + 2 + 4;
-        let tag_len =
-            u16::from_le_bytes(buf[tag_off..tag_off + 2].try_into().unwrap()) as usize;
+        let tag_len = u16::from_le_bytes(buf[tag_off..tag_off + 2].try_into().unwrap()) as usize;
         assert_eq!(tag_len, 1); // "a"
         let tag = std::str::from_utf8(&buf[tag_off + 2..tag_off + 2 + tag_len]).unwrap();
         assert_eq!(tag, "a");

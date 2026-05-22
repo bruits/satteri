@@ -667,11 +667,7 @@ class LazyChildResolver {
 }
 
 /** Create a lazy `children` property backed by the handle. */
-function makeLazyChildren(
-  node: object,
-  childIds: number[],
-  resolver: LazyChildResolver,
-): void {
+function makeLazyChildren(node: object, childIds: number[], resolver: LazyChildResolver): void {
   Object.defineProperty(node, "children", {
     get() {
       const children = resolver.materializeChildren(childIds);

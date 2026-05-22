@@ -327,7 +327,7 @@ describe("HAST walk-path data exposure (non-element node types)", () => {
           if (node.type === "mdxJsxFlowElement" && node.name) seen.push(node.name);
         },
       },
-    })
+    });
     mdxToJs("<Other>a</Other>\n\n<Box>b</Box>\n\n<Box>c</Box>", { hastPlugins: [plugin] });
     expect(seen).toEqual(["Box", "Box"]);
   });
