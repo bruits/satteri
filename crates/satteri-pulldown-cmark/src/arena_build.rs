@@ -425,7 +425,13 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             }
                             found
                         };
-                        if is_spread {
+                        // Byte 1 (the spread flag) is ListItem-specific; guard
+                        // the node kind so a stack desync can't write it onto a
+                        // different node.
+                        if is_spread
+                            && builder.arena_ref().get_node(id).node_type
+                                == MdastNodeType::ListItem as u8
+                        {
                             let existing = builder.arena_ref().get_type_data(id).to_vec();
                             if existing.len() >= 2 {
                                 let mut data = existing;
@@ -527,7 +533,13 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             }
                             found
                         };
-                        if has_blank_between_items {
+                        // Byte 5 (the loose-list flag) is List-specific; guard
+                        // the node kind so a stack desync can't corrupt another
+                        // node's type data.
+                        if has_blank_between_items
+                            && builder.arena_ref().get_node(id).node_type
+                                == MdastNodeType::List as u8
+                        {
                             let existing = builder.arena_ref().get_type_data(id).to_vec();
                             if existing.len() >= 8 && existing[5] == 0 {
                                 let mut data = existing;

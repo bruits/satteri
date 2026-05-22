@@ -856,4 +856,20 @@ describe("MDX conformance: unclosed and mis-nested JSX", () => {
   test("list inside element with the close at column 1 pairs", async () => {
     await assertMdxConformance("<Box>\n  body\n\n1. one\n</Box>\n", { Box });
   });
+
+  test("closing tag absorbed by a nested list item rejects", async () => {
+    await assertBothReject("<Card>\n\n1. one\n   1. two\n      </Card>\n");
+  });
+
+  test("mismatched closing tag rejects", async () => {
+    await assertBothReject("<a>text</b>");
+  });
+
+  test("closing tag with no opening tag rejects", async () => {
+    await assertBothReject("text </a>");
+  });
+
+  test("nested unclosed elements reject", async () => {
+    await assertBothReject("<a><b>text");
+  });
 });
