@@ -1191,7 +1191,7 @@ fn closing_tag_absorbed_by_list_item_errors_not_panics() {
 }
 
 // The fix must not regress well-formed elements whose closing tag does line up
-// with the element — including flow elements wrapping block-level children.
+// with the element, including flow elements wrapping block-level children.
 #[test]
 fn closing_tag_paired_with_element_still_compiles(
 ) -> Result<(), satteri_arena::mdx_types::Message> {

@@ -85,10 +85,10 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     // `is_flow` is true if the open tag was on its own block line
     // (MdxJsxFlowElement), false if inline (MdxJsxTextElement). mdx-js
     // requires the closing tag to match in mode: a flow open can't be
-    // paired with an inline close, so `<Foo>\n</Foo>X` (close has trailing
-    // text → inline mode) errors. `node_id` is the open element's arena
-    // node, used to verify a closing tag actually closes that element
-    // rather than a container that absorbed the tag.
+    // paired with an inline close, so `<Foo>\n</Foo>X` errors because the
+    // trailing text after the close puts it in inline mode. `node_id` is
+    // the open element's arena node, used to verify a closing tag actually
+    // closes that element rather than a container that absorbed the tag.
     let mut jsx_stack: Vec<(String, u32, bool, u32)> = Vec::new();
     let mut mdx_errors: Vec<(usize, String)> = Vec::new();
     let mut paragraph_open_depth: Vec<usize> = Vec::new();
