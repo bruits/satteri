@@ -445,40 +445,18 @@ b
 |  a  |  b  |
 | --- | --- |
 |  c  |  d  |</p>
-<p>table c</p>
-<table>
-<thead>
-<tr>
-<th>a</th>
-<th>b</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>c</td>
-<td>d</td>
-</tr>
-</tbody>
-</table>
+<p>table c
+a  |  b
+--- | ---
+c  |  d</p>
 <p>table d
 a | b
 --|--
 c | d</p>
-<p>table e</p>
-<table>
-<thead>
-<tr>
-<th>a</th>
-<th>b</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>c</td>
-<td>d</td>
-</tr>
-</tbody>
-</table>
+<p>table e
+a | b
+--|--
+c | d</p>
 <p>table f</p>
 <table>
 <thead>
@@ -494,34 +472,14 @@ c | d</p>
 </tr>
 </tbody>
 </table>
-<p>table g</p>
-<table>
-<thead>
-<tr>
-<th>a</th>
-<th>b</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>c</td>
-<td>d</td>
-</tr>
-</tbody>
-</table>
-<p>table h</p>
-<table>
-<thead>
-<tr>
-<th>a</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>b</td>
-</tr>
-</tbody>
-</table>
+<p>table g
+a  |  b
+--- | ---
+c  |  d</p>
+<p>table h
+a
+|-|
+b</p>
 <p>table i</p>
 <table>
 <thead>
@@ -668,7 +626,7 @@ fn table_test_17() {
 </tr>
 <tr>
 <td>Wait, what?</td>
-<td>`\</td>
+<td><code>\|</code></td>
 </tr>
 <tr>
 <td>Wait, what?</td>
@@ -676,7 +634,7 @@ fn table_test_17() {
 </tr>
 <tr>
 <td>Wait, what?</td>
-<td>`\\</td>
+<td><code>\\\|</code></td>
 </tr>
 <tr>
 <td>Wait, what?</td>
@@ -688,7 +646,7 @@ fn table_test_17() {
 </tr>
 <tr>
 <td>Wait, what?</td>
-<td>\</td>
+<td>|</td>
 </tr>
 <tr>
 <td>Wait, what?</td>
@@ -700,7 +658,7 @@ fn table_test_17() {
 </tr>
 <tr>
 <td>Wait, what?x</td>
-<td>\</td>
+<td>|x</td>
 </tr>
 <tr>
 <td>Wait, what?x</td>
@@ -752,12 +710,34 @@ fn table_test_18() {
 </tr>
 </tbody>
 </table>
-<p>| Double | <code>\\|</code> |
-|--|--|
-| Double | <code>\\|</code> |</p>
-<p>| Double Twice | <code>\\|\\|</code> |
-|--|--|
-| Double Twice | <code>\\|\\|</code> |</p>
+<table>
+<thead>
+<tr>
+<th>Double</th>
+<th><code>\|</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Double</td>
+<td><code>\|</code></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Double Twice</th>
+<th><code>\|\|</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Double Twice</td>
+<td><code>\|\|</code></td>
+</tr>
+</tbody>
+</table>
 <table>
 <thead>
 <tr>
@@ -779,6 +759,9 @@ fn table_test_18() {
 
 #[test]
 fn table_test_19() {
+    // remark-gfm accepts a stray `|`-only line as a row with a single empty
+    // cell rather than terminating the table. Update from the old
+    // pulldown-cmark behaviour so mid-table `|` lines continue the table.
     let original = r##"| Table | Header |
 |-------|--------|
 | Table | Body   |
@@ -789,7 +772,7 @@ fn table_test_19() {
 | Table | Header |
 |-------|--------|
 | Table | Body   |
-|	
+|
 | Not   | Enough |
 "##;
     let expected = r##"<table>
@@ -804,10 +787,16 @@ fn table_test_19() {
 <td>Table</td>
 <td>Body</td>
 </tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Not</td>
+<td>Enough</td>
+</tr>
 </tbody>
 </table>
-<p>|
-| Not   | Enough |</p>
 <table>
 <thead>
 <tr>
@@ -820,10 +809,16 @@ fn table_test_19() {
 <td>Table</td>
 <td>Body</td>
 </tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Not</td>
+<td>Enough</td>
+</tr>
 </tbody>
 </table>
-<p>|
-| Not   | Enough |</p>
 "##;
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, false);
@@ -831,6 +826,8 @@ fn table_test_19() {
 
 #[test]
 fn table_test_20() {
+    // remark-gfm: a `|` immediately after the delimiter row is a first
+    // body row with a single empty cell, not a paragraph.
     let original = r##"| Table | Header |
 |-------|--------|
 |
@@ -842,8 +839,13 @@ fn table_test_20() {
 <th>Header</th>
 </tr>
 </thead>
+<tbody>
+<tr>
+<td></td>
+<td></td>
+</tr>
+</tbody>
 </table>
-<p>|</p>
 "##;
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, false);
@@ -882,8 +884,14 @@ fn table_test_22() {
 </tr>
 </thead>
 </table>
-<p>| Double | <a href="first%5C%7Csecond">test</a> |
-|--|--|</p>
+<table>
+<thead>
+<tr>
+<th>Double</th>
+<th><a href="first%7Csecond">test</a></th>
+</tr>
+</thead>
+</table>
 <table>
 <thead>
 <tr>
@@ -920,8 +928,14 @@ fn table_test_23() {
 </tr>
 </thead>
 </table>
-<p>| Double | <a href="https://docs.rs">first\|second</a> |
-|--|--|</p>
+<table>
+<thead>
+<tr>
+<th>Double</th>
+<th><a href="https://rust-lang.org">first|second</a></th>
+</tr>
+</thead>
+</table>
 <table>
 <thead>
 <tr>
@@ -948,10 +962,19 @@ A: Interrupting —?
     let expected = r##"<p>Q: Knock knock.
 A: Who's there.
 Q: Interrupting cow.
-A: Interrupting —?
-| <code>Moo\\|ooo</code> |
-|-------------|
-| <code>ooo\\|ooo</code> |</p>
+A: Interrupting —?</p>
+<table>
+<thead>
+<tr>
+<th><code>Moo\|ooo</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ooo\|ooo</code></td>
+</tr>
+</tbody>
+</table>
 "##;
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, false);
@@ -963,9 +986,18 @@ fn table_test_25() {
 |-------------|
 | ![Moo\\\|Moo](image.png) |
 "##;
-    let expected = r##"<p>| <img src="image.png" alt="Moo\|Moo"> |
-|-------------|
-| <img src="image.png" alt="Moo\|Moo"> |</p>
+    let expected = r##"<table>
+<thead>
+<tr>
+<th><img src="image.png" alt="Moo|Moo"></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><img src="image.png" alt="Moo\|Moo"></td>
+</tr>
+</tbody>
+</table>
 "##;
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, false);
@@ -977,9 +1009,18 @@ fn table_test_26() {
 |---------------------------------------------|
 | [Moo](https://example.org "Example\\\|Link") |
 "##;
-    let expected = r##"<p>| <a href="https://example.org" title="Example\|Link">Moo</a> |
-|---------------------------------------------|
-| <a href="https://example.org" title="Example\|Link">Moo</a> |</p>
+    let expected = r##"<table>
+<thead>
+<tr>
+<th><a href="https://example.org" title="Example|Link">Moo</a></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://example.org" title="Example\|Link">Moo</a></td>
+</tr>
+</tbody>
+</table>
 "##;
 
     test_markdown_html(original, expected, 2, false, false, false, false, false, false);
