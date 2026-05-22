@@ -227,10 +227,6 @@ content :::
 
 #[test]
 fn container_extensions_test_20() {
-    // remark-directive closes a whole run of same-length container-
-    // directive fences on a single closing `:::`. So the first `:::` here
-    // closes both `:::a` and its nested `:::b`; the second `:::` has
-    // nothing to close and falls through as literal paragraph text.
     let original = r##":::a
 :::b
 

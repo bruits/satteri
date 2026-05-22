@@ -25,7 +25,7 @@ rustc-hash = "2"
 satteri-arena = { path = "crates/satteri-arena", version = "0.2.0" }
 satteri-ast = { path = "crates/satteri-ast", version = "0.2.7" }
 satteri-mdxjs = { path = "crates/satteri-mdxjs-rs", version = "0.2.3" }
-satteri-plugin-api = { path = "crates/satteri-plugin-api", version = "0.1.12" }
+satteri-plugin-api = { path = "crates/satteri-plugin-api", version = "0.1.13" }
 satteri-pulldown-cmark = {
   path = "crates/satteri-pulldown-cmark",
   version = "0.4.1"
