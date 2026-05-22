@@ -421,14 +421,13 @@ function readMdastMatchedNode(
     pos += dataJsonLen;
   }
 
-  // Position
   const position = {
     start: { offset: ru32(view, pos), line: ru32(view, pos + 8), column: ru32(view, pos + 12) },
     end: { offset: ru32(view, pos + 4), line: ru32(view, pos + 16), column: ru32(view, pos + 20) },
   };
   pos += 24;
 
-  // Children, read IDs, materialize lazily via resolver
+  // Child IDs read eagerly; their nodes materialize lazily via resolver.
   const childCount = ru16(view, pos);
   pos += 2;
   const childIds: number[] = [];

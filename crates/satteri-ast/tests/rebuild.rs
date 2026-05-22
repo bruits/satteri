@@ -507,8 +507,6 @@ fn parent_references_consistent_after_rebuild() {
     }
 }
 
-// ----- StringRef remap coverage --------------------------------------------
-//
 // These tests Replace a node with a sub-arena that carries its own non-empty
 // source, which forces the rebuild path to allocate a non-zero `source_base`
 // for the merged buffer. Any encoded StringRef in the replacement's

@@ -47,10 +47,9 @@ impl PluginRunner {
         for plugin in &mut self.plugins {
             let mut ctx = PluginContext::new(&current_arena, data_map, typed_data);
 
-            // Call before
             plugin.before(&current_arena, &mut ctx);
 
-            // Walk the arena depth-first, dispatch to typed visitor methods
+            // Walk the arena depth-first, dispatch to typed visitor methods.
             let node_count = current_arena.len() as u32;
             for node_id in 0..node_count {
                 let node = current_arena.get_node(node_id);
@@ -75,7 +74,6 @@ impl PluginRunner {
                 }
             }
 
-            // Call after
             plugin.after(&current_arena, &mut ctx);
 
             let (commands, diagnostics) = ctx.take_commands();
@@ -83,7 +81,6 @@ impl PluginRunner {
             all_diagnostics.extend(diagnostics);
 
             if has_cmds {
-                // Convert commands to patches and rebuild the arena
                 let patches = commands_to_patches(commands.iter().collect(), &current_arena);
                 if !patches.is_empty() {
                     match rebuild(&current_arena, &patches) {

@@ -18,8 +18,8 @@ Sätteri is a Rust + TypeScript monorepo containing the following Rust crates:
 | `satteri-arena`          | Arena allocator and binary buffer primitives                           |
 | `satteri-ast`            | MDAST and HAST node types, codecs, tree operations, and conversion     |
 | `satteri-plugin-api`     | Rust `Plugin` trait for Rust plugins, typed visitors, and runner       |
-| `satteri-napi-binding`   | NAPI bindings exposing the Rust pipeline to JavaScript                 |
-| `satteri-mdxjs-rs`       | MDX-to-JavaScript compiler, fork of [mdxjs-rs] adapted for OXC         |
+| `satteri-napi`           | NAPI bindings exposing the Rust pipeline to JavaScript                 |
+| `satteri-mdxjs`          | MDX-to-JavaScript compiler, fork of [mdxjs-rs] adapted for OXC         |
 | `satteri-pulldown-cmark` | CommonMark parser with MDX extension support, fork of [pulldown-cmark] |
 
 And the following npm package:

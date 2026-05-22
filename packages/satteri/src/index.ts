@@ -1,4 +1,3 @@
-// Public API: compile functions
 export {
   markdownToHtml,
   mdxToJs,
@@ -21,7 +20,6 @@ export type {
   MdxToJsResult,
 } from "./compile.js";
 
-// Plugin definitions
 export { defineMdastPlugin, defineHastPlugin } from "./plugin.js";
 export type {
   MdastPluginDefinition,
@@ -30,7 +28,6 @@ export type {
   HastPluginInput,
 } from "./plugin.js";
 
-// Visitor types (for plugin authors)
 export type {
   HastVisitorInstance,
   HastVisitorContext,
@@ -38,7 +35,6 @@ export type {
   EstreeProgram,
 } from "./hast/hast-visitor.js";
 
-// Node types
 export type {
   MdastNode,
   HastNode,
@@ -62,7 +58,6 @@ export type {
   MdxjsEsmHast,
 } from "./types.js";
 
-// Visitor pipeline (for manual plugin execution)
 export { visitMdastHandle, resolveMdastSubscriptions } from "./mdast/mdast-visitor.js";
 export type { MdastPluginInstance } from "./mdast/mdast-visitor.js";
 export {
@@ -70,7 +65,6 @@ export {
   resolveSubscriptions as resolveHastSubscriptions,
 } from "./hast/hast-visitor.js";
 
-// Step-by-step API: readers, materializers, and handle functions
 export { MdastReader } from "./mdast/mdast-reader.js";
 export { materializeMdastTree } from "./mdast/mdast-materializer.js";
 export { HastReader } from "./hast/hast-reader.js";

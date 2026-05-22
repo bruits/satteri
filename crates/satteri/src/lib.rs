@@ -9,7 +9,12 @@
 
 /// Parse Markdown source and render it directly to HTML.
 pub fn markdown_to_html(source: &str) -> String {
-    let (arena, _) = satteri_pulldown_cmark::parse(source, satteri_pulldown_cmark::DEFAULT_OPTIONS);
+    let (arena, errors) =
+        satteri_pulldown_cmark::parse(source, satteri_pulldown_cmark::DEFAULT_OPTIONS);
+    debug_assert!(
+        errors.is_empty(),
+        "non-MDX parse should not produce MDX errors"
+    );
     satteri_ast::mdast_to_html(&arena)
 }
 

@@ -502,13 +502,12 @@ function readMdxJsxFromBinary(
 ): HastNode {
   let pos = offset;
 
-  // Name
   const nameLen = view.getUint16(pos, true);
   pos += 2;
   const name = nameLen > 0 ? textDecoder.decode(buf.subarray(pos, pos + nameLen)) : null;
   pos += nameLen;
 
-  // Attributes: [kind: u8][nameLen: u16][name][valLen: u16][val]
+  // Attribute layout: [kind: u8][nameLen: u16][name][valLen: u16][val]
   const attrCount = view.getUint16(pos, true);
   pos += 2;
   const attributes: { type: string; name?: string; value: unknown }[] = [];
@@ -589,8 +588,6 @@ function readMatchedNode(
   nodeIdMap.set(node as object, nodeId);
   return node;
 }
-
-// Shared helpers
 
 /**
  * Lazy child materializer, serializes the handle's buffer once when first

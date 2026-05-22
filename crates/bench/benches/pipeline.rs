@@ -43,8 +43,6 @@ fn main() {
     divan::main();
 }
 
-// Parse benchmarks
-
 /// Parse Markdown source into an Arena.
 #[divan::bench]
 fn parse(bencher: divan::Bencher) {
@@ -117,8 +115,6 @@ fn pulldown_mdx_parse(bencher: divan::Bencher) {
         }
     });
 }
-
-// HAST benchmarks
 
 /// Full pipeline: Markdown source → Arena → HTML string.
 #[divan::bench]

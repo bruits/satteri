@@ -647,8 +647,6 @@ fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
     }
 }
 
-// HAST command handlers
-
 /// HAST set-property: dispatches by `HastNodeType` to the matching writer.
 /// Kind-tight to `Arena<Hast>` — the MDAST field-resolver can no longer be
 /// reached from here.

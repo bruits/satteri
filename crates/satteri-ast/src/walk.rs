@@ -129,11 +129,9 @@ fn walk_and_collect_inner<K: ArenaKind>(
     let total = header_size + index_size + data_section.len();
 
     let mut out = Vec::with_capacity(total);
-
-    // Header
     out.extend_from_slice(&match_count.to_le_bytes());
 
-    // Index entries, adjust data_offset to account for header + index
+    // Index entries need data_offset adjusted to account for header + index.
     let data_base = (header_size + index_size) as u32;
     for i in 0..matches.len() {
         let (node_id, sub_idx) = matches[i];
@@ -145,7 +143,6 @@ fn walk_and_collect_inner<K: ArenaKind>(
         out.extend_from_slice(&len.to_le_bytes());
     }
 
-    // Data section
     out.extend_from_slice(&data_section);
 
     out
@@ -386,13 +383,11 @@ fn serialize_hast_node_inline(
                 out.extend_from_slice(&0u16.to_le_bytes()); // 0 children
                 return;
             }
-            // Tag name
             let tag_ref = read_string_ref(type_data, 0);
             let tag = arena.get_str(tag_ref);
             out.extend_from_slice(&(tag.len() as u16).to_le_bytes());
             out.extend_from_slice(tag.as_bytes());
 
-            // Properties
             let prop_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
             out.extend_from_slice(&(prop_count as u16).to_le_bytes());
             for i in 0..prop_count {
@@ -409,14 +404,13 @@ fn serialize_hast_node_inline(
                 out.extend_from_slice(val.as_bytes());
             }
 
-            // Child IDs
             let children = arena.get_children(node_id);
             out.extend_from_slice(&(children.len() as u16).to_le_bytes());
             for &child_id in children {
                 out.extend_from_slice(&child_id.to_le_bytes());
             }
 
-            // Node data (JSON bytes for plugin-visible `data` property)
+            // JSON bytes for the plugin-visible `data` property.
             if let Some(data) = arena.get_node_data(node_id) {
                 out.extend_from_slice(&(data.len() as u32).to_le_bytes());
                 out.extend_from_slice(data);
@@ -434,7 +428,6 @@ fn serialize_hast_node_inline(
                 out.extend_from_slice(&0u16.to_le_bytes()); // 0 children
                 return;
             }
-            // Name
             let name_ref = read_string_ref(type_data, 0);
             let name = arena.get_str(name_ref);
             out.extend_from_slice(&(name.len() as u16).to_le_bytes());

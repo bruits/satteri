@@ -56,7 +56,6 @@ pub fn oxc_util_build_jsx<'a>(
     let mut import_jsxs = false;
     let mut import_jsx_dev = false;
 
-    // Process expressions in the body
     let body_len = program.program.body.len();
     for i in 0..body_len {
         let stmt = &mut program.program.body[i];
@@ -869,7 +868,6 @@ fn process_expression_jsx<'a>(
         import_jsx_dev,
     )?;
 
-    // Then replace JSX at this level
     match expr {
         Expression::JSXElement(elem) => {
             let replacement = jsx_element_to_call(
@@ -1812,7 +1810,6 @@ fn jsx_element_to_call<'a>(
 ) -> Result<Expression<'a>, Message> {
     let span = elem.span;
 
-    // Process children first
     let children = jsx_children_to_expressions(
         &mut elem.children,
         alloc,
@@ -1828,10 +1825,11 @@ fn jsx_element_to_call<'a>(
         import_jsx_dev,
     )?;
 
-    // Get name expression
     let mut name = jsx_element_name_to_expression(alloc, &elem.opening_element.name);
 
-    // Lowercase identifiers become string literals
+    // JSX convention: lowercase tag names are intrinsic elements (e.g. `div`)
+    // and get emitted as string literals; capitalized names stay as identifier
+    // expressions referencing the component binding.
     if let Expression::Identifier(ident) = &name {
         let head = ident.name.as_bytes();
         if matches!(head.first(), Some(b'a'..=b'z')) {
@@ -1839,7 +1837,6 @@ fn jsx_element_to_call<'a>(
         }
     }
 
-    // Process attributes
     let attrs: Vec<_> = elem.opening_element.attributes.drain(..).collect();
     jsx_to_call(
         span,

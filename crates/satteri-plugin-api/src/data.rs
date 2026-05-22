@@ -35,12 +35,15 @@ impl DataValue {
     }
 }
 
-/// Untyped data map: maps (node_id, key) → DataValue.
+/// Untyped data map: maps node_id → (key → DataValue).
 /// This is the Rust-side of the JS node.data map.
 /// When a JS plugin runs after a Rust plugin, this gets synced to the JS DataMap.
+///
+/// Nested layout lets `get`/`has`/`remove` look up by `&str` without allocating;
+/// `set` only allocates when inserting a key for the first time.
 #[derive(Debug, Default)]
 pub struct DataMap {
-    inner: FxHashMap<(u32, String), DataValue>,
+    inner: FxHashMap<u32, FxHashMap<String, DataValue>>,
 }
 
 impl DataMap {
@@ -49,34 +52,43 @@ impl DataMap {
     }
 
     pub fn set(&mut self, node_id: u32, key: &str, value: DataValue) {
-        self.inner.insert((node_id, key.to_string()), value);
+        let bucket = self.inner.entry(node_id).or_default();
+        if let Some(slot) = bucket.get_mut(key) {
+            *slot = value;
+        } else {
+            bucket.insert(key.to_string(), value);
+        }
     }
 
     pub fn get(&self, node_id: u32, key: &str) -> Option<&DataValue> {
-        self.inner.get(&(node_id, key.to_string()))
+        self.inner.get(&node_id)?.get(key)
     }
 
     pub fn remove(&mut self, node_id: u32, key: &str) {
-        self.inner.remove(&(node_id, key.to_string()));
+        if let Some(bucket) = self.inner.get_mut(&node_id) {
+            bucket.remove(key);
+        }
     }
 
     pub fn has(&self, node_id: u32, key: &str) -> bool {
-        self.inner.contains_key(&(node_id, key.to_string()))
+        self.inner
+            .get(&node_id)
+            .is_some_and(|bucket| bucket.contains_key(key))
     }
 
     /// Iterate all entries for a given node_id
     pub fn entries_for_node(&self, node_id: u32) -> impl Iterator<Item = (&str, &DataValue)> {
         self.inner
-            .iter()
-            .filter(move |((id, _), _)| *id == node_id)
-            .map(|((_, key), val)| (key.as_str(), val))
+            .get(&node_id)
+            .into_iter()
+            .flat_map(|bucket| bucket.iter().map(|(key, val)| (key.as_str(), val)))
     }
 
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.inner.values().map(FxHashMap::len).sum()
     }
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.inner.values().all(FxHashMap::is_empty)
     }
 }
 

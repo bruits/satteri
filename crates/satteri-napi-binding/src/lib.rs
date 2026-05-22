@@ -239,7 +239,12 @@ pub fn compile_mdx(
 #[napi]
 pub fn parse_to_html(source: String, features: Option<JsFeatures>) -> Result<String> {
     let opts = features_to_options(features, false);
-    let (arena, _) = satteri_pulldown_cmark::parse(&source, opts);
+    let (arena, errors) = satteri_pulldown_cmark::parse(&source, opts);
+    if let Some((offset, msg)) = errors.first() {
+        return Err(napi::Error::from_reason(format!(
+            "parse error at byte {offset}: {msg}"
+        )));
+    }
     Ok(satteri_ast::mdast_to_html(&arena))
 }
 
@@ -285,7 +290,12 @@ pub struct JsSubscription {
 #[napi]
 pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Result<MdastHandle> {
     let opts = features_to_options(features, false);
-    let (mut arena, _) = satteri_pulldown_cmark::parse(&source, opts);
+    let (mut arena, errors) = satteri_pulldown_cmark::parse(&source, opts);
+    if let Some((offset, msg)) = errors.first() {
+        return Err(napi::Error::from_reason(format!(
+            "parse error at byte {offset}: {msg}"
+        )));
+    }
     arena.mdx = false;
     arena.parse_options = opts.bits();
     Ok(External::new(Mutex::new(arena)))
@@ -497,7 +507,12 @@ pub fn apply_commands_and_convert_to_hast_handle(
 #[napi]
 pub fn create_hast_handle(source: String, features: Option<JsFeatures>) -> Result<HastHandle> {
     let opts = features_to_options(features, false);
-    let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
+    let (mut mdast, errors) = satteri_pulldown_cmark::parse(&source, opts);
+    if let Some((offset, msg)) = errors.first() {
+        return Err(napi::Error::from_reason(format!(
+            "parse error at byte {offset}: {msg}"
+        )));
+    }
     mdast.parse_options = opts.bits();
     let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
     hast.mdx = false;
