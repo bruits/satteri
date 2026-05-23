@@ -163,6 +163,48 @@ heading(node) {
 }
 ```
 
+### Sharing data between plugins
+
+Each context exposes a `data` object, a document-scoped grab bag shared across every visitor in the compile. Writes from one plugin are visible to later plugins, and the bag persists across the mdast→hast boundary, so hast plugins can read what mdast plugins wrote. After compilation the final state is returned on `result.data` (or `null` if nothing was written), making it suitable for things like extracting a table of contents.
+
+```ts
+const collectHeadings = defineMdastPlugin({
+  name: "collect-headings",
+  heading(node, ctx) {
+    const list = (ctx.data.headings as string[]) ?? [];
+    const first = node.children[0];
+    if (first && "value" in first) list.push(first.value as string);
+    ctx.data.headings = list;
+  },
+});
+
+const { html, data } = markdownToHtml("# A\n\n# B", { mdastPlugins: [collectHeadings] });
+console.log(data?.headings); // ["A", "B"]
+```
+
+Values must be JSON-serializable: the bag is round-tripped to Rust between plugins, so functions, class instances, or cyclic references won't survive. A fresh, empty bag is created for every compile.
+
+### Diagnostics
+
+Visitors can emit non-fatal diagnostics through `ctx.report({ message, node?, severity? })`. `severity` defaults to `"error"`; `"warning"` and `"info"` are also allowed. All diagnostics from all plugins are returned on `result.diagnostics`, tagged with the phase (`"mdast"` or `"hast"`) they came from.
+
+```ts
+const checkAltText = defineHastPlugin({
+  name: "check-alt-text",
+  element: {
+    filter: ["img"],
+    visit(node, ctx) {
+      if (!node.properties?.alt) {
+        ctx.report({ message: "image missing alt text", node, severity: "warning" });
+      }
+    },
+  },
+});
+
+const { html, diagnostics } = markdownToHtml(src, { hastPlugins: [checkAltText] });
+for (const d of diagnostics) console.warn(`[${d.phase}] ${d.severity}: ${d.message}`);
+```
+
 ### Async plugins
 
 Visitors can optionally be async. When any visitor is async, `markdownToHtml` and `mdxToJs` return a `Promise<string>` instead of `string`. For performance reasons, it is typically best to avoid async visitors, especially if your visitor matches a large number of nodes.
@@ -191,19 +233,19 @@ const html = await markdownToHtml("```js\ncode\n```", {
 
 ### `markdownToHtml(source: string, options?: CompileOptions)`
 
-Parse Markdown and compile to HTML. Returns `string` if all plugins are sync, `Promise<string>` if any are async.
+Parse Markdown and compile to HTML. Returns a `MarkdownToHtmlResult` synchronously when all plugins are sync, or a `Promise` of one when any plugin is async.
 
 ```ts
-const html = markdownToHtml("# Hello\n\nWorld");
-// <h1>Hello</h1>\n<p>World</p>
+const { html, frontmatter, data, diagnostics } = markdownToHtml("# Hello\n\nWorld");
+// html === "<h1>Hello</h1>\n<p>World</p>"
 ```
 
 ### `mdxToJs(source: string, options?: MdxCompileOptions)`
 
-Parse MDX and compile to JavaScript module code. Same sync/async return behavior.
+Parse MDX and compile to JavaScript module code. Returns an `MdxToJsResult` (`{ code, frontmatter, data, diagnostics }`) with the same sync/async return behavior.
 
 ```ts
-const js = mdxToJs("# Hello\n\n<MyComponent />");
+const { code } = mdxToJs("# Hello\n\n<MyComponent />");
 ```
 
 #### Static optimization

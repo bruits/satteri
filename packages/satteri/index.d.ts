@@ -60,6 +60,12 @@ export declare function getMdastFrontmatter(handle: MdastHandle): JsFrontmatter 
  */
 export declare function getNodeData(handle: AnyHandle, nodeId: number): string | null
 
+/**
+ * Read the document-level plugin data bag as a JSON string.
+ * Returns null if no data has been set. Works for both MDAST and HAST handles.
+ */
+export declare function getPluginData(handle: AnyHandle): string | null
+
 /** Feature toggles for the Markdown/MDX parser, passed from JavaScript. */
 export interface JsFeatures {
   /** GFM: tables, footnotes, strikethrough, task lists. Default: true. */
@@ -207,6 +213,12 @@ export declare function serializeHandle(handle: AnyHandle): Uint8Array
  * shape on the Rust side.
  */
 export declare function setNodeData(handle: AnyHandle, nodeId: number, json: Uint8Array): void
+
+/**
+ * Replace the document-level plugin data bag with a JSON string.
+ * An empty string clears the bag. Works for both MDAST and HAST handles.
+ */
+export declare function setPluginData(handle: AnyHandle, json: string): void
 
 /**
  * Collect the concatenated text content of a HAST node and all its descendants.

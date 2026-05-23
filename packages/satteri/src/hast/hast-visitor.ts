@@ -26,6 +26,8 @@ import {
   getNodeData as napiGetNodeData,
   parseExpression as napiParseExpression,
   parseEsm as napiParseEsm,
+  getPluginData as napiGetPluginData,
+  setPluginData as napiSetPluginData,
 } from "#binding";
 
 type NapiParseFn = (source: string) => string | null;
@@ -65,6 +67,12 @@ export interface HastDiagnostic {
 export interface HastVisitorContext {
   readonly source: string;
   readonly filename: string;
+  /**
+   * Document-level data bag, shared across all plugins and across the
+   * mdast→hast phase boundary. Plugins read and write arbitrary keys here
+   * for cross-plugin coordination.
+   */
+  data: Record<string, unknown>;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastNode): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastNode): void;
@@ -110,6 +118,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
   readonly filename: string;
+  #data: Record<string, unknown> | undefined;
+  #dataTouched: boolean = false;
 
   constructor(handle: HastHandle, getSource: () => string, filename: string) {
     this.#handle = handle;
@@ -121,6 +131,27 @@ class HastVisitorContextImpl implements HastVisitorContext {
     const value = this.#getSource();
     Object.defineProperty(this, "source", { value, writable: false, enumerable: true });
     return value;
+  }
+
+  get data(): Record<string, unknown> {
+    if (this.#data === undefined) {
+      const raw = napiGetPluginData(this.#handle);
+      this.#data = raw != null ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    }
+    this.#dataTouched = true;
+    return this.#data;
+  }
+
+  set data(value: Record<string, unknown>) {
+    this.#data = value;
+    this.#dataTouched = true;
+  }
+
+  /** Flush plugin data back to the arena if it was accessed during this pass. */
+  flushData(): void {
+    if (this.#dataTouched && this.#data !== undefined) {
+      napiSetPluginData(this.#handle, JSON.stringify(this.#data));
+    }
   }
 
   removeNode(node: HastNode): void {
@@ -769,13 +800,17 @@ function mergeAndReset(
  *
  * Returns void if all visitors are sync, or a Promise if any visitor is async.
  */
+export interface HastVisitResult {
+  diagnostics: HastDiagnostic[];
+}
+
 export function visitHastHandle(
   handle: HastHandle,
   plugin: HastVisitorInstance,
   subs: ResolvedSubscription[],
   source: string | (() => string),
   filename: string,
-): void | Promise<void> {
+): HastVisitResult | Promise<HastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const ctx = new HastVisitorContextImpl(handle, getSource, filename);
   const returnBuffer = new CommandBuffer();
@@ -794,20 +829,22 @@ export function visitHastHandle(
           returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
         }
       }
-      applyMutations(handle, returnBuffer, ctx);
+      return applyMutations(handle, returnBuffer, ctx);
     });
   }
 
-  applyMutations(handle, returnBuffer, ctx);
+  return applyMutations(handle, returnBuffer, ctx);
 }
 
 function applyMutations(
   handle: HastHandle,
   returnBuffer: CommandBuffer,
   ctx: HastVisitorContextImpl,
-): void {
+): HastVisitResult {
   const { merged, hasMutations } = mergeAndReset(returnBuffer, ctx);
   if (hasMutations) {
     applyCommandsToHandle(handle, merged);
   }
+  ctx.flushData();
+  return { diagnostics: ctx.getDiagnostics() };
 }

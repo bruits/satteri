@@ -7,6 +7,8 @@ import {
   serializeHandle,
   getNodeData as napiGetNodeData,
   mdastTextContentHandle,
+  getPluginData as napiGetPluginData,
+  setPluginData as napiSetPluginData,
 } from "#binding";
 import type {
   Blockquote,
@@ -120,6 +122,8 @@ export class MdastVisitorContext {
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly filename: string;
+  #data: Record<string, unknown> | undefined;
+  #dataTouched: boolean = false;
 
   constructor(handle: MdastHandle, getSource: () => string, filename: string) {
     this.#handle = handle;
@@ -131,6 +135,32 @@ export class MdastVisitorContext {
     const value = this.#getSource();
     Object.defineProperty(this, "source", { value, writable: false, enumerable: true });
     return value;
+  }
+
+  /**
+   * Document-level data bag, shared across all plugins and across the
+   * mdast→hast phase boundary. Lazily hydrated from the arena on first
+   * access and flushed back when the visit pass completes.
+   */
+  get data(): Record<string, unknown> {
+    if (this.#data === undefined) {
+      const raw = napiGetPluginData(this.#handle);
+      this.#data = raw != null ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    }
+    this.#dataTouched = true;
+    return this.#data;
+  }
+
+  set data(value: Record<string, unknown>) {
+    this.#data = value;
+    this.#dataTouched = true;
+  }
+
+  /** Flush plugin data back to the arena if it was accessed during this pass. */
+  flushData(): void {
+    if (this.#dataTouched && this.#data !== undefined) {
+      napiSetPluginData(this.#handle, JSON.stringify(this.#data));
+    }
   }
 
   removeNode(node: Readonly<MdastNode>): void {
@@ -788,5 +818,6 @@ function finalizeMdastVisit(
   returnBuffer: CommandBuffer,
 ): MdastVisitResult {
   const { merged, hasMutations } = mergeAndReset(returnBuffer, context);
+  context.flushData();
   return { commandBuffer: merged, diagnostics: context.getDiagnostics(), hasMutations };
 }

@@ -1,8 +1,14 @@
-import { visitHastHandle, resolveSubscriptions, type HastHandle } from "./hast/hast-visitor.js";
+import {
+  visitHastHandle,
+  resolveSubscriptions,
+  type HastHandle,
+  type HastDiagnostic,
+} from "./hast/hast-visitor.js";
 import {
   visitMdastHandle,
   resolveMdastSubscriptions,
   type MdastPluginInstance,
+  type MdastDiagnostic,
 } from "./mdast/mdast-visitor.js";
 import type {
   MdastPluginDefinition,
@@ -22,13 +28,14 @@ import {
   convertMdastToHastHandle,
   getHandleSource,
   getMdastFrontmatter,
+  getPluginData,
   serializeHandle,
 } from "#binding";
 import { MdastReader } from "./mdast/mdast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
-import type { MdastNode, HastNode } from "./types.js";
+import type { MdastNode, HastNode, Position } from "./types.js";
 
 function featuresToNative(features: Features | undefined) {
   if (!features) return undefined;
@@ -55,7 +62,11 @@ function featuresToNative(features: Features | undefined) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MdastHandle = any;
 
-type MdastPipelineResult = { handle: MdastHandle; pendingCommands: Uint8Array | null };
+type MdastPipelineResult = {
+  handle: MdastHandle;
+  pendingCommands: Uint8Array | null;
+  diagnostics: MdastDiagnostic[];
+};
 
 function runMdastPluginsOnHandle(
   handle: MdastHandle,
@@ -63,6 +74,7 @@ function runMdastPluginsOnHandle(
   filename: string,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
   let pendingCommands: Uint8Array | null = null;
+  const diagnostics: MdastDiagnostic[] = [];
 
   let i = 0;
   const runNext = (): MdastPipelineResult | Promise<MdastPipelineResult> => {
@@ -88,15 +100,16 @@ function runMdastPluginsOnHandle(
 
       applyMdastResult(result, idx, plugins.length, handle);
     }
-    return { handle, pendingCommands };
+    return { handle, pendingCommands, diagnostics };
   };
 
   function applyMdastResult(
-    result: { commandBuffer: Uint8Array; hasMutations: boolean },
+    result: { commandBuffer: Uint8Array; hasMutations: boolean; diagnostics: MdastDiagnostic[] },
     idx: number,
     total: number,
     h: MdastHandle,
   ) {
+    if (result.diagnostics.length > 0) diagnostics.push(...result.diagnostics);
     if (result.hasMutations) {
       if (idx === total - 1) {
         pendingCommands = result.commandBuffer;
@@ -114,11 +127,12 @@ function runHastPluginsOnHandle(
   plugins: HastPluginInput[],
   source: string,
   filename: string,
-): void | Promise<void> {
-  if (plugins.length === 0) return;
+): HastDiagnostic[] | Promise<HastDiagnostic[]> {
+  if (plugins.length === 0) return [];
+  const diagnostics: HastDiagnostic[] = [];
 
   let i = 0;
-  const runNext = (): void | Promise<void> => {
+  const runNext = (): HastDiagnostic[] | Promise<HastDiagnostic[]> => {
     while (i < plugins.length) {
       const raw = plugins[i]!;
       i++;
@@ -127,9 +141,14 @@ function runHastPluginsOnHandle(
       const subs = resolveSubscriptions(plugin);
       const result = visitHastHandle(handle, plugin, subs, source, filename);
       if (result instanceof Promise) {
-        return result.then(runNext);
+        return result.then((r) => {
+          if (r.diagnostics.length > 0) diagnostics.push(...r.diagnostics);
+          return runNext();
+        });
       }
+      if (result.diagnostics.length > 0) diagnostics.push(...result.diagnostics);
     }
+    return diagnostics;
   };
 
   return runNext();
@@ -303,12 +322,26 @@ export interface Frontmatter {
   value: string;
 }
 
+/** A diagnostic emitted by a plugin via `ctx.report(...)`. */
+export interface Diagnostic {
+  message: string;
+  severity: "error" | "warning" | "info";
+  /** Source position of the offending node, when available. */
+  position?: Position;
+  /** Pipeline phase that produced this diagnostic. */
+  phase: "mdast" | "hast";
+}
+
 /** Result of {@link markdownToHtml}. */
 export interface MarkdownToHtmlResult {
   /** Rendered HTML string. */
   html: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
   frontmatter: Frontmatter | null;
+  /** Plugin data bag, populated via `ctx.data`. `null` if no plugin wrote to it. */
+  data: Record<string, unknown> | null;
+  /** Diagnostics collected from all plugins via `ctx.report(...)`. */
+  diagnostics: Diagnostic[];
 }
 
 /** Result of {@link mdxToJs}. */
@@ -317,6 +350,10 @@ export interface MdxToJsResult {
   code: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
   frontmatter: Frontmatter | null;
+  /** Plugin data bag, populated via `ctx.data`. `null` if no plugin wrote to it. */
+  data: Record<string, unknown> | null;
+  /** Diagnostics collected from all plugins via `ctx.report(...)`. */
+  diagnostics: Diagnostic[];
 }
 
 // Type helpers: detect whether any visitor in any plugin returns a Promise.
@@ -373,10 +410,14 @@ export function markdownToHtml(
 
   const result = createHastHandleFromMdast(source, mdastPlugins, false, filename, nativeFeatures);
 
-  const renderAndDrop = (h: HastHandle, frontmatter: Frontmatter | null): MarkdownToHtmlResult => {
+  const renderAndDrop = (
+    h: HastHandle,
+    frontmatter: Frontmatter | null,
+    diagnostics: Diagnostic[],
+  ): MarkdownToHtmlResult => {
     try {
       const html = renderHandle(h);
-      return { html, frontmatter };
+      return { html, frontmatter, data: readResultData(h), diagnostics };
     } finally {
       dropHandle(h);
     }
@@ -385,7 +426,7 @@ export function markdownToHtml(
   const runHastThenRender = (
     r: HastWithFrontmatter,
   ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> => {
-    let hastResult: void | Promise<void>;
+    let hastResult: HastDiagnostic[] | Promise<HastDiagnostic[]>;
     try {
       hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
     } catch (err) {
@@ -394,14 +435,19 @@ export function markdownToHtml(
     }
     if (hastResult instanceof Promise) {
       return hastResult.then(
-        () => renderAndDrop(r.hastHandle, r.frontmatter),
+        (hastDiags) =>
+          renderAndDrop(r.hastHandle, r.frontmatter, combineDiagnostics(r.diagnostics, hastDiags)),
         (err) => {
           dropHandle(r.hastHandle);
           throw err;
         },
       );
     }
-    return renderAndDrop(r.hastHandle, r.frontmatter);
+    return renderAndDrop(
+      r.hastHandle,
+      r.frontmatter,
+      combineDiagnostics(r.diagnostics, hastResult),
+    );
   };
 
   if (result instanceof Promise) return result.then(runHastThenRender);
@@ -428,17 +474,21 @@ export function mdxToJs(
 
   const result = createHastHandleFromMdast(source, mdastPlugins, true, filename, nativeFeatures);
 
-  const compileAndDrop = (h: HastHandle, frontmatter: Frontmatter | null): MdxToJsResult => {
+  const compileAndDrop = (
+    h: HastHandle,
+    frontmatter: Frontmatter | null,
+    diagnostics: Diagnostic[],
+  ): MdxToJsResult => {
     try {
       const code = compileHandle(h, mdxOptions);
-      return { code, frontmatter };
+      return { code, frontmatter, data: readResultData(h), diagnostics };
     } finally {
       dropHandle(h);
     }
   };
 
   const runHastThenCompile = (r: HastWithFrontmatter): MdxToJsResult | Promise<MdxToJsResult> => {
-    let hastResult: void | Promise<void>;
+    let hastResult: HastDiagnostic[] | Promise<HastDiagnostic[]>;
     try {
       hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
     } catch (err) {
@@ -447,14 +497,23 @@ export function mdxToJs(
     }
     if (hastResult instanceof Promise) {
       return hastResult.then(
-        () => compileAndDrop(r.hastHandle, r.frontmatter),
+        (hastDiags) =>
+          compileAndDrop(
+            r.hastHandle,
+            r.frontmatter,
+            combineDiagnostics(r.diagnostics, hastDiags),
+          ),
         (err) => {
           dropHandle(r.hastHandle);
           throw err;
         },
       );
     }
-    return compileAndDrop(r.hastHandle, r.frontmatter);
+    return compileAndDrop(
+      r.hastHandle,
+      r.frontmatter,
+      combineDiagnostics(r.diagnostics, hastResult),
+    );
   };
 
   if (result instanceof Promise) return result.then(runHastThenCompile);
@@ -503,11 +562,37 @@ export function evaluate(
 // Pipeline: parse → mdast plugins → hast conversion → hast plugins
 // All arenas stay in Rust. No intermediate buffer copies to JS.
 
-type HastWithFrontmatter = { hastHandle: HastHandle; frontmatter: Frontmatter | null };
+type HastWithFrontmatter = {
+  hastHandle: HastHandle;
+  frontmatter: Frontmatter | null;
+  diagnostics: MdastDiagnostic[];
+};
 
 function readFrontmatter(handle: MdastHandle): Frontmatter | null {
   const raw = getMdastFrontmatter(handle);
   return raw ? { kind: raw.kind === "toml" ? "toml" : "yaml", value: raw.value } : null;
+}
+
+function readResultData(handle: HastHandle): Record<string, unknown> | null {
+  const raw = getPluginData(handle);
+  return raw != null ? (JSON.parse(raw) as Record<string, unknown>) : null;
+}
+
+function combineDiagnostics(
+  mdast: MdastDiagnostic[],
+  hast: HastDiagnostic[],
+): Diagnostic[] {
+  if (mdast.length === 0 && hast.length === 0) return [];
+  const out: Diagnostic[] = [];
+  for (const d of mdast) {
+    const entry: Diagnostic = { message: d.message, severity: d.severity, phase: "mdast" };
+    if (d.position) entry.position = d.position;
+    out.push(entry);
+  }
+  for (const d of hast) {
+    out.push({ message: d.message, severity: d.severity, phase: "hast" });
+  }
+  return out;
 }
 
 /** Parse, run mdast plugins, capture frontmatter, then convert to HAST.
@@ -534,7 +619,7 @@ function createHastHandleFromMdast(
       }
       const frontmatter = readFrontmatter(r.handle);
       const hastHandle = convertMdastToHastHandle(r.handle);
-      return { hastHandle, frontmatter };
+      return { hastHandle, frontmatter, diagnostics: r.diagnostics };
     } finally {
       dropHandle(r.handle);
     }
@@ -542,7 +627,7 @@ function createHastHandleFromMdast(
 
   try {
     if (mdastPlugins.length === 0) {
-      return finalize({ handle: mdastHandle, pendingCommands: null });
+      return finalize({ handle: mdastHandle, pendingCommands: null, diagnostics: [] });
     }
 
     const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, filename);
