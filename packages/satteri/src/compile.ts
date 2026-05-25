@@ -590,7 +590,9 @@ function combineDiagnostics(
     out.push(entry);
   }
   for (const d of hast) {
-    out.push({ message: d.message, severity: d.severity, phase: "hast" });
+    const entry: Diagnostic = { message: d.message, severity: d.severity, phase: "hast" };
+    if (d.position) entry.position = d.position;
+    out.push(entry);
   }
   return out;
 }

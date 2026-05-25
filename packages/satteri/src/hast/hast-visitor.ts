@@ -61,6 +61,7 @@ function attachParseExpression(node: HastNode, parseFn: NapiParseFn): void {
 export interface HastDiagnostic {
   message: string;
   nodeId?: number | undefined;
+  position?: Position | undefined;
   severity: "error" | "warning" | "info";
 }
 
@@ -69,10 +70,11 @@ export interface HastVisitorContext {
   readonly filename: string;
   /**
    * Document-level data bag, shared across all plugins and across the
-   * mdast→hast phase boundary. Plugins read and write arbitrary keys here
-   * for cross-plugin coordination.
+   * mdast→hast phase boundary. Mutate keys directly (`ctx.data.foo = x`);
+   * the bag itself isn't reassignable. JSON-serializable values only —
+   * the bag round-trips through Rust between plugin passes.
    */
-  data: Record<string, unknown>;
+  readonly data: Record<string, unknown>;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastNode): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastNode): void;
@@ -140,11 +142,6 @@ class HastVisitorContextImpl implements HastVisitorContext {
     }
     this.#dataTouched = true;
     return this.#data;
-  }
-
-  set data(value: Record<string, unknown>) {
-    this.#data = value;
-    this.#dataTouched = true;
   }
 
   /** Flush plugin data back to the arena if it was accessed during this pass. */
@@ -234,7 +231,12 @@ class HastVisitorContextImpl implements HastVisitorContext {
     node?: HastNode;
     severity?: "error" | "warning" | "info";
   }): void {
-    this.#diagnostics.push({ message, nodeId: node ? nid(node) : undefined, severity });
+    this.#diagnostics.push({
+      message,
+      nodeId: node ? nid(node) : undefined,
+      position: node?.position,
+      severity,
+    });
   }
 
   getCommandBuffer(): CommandBuffer {

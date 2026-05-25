@@ -73,6 +73,7 @@ declare module "mdast" {
 export interface HastRaw {
   type: "raw";
   value: string;
+  position?: Position | undefined;
 }
 
 declare module "hast" {

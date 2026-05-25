@@ -47,7 +47,7 @@ describe("result.data", () => {
     expect(out.data).toEqual({ fromMdx: true });
   });
 
-  it("is null when ctx.data is touched but no key is written", () => {
+  it("is an empty object when ctx.data is touched but no key is written", () => {
     const plugin = defineMdastPlugin({
       name: "reader",
       paragraph(_node, ctx) {
@@ -97,6 +97,18 @@ describe("result.diagnostics", () => {
       severity: "warning",
       phase: "hast",
     });
+    expect(out.diagnostics[0]!.position).toBeDefined();
+  });
+
+  it("omits position when report is called without a node", () => {
+    const plugin = defineMdastPlugin({
+      name: "reporter",
+      paragraph(_node, ctx) {
+        ctx.report({ message: "nodeless", severity: "info" });
+      },
+    });
+    const out = markdownToHtml("text", { mdastPlugins: [plugin] });
+    expect(out.diagnostics[0]).not.toHaveProperty("position");
   });
 
   it("combines diagnostics from both phases in order", () => {

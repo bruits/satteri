@@ -355,8 +355,7 @@ pub fn mdast_arena_to_hast_arena(source: &Arena<Mdast>) -> Arena<Hast> {
     };
     convert_node(0, source, &mut builder, &ctx);
     let mut hast = builder.finish();
-    // Carry the document-level plugin data bag across the phase boundary so
-    // hast plugins see whatever mdast plugins wrote.
+    // Carry plugin data across the phase boundary so hast sees mdast writes.
     hast.plugin_data = source.plugin_data.clone();
     hast
 }

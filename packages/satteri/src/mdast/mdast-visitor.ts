@@ -139,8 +139,9 @@ export class MdastVisitorContext {
 
   /**
    * Document-level data bag, shared across all plugins and across the
-   * mdast→hast phase boundary. Lazily hydrated from the arena on first
-   * access and flushed back when the visit pass completes.
+   * mdast→hast phase boundary. Mutate keys directly (`ctx.data.foo = x`);
+   * the bag itself isn't reassignable. JSON-serializable values only —
+   * the bag round-trips through Rust between plugin passes.
    */
   get data(): Record<string, unknown> {
     if (this.#data === undefined) {
@@ -149,11 +150,6 @@ export class MdastVisitorContext {
     }
     this.#dataTouched = true;
     return this.#data;
-  }
-
-  set data(value: Record<string, unknown>) {
-    this.#data = value;
-    this.#dataTouched = true;
   }
 
   /** Flush plugin data back to the arena if it was accessed during this pass. */
