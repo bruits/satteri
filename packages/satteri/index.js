@@ -587,7 +587,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { applyCommandsAndConvertToHastHandle, applyCommandsToHandle, applyCommandsToMdastHandle, compileHandle, compileMdx, convertMdastToHastHandle, createHastHandle, createMdastHandle, createMdxHastHandle, createMdxMdastHandle, dropHandle, getHandleSource, getMdastFrontmatter, getNodeData, mdastTextContentHandle, parseEsm, parseExpression, parseToHtml, renderHandle, serializeHandle, setNodeData, textContentHandle, walkHandle, walkMdastHandle } = nativeBinding
+const { applyCommandsAndConvertToHastHandle, applyCommandsToHandle, applyCommandsToMdastHandle, compileHandle, compileMdx, convertMdastToHastHandle, createHastHandle, createMdastHandle, createMdxHastHandle, createMdxMdastHandle, dropHandle, getHandleSource, getMdastFrontmatter, getNodeData, getPluginData, mdastTextContentHandle, parseEsm, parseExpression, parseToHtml, renderHandle, serializeHandle, setNodeData, setPluginData, textContentHandle, walkHandle, walkMdastHandle } = nativeBinding
 export { applyCommandsAndConvertToHastHandle }
 export { applyCommandsToHandle }
 export { applyCommandsToMdastHandle }
@@ -602,6 +602,7 @@ export { dropHandle }
 export { getHandleSource }
 export { getMdastFrontmatter }
 export { getNodeData }
+export { getPluginData }
 export { mdastTextContentHandle }
 export { parseEsm }
 export { parseExpression }
@@ -609,6 +610,7 @@ export { parseToHtml }
 export { renderHandle }
 export { serializeHandle }
 export { setNodeData }
+export { setPluginData }
 export { textContentHandle }
 export { walkHandle }
 export { walkMdastHandle }

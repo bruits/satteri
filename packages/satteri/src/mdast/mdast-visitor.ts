@@ -1,12 +1,21 @@
 import { materializeNode, TYPE_NAMES } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
 import { CommandBuffer, classifyReturn } from "../command-buffer.js";
-import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
+import type {
+  Diagnostic,
+  MdastNode,
+  MdastNodeInternal,
+  Toml,
+  MathNode,
+  InlineMath,
+} from "../types.js";
 import {
   walkMdastHandle,
   serializeHandle,
   getNodeData as napiGetNodeData,
   mdastTextContentHandle,
+  getPluginData as napiGetPluginData,
+  setPluginData as napiSetPluginData,
 } from "#binding";
 import type {
   Blockquote,
@@ -61,13 +70,6 @@ interface Mutation {
   value?: unknown;
 }
 
-export interface MdastDiagnostic {
-  message: string;
-  nodeId?: number | undefined;
-  position?: MdastNode["position"] | undefined;
-  severity: "error" | "warning" | "info";
-}
-
 const VISITOR_KEYS = new Set([
   "paragraph",
   "heading",
@@ -116,10 +118,12 @@ function nid(node: MdastNode): number {
 
 export class MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = new CommandBuffer();
-  readonly #diagnostics: MdastDiagnostic[] = [];
+  readonly #diagnostics: Diagnostic[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly filename: string;
+  #data: Record<string, unknown> | undefined;
+  #dataTouched: boolean = false;
 
   constructor(handle: MdastHandle, getSource: () => string, filename: string) {
     this.#handle = handle;
@@ -131,6 +135,28 @@ export class MdastVisitorContext {
     const value = this.#getSource();
     Object.defineProperty(this, "source", { value, writable: false, enumerable: true });
     return value;
+  }
+
+  /**
+   * Document-level data bag, shared across all plugins and across the
+   * mdast→hast phase boundary. Mutate keys directly (`ctx.data.foo = x`);
+   * the bag itself isn't reassignable. JSON-serializable values only —
+   * the bag round-trips through Rust between plugin passes.
+   */
+  get data(): Record<string, unknown> {
+    if (this.#data === undefined) {
+      const raw = napiGetPluginData(this.#handle);
+      this.#data = raw != null ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    }
+    this.#dataTouched = true;
+    return this.#data;
+  }
+
+  /** Flush plugin data back to the arena if it was accessed during this pass. */
+  flushData(): void {
+    if (this.#dataTouched && this.#data !== undefined) {
+      napiSetPluginData(this.#handle, JSON.stringify(this.#data));
+    }
   }
 
   removeNode(node: Readonly<MdastNode>): void {
@@ -195,12 +221,9 @@ export class MdastVisitorContext {
     node?: Readonly<MdastNode>;
     severity?: "error" | "warning" | "info";
   }): void {
-    this.#diagnostics.push({
-      message,
-      nodeId: node ? nid(node) : undefined,
-      position: node?.position,
-      severity,
-    });
+    const entry: Diagnostic = { message, severity, phase: "mdast" };
+    if (node?.position) entry.position = node.position;
+    this.#diagnostics.push(entry);
   }
 
   /** Get the binary command buffer for all mutations recorded via context methods. */
@@ -208,7 +231,7 @@ export class MdastVisitorContext {
     return this.#commandBuffer;
   }
 
-  getDiagnostics(): MdastDiagnostic[] {
+  getDiagnostics(): Diagnostic[] {
     return this.#diagnostics;
   }
 }
@@ -268,7 +291,7 @@ export interface MdastPluginInstance {
 interface MdastVisitResult {
   /** Binary command buffer containing all mutations. */
   commandBuffer: Uint8Array;
-  diagnostics: MdastDiagnostic[];
+  diagnostics: Diagnostic[];
   hasMutations: boolean;
 }
 
@@ -788,5 +811,6 @@ function finalizeMdastVisit(
   returnBuffer: CommandBuffer,
 ): MdastVisitResult {
   const { merged, hasMutations } = mergeAndReset(returnBuffer, context);
+  context.flushData();
   return { commandBuffer: merged, diagnostics: context.getDiagnostics(), hasMutations };
 }

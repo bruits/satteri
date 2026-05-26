@@ -8,6 +8,7 @@ import { remark } from "remark";
 import remarkMdx from "remark-mdx";
 import remarkGfm from "remark-gfm";
 import { toHast } from "mdast-util-to-hast";
+import type { Nodes as MdastNodes } from "mdast";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import * as runtime from "react/jsx-runtime";
@@ -547,7 +548,7 @@ const REF_TO_HAST_OPTIONS = {
 };
 
 export function referenceMdxHast(input: string): unknown {
-  const mdast = mdxParser.runSync(mdxParser.parse(input));
+  const mdast = mdxParser.runSync(mdxParser.parse(input)) as MdastNodes;
   return stripPositionsAndEstree(toHast(mdast, REF_TO_HAST_OPTIONS));
 }
 

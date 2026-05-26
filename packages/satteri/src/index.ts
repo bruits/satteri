@@ -17,6 +17,7 @@ export type {
   Features,
   SmartPunctuationOptions,
   Frontmatter,
+  Diagnostic,
   MarkdownToHtmlResult,
   MdxToJsResult,
 } from "./compile.js";

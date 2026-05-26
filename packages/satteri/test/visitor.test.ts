@@ -117,7 +117,7 @@ test("context.report creates a diagnostic entry", () => {
   };
   const subs = resolveMdastSubscriptions(plugin);
   const result = visitMdastHandle(handle, plugin, subs, source, "<test>") as {
-    diagnostics: { message: string; severity: string; nodeId?: number }[];
+    diagnostics: { message: string; severity: string; phase: "mdast" | "hast" }[];
   };
   expect(result.diagnostics.length).toBe(1);
   expect(result.diagnostics[0]!.message).toBe("test diagnostic");

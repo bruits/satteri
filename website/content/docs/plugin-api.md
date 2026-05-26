@@ -177,10 +177,11 @@ after the visit completes, so it's safe to mutate while iterating.
 
 ### Properties
 
-| Property   | Type     | Notes                               |
-| ---------- | -------- | ----------------------------------- |
-| `source`   | `string` | Original markdown source.           |
-| `filename` | `string` | Filename hint, used in diagnostics. |
+| Property   | Type                       | Notes                                                                                                                                                                  |
+| ---------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`   | `string`                   | Original markdown source.                                                                                                                                              |
+| `filename` | `string`                   | Filename hint, used in diagnostics.                                                                                                                                    |
+| `data`     | `Record<string, unknown>`  | Document-scoped data bag shared across every plugin in the pipeline. Survives the mdast→hast boundary. Returned to the caller as `result.data`. JSON-serializable only. |
 
 ### Tree mutation
 
@@ -218,8 +219,9 @@ For HAST elements, `setProperty` takes a HAST property key (e.g.
 | `report({ message, node?, severity? })` | Push a diagnostic. `severity` defaults to `"error"`; allowed values are `"error" \| "warning" \| "info"`. |
 | `getDiagnostics()`                      | Return all diagnostics collected so far.                                                                  |
 
-`report` doesn't abort the plugin; diagnostics are collected and
-returned with the compile result.
+`report` doesn't abort the plugin; diagnostics from every plugin in
+the pipeline are collected and returned on `result.diagnostics`, each
+tagged with the `phase` (`"mdast"` or `"hast"`) that produced it.
 
 ## Return value semantics
 

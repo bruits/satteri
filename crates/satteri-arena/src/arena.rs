@@ -25,6 +25,9 @@ pub struct Arena<K: ArenaKind> {
     pub source: String,
     /// Per-node `data` blobs (JSON bytes), set by JS plugins.
     pub node_data: FxHashMap<u32, Vec<u8>>,
+    /// Document-level plugin data bag (JSON bytes). Opaque to Rust; JS plugins
+    /// read/write via `ctx.data`. Survives mdast→hast conversion. Empty when unused.
+    pub plugin_data: Vec<u8>,
     /// Whether this arena was parsed in MDX mode.
     pub mdx: bool,
     /// The pulldown-cmark Options bits used to parse this arena.
@@ -48,6 +51,7 @@ impl<K: ArenaKind> Clone for Arena<K> {
             type_data: self.type_data.clone(),
             source: self.source.clone(),
             node_data: self.node_data.clone(),
+            plugin_data: self.plugin_data.clone(),
             mdx: self.mdx,
             parse_options: self.parse_options,
             cp_offsets: self.cp_offsets.clone(),
@@ -67,6 +71,7 @@ impl<K: ArenaKind> Arena<K> {
             type_data: Vec::new(),
             source,
             node_data: FxHashMap::default(),
+            plugin_data: Vec::new(),
             mdx: false,
             parse_options: 0,
             cp_offsets: Vec::new(),
@@ -88,6 +93,7 @@ impl<K: ArenaKind> Arena<K> {
             type_data: Vec::with_capacity(type_data_len),
             source,
             node_data: FxHashMap::default(),
+            plugin_data: Vec::new(),
             mdx: false,
             parse_options: 0,
             cp_offsets: Vec::new(),
