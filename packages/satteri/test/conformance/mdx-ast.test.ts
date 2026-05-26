@@ -1,9 +1,10 @@
 import { describe, test, expect } from "vitest";
 import { remark } from "remark";
 import remarkMdx from "remark-mdx";
-import { toHast } from "mdast-util-to-hast";
+import { toHast, type Options as ToHastOptions } from "mdast-util-to-hast";
 import { pathToFileURL } from "node:url";
 import { mdxToMdast, mdxToHast } from "../../src/index.js";
+import type { Nodes as MdastNodes } from "mdast";
 
 const { remarkMarkAndUnravel } = await import(
   pathToFileURL("node_modules/@mdx-js/mdx/lib/plugin/remark-mark-and-unravel.js").href
@@ -22,9 +23,9 @@ const MDX_PASS_THROUGH_NODES = [
 // aren't visible to the Rust converter). Match that by passing empty handlers
 // on the reference side.
 const emptyHandler = () => undefined;
-const REF_TO_HAST_OPTIONS = {
+const REF_TO_HAST_OPTIONS: ToHastOptions = {
   allowDangerousHtml: true,
-  passThrough: MDX_PASS_THROUGH_NODES,
+  passThrough: MDX_PASS_THROUGH_NODES as ToHastOptions["passThrough"],
   handlers: {
     containerDirective: emptyHandler,
     leafDirective: emptyHandler,
@@ -64,7 +65,7 @@ function assertMdastConformance(input: string): void {
 }
 
 function referenceHast(input: string): unknown {
-  const mdast = mdxParser.runSync(mdxParser.parse(input));
+  const mdast = mdxParser.runSync(mdxParser.parse(input)) as MdastNodes;
   return stripPositionsAndEstree(toHast(mdast, REF_TO_HAST_OPTIONS));
 }
 

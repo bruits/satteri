@@ -42,8 +42,8 @@ test("MdastReader reads root node", () => {
   expect(root.type).toBe(NodeType.Root);
   expect(root.typeName).toBe("Root");
   expect(root.childrenCount).toBe(2);
-  expect(root.position.start.line).toBe(1);
-  expect(root.position.start.column).toBe(1);
+  expect(root.position!.start.line).toBe(1);
+  expect(root.position!.start.column).toBe(1);
 });
 
 test("MdastReader reads heading node", () => {

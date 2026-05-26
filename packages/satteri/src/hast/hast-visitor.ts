@@ -1,5 +1,11 @@
 import { materializeHastNode, type HastNode } from "./hast-materializer.js";
-import type { HastNodeInternal, HastRaw, MdxJsxAttributeUnion, Position } from "../types.js";
+import type {
+  Diagnostic,
+  HastNodeInternal,
+  HastRaw,
+  MdxJsxAttributeUnion,
+  Position,
+} from "../types.js";
 import type { Element, Text, Comment, Doctype } from "hast";
 import type { Program } from "estree-jsx";
 import type { MdxJsxFlowElementHast, MdxJsxTextElementHast } from "../mdx-types.js";
@@ -58,13 +64,6 @@ function attachParseExpression(node: HastNode, parseFn: NapiParseFn): void {
   });
 }
 
-export interface HastDiagnostic {
-  message: string;
-  nodeId?: number | undefined;
-  position?: Position | undefined;
-  severity: "error" | "warning" | "info";
-}
-
 export interface HastVisitorContext {
   readonly source: string;
   readonly filename: string;
@@ -90,7 +89,7 @@ export interface HastVisitorContext {
     node?: Readonly<HastNode>;
     severity?: "error" | "warning" | "info";
   }): void;
-  getDiagnostics(): HastDiagnostic[];
+  getDiagnostics(): Diagnostic[];
 }
 
 /** Inject `_hast: true` marker on a HastNode and all its children for JSON serialization. */
@@ -114,7 +113,7 @@ function nid(node: HastNode): number {
 
 class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = new CommandBuffer();
-  readonly #diagnostics: HastDiagnostic[] = [];
+  readonly #diagnostics: Diagnostic[] = [];
   /** Track accumulated node state for multiple setProperty calls on the same node. */
   readonly #pendingNodes: Map<number, HastNode> = new Map();
   readonly #handle: HastHandle;
@@ -231,19 +230,16 @@ class HastVisitorContextImpl implements HastVisitorContext {
     node?: HastNode;
     severity?: "error" | "warning" | "info";
   }): void {
-    this.#diagnostics.push({
-      message,
-      nodeId: node ? nid(node) : undefined,
-      position: node?.position,
-      severity,
-    });
+    const entry: Diagnostic = { message, severity, phase: "hast" };
+    if (node?.position) entry.position = node.position;
+    this.#diagnostics.push(entry);
   }
 
   getCommandBuffer(): CommandBuffer {
     return this.#commandBuffer;
   }
 
-  getDiagnostics(): HastDiagnostic[] {
+  getDiagnostics(): Diagnostic[] {
     return this.#diagnostics;
   }
 }
@@ -803,7 +799,7 @@ function mergeAndReset(
  * Returns void if all visitors are sync, or a Promise if any visitor is async.
  */
 export interface HastVisitResult {
-  diagnostics: HastDiagnostic[];
+  diagnostics: Diagnostic[];
 }
 
 export function visitHastHandle(

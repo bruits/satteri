@@ -1,7 +1,14 @@
 import { materializeNode, TYPE_NAMES } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
 import { CommandBuffer, classifyReturn } from "../command-buffer.js";
-import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
+import type {
+  Diagnostic,
+  MdastNode,
+  MdastNodeInternal,
+  Toml,
+  MathNode,
+  InlineMath,
+} from "../types.js";
 import {
   walkMdastHandle,
   serializeHandle,
@@ -63,13 +70,6 @@ interface Mutation {
   value?: unknown;
 }
 
-export interface MdastDiagnostic {
-  message: string;
-  nodeId?: number | undefined;
-  position?: MdastNode["position"] | undefined;
-  severity: "error" | "warning" | "info";
-}
-
 const VISITOR_KEYS = new Set([
   "paragraph",
   "heading",
@@ -118,7 +118,7 @@ function nid(node: MdastNode): number {
 
 export class MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = new CommandBuffer();
-  readonly #diagnostics: MdastDiagnostic[] = [];
+  readonly #diagnostics: Diagnostic[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly filename: string;
@@ -221,12 +221,9 @@ export class MdastVisitorContext {
     node?: Readonly<MdastNode>;
     severity?: "error" | "warning" | "info";
   }): void {
-    this.#diagnostics.push({
-      message,
-      nodeId: node ? nid(node) : undefined,
-      position: node?.position,
-      severity,
-    });
+    const entry: Diagnostic = { message, severity, phase: "mdast" };
+    if (node?.position) entry.position = node.position;
+    this.#diagnostics.push(entry);
   }
 
   /** Get the binary command buffer for all mutations recorded via context methods. */
@@ -234,7 +231,7 @@ export class MdastVisitorContext {
     return this.#commandBuffer;
   }
 
-  getDiagnostics(): MdastDiagnostic[] {
+  getDiagnostics(): Diagnostic[] {
     return this.#diagnostics;
   }
 }
@@ -294,7 +291,7 @@ export interface MdastPluginInstance {
 interface MdastVisitResult {
   /** Binary command buffer containing all mutations. */
   commandBuffer: Uint8Array;
-  diagnostics: MdastDiagnostic[];
+  diagnostics: Diagnostic[];
   hasMutations: boolean;
 }
 

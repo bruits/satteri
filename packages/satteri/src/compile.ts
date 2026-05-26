@@ -2,13 +2,11 @@ import {
   visitHastHandle,
   resolveSubscriptions,
   type HastHandle,
-  type HastDiagnostic,
 } from "./hast/hast-visitor.js";
 import {
   visitMdastHandle,
   resolveMdastSubscriptions,
   type MdastPluginInstance,
-  type MdastDiagnostic,
 } from "./mdast/mdast-visitor.js";
 import type {
   MdastPluginDefinition,
@@ -35,7 +33,7 @@ import { MdastReader } from "./mdast/mdast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
-import type { MdastNode, HastNode, Position } from "./types.js";
+import type { MdastNode, HastNode, Diagnostic } from "./types.js";
 
 function featuresToNative(features: Features | undefined) {
   if (!features) return undefined;
@@ -65,7 +63,7 @@ type MdastHandle = any;
 type MdastPipelineResult = {
   handle: MdastHandle;
   pendingCommands: Uint8Array | null;
-  diagnostics: MdastDiagnostic[];
+  diagnostics: Diagnostic[];
 };
 
 function runMdastPluginsOnHandle(
@@ -74,7 +72,7 @@ function runMdastPluginsOnHandle(
   filename: string,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
   let pendingCommands: Uint8Array | null = null;
-  const diagnostics: MdastDiagnostic[] = [];
+  const diagnostics: Diagnostic[] = [];
 
   let i = 0;
   const runNext = (): MdastPipelineResult | Promise<MdastPipelineResult> => {
@@ -104,7 +102,7 @@ function runMdastPluginsOnHandle(
   };
 
   function applyMdastResult(
-    result: { commandBuffer: Uint8Array; hasMutations: boolean; diagnostics: MdastDiagnostic[] },
+    result: { commandBuffer: Uint8Array; hasMutations: boolean; diagnostics: Diagnostic[] },
     idx: number,
     total: number,
     h: MdastHandle,
@@ -127,12 +125,12 @@ function runHastPluginsOnHandle(
   plugins: HastPluginInput[],
   source: string,
   filename: string,
-): HastDiagnostic[] | Promise<HastDiagnostic[]> {
+): Diagnostic[] | Promise<Diagnostic[]> {
   if (plugins.length === 0) return [];
-  const diagnostics: HastDiagnostic[] = [];
+  const diagnostics: Diagnostic[] = [];
 
   let i = 0;
-  const runNext = (): HastDiagnostic[] | Promise<HastDiagnostic[]> => {
+  const runNext = (): Diagnostic[] | Promise<Diagnostic[]> => {
     while (i < plugins.length) {
       const raw = plugins[i]!;
       i++;
@@ -322,15 +320,7 @@ export interface Frontmatter {
   value: string;
 }
 
-/** A diagnostic emitted by a plugin via `ctx.report(...)`. */
-export interface Diagnostic {
-  message: string;
-  severity: "error" | "warning" | "info";
-  /** Source position of the offending node, when available. */
-  position?: Position;
-  /** Pipeline phase that produced this diagnostic. */
-  phase: "mdast" | "hast";
-}
+export type { Diagnostic } from "./types.js";
 
 /** Result of {@link markdownToHtml}. */
 export interface MarkdownToHtmlResult {
@@ -426,7 +416,7 @@ export function markdownToHtml(
   const runHastThenRender = (
     r: HastWithFrontmatter,
   ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> => {
-    let hastResult: HastDiagnostic[] | Promise<HastDiagnostic[]>;
+    let hastResult: Diagnostic[] | Promise<Diagnostic[]>;
     try {
       hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
     } catch (err) {
@@ -435,19 +425,14 @@ export function markdownToHtml(
     }
     if (hastResult instanceof Promise) {
       return hastResult.then(
-        (hastDiags) =>
-          renderAndDrop(r.hastHandle, r.frontmatter, combineDiagnostics(r.diagnostics, hastDiags)),
+        (hastDiags) => renderAndDrop(r.hastHandle, r.frontmatter, [...r.diagnostics, ...hastDiags]),
         (err) => {
           dropHandle(r.hastHandle);
           throw err;
         },
       );
     }
-    return renderAndDrop(
-      r.hastHandle,
-      r.frontmatter,
-      combineDiagnostics(r.diagnostics, hastResult),
-    );
+    return renderAndDrop(r.hastHandle, r.frontmatter, [...r.diagnostics, ...hastResult]);
   };
 
   if (result instanceof Promise) return result.then(runHastThenRender);
@@ -488,7 +473,7 @@ export function mdxToJs(
   };
 
   const runHastThenCompile = (r: HastWithFrontmatter): MdxToJsResult | Promise<MdxToJsResult> => {
-    let hastResult: HastDiagnostic[] | Promise<HastDiagnostic[]>;
+    let hastResult: Diagnostic[] | Promise<Diagnostic[]>;
     try {
       hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
     } catch (err) {
@@ -498,22 +483,14 @@ export function mdxToJs(
     if (hastResult instanceof Promise) {
       return hastResult.then(
         (hastDiags) =>
-          compileAndDrop(
-            r.hastHandle,
-            r.frontmatter,
-            combineDiagnostics(r.diagnostics, hastDiags),
-          ),
+          compileAndDrop(r.hastHandle, r.frontmatter, [...r.diagnostics, ...hastDiags]),
         (err) => {
           dropHandle(r.hastHandle);
           throw err;
         },
       );
     }
-    return compileAndDrop(
-      r.hastHandle,
-      r.frontmatter,
-      combineDiagnostics(r.diagnostics, hastResult),
-    );
+    return compileAndDrop(r.hastHandle, r.frontmatter, [...r.diagnostics, ...hastResult]);
   };
 
   if (result instanceof Promise) return result.then(runHastThenCompile);
@@ -565,7 +542,7 @@ export function evaluate(
 type HastWithFrontmatter = {
   hastHandle: HastHandle;
   frontmatter: Frontmatter | null;
-  diagnostics: MdastDiagnostic[];
+  diagnostics: Diagnostic[];
 };
 
 function readFrontmatter(handle: MdastHandle): Frontmatter | null {
@@ -576,25 +553,6 @@ function readFrontmatter(handle: MdastHandle): Frontmatter | null {
 function readResultData(handle: HastHandle): Record<string, unknown> | null {
   const raw = getPluginData(handle);
   return raw != null ? (JSON.parse(raw) as Record<string, unknown>) : null;
-}
-
-function combineDiagnostics(
-  mdast: MdastDiagnostic[],
-  hast: HastDiagnostic[],
-): Diagnostic[] {
-  if (mdast.length === 0 && hast.length === 0) return [];
-  const out: Diagnostic[] = [];
-  for (const d of mdast) {
-    const entry: Diagnostic = { message: d.message, severity: d.severity, phase: "mdast" };
-    if (d.position) entry.position = d.position;
-    out.push(entry);
-  }
-  for (const d of hast) {
-    const entry: Diagnostic = { message: d.message, severity: d.severity, phase: "hast" };
-    if (d.position) entry.position = d.position;
-    out.push(entry);
-  }
-  return out;
 }
 
 /** Parse, run mdast plugins, capture frontmatter, then convert to HAST.

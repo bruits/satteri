@@ -104,6 +104,16 @@ export type MdastNodeInternal = MdastStdNodes & { _nodeId: number };
 /** @internal */
 export type HastNodeInternal = HastStdNodes & { _nodeId: number };
 
+/** A diagnostic emitted by a plugin via `ctx.report(...)`. */
+export interface Diagnostic {
+  message: string;
+  severity: "error" | "warning" | "info";
+  /** Source position of the offending node, when available. */
+  position?: Position;
+  /** Pipeline phase that produced this diagnostic. */
+  phase: "mdast" | "hast";
+}
+
 export interface StringRefRaw {
   offset: number;
   len: number;
