@@ -94,13 +94,15 @@ backref.
 
 ## Math
 
+Default: `true`.
+
 ```ts
 math?: boolean | {
   singleDollarTextMath?: boolean
 }
 ```
 
-Default: `true`. Parses `$$ ... $$` display math and `$ ... $` inline
+Parses `$$ ... $$` display math and `$ ... $` inline
 math.
 
 Set `singleDollarTextMath: false` to keep `$$ ... $$` working while
@@ -115,11 +117,13 @@ markdownToHtml(source, {
 
 ## Frontmatter
 
+Default: `true`.
+
 ```ts
 frontmatter?: boolean
 ```
 
-Default: `true`. Recognizes YAML (`--- ... ---`) and TOML (`+++ ... +++`)
+Recognizes YAML (`--- ... ---`) and TOML (`+++ ... +++`)
 blocks at the top of a document.
 
 The parsed block is returned alongside the rendered output:
@@ -136,11 +140,13 @@ Sätteri does not currently parse the TOML or YAML.
 
 ## Heading attributes
 
+Default: `true`.
+
 ```ts
 headingAttributes?: boolean
 ```
 
-Default: `true`. Recognizes curly-brace attribute syntax on headings:
+Recognizes curly-brace attribute syntax on headings:
 
 ```markdown
 ## My heading {#my-id .my-class}
