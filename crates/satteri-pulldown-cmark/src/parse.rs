@@ -939,14 +939,30 @@ impl<'input> ParserInner<'input> {
                         }
                     }
 
-                    if open_count == 1
-                        && self
-                            .options
-                            .contains(Options::DISABLE_SINGLE_DOLLAR_TEXT_MATH)
-                    {
-                        self.tree[cur_ix].item.body = ItemBody::Text {
-                            backslash_escaped: false,
-                        };
+                    // Single- and multi-dollar math can be toggled
+                    // independently (mirroring remark-math's
+                    // `singleDollarTextMath`). When this run's length isn't
+                    // an enabled delimiter, the `$` is literal text — so
+                    // prose like `$50 to $100` never becomes a math span.
+                    let count_enabled = if open_count == 1 {
+                        self.options.contains(Options::ENABLE_MATH_SINGLE_DOLLAR)
+                    } else {
+                        self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR)
+                    };
+                    if !count_enabled {
+                        let mut text_ix = cur_ix;
+                        loop {
+                            self.tree[text_ix].item.body = ItemBody::Text {
+                                backslash_escaped: false,
+                            };
+                            if text_ix == open_end {
+                                break;
+                            }
+                            match self.tree[text_ix].next {
+                                Some(next) => text_ix = next,
+                                None => break,
+                            }
+                        }
                         prev = cur;
                         cur = self.tree[cur_ix].next;
                         continue;

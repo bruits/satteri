@@ -50,6 +50,14 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         options
     };
 
+    // ENABLE_MATH is the umbrella for math, mirroring ENABLE_GFM above:
+    // expand it into the single- and multi-dollar flags the parser checks.
+    let options = if options.contains(Options::ENABLE_MATH) {
+        options | Options::ENABLE_MATH_SINGLE_DOLLAR | Options::ENABLE_MATH_MULTI_DOLLAR
+    } else {
+        options
+    };
+
     let line_index = LineIndex::from_source(source);
     let mut cursor = line_index.cursor();
 

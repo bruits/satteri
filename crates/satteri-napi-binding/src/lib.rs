@@ -106,17 +106,19 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
         opts |= Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
             | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS;
     }
-    let (math_enabled, single_dollar) = match &f.math_options {
-        Some(m) => (
-            f.math.unwrap_or(true),
-            m.single_dollar_text_math.unwrap_or(true),
-        ),
-        None => (f.math.unwrap_or(true), true),
-    };
-    if math_enabled {
-        opts |= Options::ENABLE_MATH;
-        if !single_dollar {
-            opts |= Options::DISABLE_SINGLE_DOLLAR_TEXT_MATH;
+    // Math: the umbrella `math` toggle decides "any math on?", and
+    // `math_options.single_dollar_text_math` picks between umbrella-mode
+    // (single + multi) and multi-only. When users granularly opt out of
+    // single-dollar, we set the multi-dollar sub-flag directly so the parser
+    // skips lone `$` entirely.
+    if f.math.unwrap_or(true) {
+        match f
+            .math_options
+            .as_ref()
+            .and_then(|m| m.single_dollar_text_math)
+        {
+            Some(false) => opts |= Options::ENABLE_MATH_MULTI_DOLLAR,
+            _ => opts |= Options::ENABLE_MATH,
         }
     }
     if f.heading_attributes.unwrap_or(false) {

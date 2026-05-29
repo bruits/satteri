@@ -345,7 +345,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.options.contains(Options::ENABLE_FOOTNOTES),
                                     self.options.contains(Options::ENABLE_DEFINITION_LIST),
                                     self.options.contains(Options::ENABLE_MDX),
-                                    self.options.contains(Options::ENABLE_MATH),
+                                    self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR),
                                     self.options.contains(Options::ENABLE_DIRECTIVE),
                                     &self.tree,
                                     self.tree.spine_len(),
@@ -363,7 +363,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.options.contains(Options::ENABLE_FOOTNOTES),
                                     self.options.contains(Options::ENABLE_DEFINITION_LIST),
                                     self.options.contains(Options::ENABLE_MDX),
-                                    self.options.contains(Options::ENABLE_MATH),
+                                    self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR),
                                     self.options.contains(Options::ENABLE_DIRECTIVE),
                                     &self.tree,
                                     self.tree.spine_len(),
@@ -905,7 +905,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return self.parse_fenced_code_block(ix, indent, fence_ch, n);
         }
 
-        if self.options.contains(Options::ENABLE_MATH) {
+        if self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR) {
             if let Some(n) = scan_math_fence(&bytes[ix..]) {
                 self.finish_list(start_ix);
                 return self.parse_math_block(ix, indent, n);
@@ -1203,7 +1203,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.options.contains(Options::ENABLE_FOOTNOTES),
             self.options.contains(Options::ENABLE_DEFINITION_LIST),
             self.options.contains(Options::ENABLE_MDX),
-            self.options.contains(Options::ENABLE_MATH),
+            self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR),
             self.options.contains(Options::ENABLE_DIRECTIVE),
             &self.tree,
             tree_position,
@@ -1772,7 +1772,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         begin_text = ix + 1;
                         backslash_escaped = false;
                         LoopInstruction::ContinueAndSkip(1)
-                    } else if bytes[ix + 1] == b'$' && self.options.contains(Options::ENABLE_MATH) {
+                    } else if bytes[ix + 1] == b'$' && self.options.has_math() {
                         // In math context, \$ should still produce a MaybeMath
                         // delimiter so it can close a math span. The backslash
                         // only prevents opening.
@@ -3381,7 +3381,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.options.contains(Options::ENABLE_FOOTNOTES),
             self.options.contains(Options::ENABLE_DEFINITION_LIST),
             self.options.contains(Options::ENABLE_MDX),
-            self.options.contains(Options::ENABLE_MATH),
+            self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR),
             self.options.contains(Options::ENABLE_DIRECTIVE),
             &self.tree,
             tree_position,
@@ -4531,7 +4531,7 @@ fn try_emit_gfm_autolink<'a>(
         return None;
     }
     // Math span precedence (only matters when math is enabled).
-    if options.contains(Options::ENABLE_MATH) && is_inside_math_span(bytes, ix) {
+    if options.has_math() && is_inside_math_span(bytes, ix) {
         return None;
     }
     // MDX JSX tag precedence (only matters when MDX is enabled).
@@ -5583,7 +5583,7 @@ fn special_bytes(options: &Options) -> [bool; 256] {
     if options.contains(Options::ENABLE_SUPERSCRIPT) {
         bytes[b'^' as usize] = true;
     }
-    if options.contains(Options::ENABLE_MATH) {
+    if options.has_math() {
         bytes[b'$' as usize] = true;
         bytes[b'{' as usize] = true;
         bytes[b'}' as usize] = true;
@@ -6287,7 +6287,7 @@ mod simd {
         if options.contains(Options::ENABLE_SUPERSCRIPT) {
             add_lookup_byte(&mut lookup, b'^');
         }
-        if options.contains(Options::ENABLE_MATH) {
+        if options.has_math() {
             add_lookup_byte(&mut lookup, b'$');
             add_lookup_byte(&mut lookup, b'{');
             add_lookup_byte(&mut lookup, b'}');
