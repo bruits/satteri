@@ -1,6 +1,11 @@
 import { materializeNode, TYPE_NAMES } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
-import { CommandBuffer, classifyReturn } from "../command-buffer.js";
+import {
+  acquireCommandBuffer,
+  classifyReturn,
+  CommandBuffer,
+  releaseCommandBuffer,
+} from "../command-buffer.js";
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
 import {
   walkMdastHandle,
@@ -115,7 +120,7 @@ function nid(node: MdastNode): number {
 }
 
 export class MdastVisitorContext {
-  readonly #commandBuffer: CommandBuffer = new CommandBuffer();
+  readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: MdastDiagnostic[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
@@ -314,8 +319,35 @@ interface MdastSubscription {
   visitFn: (node: MdastNode, context: MdastVisitorContext) => unknown;
 }
 
+/** Memoize derived subscriptions per plugin object identity. Reused plugin
+ *  definitions skip the per-compile Object.entries walk plus rebuilding the
+ *  NAPI subscription array. */
+type CachedMdastSubs = {
+  subs: MdastSubscription[];
+  rustSubs: { nodeType: number; tagFilter: string[] }[];
+};
+const mdastSubscriptionCache: WeakMap<MdastPluginInstance, CachedMdastSubs> = new WeakMap();
+
 /** Resolve subscriptions from a plugin instance. */
 export function resolveMdastSubscriptions(plugin: MdastPluginInstance): MdastSubscription[] {
+  const cached = mdastSubscriptionCache.get(plugin);
+  if (cached !== undefined) return cached.subs;
+  const built = buildMdastSubscriptions(plugin);
+  mdastSubscriptionCache.set(plugin, built);
+  return built.subs;
+}
+
+function getMdastRustSubs(
+  plugin: MdastPluginInstance,
+): { nodeType: number; tagFilter: string[] }[] {
+  const cached = mdastSubscriptionCache.get(plugin);
+  if (cached !== undefined) return cached.rustSubs;
+  const built = buildMdastSubscriptions(plugin);
+  mdastSubscriptionCache.set(plugin, built);
+  return built.rustSubs;
+}
+
+function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
   const subs: MdastSubscription[] = [];
   for (const [name, fn] of Object.entries(plugin)) {
     if (VISITOR_KEYS.has(name) && typeof fn === "function") {
@@ -328,7 +360,8 @@ export function resolveMdastSubscriptions(plugin: MdastPluginInstance): MdastSub
       }
     }
   }
-  return subs;
+  const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
+  return { subs, rustSubs };
 }
 
 /** Read a u16 from buf at offset (LE). */
@@ -395,8 +428,6 @@ class MdastLazyChildResolver {
  * Inline format (from Rust serialize_mdast_node_inline):
  *   [node_data: u32+bytes][position: 6×u32 = 24B][child_count: u16][child_ids: N×u32][type-specific data]
  */
-const encoder = new TextEncoder();
-
 function readMdastMatchedNode(
   view: DataView,
   buf: Uint8Array,
@@ -689,6 +720,41 @@ function readMdastMatchedNode(
   return node as unknown as MdastNode;
 }
 
+/** MDAST node types whose `value` field can be set in place by Rust via
+ *  CMD_SET_PROPERTY (see `resolve_mdast_field` for `FIELD_VALUE`). When the
+ *  visitor returns one of these as `{type, value}` with no other fields,
+ *  routing through setProperty skips a full arena rebuild. */
+const MDAST_VALUE_ONLY_TYPES = new Set<string>([
+  "text",
+  "html",
+  "inlineCode",
+  "yaml",
+  "toml",
+  "inlineMath",
+]);
+
+/** True when the visitor returned a same-type text-like MDAST node carrying
+ *  only `type` + `value` — i.e. the user just rewrote the text body. Other
+ *  fields (children, position, data) being present means we can't safely
+ *  drop them via setProperty and must take the full replace path. */
+function isMdastTextValueSwap(
+  result: MdastNode,
+  original: MdastNode | undefined,
+): result is MdastNode & { value: string } {
+  if (original === undefined) return false;
+  if (result.type !== original.type) return false;
+  if (!MDAST_VALUE_ONLY_TYPES.has(result.type)) return false;
+  const r = result as unknown as Record<string, unknown>;
+  if (typeof r.value !== "string") return false;
+  return (
+    r.children === undefined &&
+    r.position === undefined &&
+    r.data === undefined &&
+    r.lang === undefined &&
+    r.meta === undefined
+  );
+}
+
 /** Apply a sync visitor result to the return buffer.
  *  If the result is the same object as the input node, treat it as a no-op
  *  so that context mutations (e.g. setProperty) are not clobbered. */
@@ -708,9 +774,15 @@ function applyMdastVisitResult(
     case "raw_html":
       returnBuffer.replace(nodeId, result as unknown as { rawHtml: string });
       break;
-    case "structured_node":
-      returnBuffer.replace(nodeId, result as MdastNode);
+    case "structured_node": {
+      const node = result as MdastNode;
+      if (isMdastTextValueSwap(node, originalNode)) {
+        returnBuffer.setProperty(nodeId, "value", node.value);
+        break;
+      }
+      returnBuffer.replace(nodeId, node);
       break;
+    }
   }
 }
 
@@ -730,9 +802,9 @@ export function visitMdastHandle(
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const context = new MdastVisitorContext(handle, getSource, filename);
-  const returnBuffer = new CommandBuffer();
+  const returnBuffer = acquireCommandBuffer();
   const resolver = new MdastLazyChildResolver(handle);
-  const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
+  const rustSubs = getMdastRustSubs(plugin);
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
@@ -788,5 +860,8 @@ function finalizeMdastVisit(
   returnBuffer: CommandBuffer,
 ): MdastVisitResult {
   const { merged, hasMutations } = mergeAndReset(returnBuffer, context);
+  // Return both buffers to the pool — bytes were copied into `merged` above.
+  releaseCommandBuffer(returnBuffer);
+  releaseCommandBuffer(context.getCommandBuffer());
   return { commandBuffer: merged, diagnostics: context.getDiagnostics(), hasMutations };
 }

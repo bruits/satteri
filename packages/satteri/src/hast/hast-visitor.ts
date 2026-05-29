@@ -17,7 +17,7 @@ import {
   HAST_MDX_TEXT_EXPRESSION,
   HAST_MDX_ESM,
 } from "./hast-reader.js";
-import { CommandBuffer } from "../command-buffer.js";
+import { acquireCommandBuffer, CommandBuffer, releaseCommandBuffer } from "../command-buffer.js";
 import {
   walkHandle,
   applyCommandsToHandle,
@@ -103,7 +103,7 @@ function nid(node: HastNode): number {
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
-  readonly #commandBuffer: CommandBuffer = new CommandBuffer();
+  readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: HastDiagnostic[] = [];
   /** Track accumulated node state for multiple setProperty calls on the same node. */
   readonly #pendingNodes: Map<number, HastNode> = new Map();
@@ -264,8 +264,35 @@ function isFilteredVisitor(v: unknown): v is HastFilteredVisitor {
 /** Node types that use filtered visitors (have tag/component names). */
 const FILTERED_METHODS = new Set(["element", "mdxJsxFlowElement", "mdxJsxTextElement"]);
 
+/** Memoize derived subscriptions per plugin object identity. Reused plugin
+ *  definitions (the common case for non-stateful plugins) avoid the per-compile
+ *  walk over METHOD_TO_TYPE plus the `rustSubs.map(...)` projection for NAPI. */
+type CachedSubs = {
+  subs: ResolvedSubscription[];
+  rustSubs: { nodeType: number; tagFilter: string[] }[];
+};
+const subscriptionCache: WeakMap<HastVisitorInstance, CachedSubs> = new WeakMap();
+
 /** Resolve subscriptions from a plugin instance. */
 export function resolveSubscriptions(plugin: HastVisitorInstance): ResolvedSubscription[] {
+  const cached = subscriptionCache.get(plugin);
+  if (cached !== undefined) return cached.subs;
+  const built = buildSubscriptions(plugin);
+  subscriptionCache.set(plugin, built);
+  return built.subs;
+}
+
+/** Get the (cached) Rust-side projection of `subs` — strips visitFn so it can
+ *  cross NAPI. Computed once per plugin object alongside `subs`. */
+function getRustSubs(plugin: HastVisitorInstance): { nodeType: number; tagFilter: string[] }[] {
+  const cached = subscriptionCache.get(plugin);
+  if (cached !== undefined) return cached.rustSubs;
+  const built = buildSubscriptions(plugin);
+  subscriptionCache.set(plugin, built);
+  return built.rustSubs;
+}
+
+function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
   const subs: ResolvedSubscription[] = [];
 
   for (const [methodName, nodeType] of Object.entries(METHOD_TO_TYPE)) {
@@ -287,7 +314,8 @@ export function resolveSubscriptions(plugin: HastVisitorInstance): ResolvedSubsc
     }
   }
 
-  return subs;
+  const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
+  return { subs, rustSubs };
 }
 
 /** Reverse map: method name → node type number */
@@ -686,7 +714,16 @@ function makeLazyChildren(node: object, childIds: number[], resolver: LazyChildR
 
 /** Handle a visitor result (sync).
  *  If the result is the same object as the input node, treat it as a no-op
- *  so that context mutations (e.g. setProperty) are not clobbered. */
+ *  so that context mutations (e.g. setProperty) are not clobbered.
+ *
+ *  Fast path for the common `text(node) { return { type, value: ... } }`
+ *  pattern: when the returned node is a text-like node of the same type
+ *  carrying only a new `value` and no other distinguishing fields, encode
+ *  a CMD_SET_PROPERTY("value") instead of a structural replace. This skips
+ *  JSON.stringify + serde_json parse + sub-arena emit + rebuild — a Patch::
+ *  Replace would otherwise force `apply_hast_commands` into its full rebuild
+ *  branch even when no shape actually changed.
+ */
 function handleVisitResult(
   result: HastNode | void | Promise<HastNode | void>,
   nodeId: number,
@@ -701,8 +738,32 @@ function handleVisitResult(
     list.push({ nodeId, promise: result, originalNode });
     return list;
   }
+  if (isTextValueSwap(result, originalNode)) {
+    returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
+    return deferred;
+  }
   returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
   return deferred;
+}
+
+/** True when `result` is a text-like node carrying only `type` + `value` and
+ *  matching the original's type — i.e., the user just rewrote the text. The
+ *  explicit `=== undefined` checks beat `Object.keys().length` here (no array
+ *  alloc) for what is otherwise a per-text-node hot path. */
+function isTextValueSwap(result: HastNode, original: HastNode): boolean {
+  if (result.type !== original.type) return false;
+  if (result.type !== "text" && result.type !== "comment" && result.type !== "raw") return false;
+  const r = result as unknown as Record<string, unknown>;
+  if (typeof r.value !== "string") return false;
+  return (
+    r.children === undefined &&
+    r.position === undefined &&
+    r.data === undefined &&
+    r.tagName === undefined &&
+    r.properties === undefined &&
+    r.name === undefined &&
+    r.attributes === undefined
+  );
 }
 
 /**
@@ -776,11 +837,33 @@ export function visitHastHandle(
   source: string | (() => string),
   filename: string,
 ): void | Promise<void> {
+  const result = visitHastHandleCollect(handle, plugin, subs, source, filename);
+  if (result instanceof Promise) {
+    return result.then((commands) => {
+      if (commands.length > 0) applyCommandsToHandle(handle, commands);
+    });
+  }
+  if (result.length > 0) applyCommandsToHandle(handle, result);
+}
+
+/** Run a HAST visitor, build the command buffer, but do NOT apply it. Returns
+ *  the merged commands so the caller can choose how to dispatch — either via
+ *  `applyCommandsToHandle` (intermediate plugins in a chain) or via a fused
+ *  NAPI call like `applyCommandsAndRenderHandle` (final plugin, saves one
+ *  apply + one render + one drop crossing). Empty result means no mutations.
+ */
+export function visitHastHandleCollect(
+  handle: HastHandle,
+  plugin: HastVisitorInstance,
+  subs: ResolvedSubscription[],
+  source: string | (() => string),
+  filename: string,
+): Uint8Array | Promise<Uint8Array> {
   const getSource = typeof source === "function" ? source : () => source;
   const ctx = new HastVisitorContextImpl(handle, getSource, filename);
-  const returnBuffer = new CommandBuffer();
+  const returnBuffer = acquireCommandBuffer();
   const resolver = new LazyChildResolver(handle);
-  const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
+  const rustSubs = getRustSubs(plugin);
   const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
 
   if (deferred) {
@@ -794,20 +877,18 @@ export function visitHastHandle(
           returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
         }
       }
-      applyMutations(handle, returnBuffer, ctx);
+      return collectCommands(returnBuffer, ctx);
     });
   }
 
-  applyMutations(handle, returnBuffer, ctx);
+  return collectCommands(returnBuffer, ctx);
 }
 
-function applyMutations(
-  handle: HastHandle,
-  returnBuffer: CommandBuffer,
-  ctx: HastVisitorContextImpl,
-): void {
-  const { merged, hasMutations } = mergeAndReset(returnBuffer, ctx);
-  if (hasMutations) {
-    applyCommandsToHandle(handle, merged);
-  }
+function collectCommands(returnBuffer: CommandBuffer, ctx: HastVisitorContextImpl): Uint8Array {
+  const { merged } = mergeAndReset(returnBuffer, ctx);
+  // Return the buffers to the pool — the merged Uint8Array above already
+  // copied the bytes out, so the underlying ArrayBuffers can be reused.
+  releaseCommandBuffer(returnBuffer);
+  releaseCommandBuffer(ctx.getCommandBuffer());
+  return merged;
 }

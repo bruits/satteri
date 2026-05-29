@@ -24,9 +24,32 @@ pub struct LineIndex<'a> {
     /// True when the entire source is ASCII — every lookup short-circuits
     /// without consulting `line_cp_offsets` / `line_is_ascii`.
     all_ascii: bool,
+    /// "Skip positions" mode: every lookup returns the all-zero sentinel so
+    /// downstream code records no useful position. Used by HTML/JS output
+    /// paths where the consumer never reads positions; skips the per-line
+    /// `memchr` scan at construction and ~5 cursor lookups per MDAST node.
+    /// `cursor()` on a disabled index produces a cursor whose `offset_to_line_col`
+    /// and `byte_to_cp_offset` return `(0,0)` / `0` without consulting any
+    /// state, and downstream `convert.rs::copy_position` already short-circuits
+    /// on the zero sentinel — so HAST node positions stay unset for free.
+    disabled: bool,
 }
 
 impl<'a> LineIndex<'a> {
+    /// Construct a no-op index: `cursor()` returns trivial values without
+    /// inspecting the source. The source slice is still held so debug helpers
+    /// keep working, but no line scan happens.
+    pub fn disabled_for(source: &'a str) -> Self {
+        LineIndex {
+            source: source.as_bytes(),
+            line_offsets: Vec::new(),
+            line_cp_offsets: Vec::new(),
+            line_is_ascii: Vec::new(),
+            all_ascii: true,
+            disabled: true,
+        }
+    }
+
     pub fn from_source(source: &'a str) -> Self {
         let bytes = source.as_bytes();
         let all_ascii = bytes.is_ascii();
@@ -43,6 +66,7 @@ impl<'a> LineIndex<'a> {
                 line_cp_offsets: Vec::new(),
                 line_is_ascii: Vec::new(),
                 all_ascii: true,
+                disabled: false,
             };
         }
         let mut cp_offsets = Vec::with_capacity(line_count_estimate);
@@ -72,6 +96,7 @@ impl<'a> LineIndex<'a> {
             line_cp_offsets: cp_offsets,
             line_is_ascii,
             all_ascii: false,
+            disabled: false,
         }
     }
 
@@ -96,6 +121,9 @@ pub struct LineIndexCursor<'idx, 'src> {
 impl LineIndexCursor<'_, '_> {
     #[inline]
     pub fn offset_to_line_col(&mut self, offset: u32) -> (u32, u32) {
+        if self.index.disabled {
+            return (0, 0);
+        }
         let idx = self.find_line_idx(offset);
         let line_start = self.index.line_offsets[idx];
         let col = if self.index.all_ascii || self.index.line_is_ascii[idx] {
@@ -111,7 +139,7 @@ impl LineIndexCursor<'_, '_> {
     /// reports in code points, not bytes.
     #[inline]
     pub fn byte_to_cp_offset(&mut self, byte_offset: u32) -> u32 {
-        if self.index.all_ascii {
+        if self.index.all_ascii || self.index.disabled {
             return byte_offset;
         }
         let idx = self.find_line_idx(byte_offset);
