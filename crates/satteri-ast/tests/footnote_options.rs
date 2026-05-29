@@ -16,7 +16,10 @@ fn html(md: &str, opts: &ConvertOptions) -> String {
 #[test]
 fn default_options_match_existing_english_strings() {
     let out = html(MD, &ConvertOptions::default());
-    assert!(out.contains(">Footnotes<"), "expected default heading: {out}");
+    assert!(
+        out.contains(">Footnotes<"),
+        "expected default heading: {out}"
+    );
     assert!(
         out.contains("aria-label=\"Back to reference 1\""),
         "expected default aria-label: {out}"
@@ -31,7 +34,10 @@ fn custom_footnote_label_overrides_h2_text() {
         ..ConvertOptions::default()
     };
     let out = html(MD, &opts);
-    assert!(out.contains(">Notas al pie<"), "expected custom heading: {out}");
+    assert!(
+        out.contains(">Notas al pie<"),
+        "expected custom heading: {out}"
+    );
     assert!(!out.contains(">Footnotes<"));
 }
 
@@ -72,7 +78,10 @@ fn custom_back_content_replaces_arrow() {
         ..ConvertOptions::default()
     };
     let out = html(MD, &opts);
-    assert!(out.contains(">haut<"), "expected custom backref content: {out}");
+    assert!(
+        out.contains(">haut<"),
+        "expected custom backref content: {out}"
+    );
     assert!(!out.contains("\u{21a9}"));
 }
 
@@ -103,11 +112,21 @@ fn callback_back_label_gets_number_and_rerun_index() {
 fn callback_back_content_returns_per_backref_text() {
     let opts = ConvertOptions {
         footnote_back_content: Backref::Callback(Box::new(|_, k| {
-            if k == 1 { "first".into() } else { "more".into() }
+            if k == 1 {
+                "first".into()
+            } else {
+                "more".into()
+            }
         })),
         ..ConvertOptions::default()
     };
     let out = html(MD_DOUBLE, &opts);
-    assert!(out.contains(">first<"), "expected k=1 callback content: {out}");
-    assert!(out.contains(">more<"), "expected k>1 callback content: {out}");
+    assert!(
+        out.contains(">first<"),
+        "expected k=1 callback content: {out}"
+    );
+    assert!(
+        out.contains(">more<"),
+        "expected k>1 callback content: {out}"
+    );
 }

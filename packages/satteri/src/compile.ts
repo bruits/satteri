@@ -54,8 +54,7 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
         if (typeof g.footnotes === "object") {
           gfmOpts.footnotes = true;
           convertOptions = convertOptions ?? {};
-          if (g.footnotes.label !== undefined)
-            convertOptions.footnoteLabel = g.footnotes.label;
+          if (g.footnotes.label !== undefined) convertOptions.footnoteLabel = g.footnotes.label;
           if (g.footnotes.backContent !== undefined)
             convertOptions.footnoteBackContent = g.footnotes.backContent;
           if (g.footnotes.backLabel !== undefined)
@@ -252,10 +251,7 @@ export interface SmartPunctuationOptions {
  * to that definition, 2 on the second, and so on). Must return the final
  * string used as the backref content or `aria-label`.
  */
-export type FootnoteBackrefCallback = (
-  referenceNumber: number,
-  rerunIndex: number,
-) => string;
+export type FootnoteBackrefCallback = (referenceNumber: number, rerunIndex: number) => string;
 
 /**
  * i18n strings for the GFM footnotes section. Mirrors `footnoteLabel`,

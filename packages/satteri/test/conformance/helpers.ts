@@ -228,9 +228,7 @@ const MATH_NO_SINGLE_FEATURES: Features = {
 
 export function assertNoSingleDollarMathMdastConformance(md: string): void {
   const expected = stripData(serialize(mathNoSingleMdastProcessor.parse(md)));
-  const actual = stripData(
-    serialize(markdownToMdast(md, { features: MATH_NO_SINGLE_FEATURES })),
-  );
+  const actual = stripData(serialize(markdownToMdast(md, { features: MATH_NO_SINGLE_FEATURES })));
   expect(actual).toEqual(expected);
 }
 
@@ -274,17 +272,14 @@ export function assertFootnoteHastConformance(
     ...BASE_FOOTNOTE_FEATURES,
     gfm: { footnotes: options },
   };
-  const actual = stripHastDataLang(
-    serialize(markdownToHast(md, { features: satFeatures })),
-  );
+  const actual = stripHastDataLang(serialize(markdownToHast(md, { features: satFeatures })));
 
   const refOpts: Record<string, unknown> = { ...REF_REHYPE_OPTIONS };
   if (options.label !== undefined) refOpts.footnoteLabel = options.label;
   if (options.backLabel !== undefined) {
     if (typeof options.backLabel === "function") {
       const cb = options.backLabel;
-      refOpts.footnoteBackLabel = (refIdx: number, rerefIdx: number) =>
-        cb(refIdx + 1, rerefIdx);
+      refOpts.footnoteBackLabel = (refIdx: number, rerefIdx: number) => cb(refIdx + 1, rerefIdx);
     } else {
       const tpl = options.backLabel;
       refOpts.footnoteBackLabel = (refIdx: number, rerefIdx: number) => {
@@ -316,10 +311,7 @@ export function assertFootnoteHastConformance(
       };
     }
   }
-  const proc = unified()
-    .use(remarkParse)
-    .use(remarkGfm)
-    .use(remarkRehype, refOpts);
+  const proc = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, refOpts);
   const mdast = proc.parse(md);
   const expected = normalizeAlignToStyle(serialize(proc.runSync(mdast) as Nodes));
   expect(actual).toEqual(expected);

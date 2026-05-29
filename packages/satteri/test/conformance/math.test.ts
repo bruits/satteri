@@ -306,9 +306,7 @@ describe("Math HAST conformance", () => {
 // either side surfaces here.
 describe("Math singleDollarTextMath:false conformance (vs remark-math)", () => {
   test("currency prose keeps dollars literal", () => {
-    assertNoSingleDollarMathMdastConformance(
-      "the deficit grew from $50 to $100 billion",
-    );
+    assertNoSingleDollarMathMdastConformance("the deficit grew from $50 to $100 billion");
   });
 
   test("lone $ in prose is not math", () => {
@@ -338,9 +336,7 @@ describe("Math singleDollarTextMath:false conformance (vs remark-math)", () => {
   });
 
   test("hast: currency prose renders without math elements", () => {
-    assertNoSingleDollarMathHastConformance(
-      "the deficit grew from $50 to $100 billion",
-    );
+    assertNoSingleDollarMathHastConformance("the deficit grew from $50 to $100 billion");
   });
 
   test("hast: $$..$$ still becomes display math", () => {

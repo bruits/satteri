@@ -4,8 +4,7 @@ import { assertFootnoteHastConformance } from "./helpers.js";
 const SINGLE = "Text with footnote[^1].\n\n[^1]: First footnote.\n";
 const MULTI = "See[^a] and[^a] again.\n\n[^a]: Shared note.\n";
 const TRIPLE = "Ref[^x], again[^x], once more[^x].\n\n[^x]: Triple-referenced.\n";
-const MIXED =
-  "Two refs[^a] and one[^b], plus[^a].\n\n[^a]: A note.\n\n[^b]: B note.\n";
+const MIXED = "Two refs[^a] and one[^b], plus[^a].\n\n[^a]: A note.\n\n[^b]: B note.\n";
 
 describe("GFM footnote options conformance (vs remark-rehype)", () => {
   test("default options match remark-rehype (single ref)", () => {
