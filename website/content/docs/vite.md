@@ -95,7 +95,7 @@ the production runtime in `build`. Override with
 | `mdx`          | `boolean \| MdxOptions` | `true`  | Process `.mdx` files. Pass an object to configure the compile. |
 | `mdastPlugins` | `MdastPluginInput[]`    | —       | MDAST-stage plugins, shared across `.md` and `.mdx`.           |
 | `hastPlugins`  | `HastPluginInput[]`     | —       | HAST-stage plugins, shared across `.md` and `.mdx`.            |
-| `features`     | `Features`              | —       | Parser toggles (`gfm`, `frontmatter`, `math`, …).              |
+| `features`     | `Features`              | —       | Parser toggles. See [Features](/docs/features/).               |
 
 `MdxOptions` mirrors Sätteri's MDX options minus `outputFormat`. The
 plugin always emits an ES module so Vite can import it.

@@ -289,6 +289,7 @@ Type-safe wrapper for HAST plugin definitions.
 interface CompileOptions {
   mdastPlugins?: MdastPluginDefinition[];
   hastPlugins?: HastPluginDefinition[];
+  features?: Features;
   filename?: string;
 }
 
@@ -297,6 +298,8 @@ interface MdxCompileOptions extends CompileOptions {
   optimizeStatic?: OptimizeStaticConfig;
 }
 ```
+
+`Features` controls the Markdown extensions Sätteri's parser recognizes: `gfm`, `frontmatter`, `math`, `directive`, `smartPunctuation`, etc. `gfm`, `math`, and `smartPunctuation` also accept granular options. For example, `math: { singleDollarTextMath: false }` keeps single `$` as literal text. See the [Features reference](https://satteri.dev/docs/features/) for the full list.
 
 ## License
 

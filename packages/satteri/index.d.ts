@@ -4,7 +4,7 @@
  * Apply MDAST commands and convert to HAST handle in one step.
  * The MDAST handle is consumed (emptied).
  */
-export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle, commandBuf: Uint8Array): HastHandle
+export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle, commandBuf: Uint8Array, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
 /** Apply a command buffer to a HAST handle's arena in-place. */
 export declare function applyCommandsToHandle(handle: HastHandle, commandBuf: Uint8Array): void
@@ -16,22 +16,22 @@ export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandB
 export declare function compileHandle(handle: HastHandle, options?: JsMdxOptions | undefined | null): string
 
 /** Compile MDX source directly to JavaScript. */
-export declare function compileMdx(source: string, options?: JsMdxOptions | undefined | null, features?: JsFeatures | undefined | null): string
+export declare function compileMdx(source: string, options?: JsMdxOptions | undefined | null, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): string
 
 /** Convert an MDAST handle to a HAST handle. The MDAST handle is consumed (emptied). */
-export declare function convertMdastToHastHandle(handle: MdastHandle): HastHandle
+export declare function convertMdastToHastHandle(handle: MdastHandle, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
 /**
  * Parse markdown source and convert to HAST. Returns an opaque handle.
  * The arena stays in Rust memory, no buffer is copied to JS.
  */
-export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null): HastHandle
+export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
 /** Parse markdown source into an MDAST arena handle. */
 export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null): MdastHandle
 
 /** Parse MDX source and convert to HAST. Returns an opaque handle. */
-export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null): HastHandle
+export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
 /** Parse MDX source into an MDAST arena handle. */
 export declare function createMdxMdastHandle(source: string, features?: JsFeatures | undefined | null): MdastHandle
@@ -60,14 +60,37 @@ export declare function getMdastFrontmatter(handle: MdastHandle): JsFrontmatter 
  */
 export declare function getNodeData(handle: AnyHandle, nodeId: number): string | null
 
+/**
+ * MDAST→HAST conversion options passed from JavaScript.
+ *
+ * Input-only: `object_to_js = false` because `FunctionRef` only crosses
+ * JS → Rust. A `JsConvertOptions` never gets serialized back to JS.
+ */
+export interface JsConvertOptions {
+  /** `<h2>` label opening the footnotes section. Default: `"Footnotes"`. */
+  footnoteLabel?: string
+  /** Backref `<a>` content. Default: `"\u{21a9}"` (↩). */
+  footnoteBackContent?: string | ((arg0: number, arg1: number) => string)
+  /**
+   * Backref `aria-label`. The token `{reference}` is replaced with the
+   * footnote number (`1`) or `number-K` (`1-2`) for repeated references.
+   * Default: `"Back to reference {reference}"`.
+   */
+  footnoteBackLabel?: string | ((arg0: number, arg1: number) => string)
+}
+
 /** Feature toggles for the Markdown/MDX parser, passed from JavaScript. */
 export interface JsFeatures {
   /** GFM: tables, footnotes, strikethrough, task lists. Default: true. */
   gfm?: boolean
+  /** Granular GFM control (overrides `gfm`). */
+  gfmOptions?: JsGfmOptions
   /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
   frontmatter?: boolean
   /** Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true. */
   math?: boolean
+  /** Granular math control (overrides `math`). */
+  mathOptions?: JsMathOptions
   /** Heading attributes (`# text { #id .class }`). Default: true. */
   headingAttributes?: boolean
   /** Colon-delimited container directive blocks (`:::`). Default: false. */
@@ -90,6 +113,30 @@ export interface JsFrontmatter {
   kind: string
   /** Raw frontmatter content between the delimiters (no `---`/`+++` lines). */
   value: string
+}
+
+/**
+ * Granular GFM toggles, nested under `features.gfm`. The footnote i18n
+ * strings (label, back-content, back-label) travel separately via the
+ * `JsConvertOptions` argument on conversion entry points; the JS package
+ * extracts them from `features.gfm.footnotes` before calling in.
+ */
+export interface JsGfmOptions {
+  /**
+   * Enable GFM footnotes (`[^id]`). Default: true. Set `false` to drop
+   * footnote parsing while keeping the rest of the GFM bundle.
+   */
+  footnotes?: boolean
+}
+
+/** Granular math toggles, nested under `features.math`. */
+export interface JsMathOptions {
+  /**
+   * Treat single-dollar runs (`$ ... $`) as inline math. Default: true.
+   * Set `false` to keep single `$` as literal text (prose with currency)
+   * while still parsing double-dollar (`$$ ... $$`) display math.
+   */
+  singleDollarTextMath?: boolean
 }
 
 /** MDX compile options passed from JavaScript. */
@@ -189,7 +236,7 @@ export declare function parseEsm(source: string): string | null
 export declare function parseExpression(source: string): string | null
 
 /** Parse Markdown source and return HTML string directly. */
-export declare function parseToHtml(source: string, features?: JsFeatures | undefined | null): string
+export declare function parseToHtml(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): string
 
 /** Render a HAST handle's arena to HTML. Does not consume the handle. */
 export declare function renderHandle(handle: HastHandle): string

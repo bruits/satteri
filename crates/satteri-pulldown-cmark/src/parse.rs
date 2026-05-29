@@ -939,6 +939,19 @@ impl<'input> ParserInner<'input> {
                         }
                     }
 
+                    if open_count == 1
+                        && self
+                            .options
+                            .contains(Options::DISABLE_SINGLE_DOLLAR_TEXT_MATH)
+                    {
+                        self.tree[cur_ix].item.body = ItemBody::Text {
+                            backslash_escaped: false,
+                        };
+                        prev = cur;
+                        cur = self.tree[cur_ix].next;
+                        continue;
+                    }
+
                     // Scan forward for a matching run of the same count
                     let mut scan = self.tree[open_end].next;
                     let mut close_ix = None;

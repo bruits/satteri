@@ -5,7 +5,9 @@ pub mod node;
 pub mod properties;
 pub mod render;
 
-pub use crate::convert::mdast_arena_to_hast_arena;
+pub use crate::convert::{
+    mdast_arena_to_hast_arena, mdast_arena_to_hast_arena_with_options, Backref, ConvertOptions,
+};
 pub use node::HastNodeType;
 pub use render::{hast_arena_to_html, render_node};
 

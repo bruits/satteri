@@ -792,6 +792,12 @@ bitflags::bitflags! {
         /// With this feature enabled, two events `Event::InlineMath` and `Event::DisplayMath`
         /// are emitted that conventionally contain TeX formulas.
         const ENABLE_MATH = 1 << 10;
+        /// Treat single-dollar runs (`$ ... $`) as literal text instead of
+        /// inline math. Double-dollar (`$$ ... $$`) still parses as display
+        /// math.
+        ///
+        /// Requires [`Options::ENABLE_MATH`] to have any effect.
+        const DISABLE_SINGLE_DOLLAR_TEXT_MATH = 1 << 22;
         /// Misc GitHub Flavored Markdown features not supported in CommonMark.
         const ENABLE_GFM = 1 << 11;
         /// GitHub-style blockquote alerts ([!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION]).

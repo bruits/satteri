@@ -30,12 +30,56 @@ import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
 import type { MdastNode, HastNode } from "./types.js";
 
-function featuresToNative(features: Features | undefined) {
-  if (!features) return undefined;
+type NativeFeaturesPair = {
+  features: Record<string, unknown> | undefined;
+  convertOptions: Record<string, unknown> | undefined;
+};
+
+/**
+ * Split the user-facing `Features` (with nested unions) into the flat napi
+ * `JsFeatures` shape plus the conversion-side `JsConvertOptions` carrying
+ * the footnote i18n strings. The public API only exposes `features`; the
+ * footnote strings are routed to napi internally.
+ */
+function featuresToNative(features: Features | undefined): NativeFeaturesPair {
+  if (!features) return { features: undefined, convertOptions: undefined };
   const result: Record<string, unknown> = {};
-  if (features.gfm !== undefined) result.gfm = features.gfm;
+  let convertOptions: Record<string, unknown> | undefined;
+
+  if (features.gfm !== undefined) {
+    if (typeof features.gfm === "object") {
+      const g = features.gfm;
+      const gfmOpts: Record<string, unknown> = {};
+      if (g.footnotes !== undefined) {
+        if (typeof g.footnotes === "object") {
+          gfmOpts.footnotes = true;
+          convertOptions = convertOptions ?? {};
+          if (g.footnotes.label !== undefined)
+            convertOptions.footnoteLabel = g.footnotes.label;
+          if (g.footnotes.backContent !== undefined)
+            convertOptions.footnoteBackContent = g.footnotes.backContent;
+          if (g.footnotes.backLabel !== undefined)
+            convertOptions.footnoteBackLabel = g.footnotes.backLabel;
+        } else {
+          gfmOpts.footnotes = g.footnotes;
+        }
+      }
+      result.gfmOptions = gfmOpts;
+    } else {
+      result.gfm = features.gfm;
+    }
+  }
   if (features.frontmatter !== undefined) result.frontmatter = features.frontmatter;
-  if (features.math !== undefined) result.math = features.math;
+  if (features.math !== undefined) {
+    if (typeof features.math === "object") {
+      const mathOpts: Record<string, unknown> = {};
+      if (features.math.singleDollarTextMath !== undefined)
+        mathOpts.singleDollarTextMath = features.math.singleDollarTextMath;
+      result.mathOptions = mathOpts;
+    } else {
+      result.math = features.math;
+    }
+  }
   if (features.headingAttributes !== undefined)
     result.headingAttributes = features.headingAttributes;
   if (features.directive !== undefined) result.directive = features.directive;
@@ -49,7 +93,7 @@ function featuresToNative(features: Features | undefined) {
       result.smartPunctuation = features.smartPunctuation;
     }
   }
-  return result;
+  return { features: result, convertOptions };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -202,14 +246,97 @@ export interface SmartPunctuationOptions {
   ellipses?: boolean;
 }
 
+/**
+ * Per-backref callback. Invoked once per anchor in the footnotes section
+ * with 1-based `referenceNumber` and `rerunIndex` (1 on the first backref
+ * to that definition, 2 on the second, and so on). Must return the final
+ * string used as the backref content or `aria-label`.
+ */
+export type FootnoteBackrefCallback = (
+  referenceNumber: number,
+  rerunIndex: number,
+) => string;
+
+/**
+ * i18n strings for the GFM footnotes section. Mirrors `footnoteLabel`,
+ * `footnoteBackLabel`, and `footnoteBackContent` from remark-rehype.
+ *
+ * `backContent` and `backLabel` each accept either a template string with
+ * the `{reference}` placeholder (substituted with `1` or `1-2` to match
+ * remark-rehype's default suffix), or a callback receiving the raw
+ * `(referenceNumber, rerunIndex)` pair.
+ *
+ * Passing this object enables footnotes. To turn them off, use
+ * `gfm: { footnotes: false }`.
+ */
+export interface FootnoteOptions {
+  /** `<h2>` label opening the footnotes section. Default: `"Footnotes"`. */
+  label?: string;
+  /**
+   * Backref `<a>` content. Default: `"↩"`.
+   *
+   * Template form: the string is used as-is, and a `<sup>K</sup>` marker
+   * is auto-appended on reruns (k > 1). Callback form: returns the full
+   * content for each backref; no auto-sup is added.
+   */
+  backContent?: string | FootnoteBackrefCallback;
+  /**
+   * Backref `aria-label`. Default: `"Back to reference {reference}"`.
+   *
+   * Template form: `{reference}` becomes `n` for the first backref, `n-K`
+   * for subsequent ones. Callback form: returns the `aria-label` string
+   * for each backref.
+   */
+  backLabel?: string | FootnoteBackrefCallback;
+}
+
+/** Granular GFM toggles, nested under {@link Features.gfm}. */
+export interface GfmOptions {
+  /**
+   * Enable GFM footnotes (`[^id]`). Default: true.
+   *
+   * Pass `false` to drop footnote parsing while keeping the rest of GFM;
+   * pass an object to enable footnotes with custom i18n strings (see
+   * {@link FootnoteOptions}).
+   */
+  footnotes?: boolean | FootnoteOptions;
+}
+
+/** Granular math toggles, nested under {@link Features.math}. */
+export interface MathOptions {
+  /**
+   * Treat single-dollar runs (`$ ... $`) as inline math. Default: true.
+   *
+   * Set `false` to keep single `$` as literal text while still parsing
+   * `$$ ... $$` display math. Mirrors `singleDollarTextMath` from
+   * remark-math.
+   */
+  singleDollarTextMath?: boolean;
+}
+
 /** Parser feature toggles. All default to their documented value when omitted. */
 export interface Features {
-  /** GFM: tables, footnotes, strikethrough, task lists. Default: true. */
-  gfm?: boolean;
+  /**
+   * GFM: tables, footnotes, strikethrough, task lists. Default: true.
+   *
+   * Pass an options object for granular control:
+   * ```ts
+   * gfm: { footnotes: false }                   // skip footnotes only
+   * gfm: { footnotes: { label: "Notes" } }      // localize footnotes
+   * ```
+   */
+  gfm?: boolean | GfmOptions;
   /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
   frontmatter?: boolean;
-  /** Math blocks and inline math. Default: true. */
-  math?: boolean;
+  /**
+   * Math blocks and inline math. Default: true.
+   *
+   * Pass an options object for granular control:
+   * ```ts
+   * math: { singleDollarTextMath: false }       // $$..$$ only, $..$ literal
+   * ```
+   */
+  math?: boolean | MathOptions;
   /** Heading attributes (`# text { #id .class }`). Default: true. */
   headingAttributes?: boolean;
   /** Colon-delimited container directive blocks (`:::`). Default: false. */
@@ -369,9 +496,17 @@ export function markdownToHtml(
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
   const { mdastPlugins = [], hastPlugins = [], features, filename = "<unknown>" } = options;
-  const nativeFeatures = featuresToNative(features);
+  const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
+    featuresToNative(features);
 
-  const result = createHastHandleFromMdast(source, mdastPlugins, false, filename, nativeFeatures);
+  const result = createHastHandleFromMdast(
+    source,
+    mdastPlugins,
+    false,
+    filename,
+    nativeFeatures,
+    nativeConvertOptions,
+  );
 
   const renderAndDrop = (h: HastHandle, frontmatter: Frontmatter | null): MarkdownToHtmlResult => {
     try {
@@ -424,9 +559,17 @@ export function mdxToJs(
     ...mdxFields
   } = options;
   const mdxOptions = mdxOptionsToNative(mdxFields);
-  const nativeFeatures = featuresToNative(features);
+  const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
+    featuresToNative(features);
 
-  const result = createHastHandleFromMdast(source, mdastPlugins, true, filename, nativeFeatures);
+  const result = createHastHandleFromMdast(
+    source,
+    mdastPlugins,
+    true,
+    filename,
+    nativeFeatures,
+    nativeConvertOptions,
+  );
 
   const compileAndDrop = (h: HastHandle, frontmatter: Frontmatter | null): MdxToJsResult => {
     try {
@@ -520,6 +663,8 @@ function createHastHandleFromMdast(
   filename: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nativeFeatures?: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  nativeConvertOptions?: any,
 ): HastWithFrontmatter | Promise<HastWithFrontmatter> {
   const mdastHandle = mdx
     ? createMdxMdastHandle(source, nativeFeatures)
@@ -533,7 +678,7 @@ function createHastHandleFromMdast(
         applyCommandsToMdastHandle(r.handle, r.pendingCommands);
       }
       const frontmatter = readFrontmatter(r.handle);
-      const hastHandle = convertMdastToHastHandle(r.handle);
+      const hastHandle = convertMdastToHastHandle(r.handle, nativeConvertOptions);
       return { hastHandle, frontmatter };
     } finally {
       dropHandle(r.handle);
@@ -564,7 +709,7 @@ function createHastHandleFromMdast(
 
 /** Parse Markdown source into a materialized mdast tree. */
 export function markdownToMdast(source: string, options: { features?: Features } = {}): MdastNode {
-  const handle = createMdastHandle(source, featuresToNative(options.features));
+  const handle = createMdastHandle(source, featuresToNative(options.features).features);
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
@@ -574,7 +719,7 @@ export function markdownToMdast(source: string, options: { features?: Features }
 
 /** Parse MDX source into a materialized mdast tree. */
 export function mdxToMdast(source: string, options: { features?: Features } = {}): MdastNode {
-  const handle = createMdxMdastHandle(source, featuresToNative(options.features));
+  const handle = createMdxMdastHandle(source, featuresToNative(options.features).features);
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
@@ -584,7 +729,8 @@ export function mdxToMdast(source: string, options: { features?: Features } = {}
 
 /** Convert Markdown source to a materialized hast tree. */
 export function markdownToHast(source: string, options: { features?: Features } = {}): HastNode {
-  const handle = createHastHandle(source, featuresToNative(options.features));
+  const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
+  const handle = createHastHandle(source, nativeFeatures, convertOptions);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
@@ -594,7 +740,8 @@ export function markdownToHast(source: string, options: { features?: Features } 
 
 /** Convert MDX source to a materialized hast tree. */
 export function mdxToHast(source: string, options: { features?: Features } = {}): HastNode {
-  const handle = createMdxHastHandle(source, featuresToNative(options.features));
+  const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
+  const handle = createMdxHastHandle(source, nativeFeatures, convertOptions);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {

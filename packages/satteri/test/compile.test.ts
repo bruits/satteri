@@ -52,6 +52,127 @@ describe("frontmatter extraction", () => {
   });
 });
 
+describe("features.math.singleDollarTextMath", () => {
+  test("default keeps single-$ as inline math", () => {
+    const result = markdownToHtml("inline $x$ here");
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("language-math");
+  });
+
+  test("false keeps single-$ literal but still parses $$..$$", () => {
+    const result = markdownToHtml("the deficit grew from $50 to $100 billion", {
+      features: { math: { singleDollarTextMath: false } },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("$50");
+    expect(result.html).toContain("$100");
+    expect(result.html).not.toContain("language-math");
+
+    const display = markdownToHtml("text $$x^2$$ end", {
+      features: { math: { singleDollarTextMath: false } },
+    });
+    if (display instanceof Promise) throw new Error("expected sync");
+    expect(display.html).toContain("language-math");
+  });
+});
+
+describe("features.gfm.footnotes", () => {
+  const SRC = "See[^a] and[^a] again.\n\n[^a]: Shared note.\n";
+
+  test("default emits English strings", () => {
+    const result = markdownToHtml(SRC);
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">Footnotes<");
+    expect(result.html).toContain('aria-label="Back to reference 1"');
+    expect(result.html).toContain('aria-label="Back to reference 1-2"');
+  });
+
+  test("footnotes: false drops the footnotes section entirely", () => {
+    const result = markdownToHtml(SRC, {
+      features: { gfm: { footnotes: false } },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).not.toContain(">Footnotes<");
+    // Without parsing as footnotes, the `[^a]` text should leak as-is.
+    expect(result.html).toContain("[^a]");
+  });
+
+  test("footnote options localize label / back-content / back-label", () => {
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            label: "Notas",
+            backContent: "up",
+            backLabel: "Volver a {reference}",
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">Notas<");
+    expect(result.html).not.toContain(">Footnotes<");
+    expect(result.html).toContain(">up<");
+    expect(result.html).toContain('aria-label="Volver a 1"');
+    expect(result.html).toContain('aria-label="Volver a 1-2"');
+  });
+
+  test("backLabel callback receives (referenceNumber, rerunIndex)", () => {
+    const seen: Array<[number, number]> = [];
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            backLabel: (n, k) => {
+              seen.push([n, k]);
+              return k > 1 ? `cb n=${n} k=${k}` : `cb n=${n}`;
+            },
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(seen).toEqual([
+      [1, 1],
+      [1, 2],
+    ]);
+    expect(result.html).toContain('aria-label="cb n=1"');
+    expect(result.html).toContain('aria-label="cb n=1 k=2"');
+  });
+
+  test("backContent callback returns per-backref text", () => {
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            backContent: (_n, k) => (k === 1 ? "first" : "more"),
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">first<");
+    expect(result.html).toContain(">more<");
+  });
+
+  test("can mix template label and callback backLabel", () => {
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            label: "Notas",
+            backLabel: (n, k) => `#${n}.${k}`,
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">Notas<");
+    expect(result.html).toContain('aria-label="#1.1"');
+    expect(result.html).toContain('aria-label="#1.2"');
+  });
+});
+
 // markdownToHtml - no plugins
 
 describe("markdownToHtml", () => {
