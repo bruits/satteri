@@ -57,9 +57,13 @@ const {
   },
 })
 export default __napiModule.exports
+export const applyCommandsAndCompileHandle = __napiModule.exports.applyCommandsAndCompileHandle
 export const applyCommandsAndConvertToHastHandle = __napiModule.exports.applyCommandsAndConvertToHastHandle
+export const applyCommandsAndRenderHandle = __napiModule.exports.applyCommandsAndRenderHandle
 export const applyCommandsToHandle = __napiModule.exports.applyCommandsToHandle
 export const applyCommandsToMdastHandle = __napiModule.exports.applyCommandsToMdastHandle
+export const applyMdastCommandsAndConvertAndCompile = __napiModule.exports.applyMdastCommandsAndConvertAndCompile
+export const applyMdastCommandsAndConvertAndRender = __napiModule.exports.applyMdastCommandsAndConvertAndRender
 export const compileHandle = __napiModule.exports.compileHandle
 export const compileMdx = __napiModule.exports.compileMdx
 export const convertMdastToHastHandle = __napiModule.exports.convertMdastToHastHandle
@@ -71,7 +75,9 @@ export const dropHandle = __napiModule.exports.dropHandle
 export const getHandleSource = __napiModule.exports.getHandleSource
 export const getMdastFrontmatter = __napiModule.exports.getMdastFrontmatter
 export const getNodeData = __napiModule.exports.getNodeData
+export const markdownToHtmlFast = __napiModule.exports.markdownToHtmlFast
 export const mdastTextContentHandle = __napiModule.exports.mdastTextContentHandle
+export const mdxToJsFast = __napiModule.exports.mdxToJsFast
 export const parseEsm = __napiModule.exports.parseEsm
 export const parseExpression = __napiModule.exports.parseExpression
 export const parseToHtml = __napiModule.exports.parseToHtml

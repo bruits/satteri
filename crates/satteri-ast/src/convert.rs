@@ -390,7 +390,7 @@ fn resolve_backref(backref: &Backref, number: usize, k: usize) -> String {
 
 /// Convert an MDAST arena directly to a HAST arena using default options.
 pub fn mdast_arena_to_hast_arena(source: &Arena<Mdast>) -> Arena<Hast> {
-    mdast_arena_to_hast_arena_with_options(source, &ConvertOptions::default())
+    mdast_arena_to_hast_arena_impl(source, &ConvertOptions::default(), None)
 }
 
 /// Convert an MDAST arena to a HAST arena with the given conversion options.
@@ -398,12 +398,47 @@ pub fn mdast_arena_to_hast_arena_with_options(
     source: &Arena<Mdast>,
     options: &ConvertOptions,
 ) -> Arena<Hast> {
+    mdast_arena_to_hast_arena_impl(source, options, None)
+}
+
+/// Reuse-friendly variant: takes a pre-pooled `Arena<Hast>`, resets it, and
+/// fills it in instead of allocating a fresh arena. Saves the per-compile
+/// `Vec` and `String` mallocs that dominate the cost on tiny inputs.
+pub fn mdast_arena_to_hast_arena_into(
+    source: &Arena<Mdast>,
+    options: &ConvertOptions,
+    reuse: Arena<Hast>,
+) -> Arena<Hast> {
+    mdast_arena_to_hast_arena_impl(source, options, Some(reuse))
+}
+
+fn mdast_arena_to_hast_arena_impl(
+    source: &Arena<Mdast>,
+    options: &ConvertOptions,
+    reuse: Option<Arena<Hast>>,
+) -> Arena<Hast> {
     let src = source.source();
-    let mut builder: ArenaBuilder<Hast> = ArenaBuilder::new(src.to_string());
     let n = source.len();
-    builder.arena_mut().nodes.reserve(n);
-    builder.arena_mut().children.reserve(n);
-    builder.arena_mut().type_data.reserve(n * 20);
+    let hast_arena = if let Some(mut a) = reuse {
+        a.reset();
+        a.source.reserve(src.len());
+        a.source.push_str(src);
+        a.nodes.reserve(n);
+        a.children.reserve(n);
+        a.type_data.reserve(n * 20);
+        a
+    } else {
+        let mut s = String::with_capacity(src.len());
+        s.push_str(src);
+        let mut a = Arena::<Hast>::with_capacity(s, n, n, n * 20);
+        // Same reservation shape as the non-pooled path (no-op when capacity
+        // already covers it; kept for parity with the pooled branch).
+        a.nodes.reserve(n);
+        a.children.reserve(n);
+        a.type_data.reserve(n * 20);
+        a
+    };
+    let mut builder: ArenaBuilder<Hast> = ArenaBuilder::from_arena(hast_arena);
     let newline_ref = builder.alloc_string("\n");
     let refs = collect_refs(source);
     let ctx = ConvertCtx {
@@ -935,7 +970,7 @@ fn copy_position_to(
     builder: &mut ArenaBuilder<Hast>,
 ) {
     let node = view.get_node(src_node_id);
-    if node.start_line > 0 || node.start_offset > 0 {
+    if node.start_line > 0 {
         builder.arena_mut().set_position(
             target_id,
             node.start_offset,
@@ -997,7 +1032,12 @@ fn encode_code_node_data(lang: &str, meta: &str) -> Vec<u8> {
 
 fn copy_position(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>) {
     let node = view.get_node(node_id);
-    if node.start_line > 0 || node.start_offset > 0 {
+    // `start_line` is 1-based; `0` is the "no position" sentinel set when the
+    // parser ran in skip-positions mode (HTML/JS output paths). Skipping on
+    // line-only — rather than the previous `line || offset` check — lets that
+    // mode fully suppress the per-node `set_position_current` cost even though
+    // `start_offset` may still carry a stray byte position from the parser.
+    if node.start_line > 0 {
         builder.set_position_current(
             node.start_offset,
             node.end_offset,

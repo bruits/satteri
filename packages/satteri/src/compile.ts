@@ -1,4 +1,9 @@
-import { visitHastHandle, resolveSubscriptions, type HastHandle } from "./hast/hast-visitor.js";
+import {
+  visitHastHandle,
+  visitHastHandleCollect,
+  resolveSubscriptions,
+  type HastHandle,
+} from "./hast/hast-visitor.js";
 import {
   visitMdastHandle,
   resolveMdastSubscriptions,
@@ -12,17 +17,23 @@ import type {
   HastPluginInput,
 } from "./plugin.js";
 import {
-  createHastHandle,
-  createMdxHastHandle,
-  renderHandle,
-  compileHandle,
-  dropHandle,
-  createMdastHandle,
-  createMdxMdastHandle,
+  applyCommandsAndCompileHandle,
+  applyCommandsAndRenderHandle,
   applyCommandsToMdastHandle,
+  applyMdastCommandsAndConvertAndCompile,
+  applyMdastCommandsAndConvertAndRender,
+  compileHandle,
   convertMdastToHastHandle,
+  createHastHandle,
+  createMdastHandle,
+  createMdxHastHandle,
+  createMdxMdastHandle,
+  dropHandle,
   getHandleSource,
   getMdastFrontmatter,
+  markdownToHtmlFast,
+  mdxToJsFast,
+  renderHandle,
   serializeHandle,
 } from "#binding";
 import { MdastReader } from "./mdast/mdast-reader.js";
@@ -97,7 +108,16 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
   return { features: result, convertOptions };
 }
 
-type MdastPipelineResult = { handle: MdastHandle };
+type MdastPipelineResult = {
+  handle: MdastHandle;
+  /** The final plugin's unapplied commands when `collectLast` was requested
+   *  and that plugin queued mutations; the caller fuses the apply with the
+   *  downstream NAPI step. */
+  pendingCommands?: Uint8Array;
+  /** The plugin whose commands were deferred — for dropped-transform warning
+   *  attribution after the fused apply. */
+  lastPlugin?: { name?: string };
+};
 
 /** Drop a handle after bumping its epoch: the arena dies with the handle, so a
  *  child stub retained past the pipeline must hit the designed retention error,
@@ -124,17 +144,27 @@ function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginInput[],
   fileURL: URL | undefined,
+  collectLast = false,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
+  const out: MdastPipelineResult = { handle };
+
   // Each plugin runs once over the tree. A transform that passes a child
   // through (returning it inside the replacement) keeps that child's identity,
   // so a patch the same pass queued on it still applies — nesting composes in
   // one pass. A plugin's own freshly-built nodes are not re-walked; transform
   // them up front, or hand off to a later plugin that sees the materialized tree.
-  const runPlugin = (plugin: MdastPluginInstance): void | Promise<void> => {
+  const runPlugin = (plugin: MdastPluginInstance, isLast: boolean): void | Promise<void> => {
     const subs = resolveMdastSubscriptions(plugin);
     const result = visitMdastHandle(handle, plugin, subs, () => getHandleSource(handle), fileURL);
     const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
       if (!r.hasMutations) return;
+      if (collectLast && isLast) {
+        // Defer the final plugin's commands so the caller can fuse the apply
+        // with the downstream convert + render/compile NAPI call.
+        out.pendingCommands = r.commandBuffer;
+        out.lastPlugin = plugin as { name?: string };
+        return;
+      }
       markHandleMutated(handle);
       const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
       if (dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
@@ -147,31 +177,55 @@ function runMdastPluginsOnHandle(
     while (i < plugins.length) {
       const raw = plugins[i++]!;
       const plugin: MdastPluginDefinition = typeof raw === "function" ? raw() : raw;
-      const r = runPlugin(plugin as MdastPluginInstance);
+      const r = runPlugin(plugin as MdastPluginInstance, i === plugins.length);
       if (r instanceof Promise) return r.then(runNext);
     }
-    return { handle };
+    return out;
   };
 
   return runNext();
 }
 
-function runHastPluginsOnHandle(
+const EMPTY_COMMAND_BUFFER = new Uint8Array(0);
+
+type CollectedHastCommands = {
+  commands: Uint8Array;
+  /** The plugin whose commands were collected — for dropped-transform warning
+   *  attribution after the fused apply. */
+  lastPlugin: { name?: string } | null;
+};
+
+const NO_HAST_COMMANDS: CollectedHastCommands = {
+  commands: EMPTY_COMMAND_BUFFER,
+  lastPlugin: null,
+};
+
+/** Run every HAST plugin except the last one normally (each applies its
+ *  commands inline), then return the last plugin's commands without applying.
+ *  Lets the caller fuse the final apply with the downstream NAPI step
+ *  (`render` or `compile`), saving one NAPI roundtrip per compile. */
+function runHastPluginsCollectLast(
   handle: HastHandle,
   plugins: HastPluginInput[],
   source: string,
   fileURL: URL | undefined,
-): void | Promise<void> {
-  if (plugins.length === 0) return;
-
+): CollectedHastCommands | Promise<CollectedHastCommands> {
   let i = 0;
-  const runNext = (): void | Promise<void> => {
+  const runNext = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
     while (i < plugins.length) {
       const raw = plugins[i]!;
+      const isLast = i === plugins.length - 1;
       i++;
       const plugin: HastPluginDefinition = typeof raw === "function" ? raw() : raw;
-
       const subs = resolveSubscriptions(plugin);
+
+      if (isLast) {
+        const collected = visitHastHandleCollect(handle, plugin, subs, source, fileURL);
+        return collected instanceof Promise
+          ? collected.then((commands) => ({ commands, lastPlugin: plugin }))
+          : { commands: collected, lastPlugin: plugin };
+      }
+
       const result = visitHastHandle(handle, plugin, subs, source, fileURL);
       const warnIfDropped = (dropped: number): void => {
         if (dropped) warnDroppedTransforms(plugin, dropped, "hast");
@@ -184,6 +238,7 @@ function runHastPluginsOnHandle(
       }
       warnIfDropped(result);
     }
+    return NO_HAST_COMMANDS;
   };
 
   return runNext();
@@ -511,6 +566,53 @@ export function markdownToHtml(
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
 
+  // Fast path: no plugins → parse, convert, render, and frontmatter all happen
+  // inside a single NAPI call. Skips 5 handle-NAPI roundtrips that the
+  // plugin-capable path needs to keep the arena live across passes.
+  if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
+    const { html, frontmatter } = markdownToHtmlFast(source, nativeFeatures, nativeConvertOptions);
+    return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null };
+  }
+
+  // Fused tail for MDAST-plugins-only (no HAST plugins): after the MDAST
+  // plugin pass returns its pending commands, apply + convert + render all
+  // happen inside a single NAPI roundtrip. Saves the convert-to-hast handle
+  // create + render + drop crossings the generic path makes separately.
+  if (hastPlugins.length === 0) {
+    const mdastHandle = createMdastHandle(source, nativeFeatures);
+    try {
+      const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL, true);
+      const finishMdast = (r: MdastPipelineResult): MarkdownToHtmlResult => {
+        try {
+          // Fused tail: apply pending commands (empty buffer is a Rust no-op),
+          // extract frontmatter post-mutation, convert, render — all in one
+          // NAPI roundtrip.
+          const commands = r.pendingCommands ?? EMPTY_COMMAND_BUFFER;
+          const { html, frontmatter, droppedTransforms } = applyMdastCommandsAndConvertAndRender(
+            r.handle,
+            commands,
+            nativeConvertOptions,
+          );
+          if (droppedTransforms && r.lastPlugin)
+            warnDroppedTransforms(r.lastPlugin, droppedTransforms, "mdast");
+          return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null };
+        } finally {
+          disposeHandle(r.handle);
+        }
+      };
+      if (mdastResult instanceof Promise) {
+        return mdastResult.then(finishMdast, (err) => {
+          disposeHandle(mdastHandle);
+          throw err;
+        });
+      }
+      return finishMdast(mdastResult);
+    } catch (err) {
+      disposeHandle(mdastHandle);
+      throw err;
+    }
+  }
+
   const result = createHastHandleFromMdast(
     source,
     mdastPlugins,
@@ -520,35 +622,50 @@ export function markdownToHtml(
     nativeConvertOptions,
   );
 
-  const renderAndDrop = (h: HastHandle, frontmatter: Frontmatter | null): MarkdownToHtmlResult => {
-    try {
-      const html = renderHandle(h);
-      return { html, frontmatter };
-    } finally {
-      disposeHandle(h);
-    }
-  };
-
   const runHastThenRender = (
     r: HastWithFrontmatter,
   ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> => {
-    let hastResult: void | Promise<void>;
+    // Run all but the last HAST plugin normally (each one applies its
+    // commands inline); collect the last plugin's commands and fuse apply +
+    // render + handle-drop into one NAPI call.
+    let collected: CollectedHastCommands | Promise<CollectedHastCommands>;
     try {
-      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL);
+      collected = runHastPluginsCollectLast(r.hastHandle, hastPlugins, source, fileURL);
     } catch (err) {
       disposeHandle(r.hastHandle);
       throw err;
     }
-    if (hastResult instanceof Promise) {
-      return hastResult.then(
-        () => renderAndDrop(r.hastHandle, r.frontmatter),
+    if (collected instanceof Promise) {
+      return collected.then(
+        (c) => finishHastRender(r.hastHandle, c, r.frontmatter),
         (err) => {
           disposeHandle(r.hastHandle);
           throw err;
         },
       );
     }
-    return renderAndDrop(r.hastHandle, r.frontmatter);
+    return finishHastRender(r.hastHandle, collected, r.frontmatter);
+  };
+
+  const finishHastRender = (
+    h: HastHandle,
+    collected: CollectedHastCommands,
+    frontmatter: Frontmatter | null,
+  ): MarkdownToHtmlResult => {
+    try {
+      let html: string;
+      if (collected.commands.length > 0) {
+        const result = applyCommandsAndRenderHandle(h, collected.commands);
+        if (result.droppedTransforms && collected.lastPlugin)
+          warnDroppedTransforms(collected.lastPlugin, result.droppedTransforms, "hast");
+        html = result.html;
+      } else {
+        html = renderHandle(h);
+      }
+      return { html, frontmatter };
+    } finally {
+      disposeHandle(h);
+    }
   };
 
   if (result instanceof Promise) return result.then(runHastThenRender);
@@ -568,6 +685,54 @@ export function mdxToJs(
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
 
+  // Fast path: same trick as `markdownToHtml`. Parse → MDAST → HAST → JS plus
+  // frontmatter extraction all happen inside a single NAPI call. Skips 5 of
+  // the 6 handle-based crossings the plugin-capable path needs.
+  if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
+    const { code, frontmatter } = mdxToJsFast(
+      source,
+      nativeFeatures,
+      mdxOptions,
+      nativeConvertOptions,
+    );
+    return { code, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null };
+  }
+
+  // MDAST-plugins-only fused tail (no HAST plugins): apply + extract
+  // frontmatter + convert + simplify + compile happen in one NAPI call.
+  if (hastPlugins.length === 0) {
+    const mdastHandle = createMdxMdastHandle(source, nativeFeatures);
+    try {
+      const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL, true);
+      const finishMdast = (r: MdastPipelineResult): MdxToJsResult => {
+        try {
+          const commands = r.pendingCommands ?? EMPTY_COMMAND_BUFFER;
+          const { code, frontmatter, droppedTransforms } = applyMdastCommandsAndConvertAndCompile(
+            r.handle,
+            commands,
+            mdxOptions,
+            nativeConvertOptions,
+          );
+          if (droppedTransforms && r.lastPlugin)
+            warnDroppedTransforms(r.lastPlugin, droppedTransforms, "mdast");
+          return { code, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null };
+        } finally {
+          disposeHandle(r.handle);
+        }
+      };
+      if (mdastResult instanceof Promise) {
+        return mdastResult.then(finishMdast, (err) => {
+          disposeHandle(mdastHandle);
+          throw err;
+        });
+      }
+      return finishMdast(mdastResult);
+    } catch (err) {
+      disposeHandle(mdastHandle);
+      throw err;
+    }
+  }
+
   const result = createHastHandleFromMdast(
     source,
     mdastPlugins,
@@ -577,33 +742,45 @@ export function mdxToJs(
     nativeConvertOptions,
   );
 
-  const compileAndDrop = (h: HastHandle, frontmatter: Frontmatter | null): MdxToJsResult => {
-    try {
-      const code = compileHandle(h, mdxOptions);
-      return { code, frontmatter };
-    } finally {
-      disposeHandle(h);
-    }
-  };
-
   const runHastThenCompile = (r: HastWithFrontmatter): MdxToJsResult | Promise<MdxToJsResult> => {
-    let hastResult: void | Promise<void>;
+    let collected: CollectedHastCommands | Promise<CollectedHastCommands>;
     try {
-      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL);
+      collected = runHastPluginsCollectLast(r.hastHandle, hastPlugins, source, fileURL);
     } catch (err) {
       disposeHandle(r.hastHandle);
       throw err;
     }
-    if (hastResult instanceof Promise) {
-      return hastResult.then(
-        () => compileAndDrop(r.hastHandle, r.frontmatter),
+    if (collected instanceof Promise) {
+      return collected.then(
+        (c) => finishHastCompile(r.hastHandle, c, r.frontmatter),
         (err) => {
           disposeHandle(r.hastHandle);
           throw err;
         },
       );
     }
-    return compileAndDrop(r.hastHandle, r.frontmatter);
+    return finishHastCompile(r.hastHandle, collected, r.frontmatter);
+  };
+
+  const finishHastCompile = (
+    h: HastHandle,
+    collected: CollectedHastCommands,
+    frontmatter: Frontmatter | null,
+  ): MdxToJsResult => {
+    try {
+      let code: string;
+      if (collected.commands.length > 0) {
+        const result = applyCommandsAndCompileHandle(h, collected.commands, mdxOptions);
+        if (result.droppedTransforms && collected.lastPlugin)
+          warnDroppedTransforms(collected.lastPlugin, result.droppedTransforms, "hast");
+        code = result.code;
+      } else {
+        code = compileHandle(h, mdxOptions);
+      }
+      return { code, frontmatter };
+    } finally {
+      disposeHandle(h);
+    }
   };
 
   if (result instanceof Promise) return result.then(runHastThenCompile);

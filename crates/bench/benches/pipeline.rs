@@ -57,6 +57,14 @@ fn parse_mdx(bencher: divan::Bencher) {
     bencher.bench(|| satteri_pulldown_cmark::parse(MDX, opts));
 }
 
+/// Parse Markdown without position tracking. Used by `markdown_to_html_fast`
+/// and `mdx_to_js_fast` where downstream output doesn't carry positions.
+#[divan::bench]
+fn parse_no_positions(bencher: divan::Bencher) {
+    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    bencher.bench(|| satteri_pulldown_cmark::parse_no_positions(MARKDOWN, opts));
+}
+
 // pulldown-cmark comparison (parse to events — for digging into parser regressions)
 
 /// pulldown-cmark: parse Markdown to events with the default extension set.
