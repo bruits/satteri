@@ -209,6 +209,31 @@ export function satteriMathHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
+// Math with `singleDollar: false`: `$$...$$` and `$$` fences stay math, while a
+// lone `$` is literal text. Mirrors remark-math's `singleDollarTextMath: false`.
+// (Rust-side equivalent: the `math_multi_dollar` spec, which sets the
+// ENABLE_MATH_MULTI_DOLLAR flag this option resolves to.)
+const mathSingleDollarOffHtmlProcessor = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkMath, { singleDollarTextMath: false })
+  .use(remarkRehype, REF_REHYPE_OPTIONS)
+  .use(rehypeStringify, { allowDangerousHtml: true });
+
+const MATH_SINGLE_DOLLAR_OFF_FEATURES: Features = {
+  math: { singleDollar: false },
+  frontmatter: false,
+};
+
+export function referenceMathSingleDollarOffHtml(md: string): string {
+  return normalizeHtmlForComparison(String(mathSingleDollarOffHtmlProcessor.processSync(md)));
+}
+
+export function satteriMathSingleDollarOffHtml(md: string): string {
+  const { html } = markdownToHtml(md, { features: MATH_SINGLE_DOLLAR_OFF_FEATURES });
+  return normalizeHtmlForComparison(html);
+}
+
 const fmMdastProcessor = buildMdastProcessor(["frontmatter"]);
 const fmHastProcessor = buildHastProcessor(["frontmatter"]);
 const fmHtmlProcessor = buildHastProcessor(["frontmatter"]).use(rehypeStringify, {

@@ -35,7 +35,13 @@ function featuresToNative(features: Features | undefined) {
   const result: Record<string, unknown> = {};
   if (features.gfm !== undefined) result.gfm = features.gfm;
   if (features.frontmatter !== undefined) result.frontmatter = features.frontmatter;
-  if (features.math !== undefined) result.math = features.math;
+  if (features.math !== undefined) {
+    if (typeof features.math === "object") {
+      result.mathOptions = features.math;
+    } else {
+      result.math = features.math;
+    }
+  }
   if (features.headingAttributes !== undefined)
     result.headingAttributes = features.headingAttributes;
   if (features.directive !== undefined) result.directive = features.directive;
@@ -192,6 +198,19 @@ export interface OptimizeStaticConfig {
   ignoreElements?: string[];
 }
 
+/** Granular math toggles. Omitted fields default to true. */
+export interface MathOptions {
+  /**
+   * Single-dollar inline math (`$x$`). Default: true.
+   *
+   * Set to `false` to keep `$$...$$` and `$$` block fences while treating a
+   * lone `$` as literal text — the equivalent of remark-math's
+   * `singleDollarTextMath: false`. Useful when prose uses `$` for currency
+   * (e.g. `$50 to $100`), which would otherwise be mis-parsed as math.
+   */
+  singleDollar?: boolean;
+}
+
 /** Granular smart-punctuation toggles. Omitted fields default to true. */
 export interface SmartPunctuationOptions {
   /** Replace straight quotes with curly/smart quotes. Default: true. */
@@ -208,8 +227,15 @@ export interface Features {
   gfm?: boolean;
   /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
   frontmatter?: boolean;
-  /** Math blocks and inline math. Default: true. */
-  math?: boolean;
+  /**
+   * Math blocks and inline math. Default: true.
+   *
+   * Pass `true` to enable all math, or an options object for granular control:
+   * ```ts
+   * math: { singleDollar: false } // `$$...$$` only; lone `$` stays literal
+   * ```
+   */
+  math?: boolean | MathOptions;
   /** Heading attributes (`# text { #id .class }`). Default: true. */
   headingAttributes?: boolean;
   /** Colon-delimited container directive blocks (`:::`). Default: false. */

@@ -789,9 +789,13 @@ bitflags::bitflags! {
         /// - `+++` line at start
         /// - `+++` line at end
         const ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS = 1 << 8;
-        /// With this feature enabled, two events `Event::InlineMath` and `Event::DisplayMath`
-        /// are emitted that conventionally contain TeX formulas.
+        /// Emits `Event::InlineMath` and `Event::DisplayMath` for TeX formulas.
+        /// Umbrella over `ENABLE_MATH_SINGLE_DOLLAR` and `ENABLE_MATH_MULTI_DOLLAR`.
         const ENABLE_MATH = 1 << 10;
+        /// Single-dollar inline math (`$x$`).
+        const ENABLE_MATH_SINGLE_DOLLAR = 1 << 22;
+        /// Multi-dollar math: inline `$$x$$` and `$$` block fences.
+        const ENABLE_MATH_MULTI_DOLLAR = 1 << 23;
         /// Misc GitHub Flavored Markdown features not supported in CommonMark.
         const ENABLE_GFM = 1 << 11;
         /// GitHub-style blockquote alerts ([!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION]).
@@ -833,5 +837,13 @@ impl Options {
     pub(crate) fn has_smart_ellipses(&self) -> bool {
         self.contains(Options::ENABLE_SMART_PUNCTUATION)
             || self.contains(Options::ENABLE_SMART_ELLIPSES)
+    }
+
+    pub(crate) fn has_math(&self) -> bool {
+        self.intersects(
+            Options::ENABLE_MATH
+                | Options::ENABLE_MATH_SINGLE_DOLLAR
+                | Options::ENABLE_MATH_MULTI_DOLLAR,
+        )
     }
 }

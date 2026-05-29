@@ -68,6 +68,8 @@ export interface JsFeatures {
   frontmatter?: boolean
   /** Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true. */
   math?: boolean
+  /** Granular math control (overrides `math`). */
+  mathOptions?: JsMathOptions
   /** Heading attributes (`# text { #id .class }`). Default: true. */
   headingAttributes?: boolean
   /** Colon-delimited container directive blocks (`:::`). Default: false. */
@@ -90,6 +92,12 @@ export interface JsFrontmatter {
   kind: string
   /** Raw frontmatter content between the delimiters (no `---`/`+++` lines). */
   value: string
+}
+
+/** Granular math toggles. */
+export interface JsMathOptions {
+  /** Single-dollar inline math (`$x$`). Default: true. */
+  singleDollar?: boolean
 }
 
 /** MDX compile options passed from JavaScript. */

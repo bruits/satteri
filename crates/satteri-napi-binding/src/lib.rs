@@ -5,6 +5,13 @@ use napi_derive::napi;
 
 // Parsing feature flags (JS-facing)
 
+/// Granular math toggles.
+#[napi(object)]
+pub struct JsMathOptions {
+    /// Single-dollar inline math (`$x$`). Default: true.
+    pub single_dollar: Option<bool>,
+}
+
 /// Granular smart-punctuation toggles.
 #[napi(object)]
 pub struct JsSmartPunctuationOptions {
@@ -25,6 +32,8 @@ pub struct JsFeatures {
     pub frontmatter: Option<bool>,
     /// Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true.
     pub math: Option<bool>,
+    /// Granular math control (overrides `math`).
+    pub math_options: Option<JsMathOptions>,
     /// Heading attributes (`# text { #id .class }`). Default: true.
     pub heading_attributes: Option<bool>,
     /// Colon-delimited container directive blocks (`:::`). Default: false.
@@ -48,6 +57,7 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
         gfm: None,
         frontmatter: None,
         math: None,
+        math_options: None,
         heading_attributes: None,
         directive: None,
         superscript: None,
@@ -70,7 +80,12 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
         opts |= Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
             | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS;
     }
-    if f.math.unwrap_or(true) {
+    if let Some(mo) = f.math_options {
+        opts |= Options::ENABLE_MATH_MULTI_DOLLAR;
+        if mo.single_dollar.unwrap_or(true) {
+            opts |= Options::ENABLE_MATH_SINGLE_DOLLAR;
+        }
+    } else if f.math.unwrap_or(true) {
         opts |= Options::ENABLE_MATH;
     }
     if f.heading_attributes.unwrap_or(false) {
