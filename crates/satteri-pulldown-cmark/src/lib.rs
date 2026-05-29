@@ -101,7 +101,7 @@ mod tree;
 use core::fmt::Display;
 
 pub use crate::{
-    arena_build::{parse, DEFAULT_OPTIONS, MDX_OPTIONS},
+    arena_build::{parse, parse_no_positions, parse_no_positions_into, DEFAULT_OPTIONS, MDX_OPTIONS},
     parse::{
         BrokenLink, BrokenLinkCallback, DefaultParserCallbacks, OffsetIter, Parser,
         ParserCallbacks, RefDefs,

@@ -50,7 +50,31 @@ export function classifyReturn(value: unknown): ReturnClass {
 
 const INITIAL_SIZE = 4096;
 const encoder = new TextEncoder();
-const EMPTY_U8 = new Uint8Array(0);
+
+/** Module-level free list for `CommandBuffer` instances.
+ *
+ *  Each plugin pass on a small fixture allocates *two* CommandBuffers — one
+ *  for the visitor context's mutation commands and one for the return-value
+ *  replacements. At ~4 KB ArrayBuffer per instance, plugin-heavy workloads
+ *  burn substantial GC time on what is structurally a reusable buffer. The
+ *  freelist below recycles instances between visits; sites that finish with a
+ *  buffer call `releaseCommandBuffer(buf)` and `acquireCommandBuffer()` returns
+ *  one that's already been `reset()` (offset=0, same ArrayBuffer). Cap keeps
+ *  the pool bounded for long-lived processes that briefly burst high. */
+const COMMAND_BUFFER_POOL_MAX = 8;
+const commandBufferPool: CommandBuffer[] = [];
+
+export function acquireCommandBuffer(): CommandBuffer {
+  const pooled = commandBufferPool.pop();
+  if (pooled !== undefined) return pooled;
+  return new CommandBuffer();
+}
+
+export function releaseCommandBuffer(buf: CommandBuffer): void {
+  if (commandBufferPool.length >= COMMAND_BUFFER_POOL_MAX) return;
+  buf.reset();
+  commandBufferPool.push(buf);
+}
 
 export class CommandBuffer {
   private buffer: ArrayBuffer;
@@ -70,41 +94,52 @@ export class CommandBuffer {
     this.writeU32(nodeId);
   }
 
-  /** Unified set-property for both MDAST and HAST nodes. */
+  /** Unified set-property for both MDAST and HAST nodes.
+   *
+   *  Hot path: profiles show plugins that touch every node spend ~38% of
+   *  total time inside `TextEncoder.encode` — almost entirely on short
+   *  property keys/values. `encodeInto` writes UTF-8 straight into the
+   *  command buffer, no per-call `Uint8Array` allocation. We reserve the
+   *  worst-case UTF-8 length (`str.length * 3`) up front and backfill the
+   *  length prefix once the actual byte count is known. */
   setProperty(nodeId: number, key: string, value: unknown): void {
-    const encodedName = encoder.encode(key);
     let valueType: number;
-    let encodedValue: Uint8Array;
+    let valueStr: string | null;
 
     if (value === null || value === undefined) {
       valueType = PROP_NULL;
-      encodedValue = EMPTY_U8;
+      valueStr = null;
     } else if (value === true) {
       valueType = PROP_BOOL_TRUE;
-      encodedValue = EMPTY_U8;
+      valueStr = null;
     } else if (value === false) {
       valueType = PROP_BOOL_FALSE;
-      encodedValue = EMPTY_U8;
+      valueStr = null;
     } else if (typeof value === "number") {
       valueType = PROP_INT;
-      encodedValue = encoder.encode(String(value));
+      valueStr = String(value);
     } else if (Array.isArray(value)) {
       valueType = PROP_SPACE_SEP;
-      encodedValue = encoder.encode((value as string[]).join(" "));
+      valueStr = (value as string[]).join(" ");
     } else {
       valueType = PROP_STRING;
-      encodedValue = encoder.encode(String(value));
+      valueStr = String(value);
     }
 
-    // 1(cmd) + 4(nodeId) + 1(valueType) + 4(nameLen) + name + 4(valueLen) + value
-    this.ensureCapacity(14 + encodedName.length + encodedValue.length);
+    // 1(cmd) + 4(nodeId) + 1(valueType) + 4(nameLen) + nameBytes(≤3*key.length)
+    //   + 4(valueLen) + valueBytes(≤3*valueStr.length)
+    const maxNameLen = key.length * 3;
+    const maxValueLen = valueStr === null ? 0 : valueStr.length * 3;
+    this.ensureCapacity(14 + maxNameLen + maxValueLen);
     this.writeU8(CMD_SET_PROPERTY);
     this.writeU32(nodeId);
     this.writeU8(valueType);
-    this.writeU32(encodedName.length);
-    this.writeBytes(encodedName);
-    this.writeU32(encodedValue.length);
-    this.writeBytes(encodedValue);
+    this.writeStringWithLen(key);
+    if (valueStr === null) {
+      this.writeU32(0);
+    } else {
+      this.writeStringWithLen(valueStr);
+    }
   }
 
   insertBefore(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
@@ -158,13 +193,11 @@ export class CommandBuffer {
   }
 
   private writeRawJsonCommand(cmd: number, nodeId: number, json: string): void {
-    const encoded = encoder.encode(json);
-    this.ensureCapacity(10 + encoded.length);
+    this.ensureCapacity(10 + json.length * 3);
     this.writeU8(cmd);
     this.writeU32(nodeId);
     this.writeU8(PAYLOAD_SERDE_JSON);
-    this.writeU32(encoded.length);
-    this.writeBytes(encoded);
+    this.writeStringWithLen(json);
   }
 
   /** Return a Uint8Array view of the written bytes (no copy). */
@@ -177,42 +210,39 @@ export class CommandBuffer {
     return this.offset;
   }
 
-  /** Reset the buffer for reuse, releasing the old ArrayBuffer. */
+  /** Reset the write cursor for reuse. The backing ArrayBuffer is intentionally
+   *  kept — the next write overwrites in place, avoiding a fresh 4 KB alloc
+   *  per compile. Safe because `getBuffer()` returns a view over the same
+   *  ArrayBuffer; callers must consume that view before the next write. */
   reset(): void {
-    this.buffer = new ArrayBuffer(INITIAL_SIZE);
-    this.view = new DataView(this.buffer);
-    this.bytes = new Uint8Array(this.buffer);
     this.offset = 0;
   }
 
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {
     const v = node as Record<string, unknown>;
     if (typeof v.raw === "string") {
-      const encoded = encoder.encode(v.raw as string);
-      this.ensureCapacity(10 + encoded.length); // 1(cmd) + 4(nodeId) + 1(payloadType) + 4(len) + payload
+      const raw = v.raw as string;
+      // 1(cmd) + 4(nodeId) + 1(payloadType) + 4(len) + payload(≤3*raw.length)
+      this.ensureCapacity(10 + raw.length * 3);
       this.writeU8(cmd);
       this.writeU32(nodeId);
       this.writeU8(PAYLOAD_RAW_MARKDOWN);
-      this.writeU32(encoded.length);
-      this.writeBytes(encoded);
+      this.writeStringWithLen(raw);
     } else if (typeof v.rawHtml === "string") {
-      const encoded = encoder.encode(v.rawHtml as string);
-      this.ensureCapacity(10 + encoded.length);
+      const rawHtml = v.rawHtml as string;
+      this.ensureCapacity(10 + rawHtml.length * 3);
       this.writeU8(cmd);
       this.writeU32(nodeId);
       this.writeU8(PAYLOAD_RAW_HTML);
-      this.writeU32(encoded.length);
-      this.writeBytes(encoded);
+      this.writeStringWithLen(rawHtml);
     } else {
       // Structured node, serialize as JSON
       const json = JSON.stringify(node);
-      const encoded = encoder.encode(json);
-      this.ensureCapacity(10 + encoded.length);
+      this.ensureCapacity(10 + json.length * 3);
       this.writeU8(cmd);
       this.writeU32(nodeId);
       this.writeU8(PAYLOAD_SERDE_JSON);
-      this.writeU32(encoded.length);
-      this.writeBytes(encoded);
+      this.writeStringWithLen(json);
     }
   }
 
@@ -243,5 +273,18 @@ export class CommandBuffer {
   private writeBytes(data: Uint8Array): void {
     this.bytes.set(data, this.offset);
     this.offset += data.length;
+  }
+
+  /** Encode `str` as UTF-8 directly into the buffer, prefixed by a u32 byte
+   *  length. Caller must `ensureCapacity(4 + str.length * 3)` beforehand so
+   *  the worst-case UTF-8 expansion fits. Uses `encodeInto` to avoid the
+   *  intermediate `Uint8Array` that `TextEncoder.encode` would allocate. */
+  private writeStringWithLen(str: string): void {
+    const lenOffset = this.offset;
+    this.offset += 4;
+    const start = this.offset;
+    const { written } = encoder.encodeInto(str, this.bytes.subarray(start));
+    this.view.setUint32(lenOffset, written, true);
+    this.offset = start + written;
   }
 }
