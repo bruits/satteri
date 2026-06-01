@@ -1151,7 +1151,15 @@ fn parse_style_declarations(input: &str) -> Vec<(String, String)> {
         if !decl.is_empty()
             && let Some(colon) = decl.find(':')
         {
-            let property = decl[..colon].trim().to_ascii_lowercase();
+            let name = decl[..colon].trim();
+            // Standard CSS property names are case-insensitive, but custom
+            // properties (`--*`) are case-sensitive — `--tmLabel` must not
+            // become `--tmlabel`, or `var(--tmLabel)` references break.
+            let property = if name.starts_with("--") {
+                name.to_string()
+            } else {
+                name.to_ascii_lowercase()
+            };
             let value = decl[colon + 1..].trim().to_string();
             if !property.is_empty() && !value.is_empty() {
                 out.push((property, value));
@@ -1292,5 +1300,17 @@ mod tests {
     fn parse_style_lowercases_property() {
         let pairs = parse_style_declarations("COLOR: red");
         assert_eq!(pairs, vec![("color".to_string(), "red".to_string())]);
+    }
+
+    #[test]
+    fn parse_style_preserves_custom_property_case() {
+        let pairs = parse_style_declarations("--tmLabel: 'a'; COLOR: red");
+        assert_eq!(
+            pairs,
+            vec![
+                ("--tmLabel".to_string(), "'a'".to_string()),
+                ("color".to_string(), "red".to_string())
+            ]
+        );
     }
 }

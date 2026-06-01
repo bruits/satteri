@@ -871,7 +871,11 @@ describe("mdxToJs", () => {
       element: {
         filter: ["p"],
         visit(node, ctx) {
-          ctx.setProperty(node, "style", "background-color: red; -webkit-line-clamp: 2; --x: 1");
+          ctx.setProperty(
+            node,
+            "style",
+            "background-color: red; -webkit-line-clamp: 2; --tmLabel: blue; --x: 1",
+          );
         },
       },
     });
@@ -879,7 +883,10 @@ describe("mdxToJs", () => {
     const dom = mdxToJs("hi\n", { hastPlugins: [setStyle] }).code;
     expect(dom).toContain('backgroundColor: "red"');
     expect(dom).toContain('WebkitLineClamp: "2"');
-    // Custom properties are kept verbatim under both casings.
+    // Custom properties are kept verbatim under both casings — including their
+    // case, which is significant (`--tmLabel` ≠ `--tmlabel`). Regression test
+    // for https://github.com/withastro/astro/issues/16940.
+    expect(dom).toContain('"--tmLabel": "blue"');
     expect(dom).toContain('"--x": "1"');
 
     const css = mdxToJs("hi\n", {
@@ -888,7 +895,27 @@ describe("mdxToJs", () => {
     }).code;
     expect(css).toContain('"background-color": "red"');
     expect(css).toContain('"-webkit-line-clamp": "2"');
+    expect(css).toContain('"--tmLabel": "blue"');
     expect(css).toContain('"--x": "1"');
+  });
+
+  test("case-insensitive standard property names are lowercased", () => {
+    // CSS standard property names are case-insensitive, so satteri normalizes
+    // `COLOR` to `color`. Custom properties (`--*`) are case-sensitive and
+    // exempt (covered above).
+    const setStyle = defineHastPlugin({
+      name: "set-style",
+      element: {
+        filter: ["p"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "style", "COLOR: red");
+        },
+      },
+    });
+
+    const { code } = mdxToJs("hi\n", { hastPlugins: [setStyle] });
+    expect(code).toContain('color: "red"');
+    expect(code).not.toContain("COLOR");
   });
 
   test("style on MDX-written JSX is preserved as a string", () => {
