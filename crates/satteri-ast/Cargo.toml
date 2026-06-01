@@ -1,6 +1,6 @@
 [package]
 name = "satteri-ast"
-version = "0.2.7"
+version = "0.3.0"
 edition = "2021"
 description = "MDAST and HAST node types, codecs, tree operations, and conversion for Sätteri"
 license = "MIT"
