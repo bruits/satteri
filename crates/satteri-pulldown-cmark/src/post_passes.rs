@@ -15,9 +15,9 @@
 //! reads / mutates `Arena<Mdast>` after building is finished. They live
 //! here so [`arena_build`] stays focused on actually building the arena.
 
-use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
+use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
 use satteri_ast::mdast::{codec::LinkData, MdastNodeType};
 
 #[cfg(feature = "mdx")]

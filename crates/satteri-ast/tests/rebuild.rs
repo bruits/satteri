@@ -1144,8 +1144,7 @@ fn replace_with_multi_block_root_splices_all_siblings() {
     let orig = build_hello_world();
     let para_id = orig.get_children(0)[1];
 
-    let replacement =
-        root_wrapped_arena(&[MdastNodeType::Heading, MdastNodeType::ThematicBreak]);
+    let replacement = root_wrapped_arena(&[MdastNodeType::Heading, MdastNodeType::ThematicBreak]);
     let rebuilt = rebuild(
         &orig,
         &[Patch::Replace {
@@ -1156,7 +1155,11 @@ fn replace_with_multi_block_root_splices_all_siblings() {
     );
 
     let root_children = rebuilt.get_children(0);
-    assert_eq!(root_children.len(), 3, "original heading + 2 spliced blocks");
+    assert_eq!(
+        root_children.len(),
+        3,
+        "original heading + 2 spliced blocks"
+    );
     assert_eq!(
         rebuilt.get_node(root_children[1]).node_type,
         MdastNodeType::Heading as u8

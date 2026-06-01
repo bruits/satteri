@@ -43,11 +43,11 @@ use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::rebuild::Patch;
+#[cfg(feature = "mdx")]
+use satteri_ast::shared::encode_js_jsx_attrs;
 use satteri_ast::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP, PROP_STRING,
 };
-#[cfg(feature = "mdx")]
-use satteri_ast::shared::encode_js_jsx_attrs;
 
 // Must match packages/satteri/src/command-buffer.ts
 const CMD_REMOVE: u8 = 0x01;

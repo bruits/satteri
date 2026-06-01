@@ -14,9 +14,9 @@ use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
 };
 
-use crate::parse::{DefaultParserCallbacks, ItemBody, ParserInner};
 #[cfg(feature = "mdx")]
 use crate::parse::JsxAttr;
+use crate::parse::{DefaultParserCallbacks, ItemBody, ParserInner};
 use crate::{Alignment, HeadingLevel, LinkType, Options};
 
 #[cfg(feature = "mdx")]

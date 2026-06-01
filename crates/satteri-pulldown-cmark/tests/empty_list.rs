@@ -1,7 +1,7 @@
 use satteri_ast::mdast::MdastNodeType;
-use satteri_pulldown_cmark::arena_build::{parse, DEFAULT_OPTIONS};
 #[cfg(feature = "mdx")]
 use satteri_pulldown_cmark::arena_build::MDX_OPTIONS;
+use satteri_pulldown_cmark::arena_build::{parse, DEFAULT_OPTIONS};
 
 #[test]
 fn empty_list_item_keeps_list() {
