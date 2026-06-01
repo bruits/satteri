@@ -2,6 +2,7 @@ import { evaluate as mdxEvaluate } from "@mdx-js/mdx";
 import type { EvaluateOptions as MdxEvaluateOptions } from "@mdx-js/mdx";
 import {
   evaluate as satteriEvaluate,
+  defineHastPlugin,
   markdownToMdast,
   markdownToHast,
   markdownToHtml,
@@ -468,6 +469,51 @@ export async function assertMdxConformance(
   const satHtml = renderToStaticMarkup(
     createElement(SatComponent as React.FC<Record<string, unknown>>, { components }),
   );
+
+  expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
+}
+
+// Set an inline `style` string on every `<tag>` element via a hast/rehype
+// plugin on both pipelines, evaluate, and compare the rendered HTML. This is
+// the path expressive-code (and similar hast plugins) take: satteri's HAST→JSX
+// compiler parses `style="…"` into a JSX style object, which must agree with
+// @mdx-js/mdx (hast-util-to-estree). CSS custom properties are case-sensitive,
+// so casing like `--tmLabel` must survive intact on both sides.
+export async function assertMdxInlineStyleConformance(
+  input: string,
+  tag: string,
+  style: string,
+): Promise<void> {
+  const setStyle = (node: AnyNode): void => {
+    if (node.type === "element" && node.tagName === tag) {
+      node.properties = { ...(node.properties as AnyNode), style };
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children as AnyNode[]) setStyle(child);
+    }
+  };
+  const rehypeSetStyle = () => (tree: Nodes) => setStyle(tree as unknown as AnyNode);
+  const satteriSetStyle = defineHastPlugin({
+    name: "set-inline-style",
+    element: {
+      filter: [tag],
+      visit(node, ctx) {
+        ctx.setProperty(node, "style", style);
+      },
+    },
+  });
+
+  const { default: MdxComponent } = (await mdxEvaluate(input, {
+    ...mdxRuntime,
+    rehypePlugins: [rehypeSetStyle],
+  })) as { default: Function };
+  const mdxHtml = renderToStaticMarkup(createElement(MdxComponent as React.FC));
+
+  const { default: SatComponent } = await satteriEvaluate(input, {
+    ...satteriRuntime,
+    hastPlugins: [satteriSetStyle],
+  });
+  const satHtml = renderToStaticMarkup(createElement(SatComponent as React.FC));
 
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }
