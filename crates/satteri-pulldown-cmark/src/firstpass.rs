@@ -521,6 +521,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         let after = &bytes[content_end..];
                         let ws = scan_whitespace_no_nl(after);
                         let line_end = content_end + ws + scan_nextline(&after[ws..]);
+                        // `[label]` offsets (0/0 when no brackets) — capture
+                        // before `dir_data` is moved into the allocator.
+                        let label_start = dir_data.label_start;
+                        let label_end = dir_data.label_end;
                         let dir_ix = self.allocs.allocate_directive(dir_data);
                         self.tree.append(Item {
                             start: container_start,
@@ -528,6 +532,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::ContainerDirective(fence_length as u8, dir_ix),
                         });
                         self.tree.push();
+                        // Emit the label as a real inline-tokenized child so the
+                        // normal inline pass resolves emphasis/strong/links/code.
+                        if label_start != 0 || label_end != 0 {
+                            self.append_container_directive_label(label_start, label_end);
+                        }
                         return line_end;
                     } else {
                         break;
@@ -546,12 +555,25 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             || bytes[line_end + ws] == b'\r';
                         if at_eol || line_end >= bytes.len() {
                             self.finish_list(start_ix);
+                            let label_start = dir_data.label_start;
+                            let label_end = dir_data.label_end;
                             let dir_ix = self.allocs.allocate_directive(dir_data);
                             self.tree.append(Item {
                                 start: container_start,
                                 end: line_end,
                                 body: ItemBody::LeafDirective(dir_ix),
                             });
+                            // The label is the directive's inline content: tokenize
+                            // it directly as children (no label paragraph).
+                            if label_start < label_end {
+                                self.tree.push();
+                                self.parse_line(
+                                    label_start,
+                                    Some(label_end),
+                                    TableParseMode::Disabled,
+                                );
+                                self.tree.pop();
+                            }
                             let next_line = line_end + scan_nextline(&bytes[line_end..]);
                             return next_line;
                         }
@@ -1220,6 +1242,26 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     /// Returns offset of line start after paragraph.
+    /// Append a container directive's `[label]` as a `DirectiveLabel` child
+    /// holding inline-tokenized content. The label paragraph spans the brackets
+    /// (`[` … `]`); its children come from the normal inline pass run over the
+    /// inner content, so emphasis/strong/links/code resolve like anywhere else.
+    /// Must be called with the directive itself on the spine.
+    fn append_container_directive_label(&mut self, label_start: usize, label_end: usize) {
+        let bracket_offset = label_start.saturating_sub(1);
+        let bracket_end = label_end + 1;
+        self.tree.append(Item {
+            start: bracket_offset,
+            end: bracket_end,
+            body: ItemBody::DirectiveLabel,
+        });
+        self.tree.push();
+        if label_start < label_end {
+            self.parse_line(label_start, Some(label_end), TableParseMode::Disabled);
+        }
+        self.tree.pop();
+    }
+
     fn parse_paragraph(&mut self, start_ix: usize, tasklist_marker: Option<Item>) -> usize {
         self.list_interrupted_paragraph = false;
         let body = if let Some(ItemBody::DefinitionList(_)) =
@@ -2161,6 +2203,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         }
                         self.tree.append_text(begin_text, ix, backslash_escaped);
                         backslash_escaped = false;
+                        let label_start = dir_data.label_start;
+                        let label_end = dir_data.label_end;
                         let dir_ix = self.allocs.allocate_directive(dir_data);
                         let consumed = end_pos - ix;
                         self.tree.append(Item {
@@ -2168,6 +2212,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             end: end_pos,
                             body: ItemBody::TextDirective(dir_ix),
                         });
+                        // Tokenize the label inline as the directive's children,
+                        // re-entering the inline scanner over the `[…]` span.
+                        if label_start < label_end {
+                            self.tree.push();
+                            self.parse_line(label_start, Some(label_end), TableParseMode::Disabled);
+                            self.tree.pop();
+                        }
                         begin_text = end_pos;
                         LoopInstruction::ContinueAndSkip(consumed - 1)
                     } else {
@@ -2331,6 +2382,38 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     /// tree and also keeping track of the lines of HTML within the block.
     ///
     /// The html_end_tag is the tag that must be found on a line to end the block.
+    /// True when `line_start` (already advanced past container prefixes) sits
+    /// on a *pure* closing `:::` fence for an enclosing container directive:
+    /// colons only, indented at most 3 spaces, nothing but whitespace after,
+    /// and at least as long as that directive's opening fence. HTML blocks
+    /// consult this so they stop before the fence instead of swallowing it —
+    /// remark-directive recognizes the close at the container level, before
+    /// the block's continuation rule fires.
+    fn at_closing_directive_fence(&self, line_start: &LineStart<'_>) -> bool {
+        if !self.options.contains(Options::ENABLE_DIRECTIVE) {
+            return false;
+        }
+        for &node_ix in self.tree.walk_spine().rev() {
+            match self.tree[node_ix].item.body {
+                ItemBody::ContainerDirective(length, ..) => {
+                    // Keep walking outward on a miss: a shorter fence can still
+                    // close an ancestor directive that opened with fewer colons.
+                    let mut probe = line_start.clone();
+                    let _ = probe.scan_space_upto(3);
+                    if probe.scan_closing_container_extensions_fence(length) {
+                        probe.scan_all_space();
+                        if probe.is_at_eol() {
+                            return true;
+                        }
+                    }
+                }
+                ItemBody::HtmlBlock(..) | ItemBody::List(..) | ItemBody::ListItem(..) => {}
+                _ => break,
+            }
+        }
+        false
+    }
+
     fn parse_html_block_type_1_to_5(
         &mut self,
         start_ix: usize,
@@ -2452,6 +2535,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 end_ix = next_line_ix;
                 break;
             }
+            // A closing directive fence ends the block before swallowing it.
+            if self.at_closing_directive_fence(&line_start) {
+                end_ix = ix;
+                break;
+            }
             ix = next_line_ix;
             remaining_space = line_start.remaining_space();
             indent = 0;
@@ -2510,6 +2598,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if next_line_ix == self.text.len() || scan_blank_line(&bytes[next_line_ix..]).is_some()
             {
                 end_ix = next_line_ix;
+                break;
+            }
+            // A closing directive fence ends the block before swallowing it.
+            if self.at_closing_directive_fence(&line_start) {
+                end_ix = ix;
                 break;
             }
             ix = next_line_ix;

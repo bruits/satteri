@@ -26,7 +26,7 @@ describe("visitHastHandle - basic behaviour", () => {
     const { handle, source } = setup();
     const plugin = {};
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     // No crash, no mutations, handle still renders
     expect(renderHandle(handle)).toContain("Hello");
   });
@@ -43,7 +43,7 @@ describe("visitHastHandle - basic behaviour", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(tags).toContain("h1");
     expect(tags).toContain("p");
   });
@@ -57,7 +57,7 @@ describe("visitHastHandle - basic behaviour", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(texts).toContain("Hello");
     expect(texts).toContain("World");
   });
@@ -74,7 +74,7 @@ describe("visitHastHandle - basic behaviour", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(positions.h1?.start.line).toBe(1);
     expect(positions.h1?.start.column).toBe(1);
     expect(positions.p?.start.line).toBe(3);
@@ -89,7 +89,7 @@ describe("visitHastHandle - basic behaviour", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(positions.Hello?.start.line).toBe(1);
     expect(positions.World?.start.line).toBe(3);
   });
@@ -118,7 +118,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<h2>");
     expect(html).not.toContain("<h1>");
@@ -135,7 +135,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).not.toContain("<h1>");
     expect(html).toContain("World");
@@ -152,7 +152,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain('id="title"');
   });
@@ -165,7 +165,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("HELLO");
     expect(html).not.toContain("hello");
@@ -187,7 +187,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<h1>Hello</h1><hr>");
   });
@@ -208,7 +208,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<div><h1>Hello</h1></div>");
   });
@@ -224,7 +224,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<h1>Hello!</h1>");
   });
@@ -245,7 +245,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<hr><h1>Hello</h1>");
   });
@@ -261,7 +261,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<h1>&gt;&gt; Hello</h1>");
   });
@@ -282,7 +282,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<h3>Replaced</h3>");
     expect(html).not.toContain("<h1>");
@@ -302,7 +302,7 @@ describe("visitHastHandle - mutations", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<h1>Hello World</h1>");
   });
@@ -324,7 +324,7 @@ describe("visitHastHandle - diagnostics", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(diags.length).toBe(1);
     expect(diags[0]!.message).toBe("heading found");
     expect(diags[0]!.severity).toBe("info");
@@ -334,25 +334,25 @@ describe("visitHastHandle - diagnostics", () => {
 // Context properties
 
 describe("visitHastHandle - context", () => {
-  test("ctx.source and ctx.filename are available", () => {
+  test("ctx.source and ctx.fileURL are available", () => {
     const handle = createHastHandle("# Hello\n\nWorld");
     // Pass the original source explicitly (the real pipeline does this)
     const originalSource = "# Hello\n\nWorld";
     let capturedSource = "";
-    let capturedFilename = "";
+    let capturedFileURL: URL | undefined;
     const plugin = {
       element: {
         filter: ["h1"],
         visit(_node: HastNode, ctx: HastVisitorContext) {
           capturedSource = ctx.source;
-          capturedFilename = ctx.filename;
+          capturedFileURL = ctx.fileURL;
         },
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, originalSource, "test.md");
+    visitHastHandle(handle, plugin, subs, originalSource, new URL("file:///project/test.md"));
     expect(capturedSource).toBe("# Hello\n\nWorld");
-    expect(capturedFilename).toBe("test.md");
+    expect(capturedFileURL?.href).toBe("file:///project/test.md");
   });
 
   test("ctx.textContent() returns concatenated text", () => {
@@ -367,7 +367,7 @@ describe("visitHastHandle - context", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(text).toBe("Hello");
   });
 
@@ -388,7 +388,7 @@ describe("visitHastHandle - context", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(lang).toBe("typescript");
     expect(meta).toBe("{highlight=[1]}");
   });
@@ -411,7 +411,7 @@ describe("visitHastHandle - context", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(childLang).toBe("js");
   });
 });
@@ -571,7 +571,7 @@ describe("mdxjsEsm visitor", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(values.length).toBe(1);
     expect(values[0]).toContain("import Foo from");
   });
@@ -588,7 +588,7 @@ describe("mdxjsEsm visitor", () => {
       },
     };
     const subs = resolveSubscriptions(plugin);
-    visitHastHandle(handle, plugin, subs, source, "<test>");
+    visitHastHandle(handle, plugin, subs, source, undefined);
     expect(values.length).toBe(1);
     expect(values[0]).toContain("export const x");
   });

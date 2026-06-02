@@ -64,7 +64,12 @@ export interface HastDiagnostic {
 
 export interface HastVisitorContext {
   readonly source: string;
-  readonly filename: string;
+  /**
+   * The URL of the document being processed (the compile `fileURL` option),
+   * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
+   * decoded filesystem path.
+   */
+  readonly fileURL: URL | undefined;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastNode): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastNode): void;
@@ -83,8 +88,22 @@ export interface HastVisitorContext {
   getDiagnostics(): HastDiagnostic[];
 }
 
-/** Inject `_hast: true` marker on a HastNode and all its children for JSON serialization. */
+/**
+ * Serialize a HastNode for the command buffer. Marks each node `_hast: true`,
+ * and — except at the root, which is the new replacement content — emits a
+ * reused (materialized) node as a `{ _ref: id }` placeholder so the rebuild
+ * splices the original in place (preserving its id, applying any pending patch
+ * on it) instead of rebuilding it fresh.
+ */
 function markHast(node: HastNode): Record<string, unknown> {
+  return markHastNode(node, true);
+}
+
+function markHastNode(node: HastNode, isRoot: boolean): Record<string, unknown> {
+  if (!isRoot) {
+    const id = nodeIdMap.get(node) ?? (node as HastNodeInternal)._nodeId;
+    if (typeof id === "number") return { _ref: id };
+  }
   const obj: Record<string, unknown> = { _hast: true, type: node.type };
   if ("tagName" in node) obj.tagName = node.tagName;
   if ("properties" in node) obj.properties = node.properties;
@@ -93,7 +112,7 @@ function markHast(node: HastNode): Record<string, unknown> {
   if ("attributes" in node) obj.attributes = node.attributes;
   if ("data" in node && node.data != null) obj.data = node.data;
   if ("children" in node) {
-    obj.children = node.children.map(markHast);
+    obj.children = node.children.map((c) => markHastNode(c, false));
   }
   return obj;
 }
@@ -109,12 +128,12 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #pendingNodes: Map<number, HastNode> = new Map();
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
-  readonly filename: string;
+  readonly fileURL: URL | undefined;
 
-  constructor(handle: HastHandle, getSource: () => string, filename: string) {
+  constructor(handle: HastHandle, getSource: () => string, fileURL: URL | undefined) {
     this.#handle = handle;
     this.#getSource = getSource;
-    this.filename = filename;
+    this.fileURL = fileURL;
   }
 
   get source(): string {
@@ -774,10 +793,10 @@ export function visitHastHandle(
   plugin: HastVisitorInstance,
   subs: ResolvedSubscription[],
   source: string | (() => string),
-  filename: string,
+  fileURL: URL | undefined,
 ): void | Promise<void> {
   const getSource = typeof source === "function" ? source : () => source;
-  const ctx = new HastVisitorContextImpl(handle, getSource, filename);
+  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL);
   const returnBuffer = new CommandBuffer();
   const resolver = new LazyChildResolver(handle);
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));

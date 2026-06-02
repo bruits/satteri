@@ -154,6 +154,15 @@ export async function createRenderer(
   };
 }
 
+/** file: URL → decoded path. Hand-rolled to avoid a `node:url` dep; strips the
+ *  leading slash on Windows drive paths (`/C:/x`). */
+function fileURLToFilePath(fileURL: URL | undefined): string {
+  if (!fileURL) return "";
+  if (fileURL.protocol !== "file:") return fileURL.href;
+  const path = decodeURIComponent(fileURL.pathname);
+  return /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path;
+}
+
 /**
  * Satteri HAST plugin for code blocks using Expressive Code.
  * Equivalent to `rehype-expressive-code` for satteri.
@@ -195,9 +204,10 @@ function expressiveCode(options: SatteriExpressiveCodeOptions = {}): () => HastP
           let normalizedCode = codeBlockInfo.text;
           if (tabWidth > 0) normalizedCode = normalizedCode.replace(/\t/g, " ".repeat(tabWidth));
 
+          const filePath = fileURLToFilePath(ctx.fileURL);
           const document: SatteriExpressiveCodeDocument = {
             source: ctx.source,
-            filename: ctx.filename,
+            filename: filePath,
           };
 
           const input: ExpressiveCodeBlockOptions = {
@@ -205,7 +215,7 @@ function expressiveCode(options: SatteriExpressiveCodeOptions = {}): () => HastP
             language: codeBlockInfo.lang,
             meta: codeBlockInfo.meta,
             parentDocument: {
-              sourceFilePath: ctx.filename,
+              sourceFilePath: filePath,
             },
           };
 

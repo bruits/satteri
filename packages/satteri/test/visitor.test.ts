@@ -21,7 +21,7 @@ function visitAndRender(
   const handle = createMdastHandle(md);
   const source = getHandleSource(handle);
   const subs = resolveMdastSubscriptions(plugin);
-  const result = visitMdastHandle(handle, plugin, subs, source, "<test>") as {
+  const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     commandBuffer: Uint8Array;
   };
   const hastHandle = applyCommandsAndConvertToHastHandle(handle, result.commandBuffer);
@@ -38,7 +38,7 @@ test("visitor with no subscriptions produces no mutations, no diagnostics", () =
   const { handle, source } = setup();
   const plugin = {};
   const subs = resolveMdastSubscriptions(plugin);
-  const result = visitMdastHandle(handle, plugin, subs, source, "<test>");
+  const result = visitMdastHandle(handle, plugin, subs, source, undefined);
   expect((result as { commandBuffer: Uint8Array }).commandBuffer.length).toBe(0);
   expect((result as { hasMutations: boolean }).hasMutations).toBe(false);
 });
@@ -52,7 +52,7 @@ test("visiting heading nodes - callback fires once for the test doc", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(callCount).toBe(1);
 });
 
@@ -65,7 +65,7 @@ test('visitor callback receives correct MDAST node (type="heading", depth=1)', (
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(capturedNode).not.toBeNull();
   expect(capturedNode!.type).toBe("heading");
   if (capturedNode!.type === "heading") {
@@ -82,7 +82,7 @@ test("return value from visitor creates a Replace command in the buffer", () => 
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  const result = visitMdastHandle(handle, plugin, subs, source, "<test>") as {
+  const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     commandBuffer: Uint8Array;
     hasMutations: boolean;
   };
@@ -99,7 +99,7 @@ test("context.removeNode creates a Remove command in the buffer", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  const result = visitMdastHandle(handle, plugin, subs, source, "<test>") as {
+  const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     commandBuffer: Uint8Array;
     hasMutations: boolean;
   };
@@ -116,7 +116,7 @@ test("context.report creates a diagnostic entry", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  const result = visitMdastHandle(handle, plugin, subs, source, "<test>") as {
+  const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     diagnostics: { message: string; severity: string; nodeId?: number }[];
   };
   expect(result.diagnostics.length).toBe(1);
@@ -139,7 +139,7 @@ test("multiple subscribed types - all fire", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(fired).toContain("heading");
   expect(fired).toContain("paragraph");
   expect(fired.filter((x) => x === "text").length).toBe(2);
@@ -154,28 +154,45 @@ test("context.source returns the source text", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(capturedSource).toBe("# Hello\n\nWorld");
 });
 
-test("context.filename returns the filename", () => {
+test("context.fileURL exposes a file URL passed as a URL", () => {
   const { handle, source } = setup();
-  let capturedFilename: string | null = null;
+  let captured: URL | undefined;
+  const fileURL = new URL("file:///project/test.md");
   const plugin = {
     heading(_node: MdastNode, ctx: MdastVisitorContext) {
-      capturedFilename = ctx.filename;
+      captured = ctx.fileURL;
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  visitMdastHandle(handle, plugin, subs, source, "test.md");
-  expect(capturedFilename).toBe("test.md");
+  visitMdastHandle(handle, plugin, subs, source, fileURL);
+  expect(captured).toBeInstanceOf(URL);
+  expect(captured?.href).toBe("file:///project/test.md");
+});
+
+test("context.fileURL preserves a URL with a percent-encoded path", () => {
+  const { handle, source } = setup();
+  let captured: URL | undefined;
+  const fileURL = new URL("file:///home/My Docs/test.md");
+  const plugin = {
+    heading(_node: MdastNode, ctx: MdastVisitorContext) {
+      captured = ctx.fileURL;
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, fileURL);
+  // The URL keeps the space percent-encoded; `fileURLToPath` would decode it.
+  expect(captured?.pathname).toBe("/home/My%20Docs/test.md");
 });
 
 test("hasMutations is false when no mutations, true when there are mutations", () => {
   const { handle, source } = setup();
   const noMutPlugin = { heading(_node: MdastNode) {} };
   const noMutSubs = resolveMdastSubscriptions(noMutPlugin);
-  const noMutResult = visitMdastHandle(handle, noMutPlugin, noMutSubs, source, "<test>") as {
+  const noMutResult = visitMdastHandle(handle, noMutPlugin, noMutSubs, source, undefined) as {
     hasMutations: boolean;
   };
   expect(noMutResult.hasMutations).toBe(false);
@@ -187,7 +204,7 @@ test("hasMutations is false when no mutations, true when there are mutations", (
     },
   };
   const mutSubs = resolveMdastSubscriptions(mutPlugin);
-  const mutResult = visitMdastHandle(handle2, mutPlugin, mutSubs, source, "<test>") as {
+  const mutResult = visitMdastHandle(handle2, mutPlugin, mutSubs, source, undefined) as {
     hasMutations: boolean;
   };
   expect(mutResult.hasMutations).toBe(true);
@@ -202,7 +219,7 @@ test("setProperty + returning the same node does not drop the mutation", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  const result = visitMdastHandle(handle, plugin, subs, source, "<test>") as {
+  const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     hasMutations: boolean;
   };
   // The setProperty should still be present in the command buffer
@@ -295,7 +312,7 @@ test("containerDirective visitor fires and exposes name + attributes", () => {
   };
   const subs = resolveMdastSubscriptions(plugin);
   expect(subs.length).toBe(1);
-  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(seen.length).toBe(1);
   expect(seen[0]!.name).toBe("tip");
   expect(seen[0]!.attributes.id).toBe("id");
@@ -312,7 +329,7 @@ test("containerDirective with [label] exposes directiveLabel marker on first chi
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(labelChildHadMarker).toBe(true);
 });
 
@@ -325,7 +342,7 @@ test("leafDirective visitor fires and exposes name", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(seen.length).toBe(1);
   expect(seen[0]!.name).toBe("break");
   expect(seen[0]!.attributes["aria-label"]).toBe("section");
@@ -340,7 +357,7 @@ test("textDirective visitor fires inside a paragraph", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(seen).toEqual(["emoji"]);
 });
 
@@ -353,7 +370,7 @@ test("containerDirective replaceNode rewrites to an aside-style block", () => {
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
-  const result = visitMdastHandle(handle, plugin, subs, source, "<test>") as {
+  const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     commandBuffer: Uint8Array;
     hasMutations: boolean;
   };

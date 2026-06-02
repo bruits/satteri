@@ -163,7 +163,7 @@ describe("HAST plugins affecting HTML output", () => {
         },
       },
     };
-    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, "<test>");
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     dropHandle(handle);
     expect(tags).toContain("h1");
     expect(tags).toContain("ul");
@@ -185,7 +185,7 @@ describe("HAST plugins affecting HTML output", () => {
         },
       },
     };
-    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, "<test>");
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     dropHandle(handle);
     expect(hrefs).toContain("https://example.com");
   });
@@ -204,7 +204,7 @@ describe("HAST plugins affecting HTML output", () => {
         },
       },
     };
-    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, "<test>");
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     dropHandle(handle);
     expect(imgNode).not.toBeNull();
     const img = imgNode!;
@@ -223,7 +223,7 @@ describe("HAST plugins affecting HTML output", () => {
         if (node.type === "text") texts.push(node.value);
       },
     };
-    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, "<test>");
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     dropHandle(handle);
     expect(texts).toContain("Hello ");
     expect(texts).toContain("world");
@@ -240,7 +240,7 @@ describe("HAST plugins affecting HTML output", () => {
         },
       },
     };
-    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, "<test>");
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     const html = renderHandle(handle);
     dropHandle(handle);
     expect(html).toContain('id="my-title"');
@@ -257,7 +257,7 @@ describe("HAST plugins affecting HTML output", () => {
         },
       },
     };
-    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, "<test>");
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     const html = renderHandle(handle);
     dropHandle(handle);
     expect(html).not.toContain("Remove this");
@@ -284,7 +284,7 @@ describe("HAST plugins affecting HTML output", () => {
         },
       },
     };
-    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, "<test>");
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     const html = renderHandle(handle);
     dropHandle(handle);
     expect(html).toContain("<h2>");
@@ -304,7 +304,7 @@ describe("HAST plugins affecting HTML output", () => {
         },
       },
     };
-    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, "<test>");
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     dropHandle(handle);
     expect(diags.length).toBe(1);
     expect(diags[0]!.message).toBe("headings should have IDs");

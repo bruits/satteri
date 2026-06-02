@@ -2045,14 +2045,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 }
 
-/// Parse a raw JSX tag string into structured `JsxElementData`.
-///
-/// Handles opening, closing, self-closing tags, and fragments.
-/// Attributes are extracted with zero-copy `CowStr::Borrowed` where possible.
-pub(crate) fn parse_jsx_tag<'a>(raw: &'a str) -> JsxElementData<'a> {
-    parse_jsx_tag_with_column(raw, 1, 0)
-}
-
 /// Return the 1-indexed column of `bytes[pos]` by walking back to the most
 /// recent line start. Tabs in the preceding indent are expanded to 4-column
 /// tab stops, matching micromark.
@@ -2075,10 +2067,10 @@ pub(crate) fn column_at(bytes: &[u8], pos: usize) -> usize {
     col
 }
 
-/// Like `parse_jsx_tag`, but takes the 1-indexed column where the container's
-/// content begins. Multi-line JSX attribute expressions need to strip
-/// `(column - 1) + indentSize` columns from each continuation line to match
-/// remark's normalized output.
+/// Parse a raw JSX tag string into structured `JsxElementData`, given the
+/// 1-indexed column where the container's content begins. Multi-line JSX
+/// attribute expressions need to strip `(column - 1) + indentSize` columns from
+/// each continuation line to match remark's normalized output.
 pub(crate) fn parse_jsx_tag_with_column<'a>(
     raw: &'a str,
     container_content_col: usize,

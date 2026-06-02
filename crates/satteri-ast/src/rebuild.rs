@@ -5,6 +5,14 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::commands::CommandError;
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
 
+/// Sentinel `node_type` for a *reference* node inside a replacement sub-tree:
+/// "splice the existing original node whose id is stored in this node's
+/// type_data (u32 LE) here." Higher than any real MDAST (≤104) or HAST (≤14)
+/// type. Resolving it copies the original subtree *and applies any pending
+/// patch on it*, so a nested transform queued on a passed-through child still
+/// lands — no stranding, no re-visit.
+pub const REF_NODE_TYPE: u8 = 0xFF;
+
 #[derive(Debug, Clone)]
 pub enum Patch<K: ArenaKind> {
     Replace {
@@ -61,6 +69,33 @@ pub fn rebuild<K: ArenaKind>(
     arena: &Arena<K>,
     patches: &[Patch<K>],
 ) -> Result<Arena<K>, CommandError> {
+    let result = rebuild_lenient(arena, patches)?;
+    if let Some(&anchor) = result.dropped.first() {
+        return Err(CommandError::PatchOnRemovedSubtree(anchor));
+    }
+    Ok(result.arena)
+}
+
+/// Outcome of [`rebuild_lenient`].
+pub struct RebuildResult<K: ArenaKind> {
+    pub arena: Arena<K>,
+    /// Anchors whose patch landed inside a subtree that an ancestor's
+    /// `Remove`/`Replace` genuinely discarded, so the patch could not be
+    /// applied — and is moot, since the plugin chose to drop that subtree. A
+    /// *passed-through* child is not dropped this way: it is spliced back by a
+    /// `REF_NODE_TYPE` node (see [`REF_NODE_TYPE`]), keeping its id so a patch
+    /// queued on it still applies.
+    pub dropped: Vec<u32>,
+}
+
+/// Like [`rebuild`], but instead of erroring when a patch targets a node inside
+/// a removed/replaced subtree, drops that patch and reports its anchor in
+/// [`RebuildResult::dropped`]. Genuine misuse that can't be re-derived
+/// (`Wrap`/`PrependChild`/`AppendChild` on a removed anchor) still errors.
+pub fn rebuild_lenient<K: ArenaKind>(
+    arena: &Arena<K>,
+    patches: &[Patch<K>],
+) -> Result<RebuildResult<K>, CommandError> {
     let mut patch_map: FxHashMap<u32, Vec<&Patch<K>>> = FxHashMap::default();
     for patch in patches {
         let node_id = match patch {
@@ -115,14 +150,19 @@ pub fn rebuild<K: ArenaKind>(
 
     // Any anchor in patch_map that wasn't reached during the walk lives
     // inside a removed subtree (or a Replace { keep_children: false }
-    // subtree), so its patch was silently dropped. Surface that.
-    for &anchor in patch_map.keys() {
-        if !visited.contains(&anchor) {
-            return Err(CommandError::PatchOnRemovedSubtree(anchor));
-        }
-    }
+    // subtree) that no reference spliced back, so its patch was not applied.
+    // Report it; the lenient caller drops it (the subtree was discarded).
+    let mut dropped: Vec<u32> = patch_map
+        .keys()
+        .copied()
+        .filter(|anchor| !visited.contains(anchor))
+        .collect();
+    dropped.sort_unstable();
 
-    Ok(builder.finish())
+    Ok(RebuildResult {
+        arena: builder.finish(),
+        dropped,
+    })
 }
 
 /// Returns `true` if the node was emitted (or a replacement was emitted),
@@ -147,7 +187,7 @@ fn copy_node<K: ArenaKind>(
     // its absence — whichever applies.
     for patch in node_patches {
         if let Patch::InsertBefore { new_tree, .. } = patch {
-            emit_subtree(new_tree, builder);
+            emit_subtree(new_tree, builder, orig, patch_map, deleted, visited);
         }
     }
 
@@ -171,13 +211,13 @@ fn copy_node<K: ArenaKind>(
                     new_tree, node_id, orig, builder, patch_map, deleted, visited,
                 );
             } else {
-                emit_subtree(new_tree, builder);
+                emit_subtree(new_tree, builder, orig, patch_map, deleted, visited);
             }
         }
         // Post-siblings still apply for Remove and Replace.
         for patch in node_patches {
             if let Patch::InsertAfter { new_tree, .. } = patch {
-                emit_subtree(new_tree, builder);
+                emit_subtree(new_tree, builder, orig, patch_map, deleted, visited);
             }
         }
         return true;
@@ -203,7 +243,7 @@ fn copy_node<K: ArenaKind>(
         );
         for patch in node_patches {
             if let Patch::InsertAfter { new_tree, .. } = patch {
-                emit_subtree(new_tree, builder);
+                emit_subtree(new_tree, builder, orig, patch_map, deleted, visited);
             }
         }
         return true;
@@ -234,7 +274,7 @@ fn copy_node<K: ArenaKind>(
 
     for patch in node_patches {
         if let Patch::PrependChild { child_tree, .. } = patch {
-            emit_subtree(child_tree, builder);
+            emit_subtree(child_tree, builder, orig, patch_map, deleted, visited);
         }
     }
 
@@ -245,7 +285,7 @@ fn copy_node<K: ArenaKind>(
 
     for patch in node_patches {
         if let Patch::AppendChild { child_tree, .. } = patch {
-            emit_subtree(child_tree, builder);
+            emit_subtree(child_tree, builder, orig, patch_map, deleted, visited);
         }
     }
 
@@ -253,7 +293,7 @@ fn copy_node<K: ArenaKind>(
 
     for patch in node_patches {
         if let Patch::InsertAfter { new_tree, .. } = patch {
-            emit_subtree(new_tree, builder);
+            emit_subtree(new_tree, builder, orig, patch_map, deleted, visited);
         }
     }
 
@@ -262,7 +302,14 @@ fn copy_node<K: ArenaKind>(
 
 /// Sub-arena source is appended to the builder's source, and StringRef
 /// offsets in type_data are remapped into the merged buffer.
-fn emit_subtree<K: ArenaKind>(sub_arena: &Arena<K>, builder: &mut ArenaBuilder<K>) {
+fn emit_subtree<K: ArenaKind>(
+    sub_arena: &Arena<K>,
+    builder: &mut ArenaBuilder<K>,
+    orig: &Arena<K>,
+    patch_map: &FxHashMap<u32, Vec<&Patch<K>>>,
+    deleted: &FxHashSet<u32>,
+    visited: &mut FxHashSet<u32>,
+) {
     if sub_arena.is_empty() {
         return;
     }
@@ -281,22 +328,57 @@ fn emit_subtree<K: ArenaKind>(sub_arena: &Arena<K>, builder: &mut ArenaBuilder<K
     // they skip this and emit unchanged.
     if sub_arena.get_node(0).node_type == K::ROOT_TAG {
         for child in sub_arena.get_children(0).to_vec() {
-            emit_subtree_node(child, sub_arena, builder, source_base);
+            emit_subtree_node(
+                child,
+                sub_arena,
+                builder,
+                source_base,
+                orig,
+                patch_map,
+                deleted,
+                visited,
+            );
         }
     } else {
-        emit_subtree_node(0, sub_arena, builder, source_base);
+        emit_subtree_node(
+            0,
+            sub_arena,
+            builder,
+            source_base,
+            orig,
+            patch_map,
+            deleted,
+            visited,
+        );
     }
 }
 
 /// `source_base` is the offset added to StringRef offsets to remap them
 /// into the merged source buffer.
+// Threads the same rebuild state (orig/patch_map/deleted/visited) the other
+// emit helpers carry, so a ref node can resolve against it via `copy_node`.
+#[allow(clippy::too_many_arguments)]
 fn emit_subtree_node<K: ArenaKind>(
     node_id: u32,
     sub_arena: &Arena<K>,
     builder: &mut ArenaBuilder<K>,
     source_base: u32,
+    orig: &Arena<K>,
+    patch_map: &FxHashMap<u32, Vec<&Patch<K>>>,
+    deleted: &FxHashSet<u32>,
+    visited: &mut FxHashSet<u32>,
 ) {
     let node = sub_arena.get_node(node_id);
+
+    // A reference node: splice the original subtree it names, applying any
+    // pending patch on it (so a nested transform on a passed-through child
+    // runs in the same pass instead of stranding).
+    if node.node_type == REF_NODE_TYPE {
+        let td = sub_arena.get_type_data(node_id);
+        let target = u32::from_le_bytes([td[0], td[1], td[2], td[3]]);
+        copy_node(target, orig, builder, patch_map, deleted, visited);
+        return;
+    }
 
     let new_id = builder.open_node_raw(node.node_type);
 
@@ -326,7 +408,16 @@ fn emit_subtree_node<K: ArenaKind>(
 
     let child_ids: Vec<u32> = sub_arena.get_children(node_id).to_vec();
     for child_id in child_ids {
-        emit_subtree_node(child_id, sub_arena, builder, source_base);
+        emit_subtree_node(
+            child_id,
+            sub_arena,
+            builder,
+            source_base,
+            orig,
+            patch_map,
+            deleted,
+            visited,
+        );
     }
 
     builder.close_node();
@@ -1364,6 +1455,154 @@ mod tests {
         match rebuild(&orig, &patches) {
             Err(CommandError::PatchOnRemovedSubtree(id)) => assert_eq!(id, text_in_heading),
             other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
+        }
+    }
+
+    /// `rebuild_lenient` drops a patch stranded inside a removed/replaced
+    /// subtree instead of erroring, and reports its anchor. The rest of the
+    /// rebuild still applies.
+    #[test]
+    fn rebuild_lenient_drops_and_reports_stranded_patch() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+        let text_in_heading = orig.get_children(heading_id)[0];
+
+        // Replace the heading (dropping its subtree), and also replace the text
+        // inside it — the kind of pair a nested-directive transform produces.
+        let mut replacement = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        replacement.open_node(MdastNodeType::Paragraph as u8);
+        replacement.close_node();
+        let replacement = replacement.finish();
+
+        let patches = vec![
+            Patch::Replace {
+                node_id: heading_id,
+                new_tree: replacement,
+                keep_children: false,
+            },
+            Patch::Replace {
+                node_id: text_in_heading,
+                new_tree: single_node_arena(MdastNodeType::Break),
+                keep_children: false,
+            },
+        ];
+        let result = rebuild_lenient(&orig, &patches).expect("lenient rebuild should not error");
+        assert_eq!(result.dropped, vec![text_in_heading]);
+        // The heading replacement still applied: root's first child is the new Paragraph.
+        let root_children = result.arena.get_children(0);
+        assert_eq!(
+            result.arena.get_node(root_children[0]).node_type,
+            MdastNodeType::Paragraph as u8
+        );
+    }
+
+    /// Same shape as the stranding test, but the replacement *references* the
+    /// original child via a `REF_NODE_TYPE` node instead of discarding it. The
+    /// child's own patch then applies (text → Break) and nothing strands — this
+    /// is how a passed-through child keeps its identity so a nested transform
+    /// queued on it runs in the same pass.
+    #[test]
+    fn ref_node_splices_original_and_applies_its_patch() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+        let text_in_heading = orig.get_children(heading_id)[0];
+
+        // Replacement: a Blockquote whose only child is a reference to the
+        // heading's original text node.
+        let mut replacement = ArenaBuilder::<Mdast>::new(String::new());
+        replacement.open_node(MdastNodeType::Blockquote as u8);
+        replacement.open_node_raw(REF_NODE_TYPE);
+        replacement.set_data_current(&text_in_heading.to_le_bytes());
+        replacement.close_node();
+        replacement.close_node();
+        let replacement = replacement.finish();
+
+        let patches = vec![
+            Patch::Replace {
+                node_id: heading_id,
+                new_tree: replacement,
+                keep_children: false,
+            },
+            Patch::Replace {
+                node_id: text_in_heading,
+                new_tree: single_node_arena(MdastNodeType::Break),
+                keep_children: false,
+            },
+        ];
+        let result = rebuild_lenient(&orig, &patches).expect("lenient rebuild should not error");
+        assert!(
+            result.dropped.is_empty(),
+            "the referenced child should not strand: {:?}",
+            result.dropped
+        );
+        // root > blockquote > break (the referenced text, transformed in place).
+        let bq = result.arena.get_children(0)[0];
+        assert_eq!(
+            result.arena.get_node(bq).node_type,
+            MdastNodeType::Blockquote as u8
+        );
+        let bq_children = result.arena.get_children(bq);
+        assert_eq!(bq_children.len(), 1);
+        assert_eq!(
+            result.arena.get_node(bq_children[0]).node_type,
+            MdastNodeType::Break as u8
+        );
+    }
+
+    /// Every patch stranded under a removed subtree is reported, not just the
+    /// first, so strict `rebuild` can surface the complete set.
+    #[test]
+    fn rebuild_lenient_reports_every_stranded_anchor() {
+        // Root(0) -> Heading(1) -> Text(2), Paragraph(3) -> Text(4)
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+        let text_in_heading = orig.get_children(heading_id)[0];
+        let para_id = orig.get_children(0)[1];
+        let text_in_para = orig.get_children(para_id)[0];
+
+        let patches = vec![
+            // Remove both top-level nodes, stranding the text inside each.
+            Patch::Remove {
+                node_id: heading_id,
+            },
+            Patch::Remove { node_id: para_id },
+            Patch::Replace {
+                node_id: text_in_heading,
+                new_tree: single_node_arena(MdastNodeType::Break),
+                keep_children: false,
+            },
+            Patch::InsertBefore {
+                node_id: text_in_para,
+                new_tree: single_node_arena(MdastNodeType::Break),
+            },
+        ];
+        let result = rebuild_lenient(&orig, &patches).expect("lenient rebuild should not error");
+        assert_eq!(result.dropped, vec![text_in_heading, text_in_para]);
+        // Both removals applied: the root is now empty.
+        assert_eq!(result.arena.get_children(0).len(), 0);
+    }
+
+    /// Leniency only covers the "stranded inside a removed subtree" case. A
+    /// `Wrap` (or child-add) on a node that is itself removed is unrecoverable
+    /// misuse and still errors in `rebuild_lenient`, not just in `rebuild`.
+    #[test]
+    fn rebuild_lenient_still_errors_on_wrap_on_removed() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+
+        let patches = vec![
+            Patch::Wrap {
+                node_id: heading_id,
+                parent_tree: single_node_arena(MdastNodeType::Blockquote),
+            },
+            Patch::Remove {
+                node_id: heading_id,
+            },
+        ];
+        match rebuild_lenient(&orig, &patches) {
+            Err(CommandError::WrapOnRemovedNode(id)) => assert_eq!(id, heading_id),
+            Err(other) => panic!("expected WrapOnRemovedNode, got {other:?}"),
+            Ok(_) => panic!("expected WrapOnRemovedNode error, got Ok"),
         }
     }
 

@@ -9,7 +9,9 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct JsNode {
-    #[serde(rename = "type")]
+    // Defaulted so a bare reference node (`{ "_ref": N }`, no `type`)
+    // deserializes; `ref_id` is checked before `node_type` is ever used.
+    #[serde(rename = "type", default)]
     pub node_type: String,
     #[serde(default)]
     pub children: Option<Vec<JsNode>>,
@@ -42,6 +44,13 @@ pub struct JsNode {
     /// When true, keep the original node's children instead of replacing them.
     #[serde(rename = "_keepChildren", default)]
     pub keep_children: bool,
+    /// Reference to an existing original node id. When set, this node is a
+    /// placeholder: the rebuild splices that original node's subtree in place
+    /// (preserving its id and applying any pending patch on it) instead of
+    /// building a fresh node. Lets a returned replacement pass through existing
+    /// children at any depth without stranding patches queued on them.
+    #[serde(rename = "_ref", default)]
+    pub ref_id: Option<u32>,
     /// On a fresh node, equivalent to `ctx.setProperty(node, "data", …)`.
     #[serde(default)]
     pub data: Option<serde_json::Map<String, serde_json::Value>>,

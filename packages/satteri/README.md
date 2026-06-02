@@ -163,6 +163,14 @@ heading(node) {
 }
 ```
 
+### How transforms compose
+
+Unlike remark and rehype, which re-walk the tree until it stops changing, each Sätteri plugin walks the tree **once**. Within that single pass:
+
+- **Passed-through children keep their identity.** When a visitor returns a replacement that reuses the original node's children (e.g. `{ ...node, children: [...node.children] }`), those children are spliced back unchanged — so a transform the same pass queues on a nested one still applies. This is what lets a `containerDirective` visitor turn both an outer `:::note` and a nested `:::tip` into asides in one go.
+- **A plugin's own freshly-built nodes are not re-walked by that plugin.** If a visitor returns a brand-new node (one that didn't come from the tree), the same plugin won't visit it. Produce its final shape directly, or hand it off to a later plugin — every plugin runs over the fully materialized output of the ones before it.
+- **Dropping a subtree drops transforms queued inside it.** If one visitor removes or replaces a node while another (in the same pass) had queued a transform on something inside that subtree, the orphaned transform is dropped and a warning is logged. This is usually intentional — you discarded that subtree on purpose — but the warning helps catch the cases where it isn't.
+
 ### Async plugins
 
 Visitors can optionally be async. When any visitor is async, `markdownToHtml` and `mdxToJs` return a `Promise<string>` instead of `string`. For performance reasons, it is typically best to avoid async visitors, especially if your visitor matches a large number of nodes.
@@ -290,7 +298,7 @@ interface CompileOptions {
   mdastPlugins?: MdastPluginDefinition[];
   hastPlugins?: HastPluginDefinition[];
   features?: Features;
-  filename?: string;
+  fileURL?: URL;
 }
 
 // mdxToJs accepts MdxCompileOptions, which extends CompileOptions
@@ -298,6 +306,8 @@ interface MdxCompileOptions extends CompileOptions {
   optimizeStatic?: OptimizeStaticConfig;
 }
 ```
+
+`fileURL` is the `URL` of the document being processed, surfaced to plugins as `ctx.fileURL` (a `URL`, or `undefined` when omitted). Pass a file URL such as Astro's `fileURL`, or convert a filesystem path with Node's `pathToFileURL`; read it back with `fileURLToPath(ctx.fileURL)`.
 
 `Features` controls the Markdown extensions Sätteri's parser recognizes: `gfm`, `frontmatter`, `math`, `directive`, `smartPunctuation`, etc. `gfm`, `math`, and `smartPunctuation` also accept granular options. For example, `math: { singleDollarTextMath: false }` keeps single `$` as literal text. See the [Features reference](https://satteri.dev/docs/features/) for the full list.
 
