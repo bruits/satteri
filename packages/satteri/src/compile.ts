@@ -100,10 +100,19 @@ type MdastHandle = any;
 
 type MdastPipelineResult = { handle: MdastHandle };
 
+function warnDroppedTransforms(plugin: MdastPluginInstance, dropped: number): void {
+  const name = (plugin as { name?: string }).name ?? "<anonymous>";
+  const noun = dropped === 1 ? "transform" : "transforms";
+  console.warn(
+    `satteri: plugin "${name}" queued ${dropped} mdast ${noun} on node(s) that were removed or ` +
+      `replaced earlier in the same pass; ${dropped === 1 ? "it was" : "they were"} dropped.`,
+  );
+}
+
 function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginInput[],
-  filename: URL | undefined,
+  fileURL: URL | undefined,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
   // Each plugin runs once over the tree. A transform that passes a child
   // through (returning it inside the replacement) keeps that child's identity,
@@ -112,9 +121,11 @@ function runMdastPluginsOnHandle(
   // them up front, or hand off to a later plugin that sees the materialized tree.
   const runPlugin = (plugin: MdastPluginInstance): void | Promise<void> => {
     const subs = resolveMdastSubscriptions(plugin);
-    const result = visitMdastHandle(handle, plugin, subs, () => getHandleSource(handle), filename);
+    const result = visitMdastHandle(handle, plugin, subs, () => getHandleSource(handle), fileURL);
     const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
-      if (r.hasMutations) applyCommandsToMdastHandle(handle, r.commandBuffer);
+      if (!r.hasMutations) return;
+      const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
+      if (dropped) warnDroppedTransforms(plugin, dropped);
     };
     return result instanceof Promise ? result.then(apply) : apply(result);
   };
@@ -137,7 +148,7 @@ function runHastPluginsOnHandle(
   handle: HastHandle,
   plugins: HastPluginInput[],
   source: string,
-  filename: URL | undefined,
+  fileURL: URL | undefined,
 ): void | Promise<void> {
   if (plugins.length === 0) return;
 
@@ -149,7 +160,7 @@ function runHastPluginsOnHandle(
       const plugin: HastPluginDefinition = typeof raw === "function" ? raw() : raw;
 
       const subs = resolveSubscriptions(plugin);
-      const result = visitHastHandle(handle, plugin, subs, source, filename);
+      const result = visitHastHandle(handle, plugin, subs, source, fileURL);
       if (result instanceof Promise) {
         return result.then(runNext);
       }
@@ -340,11 +351,11 @@ export interface CompileOptions {
   hastPlugins?: HastPluginInput[];
   features?: Features;
   /**
-   * The document being processed, surfaced to plugins as `ctx.filename`. Must
+   * The document being processed, surfaced to plugins as `ctx.fileURL`. Must
    * be a `URL` (e.g. Astro's `fileURL`); convert a filesystem path with Node's
    * `pathToFileURL` before passing it.
    */
-  filename?: URL;
+  fileURL?: URL;
 }
 
 /**
@@ -477,7 +488,7 @@ export function markdownToHtml(
   source: string,
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
-  const { mdastPlugins = [], hastPlugins = [], features, filename } = options;
+  const { mdastPlugins = [], hastPlugins = [], features, fileURL } = options;
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
 
@@ -485,7 +496,7 @@ export function markdownToHtml(
     source,
     mdastPlugins,
     false,
-    filename,
+    fileURL,
     nativeFeatures,
     nativeConvertOptions,
   );
@@ -504,7 +515,7 @@ export function markdownToHtml(
   ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> => {
     let hastResult: void | Promise<void>;
     try {
-      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
+      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL);
     } catch (err) {
       dropHandle(r.hastHandle);
       throw err;
@@ -533,7 +544,7 @@ export function mdxToJs(
   source: string,
   options: MdxCompileOptions = {},
 ): MdxToJsResult | Promise<MdxToJsResult> {
-  const { mdastPlugins = [], hastPlugins = [], features, filename, ...mdxFields } = options;
+  const { mdastPlugins = [], hastPlugins = [], features, fileURL, ...mdxFields } = options;
   const mdxOptions = mdxOptionsToNative(mdxFields);
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
@@ -542,7 +553,7 @@ export function mdxToJs(
     source,
     mdastPlugins,
     true,
-    filename,
+    fileURL,
     nativeFeatures,
     nativeConvertOptions,
   );
@@ -559,7 +570,7 @@ export function mdxToJs(
   const runHastThenCompile = (r: HastWithFrontmatter): MdxToJsResult | Promise<MdxToJsResult> => {
     let hastResult: void | Promise<void>;
     try {
-      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
+      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL);
     } catch (err) {
       dropHandle(r.hastHandle);
       throw err;
@@ -636,7 +647,7 @@ function createHastHandleFromMdast(
   source: string,
   mdastPlugins: MdastPluginInput[],
   mdx: boolean,
-  filename: URL | undefined,
+  fileURL: URL | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nativeFeatures?: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -663,7 +674,7 @@ function createHastHandleFromMdast(
       return finalize({ handle: mdastHandle });
     }
 
-    const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, filename);
+    const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL);
 
     if (mdastResult instanceof Promise) {
       return mdastResult.then(finalize, (err) => {

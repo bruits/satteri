@@ -9,8 +9,12 @@ export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle,
 /** Apply a command buffer to a HAST handle's arena in-place. */
 export declare function applyCommandsToHandle(handle: HastHandle, commandBuf: Uint8Array): void
 
-/** Apply a command buffer to an MDAST handle in-place. */
-export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): void
+/**
+ * Apply a command buffer to an MDAST handle in-place. Returns how many patches
+ * were dropped because their target lived inside a subtree this pass removed or
+ * replaced (see the lenient note below); the JS pipeline warns when non-zero.
+ */
+export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): number
 
 /** Compile a HAST handle's arena to MDX JavaScript. Does not consume the handle. */
 export declare function compileHandle(handle: HastHandle, options?: JsMdxOptions | undefined | null): string

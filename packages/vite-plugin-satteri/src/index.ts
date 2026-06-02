@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import type { Plugin, ResolvedConfig } from "vite";
 import { markdownToHtml, mdxToJs } from "satteri";
 import type {
@@ -73,12 +74,13 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
       const isMd = !isMdx && markdown && MD_RE.test(id);
       if (!isMd && !isMdx) return null;
 
-      const filename = id.replace(/\?.*$/, "");
+      const filePath = id.replace(/\?.*$/, "");
+      const fileURL = pathToFileURL(filePath);
 
       if (isMdx) {
         const isDev = mdxOptions.development ?? viteConfig?.command === "serve";
         const opts: MdxCompileOptions = {
-          filename,
+          fileURL,
           development: isDev,
           ...(mdastPlugins ? { mdastPlugins } : {}),
           ...(hastPlugins ? { hastPlugins } : {}),
@@ -105,7 +107,7 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
       }
 
       const opts: CompileOptions = {
-        filename,
+        fileURL,
         ...(mdastPlugins ? { mdastPlugins } : {}),
         ...(hastPlugins ? { hastPlugins } : {}),
         ...(features ? { features } : {}),

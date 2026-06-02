@@ -334,25 +334,25 @@ describe("visitHastHandle - diagnostics", () => {
 // Context properties
 
 describe("visitHastHandle - context", () => {
-  test("ctx.source and ctx.filename are available", () => {
+  test("ctx.source and ctx.fileURL are available", () => {
     const handle = createHastHandle("# Hello\n\nWorld");
     // Pass the original source explicitly (the real pipeline does this)
     const originalSource = "# Hello\n\nWorld";
     let capturedSource = "";
-    let capturedFilename: URL | undefined;
+    let capturedFileURL: URL | undefined;
     const plugin = {
       element: {
         filter: ["h1"],
         visit(_node: HastNode, ctx: HastVisitorContext) {
           capturedSource = ctx.source;
-          capturedFilename = ctx.filename;
+          capturedFileURL = ctx.fileURL;
         },
       },
     };
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, originalSource, new URL("file:///project/test.md"));
     expect(capturedSource).toBe("# Hello\n\nWorld");
-    expect(capturedFilename?.href).toBe("file:///project/test.md");
+    expect(capturedFileURL?.href).toBe("file:///project/test.md");
   });
 
   test("ctx.textContent() returns concatenated text", () => {

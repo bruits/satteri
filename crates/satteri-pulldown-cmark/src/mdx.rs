@@ -2067,10 +2067,10 @@ pub(crate) fn column_at(bytes: &[u8], pos: usize) -> usize {
     col
 }
 
-/// Like `parse_jsx_tag`, but takes the 1-indexed column where the container's
-/// content begins. Multi-line JSX attribute expressions need to strip
-/// `(column - 1) + indentSize` columns from each continuation line to match
-/// remark's normalized output.
+/// Parse a raw JSX tag string into structured `JsxElementData`, given the
+/// 1-indexed column where the container's content begins. Multi-line JSX
+/// attribute expressions need to strip `(column - 1) + indentSize` columns from
+/// each continuation line to match remark's normalized output.
 pub(crate) fn parse_jsx_tag_with_column<'a>(
     raw: &'a str,
     container_content_col: usize,

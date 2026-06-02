@@ -120,16 +120,16 @@ export class MdastVisitorContext {
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   /**
-   * The URL of the document being processed (the compile `filename` option),
-   * or `undefined` when none was given. Use `fileURLToPath(ctx.filename)` for a
+   * The URL of the document being processed (the compile `fileURL` option),
+   * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
    * decoded filesystem path.
    */
-  readonly filename: URL | undefined;
+  readonly fileURL: URL | undefined;
 
-  constructor(handle: MdastHandle, getSource: () => string, filename: URL | undefined) {
+  constructor(handle: MdastHandle, getSource: () => string, fileURL: URL | undefined) {
     this.#handle = handle;
     this.#getSource = getSource;
-    this.filename = filename;
+    this.fileURL = fileURL;
   }
 
   get source(): string {
@@ -760,10 +760,10 @@ export function visitMdastHandle(
   plugin: MdastPluginInstance,
   subs: MdastSubscription[],
   source: string | (() => string),
-  filename: URL | undefined,
+  fileURL: URL | undefined,
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
-  const context = new MdastVisitorContext(handle, getSource, filename);
+  const context = new MdastVisitorContext(handle, getSource, fileURL);
   const returnBuffer = new CommandBuffer();
   const resolver = new MdastLazyChildResolver(handle);
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));

@@ -65,11 +65,11 @@ export interface HastDiagnostic {
 export interface HastVisitorContext {
   readonly source: string;
   /**
-   * The URL of the document being processed (the compile `filename` option),
-   * or `undefined` when none was given. Use `fileURLToPath(ctx.filename)` for a
+   * The URL of the document being processed (the compile `fileURL` option),
+   * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
    * decoded filesystem path.
    */
-  readonly filename: URL | undefined;
+  readonly fileURL: URL | undefined;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastNode): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastNode): void;
@@ -128,12 +128,12 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #pendingNodes: Map<number, HastNode> = new Map();
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
-  readonly filename: URL | undefined;
+  readonly fileURL: URL | undefined;
 
-  constructor(handle: HastHandle, getSource: () => string, filename: URL | undefined) {
+  constructor(handle: HastHandle, getSource: () => string, fileURL: URL | undefined) {
     this.#handle = handle;
     this.#getSource = getSource;
-    this.filename = filename;
+    this.fileURL = fileURL;
   }
 
   get source(): string {
@@ -793,10 +793,10 @@ export function visitHastHandle(
   plugin: HastVisitorInstance,
   subs: ResolvedSubscription[],
   source: string | (() => string),
-  filename: URL | undefined,
+  fileURL: URL | undefined,
 ): void | Promise<void> {
   const getSource = typeof source === "function" ? source : () => source;
-  const ctx = new HastVisitorContextImpl(handle, getSource, filename);
+  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL);
   const returnBuffer = new CommandBuffer();
   const resolver = new LazyChildResolver(handle);
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));

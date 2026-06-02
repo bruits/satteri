@@ -310,7 +310,7 @@ describe("Directive MDAST conformance", () => {
   // keep its `_mdxExplicitJsx` marking, as the deleted label pass used to set.
   describe("MDX JSX inside directive labels", () => {
     const labelChildren = (md: string, depth: number): any[] => {
-      let node: any = mdxToMdast(md, { features: { directive: true } } as any);
+      let node: any = mdxToMdast(md, { features: { directive: true } });
       for (let i = 0; i < depth; i++) node = node.children[0];
       return node.children;
     };

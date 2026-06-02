@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { test, expect, vi } from "vitest";
 import { markdownToHtml, defineMdastPlugin } from "../src/index.js";
 import type { MdastNode } from "../src/types.js";
 
@@ -58,6 +58,31 @@ test("a transform stranded under a removed node is dropped, not fatal", () => {
   expect(html).not.toContain("TIP"); // the stranded tip transform was dropped
   expect(html).not.toContain("outer"); // the whole note subtree is gone
   expect(html.trim()).toBe("");
+});
+
+test("dropping a stranded transform warns, naming the plugin", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const plugin = defineMdastPlugin({
+      name: "remove-outer",
+      containerDirective(node, ctx) {
+        if (node.name === "note") {
+          ctx.removeNode(node);
+          return;
+        }
+        if (node.name === "tip") {
+          return { type: "paragraph", children: [{ type: "text", value: "TIP" }] } as MdastNode;
+        }
+      },
+    });
+    markdownToHtml(nestedDirectives, { features, mdastPlugins: [plugin] });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = warn.mock.calls[0]?.[0] as string;
+    expect(message).toContain('plugin "remove-outer"');
+    expect(message).toContain("dropped");
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 test("a passed-through child is fully transformed before the next plugin runs", () => {

@@ -158,13 +158,13 @@ test("context.source returns the source text", () => {
   expect(capturedSource).toBe("# Hello\n\nWorld");
 });
 
-test("context.filename exposes a file URL passed as a URL", () => {
+test("context.fileURL exposes a file URL passed as a URL", () => {
   const { handle, source } = setup();
   let captured: URL | undefined;
   const fileURL = new URL("file:///project/test.md");
   const plugin = {
     heading(_node: MdastNode, ctx: MdastVisitorContext) {
-      captured = ctx.filename;
+      captured = ctx.fileURL;
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
@@ -173,13 +173,13 @@ test("context.filename exposes a file URL passed as a URL", () => {
   expect(captured?.href).toBe("file:///project/test.md");
 });
 
-test("context.filename preserves a URL with a percent-encoded path", () => {
+test("context.fileURL preserves a URL with a percent-encoded path", () => {
   const { handle, source } = setup();
   let captured: URL | undefined;
   const fileURL = new URL("file:///home/My Docs/test.md");
   const plugin = {
     heading(_node: MdastNode, ctx: MdastVisitorContext) {
-      captured = ctx.filename;
+      captured = ctx.fileURL;
     },
   };
   const subs = resolveMdastSubscriptions(plugin);
