@@ -64,7 +64,12 @@ export interface HastDiagnostic {
 
 export interface HastVisitorContext {
   readonly source: string;
-  readonly filename: string;
+  /**
+   * The URL of the document being processed (the compile `filename` option),
+   * or `undefined` when none was given. Use `fileURLToPath(ctx.filename)` for a
+   * decoded filesystem path.
+   */
+  readonly filename: URL | undefined;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastNode): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastNode): void;
@@ -109,9 +114,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #pendingNodes: Map<number, HastNode> = new Map();
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
-  readonly filename: string;
+  readonly filename: URL | undefined;
 
-  constructor(handle: HastHandle, getSource: () => string, filename: string) {
+  constructor(handle: HastHandle, getSource: () => string, filename: URL | undefined) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.filename = filename;
@@ -774,7 +779,7 @@ export function visitHastHandle(
   plugin: HastVisitorInstance,
   subs: ResolvedSubscription[],
   source: string | (() => string),
-  filename: string,
+  filename: URL | undefined,
 ): void | Promise<void> {
   const getSource = typeof source === "function" ? source : () => source;
   const ctx = new HastVisitorContextImpl(handle, getSource, filename);

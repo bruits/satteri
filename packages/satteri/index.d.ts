@@ -10,7 +10,7 @@ export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle,
 export declare function applyCommandsToHandle(handle: HastHandle, commandBuf: Uint8Array): void
 
 /** Apply a command buffer to an MDAST handle in-place. */
-export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): void
+export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): number
 
 /** Compile a HAST handle's arena to MDX JavaScript. Does not consume the handle. */
 export declare function compileHandle(handle: HastHandle, options?: JsMdxOptions | undefined | null): string

@@ -559,7 +559,12 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         // than silently produce an invalid tree where the
                         // would-be paragraph-close ends up closing the
                         // dangling JSX node.
-                        if matches!(item.body, ItemBody::Paragraph | ItemBody::TightParagraph) {
+                        if matches!(
+                            item.body,
+                            ItemBody::Paragraph
+                                | ItemBody::TightParagraph
+                                | ItemBody::DirectiveLabel
+                        ) {
                             if let Some(opened_at) = paragraph_open_depth.pop() {
                                 while builder.stack_depth() > opened_at {
                                     if let Some((name, offset, _is_flow)) = jsx_stack.pop() {
@@ -820,6 +825,21 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
+                        paragraph_open_depth.push(builder.stack_depth());
+                        inner.tree.push();
+                    }
+                    ItemBody::DirectiveLabel => {
+                        // A container directive label: a `paragraph` tagged with
+                        // `directiveLabel`, whose inline children were tokenized
+                        // by the normal inline pass.
+                        builder.open_node(MdastNodeType::Paragraph as u8);
+                        builder.set_position_current(
+                            start, end, start_line, start_col, end_line, end_col,
+                        );
+                        let para_id = builder.current_node_id();
+                        builder
+                            .arena_mut()
+                            .set_node_data(para_id, b"{\"directiveLabel\":true}".to_vec());
                         paragraph_open_depth.push(builder.stack_depth());
                         inner.tree.push();
                     }
@@ -1246,61 +1266,14 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             .map(|(k, v)| (builder.alloc_string(k), builder.alloc_string(v)))
                             .collect();
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
-                        // `label_start == label_end == 0` means no brackets at
-                        // all; any other state (including `[]`) means brackets
-                        // were present and remark emits an (possibly empty)
-                        // directive-label paragraph.
-                        let brackets_present = dir.label_start != 0 || dir.label_end != 0;
-                        let has_label_content = dir.label_start < dir.label_end;
-                        let label_text = if has_label_content {
-                            Some(source[dir.label_start..dir.label_end].to_string())
-                        } else {
-                            None
-                        };
                         builder.open_node(MdastNodeType::ContainerDirective as u8);
                         builder.set_data_current(&type_data);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        if brackets_present {
-                            let bracket_offset = dir.label_start.saturating_sub(1) as u32;
-                            let bracket_end = (dir.label_end + 1) as u32;
-                            let (para_start_line, para_start_col) =
-                                cursor.offset_to_line_col(bracket_offset);
-                            let (para_end_line, para_end_col) =
-                                cursor.offset_to_line_col(bracket_end);
-                            builder.open_node(MdastNodeType::Paragraph as u8);
-                            builder.set_position_current(
-                                bracket_offset,
-                                bracket_end,
-                                para_start_line,
-                                para_start_col,
-                                para_end_line,
-                                para_end_col,
-                            );
-                            let para_id = builder.current_node_id();
-                            builder
-                                .arena_mut()
-                                .set_node_data(para_id, b"{\"directiveLabel\":true}".to_vec());
-                            if let Some(label) = label_text {
-                                let label_sr = builder.alloc_string(&label);
-                                let (text_start_line, text_start_col) =
-                                    cursor.offset_to_line_col(dir.label_start as u32);
-                                let (text_end_line, text_end_col) =
-                                    cursor.offset_to_line_col(dir.label_end as u32);
-                                builder.add_leaf_full(
-                                    MdastNodeType::Text as u8,
-                                    dir.label_start as u32,
-                                    dir.label_end as u32,
-                                    text_start_line,
-                                    text_start_col,
-                                    text_end_line,
-                                    text_end_col,
-                                    &label_sr.as_bytes(),
-                                );
-                            }
-                            builder.close_node();
-                        }
+                        // The `[label]`, when present, is a `DirectiveLabel`
+                        // child in the first-pass tree (emitted as a tagged
+                        // paragraph), so nothing to synthesize here.
                         inner.tree.push();
                     }
                     ItemBody::LeafDirective(dir_ix) => {
@@ -1312,32 +1285,14 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             .map(|(k, v)| (builder.alloc_string(k), builder.alloc_string(v)))
                             .collect();
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
-                        let has_label = dir.label_start < dir.label_end;
                         builder.open_node(MdastNodeType::LeafDirective as u8);
                         builder.set_data_current(&type_data);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        if has_label {
-                            let label = &source[dir.label_start..dir.label_end];
-                            let label_sr = builder.alloc_string(label);
-                            let (ls_line, ls_col) =
-                                cursor.offset_to_line_col(dir.label_start as u32);
-                            let (le_line, le_col) = cursor.offset_to_line_col(dir.label_end as u32);
-                            builder.add_leaf_full(
-                                MdastNodeType::Text as u8,
-                                dir.label_start as u32,
-                                dir.label_end as u32,
-                                ls_line,
-                                ls_col,
-                                le_line,
-                                le_col,
-                                &label_sr.as_bytes(),
-                            );
-                        }
-                        builder.close_node();
-                        inner.tree.next_sibling(cur_ix);
-                        continue;
+                        // The label is the directive's inline children in the
+                        // first-pass tree; descend so the walk emits them.
+                        inner.tree.push();
                     }
 
                     ItemBody::TextDirective(dir_ix) => {
@@ -1349,32 +1304,12 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             .map(|(k, v)| (builder.alloc_string(k), builder.alloc_string(v)))
                             .collect();
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
-                        let has_label = dir.label_start < dir.label_end;
                         builder.open_node(MdastNodeType::TextDirective as u8);
                         builder.set_data_current(&type_data);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        if has_label {
-                            let label = &source[dir.label_start..dir.label_end];
-                            let label_sr = builder.alloc_string(label);
-                            let (ls_line, ls_col) =
-                                cursor.offset_to_line_col(dir.label_start as u32);
-                            let (le_line, le_col) = cursor.offset_to_line_col(dir.label_end as u32);
-                            builder.add_leaf_full(
-                                MdastNodeType::Text as u8,
-                                dir.label_start as u32,
-                                dir.label_end as u32,
-                                ls_line,
-                                ls_col,
-                                le_line,
-                                le_col,
-                                &label_sr.as_bytes(),
-                            );
-                        }
-                        builder.close_node();
-                        inner.tree.next_sibling(cur_ix);
-                        continue;
+                        inner.tree.push();
                     }
 
                     ItemBody::Text { backslash_escaped } => {
@@ -1880,24 +1815,6 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         }
         if memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some() {
             crate::post_passes::gfm_autolink_literal_pass(&mut arena, source_bytes);
-        }
-    }
-
-    if options.contains(Options::ENABLE_DIRECTIVE) {
-        // Directive labels are stored as a single Text node today. Remark
-        // inline-parses them so constructs like `` `code` `` inside
-        // `:::tip[Set a \`baseUrl\`]` end up as inlineCode. We mirror the
-        // common case (backticks) here as a post-pass.
-        if memchr::memchr(b'`', source_bytes).is_some() {
-            crate::post_passes::directive_label_inline_code_pass(&mut arena);
-        }
-        #[cfg(feature = "mdx")]
-        if options.contains(Options::ENABLE_MDX)
-            && memchr::memchr2(b'<', b'{', source_bytes).is_some()
-        {
-            // Same idea for JSX tags inside a directive label —
-            // `:::note[The <code>x</code> property]`.
-            crate::post_passes::directive_label_jsx_pass(&mut arena);
         }
     }
 

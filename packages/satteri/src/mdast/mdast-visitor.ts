@@ -119,9 +119,14 @@ export class MdastVisitorContext {
   readonly #diagnostics: MdastDiagnostic[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
-  readonly filename: string;
+  /**
+   * The URL of the document being processed (the compile `filename` option),
+   * or `undefined` when none was given. Use `fileURLToPath(ctx.filename)` for a
+   * decoded filesystem path.
+   */
+  readonly filename: URL | undefined;
 
-  constructor(handle: MdastHandle, getSource: () => string, filename: string) {
+  constructor(handle: MdastHandle, getSource: () => string, filename: URL | undefined) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.filename = filename;
@@ -726,7 +731,7 @@ export function visitMdastHandle(
   plugin: MdastPluginInstance,
   subs: MdastSubscription[],
   source: string | (() => string),
-  filename: string,
+  filename: URL | undefined,
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const context = new MdastVisitorContext(handle, getSource, filename);

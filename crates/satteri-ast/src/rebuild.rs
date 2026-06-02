@@ -61,6 +61,35 @@ pub fn rebuild<K: ArenaKind>(
     arena: &Arena<K>,
     patches: &[Patch<K>],
 ) -> Result<Arena<K>, CommandError> {
+    let result = rebuild_lenient(arena, patches)?;
+    if let Some(&anchor) = result.dropped.first() {
+        return Err(CommandError::PatchOnRemovedSubtree(anchor));
+    }
+    Ok(result.arena)
+}
+
+/// Outcome of [`rebuild_lenient`].
+pub struct RebuildResult<K: ArenaKind> {
+    pub arena: Arena<K>,
+    /// Anchors whose patch landed inside a subtree that an ancestor's
+    /// `Remove`/`Replace` discarded, so the patch could not be applied. This
+    /// is non-empty when a transform subsumes a descendant transform — e.g. a
+    /// `containerDirective` visitor that replaces both an outer directive and
+    /// the nested one it contains in a single pass. The caller re-runs the
+    /// plugin so the descendant, now re-parented into the replacement, is
+    /// visited there instead (mirroring `unist-util-visit` descending into a
+    /// replaced node).
+    pub dropped: Vec<u32>,
+}
+
+/// Like [`rebuild`], but instead of erroring when a patch targets a node inside
+/// a removed/replaced subtree, drops that patch and reports its anchor in
+/// [`RebuildResult::dropped`]. Genuine misuse that can't be re-derived
+/// (`Wrap`/`PrependChild`/`AppendChild` on a removed anchor) still errors.
+pub fn rebuild_lenient<K: ArenaKind>(
+    arena: &Arena<K>,
+    patches: &[Patch<K>],
+) -> Result<RebuildResult<K>, CommandError> {
     let mut patch_map: FxHashMap<u32, Vec<&Patch<K>>> = FxHashMap::default();
     for patch in patches {
         let node_id = match patch {
@@ -115,14 +144,19 @@ pub fn rebuild<K: ArenaKind>(
 
     // Any anchor in patch_map that wasn't reached during the walk lives
     // inside a removed subtree (or a Replace { keep_children: false }
-    // subtree), so its patch was silently dropped. Surface that.
-    for &anchor in patch_map.keys() {
-        if !visited.contains(&anchor) {
-            return Err(CommandError::PatchOnRemovedSubtree(anchor));
-        }
-    }
+    // subtree), so its patch was not applied. Report it so the caller can
+    // re-visit the replacement that subsumed it.
+    let mut dropped: Vec<u32> = patch_map
+        .keys()
+        .copied()
+        .filter(|anchor| !visited.contains(anchor))
+        .collect();
+    dropped.sort_unstable();
 
-    Ok(builder.finish())
+    Ok(RebuildResult {
+        arena: builder.finish(),
+        dropped,
+    })
 }
 
 /// Returns `true` if the node was emitted (or a replacement was emitted),
@@ -1364,6 +1398,101 @@ mod tests {
         match rebuild(&orig, &patches) {
             Err(CommandError::PatchOnRemovedSubtree(id)) => assert_eq!(id, text_in_heading),
             other => panic!("expected PatchOnRemovedSubtree, got {other:?}"),
+        }
+    }
+
+    /// `rebuild_lenient` drops a patch stranded inside a removed/replaced
+    /// subtree instead of erroring, and reports its anchor so the caller can
+    /// re-visit. The rest of the rebuild still applies.
+    #[test]
+    fn rebuild_lenient_drops_and_reports_stranded_patch() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+        let text_in_heading = orig.get_children(heading_id)[0];
+
+        // Replace the heading (dropping its subtree), and also replace the text
+        // inside it — the kind of pair a nested-directive transform produces.
+        let mut replacement = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        replacement.open_node(MdastNodeType::Paragraph as u8);
+        replacement.close_node();
+        let replacement = replacement.finish();
+
+        let patches = vec![
+            Patch::Replace {
+                node_id: heading_id,
+                new_tree: replacement,
+                keep_children: false,
+            },
+            Patch::Replace {
+                node_id: text_in_heading,
+                new_tree: single_node_arena(MdastNodeType::Break),
+                keep_children: false,
+            },
+        ];
+        let result = rebuild_lenient(&orig, &patches).expect("lenient rebuild should not error");
+        assert_eq!(result.dropped, vec![text_in_heading]);
+        // The heading replacement still applied: root's first child is the new Paragraph.
+        let root_children = result.arena.get_children(0);
+        assert_eq!(
+            result.arena.get_node(root_children[0]).node_type,
+            MdastNodeType::Paragraph as u8
+        );
+    }
+
+    /// Every patch stranded under a removed subtree is reported, not just the
+    /// first — the caller needs the full count to decide whether to re-visit.
+    #[test]
+    fn rebuild_lenient_reports_every_stranded_anchor() {
+        // Root(0) -> Heading(1) -> Text(2), Paragraph(3) -> Text(4)
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+        let text_in_heading = orig.get_children(heading_id)[0];
+        let para_id = orig.get_children(0)[1];
+        let text_in_para = orig.get_children(para_id)[0];
+
+        let patches = vec![
+            // Remove both top-level nodes, stranding the text inside each.
+            Patch::Remove {
+                node_id: heading_id,
+            },
+            Patch::Remove { node_id: para_id },
+            Patch::Replace {
+                node_id: text_in_heading,
+                new_tree: single_node_arena(MdastNodeType::Break),
+                keep_children: false,
+            },
+            Patch::InsertBefore {
+                node_id: text_in_para,
+                new_tree: single_node_arena(MdastNodeType::Break),
+            },
+        ];
+        let result = rebuild_lenient(&orig, &patches).expect("lenient rebuild should not error");
+        assert_eq!(result.dropped, vec![text_in_heading, text_in_para]);
+        // Both removals applied: the root is now empty.
+        assert_eq!(result.arena.get_children(0).len(), 0);
+    }
+
+    /// Leniency only covers the "stranded inside a removed subtree" case. A
+    /// `Wrap` (or child-add) on a node that is itself removed is unrecoverable
+    /// misuse and still errors in `rebuild_lenient`, not just in `rebuild`.
+    #[test]
+    fn rebuild_lenient_still_errors_on_wrap_on_removed() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+
+        let patches = vec![
+            Patch::Wrap {
+                node_id: heading_id,
+                parent_tree: single_node_arena(MdastNodeType::Blockquote),
+            },
+            Patch::Remove {
+                node_id: heading_id,
+            },
+        ];
+        match rebuild_lenient(&orig, &patches) {
+            Err(CommandError::WrapOnRemovedNode(id)) => assert_eq!(id, heading_id),
+            Err(other) => panic!("expected WrapOnRemovedNode, got {other:?}"),
+            Ok(_) => panic!("expected WrapOnRemovedNode error, got Ok"),
         }
     }
 

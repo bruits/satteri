@@ -98,56 +98,60 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MdastHandle = any;
 
-type MdastPipelineResult = { handle: MdastHandle; pendingCommands: Uint8Array | null };
+type MdastPipelineResult = { handle: MdastHandle };
+
+// Upper bound on how many times one plugin is re-visited within a single
+// `runMdastPluginsOnHandle` call. Each legitimate level of transform nesting
+// needs one extra pass (outer aside, then inner, …); this caps a plugin that
+// keeps stranding patches without converging so it can't loop forever.
+const MAX_MDAST_REVISITS = 16;
 
 function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginInput[],
-  filename: string,
+  filename: URL | undefined,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
-  let pendingCommands: Uint8Array | null = null;
-
-  let i = 0;
-  const runNext = (): MdastPipelineResult | Promise<MdastPipelineResult> => {
-    while (i < plugins.length) {
-      const idx = i++;
-      const raw = plugins[idx]!;
-      const plugin: MdastPluginDefinition = typeof raw === "function" ? raw() : raw;
-      const subs = resolveMdastSubscriptions(plugin as MdastPluginInstance);
+  // Run one plugin to a fixpoint. After applying a pass, the native layer
+  // reports how many patches were dropped because an ancestor's replacement
+  // discarded the subtree they targeted. A non-zero count means a transform
+  // subsumed a descendant transform (e.g. a `:::tip` nested in a `:::note`,
+  // both turned into asides in one pass); the descendant is now re-parented
+  // into the replacement, so we re-visit to give it its turn — mirroring how
+  // `unist-util-visit` descends into a replaced node.
+  const runPlugin = (plugin: MdastPluginInstance): void | Promise<void> => {
+    const subs = resolveMdastSubscriptions(plugin);
+    let pass = 0;
+    const onePass = (): void | Promise<void> => {
       const result = visitMdastHandle(
         handle,
-        plugin as MdastPluginInstance,
+        plugin,
         subs,
         () => getHandleSource(handle),
         filename,
       );
-
-      if (result instanceof Promise) {
-        return result.then((r) => {
-          applyMdastResult(r, idx, plugins.length, handle);
-          return runNext();
-        });
-      }
-
-      applyMdastResult(result, idx, plugins.length, handle);
-    }
-    return { handle, pendingCommands };
+      const apply = (r: {
+        commandBuffer: Uint8Array;
+        hasMutations: boolean;
+      }): void | Promise<void> => {
+        if (!r.hasMutations) return;
+        const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
+        if (dropped > 0 && ++pass < MAX_MDAST_REVISITS) return onePass();
+      };
+      return result instanceof Promise ? result.then(apply) : apply(result);
+    };
+    return onePass();
   };
 
-  function applyMdastResult(
-    result: { commandBuffer: Uint8Array; hasMutations: boolean },
-    idx: number,
-    total: number,
-    h: MdastHandle,
-  ) {
-    if (result.hasMutations) {
-      if (idx === total - 1) {
-        pendingCommands = result.commandBuffer;
-      } else {
-        applyCommandsToMdastHandle(h, result.commandBuffer);
-      }
+  let i = 0;
+  const runNext = (): MdastPipelineResult | Promise<MdastPipelineResult> => {
+    while (i < plugins.length) {
+      const raw = plugins[i++]!;
+      const plugin: MdastPluginDefinition = typeof raw === "function" ? raw() : raw;
+      const r = runPlugin(plugin as MdastPluginInstance);
+      if (r instanceof Promise) return r.then(runNext);
     }
-  }
+    return { handle };
+  };
 
   return runNext();
 }
@@ -156,7 +160,7 @@ function runHastPluginsOnHandle(
   handle: HastHandle,
   plugins: HastPluginInput[],
   source: string,
-  filename: string,
+  filename: URL | undefined,
 ): void | Promise<void> {
   if (plugins.length === 0) return;
 
@@ -358,7 +362,12 @@ export interface CompileOptions {
   mdastPlugins?: MdastPluginInput[];
   hastPlugins?: HastPluginInput[];
   features?: Features;
-  filename?: string;
+  /**
+   * The document being processed, surfaced to plugins as `ctx.filename`. Must
+   * be a `URL` (e.g. Astro's `fileURL`); convert a filesystem path with Node's
+   * `pathToFileURL` before passing it.
+   */
+  filename?: URL;
 }
 
 /**
@@ -491,7 +500,7 @@ export function markdownToHtml(
   source: string,
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
-  const { mdastPlugins = [], hastPlugins = [], features, filename = "<unknown>" } = options;
+  const { mdastPlugins = [], hastPlugins = [], features, filename } = options;
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
 
@@ -547,13 +556,7 @@ export function mdxToJs(
   source: string,
   options: MdxCompileOptions = {},
 ): MdxToJsResult | Promise<MdxToJsResult> {
-  const {
-    mdastPlugins = [],
-    hastPlugins = [],
-    features,
-    filename = "<unknown>",
-    ...mdxFields
-  } = options;
+  const { mdastPlugins = [], hastPlugins = [], features, filename, ...mdxFields } = options;
   const mdxOptions = mdxOptionsToNative(mdxFields);
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
@@ -656,7 +659,7 @@ function createHastHandleFromMdast(
   source: string,
   mdastPlugins: MdastPluginInput[],
   mdx: boolean,
-  filename: string,
+  filename: URL | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nativeFeatures?: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -670,9 +673,6 @@ function createHastHandleFromMdast(
   // on success, but if any step here throws the handle would otherwise leak.
   const finalize = (r: MdastPipelineResult): HastWithFrontmatter => {
     try {
-      if (r.pendingCommands) {
-        applyCommandsToMdastHandle(r.handle, r.pendingCommands);
-      }
       const frontmatter = readFrontmatter(r.handle);
       const hastHandle = convertMdastToHastHandle(r.handle, nativeConvertOptions);
       return { hastHandle, frontmatter };
@@ -683,7 +683,7 @@ function createHastHandleFromMdast(
 
   try {
     if (mdastPlugins.length === 0) {
-      return finalize({ handle: mdastHandle, pendingCommands: null });
+      return finalize({ handle: mdastHandle });
     }
 
     const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, filename);

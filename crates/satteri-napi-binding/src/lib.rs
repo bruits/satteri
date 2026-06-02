@@ -551,7 +551,10 @@ pub fn walk_mdast_handle(
 
 /// Apply a command buffer to an MDAST handle in-place.
 #[napi]
-pub fn apply_commands_to_mdast_handle(handle: &MdastHandle, command_buf: Uint8Array) -> Result<()> {
+pub fn apply_commands_to_mdast_handle(
+    handle: &MdastHandle,
+    command_buf: Uint8Array,
+) -> Result<u32> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -560,10 +563,14 @@ pub fn apply_commands_to_mdast_handle(handle: &MdastHandle, command_buf: Uint8Ar
         &mut *arena,
         satteri_arena::Arena::<Mdast>::new(String::new()),
     );
-    let new_arena = satteri_plugin_api::apply_mdast_commands(owned, &command_buf, &parse_markdown)
-        .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    // Lenient: patches stranded inside a subtree replaced earlier in the same
+    // pass are dropped rather than fatal. The returned count lets the JS runner
+    // re-visit the plugin so a transform nested inside the replacement runs.
+    let (new_arena, dropped) =
+        satteri_plugin_api::apply_mdast_commands_lenient(owned, &command_buf, &parse_markdown)
+            .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     *arena = new_arena;
-    Ok(())
+    Ok(dropped.len() as u32)
 }
 
 /// Convert an MDAST handle to a HAST handle. The MDAST handle is consumed (emptied).

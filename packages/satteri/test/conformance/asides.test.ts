@@ -115,6 +115,9 @@ function transformAsides(tree: MdastRoot): void {
           title = nodeText(firstChild as Parameters<typeof nodeText>[0]);
           children.shift();
         }
+        // Recurse into the body first so a nested directive becomes an aside too
+        // (innermost-first), matching how the real remarkAsides plugin composes.
+        walk({ children });
         kids[i] = buildAside(
           variant,
           title,
@@ -200,6 +203,40 @@ describe("Starlight asides plugin (fresh-node data hints, full integration)", ()
 
   test("aside label preserves inline `code`", () => {
     const md = `:::note[See \`config\`]\nDetails.\n:::`;
+    expect(satteriHtml(md)).toBe(referenceHtml(md));
+  });
+
+  // Issue 3: emphasis/strong inside a directive label (not just inline code).
+  test("aside label parses emphasis and strong", () => {
+    const md = `:::note[Custom **strong with _emphasis_** Label]\nSome text\n:::`;
+    expect(satteriHtml(md)).toBe(referenceHtml(md));
+  });
+
+  test("aside label parses a link", () => {
+    const md = `:::tip[See [the docs](https://example.com)]\nBody.\n:::`;
+    expect(satteriHtml(md)).toBe(referenceHtml(md));
+  });
+
+  // Issue 4: a container directive whose body ends with an HTML block must still
+  // close on the `:::` fence rather than swallowing it into the HTML block.
+  test("aside body ending in an HTML block closes cleanly", () => {
+    const md = `:::note\nParagraph.\n\n<details>\n<summary>See more</summary>\n\nMore.\n\n</details>\n:::`;
+    expect(satteriHtml(md)).toBe(referenceHtml(md));
+  });
+
+  // Issue 1: a nested directive inside a transformed directive must transform too.
+  test("nested asides", () => {
+    const md = `::::note\nNote contents.\n\n:::tip\nNested tip.\n:::\n\n::::`;
+    expect(satteriHtml(md)).toBe(referenceHtml(md));
+  });
+
+  test("nested asides with custom titles", () => {
+    const md = `:::::caution[Caution with a custom title]\nNested caution.\n\n::::note\nNested note.\n\n:::tip[Tip with a custom title]\nNested tip.\n:::\n\n::::\n\n:::::`;
+    expect(satteriHtml(md)).toBe(referenceHtml(md));
+  });
+
+  test("triply nested asides", () => {
+    const md = `:::::note\nA\n\n::::tip\nB\n\n:::caution\nC\n:::\n\n::::\n\n:::::`;
     expect(satteriHtml(md)).toBe(referenceHtml(md));
   });
 });

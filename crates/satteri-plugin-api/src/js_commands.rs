@@ -989,12 +989,29 @@ fn read_hast_payload(reader: &mut BufReader<'_>) -> Result<(Arena<Hast>, bool), 
 /// let _ = apply_mdast_commands(arena, &[], &parse_markdown);
 /// ```
 pub fn apply_mdast_commands(
-    mut arena: Arena<Mdast>,
+    arena: Arena<Mdast>,
     command_buf: &[u8],
     parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
 ) -> Result<Arena<Mdast>, CommandError> {
+    let (arena, dropped) = apply_mdast_commands_lenient(arena, command_buf, parse_markdown)?;
+    if let Some(anchor) = dropped.first() {
+        return Err(CommandError::PatchOnRemovedSubtree(*anchor));
+    }
+    Ok(arena)
+}
+
+/// Like [`apply_mdast_commands`], but rather than erroring when a patch targets
+/// a node inside a removed/replaced subtree, drops it and returns the dropped
+/// anchors. The JS plugin runner uses the count to decide whether to re-visit
+/// the plugin so a transform nested inside a just-applied replacement (e.g. a
+/// `:::tip` inside a `:::note` both turned into asides) gets its turn.
+pub fn apply_mdast_commands_lenient(
+    mut arena: Arena<Mdast>,
+    command_buf: &[u8],
+    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+) -> Result<(Arena<Mdast>, Vec<u32>), CommandError> {
     if command_buf.is_empty() {
-        return Ok(arena);
+        return Ok((arena, Vec::new()));
     }
 
     let mut patches: Vec<Patch<Mdast>> = Vec::new();
@@ -1073,9 +1090,10 @@ pub fn apply_mdast_commands(
     }
 
     if patches.is_empty() {
-        Ok(arena)
+        Ok((arena, Vec::new()))
     } else {
-        satteri_ast::rebuild::rebuild(&arena, &patches)
+        let result = satteri_ast::rebuild::rebuild_lenient(&arena, &patches)?;
+        Ok((result.arena, result.dropped))
     }
 }
 

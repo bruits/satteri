@@ -121,6 +121,10 @@ pub(crate) enum ItemBody {
     ContainerDirective(u8, DirectiveIndex), // (fence length, directive data)
     LeafDirective(DirectiveIndex),
     TextDirective(DirectiveIndex),
+    // A container directive's `[label]`, holding inline content. Emitted as a
+    // `paragraph` with `data.directiveLabel = true`. Its children are tokenized
+    // by the normal inline pass, so emphasis/strong/links resolve naturally.
+    DirectiveLabel,
     List(bool, u8, u64),   // is_tight, list character, list start index
     ListItem(usize, bool), // indent level, spread (loose item)
     FootnoteDefinition(CowIndex),
