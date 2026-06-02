@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-satteri",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Vite plugin for processing Markdown and MDX with Sätteri",
   "keywords": [
     "markdown",

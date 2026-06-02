@@ -1,5 +1,17 @@
 # satteri
 
+## 0.2.0 — 2026-06-02
+
+### Minor changes
+
+- [c69e907](https://github.com/bruits/satteri/commit/c69e9073f3f101faf8058f05f6e6fea4466039fe) Adds an `mdx` cargo feature (enabled by default) across the Rust crates. Disabling it compiles out all MDX support. In the future, this will be used to ship a "lite" version of Sätteri for environments where MDX is not needed and bundle size is a concern.
+  
+  On Linux the native addon drops from ~2.99 MB to ~1.36 MB when disabling MDX. — Thanks @Princesseuh!
+
+### Patch changes
+
+- Updated dependencies: satteri-ast (Cargo)@0.3.0, satteri-mdxjs (Cargo)@0.3.0, satteri-pulldown-cmark (Cargo)@0.5.0
+
 ## 0.1.20 — 2026-05-19
 
 ### Patch changes

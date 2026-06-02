@@ -1,5 +1,48 @@
 # satteri-mdxjs
 
+## 0.3.0 — 2026-06-02
+
+### Minor changes
+
+- [8d84807](https://github.com/bruits/satteri/commit/8d84807fe572950f47f0017f68a3b753dd9e90c3) Adds granular `features.gfm` control. Footnotes can now be customized without requiring a plugin. `backContent` and `backLabel` each accept either a string template or a JS callback `(referenceNumber, rerunIndex) => string` for cases that need to branch on the index.
+  
+  ```ts
+  // Disable footnotes, keep the rest of GFM.
+  markdownToHtml(source, { features: { gfm: { footnotes: false } } });
+  
+  // String templates.
+  markdownToHtml(source, {
+    features: {
+      gfm: {
+        footnotes: {
+          label: "Notes de bas de page",
+          backContent: "↑",
+          backLabel: "Retour à la référence {reference}",
+        },
+      },
+    },
+  });
+  
+  // Callbacks for per-backref control.
+  markdownToHtml(source, {
+    features: {
+      gfm: {
+        footnotes: {
+          backLabel: (n, k) => (k > 1 ? `Retour ${n}-${k}` : `Retour ${n}`),
+          backContent: (_n, k) => (k === 1 ? "↑" : `↑${k}`),
+        },
+      },
+    },
+  });
+  ```
+  
+  In a string template, `{reference}` expands to the footnote number on the first backref and to `number-K` on repeated backrefs to the same definition. Template mode also appends `<sup>K</sup>` after the back content on reruns; callback mode skips the auto-sup and lets the callback return the final content. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [18f269f](https://github.com/bruits/satteri/commit/18f269f216a8e46240f3e7d71ca52c99aee9a709) Fixed inline `style` custom properties (`--*`) being lowercased in MDX, which broke `var()` references to case-sensitive names like `--tmLabel` — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.2.1, satteri-ast (Cargo)@0.3.0, satteri-pulldown-cmark (Cargo)@0.5.0
+
 ## 0.2.3 — 2026-05-19
 
 ### Patch changes

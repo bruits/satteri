@@ -1,5 +1,63 @@
 # satteri-napi
 
+## 0.3.0 — 2026-06-02
+
+### Minor changes
+
+- [8d84807](https://github.com/bruits/satteri/commit/8d84807fe572950f47f0017f68a3b753dd9e90c3) Adds granular `features.gfm` control. Footnotes can now be customized without requiring a plugin. `backContent` and `backLabel` each accept either a string template or a JS callback `(referenceNumber, rerunIndex) => string` for cases that need to branch on the index.
+  
+  ```ts
+  // Disable footnotes, keep the rest of GFM.
+  markdownToHtml(source, { features: { gfm: { footnotes: false } } });
+  
+  // String templates.
+  markdownToHtml(source, {
+    features: {
+      gfm: {
+        footnotes: {
+          label: "Notes de bas de page",
+          backContent: "↑",
+          backLabel: "Retour à la référence {reference}",
+        },
+      },
+    },
+  });
+  
+  // Callbacks for per-backref control.
+  markdownToHtml(source, {
+    features: {
+      gfm: {
+        footnotes: {
+          backLabel: (n, k) => (k > 1 ? `Retour ${n}-${k}` : `Retour ${n}`),
+          backContent: (_n, k) => (k === 1 ? "↑" : `↑${k}`),
+        },
+      },
+    },
+  });
+  ```
+  
+  In a string template, `{reference}` expands to the footnote number on the first backref and to `number-K` on repeated backrefs to the same definition. Template mode also appends `<sup>K</sup>` after the back content on reruns; callback mode skips the auto-sup and lets the callback return the final content. — Thanks @Princesseuh!
+- [8d84807](https://github.com/bruits/satteri/commit/8d84807fe572950f47f0017f68a3b753dd9e90c3) Adds granular `features.math` control. `singleDollarTextMath: false` keeps single-`$` constructs as literal text (so prose can carry currency like "$50 to $100") while `$$ ... $$` still parses as display math.
+  
+  ```ts
+  markdownToHtml(source, {
+    features: { math: { singleDollarTextMath: false } },
+  });
+  ```
+   — Thanks @Princesseuh!
+- [b8d8fa8](https://github.com/bruits/satteri/commit/b8d8fa8d56cfef1e1c35a5a37e9c61ed421d7bac) Nested directives now transform correctly. When a plugin turns a directive into something else (for example a `containerDirective` visitor that renders both an outer `:::note` and a nested `:::tip` as asides), the inner one is transformed too — in a single pass.
+  
+  A node returned from a visitor that passes existing children through (e.g. `{ ...node, children: [...node.children] }`) now keeps those children's identity, so a transform queued on a nested one in the same pass still applies. Previously this crashed with `patch targets node N inside a removed subtree`.
+  
+  Note: a visitor's own freshly-built nodes are not re-walked by that same visitor. Produce their final shape directly, or hand off to a later plugin (which sees the materialized tree). — Thanks @Princesseuh!
+- [c69e907](https://github.com/bruits/satteri/commit/c69e9073f3f101faf8058f05f6e6fea4466039fe) Adds an `mdx` cargo feature (enabled by default) across the Rust crates. Disabling it compiles out all MDX support. In the future, this will be used to ship a "lite" version of Sätteri for environments where MDX is not needed and bundle size is a concern.
+  
+  On Linux the native addon drops from ~2.99 MB to ~1.36 MB when disabling MDX. — Thanks @Princesseuh!
+
+### Patch changes
+
+- Updated dependencies: satteri-arena (Cargo)@0.2.1, satteri-ast (Cargo)@0.3.0, satteri-mdxjs (Cargo)@0.3.0, satteri-plugin-api (Cargo)@0.2.0, satteri-pulldown-cmark (Cargo)@0.5.0
+
 ## 0.2.3 — 2026-05-19
 
 ### Patch changes
