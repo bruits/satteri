@@ -1,5 +1,12 @@
 # satteri-plugin-api
 
+## 0.2.1 — 2026-06-03
+
+### Patch changes
+
+- [c91de73](https://github.com/bruits/satteri/commit/c91de73b75420934819c4488101aa9589be7f39c) Made HAST plugins match MDAST when a transform targets a node removed or replaced earlier in the same pass: the stranded transform is now dropped with a warning instead of throwing a fatal error. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.3.1
+
 ## 0.2.0 — 2026-06-02
 
 ### Minor changes
