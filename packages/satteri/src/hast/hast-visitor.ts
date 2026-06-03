@@ -93,33 +93,14 @@ export interface HastVisitorContext {
   getDiagnostics(): HastDiagnostic[];
 }
 
-/**
- * Serialize a HastNode for the command buffer. Marks each node `_hast: true`,
- * and — except at the root, which is the new replacement content — emits a
- * reused (materialized) node as a `{ _ref: id }` placeholder so the rebuild
- * splices the original in place (preserving its id, applying any pending patch
- * on it) instead of rebuilding it fresh.
- */
-function markHast(node: HastNode): Record<string, unknown> {
-  return markHastNode(node, true);
-}
-
-function markHastNode(node: HastNode, isRoot: boolean): Record<string, unknown> {
-  if (!isRoot) {
-    const id = nodeIdMap.get(node) ?? (node as HastNodeInternal)._nodeId;
-    if (typeof id === "number") return { _ref: id };
-  }
-  const obj: Record<string, unknown> = { _hast: true, type: node.type };
-  if ("tagName" in node) obj.tagName = node.tagName;
-  if ("properties" in node) obj.properties = node.properties;
-  if ("value" in node) obj.value = node.value;
-  if ("name" in node) obj.name = node.name;
-  if ("attributes" in node) obj.attributes = node.attributes;
-  if ("data" in node && node.data != null) obj.data = node.data;
-  if ("children" in node) {
-    obj.children = node.children.map((c) => markHastNode(c, false));
-  }
-  return obj;
+/** The arena id of a HAST node when it is an existing (reused) node, else
+ *  undefined for a freshly-built one. Drives the binary encoder's `_ref`
+ *  placeholders, so a passed-through child keeps its identity (and any patch
+ *  queued on it) instead of being rebuilt fresh. */
+function reusedId(node: unknown): number | undefined {
+  if (node === null || typeof node !== "object") return undefined;
+  const id = nodeIdMap.get(node) ?? (node as HastNodeInternal)._nodeId;
+  return typeof id === "number" ? id : undefined;
 }
 
 function nid(node: HastNode): number {
@@ -127,7 +108,7 @@ function nid(node: HastNode): number {
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
-  readonly #commandBuffer: CommandBuffer = new CommandBuffer();
+  readonly #commandBuffer: CommandBuffer = new CommandBuffer(reusedId);
   readonly #diagnostics: HastDiagnostic[] = [];
   /** Track accumulated node state for multiple setProperty calls on the same node. */
   readonly #pendingNodes: Map<number, HastNode> = new Map();
@@ -153,28 +134,28 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   replaceNode(node: HastNode, newNode: HastNode): void {
     const id = nid(node);
-    this.#commandBuffer.replaceRawJson(id, JSON.stringify(markHast(newNode)));
+    this.#commandBuffer.replace(id, newNode);
     this.#pendingNodes.set(id, newNode);
   }
 
   insertBefore(node: HastNode, newNode: HastNode): void {
-    this.#commandBuffer.insertBeforeRawJson(nid(node), JSON.stringify(markHast(newNode)));
+    this.#commandBuffer.insertBefore(nid(node), newNode);
   }
 
   insertAfter(node: HastNode, newNode: HastNode): void {
-    this.#commandBuffer.insertAfterRawJson(nid(node), JSON.stringify(markHast(newNode)));
+    this.#commandBuffer.insertAfter(nid(node), newNode);
   }
 
   wrapNode(node: HastNode, parentNode: HastNode): void {
-    this.#commandBuffer.wrapNodeRawJson(nid(node), JSON.stringify(markHast(parentNode)));
+    this.#commandBuffer.wrapNode(nid(node), parentNode);
   }
 
   prependChild(node: HastNode, childNode: HastNode): void {
-    this.#commandBuffer.prependChildRawJson(nid(node), JSON.stringify(markHast(childNode)));
+    this.#commandBuffer.prependChild(nid(node), childNode);
   }
 
   appendChild(node: HastNode, childNode: HastNode): void {
-    this.#commandBuffer.appendChildRawJson(nid(node), JSON.stringify(markHast(childNode)));
+    this.#commandBuffer.appendChild(nid(node), childNode);
   }
 
   setProperty(node: HastNode, key: string, value: unknown): void {
@@ -738,7 +719,7 @@ function handleVisitResult(
     list.push({ nodeId, promise: result, originalNode });
     return list;
   }
-  returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
+  returnBuffer.replace(nodeId, result);
   return deferred;
 }
 
@@ -817,7 +798,7 @@ export function visitHastHandle(
 ): number | Promise<number> {
   const getSource = typeof source === "function" ? source : () => source;
   const ctx = new HastVisitorContextImpl(handle, getSource, fileURL);
-  const returnBuffer = new CommandBuffer();
+  const returnBuffer = new CommandBuffer(reusedId);
   const resolver = new LazyChildResolver(handle);
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
   const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
@@ -830,7 +811,7 @@ export function visitHastHandle(
     ).then((results) => {
       for (const { nodeId, result, originalNode } of results) {
         if (result != null && result !== originalNode) {
-          returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
+          returnBuffer.replace(nodeId, result);
         }
       }
       return applyMutations(handle, returnBuffer, ctx);

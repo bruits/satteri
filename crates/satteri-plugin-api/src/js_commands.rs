@@ -31,6 +31,12 @@
 //!   0x10  RAW_MARKDOWN     [len: u32][utf8...]
 //!   0x11  RAW_HTML         [len: u32][utf8...]
 //!   0x12  SERDE_JSON       [len: u32][utf8...]
+//!   0x13  BINARY_NODE      [len: u32][compact binary node tree]
+//!
+//! Plugin-built node trees use BINARY_NODE — a compact, kind-agnostic encoding
+//! (varint lengths, a per-node field bitmask, no repeated field names) decoded
+//! by `read_binary_node`. It replaces JSON for structural payloads, shrinking
+//! the JS→Rust transfer and dropping `serde_json` parsing.
 //!
 //! The MDAST and HAST command paths are deliberately separate functions
 //! (`apply_mdast_commands`, `apply_hast_commands`). Numeric `node_type`
@@ -40,7 +46,7 @@
 //! signature on each entry point makes a cross-kind call a compile error.
 
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
-use satteri_ast::commands::{CommandError, JsNode};
+use satteri_ast::commands::{CommandError, JsNode, JsNodeAttribute, JsNodeAttributes};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
@@ -64,6 +70,7 @@ const CMD_SET_PROPERTY: u8 = 0x0C;
 const PAYLOAD_RAW_MARKDOWN: u8 = 0x10;
 const PAYLOAD_RAW_HTML: u8 = 0x11;
 const PAYLOAD_SERDE_JSON: u8 = 0x12;
+const PAYLOAD_BINARY_NODE: u8 = 0x13;
 
 // MDAST field IDs: internal to the set_string_ref / resolve_mdast_field dispatch
 const FIELD_DEPTH: u16 = 0x0001;
@@ -126,6 +133,29 @@ impl<'a> BufReader<'a> {
         let slice = &self.data[self.pos..self.pos + len];
         self.pos += len;
         Ok(slice)
+    }
+
+    /// Unsigned LEB128 varint (matches the JS `NodeWriter.varint`).
+    fn read_varint(&mut self) -> Result<u32, CommandError> {
+        let mut result: u32 = 0;
+        let mut shift = 0;
+        loop {
+            let byte = self.read_u8()?;
+            result |= ((byte & 0x7f) as u32) << shift;
+            if byte & 0x80 == 0 {
+                return Ok(result);
+            }
+            shift += 7;
+            if shift >= 32 {
+                return Err(CommandError::UnexpectedEof);
+            }
+        }
+    }
+
+    /// A varint-length-prefixed UTF-8 string.
+    fn read_var_str(&mut self) -> Result<String, CommandError> {
+        let len = self.read_varint()? as usize;
+        Ok(self.read_str(len)?.to_string())
     }
 
     fn read_str(&mut self, len: usize) -> Result<&'a str, CommandError> {
@@ -1030,6 +1060,233 @@ fn encode_hast_js_node_data(
     }
 }
 
+// Binary node payload — field bits (must match command-buffer.ts `F_*`).
+const F_VALUE: u32 = 1 << 0;
+const F_DEPTH: u32 = 1 << 1;
+const F_URL: u32 = 1 << 2;
+const F_TITLE: u32 = 1 << 3;
+const F_ALT: u32 = 1 << 4;
+const F_LANG: u32 = 1 << 5;
+const F_META: u32 = 1 << 6;
+const F_ORDERED: u32 = 1 << 7;
+const F_START: u32 = 1 << 8;
+const F_SPREAD: u32 = 1 << 9;
+const F_CHECKED: u32 = 1 << 10;
+const F_IDENTIFIER: u32 = 1 << 11;
+const F_LABEL: u32 = 1 << 12;
+const F_REFERENCE_TYPE: u32 = 1 << 13;
+const F_NAME: u32 = 1 << 14;
+const F_TAG_NAME: u32 = 1 << 15;
+const F_ATTRIBUTES: u32 = 1 << 16;
+const F_PROPERTIES: u32 = 1 << 17;
+const F_DATA: u32 = 1 << 18;
+const F_KEEP_CHILDREN: u32 = 1 << 19;
+
+fn empty_js_node(is_hast: bool) -> JsNode {
+    JsNode {
+        node_type: String::new(),
+        children: None,
+        depth: None,
+        value: None,
+        url: None,
+        title: None,
+        alt: None,
+        lang: None,
+        meta: None,
+        ordered: None,
+        start: None,
+        spread: None,
+        checked: None,
+        identifier: None,
+        label: None,
+        reference_type: None,
+        name: None,
+        attributes: None,
+        tag_name: None,
+        properties: None,
+        is_hast,
+        keep_children: false,
+        ref_id: None,
+        data: None,
+    }
+}
+
+/// Decode one node (and its descendants) from the compact binary node format
+/// written by `encodeNodeTree` in command-buffer.ts. `is_hast` flags the kind;
+/// the wire format itself is kind-agnostic.
+fn read_binary_node(r: &mut BufReader<'_>, is_hast: bool) -> Result<JsNode, CommandError> {
+    let type_len = r.read_varint()? as usize;
+    let mut node = empty_js_node(is_hast);
+    if type_len == 0 {
+        // Reference placeholder: `{ _ref: id }`.
+        node.ref_id = Some(r.read_varint()?);
+        return Ok(node);
+    }
+    node.node_type = r.read_str(type_len)?.to_string();
+
+    let mask = r.read_varint()?;
+    if mask & F_VALUE != 0 {
+        node.value = Some(r.read_var_str()?);
+    }
+    if mask & F_DEPTH != 0 {
+        node.depth = Some(r.read_u8()?);
+    }
+    if mask & F_URL != 0 {
+        node.url = Some(r.read_var_str()?);
+    }
+    if mask & F_TITLE != 0 {
+        node.title = Some(r.read_var_str()?);
+    }
+    if mask & F_ALT != 0 {
+        node.alt = Some(r.read_var_str()?);
+    }
+    if mask & F_LANG != 0 {
+        node.lang = Some(r.read_var_str()?);
+    }
+    if mask & F_META != 0 {
+        node.meta = Some(r.read_var_str()?);
+    }
+    if mask & F_ORDERED != 0 {
+        node.ordered = Some(r.read_u8()? != 0);
+    }
+    if mask & F_START != 0 {
+        node.start = Some(r.read_varint()?);
+    }
+    if mask & F_SPREAD != 0 {
+        node.spread = Some(r.read_u8()? != 0);
+    }
+    if mask & F_CHECKED != 0 {
+        node.checked = Some(r.read_u8()? != 0);
+    }
+    if mask & F_IDENTIFIER != 0 {
+        node.identifier = Some(r.read_var_str()?);
+    }
+    if mask & F_LABEL != 0 {
+        node.label = Some(r.read_var_str()?);
+    }
+    if mask & F_REFERENCE_TYPE != 0 {
+        node.reference_type = Some(r.read_var_str()?);
+    }
+    if mask & F_NAME != 0 {
+        node.name = Some(r.read_var_str()?);
+    }
+    if mask & F_TAG_NAME != 0 {
+        node.tag_name = Some(r.read_var_str()?);
+    }
+    if mask & F_ATTRIBUTES != 0 {
+        node.attributes = Some(read_binary_attributes(r)?);
+    }
+    if mask & F_PROPERTIES != 0 {
+        node.properties = Some(read_binary_properties(r)?);
+    }
+    if mask & F_DATA != 0 {
+        let len = r.read_varint()? as usize;
+        let bytes = r.read_bytes(len)?;
+        node.data = Some(
+            serde_json::from_slice(bytes).map_err(|e| CommandError::InvalidJson(e.to_string()))?,
+        );
+    }
+    if mask & F_KEEP_CHILDREN != 0 {
+        node.keep_children = true;
+    }
+
+    let child_count = r.read_varint()? as usize;
+    if child_count > 0 {
+        let mut children = Vec::with_capacity(child_count);
+        for _ in 0..child_count {
+            children.push(read_binary_node(r, is_hast)?);
+        }
+        node.children = Some(children);
+    }
+
+    Ok(node)
+}
+
+/// `[kind: u8 (0=jsx, 1=directive)][count][entries…]`.
+fn read_binary_attributes(r: &mut BufReader<'_>) -> Result<JsNodeAttributes, CommandError> {
+    let kind = r.read_u8()?;
+    let count = r.read_varint()? as usize;
+    if kind == 0 {
+        let mut attrs = Vec::with_capacity(count);
+        for _ in 0..count {
+            let tag = r.read_u8()?;
+            let attr = match tag {
+                0 => JsNodeAttribute::Attribute {
+                    name: r.read_var_str()?,
+                    value: None,
+                },
+                1 => {
+                    let name = r.read_var_str()?;
+                    let value = r.read_var_str()?;
+                    JsNodeAttribute::Attribute {
+                        name,
+                        value: Some(serde_json::Value::String(value)),
+                    }
+                }
+                2 => {
+                    let name = r.read_var_str()?;
+                    let expr = r.read_var_str()?;
+                    // encode_js_jsx_attrs reads only the `value` key.
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("value".to_string(), serde_json::Value::String(expr));
+                    JsNodeAttribute::Attribute {
+                        name,
+                        value: Some(serde_json::Value::Object(obj)),
+                    }
+                }
+                3 => JsNodeAttribute::ExpressionAttribute {
+                    value: r.read_var_str()?,
+                },
+                other => return Err(CommandError::UnknownPayloadType(other)),
+            };
+            attrs.push(attr);
+        }
+        Ok(JsNodeAttributes::Jsx(attrs))
+    } else {
+        let mut map = serde_json::Map::new();
+        for _ in 0..count {
+            let key = r.read_var_str()?;
+            let value = r.read_var_str()?;
+            map.insert(key, serde_json::Value::String(value));
+        }
+        Ok(JsNodeAttributes::Directive(map))
+    }
+}
+
+/// `[count]` then per entry `[name][value_kind: u8][value]`, reconstructing the
+/// `serde_json::Value` shapes that `json_value_to_prop` expects.
+fn read_binary_properties(
+    r: &mut BufReader<'_>,
+) -> Result<serde_json::Map<String, serde_json::Value>, CommandError> {
+    let count = r.read_varint()? as usize;
+    let mut map = serde_json::Map::new();
+    for _ in 0..count {
+        let name = r.read_var_str()?;
+        let kind = r.read_u8()?;
+        let value = match kind {
+            0 => serde_json::Value::String(r.read_var_str()?),
+            1 => serde_json::Value::Bool(true),
+            2 => serde_json::Value::Bool(false),
+            3 => {
+                let s = r.read_var_str()?;
+                serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
+            }
+            4 => {
+                let n = r.read_varint()? as usize;
+                let mut arr = Vec::with_capacity(n);
+                for _ in 0..n {
+                    arr.push(serde_json::Value::String(r.read_var_str()?));
+                }
+                serde_json::Value::Array(arr)
+            }
+            5 => serde_json::Value::Null,
+            other => return Err(CommandError::UnknownPayloadType(other)),
+        };
+        map.insert(name, value);
+    }
+    Ok(map)
+}
+
 /// Returns (arena, keep_children) for an MDAST sub-tree payload.
 fn read_mdast_payload(
     reader: &mut BufReader<'_>,
@@ -1054,13 +1311,18 @@ fn read_mdast_payload(
                 .map_err(|e| CommandError::InvalidJson(e.to_string()))?;
             js_node_to_mdast_arena(&js_node)
         }
+        PAYLOAD_BINARY_NODE => {
+            let bytes = reader.read_bytes(len)?;
+            let js_node = read_binary_node(&mut BufReader::new(bytes), false)?;
+            js_node_to_mdast_arena(&js_node)
+        }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
 }
 
-/// Returns (arena, keep_children) for a HAST sub-tree payload. Only
-/// `PAYLOAD_SERDE_JSON` is accepted — HAST plugins emit JSON node trees,
-/// not raw markdown or raw HTML.
+/// Returns (arena, keep_children) for a HAST sub-tree payload. `PAYLOAD_BINARY_NODE`
+/// carries plugin-built node trees; `PAYLOAD_SERDE_JSON` remains for compatibility.
+/// HAST has no source grammar, so raw markdown / raw HTML are not accepted.
 fn read_hast_payload(reader: &mut BufReader<'_>) -> Result<(Arena<Hast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
     let len = reader.read_u32()? as usize;
@@ -1070,6 +1332,11 @@ fn read_hast_payload(reader: &mut BufReader<'_>) -> Result<(Arena<Hast>, bool), 
             let json_str = reader.read_str(len)?;
             let js_node: JsNode = serde_json::from_str(json_str)
                 .map_err(|e| CommandError::InvalidJson(e.to_string()))?;
+            js_node_to_hast_arena(&js_node)
+        }
+        PAYLOAD_BINARY_NODE => {
+            let bytes = reader.read_bytes(len)?;
+            let js_node = read_binary_node(&mut BufReader::new(bytes), true)?;
             js_node_to_hast_arena(&js_node)
         }
         other => Err(CommandError::UnknownPayloadType(other)),

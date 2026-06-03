@@ -111,7 +111,7 @@ function nid(node: MdastNode): number {
 }
 
 export class MdastVisitorContext {
-  readonly #commandBuffer: CommandBuffer = new CommandBuffer();
+  readonly #commandBuffer: CommandBuffer = new CommandBuffer(reusedId);
   readonly #diagnostics: MdastDiagnostic[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
@@ -139,11 +139,11 @@ export class MdastVisitorContext {
   }
 
   insertBefore(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.insertBefore(nid(node as MdastNode), refifyReusedNodes(newNode, true));
+    this.#commandBuffer.insertBefore(nid(node as MdastNode), newNode);
   }
 
   insertAfter(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.insertAfter(nid(node as MdastNode), refifyReusedNodes(newNode, true));
+    this.#commandBuffer.insertAfter(nid(node as MdastNode), newNode);
   }
 
   /**
@@ -151,19 +151,19 @@ export class MdastVisitorContext {
    * children `parentNode` declares are kept after it.
    */
   wrapNode(node: Readonly<MdastNode>, parentNode: MdastNode): void {
-    this.#commandBuffer.wrapNode(nid(node as MdastNode), refifyReusedNodes(parentNode, true));
+    this.#commandBuffer.wrapNode(nid(node as MdastNode), parentNode);
   }
 
   prependChild(node: Readonly<MdastNode>, childNode: MdastNode): void {
-    this.#commandBuffer.prependChild(nid(node as MdastNode), refifyReusedNodes(childNode, true));
+    this.#commandBuffer.prependChild(nid(node as MdastNode), childNode);
   }
 
   appendChild(node: Readonly<MdastNode>, childNode: MdastNode): void {
-    this.#commandBuffer.appendChild(nid(node as MdastNode), refifyReusedNodes(childNode, true));
+    this.#commandBuffer.appendChild(nid(node as MdastNode), childNode);
   }
 
   replaceNode(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.replace(nid(node as MdastNode), refifyReusedNodes(newNode, true));
+    this.#commandBuffer.replace(nid(node as MdastNode), newNode);
   }
 
   setProperty<N extends MdastNode, K extends keyof N & string>(
@@ -710,41 +710,19 @@ function readMdastMatchedNode(
   return node as unknown as MdastNode;
 }
 
-/** Apply a sync visitor result to the return buffer.
- *  If the result is the same object as the input node, treat it as a no-op
- *  so that context mutations (e.g. setProperty) are not clobbered. */
-/** The arena id of a node if it is an existing (materialized) node, else
- *  undefined for a freshly-built one. */
+/** The arena id of a node when it is an existing (reused) node, else undefined
+ *  for a freshly-built one. Drives the binary encoder's `_ref` placeholders so
+ *  a passed-through child keeps its identity (and any patch queued on it). */
 function reusedId(node: unknown): number | undefined {
   if (node === null || typeof node !== "object") return undefined;
   const id = nid(node as MdastNode);
   return typeof id === "number" ? id : undefined;
 }
 
-/**
- * Rewrite a returned replacement tree so every *reused* node (one that came
- * from the arena, at any depth) becomes a `{ _ref: id }` placeholder. The
- * rebuild splices those originals back in place, preserving their ids — so a
- * patch a nested visitor queued on a passed-through child still lands, in the
- * same pass. Freshly-built nodes serialize as before. The root is never reffed:
- * it is the new shape replacing the visited node.
- */
-function refifyReusedNodes(node: unknown, isRoot: boolean): MdastNode {
-  if (node === null || typeof node !== "object") return node as MdastNode;
-  if (!isRoot) {
-    const id = reusedId(node);
-    if (id !== undefined) return { _ref: id } as unknown as MdastNode;
-  }
-  const children = (node as { children?: unknown }).children;
-  if (Array.isArray(children)) {
-    return {
-      ...(node as object),
-      children: children.map((c) => refifyReusedNodes(c, false)),
-    } as unknown as MdastNode;
-  }
-  return node as MdastNode;
-}
-
+/** Apply a sync visitor result to the return buffer. A result identical to the
+ *  input node is a no-op, so context mutations (e.g. setProperty) aren't
+ *  clobbered. The buffer's encoder handles reused nodes (via `reusedId`) and
+ *  `{ raw }` / `{ rawHtml }` payloads. */
 function applyMdastVisitResult(
   result: MdastVisitorResult,
   nodeId: number,
@@ -753,18 +731,9 @@ function applyMdastVisitResult(
 ): void {
   if (result === undefined || result === null) return;
   if (result === originalNode) return;
-  const cls = classifyReturn(result);
-  switch (cls) {
-    case "raw_markdown":
-      returnBuffer.replace(nodeId, result as unknown as { raw: string });
-      break;
-    case "raw_html":
-      returnBuffer.replace(nodeId, result as unknown as { rawHtml: string });
-      break;
-    case "structured_node":
-      returnBuffer.replace(nodeId, refifyReusedNodes(result, true));
-      break;
-  }
+  // Validate the shape (raw / rawHtml / structured node); throws otherwise.
+  classifyReturn(result);
+  returnBuffer.replace(nodeId, result as MdastNode | { raw: string } | { rawHtml: string });
 }
 
 /**
@@ -783,7 +752,7 @@ export function visitMdastHandle(
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const context = new MdastVisitorContext(handle, getSource, fileURL);
-  const returnBuffer = new CommandBuffer();
+  const returnBuffer = new CommandBuffer(reusedId);
   const resolver = new MdastLazyChildResolver(handle);
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);
