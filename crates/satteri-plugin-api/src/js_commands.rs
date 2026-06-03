@@ -94,7 +94,6 @@ const OF_META: u8 = 5;
 const OF_IDENTIFIER: u8 = 6;
 const OF_LABEL: u8 = 7;
 const OF_NAME: u8 = 8; // directive / MDX JSX element name
-// 8 = OF_NAME — reserved for directive / MDX-JSX node names (not in v1).
 const OF_REFERENCE_TYPE: u8 = 9;
 const OF_DEPTH: u8 = 10;
 const OF_CHECKED: u8 = 11;
@@ -1683,19 +1682,22 @@ pub fn apply_mdast_commands_lenient(
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                let (new_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                let (new_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                let (child_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1704,7 +1706,8 @@ pub fn apply_mdast_commands_lenient(
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                let (child_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1713,7 +1716,8 @@ pub fn apply_mdast_commands_lenient(
 
             CMD_WRAP => {
                 let node_id = reader.read_u32()?;
-                let (parent_tree, _) = read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                let (parent_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -1722,7 +1726,8 @@ pub fn apply_mdast_commands_lenient(
 
             CMD_REPLACE => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, keep_children) = read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                let (new_tree, keep_children) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -2209,6 +2214,7 @@ mod tests {
                 label: None,
                 reference_type: None,
                 name: None,
+                align: None,
                 attributes: None,
                 tag_name: None,
                 properties: None,
@@ -2232,6 +2238,7 @@ mod tests {
             label: None,
             reference_type: None,
             name: None,
+            align: None,
             attributes: None,
             tag_name: None,
             properties: None,
