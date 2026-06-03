@@ -17,13 +17,15 @@
 //!   0x0B  REPLACE          [nodeId: u32][payloadType: u8][payload...]
 //!   0x0C  SET_PROPERTY     [nodeId: u32][valueType: u8][nameLen: u32][name...][valueLen: u32][value...]
 //!
-//! Value types for SET_PROPERTY:
+//! Value types for SET_PROPERTY (must match `shared::PROP_*` and the JS
+//! `command-buffer.ts` constants):
 //!   0  STRING     : UTF-8 value
 //!   1  BOOL_TRUE  : no value bytes
 //!   2  BOOL_FALSE : no value bytes
 //!   3  SPACE_SEP  : space-separated list (UTF-8)
-//!   4  INT        : value is decimal string, parsed to i64
-//!   5  NULL       : no value bytes
+//!   4  COMMA_SEP  : comma-separated list (UTF-8)
+//!   5  INT        : value is decimal string, parsed to i64
+//!   6  NULL       : no value bytes
 //!
 //! Payload types:
 //!   0x10  RAW_MARKDOWN     [len: u32][utf8...]
@@ -214,7 +216,12 @@ fn apply_mdast_set_property(
         PROP_BOOL_TRUE => apply_mdast_bool(arena, node_id, node_type, field_id, true),
         PROP_BOOL_FALSE => apply_mdast_bool(arena, node_id, node_type, field_id, false),
         PROP_INT => {
-            let value: i64 = value_str.parse().unwrap_or(0);
+            // Integer fields (depth, list start, checked). Accept a float
+            // spelling like "3" or "3.0" leniently rather than truncating to 0.
+            let value = value_str
+                .parse::<i64>()
+                .or_else(|_| value_str.parse::<f64>().map(|f| f as i64))
+                .unwrap_or(0);
             apply_mdast_int(arena, node_id, node_type, field_id, value)
         }
         PROP_NULL => apply_mdast_null(arena, node_id, node_type, field_id),
@@ -717,8 +724,92 @@ fn apply_hast_set_property(
             }
         }
 
+        #[cfg(feature = "mdx")]
+        HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => {
+            apply_hast_mdx_jsx_attribute(arena, node_id, prop_name, value_type, value_str)
+        }
+
         _ => Err(CommandError::UnknownField(0)),
     }
+}
+
+/// Upsert a single attribute on an MDX JSX flow/text element, mirroring the
+/// in-place attribute write that HAST elements get via
+/// [`apply_hast_element_property`]. Avoids re-serializing the whole node (and
+/// materializing its children) just to change one attribute.
+///
+/// Value-type mapping (matches the JS fold path this replaces):
+///   bool-true / null -> boolean attribute (no value)
+///   bool-false       -> literal `"false"`
+///   string / int / … -> literal attribute carrying the value
+#[cfg(feature = "mdx")]
+fn apply_hast_mdx_jsx_attribute(
+    arena: &mut Arena<Hast>,
+    node_id: u32,
+    attr_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    let old_data = arena.get_type_data(node_id).to_vec();
+    if old_data.len() < 16 {
+        return Err(CommandError::UnexpectedEof);
+    }
+    let old_attr_count = u32::from_le_bytes(old_data[8..12].try_into().unwrap()) as usize;
+
+    // Map the binary value-type to a JSX attribute (kind, value).
+    let (kind, val_ref) = match value_type {
+        PROP_BOOL_TRUE | PROP_NULL => (0u8, StringRef::empty()),
+        PROP_BOOL_FALSE => (1u8, arena.alloc_string("false")),
+        _ if value_str.is_empty() => (1u8, StringRef::empty()),
+        _ => (1u8, arena.alloc_string(value_str)),
+    };
+    let name_ref = arena.alloc_string(attr_name);
+
+    // Find an existing boolean/literal attribute with the same name. Expression
+    // and spread attributes have no comparable name, so they're skipped.
+    let mut found_index: Option<usize> = None;
+    for i in 0..old_attr_count {
+        let base = 16 + i * 20;
+        let existing_kind = old_data[base];
+        if existing_kind != 0 && existing_kind != 1 {
+            continue;
+        }
+        let name_off = u32::from_le_bytes(old_data[base + 4..base + 8].try_into().unwrap());
+        let name_len = u32::from_le_bytes(old_data[base + 8..base + 12].try_into().unwrap());
+        if arena.get_str(StringRef::new(name_off, name_len)) == attr_name {
+            found_index = Some(i);
+            break;
+        }
+    }
+
+    let write_attr = |buf: &mut [u8], base: usize| {
+        buf[base] = kind;
+        buf[base + 1..base + 4].copy_from_slice(&[0u8; 3]);
+        buf[base + 4..base + 8].copy_from_slice(&name_ref.offset.to_le_bytes());
+        buf[base + 8..base + 12].copy_from_slice(&name_ref.len.to_le_bytes());
+        buf[base + 12..base + 16].copy_from_slice(&val_ref.offset.to_le_bytes());
+        buf[base + 16..base + 20].copy_from_slice(&val_ref.len.to_le_bytes());
+    };
+
+    if let Some(idx) = found_index {
+        let mut new_data = old_data;
+        write_attr(&mut new_data, 16 + idx * 20);
+        arena.set_type_data(node_id, &new_data);
+    } else {
+        let new_count = (old_attr_count + 1) as u32;
+        let mut new_data = Vec::with_capacity(16 + new_count as usize * 20);
+        new_data.extend_from_slice(&old_data[0..8]); // name StringRef
+        new_data.extend_from_slice(&new_count.to_le_bytes());
+        new_data.extend_from_slice(&0u32.to_le_bytes()); // pad
+        if old_attr_count > 0 {
+            new_data.extend_from_slice(&old_data[16..16 + old_attr_count * 20]);
+        }
+        new_data.resize(16 + new_count as usize * 20, 0);
+        write_attr(&mut new_data, 16 + old_attr_count * 20);
+        arena.set_type_data(node_id, &new_data);
+    }
+
+    Ok(())
 }
 
 /// Set or add a single property on a HAST element node.

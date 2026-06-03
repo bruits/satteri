@@ -1,13 +1,9 @@
 import { materializeNode, TYPE_NAMES } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
 import { CommandBuffer, classifyReturn } from "../command-buffer.js";
+import { restorePhantomSpaces } from "../phantom.js";
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
-import {
-  walkMdastHandle,
-  serializeHandle,
-  getNodeData as napiGetNodeData,
-  mdastTextContentHandle,
-} from "#binding";
+import { walkMdastHandle, serializeHandle, mdastTextContentHandle } from "#binding";
 import type {
   Blockquote,
   Break,
@@ -143,11 +139,11 @@ export class MdastVisitorContext {
   }
 
   insertBefore(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.insertBefore(nid(node as MdastNode), newNode);
+    this.#commandBuffer.insertBefore(nid(node as MdastNode), refifyReusedNodes(newNode, true));
   }
 
   insertAfter(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.insertAfter(nid(node as MdastNode), newNode);
+    this.#commandBuffer.insertAfter(nid(node as MdastNode), refifyReusedNodes(newNode, true));
   }
 
   /**
@@ -155,19 +151,19 @@ export class MdastVisitorContext {
    * children `parentNode` declares are kept after it.
    */
   wrapNode(node: Readonly<MdastNode>, parentNode: MdastNode): void {
-    this.#commandBuffer.wrapNode(nid(node as MdastNode), parentNode);
+    this.#commandBuffer.wrapNode(nid(node as MdastNode), refifyReusedNodes(parentNode, true));
   }
 
   prependChild(node: Readonly<MdastNode>, childNode: MdastNode): void {
-    this.#commandBuffer.prependChild(nid(node as MdastNode), childNode);
+    this.#commandBuffer.prependChild(nid(node as MdastNode), refifyReusedNodes(childNode, true));
   }
 
   appendChild(node: Readonly<MdastNode>, childNode: MdastNode): void {
-    this.#commandBuffer.appendChild(nid(node as MdastNode), childNode);
+    this.#commandBuffer.appendChild(nid(node as MdastNode), refifyReusedNodes(childNode, true));
   }
 
   replaceNode(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.replace(nid(node as MdastNode), newNode);
+    this.#commandBuffer.replace(nid(node as MdastNode), refifyReusedNodes(newNode, true));
   }
 
   setProperty<N extends MdastNode, K extends keyof N & string>(
@@ -374,27 +370,12 @@ class MdastLazyChildResolver {
   }
 
   materializeChildren(childIds: number[]): MdastNode[] {
+    // The serialized buffer already carries each node's `data` blob (read
+    // eagerly by materializeNode), and the arena isn't mutated mid-visit — so
+    // no separate lazy NAPI fetch is needed. This also keeps walk-path children
+    // consistent with `markdownToMdast` (no `data` key when a node has none).
     const reader = this.#ensure();
-    const handle = this.#handle;
-    return childIds.map((id) => {
-      const node = materializeNode(reader, id);
-      Object.defineProperty(node, "data", {
-        get() {
-          const json = napiGetNodeData(handle, id);
-          const val = json ? (JSON.parse(json) as Record<string, unknown>) : null;
-          Object.defineProperty(this, "data", {
-            value: val,
-            writable: true,
-            enumerable: true,
-            configurable: true,
-          });
-          return val;
-        },
-        configurable: true,
-        enumerable: true,
-      });
-      return node;
-    });
+    return childIds.map((id) => materializeNode(reader, id));
   }
 }
 
@@ -430,11 +411,18 @@ function readMdastMatchedNode(
     pos += dataJsonLen;
   }
 
-  // Position
-  const position = {
-    start: { offset: ru32(view, pos), line: ru32(view, pos + 8), column: ru32(view, pos + 12) },
-    end: { offset: ru32(view, pos + 4), line: ru32(view, pos + 16), column: ru32(view, pos + 20) },
-  };
+  // Position. Synthesized nodes (no source range) store an all-zero block;
+  // surface those as `position: undefined`, matching the hast walk path and
+  // the MdastReader so a node reads the same however it's reached.
+  const startOffset = ru32(view, pos);
+  const startLine = ru32(view, pos + 8);
+  const position =
+    startLine === 0 && startOffset === 0
+      ? undefined
+      : {
+          start: { offset: startOffset, line: startLine, column: ru32(view, pos + 12) },
+          end: { offset: ru32(view, pos + 4), line: ru32(view, pos + 16), column: ru32(view, pos + 20) },
+        };
   pos += 24;
 
   // Children, read IDs, materialize lazily via resolver
@@ -449,7 +437,8 @@ function readMdastMatchedNode(
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
   // Build node with type-specific fields
-  const node: Record<string, unknown> = { type: typeName, position };
+  const node: Record<string, unknown> = { type: typeName };
+  if (position !== undefined) node.position = position;
   if (childCount > 0) {
     Object.defineProperty(node, "children", {
       get() {
@@ -571,9 +560,8 @@ function readMdastMatchedNode(
       break;
     }
     case 17:
-    case 18:
     case 20: {
-      // linkReference, imageReference, footnoteReference
+      // linkReference, footnoteReference
       const idLen = ru16(view, pos);
       pos += 2;
       node.identifier = rstr(buf, pos, idLen);
@@ -583,11 +571,29 @@ function readMdastMatchedNode(
       node.label = rstr(buf, pos, labelLen);
       pos += labelLen;
       const kind = buf[pos]!;
-      // Only link/image references carry `referenceType`; the mdast spec
-      // defines it for those two, not for `footnoteReference`.
+      // `linkReference` carries `referenceType`; the mdast spec does not
+      // define it for `footnoteReference`.
       if (nodeType !== 20) {
         node.referenceType = ["shortcut", "collapsed", "full"][kind] ?? "shortcut";
       }
+      break;
+    }
+    case 18: {
+      // imageReference: identifier + label + kind + alt (matches the reader path)
+      const idLen = ru16(view, pos);
+      pos += 2;
+      node.identifier = rstr(buf, pos, idLen);
+      pos += idLen;
+      const labelLen = ru16(view, pos);
+      pos += 2;
+      node.label = rstr(buf, pos, labelLen);
+      pos += labelLen;
+      const kind = buf[pos]!;
+      pos += 1;
+      node.referenceType = ["shortcut", "collapsed", "full"][kind] ?? "shortcut";
+      const altLen = ru16(view, pos);
+      pos += 2;
+      node.alt = rstr(buf, pos, altLen);
       break;
     }
     case 19: {
@@ -666,11 +672,17 @@ function readMdastMatchedNode(
             attributes.push({
               type: "mdxJsxAttribute",
               name: an,
-              value: { type: "mdxJsxAttributeValueExpression", value: av },
+              value: {
+                type: "mdxJsxAttributeValueExpression",
+                value: restorePhantomSpaces(av),
+              },
             });
             break;
           case 3:
-            attributes.push({ type: "mdxJsxExpressionAttribute", value: av });
+            attributes.push({
+              type: "mdxJsxExpressionAttribute",
+              value: restorePhantomSpaces(av),
+            });
             break;
         }
       }
@@ -682,7 +694,7 @@ function readMdastMatchedNode(
     case 104: {
       // mdxFlowExpression, mdxTextExpression, mdxjsEsm
       const vlen = ru32(view, pos);
-      node.value = rstr(buf, pos + 4, vlen);
+      node.value = restorePhantomSpaces(rstr(buf, pos + 4, vlen));
       break;
     }
     // root(0), paragraph(1), thematicBreak(3), blockquote(4), emphasis(11),
@@ -717,17 +729,20 @@ function reusedId(node: unknown): number | undefined {
  * same pass. Freshly-built nodes serialize as before. The root is never reffed:
  * it is the new shape replacing the visited node.
  */
-function refifyReusedNodes(node: unknown, isRoot: boolean): unknown {
-  if (node === null || typeof node !== "object") return node;
+function refifyReusedNodes(node: unknown, isRoot: boolean): MdastNode {
+  if (node === null || typeof node !== "object") return node as MdastNode;
   if (!isRoot) {
     const id = reusedId(node);
-    if (id !== undefined) return { _ref: id };
+    if (id !== undefined) return { _ref: id } as unknown as MdastNode;
   }
   const children = (node as { children?: unknown }).children;
   if (Array.isArray(children)) {
-    return { ...(node as object), children: children.map((c) => refifyReusedNodes(c, false)) };
+    return {
+      ...(node as object),
+      children: children.map((c) => refifyReusedNodes(c, false)),
+    } as unknown as MdastNode;
   }
-  return node;
+  return node as MdastNode;
 }
 
 function applyMdastVisitResult(
@@ -747,7 +762,7 @@ function applyMdastVisitResult(
       returnBuffer.replace(nodeId, result as unknown as { rawHtml: string });
       break;
     case "structured_node":
-      returnBuffer.replace(nodeId, refifyReusedNodes(result, true) as MdastNode);
+      returnBuffer.replace(nodeId, refifyReusedNodes(result, true));
       break;
   }
 }

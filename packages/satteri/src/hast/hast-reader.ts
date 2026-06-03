@@ -1,5 +1,6 @@
 import type { BufferHeader } from "../types.js";
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "../mdx-types.js";
+import { restorePhantomSpaces } from "../phantom.js";
 
 export type { MdxJsxAttribute, MdxJsxExpressionAttribute };
 
@@ -368,14 +369,14 @@ export class HastReader {
             name: this.getString(attrNameRef.offset, attrNameRef.len),
             value: {
               type: "mdxJsxAttributeValueExpression",
-              value: this.getString(attrValueRef.offset, attrValueRef.len).replaceAll("", " "),
+              value: restorePhantomSpaces(this.getString(attrValueRef.offset, attrValueRef.len)),
             },
           });
           break;
         case MDX_ATTR_SPREAD:
           attributes.push({
             type: "mdxJsxExpressionAttribute",
-            value: this.getString(attrValueRef.offset, attrValueRef.len).replaceAll("", " "),
+            value: restorePhantomSpaces(this.getString(attrValueRef.offset, attrValueRef.len)),
           });
           break;
       }

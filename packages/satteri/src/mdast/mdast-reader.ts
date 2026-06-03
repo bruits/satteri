@@ -1,4 +1,5 @@
 import type { MdastNodeRaw, BufferHeader, StringRefRaw, MdxJsxAttributeUnion } from "../types.js";
+import { restorePhantomSpaces } from "../phantom.js";
 
 // Node type discriminant values (must match NodeType enum in node.rs)
 export const NodeType = Object.freeze({
@@ -551,14 +552,14 @@ export class MdastReader {
             name: this.getString(attrNameRef.offset, attrNameRef.len),
             value: {
               type: "mdxJsxAttributeValueExpression",
-              value: this.getString(attrValueRef.offset, attrValueRef.len).replaceAll("", " "),
+              value: restorePhantomSpaces(this.getString(attrValueRef.offset, attrValueRef.len)),
             },
           });
           break;
         case 3: // Spread
           attributes.push({
             type: "mdxJsxExpressionAttribute",
-            value: this.getString(attrValueRef.offset, attrValueRef.len).replaceAll("", " "),
+            value: restorePhantomSpaces(this.getString(attrValueRef.offset, attrValueRef.len)),
           });
           break;
       }
@@ -605,7 +606,7 @@ export class MdastReader {
   getExpressionValue(nodeId: number): string {
     const data = this.getTypeData(nodeId);
     const valueRef = this.readStringRef(data, 0);
-    return this.getString(valueRef.offset, valueRef.len).replaceAll("", " ");
+    return restorePhantomSpaces(this.getString(valueRef.offset, valueRef.len));
   }
 
   /**

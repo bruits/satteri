@@ -317,9 +317,9 @@ fn serialize_mdast_node_inline(
             }
         }
 
-        // LinkReference(17), ImageReference(18), FootnoteReference(20):
+        // LinkReference(17), FootnoteReference(20):
         // identifier(0) + label(8) + kind(16)
-        17 | 18 | 20 => {
+        17 | 20 => {
             write_str16(out, type_data, 0);
             write_str16(out, type_data, 8);
             out.push(if type_data.len() > 16 {
@@ -327,6 +327,20 @@ fn serialize_mdast_node_inline(
             } else {
                 0
             });
+        }
+
+        // ImageReference(18): identifier(0) + label(8) + kind(16) + alt(20).
+        // The alt StringRef follows the 20-byte ReferenceData header; when it's
+        // absent (plugin-created refs), `write_str16` emits an empty string.
+        18 => {
+            write_str16(out, type_data, 0);
+            write_str16(out, type_data, 8);
+            out.push(if type_data.len() > 16 {
+                type_data[16]
+            } else {
+                0
+            });
+            write_str16(out, type_data, 20);
         }
 
         // FootnoteDefinition(19): identifier(0) + label(8)

@@ -18,12 +18,12 @@ import {
   HAST_MDX_ESM,
 } from "./hast-reader.js";
 import { CommandBuffer } from "../command-buffer.js";
+import { restorePhantomSpaces } from "../phantom.js";
 import {
   walkHandle,
   applyCommandsToHandle,
   serializeHandle,
   textContentHandle,
-  getNodeData as napiGetNodeData,
   parseExpression as napiParseExpression,
   parseEsm as napiParseEsm,
 } from "#binding";
@@ -190,22 +190,36 @@ class HastVisitorContextImpl implements HastVisitorContext {
     }
 
     if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
-      // MDX JSX nodes use `attributes`, not `properties`, keep replaceNode path
-      const pending = this.#pendingNodes.get(id);
-      const current = (pending ?? node) as MdxJsxFlowElementHast | MdxJsxTextElementHast;
-      const updated = { ...current };
-      const attrs: MdxJsxAttributeUnion[] = [...(updated.attributes ?? [])];
-      const idx = attrs.findIndex((a) => a.type === "mdxJsxAttribute" && a.name === key);
-      if (idx !== -1) attrs.splice(idx, 1);
-      const attrValue =
-        value === true || value === null || value === undefined
-          ? null
-          : typeof value === "string"
-            ? value
-            : String(value);
-      attrs.push({ type: "mdxJsxAttribute", name: key, value: attrValue });
-      updated.attributes = attrs;
-      this.replaceNode(node, updated);
+      // MDX JSX nodes carry `attributes`, not `properties`. If a replacement is
+      // already queued for this node, fold the attribute into it so the change
+      // survives the rebuild. This spreads the queued replacement object, not
+      // the matched node, so it never forces the matched node's children to
+      // materialize.
+      const pending = this.#pendingNodes.get(id) as
+        | MdxJsxFlowElementHast
+        | MdxJsxTextElementHast
+        | undefined;
+      if (pending !== undefined) {
+        const updated = { ...pending };
+        const attrs: MdxJsxAttributeUnion[] = [...(updated.attributes ?? [])];
+        const idx = attrs.findIndex((a) => a.type === "mdxJsxAttribute" && a.name === key);
+        if (idx !== -1) attrs.splice(idx, 1);
+        const attrValue =
+          value === true || value === null || value === undefined
+            ? null
+            : typeof value === "string"
+              ? value
+              : String(value);
+        attrs.push({ type: "mdxJsxAttribute", name: key, value: attrValue });
+        updated.attributes = attrs;
+        this.replaceNode(node, updated);
+        return;
+      }
+      // Fast binary path: upsert a single JSX attribute in the arena's
+      // type_data — no JSON, and no child materialization. Rust maps the
+      // value-type to a boolean (true/null) or literal (string/number/false)
+      // attribute, mirroring the fold path above.
+      this.#commandBuffer.setProperty(id, key, value);
       return;
     }
 
@@ -365,6 +379,12 @@ function decodeProperties(
       case 3: // PROP_SPACE_SEP
         properties[name] = valStr.split(" ").filter((s) => s.length > 0);
         break;
+      case 4: // PROP_COMMA_SEP
+        properties[name] = valStr
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+        break;
       case 5: // PROP_INT
         properties[name] = Number(valStr);
         break;
@@ -488,7 +508,13 @@ function readTextFromBinary(
   data: Record<string, unknown> | null,
 ): HastNode {
   const valLen = view.getUint32(offset, true);
-  const value = textDecoder.decode(buf.subarray(offset + 4, offset + 4 + valLen));
+  const rawValue = textDecoder.decode(buf.subarray(offset + 4, offset + 4 + valLen));
+  // MDX flow/text expressions store phantom-space sentinels; restore them so
+  // the value matches the reader path. ESM and plain text keep their value.
+  const value =
+    nodeType === HAST_MDX_FLOW_EXPRESSION || nodeType === HAST_MDX_TEXT_EXPRESSION
+      ? restorePhantomSpaces(rawValue)
+      : rawValue;
   const base: Record<string, unknown> = { type: TEXT_NODE_TYPES[nodeType]!, value };
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
@@ -549,11 +575,17 @@ function readMdxJsxFromBinary(
         attributes.push({
           type: "mdxJsxAttribute",
           name: attrName,
-          value: { type: "mdxJsxAttributeValueExpression", value: attrVal },
+          value: {
+            type: "mdxJsxAttributeValueExpression",
+            value: restorePhantomSpaces(attrVal),
+          },
         });
         break;
       case 3: // Spread
-        attributes.push({ type: "mdxJsxExpressionAttribute", value: attrVal });
+        attributes.push({
+          type: "mdxJsxExpressionAttribute",
+          value: restorePhantomSpaces(attrVal),
+        });
         break;
     }
   }
@@ -661,32 +693,13 @@ class LazyChildResolver {
   }
 
   materializeChildren(childIds: number[]): HastNode[] {
+    // The serialized buffer already carries each node's `data` blob (read
+    // eagerly by materializeHastNode), and the arena isn't mutated mid-visit —
+    // so no separate lazy NAPI fetch is needed. This also keeps walk-path
+    // children consistent with `markdownToHast` (no `data` key when a node has
+    // none).
     const reader = this.#ensure();
-    return childIds.map((id) => {
-      const node = materializeHastNode(reader, id);
-      this.attachLazyData(node, id);
-      return node;
-    });
-  }
-
-  /** Attach a lazy `data` getter backed by the Rust arena's node_data. */
-  attachLazyData(node: object, nodeId: number): void {
-    const handle = this.#handle;
-    Object.defineProperty(node, "data", {
-      get() {
-        const json = napiGetNodeData(handle, nodeId);
-        const val = json ? (JSON.parse(json) as Record<string, unknown>) : null;
-        Object.defineProperty(this, "data", {
-          value: val,
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        });
-        return val;
-      },
-      configurable: true,
-      enumerable: true,
-    });
+    return childIds.map((id) => materializeHastNode(reader, id));
   }
 }
 

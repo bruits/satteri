@@ -15,6 +15,7 @@ import {
 } from "./hast-reader.js";
 import type { HastNode } from "../types.js";
 import { lazyProp, lazyGroup } from "../lazy-props.js";
+import { restorePhantomSpaces } from "../phantom.js";
 
 export type { HastNode };
 
@@ -169,7 +170,7 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
         // satteri-pulldown-cmark/src/mdx.rs) back to regular spaces — mdast
         // and hast keep phantoms in the value field; only the compile path
         // drops them.
-        value: lazyProp("value", () => reader.getTextValue(nodeId).replaceAll("", " ")),
+        value: lazyProp("value", () => restorePhantomSpaces(reader.getTextValue(nodeId))),
       });
       break;
 
