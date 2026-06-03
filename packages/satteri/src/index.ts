@@ -35,6 +35,7 @@ export type {
   HastVisitorInstance,
   HastVisitorContext,
   HastFilteredVisitor,
+  HastContent,
   EstreeProgram,
 } from "./hast/hast-visitor.js";
 
@@ -64,7 +65,7 @@ export type {
 
 // Visitor pipeline (for manual plugin execution)
 export { visitMdastHandle, resolveMdastSubscriptions } from "./mdast/mdast-visitor.js";
-export type { MdastPluginInstance } from "./mdast/mdast-visitor.js";
+export type { MdastPluginInstance, MdastContent } from "./mdast/mdast-visitor.js";
 export {
   visitHastHandle,
   resolveSubscriptions as resolveHastSubscriptions,

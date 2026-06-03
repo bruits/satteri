@@ -2,6 +2,27 @@ import { materializeNode, TYPE_NAMES } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
 import { CommandBuffer, classifyReturn } from "../command-buffer.js";
 import { restorePhantomSpaces } from "../phantom.js";
+import {
+  OpWriter,
+  OF_VALUE,
+  OF_URL,
+  OF_TITLE,
+  OF_ALT,
+  OF_LANG,
+  OF_META,
+  OF_IDENTIFIER,
+  OF_LABEL,
+  OF_NAME,
+  OF_REFERENCE_TYPE,
+  OF_DEPTH,
+  OF_CHECKED,
+  OF_START,
+  OF_ORDERED,
+  OF_SPREAD,
+  OF_EXPLICIT,
+  PROP_STRING,
+  emitMdxAttr,
+} from "../op-stream.js";
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
 import { walkMdastHandle, serializeHandle, mdastTextContentHandle } from "#binding";
 import type {
@@ -35,6 +56,11 @@ import type { MdxJsxFlowElement, MdxJsxTextElement } from "../mdx-types.js";
 import type { MdxFlowExpression, MdxTextExpression } from "../mdx-types.js";
 import type { MdxjsEsm } from "../mdx-types.js";
 import type { ContainerDirective, LeafDirective, TextDirective } from "../directive-types.js";
+
+/** New content for a structural mutation: a declarative node, or a raw markdown
+ *  / HTML escape hatch. Declarative nodes ride the op-stream when the type is
+ *  supported, falling back to JSON otherwise — both produce identical arenas. */
+export type MdastContent = MdastNode | { raw: string } | { rawHtml: string };
 
 const MutationType = {
   Replace: "replace",
@@ -111,7 +137,7 @@ function nid(node: MdastNode): number {
 }
 
 export class MdastVisitorContext {
-  readonly #commandBuffer: CommandBuffer = new CommandBuffer(reusedId);
+  readonly #commandBuffer: CommandBuffer = new CommandBuffer();
   readonly #diagnostics: MdastDiagnostic[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
@@ -138,32 +164,50 @@ export class MdastVisitorContext {
     this.#commandBuffer.removeNode(nid(node as MdastNode));
   }
 
-  insertBefore(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.insertBefore(nid(node as MdastNode), newNode);
+  insertBefore(node: Readonly<MdastNode>, newNode: MdastContent): void {
+    const id = nid(node as MdastNode);
+    const c = compileOrJson(newNode);
+    if (c instanceof Uint8Array) this.#commandBuffer.insertBeforeOpstream(id, c);
+    else this.#commandBuffer.insertBefore(id, c);
   }
 
-  insertAfter(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.insertAfter(nid(node as MdastNode), newNode);
+  insertAfter(node: Readonly<MdastNode>, newNode: MdastContent): void {
+    const id = nid(node as MdastNode);
+    const c = compileOrJson(newNode);
+    if (c instanceof Uint8Array) this.#commandBuffer.insertAfterOpstream(id, c);
+    else this.#commandBuffer.insertAfter(id, c);
   }
 
   /**
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
    * children `parentNode` declares are kept after it.
    */
-  wrapNode(node: Readonly<MdastNode>, parentNode: MdastNode): void {
-    this.#commandBuffer.wrapNode(nid(node as MdastNode), parentNode);
+  wrapNode(node: Readonly<MdastNode>, parentNode: MdastContent): void {
+    const id = nid(node as MdastNode);
+    const c = compileOrJson(parentNode);
+    if (c instanceof Uint8Array) this.#commandBuffer.wrapNodeOpstream(id, c);
+    else this.#commandBuffer.wrapNode(id, c);
   }
 
-  prependChild(node: Readonly<MdastNode>, childNode: MdastNode): void {
-    this.#commandBuffer.prependChild(nid(node as MdastNode), childNode);
+  prependChild(node: Readonly<MdastNode>, childNode: MdastContent): void {
+    const id = nid(node as MdastNode);
+    const c = compileOrJson(childNode);
+    if (c instanceof Uint8Array) this.#commandBuffer.prependChildOpstream(id, c);
+    else this.#commandBuffer.prependChild(id, c);
   }
 
-  appendChild(node: Readonly<MdastNode>, childNode: MdastNode): void {
-    this.#commandBuffer.appendChild(nid(node as MdastNode), childNode);
+  appendChild(node: Readonly<MdastNode>, childNode: MdastContent): void {
+    const id = nid(node as MdastNode);
+    const c = compileOrJson(childNode);
+    if (c instanceof Uint8Array) this.#commandBuffer.appendChildOpstream(id, c);
+    else this.#commandBuffer.appendChild(id, c);
   }
 
-  replaceNode(node: Readonly<MdastNode>, newNode: MdastNode): void {
-    this.#commandBuffer.replace(nid(node as MdastNode), newNode);
+  replaceNode(node: Readonly<MdastNode>, newNode: MdastContent): void {
+    const id = nid(node as MdastNode);
+    const c = compileOrJson(newNode);
+    if (c instanceof Uint8Array) this.#commandBuffer.replaceOpstream(id, c);
+    else this.#commandBuffer.replace(id, c);
   }
 
   setProperty<N extends MdastNode, K extends keyof N & string>(
@@ -710,19 +754,134 @@ function readMdastMatchedNode(
   return node as unknown as MdastNode;
 }
 
-/** The arena id of a node when it is an existing (reused) node, else undefined
- *  for a freshly-built one. Drives the binary encoder's `_ref` placeholders so
- *  a passed-through child keeps its identity (and any patch queued on it). */
+/** Apply a sync visitor result to the return buffer.
+ *  If the result is the same object as the input node, treat it as a no-op
+ *  so that context mutations (e.g. setProperty) are not clobbered. */
+/** The arena id of a node if it is an existing (materialized) node, else
+ *  undefined for a freshly-built one. */
 function reusedId(node: unknown): number | undefined {
   if (node === null || typeof node !== "object") return undefined;
   const id = nid(node as MdastNode);
   return typeof id === "number" ? id : undefined;
 }
 
-/** Apply a sync visitor result to the return buffer. A result identical to the
- *  input node is a no-op, so context mutations (e.g. setProperty) aren't
- *  clobbered. The buffer's encoder handles reused nodes (via `reusedId`) and
- *  `{ raw }` / `{ rawHtml }` payloads. */
+/**
+ * Rewrite a returned replacement tree so every *reused* node (one that came
+ * from the arena, at any depth) becomes a `{ _ref: id }` placeholder. The
+ * rebuild splices those originals back in place, preserving their ids — so a
+ * patch a nested visitor queued on a passed-through child still lands, in the
+ * same pass. Freshly-built nodes serialize as before. The root is never reffed:
+ * it is the new shape replacing the visited node.
+ */
+function refifyReusedNodes(node: unknown, isRoot: boolean): MdastNode {
+  if (node === null || typeof node !== "object") return node as MdastNode;
+  if (!isRoot) {
+    const id = reusedId(node);
+    if (id !== undefined) return { _ref: id } as unknown as MdastNode;
+  }
+  const children = (node as { children?: unknown }).children;
+  if (Array.isArray(children)) {
+    return {
+      ...(node as object),
+      children: children.map((c) => refifyReusedNodes(c, false)),
+    } as unknown as MdastNode;
+  }
+  return node as MdastNode;
+}
+
+/**
+ * MDAST types the op-stream replay reconstructs byte-identically to the JSON
+ * path (`finalize_collector` in js_commands.rs). Covers everything a plugin can
+ * build: imageReference (alt), table (align via OP_ALIGN), directives (30–32:
+ * name + attributes), MDX JSX elements (100/101: name + typed attributes +
+ * explicit), and MDX expression/ESM (102–104: value). Only `root` falls back to
+ * JSON (degenerate as a replacement).
+ */
+const MDAST_OPSTREAM_TYPES = new Set<number>([
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+  28, 30, 31, 32, 100, 101, 102, 103, 104,
+]);
+
+/**
+ * Compile a declarative MDAST replacement tree to the op-stream — the structural
+ * backend the rebuild already uses, but skipping JSON + the JsNode deserialize.
+ * Reused nodes (those still carrying an arena id) become `ref`s, exactly like
+ * `refifyReusedNodes`. Returns null when the tree contains a node type the
+ * replay can't reproduce identically, so the caller falls back to JSON.
+ */
+function compileMdastToOpstream(root: unknown): Uint8Array | null {
+  const w = new OpWriter();
+  if (!emitMdastOp(w, root, true)) return null;
+  return w.take();
+}
+
+function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
+  if (node === null || typeof node !== "object") return false;
+  if (!isRoot) {
+    const id = reusedId(node);
+    if (id !== undefined) {
+      w.ref(id);
+      return true;
+    }
+  }
+  const n = node as Record<string, unknown>;
+  const type = NAME_TO_TYPE[n.type as string];
+  if (type === undefined || !MDAST_OPSTREAM_TYPES.has(type)) return false;
+  w.open(type);
+  if (typeof n.value === "string") w.str(OF_VALUE, n.value);
+  if (typeof n.url === "string") w.str(OF_URL, n.url);
+  if (typeof n.title === "string") w.str(OF_TITLE, n.title);
+  if (typeof n.alt === "string") w.str(OF_ALT, n.alt);
+  if (typeof n.lang === "string") w.str(OF_LANG, n.lang);
+  if (typeof n.meta === "string") w.str(OF_META, n.meta);
+  if (typeof n.identifier === "string") w.str(OF_IDENTIFIER, n.identifier);
+  if (typeof n.label === "string") w.str(OF_LABEL, n.label);
+  if (typeof n.referenceType === "string") w.str(OF_REFERENCE_TYPE, n.referenceType);
+  if (typeof n.depth === "number") w.u8(OF_DEPTH, n.depth);
+  if (typeof n.checked === "boolean") w.u8(OF_CHECKED, n.checked ? 1 : 0);
+  if (typeof n.start === "number") w.u32(OF_START, n.start);
+  if (typeof n.ordered === "boolean") w.bool(OF_ORDERED, n.ordered);
+  if (typeof n.spread === "boolean") w.bool(OF_SPREAD, n.spread);
+  if (typeof n.name === "string") w.str(OF_NAME, n.name);
+  const attrs = n.attributes;
+  if (Array.isArray(attrs)) {
+    // MDX JSX attributes (boolean / literal / expression / spread).
+    for (const a of attrs) emitMdxAttr(w, a as Record<string, unknown>);
+  } else if (attrs !== null && typeof attrs === "object") {
+    // Directive attributes: a string→string map. Non-string values are dropped,
+    // matching the JSON path's `encode_js_directive_attrs`.
+    for (const key in attrs as Record<string, unknown>) {
+      const v = (attrs as Record<string, unknown>)[key];
+      if (typeof v === "string") w.prop(key, PROP_STRING, v);
+    }
+  }
+  if (Array.isArray(n.align)) w.align(n.align.map(alignCode));
+  if ((n.data as Record<string, unknown> | null | undefined)?._mdxExplicitJsx === true) {
+    w.bool(OF_EXPLICIT, true);
+  }
+  if (n.data != null) w.data(n.data);
+  const children = n.children;
+  if (Array.isArray(children)) {
+    for (const c of children) if (!emitMdastOp(w, c, false)) return false;
+  }
+  w.close();
+  return true;
+}
+
+/** Map a table `align` entry to its arena code (none=0). */
+function alignCode(a: unknown): number {
+  return a === "left" ? 1 : a === "right" ? 2 : a === "center" ? 3 : 0;
+}
+
+/**
+ * Resolve declarative content to either an op-stream (fast path) or a
+ * JSON-ready node (raw escape hatches + unsupported types). The op-stream and
+ * JSON paths produce identical arenas; this just picks the cheaper encoding.
+ */
+function compileOrJson(content: MdastContent): Uint8Array | MdastNode {
+  return compileMdastToOpstream(content) ?? refifyReusedNodes(content, true);
+}
+
 function applyMdastVisitResult(
   result: MdastVisitorResult,
   nodeId: number,
@@ -731,9 +890,21 @@ function applyMdastVisitResult(
 ): void {
   if (result === undefined || result === null) return;
   if (result === originalNode) return;
-  // Validate the shape (raw / rawHtml / structured node); throws otherwise.
-  classifyReturn(result);
-  returnBuffer.replace(nodeId, result as MdastNode | { raw: string } | { rawHtml: string });
+  const cls = classifyReturn(result);
+  switch (cls) {
+    case "raw_markdown":
+      returnBuffer.replace(nodeId, result as unknown as { raw: string });
+      break;
+    case "raw_html":
+      returnBuffer.replace(nodeId, result as unknown as { rawHtml: string });
+      break;
+    case "structured_node": {
+      const c = compileMdastToOpstream(result);
+      if (c) returnBuffer.replaceOpstream(nodeId, c);
+      else returnBuffer.replace(nodeId, refifyReusedNodes(result, true));
+      break;
+    }
+  }
 }
 
 /**
@@ -752,7 +923,7 @@ export function visitMdastHandle(
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const context = new MdastVisitorContext(handle, getSource, fileURL);
-  const returnBuffer = new CommandBuffer(reusedId);
+  const returnBuffer = new CommandBuffer();
   const resolver = new MdastLazyChildResolver(handle);
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);

@@ -300,8 +300,9 @@ fn copy_node<K: ArenaKind>(
         }
     }
 
-    let child_ids: Vec<u32> = orig.get_children(node_id).to_vec();
-    for child_id in child_ids {
+    // Iterate children directly — the read-only `orig` borrow coexists with the
+    // recursive read-only `copy_node` calls, so no per-node `Vec` alloc is needed.
+    for &child_id in orig.get_children(node_id) {
         copy_node(child_id, orig, builder, patch_map, deleted, visited, active);
     }
 
@@ -794,8 +795,9 @@ fn copy_node_raw<K: ArenaKind>(
         }
     }
 
-    let child_ids: Vec<u32> = orig.get_children(node_id).to_vec();
-    for child_id in child_ids {
+    // Iterate children directly — the read-only `orig` borrow coexists with the
+    // recursive read-only `copy_node` calls, so no per-node `Vec` alloc is needed.
+    for &child_id in orig.get_children(node_id) {
         copy_node(child_id, orig, builder, patch_map, deleted, visited, active);
     }
 

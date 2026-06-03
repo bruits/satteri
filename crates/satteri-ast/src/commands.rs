@@ -31,6 +31,9 @@ pub struct JsNode {
     #[serde(rename = "referenceType")]
     pub reference_type: Option<String>,
     pub name: Option<String>,
+    /// `table` column alignment: each entry is `"left"`/`"right"`/`"center"`/null.
+    #[serde(default)]
+    pub align: Option<Vec<Option<String>>>,
     #[serde(default)]
     pub attributes: Option<JsNodeAttributes>,
     // HAST-specific fields
