@@ -1091,12 +1091,9 @@ dependencies = [
  "codspeed-divan-compat",
  "oxc_allocator",
  "rustc-hash",
- "satteri-arena",
  "satteri-ast",
  "satteri-mdxjs",
- "satteri-plugin-api",
  "satteri-pulldown-cmark",
- "serde_json",
 ]
 
 [[package]]

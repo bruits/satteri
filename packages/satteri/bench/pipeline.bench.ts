@@ -54,28 +54,12 @@ const noopMdastPlugin = defineMdastPlugin({
   heading() {},
 });
 
-// Structural-mutation plugins. Unlike the noop / setProperty plugins above,
-// these exercise the binary node payload path — insert / replace / wrap of
-// plugin-built node trees — which is the path the JSON→binary work changed.
+// Plugins that transform the tree — the path most plugins exercise. Two
+// representative shapes: keeping children (passthrough) and building a fresh
+// subtree.
 
-// ctx.wrapNode — wrap every heading in a fresh <div> (fresh wrapper payload).
-const wrapHeadingsHast = defineHastPlugin({
-  name: "wrap-headings",
-  element: {
-    filter: ["h1", "h2", "h3", "h4", "h5", "h6"],
-    visit(node: HastNode, ctx: HastVisitorContext) {
-      ctx.wrapNode(node, {
-        type: "element",
-        tagName: "div",
-        properties: { className: ["heading-wrap"] },
-        children: [],
-      } as unknown as HastNode);
-    },
-  },
-});
-
-// ctx.replaceNode keeping children — swap every <a> for a <span> carrying the
-// href; the children pass through as `_ref` placeholders.
+// Keep children: swap every <a> for a <span> carrying the href; children pass
+// through by reference.
 const replaceLinksHast = defineHastPlugin({
   name: "replace-links",
   element: {
@@ -92,44 +76,7 @@ const replaceLinksHast = defineHastPlugin({
   },
 });
 
-// Visitor return value — replace every <strong>/<em> with a fresh <mark>
-// wrapping its (passed-through) children.
-const returnReplaceHast = defineHastPlugin({
-  name: "return-replace",
-  element: {
-    filter: ["strong", "em"],
-    visit(node: HastNode): HastNode {
-      return {
-        type: "element",
-        tagName: "mark",
-        properties: {},
-        children: (node as { children: HastNode[] }).children,
-      } as unknown as HastNode;
-    },
-  },
-});
-
-// ctx.replaceNode (MDAST) keeping children — swap every link for an emphasis.
-const replaceLinksMdast = defineMdastPlugin({
-  name: "replace-links-mdast",
-  link(node, ctx) {
-    ctx.replaceNode(node, {
-      type: "emphasis",
-      children: node.children,
-    } as unknown as MdastNode);
-  },
-});
-
-// ctx.insertAfter (MDAST) — drop a thematic break after every heading.
-const insertAfterMdast = defineMdastPlugin({
-  name: "insert-after-mdast",
-  heading(node, ctx) {
-    ctx.insertAfter(node, { type: "thematicBreak" } as unknown as MdastNode);
-  },
-});
-
-// Visitor return value (MDAST) building a brand-new subtree (no passthrough) —
-// the heaviest encode case: every field and child is freshly serialized.
+// Build a fresh subtree: replace every paragraph with a blockquote it constructs.
 const buildSubtreeMdast = defineMdastPlugin({
   name: "build-subtree-mdast",
   paragraph() {
@@ -140,29 +87,6 @@ const buildSubtreeMdast = defineMdastPlugin({
         { type: "paragraph", children: [{ type: "text", value: "Rebuilt paragraph body." }] },
       ],
     } as unknown as MdastNode;
-  },
-});
-
-// HAST: replace every <p> with a fresh `<div class="note"><p>Rebuilt</p></div>`.
-const buildSubtreeHastDecl = defineHastPlugin({
-  name: "hast-build-decl",
-  element: {
-    filter: ["p"],
-    visit(node: HastNode, ctx: HastVisitorContext) {
-      ctx.replaceNode(node, {
-        type: "element",
-        tagName: "div",
-        properties: { className: ["note"] },
-        children: [
-          {
-            type: "element",
-            tagName: "p",
-            properties: {},
-            children: [{ type: "text", value: "Rebuilt" }],
-          },
-        ],
-      } as unknown as HastNode);
-    },
   },
 });
 
@@ -195,33 +119,13 @@ describe("markdownToHtml", () => {
   });
 });
 
-describe("markdownToHtml (structural mutations)", () => {
-  bench("HAST ctx.wrapNode (headings)", () => {
-    markdownToHtml(MARKDOWN, { hastPlugins: [wrapHeadingsHast] });
-  });
-
-  bench("HAST ctx.replaceNode keep-children (links)", () => {
+describe("markdownToHtml (plugin transforms)", () => {
+  bench("HAST replaceNode keep-children (links)", () => {
     markdownToHtml(MARKDOWN, { hastPlugins: [replaceLinksHast] });
   });
 
-  bench("HAST return replace (emphasis→mark)", () => {
-    markdownToHtml(MARKDOWN, { hastPlugins: [returnReplaceHast] });
-  });
-
-  bench("MDAST ctx.replaceNode keep-children (links)", () => {
-    markdownToHtml(MARKDOWN, { mdastPlugins: [replaceLinksMdast] });
-  });
-
-  bench("MDAST ctx.insertAfter (headings)", () => {
-    markdownToHtml(MARKDOWN, { mdastPlugins: [insertAfterMdast] });
-  });
-
-  bench("MDAST return build-subtree (paragraphs)", () => {
+  bench("MDAST build-subtree (paragraphs)", () => {
     markdownToHtml(MARKDOWN, { mdastPlugins: [buildSubtreeMdast] });
-  });
-
-  bench("HAST return build-subtree (paragraphs)", () => {
-    markdownToHtml(MARKDOWN, { hastPlugins: [buildSubtreeHastDecl] });
   });
 });
 
