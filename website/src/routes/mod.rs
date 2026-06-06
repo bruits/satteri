@@ -1,3 +1,5 @@
+//! Website routes module.
+
 mod chat;
 mod docs;
 mod index;
