@@ -172,10 +172,13 @@ const HAST_OPSTREAM_TYPES: Record<string, number> = {
  * Reused nodes become `ref`s (transparent passthrough). Returns null when the
  * tree holds a type the replay can't reproduce identically (JSON fallback).
  */
+// Reused across replacements in a pass — see the note on `mdastWriter`.
+const hastWriter = new OpWriter();
+
 function compileHastToOpstream(root: unknown): Uint8Array | null {
-  const w = new OpWriter();
-  if (!emitHastOp(w, root, true)) return null;
-  return w.take();
+  hastWriter.reset();
+  if (!emitHastOp(hastWriter, root, true)) return null;
+  return hastWriter.take();
 }
 
 function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {

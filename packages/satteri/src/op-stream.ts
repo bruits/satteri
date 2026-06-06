@@ -5,7 +5,8 @@
  * replays straight into the arena (see js_commands.rs `OP_*` / `OF_*`). The
  * replay drives the SAME arena encoders the JSON path uses, so a compiled tree
  * is byte-identical to its JSON form — it just skips the JSON + JsNode hop.
- * Strings take an ASCII fast path (char codes) to avoid a per-string encoder.
+ * Short strings take an inline char-code path; longer ones use `encodeInto`
+ * (native, no allocation, no per-char JS loop).
  */
 
 // Op codes (must match js_commands.rs OP_*).
@@ -55,9 +56,18 @@ const MDX_ATTR_SPREAD = 3;
 
 const encoder = new TextEncoder();
 
+/** Below this length the inline char-code copy beats `encodeInto`'s call
+ *  overhead; above it the native bulk path wins (and skips the ASCII scan). */
+const INLINE_STR_MAX = 32;
+
 export class OpWriter {
   #buf = new Uint8Array(512);
   #n = 0;
+
+  /** Reset for reuse; the grown buffer is retained so steady state is alloc-free. */
+  reset(): void {
+    this.#n = 0;
+  }
 
   /** The op-stream written so far (valid until the next reset). */
   take(): Uint8Array {
@@ -82,27 +92,38 @@ export class OpWriter {
 
   #string(s: string): void {
     const len = s.length;
-    this.#ensure(4 + len);
-    let ascii = true;
-    for (let i = 0; i < len; i++) {
-      if (s.charCodeAt(i) > 127) {
-        ascii = false;
-        break;
+    this.#ensure(4 + len * 3); // worst-case UTF-8 is 3 bytes per UTF-16 unit
+
+    // Short strings: inline char copy (cheaper than a native call), guarded by a
+    // quick ASCII scan. Anything longer — or non-ASCII — goes to encodeInto.
+    if (len <= INLINE_STR_MAX) {
+      let ascii = true;
+      for (let i = 0; i < len; i++) {
+        if (s.charCodeAt(i) > 127) {
+          ascii = false;
+          break;
+        }
+      }
+      if (ascii) {
+        this.#u32at(len);
+        const buf = this.#buf;
+        const n = this.#n;
+        for (let i = 0; i < len; i++) buf[n + i] = s.charCodeAt(i);
+        this.#n = n + len;
+        return;
       }
     }
-    if (ascii) {
-      this.#u32at(len);
-      const buf = this.#buf;
-      const n = this.#n;
-      for (let i = 0; i < len; i++) buf[n + i] = s.charCodeAt(i);
-      this.#n = n + len;
-    } else {
-      const bytes = encoder.encode(s);
-      this.#ensure(4 + bytes.length);
-      this.#u32at(bytes.length);
-      this.#buf.set(bytes, this.#n);
-      this.#n += bytes.length;
-    }
+
+    // Bulk path: encodeInto writes UTF-8 straight into the buffer (no alloc, no
+    // per-char loop); backpatch the byte length once it's known.
+    const lenPos = this.#n;
+    this.#n += 4;
+    const written = encoder.encodeInto(s, this.#buf.subarray(this.#n)).written;
+    this.#buf[lenPos] = written & 255;
+    this.#buf[lenPos + 1] = (written >> 8) & 255;
+    this.#buf[lenPos + 2] = (written >> 16) & 255;
+    this.#buf[lenPos + 3] = (written >>> 24) & 255;
+    this.#n += written;
   }
 
   open(type: number): void {

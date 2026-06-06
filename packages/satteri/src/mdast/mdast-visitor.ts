@@ -809,10 +809,15 @@ const MDAST_OPSTREAM_TYPES = new Set<number>([
  * `refifyReusedNodes`. Returns null when the tree contains a node type the
  * replay can't reproduce identically, so the caller falls back to JSON.
  */
+// Reused across every replacement in a pass: compile is synchronous and its
+// result is copied into the command buffer before the next call, so a single
+// writer is safe and avoids a 512-byte allocation per built node.
+const mdastWriter = new OpWriter();
+
 function compileMdastToOpstream(root: unknown): Uint8Array | null {
-  const w = new OpWriter();
-  if (!emitMdastOp(w, root, true)) return null;
-  return w.take();
+  mdastWriter.reset();
+  if (!emitMdastOp(mdastWriter, root, true)) return null;
+  return mdastWriter.take();
 }
 
 function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
