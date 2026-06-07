@@ -222,9 +222,9 @@ fn apply_mdast_set_property(
         }
     })?;
 
-    // The field resolved, so the inner writers' `Err(())` means the value's
+    // The field resolved, so a `None` from the inner writers means the value's
     // type is one the field can't hold — report that rather than "unknown".
-    let written: Result<(), ()> = match value_type {
+    let written: Option<()> = match value_type {
         PROP_STRING | PROP_SPACE_SEP => {
             let sref = arena.alloc_string(value_str);
             set_mdast_string_ref(arena, node_id, field_id, sref)
@@ -238,7 +238,7 @@ fn apply_mdast_set_property(
         PROP_NULL => apply_mdast_null(arena, node_id, node_type, field_id),
         _ => return Err(CommandError::UnknownCommand(value_type)),
     };
-    written.map_err(|()| CommandError::InvalidPropertyValue {
+    written.ok_or_else(|| CommandError::InvalidPropertyValue {
         node_type: mdast_type_name(node_type),
         name: prop_name.to_string(),
     })
@@ -250,7 +250,7 @@ fn apply_mdast_int(
     node_type: u8,
     field_id: u16,
     value: i64,
-) -> Result<(), ()> {
+) -> Option<()> {
     let data_offset = arena.get_node(node_id).data_offset as usize;
     let data_len = arena.get_node(node_id).data_len as usize;
     match (node_type, field_id) {
@@ -270,9 +270,9 @@ fn apply_mdast_int(
                 arena.type_data[data_offset] = value as u8;
             }
         }
-        _ => return Err(()),
+        _ => return None,
     }
-    Ok(())
+    Some(())
 }
 
 fn apply_mdast_bool(
@@ -281,7 +281,7 @@ fn apply_mdast_bool(
     node_type: u8,
     field_id: u16,
     value: bool,
-) -> Result<(), ()> {
+) -> Option<()> {
     let data_offset = arena.get_node(node_id).data_offset as usize;
     let data_len = arena.get_node(node_id).data_len as usize;
     match (node_type, field_id) {
@@ -300,9 +300,9 @@ fn apply_mdast_bool(
                 arena.type_data[data_offset + 1] = value as u8;
             }
         }
-        _ => return Err(()),
+        _ => return None,
     }
-    Ok(())
+    Some(())
 }
 
 fn apply_mdast_null(
@@ -310,7 +310,7 @@ fn apply_mdast_null(
     node_id: u32,
     node_type: u8,
     field_id: u16,
-) -> Result<(), ()> {
+) -> Option<()> {
     match (node_type, field_id) {
         (6, FIELD_CHECKED) => {
             let data_offset = arena.get_node(node_id).data_offset as usize;
@@ -318,7 +318,7 @@ fn apply_mdast_null(
             if data_len >= 1 {
                 arena.type_data[data_offset] = 2;
             }
-            Ok(())
+            Some(())
         }
         _ => set_mdast_string_ref(arena, node_id, field_id, StringRef::empty()),
     }
@@ -329,7 +329,7 @@ fn set_mdast_string_ref(
     node_id: u32,
     field_id: u16,
     sref: StringRef,
-) -> Result<(), ()> {
+) -> Option<()> {
     let node = arena.get_node(node_id);
     let node_type = node.node_type;
     let data_offset = node.data_offset as usize;
@@ -366,7 +366,7 @@ fn set_mdast_string_ref(
         (100 | 101, FIELD_NAME) => 0,
         // MdxExpression/MdxjsEsm: ExpressionData { value: 0 }
         (102..=104, FIELD_VALUE) => 0,
-        _ => return Err(()),
+        _ => return None,
     };
 
     let abs_offset = data_offset + ref_offset;
@@ -375,7 +375,7 @@ fn set_mdast_string_ref(
     arena.type_data[abs_offset..abs_offset + 4].copy_from_slice(&bytes_offset);
     arena.type_data[abs_offset + 4..abs_offset + 8].copy_from_slice(&bytes_len);
 
-    Ok(())
+    Some(())
 }
 
 fn parse_raw_markdown(
