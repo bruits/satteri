@@ -192,43 +192,7 @@ fn resolve_mdast_field(node_type: u8, name: &str) -> Option<u16> {
 /// The canonical MDAST type name for a node-type byte, for error messages.
 fn mdast_type_name(node_type: u8) -> String {
     match MdastNodeType::from_u8(node_type) {
-        Some(MdastNodeType::Root) => "root".into(),
-        Some(MdastNodeType::Paragraph) => "paragraph".into(),
-        Some(MdastNodeType::Heading) => "heading".into(),
-        Some(MdastNodeType::ThematicBreak) => "thematicBreak".into(),
-        Some(MdastNodeType::Blockquote) => "blockquote".into(),
-        Some(MdastNodeType::List) => "list".into(),
-        Some(MdastNodeType::ListItem) => "listItem".into(),
-        Some(MdastNodeType::Html) => "html".into(),
-        Some(MdastNodeType::Code) => "code".into(),
-        Some(MdastNodeType::Definition) => "definition".into(),
-        Some(MdastNodeType::Text) => "text".into(),
-        Some(MdastNodeType::Emphasis) => "emphasis".into(),
-        Some(MdastNodeType::Strong) => "strong".into(),
-        Some(MdastNodeType::InlineCode) => "inlineCode".into(),
-        Some(MdastNodeType::Break) => "break".into(),
-        Some(MdastNodeType::Link) => "link".into(),
-        Some(MdastNodeType::Image) => "image".into(),
-        Some(MdastNodeType::LinkReference) => "linkReference".into(),
-        Some(MdastNodeType::ImageReference) => "imageReference".into(),
-        Some(MdastNodeType::FootnoteDefinition) => "footnoteDefinition".into(),
-        Some(MdastNodeType::FootnoteReference) => "footnoteReference".into(),
-        Some(MdastNodeType::Table) => "table".into(),
-        Some(MdastNodeType::TableRow) => "tableRow".into(),
-        Some(MdastNodeType::TableCell) => "tableCell".into(),
-        Some(MdastNodeType::Delete) => "delete".into(),
-        Some(MdastNodeType::Yaml) => "yaml".into(),
-        Some(MdastNodeType::Toml) => "toml".into(),
-        Some(MdastNodeType::Math) => "math".into(),
-        Some(MdastNodeType::InlineMath) => "inlineMath".into(),
-        Some(MdastNodeType::ContainerDirective) => "containerDirective".into(),
-        Some(MdastNodeType::LeafDirective) => "leafDirective".into(),
-        Some(MdastNodeType::TextDirective) => "textDirective".into(),
-        Some(MdastNodeType::MdxJsxFlowElement) => "mdxJsxFlowElement".into(),
-        Some(MdastNodeType::MdxJsxTextElement) => "mdxJsxTextElement".into(),
-        Some(MdastNodeType::MdxFlowExpression) => "mdxFlowExpression".into(),
-        Some(MdastNodeType::MdxTextExpression) => "mdxTextExpression".into(),
-        Some(MdastNodeType::MdxjsEsm) => "mdxjsEsm".into(),
+        Some(t) => t.name().to_string(),
         None => format!("unknown({node_type})"),
     }
 }
@@ -249,15 +213,17 @@ fn apply_mdast_set_property(
     }
 
     let node_type = arena.get_node(node_id).node_type;
-    let unsettable = || CommandError::UnknownField {
-        node_type: mdast_type_name(node_type),
-        name: prop_name.to_string(),
-    };
 
-    let field_id = resolve_mdast_field(node_type, prop_name).ok_or_else(unsettable)?;
+    // The field name doesn't resolve for this node type at all.
+    let field_id = resolve_mdast_field(node_type, prop_name).ok_or_else(|| {
+        CommandError::UnknownField {
+            node_type: mdast_type_name(node_type),
+            name: prop_name.to_string(),
+        }
+    })?;
 
-    // The inner writers signal an unhandled (field, value-type) combo with
-    // `Err(())`; rebuild the actionable error from the property name here.
+    // The field resolved, so the inner writers' `Err(())` means the value's
+    // type is one the field can't hold — report that rather than "unknown".
     let written: Result<(), ()> = match value_type {
         PROP_STRING | PROP_SPACE_SEP => {
             let sref = arena.alloc_string(value_str);
@@ -272,7 +238,10 @@ fn apply_mdast_set_property(
         PROP_NULL => apply_mdast_null(arena, node_id, node_type, field_id),
         _ => return Err(CommandError::UnknownCommand(value_type)),
     };
-    written.map_err(|()| unsettable())
+    written.map_err(|()| CommandError::InvalidPropertyValue {
+        node_type: mdast_type_name(node_type),
+        name: prop_name.to_string(),
+    })
 }
 
 fn apply_mdast_int(
@@ -772,28 +741,10 @@ fn apply_hast_set_property(
         }
 
         _ => Err(CommandError::UnknownField {
-            node_type: hast_type_name(node_type),
+            node_type: node_type.name().to_string(),
             name: prop_name.to_string(),
         }),
     }
-}
-
-/// The canonical HAST type name for a node type, for error messages.
-fn hast_type_name(node_type: HastNodeType) -> String {
-    match node_type {
-        HastNodeType::Root => "root",
-        HastNodeType::Element => "element",
-        HastNodeType::Text => "text",
-        HastNodeType::Comment => "comment",
-        HastNodeType::Doctype => "doctype",
-        HastNodeType::Raw => "raw",
-        HastNodeType::MdxJsxElement => "mdxJsxFlowElement",
-        HastNodeType::MdxJsxTextElement => "mdxJsxTextElement",
-        HastNodeType::MdxFlowExpression => "mdxFlowExpression",
-        HastNodeType::MdxEsm => "mdxjsEsm",
-        HastNodeType::MdxTextExpression => "mdxTextExpression",
-    }
-    .to_string()
 }
 
 /// Set or add a single property on a HAST element node.
@@ -1609,6 +1560,27 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "cannot set property 'value' on a 'heading' node"
+        );
+    }
+
+    #[test]
+    fn set_property_wrong_value_type_reports_value_mismatch() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+
+        // `depth` is a valid heading field, but it holds an int, not a string.
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_STRING, "depth", "3");
+
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::InvalidPropertyValue { ref name, ref node_type }
+                if name == "depth" && node_type == "heading"
+        ));
+        assert_eq!(
+            err.to_string(),
+            "property 'depth' on a 'heading' node cannot hold a value of this type"
         );
     }
 

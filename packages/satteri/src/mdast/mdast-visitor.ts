@@ -174,7 +174,7 @@ export class MdastVisitorContext {
     for (const n of asArray(childNode)) this.#commandBuffer.appendChild(id, n);
   }
 
-  /** Insert one node or an array at `index`; clamps (`0` prepends, past the end appends). */
+  /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
   insertChildAt(
     node: Readonly<MdastNode>,
     index: number,

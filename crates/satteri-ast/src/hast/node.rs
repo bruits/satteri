@@ -34,4 +34,21 @@ impl HastNodeType {
             _ => None,
         }
     }
+
+    /// The canonical HAST type name, as used in the public AST and diagnostics.
+    pub fn name(self) -> &'static str {
+        match self {
+            HastNodeType::Root => "root",
+            HastNodeType::Element => "element",
+            HastNodeType::Text => "text",
+            HastNodeType::Comment => "comment",
+            HastNodeType::Doctype => "doctype",
+            HastNodeType::Raw => "raw",
+            HastNodeType::MdxJsxElement => "mdxJsxFlowElement",
+            HastNodeType::MdxJsxTextElement => "mdxJsxTextElement",
+            HastNodeType::MdxFlowExpression => "mdxFlowExpression",
+            HastNodeType::MdxEsm => "mdxjsEsm",
+            HastNodeType::MdxTextExpression => "mdxTextExpression",
+        }
+    }
 }

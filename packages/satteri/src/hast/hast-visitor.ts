@@ -82,7 +82,7 @@ export interface HastVisitorContext {
   wrapNode(node: Readonly<HastNode>, parentNode: HastNode): void;
   prependChild(node: Readonly<HastNode>, childNode: HastNode | HastNode[]): void;
   appendChild(node: Readonly<HastNode>, childNode: HastNode | HastNode[]): void;
-  /** Insert one node or an array at `index`; clamps (`0` prepends, past the end appends). */
+  /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
   insertChildAt(node: Readonly<HastNode>, index: number, childNode: HastNode | HastNode[]): void;
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<HastNode>, index: number): void;
