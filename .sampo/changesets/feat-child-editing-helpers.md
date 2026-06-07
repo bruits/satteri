@@ -1,5 +1,5 @@
 ---
-npm/satteri: minor
+npm/satteri: patch
 ---
 
 Adds `ctx.insertChildAt(node, index, child)` and `ctx.removeChildAt(node, index)` for editing a node's children by position.
