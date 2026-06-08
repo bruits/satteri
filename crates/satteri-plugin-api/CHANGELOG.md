@@ -1,5 +1,13 @@
 # satteri-plugin-api
 
+## 0.2.2 — 2026-06-08
+
+### Patch changes
+
+- [f41d32f](https://github.com/bruits/satteri/commit/f41d32f590e7763f7ba8199aead1e563503c8a9a) Fixes `ctx.setProperty(node, "children", [...])`, which used to throw an error. You can now set a node's children directly, and any other properties you set on the same node still take effect. — Thanks @Princesseuh!
+- [67ac7b0](https://github.com/bruits/satteri/commit/67ac7b06aa270c22664cfa3c7a11d6bf37495529) Fixes several kinds of nodes getting mangled when a plugin would move or duplicate them. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.3.2
+
 ## 0.2.1 — 2026-06-03
 
 ### Patch changes

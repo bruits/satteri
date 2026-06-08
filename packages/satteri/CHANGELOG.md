@@ -1,5 +1,18 @@
 # satteri
 
+## 0.8.1 — 2026-06-08
+
+### Patch changes
+
+- [e58b500](https://github.com/bruits/satteri/commit/e58b500aecfce9c03e3a5045a2d5a063eb1f8203) Fixes a parsing error when a MDX attribute contained the closing tag of itself, e.g. `<Component attr="</Component>">`. The parser would incorrectly treat the `</Component>` as the closing tag of the component, instead of part of the attribute value. — Thanks @Princesseuh!
+- [f41d32f](https://github.com/bruits/satteri/commit/f41d32f590e7763f7ba8199aead1e563503c8a9a) Fixes `ctx.setProperty(node, "children", [...])`, which used to throw an error. You can now set a node's children directly, and any other properties you set on the same node still take effect. — Thanks @Princesseuh!
+- [67ac7b0](https://github.com/bruits/satteri/commit/67ac7b06aa270c22664cfa3c7a11d6bf37495529) Fixes `ctx.textContent()` not including inline math. A heading like `# Energy $E=mc^2$` would only return `Energy ` instead of `Energy E=mc^2`. — Thanks @Princesseuh!
+- [67ac7b0](https://github.com/bruits/satteri/commit/67ac7b06aa270c22664cfa3c7a11d6bf37495529) Fixes several kinds of nodes getting mangled when a plugin would move or duplicate them. — Thanks @Princesseuh!
+- [7979f1e](https://github.com/bruits/satteri/commit/7979f1ec93695a8b700272f75be967bdba29452b) Fixes a crash when a plugin replaces a node with a tree containing an empty text node in a document that has non-ASCII characters (e.g. `é`). — Thanks @HiDeoo for your first contribution 🎉!
+- [f41d32f](https://github.com/bruits/satteri/commit/f41d32f590e7763f7ba8199aead1e563503c8a9a) Adds `ctx.insertChildAt(node, index, child)` and `ctx.removeChildAt(node, index)` for editing a node's children by position.
+  
+  `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and `insertChildAt` now also accept an array of nodes, so you can insert several at once. — Thanks @Princesseuh!
+
 ## 0.8.0 — 2026-06-03
 
 ### Minor changes

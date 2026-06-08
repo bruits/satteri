@@ -1,5 +1,12 @@
 # satteri-pulldown-cmark
 
+## 0.5.2 — 2026-06-08
+
+### Patch changes
+
+- [e58b500](https://github.com/bruits/satteri/commit/e58b500aecfce9c03e3a5045a2d5a063eb1f8203) Fixes a parsing error when a MDX attribute contained the closing tag of itself, e.g. `<Component attr="</Component>">`. The parser would incorrectly treat the `</Component>` as the closing tag of the component, instead of part of the attribute value. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.3.2
+
 ## 0.5.1 — 2026-06-03
 
 ### Patch changes
