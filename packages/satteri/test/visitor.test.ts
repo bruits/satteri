@@ -159,6 +159,23 @@ test("context.source returns the source text", () => {
   expect(capturedSource).toBe("# Hello\n\nWorld");
 });
 
+test("context.textContent includes an inlineMath node's value", () => {
+  // inlineMath shares Math's (meta, value) layout, so its value sits at the
+  // second slot — mdast-util-to-string must read that, not the empty `meta`.
+  const handle = createMdastHandle("# Energy $E=mc^2$", { math: true });
+  const source = getHandleSource(handle);
+  let captured: string | null = null;
+  const plugin = defineMdastPlugin({
+    name: "capture-heading-text",
+    heading(node, ctx) {
+      captured = ctx.textContent(node);
+    },
+  });
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, undefined);
+  expect(captured).toBe("Energy E=mc^2");
+});
+
 test("context.fileURL exposes a file URL passed as a URL", () => {
   const { handle, source } = setup();
   let captured: URL | undefined;
