@@ -21,6 +21,7 @@ const CMD_APPEND_CHILD = 0x08;
 const CMD_WRAP = 0x09;
 const CMD_REPLACE = 0x0b;
 const CMD_SET_PROPERTY = 0x0c;
+const CMD_SET_CHILDREN = 0x0d;
 
 // Payload types (0x10+, distinct range from commands)
 
@@ -136,6 +137,11 @@ export class CommandBuffer {
   /** Write a REPLACE command with a pre-serialized JSON payload. */
   replaceRawJson(nodeId: number, json: string): void {
     this.writeRawJsonCommand(CMD_REPLACE, nodeId, json);
+  }
+
+  /** Replace a node's child list (Root-wrapped `json`) while keeping the node. */
+  setChildren(nodeId: number, json: string): void {
+    this.writeRawJsonCommand(CMD_SET_CHILDREN, nodeId, json);
   }
 
   /** Write any structural command with a pre-serialized JSON payload. */

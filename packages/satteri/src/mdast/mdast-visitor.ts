@@ -136,6 +136,10 @@ function nid(node: MdastNode): number {
   return mdastNodeIdMap.get(node as object) ?? (node as MdastNodeInternal)._nodeId;
 }
 
+function asArray<T>(value: T | T[]): T[] {
+  return Array.isArray(value) ? value : [value];
+}
+
 export class MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = new CommandBuffer();
   readonly #diagnostics: MdastDiagnostic[] = [];
@@ -164,18 +168,22 @@ export class MdastVisitorContext {
     this.#commandBuffer.removeNode(nid(node as MdastNode));
   }
 
-  insertBefore(node: Readonly<MdastNode>, newNode: MdastContent): void {
+  insertBefore(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
     const id = nid(node as MdastNode);
-    const c = compileOrJson(newNode);
-    if (c instanceof Uint8Array) this.#commandBuffer.insertBeforeOpstream(id, c);
-    else this.#commandBuffer.insertBefore(id, c);
+    for (const n of asArray(newNode)) {
+      const c = compileOrJson(n);
+      if (c instanceof Uint8Array) this.#commandBuffer.insertBeforeOpstream(id, c);
+      else this.#commandBuffer.insertBefore(id, c);
+    }
   }
 
-  insertAfter(node: Readonly<MdastNode>, newNode: MdastContent): void {
+  insertAfter(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
     const id = nid(node as MdastNode);
-    const c = compileOrJson(newNode);
-    if (c instanceof Uint8Array) this.#commandBuffer.insertAfterOpstream(id, c);
-    else this.#commandBuffer.insertAfter(id, c);
+    for (const n of asArray(newNode)) {
+      const c = compileOrJson(n);
+      if (c instanceof Uint8Array) this.#commandBuffer.insertAfterOpstream(id, c);
+      else this.#commandBuffer.insertAfter(id, c);
+    }
   }
 
   /**
@@ -189,18 +197,44 @@ export class MdastVisitorContext {
     else this.#commandBuffer.wrapNode(id, c);
   }
 
-  prependChild(node: Readonly<MdastNode>, childNode: MdastContent): void {
+  prependChild(node: Readonly<MdastNode>, childNode: MdastContent | MdastContent[]): void {
     const id = nid(node as MdastNode);
-    const c = compileOrJson(childNode);
-    if (c instanceof Uint8Array) this.#commandBuffer.prependChildOpstream(id, c);
-    else this.#commandBuffer.prependChild(id, c);
+    for (const n of asArray(childNode)) {
+      const c = compileOrJson(n);
+      if (c instanceof Uint8Array) this.#commandBuffer.prependChildOpstream(id, c);
+      else this.#commandBuffer.prependChild(id, c);
+    }
   }
 
-  appendChild(node: Readonly<MdastNode>, childNode: MdastContent): void {
+  appendChild(node: Readonly<MdastNode>, childNode: MdastContent | MdastContent[]): void {
     const id = nid(node as MdastNode);
-    const c = compileOrJson(childNode);
-    if (c instanceof Uint8Array) this.#commandBuffer.appendChildOpstream(id, c);
-    else this.#commandBuffer.appendChild(id, c);
+    for (const n of asArray(childNode)) {
+      const c = compileOrJson(n);
+      if (c instanceof Uint8Array) this.#commandBuffer.appendChildOpstream(id, c);
+      else this.#commandBuffer.appendChild(id, c);
+    }
+  }
+
+  /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
+  insertChildAt(
+    node: Readonly<MdastNode>,
+    index: number,
+    childNode: MdastContent | MdastContent[],
+  ): void {
+    const children = "children" in node ? node.children : [];
+    if (index <= 0 || children.length === 0) {
+      this.prependChild(node, childNode);
+    } else if (index >= children.length) {
+      this.appendChild(node, childNode);
+    } else {
+      this.insertBefore(children[index]!, childNode);
+    }
+  }
+
+  /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
+  removeChildAt(node: Readonly<MdastNode>, index: number): void {
+    const child = "children" in node ? node.children[index] : undefined;
+    if (child) this.removeNode(child);
   }
 
   replaceNode(node: Readonly<MdastNode>, newNode: MdastContent): void {
@@ -215,6 +249,13 @@ export class MdastVisitorContext {
     key: K,
     value: N[K],
   ): void {
+    if (key === "children") {
+      // children is structural: set-children keeps the node and swaps only its
+      // child list (reused children keep their id).
+      const wrapper = refifyReusedNodes({ type: "root", children: value }, true);
+      this.#commandBuffer.setChildren(nid(node as MdastNode), JSON.stringify(wrapper));
+      return;
+    }
     if (key === "data") {
       // data is stored as JSON in the arena, serialize it for the command buffer
       this.#commandBuffer.setProperty(

@@ -607,7 +607,6 @@ pub fn decode_math_data(bytes: &[u8]) -> MathData {
     MathData::from_bytes(bytes)
 }
 
-/// Used by Text, InlineCode, Html, Yaml, Toml, and InlineMath nodes.
 pub fn encode_string_ref_data(sr: StringRef) -> Vec<u8> {
     sr.as_bytes().to_vec()
 }

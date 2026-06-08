@@ -167,6 +167,78 @@ test("a plugin's own freshly-built node is not re-walked", () => {
   expect((html.match(/data-wrapped/g) ?? []).length).toBe(1); // output not re-wrapped
 });
 
+test("a table moved out of a directive keeps its cells and alignment (#80)", () => {
+  const move = defineMdastPlugin({
+    name: "move-table",
+    containerDirective(node, ctx) {
+      ctx.insertAfter(node, node.children[1]!);
+    },
+  });
+  const md = ":::tip\nintro\n\n| A | B | C |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n\n:::";
+  const { html } = markdownToHtml(md, {
+    features: { directive: true, gfm: true },
+    mdastPlugins: [move],
+  });
+  expect(html).toContain('<td style="text-align: left">1</td>');
+  expect(html).toContain('<td style="text-align: center">2</td>');
+  expect(html).toContain('<td style="text-align: right">3</td>');
+});
+
+test("an inlineMath node survives a round-trip", () => {
+  // inlineMath shares Math's 16-byte `MathData` layout. The rebuild once encoded
+  // it as an 8-byte string ref, so reading it back overran the buffer and crashed.
+  const dup = defineMdastPlugin({
+    name: "dup-inline-math",
+    inlineMath(node, ctx) {
+      ctx.insertAfter(node, node);
+    },
+  });
+  const { html } = markdownToHtml("hi $x$ end", { features: { math: true }, mdastPlugins: [dup] });
+  expect((html.match(/math-inline">x</g) ?? []).length).toBe(2);
+});
+
+test("an imageReference keeps its alt through a round-trip", () => {
+  // imageReference stores `alt` after the reference header. The rebuild used the
+  // plain reference layout (no alt), and the matched-node reader never surfaced
+  // it, so a duplicated reference lost its alt text.
+  const dup = defineMdastPlugin({
+    name: "dup-image-ref",
+    imageReference(node, ctx) {
+      ctx.insertAfter(node, node);
+    },
+  });
+  const md = '![alt text][logo]\n\n[logo]: /logo.png "Logo"';
+  const { html } = markdownToHtml(md, { mdastPlugins: [dup] });
+  expect((html.match(/alt="alt text"/g) ?? []).length).toBe(2);
+});
+
+test("a fresh table built without `align` still renders its cells", () => {
+  // mdast→hast uses the table's `align` length as the column count. A plugin
+  // building a table from scratch need not supply `align`; the conversion then
+  // falls back to the row's own cell count instead of dropping every cell.
+  const build = defineMdastPlugin({
+    name: "build-table",
+    paragraph() {
+      return {
+        type: "table",
+        children: [
+          {
+            type: "tableRow",
+            children: [{ type: "tableCell", children: [{ type: "text", value: "H" }] }],
+          },
+          {
+            type: "tableRow",
+            children: [{ type: "tableCell", children: [{ type: "text", value: "v" }] }],
+          },
+        ],
+      } as unknown as MdastNode;
+    },
+  });
+  const { html } = markdownToHtml("x", { features: { gfm: true }, mdastPlugins: [build] });
+  expect(html).toContain("<th>H</th>");
+  expect(html).toContain("<td>v</td>");
+});
+
 test("a freshly-generated node is transformed by a later plugin (the multi-plugin path)", () => {
   // `emit` produces a NEW :::tip directive; it is not re-walked within `emit`.
   // `toAside`, running afterward over the materialized tree, transforms it.

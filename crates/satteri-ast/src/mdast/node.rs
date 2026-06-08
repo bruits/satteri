@@ -86,4 +86,47 @@ impl MdastNodeType {
             _ => None,
         }
     }
+
+    /// The canonical MDAST type name, as used in the public AST and diagnostics.
+    pub fn name(self) -> &'static str {
+        match self {
+            MdastNodeType::Root => "root",
+            MdastNodeType::Paragraph => "paragraph",
+            MdastNodeType::Heading => "heading",
+            MdastNodeType::ThematicBreak => "thematicBreak",
+            MdastNodeType::Blockquote => "blockquote",
+            MdastNodeType::List => "list",
+            MdastNodeType::ListItem => "listItem",
+            MdastNodeType::Html => "html",
+            MdastNodeType::Code => "code",
+            MdastNodeType::Definition => "definition",
+            MdastNodeType::Text => "text",
+            MdastNodeType::Emphasis => "emphasis",
+            MdastNodeType::Strong => "strong",
+            MdastNodeType::InlineCode => "inlineCode",
+            MdastNodeType::Break => "break",
+            MdastNodeType::Link => "link",
+            MdastNodeType::Image => "image",
+            MdastNodeType::LinkReference => "linkReference",
+            MdastNodeType::ImageReference => "imageReference",
+            MdastNodeType::FootnoteDefinition => "footnoteDefinition",
+            MdastNodeType::FootnoteReference => "footnoteReference",
+            MdastNodeType::Table => "table",
+            MdastNodeType::TableRow => "tableRow",
+            MdastNodeType::TableCell => "tableCell",
+            MdastNodeType::Delete => "delete",
+            MdastNodeType::Yaml => "yaml",
+            MdastNodeType::Toml => "toml",
+            MdastNodeType::Math => "math",
+            MdastNodeType::InlineMath => "inlineMath",
+            MdastNodeType::ContainerDirective => "containerDirective",
+            MdastNodeType::LeafDirective => "leafDirective",
+            MdastNodeType::TextDirective => "textDirective",
+            MdastNodeType::MdxJsxFlowElement => "mdxJsxFlowElement",
+            MdastNodeType::MdxJsxTextElement => "mdxJsxTextElement",
+            MdastNodeType::MdxFlowExpression => "mdxFlowExpression",
+            MdastNodeType::MdxTextExpression => "mdxTextExpression",
+            MdastNodeType::MdxjsEsm => "mdxjsEsm",
+        }
+    }
 }

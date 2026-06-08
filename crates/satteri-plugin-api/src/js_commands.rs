@@ -16,6 +16,7 @@
 //!   0x09  WRAP             [nodeId: u32][payloadType: u8][payload...]
 //!   0x0B  REPLACE          [nodeId: u32][payloadType: u8][payload...]
 //!   0x0C  SET_PROPERTY     [nodeId: u32][valueType: u8][nameLen: u32][name...][valueLen: u32][value...]
+//!   0x0D  SET_CHILDREN     [nodeId: u32][payloadType: u8][payload...] (payload is a Root-wrapped child list)
 //!
 //! Value types for SET_PROPERTY (must match `shared::PROP_*` and the JS
 //! `command-buffer.ts` constants):
@@ -62,6 +63,7 @@ const CMD_APPEND_CHILD: u8 = 0x08;
 const CMD_WRAP: u8 = 0x09;
 const CMD_REPLACE: u8 = 0x0B;
 const CMD_SET_PROPERTY: u8 = 0x0C;
+const CMD_SET_CHILDREN: u8 = 0x0D;
 
 const PAYLOAD_RAW_MARKDOWN: u8 = 0x10;
 const PAYLOAD_RAW_HTML: u8 = 0x11;
@@ -227,6 +229,14 @@ fn resolve_mdast_field(node_type: u8, name: &str) -> Option<u16> {
     }
 }
 
+/// The canonical MDAST type name for a node-type byte, for error messages.
+fn mdast_type_name(node_type: u8) -> String {
+    match MdastNodeType::from_u8(node_type) {
+        Some(t) => t.name().to_string(),
+        None => format!("unknown({node_type})"),
+    }
+}
+
 /// MDAST set-property: writes a typed field (or `data` JSON) onto an MDAST
 /// node. Kind-tight to `Arena<Mdast>` — the HAST element-properties writer
 /// can no longer be reached from here.
@@ -243,10 +253,17 @@ fn apply_mdast_set_property(
     }
 
     let node_type = arena.get_node(node_id).node_type;
-    let field_id =
-        resolve_mdast_field(node_type, prop_name).ok_or(CommandError::UnknownField(0))?;
 
-    match value_type {
+    // The field name doesn't resolve for this node type at all.
+    let field_id =
+        resolve_mdast_field(node_type, prop_name).ok_or_else(|| CommandError::UnknownField {
+            node_type: mdast_type_name(node_type),
+            name: prop_name.to_string(),
+        })?;
+
+    // The field resolved, so a `None` from the inner writers means the value's
+    // type is one the field can't hold — report that rather than "unknown".
+    let written: Option<()> = match value_type {
         PROP_STRING | PROP_SPACE_SEP => {
             let sref = arena.alloc_string(value_str);
             set_mdast_string_ref(arena, node_id, field_id, sref)
@@ -263,8 +280,12 @@ fn apply_mdast_set_property(
             apply_mdast_int(arena, node_id, node_type, field_id, value)
         }
         PROP_NULL => apply_mdast_null(arena, node_id, node_type, field_id),
-        _ => Err(CommandError::UnknownCommand(value_type)),
-    }
+        _ => return Err(CommandError::UnknownCommand(value_type)),
+    };
+    written.ok_or_else(|| CommandError::InvalidPropertyValue {
+        node_type: mdast_type_name(node_type),
+        name: prop_name.to_string(),
+    })
 }
 
 fn apply_mdast_int(
@@ -273,7 +294,7 @@ fn apply_mdast_int(
     node_type: u8,
     field_id: u16,
     value: i64,
-) -> Result<(), CommandError> {
+) -> Option<()> {
     let data_offset = arena.get_node(node_id).data_offset as usize;
     let data_len = arena.get_node(node_id).data_len as usize;
     match (node_type, field_id) {
@@ -293,9 +314,9 @@ fn apply_mdast_int(
                 arena.type_data[data_offset] = value as u8;
             }
         }
-        _ => return Err(CommandError::UnknownField(field_id)),
+        _ => return None,
     }
-    Ok(())
+    Some(())
 }
 
 fn apply_mdast_bool(
@@ -304,7 +325,7 @@ fn apply_mdast_bool(
     node_type: u8,
     field_id: u16,
     value: bool,
-) -> Result<(), CommandError> {
+) -> Option<()> {
     let data_offset = arena.get_node(node_id).data_offset as usize;
     let data_len = arena.get_node(node_id).data_len as usize;
     match (node_type, field_id) {
@@ -323,9 +344,9 @@ fn apply_mdast_bool(
                 arena.type_data[data_offset + 1] = value as u8;
             }
         }
-        _ => return Err(CommandError::UnknownField(field_id)),
+        _ => return None,
     }
-    Ok(())
+    Some(())
 }
 
 fn apply_mdast_null(
@@ -333,7 +354,7 @@ fn apply_mdast_null(
     node_id: u32,
     node_type: u8,
     field_id: u16,
-) -> Result<(), CommandError> {
+) -> Option<()> {
     match (node_type, field_id) {
         (6, FIELD_CHECKED) => {
             let data_offset = arena.get_node(node_id).data_offset as usize;
@@ -341,7 +362,7 @@ fn apply_mdast_null(
             if data_len >= 1 {
                 arena.type_data[data_offset] = 2;
             }
-            Ok(())
+            Some(())
         }
         _ => set_mdast_string_ref(arena, node_id, field_id, StringRef::empty()),
     }
@@ -352,7 +373,7 @@ fn set_mdast_string_ref(
     node_id: u32,
     field_id: u16,
     sref: StringRef,
-) -> Result<(), CommandError> {
+) -> Option<()> {
     let node = arena.get_node(node_id);
     let node_type = node.node_type;
     let data_offset = node.data_offset as usize;
@@ -389,7 +410,7 @@ fn set_mdast_string_ref(
         (100 | 101, FIELD_NAME) => 0,
         // MdxExpression/MdxjsEsm: ExpressionData { value: 0 }
         (102..=104, FIELD_VALUE) => 0,
-        _ => return Err(CommandError::UnknownField(field_id)),
+        _ => return None,
     };
 
     let abs_offset = data_offset + ref_offset;
@@ -398,7 +419,7 @@ fn set_mdast_string_ref(
     arena.type_data[abs_offset..abs_offset + 4].copy_from_slice(&bytes_offset);
     arena.type_data[abs_offset + 4..abs_offset + 8].copy_from_slice(&bytes_len);
 
-    Ok(())
+    Some(())
 }
 
 fn parse_raw_markdown(
@@ -548,8 +569,7 @@ fn encode_js_node_data(
         | MdastNodeType::InlineCode
         | MdastNodeType::Html
         | MdastNodeType::Yaml
-        | MdastNodeType::Toml
-        | MdastNodeType::InlineMath => {
+        | MdastNodeType::Toml => {
             let value = js_node.value.as_deref().unwrap_or("");
             let sref = builder.alloc_string(value);
             encode_string_ref_data(sref)
@@ -560,7 +580,9 @@ fn encode_js_node_data(
             let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
             encode_code_data(lang_ref, meta_ref, value_ref, b'`')
         }
-        MdastNodeType::Math => {
+        // InlineMath shares Math's `MathData` layout (the parser stores both
+        // that way); it has no `meta`, so that ref stays empty.
+        MdastNodeType::Math | MdastNodeType::InlineMath => {
             let meta_ref = alloc_opt_str(builder, js_node.meta.as_deref());
             let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
             encode_math_data(meta_ref, value_ref)
@@ -757,8 +779,9 @@ fn apply_hast_set_property(
         return Ok(());
     }
 
-    let node_type = HastNodeType::from_u8(arena.get_node(node_id).node_type)
-        .ok_or(CommandError::UnknownField(0))?;
+    let raw_type = arena.get_node(node_id).node_type;
+    let node_type = HastNodeType::from_u8(raw_type)
+        .ok_or_else(|| CommandError::UnknownNodeType(format!("hast type 0x{raw_type:02x}")))?;
 
     match node_type {
         HastNodeType::Element => {
@@ -783,7 +806,7 @@ fn apply_hast_set_property(
                     .copy_from_slice(&sref.len.to_le_bytes());
                 Ok(())
             } else {
-                Err(CommandError::UnknownField(0))
+                Err(CommandError::UnexpectedEof)
             }
         }
 
@@ -792,7 +815,10 @@ fn apply_hast_set_property(
             apply_hast_mdx_jsx_attribute(arena, node_id, prop_name, value_type, value_str)
         }
 
-        _ => Err(CommandError::UnknownField(0)),
+        _ => Err(CommandError::UnknownField {
+            node_type: node_type.name().to_string(),
+            name: prop_name.to_string(),
+        }),
     }
 }
 
@@ -1132,8 +1158,8 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
     let type_data: Vec<u8> = match c.node_type {
         // Heading
         2 => encode_heading_data(c.depth.unwrap_or(1)),
-        // Text, Html, InlineCode, Yaml, Toml, InlineMath: single value StringRef
-        10 | 7 | 13 | 25 | 26 | 28 => {
+        // Text, Html, InlineCode, Yaml, Toml: single value StringRef
+        10 | 7 | 13 | 25 | 26 => {
             let sref = builder.alloc_string(s(OF_VALUE).unwrap_or(""));
             encode_string_ref_data(sref)
         }
@@ -1144,8 +1170,8 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
             let value = alloc_opt_str(builder, s(OF_VALUE));
             encode_code_data(lang, meta, value, b'`')
         }
-        // Math: meta + value
-        27 => {
+        // Math / InlineMath share MathData: meta + value
+        27 | 28 => {
             let meta = alloc_opt_str(builder, s(OF_META));
             let value = alloc_opt_str(builder, s(OF_VALUE));
             encode_math_data(meta, value)
@@ -1735,6 +1761,16 @@ pub fn apply_mdast_commands_lenient(
                 });
             }
 
+            CMD_SET_CHILDREN => {
+                let node_id = reader.read_u32()?;
+                let (new_children, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                patches.push(Patch::SetChildren {
+                    node_id,
+                    new_children,
+                });
+            }
+
             other => return Err(CommandError::UnknownCommand(other)),
         }
     }
@@ -1856,6 +1892,15 @@ pub fn apply_hast_commands_lenient(
                     node_id,
                     new_tree,
                     keep_children,
+                });
+            }
+
+            CMD_SET_CHILDREN => {
+                let node_id = reader.read_u32()?;
+                let (new_children, _) = read_hast_payload(&mut reader, &arena, node_id)?;
+                patches.push(Patch::SetChildren {
+                    node_id,
+                    new_children,
                 });
             }
 
@@ -2193,6 +2238,47 @@ mod tests {
     }
 
     #[test]
+    fn set_property_invalid_field_reports_property_and_node_type() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_STRING, "value", "x");
+
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::UnknownField { ref name, ref node_type }
+                if name == "value" && node_type == "heading"
+        ));
+        assert_eq!(
+            err.to_string(),
+            "cannot set property 'value' on a 'heading' node"
+        );
+    }
+
+    #[test]
+    fn set_property_wrong_value_type_reports_value_mismatch() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+
+        // `depth` is a valid heading field, but it holds an int, not a string.
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_STRING, "depth", "3");
+
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::InvalidPropertyValue { ref name, ref node_type }
+                if name == "depth" && node_type == "heading"
+        ));
+        assert_eq!(
+            err.to_string(),
+            "property 'depth' on a 'heading' node cannot hold a value of this type"
+        );
+    }
+
+    #[test]
     fn js_node_to_arena_basic() {
         let js = JsNode {
             node_type: "heading".to_string(),
@@ -2210,11 +2296,11 @@ mod tests {
                 start: None,
                 spread: None,
                 checked: None,
+                align: None,
                 identifier: None,
                 label: None,
                 reference_type: None,
                 name: None,
-                align: None,
                 attributes: None,
                 tag_name: None,
                 properties: None,
@@ -2234,11 +2320,11 @@ mod tests {
             start: None,
             spread: None,
             checked: None,
+            align: None,
             identifier: None,
             label: None,
             reference_type: None,
             name: None,
-            align: None,
             attributes: None,
             tag_name: None,
             properties: None,

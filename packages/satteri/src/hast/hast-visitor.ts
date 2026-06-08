@@ -85,16 +85,20 @@ export interface HastVisitorContext {
   readonly fileURL: URL | undefined;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastContent): void;
-  insertBefore(node: Readonly<HastNode>, newNode: HastContent): void;
-  insertAfter(node: Readonly<HastNode>, newNode: HastContent): void;
+  insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
+  insertAfter(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   /**
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
    * children `parentNode` declares are kept after it, so a `div` with an anchor
    * child wraps a heading as `div > [heading, anchor]`.
    */
   wrapNode(node: Readonly<HastNode>, parentNode: HastContent): void;
-  prependChild(node: Readonly<HastNode>, childNode: HastContent): void;
-  appendChild(node: Readonly<HastNode>, childNode: HastContent): void;
+  prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
+  appendChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
+  /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
+  insertChildAt(node: Readonly<HastNode>, index: number, childNode: HastContent | HastContent[]): void;
+  /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
+  removeChildAt(node: Readonly<HastNode>, index: number): void;
   setProperty(node: Readonly<HastNode>, key: string, value: unknown): void;
   /** Collect the concatenated text of all descendant text nodes (like DOM textContent). */
   textContent(node: Readonly<HastNode>): string;
@@ -235,6 +239,10 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
     w.prop(name, PROP_SPACE_SEP, value.filter((v) => typeof v === "string").join(" "));
 }
 
+function asArray<T>(value: T | T[]): T[] {
+  return Array.isArray(value) ? value : [value];
+}
+
 class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = new CommandBuffer();
   readonly #diagnostics: HastDiagnostic[] = [];
@@ -269,18 +277,22 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#pendingNodes.set(id, newNode);
   }
 
-  insertBefore(node: HastNode, newNode: HastContent): void {
+  insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = nid(node);
-    const ops = compileHastToOpstream(newNode);
-    if (ops) this.#commandBuffer.insertBeforeOpstream(id, ops);
-    else this.#commandBuffer.insertBeforeRawJson(id, JSON.stringify(markHast(newNode)));
+    for (const n of asArray(newNode)) {
+      const ops = compileHastToOpstream(n);
+      if (ops) this.#commandBuffer.insertBeforeOpstream(id, ops);
+      else this.#commandBuffer.insertBeforeRawJson(id, JSON.stringify(markHast(n)));
+    }
   }
 
-  insertAfter(node: HastNode, newNode: HastContent): void {
+  insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = nid(node);
-    const ops = compileHastToOpstream(newNode);
-    if (ops) this.#commandBuffer.insertAfterOpstream(id, ops);
-    else this.#commandBuffer.insertAfterRawJson(id, JSON.stringify(markHast(newNode)));
+    for (const n of asArray(newNode)) {
+      const ops = compileHastToOpstream(n);
+      if (ops) this.#commandBuffer.insertAfterOpstream(id, ops);
+      else this.#commandBuffer.insertAfterRawJson(id, JSON.stringify(markHast(n)));
+    }
   }
 
   wrapNode(node: HastNode, parentNode: HastContent): void {
@@ -290,22 +302,53 @@ class HastVisitorContextImpl implements HastVisitorContext {
     else this.#commandBuffer.wrapNodeRawJson(id, JSON.stringify(markHast(parentNode)));
   }
 
-  prependChild(node: HastNode, childNode: HastContent): void {
+  prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = nid(node);
-    const ops = compileHastToOpstream(childNode);
-    if (ops) this.#commandBuffer.prependChildOpstream(id, ops);
-    else this.#commandBuffer.prependChildRawJson(id, JSON.stringify(markHast(childNode)));
+    for (const n of asArray(childNode)) {
+      const ops = compileHastToOpstream(n);
+      if (ops) this.#commandBuffer.prependChildOpstream(id, ops);
+      else this.#commandBuffer.prependChildRawJson(id, JSON.stringify(markHast(n)));
+    }
   }
 
-  appendChild(node: HastNode, childNode: HastContent): void {
+  appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = nid(node);
-    const ops = compileHastToOpstream(childNode);
-    if (ops) this.#commandBuffer.appendChildOpstream(id, ops);
-    else this.#commandBuffer.appendChildRawJson(id, JSON.stringify(markHast(childNode)));
+    for (const n of asArray(childNode)) {
+      const ops = compileHastToOpstream(n);
+      if (ops) this.#commandBuffer.appendChildOpstream(id, ops);
+      else this.#commandBuffer.appendChildRawJson(id, JSON.stringify(markHast(n)));
+    }
+  }
+
+  insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
+    const children = "children" in node ? node.children : [];
+    if (index <= 0 || children.length === 0) {
+      this.prependChild(node, childNode);
+    } else if (index >= children.length) {
+      this.appendChild(node, childNode);
+    } else {
+      this.insertBefore(children[index]!, childNode);
+    }
+  }
+
+  removeChildAt(node: HastNode, index: number): void {
+    const child = "children" in node ? node.children[index] : undefined;
+    if (child) this.removeNode(child);
   }
 
   setProperty(node: HastNode, key: string, value: unknown): void {
     const id = nid(node);
+    if (key === "children") {
+      // children is structural: set-children keeps the node and swaps only its
+      // child list (reused children keep their id).
+      const wrapper = {
+        _hast: true,
+        type: "root",
+        children: (value as HastNode[]).map((child) => markHastNode(child, false)),
+      };
+      this.#commandBuffer.setChildren(id, JSON.stringify(wrapper));
+      return;
+    }
     if (key === "data") {
       this.#commandBuffer.setProperty(id, key, value != null ? JSON.stringify(value) : null);
       return;

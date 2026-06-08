@@ -41,9 +41,8 @@ pub fn text_content_with_options(
     let include_image_alt = options.include_image_alt;
     let include_html = options.include_html;
     crate::text_content::text_content(arena, node_id, |nt| match MdastNodeType::from_u8(nt) {
-        Some(MdastNodeType::Text | MdastNodeType::InlineCode | MdastNodeType::InlineMath) => {
-            Some(0)
-        }
+        Some(MdastNodeType::Text | MdastNodeType::InlineCode) => Some(0),
+        Some(MdastNodeType::InlineMath) => Some(8),
         Some(MdastNodeType::Html) if include_html => Some(0),
         Some(MdastNodeType::Image) if include_image_alt => Some(8),
         _ => None,

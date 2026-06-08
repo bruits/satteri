@@ -9,6 +9,7 @@ import {
   renderHandle,
   getHandleSource,
 } from "../index.js";
+import { defineHastPlugin } from "../src/plugin.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { Position } from "unist";
@@ -129,19 +130,20 @@ describe("visitHastHandle - mutations", () => {
   // splice it once rather than re-applying the replacement and recursing.
   test("element() may re-parent the visited node into its replacement", () => {
     const { handle, source } = setup("# Hello");
-    const plugin = {
+    const plugin = defineHastPlugin({
+      name: "reparent-heading-into-div",
       element: {
         filter: ["h1"],
-        visit(node: HastNode) {
+        visit(node) {
           return {
-            type: "element" as const,
+            type: "element",
             tagName: "div",
             properties: {},
             children: [node],
-          } as unknown as HastNode;
+          };
         },
       },
-    };
+    });
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
@@ -152,27 +154,28 @@ describe("visitHastHandle - mutations", () => {
   // holding the original heading plus a freshly built anchor-link sibling.
   test("element() re-parents the visited node alongside a freshly built sibling", () => {
     const { handle, source } = setup("# Hello");
-    const plugin = {
+    const plugin = defineHastPlugin({
+      name: "reparent-heading-with-anchor",
       element: {
         filter: ["h1"],
-        visit(node: HastNode) {
+        visit(node) {
           return {
-            type: "element" as const,
+            type: "element",
             tagName: "div",
             properties: { className: ["heading-wrapper"] },
             children: [
               node,
               {
-                type: "element" as const,
+                type: "element",
                 tagName: "a",
                 properties: { href: "#hello" },
                 children: [{ type: "text", value: "#" }],
               },
             ],
-          } as unknown as HastNode;
+          };
         },
       },
-    };
+    });
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
@@ -239,7 +242,7 @@ describe("visitHastHandle - mutations", () => {
             tagName: "hr",
             properties: {},
             children: [],
-          } as unknown as HastNode);
+          });
         },
       },
     };
@@ -260,7 +263,7 @@ describe("visitHastHandle - mutations", () => {
             tagName: "div",
             properties: {},
             children: [],
-          } as unknown as HastNode);
+          });
         },
       },
     };
@@ -291,7 +294,7 @@ describe("visitHastHandle - mutations", () => {
                 children: [{ type: "text", value: "#" }],
               },
             ],
-          } as unknown as HastNode);
+          });
         },
       },
     };
@@ -309,7 +312,7 @@ describe("visitHastHandle - mutations", () => {
       element: {
         filter: ["h1"],
         visit(node: HastNode, ctx: HastVisitorContext) {
-          ctx.appendChild(node, { type: "text", value: "!" } as unknown as HastNode);
+          ctx.appendChild(node, { type: "text", value: "!" });
         },
       },
     };
@@ -330,7 +333,7 @@ describe("visitHastHandle - mutations", () => {
             tagName: "hr",
             properties: {},
             children: [],
-          } as unknown as HastNode);
+          });
         },
       },
     };
@@ -346,7 +349,7 @@ describe("visitHastHandle - mutations", () => {
       element: {
         filter: ["h1"],
         visit(node: HastNode, ctx: HastVisitorContext) {
-          ctx.prependChild(node, { type: "text", value: ">> " } as unknown as HastNode);
+          ctx.prependChild(node, { type: "text", value: ">> " });
         },
       },
     };
@@ -367,7 +370,7 @@ describe("visitHastHandle - mutations", () => {
             tagName: "h3",
             properties: {},
             children: [{ type: "text", value: "Replaced" }],
-          } as unknown as HastNode);
+          });
         },
       },
     };
@@ -386,7 +389,7 @@ describe("visitHastHandle - mutations", () => {
         visit(node: HastNode, ctx: HastVisitorContext) {
           const textChild = "children" in node ? node.children?.[0] : undefined;
           if (textChild) {
-            ctx.insertAfter(textChild, { type: "text", value: " World" } as unknown as HastNode);
+            ctx.insertAfter(textChild, { type: "text", value: " World" });
           }
         },
       },
@@ -395,6 +398,300 @@ describe("visitHastHandle - mutations", () => {
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain("<h1>Hello World</h1>");
+  });
+
+  test("context.setProperty(node, 'children', ...) replaces an element's children", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "replace-heading-children",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "children", [{ type: "text", value: "New heading" }]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>New heading</h1>");
+  });
+
+  test("context.setProperty 'children' composes with a scalar setProperty on the same node", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "set-id-and-replace-children",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "id", "title");
+          ctx.setProperty(node, "children", [{ type: "text", value: "Hi" }]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain(`<h1 id="title">Hi</h1>`);
+  });
+
+  test("context.setProperty(node, 'children', ...) preserves the element's properties", () => {
+    const { handle, source } = setup("[x](https://example.com)");
+    const plugin = defineHastPlugin({
+      name: "replace-anchor-children",
+      element: {
+        filter: ["a"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "children", [{ type: "text", value: "Y" }]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain(`<a href="https://example.com">Y</a>`);
+  });
+
+  test("context.insertChildAt() prepends at index 0", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "prepend-marker-at-index-0",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertChildAt(node, 0, { type: "text", value: ">> " });
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>&gt;&gt; Hello</h1>");
+  });
+
+  test("context.removeChildAt() removes the index-th child of an element", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "remove-first-child",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.removeChildAt(node, 0);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1></h1>");
+  });
+
+  test("context.appendChild() accepts an array of nodes on an element, in order", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "append-text-array",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.appendChild(node, [
+            { type: "text", value: " A" },
+            { type: "text", value: " B" },
+          ]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello A B</h1>");
+  });
+
+  test("context.insertChildAt() inserts before the index-th child of an element", () => {
+    const { handle, source } = setup("# Hello *world*");
+    const plugin = defineHastPlugin({
+      name: "insert-before-second-child",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertChildAt(node, 1, { type: "text", value: "X" });
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello X<em>world</em></h1>");
+  });
+
+  test("context.insertChildAt() appends past the end", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "append-via-clamped-index",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertChildAt(node, 99, { type: "text", value: "!" });
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello!</h1>");
+  });
+
+  test("context.insertChildAt() accepts an array, keeping order at the index", () => {
+    const { handle, source } = setup("# Hello *world*");
+    const plugin = defineHastPlugin({
+      name: "insert-array-between-children",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertChildAt(node, 1, [
+            { type: "text", value: "X" },
+            { type: "text", value: "Y" },
+          ]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello XY<em>world</em></h1>");
+  });
+
+  test("context.insertChildAt() treats a negative index as a prepend", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "prepend-via-negative-index",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertChildAt(node, -3, { type: "text", value: ">> " });
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>&gt;&gt; Hello</h1>");
+  });
+
+  test("context.setProperty(node, 'children', ...) keeps reused children", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "replace-children-keep-original",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          const original = node.children[0];
+          if (original) {
+            ctx.setProperty(node, "children", [{ type: "text", value: "> " }, original]);
+          }
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>&gt; Hello</h1>");
+  });
+
+  test("context.setProperty(node, 'children', []) clears the children", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "clear-children",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "children", []);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1></h1>");
+  });
+
+  test("context.removeChildAt() is a no-op for an out-of-range or negative index", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "remove-child-noop-out-of-range",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.removeChildAt(node, 9);
+          ctx.removeChildAt(node, -1);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello</h1>");
+  });
+
+  test("context.insertBefore() accepts an array of siblings", () => {
+    const { handle, source } = setup("# Hello\n\nWorld");
+    const plugin = defineHastPlugin({
+      name: "insert-two-hr-before",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertBefore(node, [
+            { type: "element", tagName: "hr", properties: {}, children: [] },
+            { type: "element", tagName: "hr", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect((html.match(/<hr>/g) ?? []).length).toBe(2);
+    expect(html.lastIndexOf("<hr>")).toBeLessThan(html.indexOf("<h1>"));
+  });
+
+  test("context.insertAfter() accepts an array of siblings", () => {
+    const { handle, source } = setup("# Hello\n\nWorld");
+    const plugin = defineHastPlugin({
+      name: "insert-two-hr-after",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertAfter(node, [
+            { type: "element", tagName: "hr", properties: {}, children: [] },
+            { type: "element", tagName: "hr", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect((html.match(/<hr>/g) ?? []).length).toBe(2);
+    expect(html.indexOf("<hr>")).toBeGreaterThan(html.indexOf("<h1>"));
+  });
+
+  test("context.prependChild() accepts an array of nodes, in order", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "prepend-text-array",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.prependChild(node, [
+            { type: "text", value: "A " },
+            { type: "text", value: "B " },
+          ]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>A B Hello</h1>");
   });
 });
 

@@ -3,7 +3,6 @@ import {
   visitMdastHandle,
   resolveMdastSubscriptions,
   type MdastVisitorContext,
-  type MdastPluginInstance,
 } from "../src/mdast/mdast-visitor.js";
 import {
   createMdastHandle,
@@ -12,6 +11,7 @@ import {
   renderHandle,
 } from "../index.js";
 import type { MdastNode } from "../src/types.js";
+import { defineMdastPlugin } from "../src/plugin.js";
 
 /** Helper: run a visitor on markdown, apply mutations, convert to HAST, render HTML. */
 function visitAndRender(
@@ -75,12 +75,13 @@ test('visitor callback receives correct MDAST node (type="heading", depth=1)', (
 
 test("return value from visitor creates a Replace command in the buffer", () => {
   const { handle, source } = setup();
-  const newNode = { type: "paragraph", children: [] } as unknown as MdastNode;
-  const plugin = {
-    heading(_node: MdastNode) {
+  const newNode = { type: "paragraph", children: [] } satisfies MdastNode;
+  const plugin = defineMdastPlugin({
+    name: "replace-heading-via-return",
+    heading(_node) {
       return newNode;
     },
-  };
+  });
   const subs = resolveMdastSubscriptions(plugin);
   const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     commandBuffer: Uint8Array;
@@ -158,6 +159,23 @@ test("context.source returns the source text", () => {
   expect(capturedSource).toBe("# Hello\n\nWorld");
 });
 
+test("context.textContent includes an inlineMath node's value", () => {
+  // inlineMath shares Math's (meta, value) layout, so its value sits at the
+  // second slot — mdast-util-to-string must read that, not the empty `meta`.
+  const handle = createMdastHandle("# Energy $E=mc^2$", { math: true });
+  const source = getHandleSource(handle);
+  let captured: string | null = null;
+  const plugin = defineMdastPlugin({
+    name: "capture-heading-text",
+    heading(node, ctx) {
+      captured = ctx.textContent(node);
+    },
+  });
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, undefined);
+  expect(captured).toBe("Energy E=mc^2");
+});
+
 test("context.fileURL exposes a file URL passed as a URL", () => {
   const { handle, source } = setup();
   let captured: URL | undefined;
@@ -212,12 +230,13 @@ test("hasMutations is false when no mutations, true when there are mutations", (
 
 test("setProperty + returning the same node does not drop the mutation", () => {
   const { handle, source } = setup();
-  const plugin: MdastPluginInstance = {
+  const plugin = defineMdastPlugin({
+    name: "set-depth-keep-mutation",
     heading(node, context) {
       context.setProperty(node, "depth", 3);
       return node; // returning same object should NOT clobber the setProperty
     },
-  };
+  });
   const subs = resolveMdastSubscriptions(plugin);
   const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     hasMutations: boolean;
@@ -231,7 +250,7 @@ test("setProperty + returning the same node does not drop the mutation", () => {
 test("context.insertBefore() inserts a node before the target", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
-      ctx.insertBefore(node, { type: "thematicBreak" } as MdastNode);
+      ctx.insertBefore(node, { type: "thematicBreak" });
     },
   });
   expect(html).toContain("<hr>");
@@ -242,7 +261,7 @@ test("context.insertBefore() inserts a node before the target", () => {
 test("context.insertAfter() inserts a node after the target", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
-      ctx.insertAfter(node, { type: "thematicBreak" } as MdastNode);
+      ctx.insertAfter(node, { type: "thematicBreak" });
     },
   });
   expect(html).toContain("<hr>");
@@ -253,7 +272,7 @@ test("context.insertAfter() inserts a node after the target", () => {
 test("context.prependChild() adds a child at the start", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
-      ctx.prependChild(node, { type: "text", value: ">> " } as MdastNode);
+      ctx.prependChild(node, { type: "text", value: ">> " });
     },
   });
   expect(html).toContain("<h1>");
@@ -263,7 +282,7 @@ test("context.prependChild() adds a child at the start", () => {
 test("context.appendChild() adds a child at the end", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
-      ctx.appendChild(node, { type: "text", value: "!" } as MdastNode);
+      ctx.appendChild(node, { type: "text", value: "!" });
     },
   });
   expect(html).toContain("<h1>");
@@ -273,7 +292,7 @@ test("context.appendChild() adds a child at the end", () => {
 test("context.wrapNode() wraps a node in a parent", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
-      ctx.wrapNode(node, { type: "blockquote", children: [] } as MdastNode);
+      ctx.wrapNode(node, { type: "blockquote", children: [] });
     },
   });
   expect(html).toContain("<blockquote>");
@@ -287,11 +306,172 @@ test("context.replaceNode() replaces a node via context method", () => {
       ctx.replaceNode(node, {
         type: "paragraph",
         children: [{ type: "text", value: "Replaced" }],
-      } as MdastNode);
+      });
     },
   });
   expect(html).not.toContain("<h1>");
   expect(html).toContain("Replaced");
+});
+
+test("context.setProperty(node, 'children', ...) replaces a node's children", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      ctx.setProperty(node, "children", [{ type: "text", value: "New heading" }]);
+    },
+  });
+  expect(html).toMatch(/<h1>New heading<\/h1>/);
+});
+
+test("context.setProperty 'children' composes with a scalar setProperty on the same node", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      ctx.setProperty(node, "depth", 3);
+      ctx.setProperty(node, "children", [{ type: "text", value: "New heading" }]);
+    },
+  });
+  expect(html).toMatch(/<h3>New heading<\/h3>/);
+});
+
+test("context.setProperty(node, 'children', ...) keeps reused children", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      const original = node.children[0]!;
+      ctx.setProperty(node, "children", [{ type: "text", value: "> " }, original]);
+    },
+  });
+  expect(html).toMatch(/<h1>&gt; Hello<\/h1>/);
+});
+
+test("context.insertChildAt() prepends at index 0", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      ctx.insertChildAt(node, 0, { type: "text", value: ">> " });
+    },
+  });
+  expect(html).toMatch(/<h1>&gt;&gt; Hello<\/h1>/);
+});
+
+test("context.insertChildAt() appends past the end", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      ctx.insertChildAt(node, 99, { type: "text", value: "!" });
+    },
+  });
+  expect(html).toMatch(/<h1>Hello!<\/h1>/);
+});
+
+test("context.insertChildAt() inserts before the index-th child", () => {
+  const html = visitAndRender("a *b*", {
+    paragraph(node, ctx) {
+      ctx.insertChildAt(node, 1, { type: "text", value: "Z" });
+    },
+  });
+  expect(html).toMatch(/<p>a Z<em>b<\/em><\/p>/);
+});
+
+test("context.removeChildAt() removes the index-th child", () => {
+  const html = visitAndRender("a *b*", {
+    paragraph(node, ctx) {
+      ctx.removeChildAt(node, 1);
+    },
+  });
+  expect(html).toContain("<p>a ");
+  expect(html).not.toContain("<em>");
+});
+
+test("context.appendChild() accepts an array of nodes, in order", () => {
+  const html = visitAndRender("# Hello", {
+    heading(node, ctx) {
+      ctx.appendChild(node, [
+        { type: "text", value: " A" },
+        { type: "text", value: " B" },
+      ]);
+    },
+  });
+  expect(html).toMatch(/<h1>Hello A B<\/h1>/);
+});
+
+test("context.insertChildAt() accepts an array, keeping order at the index", () => {
+  const html = visitAndRender("a *b*", {
+    paragraph(node, ctx) {
+      ctx.insertChildAt(node, 1, [
+        { type: "text", value: "X" },
+        { type: "text", value: "Y" },
+      ]);
+    },
+  });
+  expect(html).toMatch(/<p>a XY<em>b<\/em><\/p>/);
+});
+
+test("context.insertBefore() accepts an array of siblings", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      ctx.insertBefore(node, [{ type: "thematicBreak" }, { type: "thematicBreak" }]);
+    },
+  });
+  expect((html.match(/<hr>/g) ?? []).length).toBe(2);
+  expect(html.lastIndexOf("<hr>")).toBeLessThan(html.indexOf("<h1>"));
+});
+
+test("context.insertAfter() accepts an array of siblings", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      ctx.insertAfter(node, [{ type: "thematicBreak" }, { type: "thematicBreak" }]);
+    },
+  });
+  expect((html.match(/<hr>/g) ?? []).length).toBe(2);
+  expect(html.indexOf("<hr>")).toBeGreaterThan(html.indexOf("<h1>"));
+});
+
+test("context.prependChild() accepts an array of nodes, in order", () => {
+  const html = visitAndRender("# Hello", {
+    heading(node, ctx) {
+      ctx.prependChild(node, [
+        { type: "text", value: "A " },
+        { type: "text", value: "B " },
+      ]);
+    },
+  });
+  expect(html).toMatch(/<h1>A B Hello<\/h1>/);
+});
+
+test("context.setProperty(node, 'children', []) clears the children", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      ctx.setProperty(node, "children", []);
+    },
+  });
+  expect(html).toMatch(/<h1><\/h1>/);
+});
+
+test("context.removeChildAt() is a no-op for an out-of-range or negative index", () => {
+  const html = visitAndRender("a *b*", {
+    paragraph(node, ctx) {
+      ctx.removeChildAt(node, 99);
+      ctx.removeChildAt(node, -1);
+    },
+  });
+  expect(html).toMatch(/<p>a <em>b<\/em><\/p>/);
+});
+
+test("context.insertChildAt() treats a negative index as a prepend", () => {
+  const html = visitAndRender("# Hello", {
+    heading(node, ctx) {
+      ctx.insertChildAt(node, -5, { type: "text", value: ">> " });
+    },
+  });
+  expect(html).toMatch(/<h1>&gt;&gt; Hello<\/h1>/);
+});
+
+test("setProperty on an invalid field throws an error naming the property and node type", () => {
+  const run = () =>
+    visitAndRender("# Hello\n\nWorld", {
+      heading(node, ctx) {
+        // @ts-expect-error "value" is not a field on a heading node
+        ctx.setProperty(node, "value", "x");
+      },
+    });
+  expect(run).toThrow(/cannot set property 'value' on a 'heading' node/);
 });
 
 // Directive visitors
@@ -305,11 +485,12 @@ function setupDirective(md: string) {
 test("containerDirective visitor fires and exposes name + attributes", () => {
   const { handle, source } = setupDirective(":::tip{.note #id}\nbody\n:::\n");
   const seen: { name: string; attributes: Record<string, string> }[] = [];
-  const plugin: MdastPluginInstance = {
+  const plugin = defineMdastPlugin({
+    name: "collect-container-directive",
     containerDirective(node) {
       seen.push({ name: node.name, attributes: { ...(node.attributes ?? {}) } });
     },
-  };
+  });
   const subs = resolveMdastSubscriptions(plugin);
   expect(subs.length).toBe(1);
   visitMdastHandle(handle, plugin, subs, source, undefined);
@@ -322,12 +503,13 @@ test("containerDirective visitor fires and exposes name + attributes", () => {
 test("containerDirective with [label] exposes directiveLabel marker on first child", () => {
   const { handle, source } = setupDirective(":::warning[Heads up]\ncontent\n:::\n");
   let labelChildHadMarker = false;
-  const plugin: MdastPluginInstance = {
+  const plugin = defineMdastPlugin({
+    name: "read-container-directive-label",
     containerDirective(node) {
       const first = node.children[0] as { data?: { directiveLabel?: boolean } } | undefined;
       labelChildHadMarker = first?.data?.directiveLabel === true;
     },
-  };
+  });
   const subs = resolveMdastSubscriptions(plugin);
   visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(labelChildHadMarker).toBe(true);
@@ -336,11 +518,12 @@ test("containerDirective with [label] exposes directiveLabel marker on first chi
 test("leafDirective visitor fires and exposes name", () => {
   const { handle, source } = setupDirective("::break{aria-label=section}\n");
   const seen: { name: string; attributes: Record<string, string> }[] = [];
-  const plugin: MdastPluginInstance = {
+  const plugin = defineMdastPlugin({
+    name: "collect-leaf-directive",
     leafDirective(node) {
       seen.push({ name: node.name, attributes: { ...(node.attributes ?? {}) } });
     },
-  };
+  });
   const subs = resolveMdastSubscriptions(plugin);
   visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(seen.length).toBe(1);
@@ -351,11 +534,12 @@ test("leafDirective visitor fires and exposes name", () => {
 test("textDirective visitor fires inside a paragraph", () => {
   const { handle, source } = setupDirective("Hello :emoji[smile]{.big} world\n");
   const seen: string[] = [];
-  const plugin: MdastPluginInstance = {
+  const plugin = defineMdastPlugin({
+    name: "collect-text-directive",
     textDirective(node) {
       seen.push(node.name);
     },
-  };
+  });
   const subs = resolveMdastSubscriptions(plugin);
   visitMdastHandle(handle, plugin, subs, source, undefined);
   expect(seen).toEqual(["emoji"]);
@@ -364,11 +548,12 @@ test("textDirective visitor fires inside a paragraph", () => {
 test("containerDirective replaceNode rewrites to an aside-style block", () => {
   const handle = createMdastHandle(":::tip\nbody\n:::\n", { directive: true });
   const source = getHandleSource(handle);
-  const plugin: MdastPluginInstance = {
+  const plugin = defineMdastPlugin({
+    name: "container-directive-to-aside",
     containerDirective(node, ctx) {
       ctx.replaceNode(node, { rawHtml: `<aside class="${node.name}">body</aside>` } as never);
     },
-  };
+  });
   const subs = resolveMdastSubscriptions(plugin);
   const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
     commandBuffer: Uint8Array;

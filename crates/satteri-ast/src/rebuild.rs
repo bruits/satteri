@@ -47,6 +47,12 @@ pub enum Patch<K: ArenaKind> {
         node_id: u32,
         child_tree: Arena<K>,
     },
+    /// Replaces the node's child list with `new_children` (a Root-rooted
+    /// sub-arena, spliced in), keeping the node itself — unlike `Replace`.
+    SetChildren {
+        node_id: u32,
+        new_children: Arena<K>,
+    },
 }
 
 /// Node IDs in the new arena are assigned fresh (monotonically increasing)
@@ -106,6 +112,7 @@ pub fn rebuild_lenient<K: ArenaKind>(
             Patch::Wrap { node_id, .. } => *node_id,
             Patch::PrependChild { node_id, .. } => *node_id,
             Patch::AppendChild { node_id, .. } => *node_id,
+            Patch::SetChildren { node_id, .. } => *node_id,
         };
         patch_map.entry(node_id).or_default().push(patch);
     }
@@ -300,10 +307,26 @@ fn copy_node<K: ArenaKind>(
         }
     }
 
-    // Iterate children directly — the read-only `orig` borrow coexists with the
-    // recursive read-only `copy_node` calls, so no per-node `Vec` alloc is needed.
-    for &child_id in orig.get_children(node_id) {
-        copy_node(child_id, orig, builder, patch_map, deleted, visited, active);
+    let set_children = node_patches.iter().rev().find_map(|p| match p {
+        Patch::SetChildren { new_children, .. } => Some(new_children),
+        _ => None,
+    });
+    if let Some(new_children) = set_children {
+        emit_subtree(
+            new_children,
+            builder,
+            orig,
+            patch_map,
+            deleted,
+            visited,
+            active,
+        );
+    } else {
+        // Iterate children directly — the read-only `orig` borrow coexists with the
+        // recursive read-only `copy_node` calls, so no per-node `Vec` alloc is needed.
+        for &child_id in orig.get_children(node_id) {
+            copy_node(child_id, orig, builder, patch_map, deleted, visited, active);
+        }
     }
 
     for patch in node_patches {
@@ -560,8 +583,8 @@ fn remap_mdast_string_refs(data: &mut [u8], node_type: u8, base: u32) {
     }
 
     let ref_offsets: &[usize] = match node_type {
-        // Html(7), Text(10), InlineCode(13), Yaml(25), Toml(26), InlineMath(28): single StringRef at 0
-        7 | 10 | 13 | 25 | 26 | 28 => &[0],
+        // Html(7), Text(10), InlineCode(13), Yaml(25), Toml(26): single StringRef at 0
+        7 | 10 | 13 | 25 | 26 => &[0],
         // Code(8): lang(0), meta(8), value(16)
         8 => &[0, 8, 16],
         // Definition(9): url(0), title(8), identifier(16), label(24)
@@ -577,8 +600,8 @@ fn remap_mdast_string_refs(data: &mut [u8], node_type: u8, base: u32) {
         18 => &[0, 8, 20],
         // FootnoteDefinition(19): identifier(0), label(8)
         19 => &[0, 8],
-        // Math(27): meta(0), value(8)
-        27 => &[0, 8],
+        // Math(27), InlineMath(28): meta(0), value(8)
+        27 | 28 => &[0, 8],
         // MdxFlowExpression(102), MdxTextExpression(103), MdxjsEsm(104): value(0)
         102..=104 => &[0],
         // List(5) carries `start: u32` at offset 0 — NOT a StringRef. Heading(2)
@@ -639,7 +662,7 @@ fn remap_one_ref(data: &mut [u8], off: usize, base: u32) {
     if off + 8 <= data.len() {
         let current = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
         let len = u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
-        if len > 0 {
+        if len > 0 || current > 0 {
             let new_offset = current + base;
             data[off..off + 4].copy_from_slice(&new_offset.to_le_bytes());
         }
@@ -795,10 +818,26 @@ fn copy_node_raw<K: ArenaKind>(
         }
     }
 
-    // Iterate children directly — the read-only `orig` borrow coexists with the
-    // recursive read-only `copy_node` calls, so no per-node `Vec` alloc is needed.
-    for &child_id in orig.get_children(node_id) {
-        copy_node(child_id, orig, builder, patch_map, deleted, visited, active);
+    let set_children = node_patches.iter().rev().find_map(|p| match p {
+        Patch::SetChildren { new_children, .. } => Some(new_children),
+        _ => None,
+    });
+    if let Some(new_children) = set_children {
+        emit_subtree(
+            new_children,
+            builder,
+            orig,
+            patch_map,
+            deleted,
+            visited,
+            active,
+        );
+    } else {
+        // Iterate children directly — the read-only `orig` borrow coexists with the
+        // recursive read-only `copy_node` calls, so no per-node `Vec` alloc is needed.
+        for &child_id in orig.get_children(node_id) {
+            copy_node(child_id, orig, builder, patch_map, deleted, visited, active);
+        }
     }
 
     for patch in node_patches {
@@ -1101,6 +1140,47 @@ mod tests {
         assert_eq!(
             rebuilt.get_node(heading_children[1]).node_type,
             MdastNodeType::Text as u8
+        );
+    }
+
+    #[test]
+    fn set_children_swaps_child_list_and_keeps_the_node() {
+        use crate::mdast::codec::decode_heading_data;
+
+        let mut orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+
+        let data_offset = orig.get_node(heading_id).data_offset as usize;
+        orig.type_data[data_offset] = 3;
+
+        let mut children_builder = ArenaBuilder::<Mdast>::new(String::new());
+        children_builder.open_node(MdastNodeType::Root as u8);
+        children_builder.open_node(MdastNodeType::Break as u8);
+        children_builder.close_node();
+        children_builder.close_node();
+        let new_children = children_builder.finish();
+
+        let patches = vec![Patch::SetChildren {
+            node_id: heading_id,
+            new_children,
+        }];
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
+
+        let new_heading_id = rebuilt.get_children(0)[0];
+        assert_eq!(
+            rebuilt.get_node(new_heading_id).node_type,
+            MdastNodeType::Heading as u8
+        );
+        assert_eq!(
+            decode_heading_data(rebuilt.get_type_data(new_heading_id)).depth,
+            3
+        );
+
+        let heading_children = rebuilt.get_children(new_heading_id);
+        assert_eq!(heading_children.len(), 1);
+        assert_eq!(
+            rebuilt.get_node(heading_children[0]).node_type,
+            MdastNodeType::Break as u8
         );
     }
 

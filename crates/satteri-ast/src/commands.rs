@@ -26,14 +26,14 @@ pub struct JsNode {
     pub start: Option<u32>,
     pub spread: Option<bool>,
     pub checked: Option<bool>,
+    /// Table column alignments, one per column (`null`/`"left"`/`"right"`/`"center"`).
+    #[serde(default)]
+    pub align: Option<Vec<Option<String>>>,
     pub identifier: Option<String>,
     pub label: Option<String>,
     #[serde(rename = "referenceType")]
     pub reference_type: Option<String>,
     pub name: Option<String>,
-    /// `table` column alignment: each entry is `"left"`/`"right"`/`"center"`/null.
-    #[serde(default)]
-    pub align: Option<Vec<Option<String>>>,
     #[serde(default)]
     pub attributes: Option<JsNodeAttributes>,
     // HAST-specific fields
@@ -108,7 +108,16 @@ pub enum CommandError {
     InvalidUtf8,
     InvalidJson(String),
     UnknownNodeType(String),
-    UnknownField(u16),
+    UnknownField {
+        node_type: String,
+        name: String,
+    },
+    /// The property exists on the node type, but the supplied value's type is
+    /// not one the field can hold (e.g. a string for `heading.depth`).
+    InvalidPropertyValue {
+        node_type: String,
+        name: String,
+    },
     /// `wrapNode` was issued against a node that is also removed in the same
     /// command buffer. There's no defined way to "wrap then remove" or
     /// "remove then wrap" the same anchor.
@@ -130,7 +139,13 @@ impl std::fmt::Display for CommandError {
             Self::InvalidUtf8 => write!(f, "invalid UTF-8 in command buffer"),
             Self::InvalidJson(e) => write!(f, "invalid JSON in command payload: {e}"),
             Self::UnknownNodeType(t) => write!(f, "unknown node type in JSON: {t}"),
-            Self::UnknownField(f_id) => write!(f, "unknown field ID: 0x{f_id:04x}"),
+            Self::UnknownField { node_type, name } => {
+                write!(f, "cannot set property '{name}' on a '{node_type}' node")
+            }
+            Self::InvalidPropertyValue { node_type, name } => write!(
+                f,
+                "property '{name}' on a '{node_type}' node cannot hold a value of this type"
+            ),
             Self::WrapOnRemovedNode(id) => {
                 write!(f, "wrapNode targets node {id} which is also removed")
             }

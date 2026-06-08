@@ -2134,8 +2134,15 @@ fn convert_table_row(
     let all_cells = view.get_children(row_id);
     // mdast-util-to-hast truncates source cells past the header column count
     // (HAST padding fills underflow; this drops overflow). The MDAST tree
-    // keeps all source cells per `mdast-util-gfm-table`.
-    let max_cells = all_cells.len().min(alignments.len());
+    // keeps all source cells per `mdast-util-gfm-table`. With no alignment
+    // info, it falls back to the row's own cell count rather than dropping
+    // every cell.
+    let column_count = if alignments.is_empty() {
+        all_cells.len()
+    } else {
+        alignments.len()
+    };
+    let max_cells = all_cells.len().min(column_count);
     let cell_ids = &all_cells[..max_cells];
     let cell_tag = if is_header { "th" } else { "td" };
     for (col_idx, &cell_id) in cell_ids.iter().enumerate() {
@@ -2164,7 +2171,7 @@ fn convert_table_row(
     // Pad to the header width — mdast-util-to-hast emits empty `<th>`/`<td>`
     // for any missing cells so the rendered table is rectangular, even though
     // the MDAST table row only stores the source cell count.
-    for col_idx in cell_ids.len()..alignments.len() {
+    for col_idx in cell_ids.len()..column_count {
         let align = alignments
             .get(col_idx)
             .copied()

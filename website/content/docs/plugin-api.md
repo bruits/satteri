@@ -184,22 +184,28 @@ after the visit completes, so it's safe to mutate while iterating.
 
 ### Tree mutation
 
-| Method                          | Effect                                                  |
-| ------------------------------- | ------------------------------------------------------- |
-| `removeNode(node)`              | Drop the node from its parent                           |
-| `replaceNode(node, newNode)`    | Swap the node for a different one                       |
-| `insertBefore(node, newNode)`   | Insert a sibling before the node                        |
-| `insertAfter(node, newNode)`    | Insert a sibling after the node                         |
-| `wrapNode(node, parentNode)`    | Wrap the node in `parentNode` (becomes its first child) |
-| `prependChild(node, childNode)` | Insert `childNode` as the first child of `node`         |
-| `appendChild(node, childNode)`  | Insert `childNode` as the last child of `node`          |
-| `setProperty(node, key, value)` | Replace one field on the node                           |
+| Method                                  | Effect                                                  |
+| --------------------------------------- | ------------------------------------------------------- |
+| `removeNode(node)`                      | Drop the node from its parent                           |
+| `replaceNode(node, newNode)`            | Swap the node for a different one                       |
+| `insertBefore(node, newNode)`           | Insert a sibling before the node                        |
+| `insertAfter(node, newNode)`            | Insert a sibling after the node                         |
+| `wrapNode(node, parentNode)`            | Wrap the node in `parentNode` (becomes its first child) |
+| `prependChild(node, childNode)`         | Insert `childNode` as the first child of `node`         |
+| `appendChild(node, childNode)`          | Insert `childNode` as the last child of `node`          |
+| `insertChildAt(node, index, childNode)` | Insert `childNode` as the `index`-th child of `node`    |
+| `removeChildAt(node, index)`            | Remove the `index`-th child of `node`                   |
+| `setProperty(node, key, value)`         | Replace one field on the node                           |
 
 `wrapNode` places the wrapped node as `parentNode`'s **first** child. If
 `parentNode` declares its own children, they are kept after it. Wrapping a
 heading in a `<div>` that holds an anchor link yields
 `<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position
 instead, return a replacement from the visitor.
+
+`insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and
+`insertChildAt` each accept either a single node or an array of nodes. An array
+is inserted in order at the target position.
 
 For MDAST, `key` must be a field of the node type and `value` must
 match that field's type. For HAST, `key` is a `string` and `value` is

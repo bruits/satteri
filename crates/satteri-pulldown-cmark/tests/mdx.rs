@@ -584,9 +584,20 @@ fn jsx_flow_closing_tag() {
     );
 }
 
-// ===========================================================================
-// JSX text (inline)
-// ===========================================================================
+#[test]
+fn jsx_flow_self_referential_close_tag_in_attribute() {
+    use satteri_pulldown_cmark::{parse, MDX_OPTIONS};
+    let src = "<CodePreview\n  code={`<CodePreview lang=\"astro\">\n    body\n</CodePreview>`}\n  lang=\"astro\"\n>\n  <CodePreview lang=\"astro\">\n    body\n  </CodePreview>\n</CodePreview>\n";
+    let (_arena, errors) = parse(src, MDX_OPTIONS);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn jsx_close_tag_in_string_attribute_is_text() {
+    use satteri_pulldown_cmark::{parse, MDX_OPTIONS};
+    let (_arena, errors) = parse("<Demo code=\"</Demo>\">child</Demo>\n", MDX_OPTIONS);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
 
 #[test]
 fn jsx_text_lowercase() {

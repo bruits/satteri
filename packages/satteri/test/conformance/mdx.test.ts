@@ -392,6 +392,51 @@ describe("MDX conformance: attribute values", () => {
     const Tag = (props: any) => createElement("span", null, props.v);
     await assertMdxConformance('<Tag v="hello\nworld"/>', { Tag });
   });
+
+  test("close tag inside string attribute is text, not a real close", async () => {
+    const Demo = (props: any) => createElement("div", null, props.code, props.children);
+    await assertMdxConformance('<Demo code="</Demo>">child</Demo>', { Demo });
+  });
+
+  test("self-referential close tag inside template-literal attribute (#74)", async () => {
+    const CodePreview = (props: any) =>
+      createElement("figure", null, createElement("pre", null, props.code), props.children);
+    const src = [
+      "<CodePreview",
+      "  code={`<CodePreview",
+      '    code="The code to preview"',
+      '    lang="astro"',
+      ">",
+      "    The preview can be manually added here.",
+      "</CodePreview>`}",
+      '  label="Using a code sample with a preview"',
+      '  lang="astro"',
+      ">",
+      '  <CodePreview code="The code to preview" lang="astro">',
+      "    The preview can be manually added here.",
+      "  </CodePreview>",
+      "</CodePreview>",
+    ].join("\n");
+    await assertMdxConformance(src, { CodePreview });
+  });
+
+  test("different self-closing component inside template-literal attribute (#74)", async () => {
+    const CodePreview = (props: any) =>
+      createElement("figure", null, createElement("pre", null, props.code), props.children);
+    const CodeBlock = (props: any) => createElement("span", null, String(props.lineStart));
+    const src = [
+      "<CodePreview",
+      "  code={`<CodeBlock",
+      "    lineStart={1505}",
+      "    showLineNumbers",
+      "/>`}",
+      '  lang="astro"',
+      ">",
+      "  <CodeBlock lineStart={1505} showLineNumbers />",
+      "</CodePreview>",
+    ].join("\n");
+    await assertMdxConformance(src, { CodePreview, CodeBlock });
+  });
 });
 
 describe("MDX conformance: markdown elements", () => {

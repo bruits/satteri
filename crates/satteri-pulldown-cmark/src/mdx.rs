@@ -2109,11 +2109,15 @@ pub(crate) fn parse_jsx_tag_with_column<'a>(
     // Extract name, skip leading '<'
     let name = extract_tag_name(&s[1..]);
 
+    // Search only the children region, past the opening tag's `>`: a `</Name>` inside an
+    // attribute value (e.g. a template-literal prop that shows the component's
+    // own usage) is text, so it must not pair with the open tag.
+    let children = &s[scan_mdx_jsx_tag_end(s.as_bytes()).unwrap_or(s.len())..];
     let is_self_contained = if !name.is_empty() {
         let close_tag = alloc::format!("</{name}>");
-        s.contains(&*close_tag)
+        children.contains(&*close_tag)
     } else {
-        s.contains("</>")
+        children.contains("</>")
     };
 
     let is_self_closing = ends_self_close || is_self_contained;
