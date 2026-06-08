@@ -661,7 +661,7 @@ fn remap_one_ref(data: &mut [u8], off: usize, base: u32) {
     if off + 8 <= data.len() {
         let current = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
         let len = u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
-        if len > 0 {
+        if len > 0 || current > 0 {
             let new_offset = current + base;
             data[off..off + 4].copy_from_slice(&new_offset.to_le_bytes());
         }

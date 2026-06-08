@@ -1075,6 +1075,172 @@ fn hast_text_round_trip_with_source_base() {
     assert_eq!(rebuilt.get_str(sr), "Hello, world!");
 }
 
+#[test]
+fn hast_empty_text_child_ref_with_nonzero_offset_is_remapped() {
+    use satteri_arena::StringRef;
+    use satteri_ast::hast::codec::{
+        decode_element_tag, decode_text_data, encode_element_data, encode_text_data,
+    };
+
+    // Root > [Text "é", Element <pre>]
+    let mut b = ArenaBuilder::<Hast>::new("é".to_string());
+    b.open_node_raw(HastNodeType::Root as u8);
+
+    // Add `Text "é"` which starts at byte 0 and is 2 bytes long in UTF-8.
+    b.open_node_raw(HastNodeType::Text as u8);
+    b.set_data_current(&encode_text_data(StringRef::new(0, 2)));
+    b.close_node();
+
+    // Add `Element <pre>`.
+    b.open_node_raw(HastNodeType::Element as u8);
+    let pre = b.alloc_string("pre");
+    b.set_data_current(&encode_element_data(pre, &[]));
+    b.close_node();
+
+    b.close_node();
+    let orig = b.finish();
+    let elem_id = orig.get_children(0)[1];
+
+    // Replace `<pre></pre>` by `<a></a>` with an empty text child.
+    let mut sub = ArenaBuilder::<Hast>::new(String::new());
+    sub.open_node_raw(HastNodeType::Element as u8);
+
+    // Add `Element <a>`.
+    let tag = sub.alloc_string("a");
+    sub.set_data_current(&encode_element_data(tag, &[]));
+
+    sub.open_node_raw(HastNodeType::Text as u8);
+
+    // Add the empty text node. With the tag "a" taking up bytes 0..1 in the arena, the empty text
+    // starts at byte 1 and has a length of 0.
+    let empty = sub.alloc_string("");
+    assert_eq!(empty.offset, 1);
+    assert_eq!(empty.len, 0);
+    sub.set_data_current(&encode_text_data(empty));
+    sub.close_node();
+
+    sub.close_node();
+    let replacement = sub.finish();
+
+    let rebuilt = rebuild_hast(
+        &orig,
+        &[Patch::Replace {
+            node_id: elem_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    // Root > [Text "é", Element <a> > Text ""]
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 2);
+
+    let original_text_id = root_children[0];
+    let original_text = decode_text_data(rebuilt.get_type_data(original_text_id));
+    assert_eq!(rebuilt.get_str(original_text), "é");
+
+    let a_id = root_children[1];
+    let a_data = rebuilt.get_type_data(a_id);
+    assert_eq!(rebuilt.get_str(decode_element_tag(a_data)), "a");
+
+    let a_children = rebuilt.get_children(a_id);
+    assert_eq!(a_children.len(), 1);
+
+    let text_id = a_children[0];
+    let sr = decode_text_data(rebuilt.get_type_data(text_id));
+
+    assert_eq!(sr.len, 0);
+    // The empty text offset must be remapped from 1 (from the replacement arena) to a valid offset
+    // in the rebuilt arena, otherwise, it would point to the middle of the "é" character.
+    // In this test, this should be after `é` (2 bytes) + `pre` (3 bytes) from the source arena and
+    // `a` (1 byte) from the replacement arena, so 6 in total.
+    assert_eq!(sr.offset, 6);
+    assert_eq!(rebuilt.get_str(sr), "");
+}
+
+#[test]
+fn mdast_empty_text_child_ref_with_nonzero_offset_is_remapped() {
+    use satteri_arena::StringRef;
+    use satteri_ast::mdast::codec::{
+        decode_link_data, decode_string_ref_data, encode_link_data, encode_string_ref_data,
+    };
+
+    // Root > [Text "é", Link (url "pre")]
+    let mut b = ArenaBuilder::<Mdast>::new("é".to_string());
+    b.open_node(MdastNodeType::Root as u8);
+
+    // Add `Text "é"` which starts at byte 0 and is 2 bytes long in UTF-8.
+    b.open_node(MdastNodeType::Text as u8);
+    b.set_data_current(&encode_string_ref_data(StringRef::new(0, 2)));
+    b.close_node();
+
+    // Add `Link` with url "pre".
+    b.open_node(MdastNodeType::Link as u8);
+    let pre = b.alloc_string("pre");
+    b.set_data_current(&encode_link_data(pre, StringRef::empty()));
+    b.close_node();
+
+    b.close_node();
+    let orig = b.finish();
+    let link_id = orig.get_children(0)[1];
+
+    // Replace the link by a `Link` (url "a") with an empty text child.
+    let mut sub = ArenaBuilder::<Mdast>::new(String::new());
+    sub.open_node(MdastNodeType::Link as u8);
+
+    // Add `Link` with url "a".
+    let url = sub.alloc_string("a");
+    sub.set_data_current(&encode_link_data(url, StringRef::empty()));
+
+    sub.open_node(MdastNodeType::Text as u8);
+
+    // Add the empty text node. With the url "a" taking up bytes 0..1 in the arena, the empty text
+    // starts at byte 1 and has a length of 0.
+    let empty = sub.alloc_string("");
+    assert_eq!(empty.offset, 1);
+    assert_eq!(empty.len, 0);
+    sub.set_data_current(&encode_string_ref_data(empty));
+    sub.close_node();
+
+    sub.close_node();
+    let replacement = sub.finish();
+
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: link_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    // Root > [Text "é", Link (url "a") > Text ""]
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 2);
+
+    let original_text_id = root_children[0];
+    let original_text = decode_string_ref_data(rebuilt.get_type_data(original_text_id));
+    assert_eq!(rebuilt.get_str(original_text), "é");
+
+    let link_id = root_children[1];
+    let link_data = rebuilt.get_type_data(link_id);
+    assert_eq!(rebuilt.get_str(decode_link_data(link_data).url), "a");
+
+    let link_children = rebuilt.get_children(link_id);
+    assert_eq!(link_children.len(), 1);
+
+    let text_id = link_children[0];
+    let sr = decode_string_ref_data(rebuilt.get_type_data(text_id));
+
+    assert_eq!(sr.len, 0);
+    // The empty text offset must be remapped from 1 (from the replacement arena) to a valid offset
+    // in the rebuilt arena, otherwise, it would point to the middle of the "é" character.
+    // In this test, this should be after `é` (2 bytes) + `pre` (3 bytes) from the source arena and
+    // `a` (1 byte) from the replacement arena, so 6 in total.
+    assert_eq!(sr.offset, 6);
+    assert_eq!(rebuilt.get_str(sr), "");
+}
+
 /// Replacing a block (the paragraph) with a `Root`-wrapped tree — as a raw
 /// markdown return does — must splice the Root's child in, not the Root.
 /// Before the fix this produced `Root > Root > Paragraph`.
