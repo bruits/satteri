@@ -1,6 +1,17 @@
 import type { BufferHeader } from "../types.js";
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "../mdx-types.js";
 import { restorePhantomSpaces } from "../phantom.js";
+import {
+  PROP_STRING,
+  PROP_BOOL_TRUE,
+  PROP_BOOL_FALSE,
+  PROP_SPACE_SEP,
+  PROP_COMMA_SEP,
+  MDX_ATTR_BOOLEAN_PROP,
+  MDX_ATTR_LITERAL_PROP,
+  MDX_ATTR_EXPRESSION_PROP,
+  MDX_ATTR_SPREAD,
+} from "../op-stream.js";
 
 export type { MdxJsxAttribute, MdxJsxExpressionAttribute };
 
@@ -18,18 +29,6 @@ export const HAST_MDX_JSX_TEXT_ELEMENT = 11;
 export const HAST_MDX_FLOW_EXPRESSION = 12;
 export const HAST_MDX_ESM = 13;
 export const HAST_MDX_TEXT_EXPRESSION = 14;
-
-const PROP_STRING = 0;
-const PROP_BOOL_TRUE = 1;
-const PROP_BOOL_FALSE = 2;
-const PROP_SPACE_SEP = 3;
-const PROP_COMMA_SEP = 4;
-
-// MDX JSX attribute kinds (must match node_types.rs)
-const MDX_ATTR_BOOLEAN_PROP = 0;
-const MDX_ATTR_LITERAL_PROP = 1;
-const MDX_ATTR_EXPRESSION_PROP = 2;
-const MDX_ATTR_SPREAD = 3;
 
 export interface HastProperty {
   name: string;

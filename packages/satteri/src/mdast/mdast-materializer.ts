@@ -1,46 +1,8 @@
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import { lazyProp, lazyGroup } from "../lazy-props.js";
-
-export const TYPE_NAMES: Record<number, string> = {
-  0: "root",
-  1: "paragraph",
-  2: "heading",
-  3: "thematicBreak",
-  4: "blockquote",
-  5: "list",
-  6: "listItem",
-  7: "html",
-  8: "code",
-  9: "definition",
-  10: "text",
-  11: "emphasis",
-  12: "strong",
-  13: "inlineCode",
-  14: "break",
-  15: "link",
-  16: "image",
-  17: "linkReference",
-  18: "imageReference",
-  19: "footnoteDefinition",
-  20: "footnoteReference",
-  21: "table",
-  22: "tableRow",
-  23: "tableCell",
-  24: "delete",
-  25: "yaml",
-  26: "toml",
-  27: "math",
-  28: "inlineMath",
-  30: "containerDirective",
-  31: "leafDirective",
-  32: "textDirective",
-  100: "mdxJsxFlowElement",
-  101: "mdxJsxTextElement",
-  102: "mdxFlowExpression",
-  103: "mdxTextExpression",
-  104: "mdxjsEsm",
-};
+import { TYPE_NAMES } from "./generated/node-types.js";
+import { materializeMdastFields } from "./generated/layout.js";
 
 // Leaf node types that do NOT have children.
 // Type 9 = `definition`; type 18 = `imageReference` — leaves per mdast spec
@@ -56,51 +18,11 @@ function addTypeProperties(
   nodeId: number,
   nodeType: number,
 ): void {
+  // Fixed-field types materialize from the generated layout table; the rest
+  // (variable-length / cross-field) stay in the hand-written switch.
+  if (materializeMdastFields(reader, node, nodeId, nodeType)) return;
+
   switch (nodeType) {
-    case 2: // heading
-      Object.defineProperties(node, {
-        depth: lazyProp("depth", () => reader.getHeadingDepth(nodeId)),
-      });
-      break;
-
-    case 10: // text
-    case 13: // inlineCode
-    case 7: // html
-    case 25: // yaml
-    case 26: // toml
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => reader.getTextValue(nodeId)),
-      });
-      break;
-
-    case 8: // code
-      lazyGroup(node, ["lang", "meta", "value"], () => reader.getCodeData(nodeId));
-      break;
-
-    case 27: // math
-      lazyGroup(node, ["meta", "value"], () => reader.getMathData(nodeId));
-      break;
-
-    case 28: // inlineMath
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => reader.getMathData(nodeId).value),
-      });
-      break;
-
-    case 15: // link
-      lazyGroup(node, ["url", "title"], () => reader.getLinkData(nodeId));
-      break;
-
-    case 9: // definition
-      lazyGroup(node, ["url", "title", "identifier", "label"], () =>
-        reader.getDefinitionData(nodeId),
-      );
-      break;
-
-    case 16: // image
-      lazyGroup(node, ["url", "alt", "title"], () => reader.getImageData(nodeId));
-      break;
-
     case 5: {
       // list
       const resolveList = () => {
@@ -113,26 +35,6 @@ function addTypeProperties(
 
     case 6: // listItem
       lazyGroup(node, ["spread", "checked"], () => reader.getListItemData(nodeId));
-      break;
-
-    case 17: // linkReference
-      lazyGroup(node, ["identifier", "label", "referenceType"], () =>
-        reader.getReferenceData(nodeId),
-      );
-      break;
-
-    case 20: // footnoteReference — no `referenceType` per mdast spec
-      lazyGroup(node, ["identifier", "label"], () => reader.getReferenceData(nodeId));
-      break;
-
-    case 18: // imageReference — leaf with alt (remark treats it as a void node)
-      lazyGroup(node, ["identifier", "label", "referenceType", "alt"], () =>
-        reader.getImageReferenceData(nodeId),
-      );
-      break;
-
-    case 19: // footnoteDefinition
-      lazyGroup(node, ["identifier", "label"], () => reader.getFootnoteDefinitionData(nodeId));
       break;
 
     case 21: // table
@@ -150,14 +52,6 @@ function addTypeProperties(
     case 100: // mdxJsxFlowElement
     case 101: // mdxJsxTextElement
       lazyGroup(node, ["name", "attributes"], () => reader.getMdxJsxElementData(nodeId));
-      break;
-
-    case 102: // mdxFlowExpression
-    case 103: // mdxTextExpression
-    case 104: // mdxjsEsm
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => reader.getExpressionValue(nodeId)),
-      });
       break;
 
     // Nodes with no type-specific props:

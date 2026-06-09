@@ -12,7 +12,13 @@ pnpm lint                                # oxlint + cargo clippy
 pnpm format                              # oxfmt + cargo fmt
 cd packages/satteri && pnpm test        # test JS (vitest)
 cd packages/satteri && pnpm build       # build NAPI binding + TS
+pnpm codegen                             # regenerate node-type code from the registry
 ```
+
+Node types are defined once in the registry at `crates/satteri-layout-codegen/src/schema.rs`;
+the enums, name maps, walk/reader decoders, and layout assertions in the `generated/` folders are
+produced from it. After editing the registry (or a codec struct it pins), run `pnpm codegen` and
+commit the result — CI fails if it is stale.
 
 ## Useful Resources
 

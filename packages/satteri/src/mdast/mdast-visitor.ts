@@ -1,7 +1,10 @@
-import { materializeNode, TYPE_NAMES } from "./mdast-materializer.js";
+import { materializeNode } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
 import { CommandBuffer, classifyReturn } from "../command-buffer.js";
 import { restorePhantomSpaces } from "../phantom.js";
+import { ru16, ru32, rstr } from "./wire-read.js";
+import { decodeMdastTypeData } from "./generated/layout.js";
+import { TYPE_NAMES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
 import {
   OpWriter,
   OF_VALUE,
@@ -62,72 +65,12 @@ import type { ContainerDirective, LeafDirective, TextDirective } from "../direct
  *  supported, falling back to JSON otherwise — both produce identical arenas. */
 export type MdastContent = MdastNode | { raw: string } | { rawHtml: string };
 
-const MutationType = {
-  Replace: "replace",
-  Remove: "remove",
-  InsertBefore: "insertBefore",
-  InsertAfter: "insertAfter",
-  Wrap: "wrap",
-  PrependChild: "prependChild",
-  AppendChild: "appendChild",
-  SetProperty: "setProperty",
-} as const;
-
-type MutationTypeValue = (typeof MutationType)[keyof typeof MutationType];
-
-interface Mutation {
-  type: MutationTypeValue;
-  nodeId: number;
-  newNode?: MdastNode;
-  key?: string;
-  value?: unknown;
-}
-
 export interface MdastDiagnostic {
   message: string;
   nodeId?: number | undefined;
   position?: MdastNode["position"] | undefined;
   severity: "error" | "warning" | "info";
 }
-
-const VISITOR_KEYS = new Set([
-  "paragraph",
-  "heading",
-  "thematicBreak",
-  "blockquote",
-  "list",
-  "listItem",
-  "html",
-  "code",
-  "definition",
-  "text",
-  "emphasis",
-  "strong",
-  "inlineCode",
-  "break",
-  "link",
-  "image",
-  "linkReference",
-  "imageReference",
-  "footnoteDefinition",
-  "footnoteReference",
-  "table",
-  "tableRow",
-  "tableCell",
-  "delete",
-  "yaml",
-  "toml",
-  "math",
-  "inlineMath",
-  "containerDirective",
-  "leafDirective",
-  "textDirective",
-  "mdxJsxFlowElement",
-  "mdxJsxTextElement",
-  "mdxFlowExpression",
-  "mdxTextExpression",
-  "mdxjsEsm",
-]);
 
 /** Maps MdastNode objects to their arena node IDs without Object.defineProperty overhead. */
 const mdastNodeIdMap: WeakMap<object, number> = new WeakMap();
@@ -391,14 +334,6 @@ function mergeAndReset(
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type MdastHandle = any;
 
-const textDecoder = new TextDecoder("utf-8");
-
-/** Build name→nodeType map from TYPE_NAMES (reverse of TYPE_NAMES). */
-const NAME_TO_TYPE: Record<string, number> = {};
-for (const [num, name] of Object.entries(TYPE_NAMES)) {
-  NAME_TO_TYPE[name] = Number(num);
-}
-
 interface MdastSubscription {
   nodeType: number;
   visitFn: (node: MdastNode, context: MdastVisitorContext) => unknown;
@@ -419,19 +354,6 @@ export function resolveMdastSubscriptions(plugin: MdastPluginInstance): MdastSub
     }
   }
   return subs;
-}
-
-/** Read a u16 from buf at offset (LE). */
-function ru16(view: DataView, off: number): number {
-  return view.getUint16(off, true);
-}
-/** Read a u32 from buf at offset (LE). */
-function ru32(view: DataView, off: number): number {
-  return view.getUint32(off, true);
-}
-/** Read a utf8 string from buf. */
-function rstr(buf: Uint8Array, off: number, len: number): string {
-  return len === 0 ? "" : textDecoder.decode(buf.subarray(off, off + len));
 }
 
 /**
@@ -506,7 +428,11 @@ function readMdastMatchedNode(
       ? undefined
       : {
           start: { offset: startOffset, line: startLine, column: ru32(view, pos + 12) },
-          end: { offset: ru32(view, pos + 4), line: ru32(view, pos + 16), column: ru32(view, pos + 20) },
+          end: {
+            offset: ru32(view, pos + 4),
+            line: ru32(view, pos + 16),
+            column: ru32(view, pos + 20),
+          },
         };
   pos += 24;
 
@@ -541,249 +467,110 @@ function readMdastMatchedNode(
     });
   }
 
-  switch (nodeType) {
-    case 2: {
-      // heading
-      node.depth = buf[pos]!;
-      break;
-    }
-    case 10:
-    case 13:
-    case 7:
-    case 25:
-    case 26: {
-      // text, inlineCode, html, yaml, toml
-      const vlen = ru32(view, pos);
-      node.value = rstr(buf, pos + 4, vlen);
-      break;
-    }
-    case 8: {
-      // code
-      const langLen = ru16(view, pos);
-      pos += 2;
-      node.lang = langLen > 0 ? rstr(buf, pos, langLen) : null;
-      pos += langLen;
-      const metaLen = ru16(view, pos);
-      pos += 2;
-      node.meta = metaLen > 0 ? rstr(buf, pos, metaLen) : null;
-      pos += metaLen;
-      const valLen = ru32(view, pos);
-      pos += 4;
-      node.value = rstr(buf, pos, valLen);
-      break;
-    }
-    case 27:
-    case 28: {
-      // math, inlineMath
-      const metaLen = ru16(view, pos);
-      pos += 2;
-      node.meta = metaLen > 0 ? rstr(buf, pos, metaLen) : null;
-      pos += metaLen;
-      const valLen = ru32(view, pos);
-      pos += 4;
-      node.value = rstr(buf, pos, valLen);
-      break;
-    }
-    case 15: {
-      // link
-      const urlLen = ru16(view, pos);
-      pos += 2;
-      node.url = rstr(buf, pos, urlLen);
-      pos += urlLen;
-      const titleLen = ru16(view, pos);
-      pos += 2;
-      node.title = titleLen > 0 ? rstr(buf, pos, titleLen) : null;
-      break;
-    }
-    case 16: {
-      // image
-      const urlLen = ru16(view, pos);
-      pos += 2;
-      node.url = rstr(buf, pos, urlLen);
-      pos += urlLen;
-      const altLen = ru16(view, pos);
-      pos += 2;
-      node.alt = rstr(buf, pos, altLen);
-      pos += altLen;
-      const titleLen = ru16(view, pos);
-      pos += 2;
-      node.title = titleLen > 0 ? rstr(buf, pos, titleLen) : null;
-      break;
-    }
-    case 9: {
-      // definition
-      const urlLen = ru16(view, pos);
-      pos += 2;
-      node.url = rstr(buf, pos, urlLen);
-      pos += urlLen;
-      const titleLen = ru16(view, pos);
-      pos += 2;
-      node.title = titleLen > 0 ? rstr(buf, pos, titleLen) : null;
-      pos += titleLen;
-      const idLen = ru16(view, pos);
-      pos += 2;
-      node.identifier = rstr(buf, pos, idLen);
-      pos += idLen;
-      const labelLen = ru16(view, pos);
-      pos += 2;
-      node.label = rstr(buf, pos, labelLen);
-      break;
-    }
-    case 5: {
-      // list
-      node.start = ru32(view, pos);
-      node.ordered = buf[pos + 4]! !== 0;
-      node.spread = buf[pos + 5]! !== 0;
-      if (!node.ordered) node.start = null;
-      break;
-    }
-    case 6: {
-      // listItem
-      const checked = buf[pos]!;
-      node.checked = checked === 2 ? null : checked === 1;
-      node.spread = buf[pos + 1]! !== 0;
-      break;
-    }
-    case 17:
-    case 20: {
-      // linkReference, footnoteReference
-      const idLen = ru16(view, pos);
-      pos += 2;
-      node.identifier = rstr(buf, pos, idLen);
-      pos += idLen;
-      const labelLen = ru16(view, pos);
-      pos += 2;
-      node.label = rstr(buf, pos, labelLen);
-      pos += labelLen;
-      const kind = buf[pos]!;
-      // `linkReference` carries `referenceType`; the mdast spec does not
-      // define it for `footnoteReference`.
-      if (nodeType !== 20) {
-        node.referenceType = ["shortcut", "collapsed", "full"][kind] ?? "shortcut";
+  // Fixed-field types decode from the generated layout table; the rest
+  // (variable-length / cross-field) stay in the hand-written switch.
+  if (!decodeMdastTypeData(view, buf, pos, nodeType, node)) {
+    switch (nodeType) {
+      case 5: {
+        // list
+        node.start = ru32(view, pos);
+        node.ordered = buf[pos + 4]! !== 0;
+        node.spread = buf[pos + 5]! !== 0;
+        if (!node.ordered) node.start = null;
+        break;
       }
-      break;
-    }
-    case 18: {
-      // imageReference: identifier + label + kind + alt (matches the reader path)
-      const idLen = ru16(view, pos);
-      pos += 2;
-      node.identifier = rstr(buf, pos, idLen);
-      pos += idLen;
-      const labelLen = ru16(view, pos);
-      pos += 2;
-      node.label = rstr(buf, pos, labelLen);
-      pos += labelLen;
-      const kind = buf[pos]!;
-      pos += 1;
-      node.referenceType = ["shortcut", "collapsed", "full"][kind] ?? "shortcut";
-      const altLen = ru16(view, pos);
-      pos += 2;
-      node.alt = rstr(buf, pos, altLen);
-      break;
-    }
-    case 19: {
-      // footnoteDefinition
-      const idLen = ru16(view, pos);
-      pos += 2;
-      node.identifier = rstr(buf, pos, idLen);
-      pos += idLen;
-      const labelLen = ru16(view, pos);
-      pos += 2;
-      node.label = rstr(buf, pos, labelLen);
-      break;
-    }
-    case 21: {
-      // table
-      const count = ru16(view, pos);
-      pos += 2;
-      const alignNames: (string | null)[] = [null, "left", "right", "center"];
-      node.align = Array.from({ length: count }, (_, i) => alignNames[buf[pos + i]!] ?? null);
-      break;
-    }
-    case 30:
-    case 31:
-    case 32: {
-      // containerDirective, leafDirective, textDirective
-      const nameLen = ru16(view, pos);
-      pos += 2;
-      node.name = rstr(buf, pos, nameLen);
-      pos += nameLen;
-      const attrCount = ru16(view, pos);
-      pos += 2;
-      const attributes: Record<string, string> = {};
-      for (let i = 0; i < attrCount; i++) {
-        const keyLen = ru16(view, pos);
-        pos += 2;
-        const key = rstr(buf, pos, keyLen);
-        pos += keyLen;
-        const valLen = ru16(view, pos);
-        pos += 2;
-        const val = rstr(buf, pos, valLen);
-        pos += valLen;
-        attributes[key] = val;
+      case 6: {
+        // listItem
+        const checked = buf[pos]!;
+        node.checked = checked === 2 ? null : checked === 1;
+        node.spread = buf[pos + 1]! !== 0;
+        break;
       }
-      node.attributes = attributes;
-      break;
-    }
-    case 100:
-    case 101: {
-      // mdxJsxFlowElement, mdxJsxTextElement
-      const nameLen = ru16(view, pos);
-      pos += 2;
-      node.name = nameLen > 0 ? rstr(buf, pos, nameLen) : null;
-      pos += nameLen;
-      const attrCount = ru16(view, pos);
-      pos += 2;
-      const attributes: { type: string; name?: string; value: unknown }[] = [];
-      for (let i = 0; i < attrCount; i++) {
-        const kind = buf[pos]!;
-        pos += 1;
-        const anLen = ru16(view, pos);
+      case 21: {
+        // table
+        const count = ru16(view, pos);
         pos += 2;
-        const an = rstr(buf, pos, anLen);
-        pos += anLen;
-        const avLen = ru32(view, pos);
-        pos += 4;
-        const av = rstr(buf, pos, avLen);
-        pos += avLen;
-        switch (kind) {
-          case 0:
-            attributes.push({ type: "mdxJsxAttribute", name: an, value: null });
-            break;
-          case 1:
-            attributes.push({ type: "mdxJsxAttribute", name: an, value: av });
-            break;
-          case 2:
-            attributes.push({
-              type: "mdxJsxAttribute",
-              name: an,
-              value: {
-                type: "mdxJsxAttributeValueExpression",
-                value: restorePhantomSpaces(av),
-              },
-            });
-            break;
-          case 3:
-            attributes.push({
-              type: "mdxJsxExpressionAttribute",
-              value: restorePhantomSpaces(av),
-            });
-            break;
+        const alignNames: (string | null)[] = [null, "left", "right", "center"];
+        node.align = Array.from({ length: count }, (_, i) => alignNames[buf[pos + i]!] ?? null);
+        break;
+      }
+      case 30:
+      case 31:
+      case 32: {
+        // containerDirective, leafDirective, textDirective
+        const nameLen = ru16(view, pos);
+        pos += 2;
+        node.name = rstr(buf, pos, nameLen);
+        pos += nameLen;
+        const attrCount = ru16(view, pos);
+        pos += 2;
+        const attributes: Record<string, string> = {};
+        for (let i = 0; i < attrCount; i++) {
+          const keyLen = ru16(view, pos);
+          pos += 2;
+          const key = rstr(buf, pos, keyLen);
+          pos += keyLen;
+          const valLen = ru16(view, pos);
+          pos += 2;
+          const val = rstr(buf, pos, valLen);
+          pos += valLen;
+          attributes[key] = val;
         }
+        node.attributes = attributes;
+        break;
       }
-      node.attributes = attributes;
-      break;
+      case 100:
+      case 101: {
+        // mdxJsxFlowElement, mdxJsxTextElement
+        const nameLen = ru16(view, pos);
+        pos += 2;
+        node.name = nameLen > 0 ? rstr(buf, pos, nameLen) : null;
+        pos += nameLen;
+        const attrCount = ru16(view, pos);
+        pos += 2;
+        const attributes: { type: string; name?: string; value: unknown }[] = [];
+        for (let i = 0; i < attrCount; i++) {
+          const kind = buf[pos]!;
+          pos += 1;
+          const anLen = ru16(view, pos);
+          pos += 2;
+          const an = rstr(buf, pos, anLen);
+          pos += anLen;
+          const avLen = ru32(view, pos);
+          pos += 4;
+          const av = rstr(buf, pos, avLen);
+          pos += avLen;
+          switch (kind) {
+            case 0:
+              attributes.push({ type: "mdxJsxAttribute", name: an, value: null });
+              break;
+            case 1:
+              attributes.push({ type: "mdxJsxAttribute", name: an, value: av });
+              break;
+            case 2:
+              attributes.push({
+                type: "mdxJsxAttribute",
+                name: an,
+                value: {
+                  type: "mdxJsxAttributeValueExpression",
+                  value: restorePhantomSpaces(av),
+                },
+              });
+              break;
+            case 3:
+              attributes.push({
+                type: "mdxJsxExpressionAttribute",
+                value: restorePhantomSpaces(av),
+              });
+              break;
+          }
+        }
+        node.attributes = attributes;
+        break;
+      }
+      // root(0), paragraph(1), thematicBreak(3), blockquote(4), emphasis(11),
+      // strong(12), break(14), tableRow(22), tableCell(23), delete(24): no extra data
     }
-    case 102:
-    case 103:
-    case 104: {
-      // mdxFlowExpression, mdxTextExpression, mdxjsEsm
-      const vlen = ru32(view, pos);
-      node.value = restorePhantomSpaces(rstr(buf, pos + 4, vlen));
-      break;
-    }
-    // root(0), paragraph(1), thematicBreak(3), blockquote(4), emphasis(11),
-    // strong(12), break(14), tableRow(22), tableCell(23), delete(24): no extra data
   }
 
   mdastNodeIdMap.set(node as object, nodeId);

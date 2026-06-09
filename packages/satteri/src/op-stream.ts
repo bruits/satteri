@@ -46,13 +46,15 @@ export const PROP_STRING = 0;
 export const PROP_BOOL_TRUE = 1;
 export const PROP_BOOL_FALSE = 2;
 export const PROP_SPACE_SEP = 3;
+export const PROP_COMMA_SEP = 4;
 export const PROP_INT = 5;
+export const PROP_NULL = 6;
 
 // MDX JSX attribute kinds (must match shared::MDX_ATTR_*).
-const MDX_ATTR_BOOLEAN = 0;
-const MDX_ATTR_LITERAL = 1;
-const MDX_ATTR_EXPRESSION = 2;
-const MDX_ATTR_SPREAD = 3;
+export const MDX_ATTR_BOOLEAN_PROP = 0;
+export const MDX_ATTR_LITERAL_PROP = 1;
+export const MDX_ATTR_EXPRESSION_PROP = 2;
+export const MDX_ATTR_SPREAD = 3;
 
 const encoder = new TextEncoder();
 
@@ -213,11 +215,11 @@ export function emitMdxAttr(w: OpWriter, a: Record<string, unknown>): void {
   const name = typeof a.name === "string" ? a.name : "";
   const val = a.value;
   if (typeof val === "string") {
-    w.prop(name, MDX_ATTR_LITERAL, val);
+    w.prop(name, MDX_ATTR_LITERAL_PROP, val);
   } else if (val !== null && typeof val === "object" && !Array.isArray(val)) {
     const expr = (val as Record<string, unknown>).value;
-    w.prop(name, MDX_ATTR_EXPRESSION, typeof expr === "string" ? expr : "");
+    w.prop(name, MDX_ATTR_EXPRESSION_PROP, typeof expr === "string" ? expr : "");
   } else {
-    w.prop(name, MDX_ATTR_BOOLEAN, "");
+    w.prop(name, MDX_ATTR_BOOLEAN_PROP, "");
   }
 }

@@ -5,6 +5,7 @@ members = [
   "crates/satteri",
   "crates/satteri-arena",
   "crates/satteri-ast",
+  "crates/satteri-layout-codegen",
   "crates/satteri-mdxjs-rs",
   "crates/satteri-napi-binding",
   "crates/satteri-plugin-api",

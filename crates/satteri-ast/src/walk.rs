@@ -229,76 +229,15 @@ fn serialize_mdast_node_inline(
         out.extend_from_slice(&child_id.to_le_bytes());
     }
 
-    // Helper: write a resolved string ref as [len: u16][data]
-    let write_str16 = |out: &mut Vec<u8>, data: &[u8], offset: usize| {
-        if data.len() >= offset + 8 {
-            let sr = read_string_ref(data, offset);
-            let s = arena.get_str(sr);
-            out.extend_from_slice(&(s.len() as u16).to_le_bytes());
-            out.extend_from_slice(s.as_bytes());
-        } else {
-            out.extend_from_slice(&0u16.to_le_bytes());
-        }
-    };
-
-    let write_str32 = |out: &mut Vec<u8>, data: &[u8], offset: usize| {
-        if data.len() >= offset + 8 {
-            let sr = read_string_ref(data, offset);
-            let s = arena.get_str(sr);
-            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
-            out.extend_from_slice(s.as_bytes());
-        } else {
-            out.extend_from_slice(&0u32.to_le_bytes());
-        }
-    };
+    // Fixed-field leaf types are generated from the layout table; this returns
+    // false for the variable-length / cross-field types handled below.
+    if crate::mdast::generated::walk_type_data::write_mdast_type_data_inline(
+        arena, node_type, type_data, out,
+    ) {
+        return;
+    }
 
     match node_type {
-        // Heading: depth u8
-        2 => {
-            out.push(if !type_data.is_empty() {
-                type_data[0]
-            } else {
-                1
-            });
-        }
-
-        // Text(10), InlineCode(13), Html(7), Yaml(25), Toml(26): single StringRef value
-        10 | 13 | 7 | 25 | 26 => write_str32(out, type_data, 0),
-
-        // Code(8): lang(0) + meta(8) + value(16)
-        8 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            write_str32(out, type_data, 16);
-        }
-
-        // Math(27), InlineMath(28): meta(0) + value(8)
-        27 | 28 => {
-            write_str16(out, type_data, 0);
-            write_str32(out, type_data, 8);
-        }
-
-        // Link(15): url(0) + title(8)
-        15 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-        }
-
-        // Image(16): url(0) + alt(8) + title(16)
-        16 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            write_str16(out, type_data, 16);
-        }
-
-        // Definition(9): url(0) + title(8) + identifier(16) + label(24)
-        9 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            write_str16(out, type_data, 16);
-            write_str16(out, type_data, 24);
-        }
-
         // List(5): start(0..4), ordered(4), spread(5)
         5 => {
             if type_data.len() >= 6 {
@@ -317,38 +256,6 @@ fn serialize_mdast_node_inline(
             }
         }
 
-        // LinkReference(17), FootnoteReference(20):
-        // identifier(0) + label(8) + kind(16)
-        17 | 20 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            out.push(if type_data.len() > 16 {
-                type_data[16]
-            } else {
-                0
-            });
-        }
-
-        // ImageReference(18): identifier(0) + label(8) + kind(16) + alt(20).
-        // The alt StringRef follows the 20-byte ReferenceData header; when it's
-        // absent (plugin-created refs), `write_str16` emits an empty string.
-        18 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            out.push(if type_data.len() > 16 {
-                type_data[16]
-            } else {
-                0
-            });
-            write_str16(out, type_data, 20);
-        }
-
-        // FootnoteDefinition(19): identifier(0) + label(8)
-        19 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-        }
-
         // Table(21): align_count(0..4) + align bytes
         21 => {
             if type_data.len() >= 4 {
@@ -363,7 +270,7 @@ fn serialize_mdast_node_inline(
 
         // MdxJsxFlowElement(100), MdxJsxTextElement(101): name(0) + attributes
         100 | 101 => {
-            write_str16(out, type_data, 0);
+            write_str16(arena, out, type_data, 0);
             if type_data.len() >= 16 {
                 let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
                 out.extend_from_slice(&(attr_count as u16).to_le_bytes());
@@ -385,7 +292,7 @@ fn serialize_mdast_node_inline(
 
         // ContainerDirective(30), LeafDirective(31), TextDirective(32): name + attributes
         30..=32 => {
-            write_str16(out, type_data, 0);
+            write_str16(arena, out, type_data, 0);
             if type_data.len() >= 16 {
                 let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
                 out.extend_from_slice(&(attr_count as u16).to_le_bytes());
@@ -403,9 +310,6 @@ fn serialize_mdast_node_inline(
             }
         }
 
-        // MdxFlowExpression(102), MdxTextExpression(103), MdxjsEsm(104): value StringRef
-        102..=104 => write_str32(out, type_data, 0),
-
         // Root(0), Paragraph(1), ThematicBreak(3), Blockquote(4), Emphasis(11),
         // Strong(12), Break(14), TableRow(22), TableCell(23), Delete(24): no type data
         _ => {}
@@ -417,6 +321,40 @@ fn read_string_ref(data: &[u8], offset: usize) -> StringRef {
         u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()),
         u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()),
     )
+}
+
+/// Write a resolved `StringRef` (at `offset` in `data`) as `[len: u16][bytes]`
+/// onto the walk wire; an out-of-range offset emits an empty string. Shared by
+/// the hand-written arms and the generated `write_mdast_type_data_inline`.
+pub(crate) fn write_str16<K: ArenaKind>(
+    arena: &Arena<K>,
+    out: &mut Vec<u8>,
+    data: &[u8],
+    offset: usize,
+) {
+    if data.len() >= offset + 8 {
+        let s = arena.get_str(read_string_ref(data, offset));
+        out.extend_from_slice(&(s.len() as u16).to_le_bytes());
+        out.extend_from_slice(s.as_bytes());
+    } else {
+        out.extend_from_slice(&0u16.to_le_bytes());
+    }
+}
+
+/// Like [`write_str16`] but with a `u32` length prefix, for large `value` fields.
+pub(crate) fn write_str32<K: ArenaKind>(
+    arena: &Arena<K>,
+    out: &mut Vec<u8>,
+    data: &[u8],
+    offset: usize,
+) {
+    if data.len() >= offset + 8 {
+        let s = arena.get_str(read_string_ref(data, offset));
+        out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+        out.extend_from_slice(s.as_bytes());
+    } else {
+        out.extend_from_slice(&0u32.to_le_bytes());
+    }
 }
 
 /// HAST inline serialization: write node data with all strings resolved

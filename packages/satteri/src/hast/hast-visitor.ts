@@ -96,7 +96,11 @@ export interface HastVisitorContext {
   prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   appendChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
-  insertChildAt(node: Readonly<HastNode>, index: number, childNode: HastContent | HastContent[]): void;
+  insertChildAt(
+    node: Readonly<HastNode>,
+    index: number,
+    childNode: HastContent | HastContent[],
+  ): void;
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<HastNode>, index: number): void;
   setProperty(node: Readonly<HastNode>, key: string, value: unknown): void;
@@ -117,14 +121,10 @@ export interface HastVisitorContext {
  * splices the original in place (preserving its id, applying any pending patch
  * on it) instead of rebuilding it fresh.
  */
-function markHast(node: HastNode): Record<string, unknown> {
-  return markHastNode(node, true);
-}
-
-function markHastNode(node: HastNode, isRoot: boolean): Record<string, unknown> {
+function markHast(node: HastNode, isRoot = true): Record<string, unknown> {
   if (!isRoot) {
-    const id = nodeIdMap.get(node) ?? (node as HastNodeInternal)._nodeId;
-    if (typeof id === "number") return { _ref: id };
+    const id = hastReusedId(node);
+    if (id !== undefined) return { _ref: id };
   }
   const obj: Record<string, unknown> = { _hast: true, type: node.type };
   if ("tagName" in node) obj.tagName = node.tagName;
@@ -134,7 +134,7 @@ function markHastNode(node: HastNode, isRoot: boolean): Record<string, unknown> 
   if ("attributes" in node) obj.attributes = node.attributes;
   if ("data" in node && node.data != null) obj.data = node.data;
   if ("children" in node) {
-    obj.children = node.children.map((c) => markHastNode(c, false));
+    obj.children = node.children.map((c) => markHast(c, false));
   }
   return obj;
 }
@@ -143,14 +143,13 @@ function nid(node: HastNode): number {
   return nodeIdMap.get(node) ?? (node as HastNodeInternal)._nodeId;
 }
 
-/** New content for a HAST structural mutation: a declarative node. Supported
- *  types ride the op-stream; everything else falls back to JSON — both produce
- *  identical arenas. */
+/** New content for a HAST structural mutation. Unlike [`MdastContent`], HAST has
+ *  a `raw` node type, so it needs no raw/rawHtml escape hatch. */
 export type HastContent = HastNode;
 
 function hastReusedId(node: unknown): number | undefined {
   if (node === null || typeof node !== "object") return undefined;
-  const id = nodeIdMap.get(node) ?? (node as HastNodeInternal)._nodeId;
+  const id = nid(node as HastNode);
   return typeof id === "number" ? id : undefined;
 }
 
@@ -208,7 +207,8 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
     }
   } else if (type === HAST_MDX_JSX_ELEMENT || type === HAST_MDX_JSX_TEXT_ELEMENT) {
     // Name falls back to tagName, matching `encode_hast_js_node_data`.
-    const name = typeof n.name === "string" ? n.name : typeof n.tagName === "string" ? n.tagName : "";
+    const name =
+      typeof n.name === "string" ? n.name : typeof n.tagName === "string" ? n.tagName : "";
     if (name !== "") w.str(OF_NAME, name);
     if (Array.isArray(n.attributes)) {
       for (const a of n.attributes) emitMdxAttr(w, a as Record<string, unknown>);
@@ -344,7 +344,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
       const wrapper = {
         _hast: true,
         type: "root",
-        children: (value as HastNode[]).map((child) => markHastNode(child, false)),
+        children: (value as HastNode[]).map((child) => markHast(child, false)),
       };
       this.#commandBuffer.setChildren(id, JSON.stringify(wrapper));
       return;

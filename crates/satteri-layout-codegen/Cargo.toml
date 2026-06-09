@@ -1,0 +1,16 @@
+[package]
+name = "satteri-layout-codegen"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone code generator for node `type_data` layouts. Run with
+# `cargo run -p satteri-layout-codegen` (or `pnpm codegen`); generated files are
+# checked into the `generated/` folders. Deliberately not a build script: codegen
+# stays out of the compile path and the output is committed and IDE-navigable.
+
+[[bin]]
+name = "satteri-layout-codegen"
+path = "src/main.rs"
+
+[dependencies]

@@ -294,102 +294,14 @@ export class MdastReader {
     };
   }
 
-  /** HeadingData: depth u8 @ 0. */
-  getHeadingDepth(nodeId: number): number {
-    return this.getTypeData(nodeId)[0]!;
-  }
-
   /**
-   * StringRef value. Valid for Text, InlineCode, Html, Yaml, Toml, InlineMath nodes.
+   * StringRef value. Valid for Text, InlineCode, Html, Yaml, Toml nodes.
    * These store a single StringRef as their type data.
    */
   getTextValue(nodeId: number): string {
     const data = this.getTypeData(nodeId);
     const ref = this.readStringRef(data);
     return this.getString(ref.offset, ref.len);
-  }
-
-  /**
-   * LinkData: url(0..8), title(8..16).
-   * Valid for Link nodes.
-   */
-  getLinkData(nodeId: number): { url: string; title: string | null } {
-    const data = this.getTypeData(nodeId);
-    const urlRef = this.readStringRef(data, 0);
-    const titleRef = this.readStringRef(data, 8);
-    return {
-      url: this.getString(urlRef.offset, urlRef.len),
-      title: titleRef.len > 0 ? this.getString(titleRef.offset, titleRef.len) : null,
-    };
-  }
-
-  /**
-   * ImageData: url(0..8), alt(8..16), title(16..24).
-   * Valid for Image nodes.
-   */
-  getImageData(nodeId: number): { url: string; alt: string; title: string | null } {
-    const data = this.getTypeData(nodeId);
-    const urlRef = this.readStringRef(data, 0);
-    const altRef = this.readStringRef(data, 8);
-    const titleRef = this.readStringRef(data, 16);
-    return {
-      url: this.getString(urlRef.offset, urlRef.len),
-      alt: this.getString(altRef.offset, altRef.len),
-      title: titleRef.len > 0 ? this.getString(titleRef.offset, titleRef.len) : null,
-    };
-  }
-
-  /**
-   * CodeData #[repr(C)]: lang(0..8), meta(8..16), value(16..24), fence_char(24), _pad(25..28).
-   * Valid for Code nodes.
-   */
-  getCodeData(nodeId: number): { lang: string | null; meta: string | null; value: string } {
-    const data = this.getTypeData(nodeId);
-    const langRef = this.readStringRef(data, 0);
-    const metaRef = this.readStringRef(data, 8);
-    const valueRef = this.readStringRef(data, 16);
-    return {
-      lang: langRef.len > 0 ? this.getString(langRef.offset, langRef.len) : null,
-      meta: metaRef.len > 0 ? this.getString(metaRef.offset, metaRef.len) : null,
-      value: this.getString(valueRef.offset, valueRef.len),
-    };
-  }
-
-  /**
-   * MathData #[repr(C)]: meta(0..8), value(8..16).
-   * Valid for Math nodes.
-   */
-  getMathData(nodeId: number): { meta: string | null; value: string } {
-    const data = this.getTypeData(nodeId);
-    const metaRef = this.readStringRef(data, 0);
-    const valueRef = this.readStringRef(data, 8);
-    return {
-      meta: metaRef.len > 0 ? this.getString(metaRef.offset, metaRef.len) : null,
-      value: this.getString(valueRef.offset, valueRef.len),
-    };
-  }
-
-  /**
-   * DefinitionData #[repr(C)]: url(0..8), title(8..16), identifier(16..24), label(24..32).
-   * Valid for Definition nodes.
-   */
-  getDefinitionData(nodeId: number): {
-    url: string;
-    title: string | null;
-    identifier: string;
-    label: string;
-  } {
-    const data = this.getTypeData(nodeId);
-    const urlRef = this.readStringRef(data, 0);
-    const titleRef = this.readStringRef(data, 8);
-    const identifierRef = this.readStringRef(data, 16);
-    const labelRef = this.readStringRef(data, 24);
-    return {
-      url: this.getString(urlRef.offset, urlRef.len),
-      title: titleRef.len > 0 ? this.getString(titleRef.offset, titleRef.len) : null,
-      identifier: this.getString(identifierRef.offset, identifierRef.len),
-      label: this.getString(labelRef.offset, labelRef.len),
-    };
   }
 
   /**
@@ -416,60 +328,6 @@ export class MdastReader {
     return {
       checked: checkedByte === 2 ? null : checkedByte === 1,
       spread: data[1] !== 0,
-    };
-  }
-
-  /**
-   * ReferenceData #[repr(C)]: identifier(0..8), label(8..16), reference_kind(16), _pad(17..20).
-   * referenceKind: 0=shortcut, 1=collapsed, 2=full.
-   * Valid for LinkReference, ImageReference, FootnoteReference nodes.
-   */
-  getReferenceData(nodeId: number): { identifier: string; label: string; referenceType: string } {
-    const data = this.getTypeData(nodeId);
-    const identifierRef = this.readStringRef(data, 0);
-    const labelRef = this.readStringRef(data, 8);
-    const kindByte = data[16]!;
-    const referenceTypes = ["shortcut", "collapsed", "full"];
-    return {
-      identifier: this.getString(identifierRef.offset, identifierRef.len),
-      label: this.getString(labelRef.offset, labelRef.len),
-      referenceType: referenceTypes[kindByte] ?? "shortcut",
-    };
-  }
-
-  /**
-   * ImageReference layout: 20-byte ReferenceData header + 8-byte alt StringRef.
-   * Parser-emitted image references carry alt inline; plugin-created ones
-   * may lack this suffix, in which case `alt` is empty.
-   */
-  getImageReferenceData(nodeId: number): {
-    identifier: string;
-    label: string;
-    referenceType: string;
-    alt: string;
-  } {
-    const base = this.getReferenceData(nodeId);
-    const data = this.getTypeData(nodeId);
-    if (data.length >= 28) {
-      const altRef = this.readStringRef(data, 20);
-      return {
-        ...base,
-        alt: this.getString(altRef.offset, altRef.len),
-      };
-    }
-    return { ...base, alt: "" };
-  }
-
-  /**
-   * FootnoteDefinitionData #[repr(C)]: identifier(0..8), label(8..16).
-   */
-  getFootnoteDefinitionData(nodeId: number): { identifier: string; label: string } {
-    const data = this.getTypeData(nodeId);
-    const identifierRef = this.readStringRef(data, 0);
-    const labelRef = this.readStringRef(data, 8);
-    return {
-      identifier: this.getString(identifierRef.offset, identifierRef.len),
-      label: this.getString(labelRef.offset, labelRef.len),
     };
   }
 
@@ -597,16 +455,6 @@ export class MdastReader {
     }
 
     return { name, attributes };
-  }
-
-  /**
-   * ExpressionData #[repr(C)]: value StringRef (0..8).
-   * Valid for MdxFlowExpression, MdxTextExpression, MdxjsEsm.
-   */
-  getExpressionValue(nodeId: number): string {
-    const data = this.getTypeData(nodeId);
-    const valueRef = this.readStringRef(data, 0);
-    return restorePhantomSpaces(this.getString(valueRef.offset, valueRef.len));
   }
 
   /**

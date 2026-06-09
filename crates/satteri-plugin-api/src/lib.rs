@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod context;
 pub mod data;
+mod generated;
 pub mod js_commands;
 pub mod plugin;
 pub mod runner;

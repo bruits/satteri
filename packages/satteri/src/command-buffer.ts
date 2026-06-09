@@ -10,6 +10,14 @@
  */
 
 import type { MdastNode } from "./types.js";
+import {
+  PROP_STRING,
+  PROP_BOOL_TRUE,
+  PROP_BOOL_FALSE,
+  PROP_SPACE_SEP,
+  PROP_INT,
+  PROP_NULL,
+} from "./op-stream.js";
 
 // Command bytes (0x01–0x0F)
 
@@ -30,15 +38,6 @@ const PAYLOAD_RAW_HTML = 0x11;
 const PAYLOAD_SERDE_JSON = 0x12;
 /** Declarative-compile op-stream (see op-stream.ts / js_commands.rs). */
 const PAYLOAD_OPSTREAM = 0x14;
-
-// Value types for CMD_SET_PROPERTY (must match commands.rs PROP_* constants)
-
-const PROP_STRING = 0;
-const PROP_BOOL_TRUE = 1;
-const PROP_BOOL_FALSE = 2;
-const PROP_SPACE_SEP = 3;
-const PROP_INT = 5;
-const PROP_NULL = 6;
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
 

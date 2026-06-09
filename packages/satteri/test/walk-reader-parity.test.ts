@@ -53,7 +53,10 @@ function walkAndReader(md: string, type: string, mdx = false) {
 // C4 — imageReference `alt`
 
 test("C4: imageReference exposes `alt`/`referenceType` on the walk path, matching the reader", () => {
-  const { walked, materialized } = walkAndReader("![my alt][ref]\n\n[ref]: /img.png", "imageReference");
+  const { walked, materialized } = walkAndReader(
+    "![my alt][ref]\n\n[ref]: /img.png",
+    "imageReference",
+  );
   expect(walked).toHaveLength(1);
   expect(materialized).toHaveLength(1);
   expect(walked[0].alt).toBe("my alt");
@@ -68,7 +71,11 @@ test("C4: imageReference exposes `alt`/`referenceType` on the walk path, matchin
 test("C2: MDX expression value strips phantom spaces on the walk path, matching the reader", () => {
   // The tab on the continuation line is partially consumed by the dedent and
   // re-emitted as phantom-space sentinels; both paths must restore real spaces.
-  const { walked, materialized } = walkAndReader("<div>\n\t{`a\n\tb`}\n</div>", "mdxFlowExpression", true);
+  const { walked, materialized } = walkAndReader(
+    "<div>\n\t{`a\n\tb`}\n</div>",
+    "mdxFlowExpression",
+    true,
+  );
   expect(walked).toHaveLength(1);
   expect(materialized).toHaveLength(1);
   expect(walked[0].value).not.toContain(PHANTOM);

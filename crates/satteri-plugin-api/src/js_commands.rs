@@ -87,16 +87,16 @@ const OP_PROP: u8 = 0x0a; // [name str][kind: u8][value str] — HAST element pr
 const OP_ALIGN: u8 = 0x0b; // [len: u32 LE][ColumnAlign bytes] — table column alignment
 
 // Op-stream field ids (single namespace across OP_STR/OP_U8/OP_U32/OP_BOOL).
-const OF_VALUE: u8 = 0;
-const OF_URL: u8 = 1;
-const OF_TITLE: u8 = 2;
-const OF_ALT: u8 = 3;
-const OF_LANG: u8 = 4;
-const OF_META: u8 = 5;
-const OF_IDENTIFIER: u8 = 6;
-const OF_LABEL: u8 = 7;
+pub(crate) const OF_VALUE: u8 = 0;
+pub(crate) const OF_URL: u8 = 1;
+pub(crate) const OF_TITLE: u8 = 2;
+pub(crate) const OF_ALT: u8 = 3;
+pub(crate) const OF_LANG: u8 = 4;
+pub(crate) const OF_META: u8 = 5;
+pub(crate) const OF_IDENTIFIER: u8 = 6;
+pub(crate) const OF_LABEL: u8 = 7;
 const OF_NAME: u8 = 8; // directive / MDX JSX element name
-const OF_REFERENCE_TYPE: u8 = 9;
+pub(crate) const OF_REFERENCE_TYPE: u8 = 9;
 const OF_DEPTH: u8 = 10;
 const OF_CHECKED: u8 = 11;
 const OF_START: u8 = 12;
@@ -555,56 +555,19 @@ fn write_js_node_data<K: ArenaKind>(
     Ok(())
 }
 
+// Generated per-type arena encoders, driven by the node registry. See
+// `crates/satteri-layout-codegen`.
+use crate::generated::encode::{encode_mdast_type_data, encode_mdast_type_data_from_ops};
+
 fn encode_js_node_data(
     js_node: &JsNode,
     node_type: MdastNodeType,
     builder: &mut ArenaBuilder<Mdast>,
 ) -> Vec<u8> {
+    if let Some(type_data) = encode_mdast_type_data(js_node, node_type as u8, builder) {
+        return type_data;
+    }
     match node_type {
-        MdastNodeType::Heading => {
-            let depth = js_node.depth.unwrap_or(1);
-            encode_heading_data(depth)
-        }
-        MdastNodeType::Text
-        | MdastNodeType::InlineCode
-        | MdastNodeType::Html
-        | MdastNodeType::Yaml
-        | MdastNodeType::Toml => {
-            let value = js_node.value.as_deref().unwrap_or("");
-            let sref = builder.alloc_string(value);
-            encode_string_ref_data(sref)
-        }
-        MdastNodeType::Code => {
-            let lang_ref = alloc_opt_str(builder, js_node.lang.as_deref());
-            let meta_ref = alloc_opt_str(builder, js_node.meta.as_deref());
-            let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
-            encode_code_data(lang_ref, meta_ref, value_ref, b'`')
-        }
-        // InlineMath shares Math's `MathData` layout (the parser stores both
-        // that way); it has no `meta`, so that ref stays empty.
-        MdastNodeType::Math | MdastNodeType::InlineMath => {
-            let meta_ref = alloc_opt_str(builder, js_node.meta.as_deref());
-            let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
-            encode_math_data(meta_ref, value_ref)
-        }
-        MdastNodeType::Link => {
-            let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
-            let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
-            encode_link_data(url_ref, title_ref)
-        }
-        MdastNodeType::Image => {
-            let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
-            let alt_ref = alloc_opt_str(builder, js_node.alt.as_deref());
-            let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
-            encode_image_data(url_ref, alt_ref, title_ref)
-        }
-        MdastNodeType::Definition => {
-            let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
-            let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
-            let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
-            let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
-            encode_definition_data(url_ref, title_ref, id_ref, label_ref)
-        }
         MdastNodeType::List => {
             let ordered = js_node.ordered.unwrap_or(false);
             let start = js_node.start.unwrap_or(1);
@@ -620,25 +583,7 @@ fn encode_js_node_data(
             let spread = js_node.spread.unwrap_or(false);
             encode_list_item_data(checked, spread)
         }
-        MdastNodeType::LinkReference | MdastNodeType::FootnoteReference => {
-            let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
-            let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
-            let kind = reference_kind(js_node.reference_type.as_deref());
-            encode_reference_data(id_ref, label_ref, kind)
-        }
-        MdastNodeType::ImageReference => {
-            let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
-            let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
-            let kind = reference_kind(js_node.reference_type.as_deref());
-            let alt_ref = alloc_opt_str(builder, js_node.alt.as_deref());
-            encode_image_reference_data(id_ref, label_ref, kind, alt_ref)
-        }
         MdastNodeType::Table => encode_table_data(&column_aligns(js_node.align.as_deref())),
-        MdastNodeType::FootnoteDefinition => {
-            let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
-            let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
-            encode_footnote_definition_data(id_ref, label_ref)
-        }
         #[cfg(feature = "mdx")]
         MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement => {
             let name_ref = alloc_opt_str(builder, js_node.name.as_deref());
@@ -656,13 +601,6 @@ fn encode_js_node_data(
             let name_ref = builder.alloc_string(name);
             let attr_pairs = encode_js_directive_attrs(builder, js_node.attributes.as_ref());
             encode_directive_data(name_ref, &attr_pairs)
-        }
-        #[cfg(feature = "mdx")]
-        MdastNodeType::MdxFlowExpression
-        | MdastNodeType::MdxTextExpression
-        | MdastNodeType::MdxjsEsm => {
-            let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
-            encode_expression_data(value_ref)
         }
         // Nodes with no type-specific data
         _ => Vec::new(),
@@ -685,7 +623,7 @@ fn encode_js_directive_attrs(
 }
 
 /// Map an mdast `referenceType` to the arena reference-kind byte (shortcut = 0).
-fn reference_kind(reference_type: Option<&str>) -> u8 {
+pub(crate) fn reference_kind(reference_type: Option<&str>) -> u8 {
     match reference_type {
         Some("collapsed") => 1,
         Some("full") => 2,
@@ -707,7 +645,10 @@ fn column_aligns(align: Option<&[Option<String>]>) -> Vec<ColumnAlign> {
         .collect()
 }
 
-fn alloc_opt_str<K: ArenaKind>(builder: &mut ArenaBuilder<K>, s: Option<&str>) -> StringRef {
+pub(crate) fn alloc_opt_str<K: ArenaKind>(
+    builder: &mut ArenaBuilder<K>,
+    s: Option<&str>,
+) -> StringRef {
     match s {
         Some(v) if !v.is_empty() => builder.alloc_string(v),
         _ => StringRef::empty(),
@@ -715,51 +656,21 @@ fn alloc_opt_str<K: ArenaKind>(builder: &mut ArenaBuilder<K>, s: Option<&str>) -
 }
 
 fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
-    match name {
-        "root" => Ok(MdastNodeType::Root),
-        "paragraph" => Ok(MdastNodeType::Paragraph),
-        "heading" => Ok(MdastNodeType::Heading),
-        "thematicBreak" => Ok(MdastNodeType::ThematicBreak),
-        "blockquote" => Ok(MdastNodeType::Blockquote),
-        "list" => Ok(MdastNodeType::List),
-        "listItem" => Ok(MdastNodeType::ListItem),
-        "html" => Ok(MdastNodeType::Html),
-        "code" => Ok(MdastNodeType::Code),
-        "definition" => Ok(MdastNodeType::Definition),
-        "text" => Ok(MdastNodeType::Text),
-        "emphasis" => Ok(MdastNodeType::Emphasis),
-        "strong" => Ok(MdastNodeType::Strong),
-        "inlineCode" => Ok(MdastNodeType::InlineCode),
-        "break" => Ok(MdastNodeType::Break),
-        "link" => Ok(MdastNodeType::Link),
-        "image" => Ok(MdastNodeType::Image),
-        "linkReference" => Ok(MdastNodeType::LinkReference),
-        "imageReference" => Ok(MdastNodeType::ImageReference),
-        "footnoteDefinition" => Ok(MdastNodeType::FootnoteDefinition),
-        "footnoteReference" => Ok(MdastNodeType::FootnoteReference),
-        "table" => Ok(MdastNodeType::Table),
-        "tableRow" => Ok(MdastNodeType::TableRow),
-        "tableCell" => Ok(MdastNodeType::TableCell),
-        "delete" => Ok(MdastNodeType::Delete),
-        "yaml" => Ok(MdastNodeType::Yaml),
-        "toml" => Ok(MdastNodeType::Toml),
-        "math" => Ok(MdastNodeType::Math),
-        "inlineMath" => Ok(MdastNodeType::InlineMath),
-        "containerDirective" => Ok(MdastNodeType::ContainerDirective),
-        "leafDirective" => Ok(MdastNodeType::LeafDirective),
-        "textDirective" => Ok(MdastNodeType::TextDirective),
-        #[cfg(feature = "mdx")]
-        "mdxJsxFlowElement" => Ok(MdastNodeType::MdxJsxFlowElement),
-        #[cfg(feature = "mdx")]
-        "mdxJsxTextElement" => Ok(MdastNodeType::MdxJsxTextElement),
-        #[cfg(feature = "mdx")]
-        "mdxFlowExpression" => Ok(MdastNodeType::MdxFlowExpression),
-        #[cfg(feature = "mdx")]
-        "mdxTextExpression" => Ok(MdastNodeType::MdxTextExpression),
-        #[cfg(feature = "mdx")]
-        "mdxjsEsm" => Ok(MdastNodeType::MdxjsEsm),
-        other => Err(CommandError::UnknownNodeType(other.to_string())),
+    let node_type = MdastNodeType::from_name(name)
+        .ok_or_else(|| CommandError::UnknownNodeType(name.to_string()))?;
+    // MDX node types only exist when the feature is on; reject them otherwise.
+    #[cfg(not(feature = "mdx"))]
+    if matches!(
+        node_type,
+        MdastNodeType::MdxJsxFlowElement
+            | MdastNodeType::MdxJsxTextElement
+            | MdastNodeType::MdxFlowExpression
+            | MdastNodeType::MdxTextExpression
+            | MdastNodeType::MdxjsEsm
+    ) {
+        return Err(CommandError::UnknownNodeType(name.to_string()));
     }
+    Ok(node_type)
 }
 
 // HAST command handlers
@@ -1130,11 +1041,11 @@ fn encode_hast_js_node_data(
 /// Accumulates one node's fields between its OPEN and finalization. Strings
 /// borrow the op-stream buffer; they're interned into the arena at finalize.
 #[derive(Default)]
-struct FieldCollector<'a> {
+pub(crate) struct FieldCollector<'a> {
     node_type: u8,
     finalized: bool,
-    strs: [Option<&'a str>; 10],
-    depth: Option<u8>,
+    pub(crate) strs: [Option<&'a str>; 10],
+    pub(crate) depth: Option<u8>,
     checked: Option<u8>,
     start: Option<u32>,
     ordered: Option<bool>,
@@ -1155,122 +1066,65 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
     }
     c.finalized = true;
     let s = |i: u8| c.strs[i as usize];
-    let type_data: Vec<u8> = match c.node_type {
-        // Heading
-        2 => encode_heading_data(c.depth.unwrap_or(1)),
-        // Text, Html, InlineCode, Yaml, Toml: single value StringRef
-        10 | 7 | 13 | 25 | 26 => {
-            let sref = builder.alloc_string(s(OF_VALUE).unwrap_or(""));
-            encode_string_ref_data(sref)
-        }
-        // Code: lang + meta + value
-        8 => {
-            let lang = alloc_opt_str(builder, s(OF_LANG));
-            let meta = alloc_opt_str(builder, s(OF_META));
-            let value = alloc_opt_str(builder, s(OF_VALUE));
-            encode_code_data(lang, meta, value, b'`')
-        }
-        // Math / InlineMath share MathData: meta + value
-        27 | 28 => {
-            let meta = alloc_opt_str(builder, s(OF_META));
-            let value = alloc_opt_str(builder, s(OF_VALUE));
-            encode_math_data(meta, value)
-        }
-        // Link: url + title
-        15 => {
-            let url = alloc_opt_str(builder, s(OF_URL));
-            let title = alloc_opt_str(builder, s(OF_TITLE));
-            encode_link_data(url, title)
-        }
-        // Image: url + alt + title
-        16 => {
-            let url = alloc_opt_str(builder, s(OF_URL));
-            let alt = alloc_opt_str(builder, s(OF_ALT));
-            let title = alloc_opt_str(builder, s(OF_TITLE));
-            encode_image_data(url, alt, title)
-        }
-        // Definition: url + title + identifier + label
-        9 => {
-            let url = alloc_opt_str(builder, s(OF_URL));
-            let title = alloc_opt_str(builder, s(OF_TITLE));
-            let id = alloc_opt_str(builder, s(OF_IDENTIFIER));
-            let label = alloc_opt_str(builder, s(OF_LABEL));
-            encode_definition_data(url, title, id, label)
-        }
-        // List: ordered + start + spread
-        5 => encode_list_data(
-            c.ordered.unwrap_or(false),
-            c.start.unwrap_or(1),
-            c.spread.unwrap_or(false),
-        ),
-        // ListItem: checked (0/1/2=none) + spread
-        6 => encode_list_item_data(c.checked.unwrap_or(2), c.spread.unwrap_or(false)),
-        // LinkReference / FootnoteReference: identifier + label + kind
-        17 | 20 => {
-            let id = alloc_opt_str(builder, s(OF_IDENTIFIER));
-            let label = alloc_opt_str(builder, s(OF_LABEL));
-            encode_reference_data(id, label, reference_kind(s(OF_REFERENCE_TYPE)))
-        }
-        // ImageReference: identifier + label + kind + alt
-        18 => {
-            let id = alloc_opt_str(builder, s(OF_IDENTIFIER));
-            let label = alloc_opt_str(builder, s(OF_LABEL));
-            let alt = alloc_opt_str(builder, s(OF_ALT));
-            encode_image_reference_data(id, label, reference_kind(s(OF_REFERENCE_TYPE)), alt)
-        }
-        // FootnoteDefinition: identifier + label
-        19 => {
-            let id = alloc_opt_str(builder, s(OF_IDENTIFIER));
-            let label = alloc_opt_str(builder, s(OF_LABEL));
-            encode_footnote_definition_data(id, label)
-        }
-        // Table: column alignment bytes
-        21 => {
-            let aligns: Vec<ColumnAlign> = c
-                .align
-                .unwrap_or(&[])
-                .iter()
-                .map(|&b| ColumnAlign::from_u8(b).unwrap_or(ColumnAlign::None))
-                .collect();
-            encode_table_data(&aligns)
-        }
-        // MdxJsxFlowElement / MdxJsxTextElement: name + typed attributes + explicit
-        #[cfg(feature = "mdx")]
-        100 | 101 => {
-            let name_ref = builder.alloc_string(s(OF_NAME).unwrap_or(""));
-            let mut attrs: Vec<(u8, StringRef, StringRef)> = Vec::with_capacity(c.props.len());
-            for &(name, kind, value) in &c.props {
-                let nr = if kind == MDX_ATTR_SPREAD {
-                    StringRef::empty()
-                } else {
-                    builder.alloc_string(name)
-                };
-                let vr = if kind == MDX_ATTR_BOOLEAN_PROP {
-                    StringRef::empty()
-                } else {
-                    builder.alloc_string(value)
-                };
-                attrs.push((kind, nr, vr));
+    let type_data: Vec<u8> = if let Some(td) =
+        encode_mdast_type_data_from_ops(c, c.node_type, builder)
+    {
+        td
+    } else {
+        match c.node_type {
+            // List: ordered + start + spread
+            5 => encode_list_data(
+                c.ordered.unwrap_or(false),
+                c.start.unwrap_or(1),
+                c.spread.unwrap_or(false),
+            ),
+            // ListItem: checked (0/1/2=none) + spread
+            6 => encode_list_item_data(c.checked.unwrap_or(2), c.spread.unwrap_or(false)),
+            // Table: column alignment bytes
+            21 => {
+                let aligns: Vec<ColumnAlign> = c
+                    .align
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|&b| ColumnAlign::from_u8(b).unwrap_or(ColumnAlign::None))
+                    .collect();
+                encode_table_data(&aligns)
             }
-            encode_mdx_jsx_element_data(name_ref, &attrs, c.explicit.unwrap_or(false))
-        }
-        // Container/Leaf/TextDirective: name + string attributes
-        30..=32 => {
-            let name_ref = builder.alloc_string(s(OF_NAME).unwrap_or(""));
-            let mut attrs: Vec<(StringRef, StringRef)> = Vec::with_capacity(c.props.len());
-            for &(key, _kind, value) in &c.props {
-                let kr = builder.alloc_string(key);
-                let vr = builder.alloc_string(value);
-                attrs.push((kr, vr));
+            // MdxJsxFlowElement / MdxJsxTextElement: name + typed attributes + explicit
+            #[cfg(feature = "mdx")]
+            100 | 101 => {
+                let name_ref = builder.alloc_string(s(OF_NAME).unwrap_or(""));
+                let mut attrs: Vec<(u8, StringRef, StringRef)> = Vec::with_capacity(c.props.len());
+                for &(name, kind, value) in &c.props {
+                    let nr = if kind == MDX_ATTR_SPREAD {
+                        StringRef::empty()
+                    } else {
+                        builder.alloc_string(name)
+                    };
+                    let vr = if kind == MDX_ATTR_BOOLEAN_PROP {
+                        StringRef::empty()
+                    } else {
+                        builder.alloc_string(value)
+                    };
+                    attrs.push((kind, nr, vr));
+                }
+                encode_mdx_jsx_element_data(name_ref, &attrs, c.explicit.unwrap_or(false))
             }
-            encode_directive_data(name_ref, &attrs)
+            // Container/Leaf/TextDirective: name + string attributes
+            30..=32 => {
+                let name_ref = builder.alloc_string(s(OF_NAME).unwrap_or(""));
+                let mut attrs: Vec<(StringRef, StringRef)> = Vec::with_capacity(c.props.len());
+                for &(key, _kind, value) in &c.props {
+                    let kr = builder.alloc_string(key);
+                    let vr = builder.alloc_string(value);
+                    attrs.push((kr, vr));
+                }
+                encode_directive_data(name_ref, &attrs)
+            }
+            // Root, Paragraph, ThematicBreak, Blockquote, Emphasis, Strong, Break,
+            // TableRow, TableCell, Delete: no type_data.
+            _ => Vec::new(),
         }
-        // MdxFlowExpression, MdxTextExpression, MdxjsEsm: single value StringRef
-        #[cfg(feature = "mdx")]
-        102..=104 => encode_expression_data(alloc_opt_str(builder, s(OF_VALUE))),
-        // Root, Paragraph, ThematicBreak, Blockquote, Emphasis, Strong, Break,
-        // TableRow, TableCell, Delete: no type_data.
-        _ => Vec::new(),
     };
     if !type_data.is_empty() {
         builder.set_data_current(&type_data);
