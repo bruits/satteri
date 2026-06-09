@@ -464,26 +464,6 @@ fn serialize_hast_node_inline(
             }
         }
 
-        // Code (type 8): lang + meta + value
-        8 => {
-            if type_data.len() >= 24 {
-                let lang_ref = read_string_ref(type_data, 0);
-                let meta_ref = read_string_ref(type_data, 8);
-                let val_ref = read_string_ref(type_data, 16);
-                let lang = arena.get_str(lang_ref);
-                let meta = arena.get_str(meta_ref);
-                let val = arena.get_str(val_ref);
-                out.extend_from_slice(&(lang.len() as u16).to_le_bytes());
-                out.extend_from_slice(lang.as_bytes());
-                out.extend_from_slice(&(meta.len() as u16).to_le_bytes());
-                out.extend_from_slice(meta.as_bytes());
-                out.extend_from_slice(&(val.len() as u32).to_le_bytes());
-                out.extend_from_slice(val.as_bytes());
-            } else {
-                out.extend_from_slice(&[0u8; 8]); // empty lang, meta, value
-            }
-        }
-
         _ => {
             // Generic: copy raw type_data as length-prefixed blob
             out.extend_from_slice(&(type_data.len() as u16).to_le_bytes());
