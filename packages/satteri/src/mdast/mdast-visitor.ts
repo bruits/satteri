@@ -34,6 +34,7 @@ import {
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
 import { LazyChildResolver } from "../lazy-child-resolver.js";
+import { MdastChildStub } from "./child-stub.js";
 import type { MdastHandle } from "../handles.js";
 import type {
   Blockquote,
@@ -83,6 +84,9 @@ export interface MdastDiagnostic {
 const mdastNodeIdMap: WeakMap<object, number> = new WeakMap();
 
 function nid(node: MdastNode): number | undefined {
+  // Genuine stubs carry their id as a plain field; a spread copy is not
+  // `instanceof` and has no `_nodeId`, so it correctly reads as new content.
+  if (node instanceof MdastChildStub) return node._id;
   return mdastNodeIdMap.get(node as object) ?? (node as MdastNodeInternal)._nodeId;
 }
 
@@ -319,27 +323,26 @@ interface MdastVisitResult {
 }
 
 /** Merge return-value + context command buffers and release internals. */
+const EMPTY_BYTES = new Uint8Array(0);
+
 function mergeAndReset(
   returnBuffer: CommandBuffer,
   ctx: MdastVisitorContext,
 ): { merged: Uint8Array; hasMutations: boolean } {
   const ctxCmdBuf = ctx.getCommandBuffer();
+  // The common case — no mutations this match — allocates nothing.
+  if (returnBuffer.length === 0 && ctxCmdBuf.length === 0) {
+    return { merged: EMPTY_BYTES, hasMutations: false };
+  }
   const ctxBuf = ctxCmdBuf.getBuffer();
   const retBuf = returnBuffer.getBuffer();
-  const totalLen = retBuf.length + ctxBuf.length;
-
-  let merged: Uint8Array;
-  if (totalLen === 0) {
-    merged = new Uint8Array(0);
-  } else {
-    merged = new Uint8Array(totalLen);
-    merged.set(retBuf, 0);
-    merged.set(ctxBuf, retBuf.length);
-  }
+  const merged = new Uint8Array(retBuf.length + ctxBuf.length);
+  merged.set(retBuf, 0);
+  merged.set(ctxBuf, retBuf.length);
 
   returnBuffer.reset();
   ctxCmdBuf.reset();
-  return { merged, hasMutations: totalLen > 0 };
+  return { merged, hasMutations: true };
 }
 
 // Handle-based MDAST visitor (arena stays in Rust)
@@ -378,11 +381,36 @@ class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
   }
 }
 
+/** Build the child-stub list for a matched node from the wire's `[child_ids]
+ *  [child_types]` blocks — no arena snapshot. The seal check still applies:
+ *  post-pass ids are stale, and a stub built from them could later splice the
+ *  wrong node as a ref. */
+function readMdastChildStubs(
+  view: DataView,
+  buf: Uint8Array,
+  idsPos: number,
+  typesPos: number,
+  count: number,
+  resolver: MdastLazyChildResolver,
+): MdastNode[] {
+  resolver.assertUnsealed();
+  const stubs: MdastNode[] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    stubs[i] = new MdastChildStub(
+      resolver,
+      ru32(view, idsPos + i * 4),
+      buf[typesPos + i]!,
+    ) as unknown as MdastNode;
+  }
+  return stubs;
+}
+
 /**
  * Read an MDAST node from the inline data in a match buffer entry.
  *
  * Inline format (from Rust serialize_mdast_node_inline):
- *   [node_data: u32+bytes][position: 6×u32 = 24B][child_count: u16][child_ids: N×u32][type-specific data]
+ *   [node_data: u32+bytes][position: 6×u32 = 24B][child_count: u16][child_ids: N×u32]
+ *   [child_types: N×u8][type-specific data]
  */
 const encoder = new TextEncoder();
 
@@ -413,14 +441,13 @@ function readMdastMatchedNode(
   const position = readPosition(view, pos);
   pos += 24;
 
-  // Children, read IDs, materialize lazily via resolver
   const childCount = ru16(view, pos);
   pos += 2;
-  const childIds: number[] = [];
-  for (let i = 0; i < childCount; i++) {
-    childIds.push(ru32(view, pos));
-    pos += 4;
-  }
+  // Ids/types decode lazily with `.children` — most matched nodes never read them.
+  const childIdsPos = pos;
+  pos += childCount * 4;
+  const childTypesPos = pos;
+  pos += childCount;
 
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
@@ -430,7 +457,14 @@ function readMdastMatchedNode(
   if (childCount > 0) {
     Object.defineProperty(node, "children", {
       get() {
-        const val = resolver.materializeChildren(childIds);
+        const val = readMdastChildStubs(
+          view,
+          buf,
+          childIdsPos,
+          childTypesPos,
+          childCount,
+          resolver,
+        );
         Object.defineProperty(this, "children", {
           value: val,
           writable: true,

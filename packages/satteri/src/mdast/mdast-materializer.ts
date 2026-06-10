@@ -7,7 +7,9 @@ import { materializeMdastFields } from "./generated/layout.js";
 // Leaf node types that do NOT have children.
 // Type 9 = `definition`; type 18 = `imageReference` — leaves per mdast spec
 // (imageReference carries `alt` as a string, not children).
-const LEAF_TYPES = new Set([9, 10, 13, 7, 8, 14, 3, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104]);
+export const LEAF_TYPES: ReadonlySet<number> = new Set([
+  9, 10, 13, 7, 8, 14, 3, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104,
+]);
 
 /**
  * Add type-specific lazy properties to a node object.

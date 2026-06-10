@@ -394,8 +394,11 @@ pub fn layout_ts(layouts: &[Layout]) -> String {
     }
     out.push_str("};\n\n");
     out.push_str("/** Materialized property names per tag (the non-skip `js` names above),\n");
-    out.push_str(" *  precomputed so `materializeMdastFields` doesn't rebuild them per node. */\n");
-    out.push_str("const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {\n");
+    out.push_str(" *  precomputed so `materializeMdastFields` doesn't rebuild them per node.\n");
+    out.push_str(" *  Exported for the child-stub field tables. */\n");
+    out.push_str(
+        "export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {\n",
+    );
     for layout in layouts {
         let keys = layout
             .fields

@@ -1,19 +1,31 @@
 import { serializeHandle } from "#binding";
 import type { AnyHandle } from "./handles.js";
 
+/** Rebuild count per handle: bumped whenever a command buffer lands and
+ *  renumbers the arena, invalidating ids captured before it. */
+const HANDLE_EPOCHS = new WeakMap<AnyHandle, number>();
+
+/** Record that `handle`'s arena was rebuilt. Resolvers created before the bump
+ *  refuse to take a fresh snapshot afterwards (their ids are stale). */
+export function markHandleMutated(handle: AnyHandle): void {
+  HANDLE_EPOCHS.set(handle, (HANDLE_EPOCHS.get(handle) ?? 0) + 1);
+}
+
 /**
- * Lazy child materializer for the walk paths: serializes the handle's arena
- * once, on the first child materialization, then materializes children from
- * that snapshot. Subclasses supply reader construction and per-node
- * materialization so the hot path stays free of per-node closures.
+ * Lazy node materializer for the walk paths: serializes the handle's arena
+ * once, on the first stub materialization, then materializes nodes from that
+ * snapshot. Subclasses supply reader construction and per-node materialization
+ * so the hot path stays free of per-node closures.
  */
 export abstract class LazyChildResolver<TReader, TNode> {
   #handle: AnyHandle;
   #reader: TReader | null = null;
   #sealed = false;
+  #epoch: number;
 
   constructor(handle: AnyHandle) {
     this.#handle = handle;
+    this.#epoch = HANDLE_EPOCHS.get(handle) ?? 0;
   }
 
   protected abstract createReader(wire: Uint8Array): TReader;
@@ -29,20 +41,38 @@ export abstract class LazyChildResolver<TReader, TNode> {
     this.#sealed = true;
   }
 
-  materializeChildren(childIds: number[]): TNode[] {
+  /** Guards the `.children` getters: a first read after the pass is refused
+   *  outright, even when no mutation landed — match-time ids cannot be trusted
+   *  once the plugin no longer controls the tree. */
+  assertUnsealed(): void {
     if (this.#sealed) {
       throw new Error(
-        "Cannot read `.children`: this node was retained past its visitor pass " +
-          "and the tree may have changed since; read `.children` inside the visitor.",
+        "Cannot read node content: this node was retained past its visitor pass " +
+          "and the tree may have changed since; read it inside the visitor.",
       );
     }
-    // The serialized buffer already carries each node's `data` blob (read
-    // eagerly by the materializer), and the arena isn't mutated mid-visit — so
-    // no separate lazy NAPI fetch is needed. This also keeps walk-path
-    // children consistent with the fully materialized tree (no `data` key
-    // when a node has none).
-    this.#reader ??= this.createReader(serializeHandle(this.#handle));
-    const reader = this.#reader;
-    return childIds.map((id) => this.materializeNode(reader, id));
+  }
+
+  /** Materialize one node for a child stub's first real-field read. */
+  materializeOne(nodeId: number): TNode {
+    if (this.#reader === null) {
+      // A stub proves `.children` was read in-pass, so a deferred snapshot is
+      // still faithful as long as no command buffer rebuilt the arena since
+      // match time (ids renumber on rebuild). An existing reader is always
+      // safe: the snapshot is an immutable pre-mutation copy.
+      if ((HANDLE_EPOCHS.get(this.#handle) ?? 0) !== this.#epoch) {
+        throw new Error(
+          "Cannot read node content: this node was retained past its visitor pass " +
+            "and the tree has changed since; read it inside the visitor.",
+        );
+      }
+      // The serialized buffer already carries each node's `data` blob (read
+      // eagerly by the materializer), and the arena isn't mutated mid-visit —
+      // so no separate lazy NAPI fetch is needed. This also keeps walk-path
+      // children consistent with the fully materialized tree (no `data` key
+      // when a node has none).
+      this.#reader = this.createReader(serializeHandle(this.#handle));
+    }
+    return this.materializeNode(this.#reader, nodeId);
   }
 }

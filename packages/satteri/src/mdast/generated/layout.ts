@@ -76,8 +76,9 @@ const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {
 };
 
 /** Materialized property names per tag (the non-skip `js` names above),
- *  precomputed so `materializeMdastFields` doesn't rebuild them per node. */
-const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
+ *  precomputed so `materializeMdastFields` doesn't rebuild them per node.
+ *  Exported for the child-stub field tables. */
+export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
   2: ["depth"],
   7: ["value"],
   10: ["value"],

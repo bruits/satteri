@@ -23,8 +23,9 @@ import { materializeHastTree } from "../src/hast/hast-materializer.js";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 import type { MdastNode, HastNode } from "../src/types.js";
 import type { MdxJsxFlowElementHast } from "../src/mdx-types.js";
-import type { Paragraph } from "mdast";
-import type { Element, Text as HastText } from "hast";
+import type { Link, Paragraph, Strong, Text as MdastText } from "mdast";
+import type { Element, ElementContent, Text as HastText } from "hast";
+import type { Position } from "unist";
 
 const PHANTOM = "";
 
@@ -226,6 +227,73 @@ test("P1: setProperty after replaceNode (fold path) space-joins arrays the same 
 });
 
 // P2 — walk-vs-reader parity for element properties
+
+// S1 — ref-stub children: a matched node's `.children` are id+type stubs whose
+// lazily-forwarded fields must read exactly like the reader-materialized node.
+
+test("S1: mdast stub children read the same as reader-materialized children", () => {
+  const handle = createMdastHandle('A paragraph with **bold** and a [link](/x "T").');
+  const source = getHandleSource(handle);
+  let stubs: Paragraph["children"] = [];
+  const plugin = defineMdastPlugin({
+    name: "capture-paragraph-children",
+    paragraph(node) {
+      stubs = node.children;
+    },
+  });
+  visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
+  const tree = materializeMdastTree(new MdastReader(serializeHandle(handle)));
+  const real = collect(tree, (n): n is Paragraph => n.type === "paragraph")[0]!.children;
+  expect(stubs.length).toBe(real.length);
+  // `type` is eager on stubs; the rest forwards through the snapshot.
+  expect(stubs.map((c) => c.type)).toEqual(real.map((c) => c.type));
+  for (let i = 0; i < stubs.length; i++) {
+    expect(stubs[i]!.position).toEqual(real[i]!.position);
+  }
+  const isLink = (c: MdastNode): c is Link => c.type === "link";
+  const isStrong = (c: MdastNode): c is Strong => c.type === "strong";
+  const isText = (c: MdastNode): c is MdastText => c.type === "text";
+  expect(stubs.find(isLink)!.url).toBe(real.find(isLink)!.url);
+  expect(stubs.find(isLink)!.title).toBe(real.find(isLink)!.title);
+  expect(stubs.find(isText)!.value).toBe(real.find(isText)!.value);
+  // A stub's `children` forwards to the reader path (real materialized nodes).
+  expect(stubs.find(isStrong)!.children).toEqual(real.find(isStrong)!.children);
+});
+
+test("S1: hast stub children read the same as reader-materialized children", () => {
+  const handle = createHastHandle("# Hi [link](/x)");
+  const source = getHandleSource(handle);
+  let stubs: ElementContent[] = [];
+  const plugin = defineHastPlugin({
+    name: "capture-h1-children",
+    element: {
+      filter: ["h1"],
+      visit(node) {
+        stubs = node.children;
+      },
+    },
+  });
+  visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+  const tree = materializeHastTree(new HastReader(serializeHandle(handle)));
+  const h1 = collect(
+    tree,
+    (n): n is Element => n.type === "element" && (n as Element).tagName === "h1",
+  )[0]!;
+  const real = h1.children;
+  expect(stubs.length).toBe(real.length);
+  expect(stubs.map((c) => c.type)).toEqual(real.map((c) => c.type));
+  const posOf = (n: object): Position | undefined => (n as { position?: Position }).position;
+  for (let i = 0; i < stubs.length; i++) {
+    expect(posOf(stubs[i]!)).toEqual(posOf(real[i]!));
+  }
+  const isAnchor = (c: ElementContent): c is Element =>
+    c.type === "element" && (c as Element).tagName === "a";
+  const isText = (c: ElementContent): c is HastText => c.type === "text";
+  expect(stubs.find(isText)!.value).toBe(real.find(isText)!.value);
+  expect(stubs.find(isAnchor)!.tagName).toBe(real.find(isAnchor)!.tagName);
+  expect(stubs.find(isAnchor)!.properties).toEqual(real.find(isAnchor)!.properties);
+  expect(stubs.find(isAnchor)!.children).toEqual(real.find(isAnchor)!.children);
+});
 
 test("P2: a false-valued element property reads the same from walk and reader paths", () => {
   const handle = createHastHandle("- [ ] todo");

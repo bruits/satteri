@@ -11,6 +11,8 @@
 
 const encoder = new TextEncoder();
 
+const EMPTY = new Uint8Array(0);
+
 /** Below this length the inline char-code copy beats `encodeInto`'s call
  *  overhead; above it the native bulk path wins (and skips the ASCII scan).
  *  Measured crossover ~16 bytes (Node 24: 8B 15 vs 41 ns, 16B 37 vs 43,
@@ -18,11 +20,14 @@ const encoder = new TextEncoder();
 const INLINE_STR_MAX = 16;
 
 export class ByteWriter {
-  protected buf: Uint8Array;
+  // Backing allocates on first write: visitor passes construct buffers that
+  // often never receive a byte (read-only plugins).
+  protected buf: Uint8Array = EMPTY;
   protected n = 0;
+  readonly #initialSize: number;
 
   constructor(initialSize: number) {
-    this.buf = new Uint8Array(initialSize);
+    this.#initialSize = initialSize;
   }
 
   /** Number of bytes written so far. */
@@ -37,13 +42,19 @@ export class ByteWriter {
 
   /** View of the bytes written so far (no copy; valid until the next write or reset). */
   take(): Uint8Array {
-    return this.buf.subarray(0, this.n);
+    return this.n === 0 ? EMPTY : this.buf.subarray(0, this.n);
+  }
+
+  /** Release the backing (handed-out views stay intact); next write re-allocates. */
+  protected release(): void {
+    this.buf = EMPTY;
+    this.n = 0;
   }
 
   /** Grow (doubling) so `extra` more bytes fit; required before unchecked writes. */
   ensure(extra: number): void {
     if (this.n + extra <= this.buf.length) return;
-    let size = this.buf.length * 2;
+    let size = Math.max(this.#initialSize, this.buf.length * 2);
     while (this.n + extra > size) size *= 2;
     const grown = new Uint8Array(size);
     grown.set(this.buf);

@@ -13,8 +13,9 @@ import {
   renderHandle,
 } from "../index.js";
 import type { MdastNode } from "../src/types.js";
-import type { Heading } from "mdast";
+import type { Heading, Text } from "mdast";
 import { defineMdastPlugin } from "../src/plugin.js";
+import { markdownToHtml } from "../src/index.js";
 
 /** Helper: run a visitor on markdown, apply mutations, convert to HAST, render HTML. */
 function visitAndRender(
@@ -693,4 +694,65 @@ test("handles are kind-branded: cross-kind use is a compile error", () => {
   // @ts-expect-error a mdast handle must not flow into a hast-typed slot
   intoHast(handle);
   expect(getHandleSource(handle)).toBe(source);
+});
+
+// Ref-stub children: `.children` of a matched node returns id+type stubs that
+// defer the arena snapshot until a real field is read, so passthrough children
+// compile to one-word refs without ever materializing.
+
+test("passthrough replacement keeps stub children rendering correctly", () => {
+  const plugin = defineMdastPlugin({
+    name: "heading-to-paragraph",
+    heading(node) {
+      return { type: "paragraph", children: node.children };
+    },
+  });
+  const html = visitAndRender("# Hello **bold**", plugin);
+  expect(html).toContain("<p>Hello <strong>bold</strong></p>");
+});
+
+test("reordering and filtering stub children works", () => {
+  const plugin = defineMdastPlugin({
+    name: "reverse-paragraph",
+    paragraph(node, ctx) {
+      // `type` is eager on stubs: this filter needs no materialization.
+      const kept = node.children.filter((c) => c.type !== "emphasis");
+      ctx.setProperty(node, "children", kept.reverse());
+    },
+  });
+  const html = visitAndRender("*a* x **b**", plugin);
+  expect(html).toContain("<strong>b</strong> x");
+  expect(html).not.toContain("<em>");
+});
+
+test("stub `.type` stays readable after the pass; first materialization throws", () => {
+  let retained: Heading["children"] = [];
+  const plugin = defineMdastPlugin({
+    name: "retain-heading-children",
+    heading(node, ctx) {
+      retained = node.children;
+      // A mutation: the arena rebuilds after the pass, so stale ids must
+      // refuse to materialize.
+      ctx.setProperty(node, "depth", 2);
+    },
+  });
+  markdownToHtml("# Hello\n\nWorld", { mdastPlugins: [plugin] });
+  expect(retained).toHaveLength(1);
+  expect(retained[0]!.type).toBe("text");
+  expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
+});
+
+test("a spread copy of a child stub is new content, not a reused ref", () => {
+  const plugin = defineMdastPlugin({
+    name: "edit-spread-stub",
+    heading(node) {
+      const first = node.children[0]!;
+      if (first.type !== "text") return;
+      // A ref here would splice the original text and drop the edit.
+      const copy = { ...first, value: "Edited" };
+      return { type: "heading", depth: 2, children: [copy] };
+    },
+  });
+  const html = visitAndRender("# Hello", plugin);
+  expect(html).toContain("<h2>Edited</h2>");
 });

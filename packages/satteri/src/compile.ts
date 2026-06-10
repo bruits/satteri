@@ -27,6 +27,7 @@ import {
 } from "#binding";
 import { MdastReader } from "./mdast/mdast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
+import { markHandleMutated } from "./lazy-child-resolver.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
 import type { MdastNode, HastNode } from "./types.js";
@@ -126,6 +127,7 @@ function runMdastPluginsOnHandle(
     const result = visitMdastHandle(handle, plugin, subs, () => getHandleSource(handle), fileURL);
     const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
       if (!r.hasMutations) return;
+      markHandleMutated(handle);
       const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
       if (dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
     };

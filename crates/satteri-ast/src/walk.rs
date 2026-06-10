@@ -20,9 +20,11 @@
 //! ```text
 //! [node_data: u32 len + utf8 JSON bytes]   ; 0-length when the node has no `data`
 //! [position: 6×u32 = 24B]                  ; start_offset, end_offset, start_line, start_col, end_line, end_col
-//! [child_count: u16][child_ids: child_count × u32]
+//! [child_count: u16][child_ids: child_count × u32][child_types: child_count × u8]
 //! [type-specific resolved data]
 //! ```
+//! Child types ride along with the ids so JS can build typed child stubs
+//! without serializing the whole arena.
 //! Synthesized nodes (no source range) store all-zero position; JS surfaces those as `position: undefined`.
 //!
 //! Type-specific tails (after the shared prelude):
@@ -194,7 +196,7 @@ fn walk_and_collect_inner<K: ArenaKind>(
 /// Format per matched node:
 /// ```text
 /// [position: 6×u32 (24 bytes)]: start_offset, end_offset, start_line, start_col, end_line, end_col
-/// [child_count: u16][child_ids: child_count × u32]: for parent nodes
+/// [child_count: u16][child_ids: child_count × u32][child_types: child_count × u8]: for parent nodes
 /// [type-specific resolved data]
 /// ```
 fn serialize_mdast_node_inline(
@@ -227,6 +229,9 @@ fn serialize_mdast_node_inline(
     out.extend_from_slice(&(children.len() as u16).to_le_bytes());
     for &child_id in children {
         out.extend_from_slice(&child_id.to_le_bytes());
+    }
+    for &child_id in children {
+        out.push(arena.get_node(child_id).node_type);
     }
 
     // Fixed-field leaf types are generated from the layout table; this returns
@@ -376,7 +381,7 @@ fn serialize_hast_node_inline(
     let node = arena.get_node(node_id);
 
     // Shared prelude (mirrors serialize_mdast_node_inline):
-    // [data: u32 len + bytes][position: 24B][child_count: u16][child_ids: N×u32]
+    // [data: u32 len + bytes][position: 24B][child_count: u16][child_ids: N×u32][child_types: N×u8]
 
     // Node data (JSON bytes), length-prefixed, always first so JS can read it at a known offset
     if let Some(data) = arena.get_node_data(node_id) {
@@ -397,6 +402,9 @@ fn serialize_hast_node_inline(
     out.extend_from_slice(&(children.len() as u16).to_le_bytes());
     for &child_id in children {
         out.extend_from_slice(&child_id.to_le_bytes());
+    }
+    for &child_id in children {
+        out.push(arena.get_node(child_id).node_type);
     }
 
     match node_type {
@@ -575,8 +583,9 @@ mod tests {
         let data_offset = u32::from_le_bytes(buf[4 + 6..4 + 10].try_into().unwrap()) as usize;
         let data_len = u16::from_le_bytes(buf[4 + 10..4 + 12].try_into().unwrap()) as usize;
         assert!(data_len > 0);
-        // Skip prelude: [data_len=0: 4B][position: 24B][child_count=1: 2B][child_id: 4B] = 34B
-        let tag_off = data_offset + 4 + 24 + 2 + 4;
+        // Skip prelude:
+        // [data_len=0: 4B][position: 24B][child_count=1: 2B][child_id: 4B][child_type: 1B] = 35B
+        let tag_off = data_offset + 4 + 24 + 2 + 4 + 1;
         let tag_len = u16::from_le_bytes(buf[tag_off..tag_off + 2].try_into().unwrap()) as usize;
         assert_eq!(tag_len, 1); // "a"
         let tag = std::str::from_utf8(&buf[tag_off + 2..tag_off + 2 + tag_len]).unwrap();

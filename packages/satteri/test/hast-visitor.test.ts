@@ -12,7 +12,7 @@ import {
 import { defineHastPlugin } from "../src/plugin.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
-import type { Element, ElementContent } from "hast";
+import type { Element, ElementContent, Text } from "hast";
 import type { Position } from "unist";
 
 function setup(source = "# Hello\n\nWorld") {
@@ -1056,4 +1056,120 @@ describe("visitHastHandle - lazy children lifecycle", () => {
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
   });
+});
+
+// Ref-stub children: `.children` of a matched node returns id+type stubs that
+// defer the arena snapshot until a real field is read, so passthrough children
+// compile to one-word refs without ever materializing.
+
+describe("visitHastHandle - child stubs", () => {
+  test("passthrough replaceNode keeps children rendering correctly", () => {
+    const { handle, source } = setup("[hello **bold**](/x)");
+    const plugin = defineHastPlugin({
+      name: "swap-links",
+      element: {
+        filter: ["a"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, {
+            type: "element",
+            tagName: "span",
+            properties: {},
+            children: node.children,
+          });
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle)).toContain("<span>hello <strong>bold</strong></span>");
+  });
+
+  test("reordering and filtering stub children works", () => {
+    const { handle, source } = setup("- one\n- two");
+    const plugin = defineHastPlugin({
+      name: "reverse-list",
+      element: {
+        filter: ["ul"],
+        visit(node, ctx) {
+          // `type` is eager on stubs: this filter needs no materialization.
+          const items = node.children.filter((c) => c.type === "element");
+          ctx.setProperty(node, "children", items.reverse());
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<li>two</li>");
+    expect(html).toContain("<li>one</li>");
+    expect(html.indexOf("two")).toBeLessThan(html.indexOf("one"));
+  });
+
+  test("stub `.type` stays readable after the pass; first materialization throws", () => {
+    const { handle, source } = setup();
+    let retained: ElementContent[] = [];
+    const plugin = defineHastPlugin({
+      name: "retain-children",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          retained = node.children;
+          // A mutation: the arena rebuilds after the pass, so stale ids must
+          // refuse to materialize.
+          ctx.setProperty(node, "id", "x");
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(retained).toHaveLength(1);
+    expect(retained[0]!.type).toBe("text");
+    expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
+  });
+
+  test("a spread copy of a child stub is new content, not a reused ref", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "edit-spread-stub",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          const first = node.children[0]!;
+          if (first.type !== "text") return;
+          // A ref here would splice the original text and drop the edit.
+          const copy = { ...first, value: "Edited" };
+          ctx.replaceNode(node, {
+            type: "element",
+            tagName: "h2",
+            properties: {},
+            children: [copy],
+          });
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle)).toContain("<h2>Edited</h2>");
+  });
+});
+
+test("a spread copy of a matched node is new content, not a reused ref", () => {
+  const { handle, source } = setup("# Hello");
+  const plugin = defineHastPlugin({
+    name: "replace-with-edited-spread-copy",
+    element: {
+      filter: ["h1"],
+      visit(node, ctx) {
+        // Spread copies must not inherit arena identity: an inherited id would
+        // splice the original node and silently drop the copy's edits.
+        const copy = { ...node, tagName: "h2", properties: {}, children: [...node.children] };
+        ctx.replaceNode(node, {
+          type: "element",
+          tagName: "section",
+          properties: {},
+          children: [copy],
+        });
+      },
+    },
+  });
+  const subs = resolveSubscriptions(plugin);
+  visitHastHandle(handle, plugin, subs, source, undefined);
+  const html = renderHandle(handle);
+  expect(html).toContain("<section><h2>Hello</h2></section>");
 });

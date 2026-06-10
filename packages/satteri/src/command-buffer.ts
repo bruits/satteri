@@ -229,8 +229,8 @@ export class CommandBuffer extends ByteWriter {
 
   /** Reset for reuse, releasing the old buffer (handed-out views stay intact). */
   override reset(): void {
-    this.buf = new Uint8Array(INITIAL_SIZE);
-    this.n = 0;
+    if (this.n === 0) return;
+    this.release();
   }
 
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {

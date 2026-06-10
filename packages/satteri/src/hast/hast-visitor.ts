@@ -34,7 +34,7 @@ import {
   emitMdxAttr,
 } from "../op-stream.js";
 import { restorePhantomSpaces } from "../phantom.js";
-import { readPosition } from "../mdast/wire-read.js";
+import { readPosition, rstr } from "../mdast/wire-read.js";
 import {
   walkHandle,
   applyCommandsToHandle,
@@ -43,7 +43,8 @@ import {
   parseEsm as napiParseEsm,
 } from "#binding";
 
-import { LazyChildResolver } from "../lazy-child-resolver.js";
+import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js";
+import { HastChildStub } from "./child-stub.js";
 import type { HastHandle } from "../handles.js";
 
 export type { HastHandle };
@@ -142,8 +143,21 @@ function markHast(node: HastNode, isRoot = true): Record<string, unknown> {
   return obj;
 }
 
+/**
+ * Arena identity of a node, rejecting impostors: `WalkElement` and
+ * `HastChildStub` carry their id as a fast plain field, which object spread
+ * would copy onto plain objects — trusting it blindly would splice an edited
+ * copy as a reused ref and drop its edits. Plain objects are trusted only via
+ * the WeakMap or a NON-enumerable `_nodeId` (the materializers' convention,
+ * which spread cannot copy; stub copies carry `_id`, a different key).
+ */
 function nid(node: HastNode): number | undefined {
-  return nodeIdMap.get(node) ?? (node as HastNodeInternal)._nodeId;
+  if (node instanceof WalkElement) return node._nodeId;
+  if (node instanceof HastChildStub) return node._id;
+  const id = nodeIdMap.get(node);
+  if (id !== undefined) return id;
+  const d = Object.getOwnPropertyDescriptor(node, "_nodeId");
+  return d !== undefined && !d.enumerable ? (d.value as number) : undefined;
 }
 
 /**
@@ -551,7 +565,6 @@ const METHOD_TO_TYPE: Record<string, number> = Object.fromEntries(
 /**
  * Selective walk path: Rust walks the tree, only sends matched nodes to JS.
  */
-const textDecoder = new TextDecoder("utf-8");
 
 /** Decode properties from the walk buffer at the given position. */
 function decodeProperties(
@@ -565,13 +578,13 @@ function decodeProperties(
   for (let i = 0; i < propCount; i++) {
     const nameLen = view.getUint16(pos, true);
     pos += 2;
-    const name = textDecoder.decode(buf.subarray(pos, pos + nameLen));
+    const name = rstr(buf, pos, nameLen);
     pos += nameLen;
     const kind = buf[pos]!;
     pos += 1;
     const valLen = view.getUint16(pos, true);
     pos += 2;
-    const valStr = textDecoder.decode(buf.subarray(pos, pos + valLen));
+    const valStr = rstr(buf, pos, valLen);
     pos += valLen;
     switch (kind) {
       case PROP_STRING:
@@ -617,8 +630,11 @@ class WalkElement {
   /** @internal */ _view!: DataView;
   /** @internal */ _buf!: Uint8Array;
   /** @internal */ _propsPos!: number;
-  /** @internal */ _childIds!: number[];
+  /** @internal */ _childIdsPos!: number;
+  /** @internal */ _childTypesPos!: number;
+  /** @internal */ _childCount!: number;
   /** @internal */ _resolver!: HastLazyChildResolver;
+  /** @internal */ _nodeId!: number;
 
   get properties(): Record<string, string | number | boolean | string[]> {
     const val = decodeProperties(this._view, this._buf, this._propsPos);
@@ -632,7 +648,14 @@ class WalkElement {
   }
 
   get children(): HastNode[] {
-    const val = this._resolver.materializeChildren(this._childIds);
+    const val = readChildStubs(
+      this._view,
+      this._buf,
+      this._childIdsPos,
+      this._childTypesPos,
+      this._childCount,
+      this._resolver,
+    );
     Object.defineProperty(this, "children", {
       value: val,
       writable: true,
@@ -641,6 +664,30 @@ class WalkElement {
     });
     return val;
   }
+}
+
+/** Build the child-stub list for a matched node from the wire's `[child_ids]
+ *  [child_types]` blocks — no arena snapshot. The seal check still applies:
+ *  post-pass ids are stale, and a stub built from them could later splice the
+ *  wrong node as a ref. */
+function readChildStubs(
+  view: DataView,
+  buf: Uint8Array,
+  idsPos: number,
+  typesPos: number,
+  count: number,
+  resolver: HastLazyChildResolver,
+): HastNode[] {
+  resolver.assertUnsealed();
+  const stubs: HastNode[] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    stubs[i] = new HastChildStub(
+      resolver,
+      view.getUint32(idsPos + i * 4, true),
+      buf[typesPos + i]!,
+    ) as unknown as HastNode;
+  }
+  return stubs;
 }
 
 /** Read the tail of a matched element node (tag + properties).
@@ -652,7 +699,9 @@ function readElementFromBinary(
   nodeId: number,
   resolver: HastLazyChildResolver,
   position: Position | undefined,
-  childIds: number[],
+  childIdsPos: number,
+  childTypesPos: number,
+  childCount: number,
   data: Record<string, unknown> | null,
 ): HastNode {
   let pos = offset;
@@ -660,7 +709,7 @@ function readElementFromBinary(
   // Eager: tagName (almost always accessed by visitors)
   const tagLen = view.getUint16(pos, true);
   pos += 2;
-  const tagName = textDecoder.decode(buf.subarray(pos, pos + tagLen));
+  const tagName = rstr(buf, pos, tagLen);
   pos += tagLen;
 
   const propsPos = pos;
@@ -673,9 +722,11 @@ function readElementFromBinary(
   node._view = view;
   node._buf = buf;
   node._propsPos = propsPos;
-  node._childIds = childIds;
+  node._childIdsPos = childIdsPos;
+  node._childTypesPos = childTypesPos;
+  node._childCount = childCount;
   node._resolver = resolver;
-  nodeIdMap.set(node, nodeId);
+  node._nodeId = nodeId;
 
   return node as unknown as HastNode;
 }
@@ -698,7 +749,7 @@ function readTextFromBinary(
   data: Record<string, unknown> | null,
 ): HastNode {
   const valLen = view.getUint32(offset, true);
-  const rawValue = textDecoder.decode(buf.subarray(offset + 4, offset + 4 + valLen));
+  const rawValue = rstr(buf, offset + 4, valLen);
   // MDX flow/text expressions store phantom-space sentinels; restore them so
   // the value matches the reader path. ESM and plain text keep their value.
   const value =
@@ -727,7 +778,9 @@ function readMdxJsxFromBinary(
   nodeType: number,
   resolver: HastLazyChildResolver,
   position: Position | undefined,
-  childIds: number[],
+  childIdsPos: number,
+  childTypesPos: number,
+  childCount: number,
   data: Record<string, unknown> | null,
 ): HastNode {
   let pos = offset;
@@ -735,7 +788,7 @@ function readMdxJsxFromBinary(
   // Name
   const nameLen = view.getUint16(pos, true);
   pos += 2;
-  const name = nameLen > 0 ? textDecoder.decode(buf.subarray(pos, pos + nameLen)) : null;
+  const name = nameLen > 0 ? rstr(buf, pos, nameLen) : null;
   pos += nameLen;
 
   // Attributes: [kind: u8][nameLen: u16][name][valLen: u32][val]
@@ -747,11 +800,11 @@ function readMdxJsxFromBinary(
     pos += 1;
     const attrNameLen = view.getUint16(pos, true);
     pos += 2;
-    const attrName = textDecoder.decode(buf.subarray(pos, pos + attrNameLen));
+    const attrName = rstr(buf, pos, attrNameLen);
     pos += attrNameLen;
     const attrValLen = view.getUint32(pos, true);
     pos += 4;
-    const attrVal = textDecoder.decode(buf.subarray(pos, pos + attrValLen));
+    const attrVal = rstr(buf, pos, attrValLen);
     pos += attrValLen;
 
     switch (kind) {
@@ -785,7 +838,7 @@ function readMdxJsxFromBinary(
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   nodeIdMap.set(base, nodeId);
-  makeLazyChildren(base, childIds, resolver);
+  makeLazyChildren(base, view, buf, childIdsPos, childTypesPos, childCount, resolver);
   return base as unknown as HastNode;
 }
 
@@ -800,14 +853,14 @@ function readMatchedNode(
   let pos = offset;
 
   // Shared prelude (matches serialize_hast_node_inline / serialize_mdast_node_inline):
-  //   [data_len: u32][data_bytes][position: 24B][child_count: u16][child_ids: N×u32]
+  //   [data_len: u32][data_bytes][position: 24B][child_count: u16][child_ids: N×u32][child_types: N×u8]
 
   // Data (JSON), eagerly parsed
   const dataLen = view.getUint32(pos, true);
   pos += 4;
   let data: Record<string, unknown> | null = null;
   if (dataLen > 0) {
-    const jsonStr = textDecoder.decode(buf.subarray(pos, pos + dataLen));
+    const jsonStr = rstr(buf, pos, dataLen);
     try {
       data = JSON.parse(jsonStr) as Record<string, unknown>;
     } catch {
@@ -821,15 +874,26 @@ function readMatchedNode(
 
   const childCount = view.getUint16(pos, true);
   pos += 2;
-  const childIds: number[] = [];
-  for (let i = 0; i < childCount; i++) {
-    childIds.push(view.getUint32(pos, true));
-    pos += 4;
-  }
+  // Ids/types decode lazily with `.children` — most matched nodes never read them.
+  const childIdsPos = pos;
+  pos += childCount * 4;
+  const childTypesPos = pos;
+  pos += childCount;
 
   // Dispatch to type-specific tail (pos now sits at the type-specific section)
   if (nodeType === HAST_ELEMENT) {
-    return readElementFromBinary(view, buf, pos, nodeId, resolver, position, childIds, data);
+    return readElementFromBinary(
+      view,
+      buf,
+      pos,
+      nodeId,
+      resolver,
+      position,
+      childIdsPos,
+      childTypesPos,
+      childCount,
+      data,
+    );
   } else if (
     nodeType === HAST_TEXT ||
     nodeType === HAST_COMMENT ||
@@ -848,7 +912,9 @@ function readMatchedNode(
       nodeType,
       resolver,
       position,
-      childIds,
+      childIdsPos,
+      childTypesPos,
+      childCount,
       data,
     );
   }
@@ -873,11 +939,19 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
   }
 }
 
-/** Create a lazy `children` property backed by the handle. */
-function makeLazyChildren(node: object, childIds: number[], resolver: HastLazyChildResolver): void {
+/** Create a lazy `children` property that builds child stubs on first read. */
+function makeLazyChildren(
+  node: object,
+  view: DataView,
+  buf: Uint8Array,
+  childIdsPos: number,
+  childTypesPos: number,
+  childCount: number,
+  resolver: HastLazyChildResolver,
+): void {
   Object.defineProperty(node, "children", {
     get() {
-      const children = resolver.materializeChildren(childIds);
+      const children = readChildStubs(view, buf, childIdsPos, childTypesPos, childCount, resolver);
       Object.defineProperty(this, "children", {
         value: children,
         writable: true,
@@ -945,27 +1019,26 @@ function dispatchMatches(
 }
 
 /** Merge return-value + context command buffers and release internals. */
+const EMPTY_BYTES = new Uint8Array(0);
+
 function mergeAndReset(
   returnBuffer: CommandBuffer,
   ctx: HastVisitorContextImpl,
 ): { merged: Uint8Array; hasMutations: boolean } {
   const ctxCmdBuf = ctx.getCommandBuffer();
+  // The common case — no mutations this match — allocates nothing.
+  if (returnBuffer.length === 0 && ctxCmdBuf.length === 0) {
+    return { merged: EMPTY_BYTES, hasMutations: false };
+  }
   const ctxBuf = ctxCmdBuf.getBuffer();
   const retBuf = returnBuffer.getBuffer();
-  const totalLen = retBuf.length + ctxBuf.length;
-
-  let merged: Uint8Array;
-  if (totalLen === 0) {
-    merged = new Uint8Array(0);
-  } else {
-    merged = new Uint8Array(totalLen);
-    merged.set(retBuf, 0);
-    merged.set(ctxBuf, retBuf.length);
-  }
+  const merged = new Uint8Array(retBuf.length + ctxBuf.length);
+  merged.set(retBuf, 0);
+  merged.set(ctxBuf, retBuf.length);
 
   returnBuffer.reset();
   ctxCmdBuf.reset();
-  return { merged, hasMutations: totalLen > 0 };
+  return { merged, hasMutations: true };
 }
 
 // Handle-based visitor
@@ -1022,6 +1095,7 @@ function applyMutations(
 ): number {
   const { merged, hasMutations } = mergeAndReset(returnBuffer, ctx);
   if (hasMutations) {
+    markHandleMutated(handle);
     return applyCommandsToHandle(handle, merged);
   }
   return 0;
