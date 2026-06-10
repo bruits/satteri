@@ -4,6 +4,8 @@
  * the bytes identically.
  */
 
+import type { Position } from "unist";
+
 const textDecoder = new TextDecoder("utf-8");
 
 /** Read a u16 (LE) at `off`. */
@@ -16,7 +18,43 @@ export function ru32(view: DataView, off: number): number {
   return view.getUint32(off, true);
 }
 
-/** Read a UTF-8 string of `len` bytes at `off`. */
+/** Read a UTF-8 string of `len` bytes at `off`. Very short ASCII runs decode
+ *  with a charCode loop — TextDecoder's per-call overhead dominates there. The
+ *  threshold is lower than the encode-side `INLINE_STR_MAX`: decoding builds a
+ *  JS string by concatenation, which costs more per char than storing bytes.
+ *  Measured crossover ~8-12 bytes (Node 24: 8B 30 vs 57 ns, 16B 64 vs 57). */
 export function rstr(buf: Uint8Array, off: number, len: number): string {
-  return len === 0 ? "" : textDecoder.decode(buf.subarray(off, off + len));
+  if (len === 0) return "";
+  if (len <= 8) {
+    let ascii = true;
+    for (let i = 0; i < len; i++) {
+      if (buf[off + i]! > 127) {
+        ascii = false;
+        break;
+      }
+    }
+    if (ascii) {
+      let s = "";
+      for (let i = 0; i < len; i++) s += String.fromCharCode(buf[off + i]!);
+      return s;
+    }
+  }
+  return textDecoder.decode(buf.subarray(off, off + len));
+}
+
+/**
+ * Decode the 24-byte position block ([startOffset, endOffset, startLine,
+ * startColumn, endLine, endColumn], u32 LE each) shared by the walk prefixes
+ * and the snapshot node structs. Line 0 + offset 0 is the sentinel for
+ * synthesized nodes with no source range (e.g. GFM autolink-literal nodes),
+ * surfaced as `undefined` so a node reads the same however it's reached.
+ */
+export function readPosition(view: DataView, off: number): Position | undefined {
+  const startOffset = ru32(view, off);
+  const startLine = ru32(view, off + 8);
+  if (startLine === 0 && startOffset === 0) return undefined;
+  return {
+    start: { offset: startOffset, line: startLine, column: ru32(view, off + 12) },
+    end: { offset: ru32(view, off + 4), line: ru32(view, off + 16), column: ru32(view, off + 20) },
+  };
 }

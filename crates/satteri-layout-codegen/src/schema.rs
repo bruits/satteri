@@ -348,16 +348,45 @@ pub const MDAST_NODES: &[Node] = &[
 pub const HAST_NODES: &[Node] = &[
     c(Hast, 0, "Root", "root"),
     x(Hast, 1, "Element", "element"),
-    c(Hast, 2, "Text", "text"),
-    c(Hast, 3, "Comment", "comment"),
+    // text/comment/raw store a single value StringRef (`encode_text_data`);
+    // HAST layouts are not generated yet, so only tag/name are read back.
+    n(Hast, 2, "Text", "text", VALUE),
+    n(Hast, 3, "Comment", "comment", VALUE),
     c(Hast, 4, "Doctype", "doctype"),
-    c(Hast, 5, "Raw", "raw"),
+    n(Hast, 5, "Raw", "raw", VALUE),
     x(Hast, 10, "MdxJsxElement", "mdxJsxFlowElement"),
     x(Hast, 11, "MdxJsxTextElement", "mdxJsxTextElement"),
     x(Hast, 12, "MdxFlowExpression", "mdxFlowExpression"),
     x(Hast, 13, "MdxEsm", "mdxjsEsm"),
     x(Hast, 14, "MdxTextExpression", "mdxTextExpression"),
 ];
+
+/// AST names whose op-stream replay falls back to JSON. `finalize_collector`
+/// (js_commands.rs) silently encodes no type_data for tags it has no arm for,
+/// so a NEW node type must either gain a finalize/generated encode arm or be
+/// listed here.
+pub const MDAST_OPSTREAM_EXCLUDED: &[&str] = &["root"];
+/// HAST twin (`finalize_hast_collector`); `doctype` has no finalize arm either.
+pub const HAST_OPSTREAM_EXCLUDED: &[&str] = &["root", "doctype"];
+
+/// Total stored `type_data` size for a field list: the max field extent,
+/// rounded up to 4 when it holds any `StringRef` (matching the codec structs'
+/// alignment).
+pub fn layout_size(fields: &[Field]) -> usize {
+    let mut max = 0usize;
+    let mut has_ref = false;
+    for f in fields {
+        let size = match f.wire {
+            Wire::Str16 | Wire::Str32 => {
+                has_ref = true;
+                8
+            }
+            Wire::U8 => 1,
+        };
+        max = max.max(f.offset + size);
+    }
+    if has_ref { max.div_ceil(4) * 4 } else { max }
+}
 
 /// Group a tree's fixed-field nodes into shared wire layouts (tags with an
 /// identical field list collapse to one [`Layout`], in first-seen order).
@@ -420,3 +449,332 @@ pub const MDAST_STRUCTS: &[ArenaStruct] = &[
         offsets: &[("identifier", 0), ("label", 8)],
     },
 ];
+
+/// Which [`MDAST_STRUCTS`] entry backs each fixed-field node's stored
+/// `type_data`. Nodes absent here store a bare `StringRef` (`VALUE` /
+/// `EXPR_VALUE`), pinned by the `size_of::<StringRef>() == 8` assertion.
+const STRUCT_BY_NODE: &[(&str, &str)] = &[
+    ("heading", "HeadingData"),
+    ("code", "CodeData"),
+    ("math", "MathData"),
+    ("inlineMath", "MathData"),
+    ("link", "LinkData"),
+    ("image", "ImageData"),
+    ("definition", "DefinitionData"),
+    ("linkReference", "ReferenceData"),
+    ("imageReference", "ReferenceData"),
+    ("footnoteReference", "ReferenceData"),
+    ("footnoteDefinition", "FootnoteDefinitionData"),
+];
+
+/// Cross-check the per-node field lists against [`MDAST_STRUCTS`], so the two
+/// parallel tables can't drift apart silently. Field *names* aren't comparable
+/// (JS camelCase vs Rust snake_case, e.g. `referenceType` / `reference_kind`),
+/// so the check compares offsets and sizes:
+///   * every node field inside the struct must start on a declared struct
+///     offset and fit within the struct;
+///   * sizes must match, unless the node has suffix fields past the struct
+///     (`imageReference.alt` at 20 behind the 20-byte `ReferenceData`);
+///   * struct-only fields need no node twin (`MathData.meta` on `inlineMath`,
+///     which the mdast spec hides).
+pub fn check_struct_layouts() {
+    for (node_name, struct_name) in STRUCT_BY_NODE {
+        let node = MDAST_NODES
+            .iter()
+            .find(|n| n.name == *node_name)
+            .unwrap_or_else(|| panic!("STRUCT_BY_NODE: unknown node {node_name:?}"));
+        let st = MDAST_STRUCTS
+            .iter()
+            .find(|s| s.rust == *struct_name)
+            .unwrap_or_else(|| panic!("STRUCT_BY_NODE: unknown struct {struct_name:?}"));
+        let size = layout_size(node.fields);
+        let has_suffix = node.fields.iter().any(|f| f.offset >= st.size);
+        if has_suffix {
+            assert!(
+                st.size <= size,
+                "{node_name}: field layout size {size} is smaller than {struct_name} size {}",
+                st.size
+            );
+        } else {
+            assert_eq!(
+                size, st.size,
+                "{node_name}: field layout size {size} != {struct_name} size {}",
+                st.size
+            );
+        }
+        for f in node.fields {
+            if f.offset >= st.size {
+                continue;
+            }
+            let extent = f.offset
+                + match f.wire {
+                    Wire::Str16 | Wire::Str32 => 8,
+                    Wire::U8 => 1,
+                };
+            assert!(
+                extent <= st.size,
+                "{node_name}: field {:?} (offset {}) straddles the end of {struct_name} (size {})",
+                f.js,
+                f.offset,
+                st.size
+            );
+            assert!(
+                st.offsets.iter().any(|&(_, off)| off == f.offset),
+                "{node_name}: field {:?} at offset {} matches no {struct_name} field",
+                f.js,
+                f.offset
+            );
+        }
+    }
+    // A fixed-field node without a struct mapping must be a bare StringRef;
+    // anything bigger needs an MDAST_STRUCTS pin and a STRUCT_BY_NODE entry.
+    for node in MDAST_NODES {
+        if node.custom
+            || node.fields.is_empty()
+            || STRUCT_BY_NODE.iter().any(|&(n, _)| n == node.name)
+        {
+            continue;
+        }
+        assert!(
+            node.fields.len() == 1 && layout_size(node.fields) == 8,
+            "{}: fixed-field node has no STRUCT_BY_NODE entry",
+            node.name
+        );
+    }
+    // Every pinned struct must be reachable from a node, or it drifted loose.
+    for s in MDAST_STRUCTS {
+        assert!(
+            STRUCT_BY_NODE.iter().any(|&(_, st)| st == s.rust),
+            "MDAST_STRUCTS entry {} is mapped to no node",
+            s.rust
+        );
+    }
+}
+
+/// One wire constant; `doc` (operand layout or meaning) is emitted as a
+/// trailing comment on both sides.
+pub struct WireConst {
+    pub name: &'static str,
+    pub value: u8,
+    pub doc: &'static str,
+}
+
+/// A table of wire constants, emitted into the Rust and TS `wire-constants`
+/// modules.
+pub struct WireTable {
+    /// Table-level comment lines.
+    pub doc: &'static [&'static str],
+    /// `cfg` attribute for the Rust consts (the TS emit ignores it).
+    pub cfg: Option<&'static str>,
+    /// Render values as two-digit hex.
+    pub hex: bool,
+    pub consts: &'static [WireConst],
+}
+
+const fn wc(name: &'static str, value: u8, doc: &'static str) -> WireConst {
+    WireConst { name, value, doc }
+}
+
+/// Op codes of the OPEN/CLOSE/field/REF/KEEP_CHILDREN/PROP stream the JS
+/// `OpWriter` emits and `replay_opstream` (js_commands.rs) replays.
+pub const OP_CODES: WireTable = WireTable {
+    doc: &["Op-stream op codes (JS `OpWriter` -> Rust `replay_opstream`)."],
+    cfg: None,
+    hex: true,
+    consts: &[
+        wc("OP_OPEN", 0x01, "[type: u8]"),
+        wc("OP_CLOSE", 0x02, ""),
+        wc("OP_REF", 0x03, "[id: u32 LE] — splice an existing node"),
+        wc(
+            "OP_KEEP_CHILDREN",
+            0x04,
+            "splice the anchor node's original children",
+        ),
+        wc("OP_STR", 0x05, "[field: u8][len: u32 LE][utf8]"),
+        wc("OP_U8", 0x06, "[field: u8][value: u8]"),
+        wc("OP_U32", 0x07, "[field: u8][value: u32 LE]"),
+        wc("OP_BOOL", 0x08, "[field: u8][0|1]"),
+        wc("OP_DATA", 0x09, "[len: u32 LE][json utf8]"),
+        wc(
+            "OP_PROP",
+            0x0a,
+            "[name str][kind: u8][value str] — HAST element property",
+        ),
+        wc(
+            "OP_ALIGN",
+            0x0b,
+            "[len: u32 LE][ColumnAlign bytes] — table column alignment",
+        ),
+    ],
+};
+
+/// Op-stream field ids (a single namespace across OP_STR/OP_U8/OP_U32/OP_BOOL).
+pub const OP_FIELDS: WireTable = WireTable {
+    doc: &["Op-stream field ids (single namespace across OP_STR/OP_U8/OP_U32/OP_BOOL)."],
+    cfg: None,
+    hex: false,
+    consts: &[
+        wc("OF_VALUE", 0, ""),
+        wc("OF_URL", 1, ""),
+        wc("OF_TITLE", 2, ""),
+        wc("OF_ALT", 3, ""),
+        wc("OF_LANG", 4, ""),
+        wc("OF_META", 5, ""),
+        wc("OF_IDENTIFIER", 6, ""),
+        wc("OF_LABEL", 7, ""),
+        wc("OF_NAME", 8, "directive / MDX JSX element name"),
+        wc("OF_REFERENCE_TYPE", 9, ""),
+        wc("OF_DEPTH", 10, ""),
+        wc("OF_CHECKED", 11, ""),
+        wc("OF_START", 12, ""),
+        wc("OF_ORDERED", 13, ""),
+        wc("OF_SPREAD", 14, ""),
+        wc("OF_TAGNAME", 15, "HAST element tag name"),
+        wc("OF_EXPLICIT", 16, "MDX JSX `_mdxExplicitJsx` flag"),
+    ],
+};
+
+/// Command bytes of the JS `CommandBuffer` -> Rust `apply_*_commands` wire.
+pub const COMMANDS: WireTable = WireTable {
+    doc: &[
+        "Command bytes (0x01–0x0F range). Each is followed by [nodeId: u32 LE];",
+        "structural commands then carry [payloadType: u8][payload…].",
+    ],
+    cfg: None,
+    hex: true,
+    consts: &[
+        wc("CMD_REMOVE", 0x01, ""),
+        wc("CMD_INSERT_BEFORE", 0x05, ""),
+        wc("CMD_INSERT_AFTER", 0x06, ""),
+        wc("CMD_PREPEND_CHILD", 0x07, ""),
+        wc("CMD_APPEND_CHILD", 0x08, ""),
+        wc("CMD_WRAP", 0x09, ""),
+        wc("CMD_REPLACE", 0x0b, ""),
+        wc(
+            "CMD_SET_PROPERTY",
+            0x0c,
+            "[valueType: u8][name str][value str], PROP_* value kinds",
+        ),
+        wc(
+            "CMD_SET_CHILDREN",
+            0x0d,
+            "payload is a Root-wrapped child list",
+        ),
+    ],
+};
+
+/// Structural-command payload types.
+pub const PAYLOADS: WireTable = WireTable {
+    doc: &["Structural-command payload types (0x10+, a range distinct from commands)."],
+    cfg: None,
+    hex: true,
+    consts: &[
+        wc(
+            "PAYLOAD_RAW_MARKDOWN",
+            0x10,
+            "[len: u32 LE][utf8] — re-parsed as markdown",
+        ),
+        wc(
+            "PAYLOAD_RAW_HTML",
+            0x11,
+            "[len: u32 LE][utf8] — re-parsed as HTML/MDX",
+        ),
+        wc("PAYLOAD_SERDE_JSON", 0x12, "[len: u32 LE][JSON node tree]"),
+        wc(
+            "PAYLOAD_OPSTREAM",
+            0x14,
+            "[len: u32 LE][op bytes] — replayed straight into the arena, no JsNode hop",
+        ),
+    ],
+};
+
+/// Property value kinds, shared by HAST element properties (stored in
+/// `type_data`) and SET_PROPERTY commands.
+pub const PROP_KINDS: WireTable = WireTable {
+    doc: &["Property value kinds (HAST element properties and SET_PROPERTY commands)."],
+    cfg: None,
+    hex: false,
+    consts: &[
+        wc("PROP_STRING", 0, "UTF-8 value"),
+        wc("PROP_BOOL_TRUE", 1, "no value bytes"),
+        wc("PROP_BOOL_FALSE", 2, "no value bytes"),
+        wc("PROP_SPACE_SEP", 3, "space-separated list (UTF-8)"),
+        wc("PROP_COMMA_SEP", 4, "comma-separated list (UTF-8)"),
+        wc("PROP_INT", 5, "decimal string, parsed to i64"),
+        wc("PROP_NULL", 6, "no value bytes"),
+    ],
+};
+
+/// MDX JSX attribute kinds (MDAST and HAST MDX JSX element `type_data`).
+pub const MDX_ATTR_KINDS: WireTable = WireTable {
+    doc: &["MDX JSX attribute kinds (MDAST and HAST MDX JSX element type_data)."],
+    cfg: Some("feature = \"mdx\""),
+    hex: false,
+    consts: &[
+        wc("MDX_ATTR_BOOLEAN_PROP", 0, "name only, no value"),
+        wc("MDX_ATTR_LITERAL_PROP", 1, "name=\"literal\""),
+        wc("MDX_ATTR_EXPRESSION_PROP", 2, "name={expr}"),
+        wc("MDX_ATTR_SPREAD", 3, "{...expr}"),
+    ],
+};
+
+/// Tables emitted into `satteri-plugin-api/src/generated/wire_constants.rs`.
+pub const PLUGIN_WIRE_TABLES: &[&WireTable] = &[&OP_CODES, &OP_FIELDS, &COMMANDS, &PAYLOADS];
+/// Tables emitted into `satteri-ast/src/generated/wire_constants.rs`
+/// (re-exported by `shared.rs`).
+pub const AST_WIRE_TABLES: &[&WireTable] = &[&PROP_KINDS, &MDX_ATTR_KINDS];
+/// Tables emitted into `packages/satteri/src/generated/wire-constants.ts`.
+pub const TS_WIRE_TABLES: &[&WireTable] = &[
+    &OP_CODES,
+    &OP_FIELDS,
+    &COMMANDS,
+    &PAYLOADS,
+    &PROP_KINDS,
+    &MDX_ATTR_KINDS,
+];
+
+/// `ArenaNode` `#[repr(C)]` size; pinned to the real struct by the generated
+/// `offset_of!` asserts in satteri-arena.
+pub const ARENA_NODE_SIZE: usize = 52;
+
+/// `ArenaNode` field byte offsets (u32 fields except the `node_type` u8),
+/// shared by the JS readers' `FIELD` table and the Rust asserts.
+pub const ARENA_NODE_FIELDS: &[(&str, usize)] = &[
+    ("id", 0),
+    ("node_type", 4),
+    ("parent", 8),
+    ("start_offset", 12),
+    ("end_offset", 16),
+    ("start_line", 20),
+    ("start_column", 24),
+    ("end_line", 28),
+    ("end_column", 32),
+    ("children_start", 36),
+    ("children_count", 40),
+    ("data_offset", 44),
+    ("data_len", 48),
+];
+
+/// Raw-buffer header fields in write order; each occupies 4 bytes (u32 LE,
+/// `magic` being the 4 magic bytes). `Arena::to_raw_buffer` writes at these
+/// offsets and the JS readers' `HEADER` table reads them back.
+pub const ARENA_HEADER_FIELDS: &[&str] = &[
+    "magic",
+    "kind",
+    "node_struct_size",
+    "node_count",
+    "nodes_offset",
+    "children_count",
+    "children_offset",
+    "type_data_len",
+    "type_data_offset",
+    "source_len",
+    "source_offset",
+    "node_data_count",
+    "node_data_offset",
+];
+
+/// `b"MDAR"` read as a little-endian u32 (how the JS readers check it).
+pub const ARENA_MAGIC: u32 = u32::from_le_bytes(*b"MDAR");
+/// `Arena<K>` kind tags carried in the header's `kind` field.
+pub const ARENA_KINDS: &[(&str, u8)] = &[("Mdast", 1), ("Hast", 2)];

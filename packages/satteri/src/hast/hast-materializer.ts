@@ -14,6 +14,7 @@ import {
   type HastProperty,
 } from "./hast-reader.js";
 import type { HastNode } from "../types.js";
+import { TYPE_NAMES } from "./generated/node-types.js";
 import { lazyProp, lazyGroup } from "../lazy-props.js";
 import { restorePhantomSpaces } from "../phantom.js";
 
@@ -34,46 +35,7 @@ function propsToRecord(
  */
 export function materializeHastNode(reader: HastReader, nodeId: number): HastNode {
   const nodeType = reader.getNodeType(nodeId);
-
-  let typeName: string;
-  switch (nodeType) {
-    case HAST_ROOT:
-      typeName = "root";
-      break;
-    case HAST_ELEMENT:
-      typeName = "element";
-      break;
-    case HAST_TEXT:
-      typeName = "text";
-      break;
-    case HAST_COMMENT:
-      typeName = "comment";
-      break;
-    case HAST_DOCTYPE:
-      typeName = "doctype";
-      break;
-    case HAST_RAW:
-      typeName = "raw";
-      break;
-    case HAST_MDX_JSX_ELEMENT:
-      typeName = "mdxJsxFlowElement";
-      break;
-    case HAST_MDX_JSX_TEXT_ELEMENT:
-      typeName = "mdxJsxTextElement";
-      break;
-    case HAST_MDX_FLOW_EXPRESSION:
-      typeName = "mdxFlowExpression";
-      break;
-    case HAST_MDX_TEXT_EXPRESSION:
-      typeName = "mdxTextExpression";
-      break;
-    case HAST_MDX_ESM:
-      typeName = "mdxjsEsm";
-      break;
-    default:
-      typeName = `unknown(${nodeType})`;
-      break;
-  }
+  const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
   const position = reader.getPosition(nodeId);
   const node = (position ? { type: typeName, position } : { type: typeName }) as HastNode;

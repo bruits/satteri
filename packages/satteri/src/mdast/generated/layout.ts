@@ -75,6 +75,30 @@ const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {
   104: [{ js: "value", offset: 0, kind: "str32", phantom: true }],
 };
 
+/** Materialized property names per tag (the non-skip `js` names above),
+ *  precomputed so `materializeMdastFields` doesn't rebuild them per node. */
+const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
+  2: ["depth"],
+  7: ["value"],
+  10: ["value"],
+  13: ["value"],
+  25: ["value"],
+  26: ["value"],
+  8: ["lang", "meta", "value"],
+  9: ["url", "title", "identifier", "label"],
+  15: ["url", "title"],
+  16: ["url", "alt", "title"],
+  17: ["identifier", "label", "referenceType"],
+  18: ["identifier", "label", "referenceType", "alt"],
+  19: ["identifier", "label"],
+  20: ["identifier", "label"],
+  27: ["meta", "value"],
+  28: ["value"],
+  102: ["value"],
+  103: ["value"],
+  104: ["value"],
+};
+
 /**
  * Decode a node's type-specific `type_data` from the walk buffer onto `node`,
  * driven entirely by `MDAST_LAYOUTS`. Returns `false` for tags with no entry, so
@@ -123,8 +147,7 @@ export function materializeMdastFields(
 ): boolean {
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields === undefined) return false;
-  const keys = fields.filter((f) => !f.skip).map((f) => f.js);
-  lazyGroup(node, keys, () => {
+  lazyGroup(node, MDAST_LAYOUT_KEYS[nodeType]!, () => {
     const data = reader.getTypeData(nodeId);
     const out: Record<string, unknown> = {};
     for (const f of fields) {
@@ -132,7 +155,12 @@ export function materializeMdastFields(
         const b = data[f.offset] ?? 0;
         if (!f.skip) out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
       } else {
-        const ref = reader.readStringRef(data, f.offset);
+        // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
+        // yields an empty ref, mirroring the Rust decoders' bounds checks.
+        const ref =
+          f.offset + 8 <= data.length
+            ? reader.readStringRef(data, f.offset)
+            : { offset: 0, len: 0 };
         if (f.skip) continue;
         const s = f.nullable && ref.len === 0 ? null : reader.getString(ref.offset, ref.len);
         out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;

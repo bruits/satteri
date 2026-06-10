@@ -12,6 +12,7 @@ import {
 import { defineHastPlugin } from "../src/plugin.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
+import type { Element, ElementContent } from "hast";
 import type { Position } from "unist";
 
 function setup(source = "# Hello\n\nWorld") {
@@ -978,5 +979,81 @@ describe("mdxjsEsm visitor", () => {
     visitHastHandle(handle, plugin, subs, source, undefined);
     expect(values.length).toBe(1);
     expect(values[0]).toContain("export const x");
+  });
+});
+
+// Lazy-children lifecycle: matched nodes resolve `.children` from a snapshot
+// taken during the pass; after the pass the arena may be rebuilt with new ids,
+// so a first-time read must fail loudly instead of mapping stale ids.
+
+describe("visitHastHandle - lazy children lifecycle", () => {
+  test("async visitor reads `.children` in a deferred callback", async () => {
+    const { handle, source } = setup();
+    let firstChild: ElementContent | undefined;
+    const plugin = defineHastPlugin({
+      name: "async-children-read",
+      element: {
+        filter: ["h1"],
+        async visit(node) {
+          await new Promise((r) => setTimeout(r, 1));
+          firstChild = node.children[0];
+        },
+      },
+    });
+    const result = visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(result).toBeInstanceOf(Promise);
+    await result;
+    expect(firstChild).toMatchObject({ type: "text", value: "Hello" });
+  });
+
+  test("a node retained past its visitor pass throws on its first `.children` read", () => {
+    const { handle, source } = setup();
+    let retained: Readonly<Element> | undefined;
+    const plugin = defineHastPlugin({
+      name: "retain-h1",
+      element: {
+        filter: ["h1"],
+        visit(node) {
+          retained = node;
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(retained).toBeDefined();
+    expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+  });
+
+  test("a retained node throws on `.children` after an async pass settles", async () => {
+    const { handle, source } = setup();
+    let retained: Readonly<Element> | undefined;
+    const plugin = defineHastPlugin({
+      name: "retain-h1-async",
+      element: {
+        filter: ["h1"],
+        async visit(node) {
+          await new Promise((r) => setTimeout(r, 1));
+          retained = node;
+        },
+      },
+    });
+    await visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+  });
+
+  test("children materialized in-pass stay usable after the pass", () => {
+    const { handle, source } = setup();
+    let retained: Readonly<Element> | undefined;
+    const plugin = defineHastPlugin({
+      name: "read-then-retain",
+      element: {
+        filter: ["h1"],
+        visit(node) {
+          void node.children; // materialize (and cache) during the pass
+          retained = node;
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
   });
 });

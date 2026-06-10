@@ -1,24 +1,17 @@
 //! Shared constants used by both MDAST and HAST command/codec paths.
+//!
+//! The constant values are generated from the wire-constant tables in
+//! `satteri-layout-codegen/src/schema.rs`; this module is their canonical
+//! import path.
 
-// Property value type constants (used in HAST element properties and command wire format)
-pub const PROP_STRING: u8 = 0;
-pub const PROP_BOOL_TRUE: u8 = 1;
-pub const PROP_BOOL_FALSE: u8 = 2;
-pub const PROP_SPACE_SEP: u8 = 3;
-pub const PROP_COMMA_SEP: u8 = 4;
-
-pub const PROP_INT: u8 = 5;
-pub const PROP_NULL: u8 = 6;
-
-// MDX JSX attribute kinds (used in both MDAST and HAST MDX JSX element type_data)
 #[cfg(feature = "mdx")]
-pub const MDX_ATTR_BOOLEAN_PROP: u8 = 0; // name only, no value
-#[cfg(feature = "mdx")]
-pub const MDX_ATTR_LITERAL_PROP: u8 = 1; // name="literal"
-#[cfg(feature = "mdx")]
-pub const MDX_ATTR_EXPRESSION_PROP: u8 = 2; // name={expr}
-#[cfg(feature = "mdx")]
-pub const MDX_ATTR_SPREAD: u8 = 3; // {...expr}
+pub use crate::generated::wire_constants::{
+    MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
+};
+pub use crate::generated::wire_constants::{
+    PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_NULL, PROP_SPACE_SEP,
+    PROP_STRING,
+};
 
 #[cfg(feature = "mdx")]
 use crate::commands::JsNodeAttribute;

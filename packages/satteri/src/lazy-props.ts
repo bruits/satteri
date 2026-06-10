@@ -25,7 +25,7 @@ export function lazyProp<T>(key: string, get: () => T): PropertyDescriptor {
  */
 export function lazyGroup(
   node: object,
-  keys: string[],
+  keys: readonly string[],
   resolve: () => Record<string, unknown>,
 ): void {
   let cached: Record<string, unknown> | undefined;

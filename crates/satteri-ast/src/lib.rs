@@ -2,6 +2,7 @@
 
 pub mod commands;
 pub mod convert;
+mod generated;
 pub mod hast;
 pub mod mdast;
 pub mod rebuild;

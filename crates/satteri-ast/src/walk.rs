@@ -334,8 +334,14 @@ pub(crate) fn write_str16<K: ArenaKind>(
 ) {
     if data.len() >= offset + 8 {
         let s = arena.get_str(read_string_ref(data, offset));
-        out.extend_from_slice(&(s.len() as u16).to_le_bytes());
-        out.extend_from_slice(s.as_bytes());
+        // Clamp at a char boundary: a >64 KiB field truncates visibly instead
+        // of wrapping the prefix and desynchronizing the decoder.
+        let mut len = s.len().min(u16::MAX as usize);
+        while !s.is_char_boundary(len) {
+            len -= 1;
+        }
+        out.extend_from_slice(&(len as u16).to_le_bytes());
+        out.extend_from_slice(&s.as_bytes()[..len]);
     } else {
         out.extend_from_slice(&0u16.to_le_bytes());
     }
@@ -401,25 +407,15 @@ fn serialize_hast_node_inline(
                 out.extend_from_slice(&0u16.to_le_bytes()); // 0 props
                 return;
             }
-            let tag_ref = read_string_ref(type_data, 0);
-            let tag = arena.get_str(tag_ref);
-            out.extend_from_slice(&(tag.len() as u16).to_le_bytes());
-            out.extend_from_slice(tag.as_bytes());
+            write_str16(arena, out, type_data, 0); // tag
 
             let prop_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
             out.extend_from_slice(&(prop_count as u16).to_le_bytes());
             for i in 0..prop_count {
                 let base = 16 + i * 20;
-                let name_ref = read_string_ref(type_data, base);
-                let kind = type_data[base + 8];
-                let val_ref = read_string_ref(type_data, base + 12);
-                let name = arena.get_str(name_ref);
-                out.extend_from_slice(&(name.len() as u16).to_le_bytes());
-                out.extend_from_slice(name.as_bytes());
-                out.push(kind);
-                let val = arena.get_str(val_ref);
-                out.extend_from_slice(&(val.len() as u16).to_le_bytes());
-                out.extend_from_slice(val.as_bytes());
+                write_str16(arena, out, type_data, base); // name
+                out.push(type_data[base + 8]); // kind
+                write_str16(arena, out, type_data, base + 12); // value
             }
         }
 
@@ -430,39 +426,20 @@ fn serialize_hast_node_inline(
                 out.extend_from_slice(&0u16.to_le_bytes()); // 0 attrs
                 return;
             }
-            let name_ref = read_string_ref(type_data, 0);
-            let name = arena.get_str(name_ref);
-            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
-            out.extend_from_slice(name.as_bytes());
+            write_str16(arena, out, type_data, 0); // element name
 
             let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
             out.extend_from_slice(&(attr_count as u16).to_le_bytes());
             for i in 0..attr_count {
                 let base = 16 + i * 20;
-                let kind = type_data[base];
-                let attr_name_ref = read_string_ref(type_data, base + 4);
-                let attr_val_ref = read_string_ref(type_data, base + 12);
-                let attr_name = arena.get_str(attr_name_ref);
-                let attr_val = arena.get_str(attr_val_ref);
-                out.push(kind);
-                out.extend_from_slice(&(attr_name.len() as u16).to_le_bytes());
-                out.extend_from_slice(attr_name.as_bytes());
-                out.extend_from_slice(&(attr_val.len() as u32).to_le_bytes());
-                out.extend_from_slice(attr_val.as_bytes());
+                out.push(type_data[base]); // kind
+                write_str16(arena, out, type_data, base + 4); // attr name
+                write_str32(arena, out, type_data, base + 12); // attr value
             }
         }
 
         // HAST text / comment / raw / MDX expressions / MDX ESM: single value
-        2 | 3 | 5 | 12 | 13 | 14 => {
-            if type_data.len() >= 8 {
-                let val_ref = read_string_ref(type_data, 0);
-                let val = arena.get_str(val_ref);
-                out.extend_from_slice(&(val.len() as u32).to_le_bytes());
-                out.extend_from_slice(val.as_bytes());
-            } else {
-                out.extend_from_slice(&0u32.to_le_bytes());
-            }
-        }
+        2 | 3 | 5 | 12 | 13 | 14 => write_str32(arena, out, type_data, 0),
 
         _ => {
             // Generic: copy raw type_data as length-prefixed blob
@@ -476,6 +453,29 @@ fn serialize_hast_node_inline(
 mod tests {
     use super::*;
     use satteri_arena::ArenaBuilder;
+
+    #[test]
+    fn write_str16_clamps_oversized_strings_at_a_char_boundary() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(0);
+        // 65534 ASCII bytes, then a 2-byte char straddling the u16 limit.
+        let big = format!("{}é{}", "a".repeat(65534), "b".repeat(100));
+        let sref = b.alloc_string(&big);
+        b.close_node();
+        let arena = b.finish();
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&sref.offset.to_le_bytes());
+        data.extend_from_slice(&sref.len.to_le_bytes());
+        let mut out = Vec::new();
+        write_str16(&arena, &mut out, &data, 0);
+
+        let len = u16::from_le_bytes(out[0..2].try_into().unwrap()) as usize;
+        assert_eq!(out.len(), 2 + len);
+        // Byte 65535 would split the 'é', so the clamp backs off to 65534.
+        assert_eq!(len, 65534);
+        assert!(std::str::from_utf8(&out[2..]).is_ok());
+    }
 
     fn build_hast_with_elements(tags: &[&str]) -> Arena<Hast> {
         let mut b = ArenaBuilder::<Hast>::new(String::new());

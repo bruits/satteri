@@ -17,7 +17,8 @@ import {
   HAST_MDX_TEXT_EXPRESSION,
   HAST_MDX_ESM,
 } from "./hast-reader.js";
-import { CommandBuffer } from "../command-buffer.js";
+import { NAME_TO_TYPE, VISITOR_KEYS, HAST_OPSTREAM_TYPES } from "./generated/node-types.js";
+import { CommandBuffer, type StructuralOp } from "../command-buffer.js";
 import {
   OpWriter,
   OF_VALUE,
@@ -28,24 +29,26 @@ import {
   PROP_BOOL_TRUE,
   PROP_BOOL_FALSE,
   PROP_SPACE_SEP,
+  PROP_COMMA_SEP,
   PROP_INT,
   emitMdxAttr,
 } from "../op-stream.js";
 import { restorePhantomSpaces } from "../phantom.js";
+import { readPosition } from "../mdast/wire-read.js";
 import {
   walkHandle,
   applyCommandsToHandle,
-  serializeHandle,
   textContentHandle,
   parseExpression as napiParseExpression,
   parseEsm as napiParseEsm,
 } from "#binding";
 
-type NapiParseFn = (source: string) => string | null;
+import { LazyChildResolver } from "../lazy-child-resolver.js";
+import type { HastHandle } from "../handles.js";
 
-// Opaque handle type from NAPI, the arena lives in Rust memory.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type HastHandle = any;
+export type { HastHandle };
+
+type NapiParseFn = (source: string) => string | null;
 
 /** ESTree-compatible Program node returned by `parseExpression()`. */
 export type EstreeProgram = Program;
@@ -139,8 +142,24 @@ function markHast(node: HastNode, isRoot = true): Record<string, unknown> {
   return obj;
 }
 
-function nid(node: HastNode): number {
+function nid(node: HastNode): number | undefined {
   return nodeIdMap.get(node) ?? (node as HastNodeInternal)._nodeId;
+}
+
+/**
+ * Arena id for a node passed to a context method. Plugin-built nodes have no
+ * id; without this check the id would coerce to 0 in the command buffer and
+ * the mutation would silently target the document root.
+ */
+function requireNid(node: HastNode, method: string): number {
+  const id = nid(node);
+  if (id === undefined) {
+    throw new Error(
+      `${method}: node has no arena id — it was built in JS, not read from this tree. ` +
+        `Pass plugin-built nodes as new content (e.g. the second argument of insertAfter).`,
+    );
+  }
+  return id;
 }
 
 /** New content for a HAST structural mutation. Unlike [`MdastContent`], HAST has
@@ -153,22 +172,6 @@ function hastReusedId(node: unknown): number | undefined {
   return typeof id === "number" ? id : undefined;
 }
 
-/** HAST types the op-stream replay reconstructs byte-identically to the JSON
- *  path (`finalize_hast_collector`). MDX expression / ESM nodes store the same
- *  single value StringRef as text; MDX JSX elements carry name + typed
- *  attributes + the explicit flag. Only doctype and root fall back to JSON. */
-const HAST_OPSTREAM_TYPES: Record<string, number> = {
-  element: HAST_ELEMENT,
-  text: HAST_TEXT,
-  comment: HAST_COMMENT,
-  raw: HAST_RAW,
-  mdxFlowExpression: HAST_MDX_FLOW_EXPRESSION,
-  mdxTextExpression: HAST_MDX_TEXT_EXPRESSION,
-  mdxjsEsm: HAST_MDX_ESM,
-  mdxJsxFlowElement: HAST_MDX_JSX_ELEMENT,
-  mdxJsxTextElement: HAST_MDX_JSX_TEXT_ELEMENT,
-};
-
 /**
  * Compile a declarative HAST replacement tree to the op-stream — the structural
  * backend the rebuild already uses, skipping JSON + the JsNode deserialize.
@@ -177,6 +180,28 @@ const HAST_OPSTREAM_TYPES: Record<string, number> = {
  */
 // Reused across replacements in a pass — see the note on `mdastWriter`.
 const hastWriter = new OpWriter();
+
+/** Compile a set-children payload: a root-wrapped child list, the shape
+ *  `Patch::SetChildren` splices in. Reused children become refs, like the
+ *  JSON wrapper's `markHast(child, false)`. */
+function compileHastChildrenToOpstream(children: unknown): Uint8Array | null {
+  if (!Array.isArray(children)) return null;
+  hastWriter.reset();
+  hastWriter.open(NAME_TO_TYPE.root!);
+  for (const c of children) {
+    if (!emitHastOp(hastWriter, c, false)) return null;
+  }
+  hastWriter.close();
+  return hastWriter.take();
+}
+
+/** Encode `node` (op-stream when compilable, JSON otherwise) and write it as
+ *  the `op` structural command — the one place that picks the encoding. */
+function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
+  const ops = compileHastToOpstream(node);
+  if (ops) buffer[`${op}Opstream`](id, ops);
+  else buffer[`${op}RawJson`](id, JSON.stringify(markHast(node)));
+}
 
 function compileHastToOpstream(root: unknown): Uint8Array | null {
   hastWriter.reset();
@@ -194,8 +219,8 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
     }
   }
   const n = node as Record<string, unknown>;
-  const type = HAST_OPSTREAM_TYPES[n.type as string];
-  if (type === undefined) return false;
+  const type = NAME_TO_TYPE[n.type as string];
+  if (type === undefined || !HAST_OPSTREAM_TYPES.has(type)) return false;
   w.open(type);
   if (type === HAST_ELEMENT) {
     w.str(OF_TAGNAME, typeof n.tagName === "string" ? n.tagName : "div");
@@ -265,59 +290,39 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   removeNode(node: HastNode): void {
-    this.#commandBuffer.removeNode(nid(node));
+    this.#commandBuffer.removeNode(requireNid(node, "removeNode"));
   }
 
   replaceNode(node: HastNode, newNode: HastContent): void {
-    const id = nid(node);
-    const ops = compileHastToOpstream(newNode);
-    if (ops) this.#commandBuffer.replaceOpstream(id, ops);
-    else this.#commandBuffer.replaceRawJson(id, JSON.stringify(markHast(newNode)));
+    const id = requireNid(node, "replaceNode");
+    emitHastTree(this.#commandBuffer, "replace", id, newNode);
     // Track the replacement so a later mdxJsx setProperty can fold into it.
     this.#pendingNodes.set(id, newNode);
   }
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = nid(node);
-    for (const n of asArray(newNode)) {
-      const ops = compileHastToOpstream(n);
-      if (ops) this.#commandBuffer.insertBeforeOpstream(id, ops);
-      else this.#commandBuffer.insertBeforeRawJson(id, JSON.stringify(markHast(n)));
-    }
+    const id = requireNid(node, "insertBefore");
+    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertBefore", id, n);
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = nid(node);
-    for (const n of asArray(newNode)) {
-      const ops = compileHastToOpstream(n);
-      if (ops) this.#commandBuffer.insertAfterOpstream(id, ops);
-      else this.#commandBuffer.insertAfterRawJson(id, JSON.stringify(markHast(n)));
-    }
+    const id = requireNid(node, "insertAfter");
+    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertAfter", id, n);
   }
 
   wrapNode(node: HastNode, parentNode: HastContent): void {
-    const id = nid(node);
-    const ops = compileHastToOpstream(parentNode);
-    if (ops) this.#commandBuffer.wrapNodeOpstream(id, ops);
-    else this.#commandBuffer.wrapNodeRawJson(id, JSON.stringify(markHast(parentNode)));
+    const id = requireNid(node, "wrapNode");
+    emitHastTree(this.#commandBuffer, "wrapNode", id, parentNode);
   }
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    const id = nid(node);
-    for (const n of asArray(childNode)) {
-      const ops = compileHastToOpstream(n);
-      if (ops) this.#commandBuffer.prependChildOpstream(id, ops);
-      else this.#commandBuffer.prependChildRawJson(id, JSON.stringify(markHast(n)));
-    }
+    const id = requireNid(node, "prependChild");
+    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "prependChild", id, n);
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    const id = nid(node);
-    for (const n of asArray(childNode)) {
-      const ops = compileHastToOpstream(n);
-      if (ops) this.#commandBuffer.appendChildOpstream(id, ops);
-      else this.#commandBuffer.appendChildRawJson(id, JSON.stringify(markHast(n)));
-    }
+    const id = requireNid(node, "appendChild");
+    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "appendChild", id, n);
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
@@ -337,10 +342,15 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   setProperty(node: HastNode, key: string, value: unknown): void {
-    const id = nid(node);
+    const id = requireNid(node, "setProperty");
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
+      const ops = compileHastChildrenToOpstream(value);
+      if (ops) {
+        this.#commandBuffer.setChildrenOpstream(id, ops);
+        return;
+      }
       const wrapper = {
         _hast: true,
         type: "root",
@@ -374,12 +384,16 @@ class HastVisitorContextImpl implements HastVisitorContext {
         const attrs: MdxJsxAttributeUnion[] = [...(updated.attributes ?? [])];
         const idx = attrs.findIndex((a) => a.type === "mdxJsxAttribute" && a.name === key);
         if (idx !== -1) attrs.splice(idx, 1);
+        // Arrays space-join, matching the binary path's PROP_SPACE_SEP encoding
+        // (hast convention for list-valued properties like className).
         const attrValue =
           value === true || value === null || value === undefined
             ? null
             : typeof value === "string"
               ? value
-              : String(value);
+              : Array.isArray(value)
+                ? value.join(" ")
+                : String(value);
         attrs.push({ type: "mdxJsxAttribute", name: key, value: attrValue });
         updated.attributes = attrs;
         this.replaceNode(node, updated);
@@ -399,7 +413,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   textContent(node: HastNode): string {
-    return textContentHandle(this.#handle, nid(node));
+    return textContentHandle(this.#handle, requireNid(node, "textContent"));
   }
 
   report({
@@ -498,19 +512,10 @@ export function resolveSubscriptions(plugin: HastVisitorInstance): ResolvedSubsc
   return subs;
 }
 
-/** Reverse map: method name → node type number */
-const METHOD_TO_TYPE: Record<string, number> = {
-  element: HAST_ELEMENT,
-  text: HAST_TEXT,
-  comment: HAST_COMMENT,
-  raw: HAST_RAW,
-  doctype: 4, // HAST_DOCTYPE
-  mdxJsxFlowElement: HAST_MDX_JSX_ELEMENT,
-  mdxJsxTextElement: HAST_MDX_JSX_TEXT_ELEMENT,
-  mdxFlowExpression: HAST_MDX_FLOW_EXPRESSION,
-  mdxTextExpression: HAST_MDX_TEXT_EXPRESSION,
-  mdxjsEsm: HAST_MDX_ESM,
-};
+/** Visitor method name → node-type tag (method names are the subscribable AST names). */
+const METHOD_TO_TYPE: Record<string, number> = Object.fromEntries(
+  [...VISITOR_KEYS].map((name) => [name, NAME_TO_TYPE[name]!] as const),
+);
 
 /**
  * Selective walk path: Rust walks the tree, only sends matched nodes to JS.
@@ -538,44 +543,30 @@ function decodeProperties(
     const valStr = textDecoder.decode(buf.subarray(pos, pos + valLen));
     pos += valLen;
     switch (kind) {
-      case 0: // PROP_STRING
+      case PROP_STRING:
         properties[name] = valStr;
         break;
-      case 1: // PROP_BOOL_TRUE
+      case PROP_BOOL_TRUE:
         properties[name] = true;
         break;
-      case 2: // PROP_BOOL_FALSE
+      case PROP_BOOL_FALSE:
+        properties[name] = false;
         break;
-      case 3: // PROP_SPACE_SEP
+      case PROP_SPACE_SEP:
         properties[name] = valStr.split(" ").filter((s) => s.length > 0);
         break;
-      case 4: // PROP_COMMA_SEP
+      case PROP_COMMA_SEP:
         properties[name] = valStr
           .split(",")
           .map((s) => s.trim())
           .filter((s) => s.length > 0);
         break;
-      case 5: // PROP_INT
+      case PROP_INT:
         properties[name] = Number(valStr);
         break;
     }
   }
   return properties;
-}
-
-/** Decode the 24-byte position block written by `serialize_hast_node_inline`. */
-function readPositionPrefix(view: DataView, offset: number): Position | undefined {
-  const startOffset = view.getUint32(offset, true);
-  const endOffset = view.getUint32(offset + 4, true);
-  const startLine = view.getUint32(offset + 8, true);
-  const startColumn = view.getUint32(offset + 12, true);
-  const endLine = view.getUint32(offset + 16, true);
-  const endColumn = view.getUint32(offset + 20, true);
-  if (startLine === 0 && startOffset === 0) return undefined;
-  return {
-    start: { offset: startOffset, line: startLine, column: startColumn },
-    end: { offset: endOffset, line: endLine, column: endColumn },
-  };
 }
 
 /**
@@ -596,7 +587,7 @@ class WalkElement {
   /** @internal */ _buf!: Uint8Array;
   /** @internal */ _propsPos!: number;
   /** @internal */ _childIds!: number[];
-  /** @internal */ _resolver!: LazyChildResolver;
+  /** @internal */ _resolver!: HastLazyChildResolver;
 
   get properties(): Record<string, string | number | boolean | string[]> {
     const val = decodeProperties(this._view, this._buf, this._propsPos);
@@ -628,7 +619,7 @@ function readElementFromBinary(
   buf: Uint8Array,
   offset: number,
   nodeId: number,
-  resolver: LazyChildResolver,
+  resolver: HastLazyChildResolver,
   position: Position | undefined,
   childIds: number[],
   data: Record<string, unknown> | null,
@@ -658,16 +649,14 @@ function readElementFromBinary(
   return node as unknown as HastNode;
 }
 
-/** Read a text/comment/raw/expression node from the binary data section. */
-const TEXT_NODE_TYPES: Record<number, string> = {
-  2: "text",
-  3: "comment",
-  5: "raw",
-  [HAST_MDX_FLOW_EXPRESSION]: "mdxFlowExpression",
-  [HAST_MDX_TEXT_EXPRESSION]: "mdxTextExpression",
-  [HAST_MDX_ESM]: "mdxjsEsm",
-};
+/** Value-carrying types read by `readTextFromBinary` (tag → AST name). */
+const TEXT_NODE_TYPES: Record<number, string> = Object.fromEntries(
+  ["text", "comment", "raw", "mdxFlowExpression", "mdxTextExpression", "mdxjsEsm"].map(
+    (name) => [NAME_TO_TYPE[name]!, name] as const,
+  ),
+);
 
+/** Read a text/comment/raw/expression node from the binary data section. */
 function readTextFromBinary(
   view: DataView,
   buf: Uint8Array,
@@ -705,7 +694,7 @@ function readMdxJsxFromBinary(
   offset: number,
   nodeId: number,
   nodeType: number,
-  resolver: LazyChildResolver,
+  resolver: HastLazyChildResolver,
   position: Position | undefined,
   childIds: number[],
   data: Record<string, unknown> | null,
@@ -775,7 +764,7 @@ function readMatchedNode(
   offset: number,
   nodeId: number,
   nodeType: number,
-  resolver: LazyChildResolver,
+  resolver: HastLazyChildResolver,
 ): HastNode {
   let pos = offset;
 
@@ -796,7 +785,7 @@ function readMatchedNode(
     pos += dataLen;
   }
 
-  const position = readPositionPrefix(view, pos);
+  const position = readPosition(view, pos);
   pos += 24;
 
   const childCount = view.getUint16(pos, true);
@@ -843,38 +832,18 @@ function readMatchedNode(
 
 // Shared helpers
 
-/**
- * Lazy child materializer, serializes the handle's buffer once when first
- * child is accessed, then materializes children from it via HastReader.
- */
-class LazyChildResolver {
-  #handle: HastHandle;
-  #reader: HastReader | null = null;
-
-  constructor(handle: HastHandle) {
-    this.#handle = handle;
+class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
+  protected override createReader(wire: Uint8Array): HastReader {
+    return new HastReader(wire);
   }
 
-  #ensure(): HastReader {
-    if (!this.#reader) {
-      this.#reader = new HastReader(serializeHandle(this.#handle));
-    }
-    return this.#reader;
-  }
-
-  materializeChildren(childIds: number[]): HastNode[] {
-    // The serialized buffer already carries each node's `data` blob (read
-    // eagerly by materializeHastNode), and the arena isn't mutated mid-visit —
-    // so no separate lazy NAPI fetch is needed. This also keeps walk-path
-    // children consistent with `markdownToHast` (no `data` key when a node has
-    // none).
-    const reader = this.#ensure();
-    return childIds.map((id) => materializeHastNode(reader, id));
+  protected override materializeNode(reader: HastReader, nodeId: number): HastNode {
+    return materializeHastNode(reader, nodeId);
   }
 }
 
 /** Create a lazy `children` property backed by the handle. */
-function makeLazyChildren(node: object, childIds: number[], resolver: LazyChildResolver): void {
+function makeLazyChildren(node: object, childIds: number[], resolver: HastLazyChildResolver): void {
   Object.defineProperty(node, "children", {
     get() {
       const children = resolver.materializeChildren(childIds);
@@ -908,9 +877,7 @@ function handleVisitResult(
     list.push({ nodeId, promise: result, originalNode });
     return list;
   }
-  const ops = compileHastToOpstream(result);
-  if (ops) returnBuffer.replaceOpstream(nodeId, ops);
-  else returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
+  emitHastTree(returnBuffer, "replace", nodeId, result);
   return deferred;
 }
 
@@ -923,7 +890,7 @@ function dispatchMatches(
   subs: ResolvedSubscription[],
   ctx: HastVisitorContextImpl,
   returnBuffer: CommandBuffer,
-  resolver: LazyChildResolver,
+  resolver: HastLazyChildResolver,
 ): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
@@ -990,7 +957,7 @@ export function visitHastHandle(
   const getSource = typeof source === "function" ? source : () => source;
   const ctx = new HastVisitorContextImpl(handle, getSource, fileURL);
   const returnBuffer = new CommandBuffer();
-  const resolver = new LazyChildResolver(handle);
+  const resolver = new HastLazyChildResolver(handle);
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
   const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
 
@@ -1002,15 +969,17 @@ export function visitHastHandle(
     ).then((results) => {
       for (const { nodeId, result, originalNode } of results) {
         if (result != null && result !== originalNode) {
-          const ops = compileHastToOpstream(result);
-          if (ops) returnBuffer.replaceOpstream(nodeId, ops);
-          else returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
+          emitHastTree(returnBuffer, "replace", nodeId, result);
         }
       }
+      // Mutations land next, renumbering the arena: snapshots taken after
+      // this point would resolve match-time child ids against wrong nodes.
+      resolver.seal();
       return applyMutations(handle, returnBuffer, ctx);
     });
   }
 
+  resolver.seal();
   return applyMutations(handle, returnBuffer, ctx);
 }
 

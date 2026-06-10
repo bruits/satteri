@@ -14,19 +14,15 @@
 //! Each entry is `[node_id: u32 LE][data_len: u32 LE][bytes...]` and
 //! entries are written in ascending node_id order.
 
+use std::mem::offset_of;
+
 use crate::arena::Arena;
+use crate::generated::layout::header;
 use crate::kind::ArenaKind;
 use crate::line_index::LineIndex;
-use crate::node::NODE_STRUCT_SIZE;
+use crate::node::{ArenaNode, NODE_STRUCT_SIZE};
 
-const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
-
-// Header field sizes (all u32 LE):
-//   magic(4) + kind(4) + node_struct_size(4) + node_count(4) + nodes_offset(4)
-//   + children_count(4) + children_offset(4) + type_data_len(4) + type_data_offset(4)
-//   + source_len(4) + source_offset(4) + node_data_count(4) + node_data_offset(4)
-//   = 52 bytes
-const HEADER_SIZE: usize = 52;
+pub(crate) const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
 
 impl<K: ArenaKind> Arena<K> {
     /// Serialize to a flat byte buffer:
@@ -47,7 +43,7 @@ impl<K: ArenaKind> Arena<K> {
             .map(|(_, v)| 4 /* id */ + 4 /* len */ + v.len())
             .sum();
 
-        let nodes_offset = HEADER_SIZE as u32;
+        let nodes_offset = header::SIZE as u32;
         let children_offset = nodes_offset + nodes_bytes as u32;
         let type_data_offset = children_offset + children_bytes as u32;
         let source_offset = type_data_offset + type_data_bytes as u32;
@@ -56,20 +52,24 @@ impl<K: ArenaKind> Arena<K> {
         let total = node_data_offset as usize + node_data_section_bytes;
         let mut buf = Vec::with_capacity(total);
 
-        // Write header fields as little-endian u32s.
-        buf.extend_from_slice(&BUFFER_MAGIC);
-        buf.extend_from_slice(&(K::KIND_TAG as u32).to_le_bytes());
-        buf.extend_from_slice(&(NODE_STRUCT_SIZE as u32).to_le_bytes());
-        buf.extend_from_slice(&(self.nodes.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&nodes_offset.to_le_bytes());
-        buf.extend_from_slice(&(self.children.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&children_offset.to_le_bytes());
-        buf.extend_from_slice(&(self.type_data.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&type_data_offset.to_le_bytes());
-        buf.extend_from_slice(&(self.source.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&source_offset.to_le_bytes());
-        buf.extend_from_slice(&node_data_count.to_le_bytes());
-        buf.extend_from_slice(&node_data_offset.to_le_bytes());
+        // Header fields (little-endian u32s) at the generated layout offsets,
+        // so the JS readers' generated `HEADER` table reads the same bytes.
+        let mut hdr = [0u8; header::SIZE];
+        let mut put = |off: usize, v: u32| hdr[off..off + 4].copy_from_slice(&v.to_le_bytes());
+        put(header::MAGIC, u32::from_le_bytes(BUFFER_MAGIC));
+        put(header::KIND, K::KIND_TAG as u32);
+        put(header::NODE_STRUCT_SIZE, NODE_STRUCT_SIZE as u32);
+        put(header::NODE_COUNT, self.nodes.len() as u32);
+        put(header::NODES_OFFSET, nodes_offset);
+        put(header::CHILDREN_COUNT, self.children.len() as u32);
+        put(header::CHILDREN_OFFSET, children_offset);
+        put(header::TYPE_DATA_LEN, self.type_data.len() as u32);
+        put(header::TYPE_DATA_OFFSET, type_data_offset);
+        put(header::SOURCE_LEN, self.source.len() as u32);
+        put(header::SOURCE_OFFSET, source_offset);
+        put(header::NODE_DATA_COUNT, node_data_count);
+        put(header::NODE_DATA_OFFSET, node_data_offset);
+        buf.extend_from_slice(&hdr);
 
         // The arena tracks `start_offset`/`end_offset` as **byte** offsets
         // (the parser works in bytes). remark/micromark report code-point
@@ -82,10 +82,8 @@ impl<K: ArenaKind> Arena<K> {
         let nodes_buf_start = buf.len();
         buf.extend_from_slice(nodes_slice);
         if !self.source.is_ascii() {
-            // ArenaNode field offsets are fixed by `#[repr(C)]`:
-            // start_offset @ 12, end_offset @ 16.
-            const START_OFF_FIELD: usize = 12;
-            const END_OFF_FIELD: usize = 16;
+            const START_OFF_FIELD: usize = offset_of!(ArenaNode, start_offset);
+            const END_OFF_FIELD: usize = offset_of!(ArenaNode, end_offset);
             let cached = self.cp_offsets.len() == self.nodes.len();
             if cached {
                 for (i, &(cp_start, cp_end)) in self.cp_offsets.iter().enumerate() {

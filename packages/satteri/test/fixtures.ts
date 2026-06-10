@@ -93,14 +93,6 @@ export function buildTestBuffer({
   return buf;
 }
 
-export const NodeType = {
-  Root: 0,
-  Paragraph: 1,
-  Heading: 2,
-  Text: 10,
-  Link: 15,
-} as const;
-
 // A simple "# Hello\n\nWorld" arena
 // source = "# Hello\n\nWorld"
 //   Root (id=0, children=[1,2])

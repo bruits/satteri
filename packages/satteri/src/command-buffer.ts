@@ -9,6 +9,7 @@
  * avoid byte-swapping on the Rust side.
  */
 
+import { ByteWriter } from "./byte-writer.js";
 import type { MdastNode } from "./types.js";
 import {
   PROP_STRING,
@@ -18,26 +19,21 @@ import {
   PROP_INT,
   PROP_NULL,
 } from "./op-stream.js";
-
-// Command bytes (0x01–0x0F)
-
-const CMD_REMOVE = 0x01;
-const CMD_INSERT_BEFORE = 0x05;
-const CMD_INSERT_AFTER = 0x06;
-const CMD_PREPEND_CHILD = 0x07;
-const CMD_APPEND_CHILD = 0x08;
-const CMD_WRAP = 0x09;
-const CMD_REPLACE = 0x0b;
-const CMD_SET_PROPERTY = 0x0c;
-const CMD_SET_CHILDREN = 0x0d;
-
-// Payload types (0x10+, distinct range from commands)
-
-const PAYLOAD_RAW_MARKDOWN = 0x10;
-const PAYLOAD_RAW_HTML = 0x11;
-const PAYLOAD_SERDE_JSON = 0x12;
-/** Declarative-compile op-stream (see op-stream.ts / js_commands.rs). */
-const PAYLOAD_OPSTREAM = 0x14;
+import {
+  CMD_REMOVE,
+  CMD_INSERT_BEFORE,
+  CMD_INSERT_AFTER,
+  CMD_PREPEND_CHILD,
+  CMD_APPEND_CHILD,
+  CMD_WRAP,
+  CMD_REPLACE,
+  CMD_SET_PROPERTY,
+  CMD_SET_CHILDREN,
+  PAYLOAD_RAW_MARKDOWN,
+  PAYLOAD_RAW_HTML,
+  PAYLOAD_SERDE_JSON,
+  PAYLOAD_OPSTREAM,
+} from "./generated/wire-constants.js";
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
 
@@ -51,62 +47,60 @@ export function classifyReturn(value: unknown): ReturnClass {
 }
 
 const INITIAL_SIZE = 4096;
-const encoder = new TextEncoder();
-const EMPTY_U8 = new Uint8Array(0);
+
+/** Structural commands that carry a subtree payload, named after the JSON-path
+ *  method; `${op}Opstream` / `${op}RawJson` are the binary/raw twins. */
+export type StructuralOp =
+  | "replace"
+  | "insertBefore"
+  | "insertAfter"
+  | "prependChild"
+  | "appendChild"
+  | "wrapNode";
 
 export class CommandBuffer {
-  private buffer: ArrayBuffer;
-  private view: DataView;
-  private bytes: Uint8Array;
-  private offset: number = 0;
-
-  constructor() {
-    this.buffer = new ArrayBuffer(INITIAL_SIZE);
-    this.view = new DataView(this.buffer);
-    this.bytes = new Uint8Array(this.buffer);
-  }
+  #w = new ByteWriter(INITIAL_SIZE);
 
   removeNode(nodeId: number): void {
-    this.ensureCapacity(5);
-    this.writeU8(CMD_REMOVE);
-    this.writeU32(nodeId);
+    const w = this.#w;
+    w.ensure(5);
+    w.u8(CMD_REMOVE);
+    w.u32(nodeId);
   }
 
   /** Unified set-property for both MDAST and HAST nodes. */
   setProperty(nodeId: number, key: string, value: unknown): void {
-    const encodedName = encoder.encode(key);
     let valueType: number;
-    let encodedValue: Uint8Array;
+    let str: string;
 
     if (value === null || value === undefined) {
       valueType = PROP_NULL;
-      encodedValue = EMPTY_U8;
+      str = "";
     } else if (value === true) {
       valueType = PROP_BOOL_TRUE;
-      encodedValue = EMPTY_U8;
+      str = "";
     } else if (value === false) {
       valueType = PROP_BOOL_FALSE;
-      encodedValue = EMPTY_U8;
+      str = "";
     } else if (typeof value === "number") {
       valueType = PROP_INT;
-      encodedValue = encoder.encode(String(value));
+      str = String(value);
     } else if (Array.isArray(value)) {
       valueType = PROP_SPACE_SEP;
-      encodedValue = encoder.encode((value as string[]).join(" "));
+      str = (value as string[]).join(" ");
     } else {
       valueType = PROP_STRING;
-      encodedValue = encoder.encode(String(value));
+      str = String(value);
     }
 
-    // 1(cmd) + 4(nodeId) + 1(valueType) + 4(nameLen) + name + 4(valueLen) + value
-    this.ensureCapacity(14 + encodedName.length + encodedValue.length);
-    this.writeU8(CMD_SET_PROPERTY);
-    this.writeU32(nodeId);
-    this.writeU8(valueType);
-    this.writeU32(encodedName.length);
-    this.writeBytes(encodedName);
-    this.writeU32(encodedValue.length);
-    this.writeBytes(encodedValue);
+    // 1(cmd) + 4(nodeId) + 1(valueType); name and value are length-prefixed strings
+    const w = this.#w;
+    w.ensure(6);
+    w.u8(CMD_SET_PROPERTY);
+    w.u32(nodeId);
+    w.u8(valueType);
+    w.utf8WithU32Len(key);
+    w.utf8WithU32Len(str);
   }
 
   insertBefore(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
@@ -165,19 +159,28 @@ export class CommandBuffer {
   }
 
   private writeRawJsonCommand(cmd: number, nodeId: number, json: string): void {
-    const encoded = encoder.encode(json);
-    this.ensureCapacity(10 + encoded.length);
-    this.writeU8(cmd);
-    this.writeU32(nodeId);
-    this.writeU8(PAYLOAD_SERDE_JSON);
-    this.writeU32(encoded.length);
-    this.writeBytes(encoded);
+    this.writePayloadCommand(cmd, nodeId, PAYLOAD_SERDE_JSON, json);
+  }
+
+  /** Header (cmd + nodeId + payloadType) followed by a length-prefixed string payload. */
+  private writePayloadCommand(cmd: number, nodeId: number, payloadType: number, s: string): void {
+    const w = this.#w;
+    w.ensure(6);
+    w.u8(cmd);
+    w.u32(nodeId);
+    w.u8(payloadType);
+    w.utf8WithU32Len(s);
   }
 
   // Imperative-builder op-stream payloads (the fast structural path).
 
   replaceOpstream(nodeId: number, ops: Uint8Array): void {
     this.writeOpstreamCommand(CMD_REPLACE, nodeId, ops);
+  }
+
+  /** Replace a node's child list (root-wrapped `ops`) while keeping the node. */
+  setChildrenOpstream(nodeId: number, ops: Uint8Array): void {
+    this.writeOpstreamCommand(CMD_SET_CHILDREN, nodeId, ops);
   }
 
   insertBeforeOpstream(nodeId: number, ops: Uint8Array): void {
@@ -201,89 +204,38 @@ export class CommandBuffer {
   }
 
   private writeOpstreamCommand(cmd: number, nodeId: number, ops: Uint8Array): void {
-    this.ensureCapacity(10 + ops.length);
-    this.writeU8(cmd);
-    this.writeU32(nodeId);
-    this.writeU8(PAYLOAD_OPSTREAM);
-    this.writeU32(ops.length);
-    this.writeBytes(ops);
+    const w = this.#w;
+    w.ensure(10 + ops.length);
+    w.u8(cmd);
+    w.u32(nodeId);
+    w.u8(PAYLOAD_OPSTREAM);
+    w.u32(ops.length);
+    w.bytes(ops);
   }
 
   /** Return a Uint8Array view of the written bytes (no copy). */
   getBuffer(): Uint8Array {
-    return new Uint8Array(this.buffer, 0, this.offset);
+    return this.#w.take();
   }
 
   /** Number of bytes written so far. */
   get length(): number {
-    return this.offset;
+    return this.#w.length;
   }
 
-  /** Reset the buffer for reuse, releasing the old ArrayBuffer. */
+  /** Reset for reuse, releasing the old buffer (handed-out views stay intact). */
   reset(): void {
-    this.buffer = new ArrayBuffer(INITIAL_SIZE);
-    this.view = new DataView(this.buffer);
-    this.bytes = new Uint8Array(this.buffer);
-    this.offset = 0;
+    this.#w = new ByteWriter(INITIAL_SIZE);
   }
 
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {
     const v = node as Record<string, unknown>;
     if (typeof v.raw === "string") {
-      const encoded = encoder.encode(v.raw as string);
-      this.ensureCapacity(10 + encoded.length); // 1(cmd) + 4(nodeId) + 1(payloadType) + 4(len) + payload
-      this.writeU8(cmd);
-      this.writeU32(nodeId);
-      this.writeU8(PAYLOAD_RAW_MARKDOWN);
-      this.writeU32(encoded.length);
-      this.writeBytes(encoded);
+      this.writePayloadCommand(cmd, nodeId, PAYLOAD_RAW_MARKDOWN, v.raw as string);
     } else if (typeof v.rawHtml === "string") {
-      const encoded = encoder.encode(v.rawHtml as string);
-      this.ensureCapacity(10 + encoded.length);
-      this.writeU8(cmd);
-      this.writeU32(nodeId);
-      this.writeU8(PAYLOAD_RAW_HTML);
-      this.writeU32(encoded.length);
-      this.writeBytes(encoded);
+      this.writePayloadCommand(cmd, nodeId, PAYLOAD_RAW_HTML, v.rawHtml as string);
     } else {
-      // Structured node, serialize as JSON
-      const json = JSON.stringify(node);
-      const encoded = encoder.encode(json);
-      this.ensureCapacity(10 + encoded.length);
-      this.writeU8(cmd);
-      this.writeU32(nodeId);
-      this.writeU8(PAYLOAD_SERDE_JSON);
-      this.writeU32(encoded.length);
-      this.writeBytes(encoded);
+      this.writePayloadCommand(cmd, nodeId, PAYLOAD_SERDE_JSON, JSON.stringify(node));
     }
-  }
-
-  private ensureCapacity(needed: number): void {
-    while (this.offset + needed > this.buffer.byteLength) {
-      this.grow();
-    }
-  }
-
-  private grow(): void {
-    const newBuffer = new ArrayBuffer(this.buffer.byteLength * 2);
-    new Uint8Array(newBuffer).set(this.bytes);
-    this.buffer = newBuffer;
-    this.view = new DataView(this.buffer);
-    this.bytes = new Uint8Array(this.buffer);
-  }
-
-  private writeU8(val: number): void {
-    this.view.setUint8(this.offset, val);
-    this.offset += 1;
-  }
-
-  private writeU32(val: number): void {
-    this.view.setUint32(this.offset, val, true);
-    this.offset += 4;
-  }
-
-  private writeBytes(data: Uint8Array): void {
-    this.bytes.set(data, this.offset);
-    this.offset += data.length;
   }
 }

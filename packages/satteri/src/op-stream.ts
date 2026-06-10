@@ -2,206 +2,160 @@
  * Low-level op-stream writer shared by the MDAST/HAST declarative compilers.
  *
  * Emits the compact OPEN/CLOSE/field/REF/KEEP_CHILDREN/PROP stream that Rust
- * replays straight into the arena (see js_commands.rs `OP_*` / `OF_*`). The
- * replay drives the SAME arena encoders the JSON path uses, so a compiled tree
- * is byte-identical to its JSON form — it just skips the JSON + JsNode hop.
- * Short strings take an inline char-code path; longer ones use `encodeInto`
- * (native, no allocation, no per-char JS loop).
+ * replays straight into the arena (`replay_opstream` in js_commands.rs; byte
+ * values in generated/wire-constants.ts). The replay drives the SAME arena
+ * encoders the JSON path uses, so a compiled tree is byte-identical to its
+ * JSON form — it just skips the JSON + JsNode hop. Strings ride ByteWriter's
+ * zero-alloc path (inline char codes when short ASCII, `encodeInto`
+ * otherwise).
  */
 
-// Op codes (must match js_commands.rs OP_*).
-const OP_OPEN = 0x01;
-const OP_CLOSE = 0x02;
-const OP_REF = 0x03;
-const OP_KEEP_CHILDREN = 0x04;
-const OP_STR = 0x05;
-const OP_U8 = 0x06;
-const OP_U32 = 0x07;
-const OP_BOOL = 0x08;
-const OP_DATA = 0x09;
-const OP_PROP = 0x0a;
-const OP_ALIGN = 0x0b;
+import { ByteWriter } from "./byte-writer.js";
+import {
+  OP_OPEN,
+  OP_CLOSE,
+  OP_REF,
+  OP_KEEP_CHILDREN,
+  OP_STR,
+  OP_U8,
+  OP_U32,
+  OP_BOOL,
+  OP_DATA,
+  OP_PROP,
+  OP_ALIGN,
+  MDX_ATTR_BOOLEAN_PROP,
+  MDX_ATTR_LITERAL_PROP,
+  MDX_ATTR_EXPRESSION_PROP,
+  MDX_ATTR_SPREAD,
+} from "./generated/wire-constants.js";
 
-// Field ids (must match js_commands.rs OF_*).
-export const OF_VALUE = 0;
-export const OF_URL = 1;
-export const OF_TITLE = 2;
-export const OF_ALT = 3;
-export const OF_LANG = 4;
-export const OF_META = 5;
-export const OF_IDENTIFIER = 6;
-export const OF_LABEL = 7;
-export const OF_NAME = 8;
-export const OF_REFERENCE_TYPE = 9;
-export const OF_DEPTH = 10;
-export const OF_CHECKED = 11;
-export const OF_START = 12;
-export const OF_ORDERED = 13;
-export const OF_SPREAD = 14;
-export const OF_TAGNAME = 15;
-export const OF_EXPLICIT = 16;
-
-// Property value kinds (must match shared::PROP_*).
-export const PROP_STRING = 0;
-export const PROP_BOOL_TRUE = 1;
-export const PROP_BOOL_FALSE = 2;
-export const PROP_SPACE_SEP = 3;
-export const PROP_COMMA_SEP = 4;
-export const PROP_INT = 5;
-export const PROP_NULL = 6;
-
-// MDX JSX attribute kinds (must match shared::MDX_ATTR_*).
-export const MDX_ATTR_BOOLEAN_PROP = 0;
-export const MDX_ATTR_LITERAL_PROP = 1;
-export const MDX_ATTR_EXPRESSION_PROP = 2;
-export const MDX_ATTR_SPREAD = 3;
-
-const encoder = new TextEncoder();
-
-/** Below this length the inline char-code copy beats `encodeInto`'s call
- *  overhead; above it the native bulk path wins (and skips the ASCII scan). */
-const INLINE_STR_MAX = 32;
+// Re-exported so visitors/readers keep importing wire constants from here.
+export {
+  OF_VALUE,
+  OF_URL,
+  OF_TITLE,
+  OF_ALT,
+  OF_LANG,
+  OF_META,
+  OF_IDENTIFIER,
+  OF_LABEL,
+  OF_NAME,
+  OF_REFERENCE_TYPE,
+  OF_DEPTH,
+  OF_CHECKED,
+  OF_START,
+  OF_ORDERED,
+  OF_SPREAD,
+  OF_TAGNAME,
+  OF_EXPLICIT,
+  PROP_STRING,
+  PROP_BOOL_TRUE,
+  PROP_BOOL_FALSE,
+  PROP_SPACE_SEP,
+  PROP_COMMA_SEP,
+  PROP_INT,
+  PROP_NULL,
+  MDX_ATTR_BOOLEAN_PROP,
+  MDX_ATTR_LITERAL_PROP,
+  MDX_ATTR_EXPRESSION_PROP,
+  MDX_ATTR_SPREAD,
+} from "./generated/wire-constants.js";
 
 export class OpWriter {
-  #buf = new Uint8Array(512);
-  #n = 0;
+  readonly #w = new ByteWriter(512);
 
   /** Reset for reuse; the grown buffer is retained so steady state is alloc-free. */
   reset(): void {
-    this.#n = 0;
+    this.#w.reset();
   }
 
   /** The op-stream written so far (valid until the next reset). */
   take(): Uint8Array {
-    return this.#buf.subarray(0, this.#n);
-  }
-
-  #ensure(k: number): void {
-    if (this.#n + k <= this.#buf.length) return;
-    let size = this.#buf.length * 2;
-    while (this.#n + k > size) size *= 2;
-    const grown = new Uint8Array(size);
-    grown.set(this.#buf);
-    this.#buf = grown;
-  }
-
-  #u32at(v: number): void {
-    this.#buf[this.#n++] = v & 255;
-    this.#buf[this.#n++] = (v >> 8) & 255;
-    this.#buf[this.#n++] = (v >> 16) & 255;
-    this.#buf[this.#n++] = (v >>> 24) & 255;
-  }
-
-  #string(s: string): void {
-    const len = s.length;
-    this.#ensure(4 + len * 3); // worst-case UTF-8 is 3 bytes per UTF-16 unit
-
-    // Short strings: inline char copy (cheaper than a native call), guarded by a
-    // quick ASCII scan. Anything longer — or non-ASCII — goes to encodeInto.
-    if (len <= INLINE_STR_MAX) {
-      let ascii = true;
-      for (let i = 0; i < len; i++) {
-        if (s.charCodeAt(i) > 127) {
-          ascii = false;
-          break;
-        }
-      }
-      if (ascii) {
-        this.#u32at(len);
-        const buf = this.#buf;
-        const n = this.#n;
-        for (let i = 0; i < len; i++) buf[n + i] = s.charCodeAt(i);
-        this.#n = n + len;
-        return;
-      }
-    }
-
-    // Bulk path: encodeInto writes UTF-8 straight into the buffer (no alloc, no
-    // per-char loop); backpatch the byte length once it's known.
-    const lenPos = this.#n;
-    this.#n += 4;
-    const written = encoder.encodeInto(s, this.#buf.subarray(this.#n)).written;
-    this.#buf[lenPos] = written & 255;
-    this.#buf[lenPos + 1] = (written >> 8) & 255;
-    this.#buf[lenPos + 2] = (written >> 16) & 255;
-    this.#buf[lenPos + 3] = (written >>> 24) & 255;
-    this.#n += written;
+    return this.#w.take();
   }
 
   open(type: number): void {
-    this.#ensure(2);
-    this.#buf[this.#n++] = OP_OPEN;
-    this.#buf[this.#n++] = type;
+    const w = this.#w;
+    w.ensure(2);
+    w.u8(OP_OPEN);
+    w.u8(type);
   }
 
   close(): void {
-    this.#ensure(1);
-    this.#buf[this.#n++] = OP_CLOSE;
+    const w = this.#w;
+    w.ensure(1);
+    w.u8(OP_CLOSE);
   }
 
   str(field: number, s: string): void {
-    this.#ensure(2);
-    this.#buf[this.#n++] = OP_STR;
-    this.#buf[this.#n++] = field;
-    this.#string(s);
+    const w = this.#w;
+    w.ensure(2);
+    w.u8(OP_STR);
+    w.u8(field);
+    w.utf8WithU32Len(s);
   }
 
   u8(field: number, v: number): void {
-    this.#ensure(3);
-    this.#buf[this.#n++] = OP_U8;
-    this.#buf[this.#n++] = field;
-    this.#buf[this.#n++] = v & 255;
+    const w = this.#w;
+    w.ensure(3);
+    w.u8(OP_U8);
+    w.u8(field);
+    w.u8(v);
   }
 
   u32(field: number, v: number): void {
-    this.#ensure(6);
-    this.#buf[this.#n++] = OP_U32;
-    this.#buf[this.#n++] = field;
-    this.#u32at(v);
+    const w = this.#w;
+    w.ensure(6);
+    w.u8(OP_U32);
+    w.u8(field);
+    w.u32(v);
   }
 
   bool(field: number, v: boolean): void {
-    this.#ensure(3);
-    this.#buf[this.#n++] = OP_BOOL;
-    this.#buf[this.#n++] = field;
-    this.#buf[this.#n++] = v ? 1 : 0;
+    const w = this.#w;
+    w.ensure(3);
+    w.u8(OP_BOOL);
+    w.u8(field);
+    w.u8(v ? 1 : 0);
   }
 
   data(value: unknown): void {
-    const bytes = encoder.encode(JSON.stringify(value));
-    this.#ensure(5 + bytes.length);
-    this.#buf[this.#n++] = OP_DATA;
-    this.#u32at(bytes.length);
-    this.#buf.set(bytes, this.#n);
-    this.#n += bytes.length;
+    const w = this.#w;
+    w.ensure(1);
+    w.u8(OP_DATA);
+    w.utf8WithU32Len(JSON.stringify(value));
   }
 
   prop(name: string, kind: number, value: string): void {
-    this.#ensure(1);
-    this.#buf[this.#n++] = OP_PROP;
-    this.#string(name);
-    this.#ensure(1);
-    this.#buf[this.#n++] = kind;
-    this.#string(value);
+    const w = this.#w;
+    w.ensure(1);
+    w.u8(OP_PROP);
+    w.utf8WithU32Len(name);
+    w.ensure(1);
+    w.u8(kind);
+    w.utf8WithU32Len(value);
   }
 
   ref(id: number): void {
-    this.#ensure(5);
-    this.#buf[this.#n++] = OP_REF;
-    this.#u32at(id);
+    const w = this.#w;
+    w.ensure(5);
+    w.u8(OP_REF);
+    w.u32(id);
   }
 
   /** Table column-alignment codes (0=none, 1=left, 2=right, 3=center). */
   align(codes: readonly number[]): void {
-    this.#ensure(5 + codes.length);
-    this.#buf[this.#n++] = OP_ALIGN;
-    this.#u32at(codes.length);
-    for (let i = 0; i < codes.length; i++) this.#buf[this.#n++] = codes[i]! & 255;
+    const w = this.#w;
+    w.ensure(5 + codes.length);
+    w.u8(OP_ALIGN);
+    w.u32(codes.length);
+    for (let i = 0; i < codes.length; i++) w.u8(codes[i]!);
   }
 
   keepChildren(): void {
-    this.#ensure(1);
-    this.#buf[this.#n++] = OP_KEEP_CHILDREN;
+    const w = this.#w;
+    w.ensure(1);
+    w.u8(OP_KEEP_CHILDREN);
   }
 }
 

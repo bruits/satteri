@@ -128,6 +128,8 @@ pub enum CommandError {
     /// A patch's anchor lives inside a subtree whose root was removed, so
     /// the patch can never apply.
     PatchOnRemovedSubtree(u32),
+    /// An op-stream contained more `OP_CLOSE` ops than `OP_OPEN`s.
+    UnbalancedOpstream,
 }
 
 impl std::fmt::Display for CommandError {
@@ -148,6 +150,9 @@ impl std::fmt::Display for CommandError {
             ),
             Self::WrapOnRemovedNode(id) => {
                 write!(f, "wrapNode targets node {id} which is also removed")
+            }
+            Self::UnbalancedOpstream => {
+                write!(f, "unbalanced op-stream: CLOSE without a matching OPEN")
             }
             Self::ChildPatchOnRemovedNode(id) => write!(
                 f,

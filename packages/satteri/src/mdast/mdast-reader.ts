@@ -1,105 +1,10 @@
 import type { MdastNodeRaw, BufferHeader, StringRefRaw, MdxJsxAttributeUnion } from "../types.js";
 import { restorePhantomSpaces } from "../phantom.js";
+import { readPosition } from "./wire-read.js";
+import { NodeTypeName } from "./generated/node-types.js";
+import { ARENA_MAGIC, KIND_MDAST, FIELD, HEADER } from "../generated/arena-layout.js";
 
-// Node type discriminant values (must match NodeType enum in node.rs)
-export const NodeType = Object.freeze({
-  Root: 0,
-  Paragraph: 1,
-  Heading: 2,
-  ThematicBreak: 3,
-  Blockquote: 4,
-  List: 5,
-  ListItem: 6,
-  Html: 7,
-  Code: 8,
-  Definition: 9,
-  Text: 10,
-  Emphasis: 11,
-  Strong: 12,
-  InlineCode: 13,
-  Break: 14,
-  Link: 15,
-  Image: 16,
-  LinkReference: 17,
-  ImageReference: 18,
-  FootnoteDefinition: 19,
-  FootnoteReference: 20,
-  Table: 21,
-  TableRow: 22,
-  TableCell: 23,
-  Delete: 24,
-  Yaml: 25,
-  Toml: 26,
-  Math: 27,
-  InlineMath: 28,
-  // Directives
-  ContainerDirective: 30,
-  LeafDirective: 31,
-  TextDirective: 32,
-  // MDX
-  MdxJsxFlowElement: 100,
-  MdxJsxTextElement: 101,
-  MdxFlowExpression: 102,
-  MdxTextExpression: 103,
-  MdxjsEsm: 104,
-} as const);
-
-type NodeTypeValue = (typeof NodeType)[keyof typeof NodeType];
-
-// Reverse map: number → string name
-export const NodeTypeName: Record<number, string> = Object.fromEntries(
-  Object.entries(NodeType).map(([k, v]) => [v, k]),
-);
-
-// MdastNode field offsets within NODE_STRUCT_SIZE bytes.
-// Must match MdastNode #[repr(C)] layout in node.rs:
-//   id: u32          @ 0
-//   node_type: u8    @ 4
-//   _pad: [u8; 3]    @ 5
-//   parent: u32      @ 8
-//   start_offset: u32 @ 12
-//   end_offset: u32  @ 16
-//   start_line: u32  @ 20
-//   start_column: u32 @ 24
-//   end_line: u32    @ 28
-//   end_column: u32  @ 32
-//   children_start: u32 @ 36
-//   children_count: u32 @ 40
-//   data_offset: u32 @ 44
-//   data_len: u32    @ 48
-//   Total: 52 bytes
-const FIELD = {
-  id: 0,
-  node_type: 4, // u8
-  parent: 8,
-  start_offset: 12,
-  end_offset: 16,
-  start_line: 20,
-  start_column: 24,
-  end_line: 28,
-  end_column: 32,
-  children_start: 36,
-  children_count: 40,
-  data_offset: 44,
-  data_len: 48,
-} as const;
-
-// BufferHeader field offsets (all u32, little-endian):
-//   magic: [u8; 4]        @ 0
-//   kind: u32              @ 4   (1 = mdast, 2 = hast)
-//   node_struct_size: u32  @ 8
-//   node_count: u32        @ 12
-//   nodes_offset: u32      @ 16
-//   children_count: u32    @ 20
-//   children_offset: u32   @ 24
-//   type_data_len: u32     @ 28
-//   type_data_offset: u32  @ 32
-//   source_len: u32        @ 36
-//   source_offset: u32     @ 40
-//   Total: 44 bytes
-
-const MAGIC = 0x5241444d; // "MDAR" bytes [0x4d,0x44,0x41,0x52] read as little-endian u32
-const KIND_MDAST = 1;
+export { NodeType, NodeTypeName } from "./generated/node-types.js";
 
 export class MdastReader {
   readonly #view: DataView;
@@ -119,13 +24,13 @@ export class MdastReader {
 
   #readHeader(): BufferHeader {
     const v = this.#view;
-    const magic = v.getUint32(0, true);
-    if (magic !== MAGIC) {
+    const magic = v.getUint32(HEADER.magic, true);
+    if (magic !== ARENA_MAGIC) {
       throw new Error(
-        `Invalid buffer: bad magic 0x${magic.toString(16)}, expected 0x${MAGIC.toString(16)}`,
+        `Invalid buffer: bad magic 0x${magic.toString(16)}, expected 0x${ARENA_MAGIC.toString(16)}`,
       );
     }
-    const kind = v.getUint32(4, true);
+    const kind = v.getUint32(HEADER.kind, true);
     if (kind !== KIND_MDAST) {
       throw new Error(
         `MdastReader was handed a buffer of kind ${kind} (expected ${KIND_MDAST}). ` +
@@ -133,17 +38,17 @@ export class MdastReader {
       );
     }
     return {
-      nodeStructSize: v.getUint32(8, true),
-      nodeCount: v.getUint32(12, true),
-      nodesOffset: v.getUint32(16, true),
-      childrenCount: v.getUint32(20, true),
-      childrenOffset: v.getUint32(24, true),
-      typeDataLen: v.getUint32(28, true),
-      typeDataOffset: v.getUint32(32, true),
-      sourceLen: v.getUint32(36, true),
-      sourceOffset: v.getUint32(40, true),
-      nodeDataCount: v.getUint32(44, true),
-      nodeDataOffset: v.getUint32(48, true),
+      nodeStructSize: v.getUint32(HEADER.node_struct_size, true),
+      nodeCount: v.getUint32(HEADER.node_count, true),
+      nodesOffset: v.getUint32(HEADER.nodes_offset, true),
+      childrenCount: v.getUint32(HEADER.children_count, true),
+      childrenOffset: v.getUint32(HEADER.children_offset, true),
+      typeDataLen: v.getUint32(HEADER.type_data_len, true),
+      typeDataOffset: v.getUint32(HEADER.type_data_offset, true),
+      sourceLen: v.getUint32(HEADER.source_len, true),
+      sourceOffset: v.getUint32(HEADER.source_offset, true),
+      nodeDataCount: v.getUint32(HEADER.node_data_count, true),
+      nodeDataOffset: v.getUint32(HEADER.node_data_offset, true),
     };
   }
 
@@ -210,26 +115,7 @@ export class MdastReader {
     const base = nodesOffset + nodeId * nodeStructSize;
     const v = this.#view;
     const type = v.getUint8(base + FIELD.node_type);
-    const startLine = v.getUint32(base + FIELD.start_line, true);
-    const startOffset = v.getUint32(base + FIELD.start_offset, true);
-    // Sentinel: nodes with both line=0 and offset=0 are synthesized
-    // without source position (e.g. GFM autolink-literal nodes that
-    // remark-gfm produces via mdast-util-find-and-replace).
-    const position =
-      startLine === 0 && startOffset === 0
-        ? undefined
-        : {
-            start: {
-              offset: startOffset,
-              line: startLine,
-              column: v.getUint32(base + FIELD.start_column, true),
-            },
-            end: {
-              offset: v.getUint32(base + FIELD.end_offset, true),
-              line: v.getUint32(base + FIELD.end_line, true),
-              column: v.getUint32(base + FIELD.end_column, true),
-            },
-          };
+    const position = readPosition(v, base + FIELD.start_offset);
     return {
       id: v.getUint32(base + FIELD.id, true),
       type,
@@ -250,13 +136,15 @@ export class MdastReader {
   }
 
   getChildIds(nodeId: number): number[] {
-    const node = this.getNode(nodeId);
-    if (node.childrenCount === 0) return [];
-    const { childrenOffset } = this.#header;
+    const { nodesOffset, nodeStructSize, childrenOffset } = this.#header;
+    const base = nodesOffset + nodeId * nodeStructSize;
+    const v = this.#view;
+    const childrenStart = v.getUint32(base + FIELD.children_start, true);
+    const childrenCount = v.getUint32(base + FIELD.children_count, true);
+    if (childrenCount === 0) return [];
     const ids: number[] = [];
-    for (let i = 0; i < node.childrenCount; i++) {
-      const off = childrenOffset + (node.childrenStart + i) * 4;
-      ids.push(this.#view.getUint32(off, true));
+    for (let i = 0; i < childrenCount; i++) {
+      ids.push(v.getUint32(childrenOffset + (childrenStart + i) * 4, true));
     }
     return ids;
   }
@@ -275,13 +163,15 @@ export class MdastReader {
   }
 
   getTypeData(nodeId: number): Uint8Array {
-    const node = this.getNode(nodeId);
-    if (node.dataLen === 0) return new Uint8Array(0);
-    const { typeDataOffset } = this.#header;
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    const v = this.#view;
+    const dataOffset = v.getUint32(base + FIELD.data_offset, true);
+    const dataLen = v.getUint32(base + FIELD.data_len, true);
+    if (dataLen === 0) return new Uint8Array(0);
     return new Uint8Array(
-      this.#view.buffer,
-      this.#view.byteOffset + typeDataOffset + node.dataOffset,
-      node.dataLen,
+      v.buffer,
+      v.byteOffset + this.#header.typeDataOffset + dataOffset,
+      dataLen,
     );
   }
 

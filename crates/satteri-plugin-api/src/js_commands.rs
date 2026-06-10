@@ -5,33 +5,13 @@
 //!
 //! ## Wire format
 //!
-//! All multi-byte integers are **little-endian**.
-//!
-//! Commands (first byte):
-//!   0x01  REMOVE           [nodeId: u32]
-//!   0x05  INSERT_BEFORE    [nodeId: u32][payloadType: u8][payload...]
-//!   0x06  INSERT_AFTER     [nodeId: u32][payloadType: u8][payload...]
-//!   0x07  PREPEND_CHILD    [nodeId: u32][payloadType: u8][payload...]
-//!   0x08  APPEND_CHILD     [nodeId: u32][payloadType: u8][payload...]
-//!   0x09  WRAP             [nodeId: u32][payloadType: u8][payload...]
-//!   0x0B  REPLACE          [nodeId: u32][payloadType: u8][payload...]
-//!   0x0C  SET_PROPERTY     [nodeId: u32][valueType: u8][nameLen: u32][name...][valueLen: u32][value...]
-//!   0x0D  SET_CHILDREN     [nodeId: u32][payloadType: u8][payload...] (payload is a Root-wrapped child list)
-//!
-//! Value types for SET_PROPERTY (must match `shared::PROP_*` and the JS
-//! `command-buffer.ts` constants):
-//!   0  STRING     : UTF-8 value
-//!   1  BOOL_TRUE  : no value bytes
-//!   2  BOOL_FALSE : no value bytes
-//!   3  SPACE_SEP  : space-separated list (UTF-8)
-//!   4  COMMA_SEP  : comma-separated list (UTF-8)
-//!   5  INT        : value is decimal string, parsed to i64
-//!   6  NULL       : no value bytes
-//!
-//! Payload types:
-//!   0x10  RAW_MARKDOWN     [len: u32][utf8...]
-//!   0x11  RAW_HTML         [len: u32][utf8...]
-//!   0x12  SERDE_JSON       [len: u32][utf8...]
+//! All multi-byte integers are **little-endian**. A command is one `CMD_*`
+//! byte plus `[nodeId: u32]`; structural commands then carry a
+//! `[payloadType: u8][len: u32][payload…]` sub-tree. The command, payload,
+//! op-stream, and property-kind byte values (with their operand layouts) are
+//! declared once in `satteri-layout-codegen/src/schema.rs` and generated into
+//! `generated/wire_constants.rs` here and
+//! `packages/satteri/src/generated/wire-constants.ts` on the JS side.
 //!
 //! The MDAST and HAST command paths are deliberately separate functions
 //! (`apply_mdast_commands`, `apply_hast_commands`). Numeric `node_type`
@@ -42,6 +22,7 @@
 
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
 use satteri_ast::commands::{CommandError, JsNode};
+use satteri_ast::hast::codec::encode_element_data;
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
@@ -49,61 +30,12 @@ use satteri_ast::rebuild::{Patch, REF_NODE_TYPE};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::encode_js_jsx_attrs;
 #[cfg(feature = "mdx")]
-use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_SPREAD};
+use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP, PROP_STRING,
 };
 
-// Must match packages/satteri/src/command-buffer.ts
-const CMD_REMOVE: u8 = 0x01;
-const CMD_INSERT_BEFORE: u8 = 0x05;
-const CMD_INSERT_AFTER: u8 = 0x06;
-const CMD_PREPEND_CHILD: u8 = 0x07;
-const CMD_APPEND_CHILD: u8 = 0x08;
-const CMD_WRAP: u8 = 0x09;
-const CMD_REPLACE: u8 = 0x0B;
-const CMD_SET_PROPERTY: u8 = 0x0C;
-const CMD_SET_CHILDREN: u8 = 0x0D;
-
-const PAYLOAD_RAW_MARKDOWN: u8 = 0x10;
-const PAYLOAD_RAW_HTML: u8 = 0x11;
-const PAYLOAD_SERDE_JSON: u8 = 0x12;
-/// Imperative-builder op-stream: a serialized ArenaBuilder program the JS `m`
-/// builder emits, replayed directly into the arena (no `JsNode`). See
-/// `replay_mdast_opstream`.
-const PAYLOAD_OPSTREAM: u8 = 0x14;
-
-// Op-stream op codes (must match the JS `MdastBuilder`).
-const OP_OPEN: u8 = 0x01; // [type: u8]
-const OP_CLOSE: u8 = 0x02;
-const OP_REF: u8 = 0x03; // [id: u32 LE] — splice an existing node
-const OP_KEEP_CHILDREN: u8 = 0x04; // splice the anchor node's original children
-const OP_STR: u8 = 0x05; // [field: u8][len: u32 LE][utf8]
-const OP_U8: u8 = 0x06; // [field: u8][value: u8]
-const OP_U32: u8 = 0x07; // [field: u8][value: u32 LE]
-const OP_BOOL: u8 = 0x08; // [field: u8][0|1]
-const OP_DATA: u8 = 0x09; // [len: u32 LE][json utf8]
-const OP_PROP: u8 = 0x0a; // [name str][kind: u8][value str] — HAST element property
-const OP_ALIGN: u8 = 0x0b; // [len: u32 LE][ColumnAlign bytes] — table column alignment
-
-// Op-stream field ids (single namespace across OP_STR/OP_U8/OP_U32/OP_BOOL).
-pub(crate) const OF_VALUE: u8 = 0;
-pub(crate) const OF_URL: u8 = 1;
-pub(crate) const OF_TITLE: u8 = 2;
-pub(crate) const OF_ALT: u8 = 3;
-pub(crate) const OF_LANG: u8 = 4;
-pub(crate) const OF_META: u8 = 5;
-pub(crate) const OF_IDENTIFIER: u8 = 6;
-pub(crate) const OF_LABEL: u8 = 7;
-const OF_NAME: u8 = 8; // directive / MDX JSX element name
-pub(crate) const OF_REFERENCE_TYPE: u8 = 9;
-const OF_DEPTH: u8 = 10;
-const OF_CHECKED: u8 = 11;
-const OF_START: u8 = 12;
-const OF_ORDERED: u8 = 13;
-const OF_SPREAD: u8 = 14;
-const OF_TAGNAME: u8 = 15; // HAST element tag name
-const OF_EXPLICIT: u8 = 16; // MDX JSX `_mdxExplicitJsx` flag
+use crate::generated::wire_constants::*;
 
 // MDAST field IDs: internal to the set_string_ref / resolve_mdast_field dispatch
 const FIELD_DEPTH: u16 = 0x0001;
@@ -557,15 +489,18 @@ fn write_js_node_data<K: ArenaKind>(
 
 // Generated per-type arena encoders, driven by the node registry. See
 // `crates/satteri-layout-codegen`.
-use crate::generated::encode::{encode_mdast_type_data, encode_mdast_type_data_from_ops};
+use crate::generated::encode::{
+    encode_mdast_type_data, encode_mdast_type_data_from_ops, MAX_FIXED_TYPE_DATA,
+};
 
 fn encode_js_node_data(
     js_node: &JsNode,
     node_type: MdastNodeType,
     builder: &mut ArenaBuilder<Mdast>,
 ) -> Vec<u8> {
-    if let Some(type_data) = encode_mdast_type_data(js_node, node_type as u8, builder) {
-        return type_data;
+    let mut fixed = [0u8; MAX_FIXED_TYPE_DATA];
+    if let Some(len) = encode_mdast_type_data(js_node, node_type as u8, builder, &mut fixed) {
+        return fixed[..len].to_vec();
     }
     match node_type {
         MdastNodeType::List => {
@@ -620,15 +555,6 @@ fn encode_js_directive_attrs(
             Some((builder.alloc_string(k), builder.alloc_string(val)))
         })
         .collect()
-}
-
-/// Map an mdast `referenceType` to the arena reference-kind byte (shortcut = 0).
-pub(crate) fn reference_kind(reference_type: Option<&str>) -> u8 {
-    match reference_type {
-        Some("collapsed") => 1,
-        Some("full") => 2,
-        _ => 0,
-    }
 }
 
 /// Map an mdast table `align` array to arena [`ColumnAlign`] bytes.
@@ -733,10 +659,14 @@ fn apply_hast_set_property(
     }
 }
 
-/// Upsert a single attribute on an MDX JSX flow/text element, mirroring the
-/// in-place attribute write that HAST elements get via
-/// [`apply_hast_element_property`]. Avoids re-serializing the whole node (and
-/// materializing its children) just to change one attribute.
+/// Upsert a single attribute on an MDX JSX flow/text element. Avoids
+/// re-serializing the whole node (and materializing its children) just to
+/// change one attribute.
+///
+/// Any existing named attribute (boolean, literal, or expression-valued) with
+/// the same name is removed and the new attribute appended at the end, so the
+/// write wins over earlier spreads — the same ordering as the JS fold path.
+/// Only spreads are never matched: they have no name.
 ///
 /// Value-type mapping (matches the JS fold path this replaces):
 ///   bool-true / null -> boolean attribute (no value)
@@ -754,61 +684,35 @@ fn apply_hast_mdx_jsx_attribute(
     if old_data.len() < 16 {
         return Err(CommandError::UnexpectedEof);
     }
-    let old_attr_count = u32::from_le_bytes(old_data[8..12].try_into().unwrap()) as usize;
+    let elem_name = decode_mdx_jsx_element_name(&old_data);
+    let explicit = decode_mdx_jsx_explicit(&old_data);
+    let attr_count = decode_mdx_jsx_attr_count(&old_data);
 
     // Map the binary value-type to a JSX attribute (kind, value).
     let (kind, val_ref) = match value_type {
-        PROP_BOOL_TRUE | PROP_NULL => (0u8, StringRef::empty()),
-        PROP_BOOL_FALSE => (1u8, arena.alloc_string("false")),
-        _ if value_str.is_empty() => (1u8, StringRef::empty()),
-        _ => (1u8, arena.alloc_string(value_str)),
+        PROP_BOOL_TRUE | PROP_NULL => (MDX_ATTR_BOOLEAN_PROP, StringRef::empty()),
+        PROP_BOOL_FALSE => (MDX_ATTR_LITERAL_PROP, arena.alloc_string("false")),
+        _ if value_str.is_empty() => (MDX_ATTR_LITERAL_PROP, StringRef::empty()),
+        _ => (MDX_ATTR_LITERAL_PROP, arena.alloc_string(value_str)),
     };
-    let name_ref = arena.alloc_string(attr_name);
 
-    // Find an existing boolean/literal attribute with the same name. Expression
-    // and spread attributes have no comparable name, so they're skipped.
-    let mut found_index: Option<usize> = None;
-    for i in 0..old_attr_count {
-        let base = 16 + i * 20;
-        let existing_kind = old_data[base];
-        if existing_kind != 0 && existing_kind != 1 {
+    let mut attrs: Vec<(u8, StringRef, StringRef)> = Vec::with_capacity(attr_count as usize + 1);
+    let mut name_ref: Option<StringRef> = None;
+    for i in 0..attr_count {
+        let (existing_kind, existing_name, existing_value) = decode_mdx_jsx_attr(&old_data, i);
+        if existing_kind != MDX_ATTR_SPREAD && arena.get_str(existing_name) == attr_name {
+            name_ref = Some(existing_name);
             continue;
         }
-        let name_off = u32::from_le_bytes(old_data[base + 4..base + 8].try_into().unwrap());
-        let name_len = u32::from_le_bytes(old_data[base + 8..base + 12].try_into().unwrap());
-        if arena.get_str(StringRef::new(name_off, name_len)) == attr_name {
-            found_index = Some(i);
-            break;
-        }
+        attrs.push((existing_kind, existing_name, existing_value));
     }
+    let name_ref = name_ref.unwrap_or_else(|| arena.alloc_string(attr_name));
+    attrs.push((kind, name_ref, val_ref));
 
-    let write_attr = |buf: &mut [u8], base: usize| {
-        buf[base] = kind;
-        buf[base + 1..base + 4].copy_from_slice(&[0u8; 3]);
-        buf[base + 4..base + 8].copy_from_slice(&name_ref.offset.to_le_bytes());
-        buf[base + 8..base + 12].copy_from_slice(&name_ref.len.to_le_bytes());
-        buf[base + 12..base + 16].copy_from_slice(&val_ref.offset.to_le_bytes());
-        buf[base + 16..base + 20].copy_from_slice(&val_ref.len.to_le_bytes());
-    };
-
-    if let Some(idx) = found_index {
-        let mut new_data = old_data;
-        write_attr(&mut new_data, 16 + idx * 20);
-        arena.set_type_data(node_id, &new_data);
-    } else {
-        let new_count = (old_attr_count + 1) as u32;
-        let mut new_data = Vec::with_capacity(16 + new_count as usize * 20);
-        new_data.extend_from_slice(&old_data[0..8]); // name StringRef
-        new_data.extend_from_slice(&new_count.to_le_bytes());
-        new_data.extend_from_slice(&0u32.to_le_bytes()); // pad
-        if old_attr_count > 0 {
-            new_data.extend_from_slice(&old_data[16..16 + old_attr_count * 20]);
-        }
-        new_data.resize(16 + new_count as usize * 20, 0);
-        write_attr(&mut new_data, 16 + old_attr_count * 20);
-        arena.set_type_data(node_id, &new_data);
-    }
-
+    arena.set_type_data(
+        node_id,
+        &encode_mdx_jsx_element_data(elem_name, &attrs, explicit),
+    );
     Ok(())
 }
 
@@ -1038,6 +942,156 @@ fn encode_hast_js_node_data(
 // after its OPEN and flushed into its type_data the moment the next op needs the
 // node finalized (a child OPEN, a CLOSE, or a spliced REF/KEEP_CHILDREN).
 
+/// Per-kind hooks for [`replay_opstream`]. `Kind` ties a collector to one
+/// arena flavor, so a cross-kind replay stays a compile error (see the module
+/// header on why MDAST/HAST must not share a dispatcher).
+trait OpCollector<'a>: Sized {
+    type Kind: ArenaKind;
+    /// Whether `OP_U8` / `OP_U32` / `OP_ALIGN` are decoded. When false those
+    /// opcodes fall through to the unknown-command error *without consuming
+    /// operands*, so the reported byte is the opcode itself.
+    const NUMERIC_OPS: bool;
+
+    fn open(node_type: u8) -> Self;
+    fn check_tag(tag: u8) -> Result<(), CommandError>;
+    fn finalize(&mut self, builder: &mut ArenaBuilder<Self::Kind>);
+    fn str_field(&mut self, field: u8, value: &'a str);
+    fn bool_field(&mut self, field: u8, value: bool);
+    fn prop(&mut self, name: &'a str, kind: u8, value: &'a str);
+    fn data(&mut self, bytes: &'a [u8]);
+    fn u8_field(&mut self, _field: u8, _value: u8) {}
+    fn u32_field(&mut self, _field: u8, _value: u32) {}
+    fn align(&mut self, _bytes: &'a [u8]) {}
+}
+
+/// Replay an op-stream into a fresh sub-arena. `orig`/`anchor` resolve
+/// `KEEP_CHILDREN` (splice the replaced node's original children, as refs).
+fn replay_opstream<'a, C: OpCollector<'a>>(
+    ops: &'a [u8],
+    orig: &Arena<C::Kind>,
+    anchor: u32,
+) -> Result<Arena<C::Kind>, CommandError> {
+    let mut builder = ArenaBuilder::<C::Kind>::new(String::new());
+    let mut reader = BufReader::new(ops);
+    let mut stack: Vec<C> = Vec::new();
+
+    while reader.remaining() > 0 {
+        match reader.read_u8()? {
+            OP_OPEN => {
+                if let Some(c) = stack.last_mut() {
+                    c.finalize(&mut builder);
+                }
+                let node_type = reader.read_u8()?;
+                C::check_tag(node_type)?;
+                builder.open_node(node_type);
+                stack.push(C::open(node_type));
+            }
+            OP_CLOSE => {
+                let Some(mut c) = stack.pop() else {
+                    return Err(CommandError::UnbalancedOpstream);
+                };
+                c.finalize(&mut builder);
+                builder.close_node();
+            }
+            OP_REF => {
+                if let Some(c) = stack.last_mut() {
+                    c.finalize(&mut builder);
+                }
+                let id = reader.read_u32()?;
+                emit_ref_node(id, &mut builder);
+            }
+            OP_KEEP_CHILDREN => {
+                if let Some(c) = stack.last_mut() {
+                    c.finalize(&mut builder);
+                }
+                for &child in orig.get_children(anchor) {
+                    emit_ref_node(child, &mut builder);
+                }
+            }
+            OP_STR => {
+                let field = reader.read_u8()?;
+                let len = reader.read_u32()? as usize;
+                let value = reader.read_str(len)?;
+                if let Some(c) = stack.last_mut() {
+                    c.str_field(field, value);
+                }
+            }
+            OP_U8 if C::NUMERIC_OPS => {
+                let field = reader.read_u8()?;
+                let value = reader.read_u8()?;
+                if let Some(c) = stack.last_mut() {
+                    c.u8_field(field, value);
+                }
+            }
+            OP_U32 if C::NUMERIC_OPS => {
+                let field = reader.read_u8()?;
+                let value = reader.read_u32()?;
+                if let Some(c) = stack.last_mut() {
+                    c.u32_field(field, value);
+                }
+            }
+            OP_BOOL => {
+                let field = reader.read_u8()?;
+                let value = reader.read_u8()? != 0;
+                if let Some(c) = stack.last_mut() {
+                    c.bool_field(field, value);
+                }
+            }
+            OP_PROP => {
+                let name_len = reader.read_u32()? as usize;
+                let name = reader.read_str(name_len)?;
+                let kind = reader.read_u8()?;
+                let val_len = reader.read_u32()? as usize;
+                let value = reader.read_str(val_len)?;
+                if let Some(c) = stack.last_mut() {
+                    c.prop(name, kind, value);
+                }
+            }
+            OP_ALIGN if C::NUMERIC_OPS => {
+                let len = reader.read_u32()? as usize;
+                let bytes = reader.read_bytes(len)?;
+                if let Some(c) = stack.last_mut() {
+                    c.align(bytes);
+                }
+            }
+            OP_DATA => {
+                let len = reader.read_u32()? as usize;
+                let bytes = reader.read_bytes(len)?;
+                if let Some(c) = stack.last_mut() {
+                    c.data(bytes);
+                }
+            }
+            other => return Err(CommandError::UnknownCommand(other)),
+        }
+    }
+
+    Ok(builder.finish())
+}
+
+/// Intern MDX-JSX attribute strings into `(kind, name, value)` rows; spreads
+/// carry no name, boolean attrs no value.
+#[cfg(feature = "mdx")]
+fn intern_mdx_jsx_attrs<K: ArenaKind>(
+    props: &[(&str, u8, &str)],
+    builder: &mut ArenaBuilder<K>,
+) -> Vec<(u8, StringRef, StringRef)> {
+    let mut attrs = Vec::with_capacity(props.len());
+    for &(name, kind, value) in props {
+        let nr = if kind == MDX_ATTR_SPREAD {
+            StringRef::empty()
+        } else {
+            builder.alloc_string(name)
+        };
+        let vr = if kind == MDX_ATTR_BOOLEAN_PROP {
+            StringRef::empty()
+        } else {
+            builder.alloc_string(value)
+        };
+        attrs.push((kind, nr, vr));
+    }
+    attrs
+}
+
 /// Accumulates one node's fields between its OPEN and finalization. Strings
 /// borrow the op-stream buffer; they're interned into the arena at finalize.
 #[derive(Default)]
@@ -1066,12 +1120,11 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
     }
     c.finalized = true;
     let s = |i: u8| c.strs[i as usize];
-    let type_data: Vec<u8> = if let Some(td) =
-        encode_mdast_type_data_from_ops(c, c.node_type, builder)
-    {
-        td
+    let mut fixed = [0u8; MAX_FIXED_TYPE_DATA];
+    if let Some(len) = encode_mdast_type_data_from_ops(c, c.node_type, builder, &mut fixed) {
+        builder.set_data_current(&fixed[..len]);
     } else {
-        match c.node_type {
+        let type_data: Vec<u8> = match c.node_type {
             // List: ordered + start + spread
             5 => encode_list_data(
                 c.ordered.unwrap_or(false),
@@ -1094,20 +1147,7 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
             #[cfg(feature = "mdx")]
             100 | 101 => {
                 let name_ref = builder.alloc_string(s(OF_NAME).unwrap_or(""));
-                let mut attrs: Vec<(u8, StringRef, StringRef)> = Vec::with_capacity(c.props.len());
-                for &(name, kind, value) in &c.props {
-                    let nr = if kind == MDX_ATTR_SPREAD {
-                        StringRef::empty()
-                    } else {
-                        builder.alloc_string(name)
-                    };
-                    let vr = if kind == MDX_ATTR_BOOLEAN_PROP {
-                        StringRef::empty()
-                    } else {
-                        builder.alloc_string(value)
-                    };
-                    attrs.push((kind, nr, vr));
-                }
+                let attrs = intern_mdx_jsx_attrs(&c.props, builder);
                 encode_mdx_jsx_element_data(name_ref, &attrs, c.explicit.unwrap_or(false))
             }
             // Container/Leaf/TextDirective: name + string attributes
@@ -1124,10 +1164,10 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
             // Root, Paragraph, ThematicBreak, Blockquote, Emphasis, Strong, Break,
             // TableRow, TableCell, Delete: no type_data.
             _ => Vec::new(),
+        };
+        if !type_data.is_empty() {
+            builder.set_data_current(&type_data);
         }
-    };
-    if !type_data.is_empty() {
-        builder.set_data_current(&type_data);
     }
     if let Some(data) = c.data {
         let id = builder.current_node_id();
@@ -1135,120 +1175,96 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
     }
 }
 
-/// Replay an op-stream into a fresh sub-arena. `orig`/`anchor` resolve
-/// `KEEP_CHILDREN` (splice the replaced node's original children, as refs).
+impl<'a> OpCollector<'a> for FieldCollector<'a> {
+    type Kind = Mdast;
+    const NUMERIC_OPS: bool = true;
+
+    fn open(node_type: u8) -> Self {
+        FieldCollector {
+            node_type,
+            ..Default::default()
+        }
+    }
+
+    /// Reject op-stream tags this build can't construct — unknown bytes
+    /// always, MDX tags without the `mdx` feature — matching the JSON path's
+    /// `name_to_node_type` errors.
+    fn check_tag(tag: u8) -> Result<(), CommandError> {
+        let known = MdastNodeType::from_u8(tag).is_some();
+        #[cfg(not(feature = "mdx"))]
+        let known = known
+            && !matches!(
+                MdastNodeType::from_u8(tag),
+                Some(
+                    MdastNodeType::MdxJsxFlowElement
+                        | MdastNodeType::MdxJsxTextElement
+                        | MdastNodeType::MdxFlowExpression
+                        | MdastNodeType::MdxTextExpression
+                        | MdastNodeType::MdxjsEsm
+                )
+            );
+        if known {
+            Ok(())
+        } else {
+            Err(CommandError::UnknownNodeType(format!(
+                "op-stream tag {tag}"
+            )))
+        }
+    }
+
+    fn finalize(&mut self, builder: &mut ArenaBuilder<Mdast>) {
+        finalize_collector(self, builder);
+    }
+
+    fn str_field(&mut self, field: u8, value: &'a str) {
+        let field = field as usize;
+        if field < self.strs.len() {
+            self.strs[field] = Some(value);
+        }
+    }
+
+    fn bool_field(&mut self, field: u8, value: bool) {
+        match field {
+            OF_ORDERED => self.ordered = Some(value),
+            OF_SPREAD => self.spread = Some(value),
+            OF_EXPLICIT => self.explicit = Some(value),
+            _ => {}
+        }
+    }
+
+    fn prop(&mut self, name: &'a str, kind: u8, value: &'a str) {
+        self.props.push((name, kind, value));
+    }
+
+    fn data(&mut self, bytes: &'a [u8]) {
+        self.data = Some(bytes);
+    }
+
+    fn u8_field(&mut self, field: u8, value: u8) {
+        match field {
+            OF_DEPTH => self.depth = Some(value),
+            OF_CHECKED => self.checked = Some(value),
+            _ => {}
+        }
+    }
+
+    fn u32_field(&mut self, field: u8, value: u32) {
+        if field == OF_START {
+            self.start = Some(value);
+        }
+    }
+
+    fn align(&mut self, bytes: &'a [u8]) {
+        self.align = Some(bytes);
+    }
+}
+
 fn replay_mdast_opstream(
     ops: &[u8],
     orig: &Arena<Mdast>,
     anchor: u32,
 ) -> Result<Arena<Mdast>, CommandError> {
-    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
-    let mut reader = BufReader::new(ops);
-    let mut stack: Vec<FieldCollector<'_>> = Vec::new();
-
-    while reader.remaining() > 0 {
-        match reader.read_u8()? {
-            OP_OPEN => {
-                if let Some(c) = stack.last_mut() {
-                    finalize_collector(c, &mut builder);
-                }
-                let node_type = reader.read_u8()?;
-                builder.open_node(node_type);
-                stack.push(FieldCollector {
-                    node_type,
-                    ..Default::default()
-                });
-            }
-            OP_CLOSE => {
-                if let Some(mut c) = stack.pop() {
-                    finalize_collector(&mut c, &mut builder);
-                }
-                builder.close_node();
-            }
-            OP_REF => {
-                if let Some(c) = stack.last_mut() {
-                    finalize_collector(c, &mut builder);
-                }
-                let id = reader.read_u32()?;
-                emit_ref_node(id, &mut builder);
-            }
-            OP_KEEP_CHILDREN => {
-                if let Some(c) = stack.last_mut() {
-                    finalize_collector(c, &mut builder);
-                }
-                for &child in orig.get_children(anchor) {
-                    emit_ref_node(child, &mut builder);
-                }
-            }
-            OP_STR => {
-                let field = reader.read_u8()? as usize;
-                let len = reader.read_u32()? as usize;
-                let value = reader.read_str(len)?;
-                if let Some(c) = stack.last_mut() {
-                    if field < c.strs.len() {
-                        c.strs[field] = Some(value);
-                    }
-                }
-            }
-            OP_U8 => {
-                let field = reader.read_u8()?;
-                let value = reader.read_u8()?;
-                if let Some(c) = stack.last_mut() {
-                    match field {
-                        OF_DEPTH => c.depth = Some(value),
-                        OF_CHECKED => c.checked = Some(value),
-                        _ => {}
-                    }
-                }
-            }
-            OP_U32 => {
-                let field = reader.read_u8()?;
-                let value = reader.read_u32()?;
-                if let (Some(c), OF_START) = (stack.last_mut(), field) {
-                    c.start = Some(value);
-                }
-            }
-            OP_BOOL => {
-                let field = reader.read_u8()?;
-                let value = reader.read_u8()? != 0;
-                if let Some(c) = stack.last_mut() {
-                    match field {
-                        OF_ORDERED => c.ordered = Some(value),
-                        OF_SPREAD => c.spread = Some(value),
-                        OF_EXPLICIT => c.explicit = Some(value),
-                        _ => {}
-                    }
-                }
-            }
-            OP_PROP => {
-                let name_len = reader.read_u32()? as usize;
-                let name = reader.read_str(name_len)?;
-                let kind = reader.read_u8()?;
-                let val_len = reader.read_u32()? as usize;
-                let value = reader.read_str(val_len)?;
-                if let Some(c) = stack.last_mut() {
-                    c.props.push((name, kind, value));
-                }
-            }
-            OP_ALIGN => {
-                let len = reader.read_u32()? as usize;
-                let bytes = reader.read_bytes(len)?;
-                if let Some(c) = stack.last_mut() {
-                    c.align = Some(bytes);
-                }
-            }
-            OP_DATA => {
-                let len = reader.read_u32()? as usize;
-                let bytes = reader.read_bytes(len)?;
-                if let Some(c) = stack.last_mut() {
-                    c.data = Some(bytes);
-                }
-            }
-            other => return Err(CommandError::UnknownCommand(other)),
-        }
-    }
-
-    Ok(builder.finish())
+    replay_opstream::<FieldCollector>(ops, orig, anchor)
 }
 
 /// Returns (arena, keep_children) for an MDAST sub-tree payload. `orig`/`anchor`
@@ -1322,20 +1338,7 @@ fn finalize_hast_collector(c: &mut HastFieldCollector<'_>, builder: &mut ArenaBu
                 };
                 prop_refs.push((n, kind, v));
             }
-            let mut td = Vec::with_capacity(16 + prop_refs.len() * 20);
-            td.extend_from_slice(&tag_ref.offset.to_le_bytes());
-            td.extend_from_slice(&tag_ref.len.to_le_bytes());
-            td.extend_from_slice(&(prop_refs.len() as u32).to_le_bytes());
-            td.extend_from_slice(&0u32.to_le_bytes());
-            for (n, kind, v) in &prop_refs {
-                td.extend_from_slice(&n.offset.to_le_bytes());
-                td.extend_from_slice(&n.len.to_le_bytes());
-                td.push(*kind);
-                td.extend_from_slice(&[0u8; 3]);
-                td.extend_from_slice(&v.offset.to_le_bytes());
-                td.extend_from_slice(&v.len.to_le_bytes());
-            }
-            td
+            encode_element_data(tag_ref, &prop_refs)
         }
         // Text, Comment, Raw, and the MDX expression/ESM nodes (which store the
         // same single value StringRef).
@@ -1347,20 +1350,7 @@ fn finalize_hast_collector(c: &mut HastFieldCollector<'_>, builder: &mut ArenaBu
         #[cfg(feature = "mdx")]
         10 | 11 => {
             let name_ref = builder.alloc_string(c.tag.unwrap_or(""));
-            let mut attrs: Vec<(u8, StringRef, StringRef)> = Vec::with_capacity(c.props.len());
-            for &(name, kind, value) in &c.props {
-                let nr = if kind == MDX_ATTR_SPREAD {
-                    StringRef::empty()
-                } else {
-                    builder.alloc_string(name)
-                };
-                let vr = if kind == MDX_ATTR_BOOLEAN_PROP {
-                    StringRef::empty()
-                } else {
-                    builder.alloc_string(value)
-                };
-                attrs.push((kind, nr, vr));
-            }
+            let attrs = intern_mdx_jsx_attrs(&c.props, builder);
             encode_mdx_jsx_element_data(name_ref, &attrs, c.explicit.unwrap_or(false))
         }
         // Root, Doctype: no type_data
@@ -1375,92 +1365,76 @@ fn finalize_hast_collector(c: &mut HastFieldCollector<'_>, builder: &mut ArenaBu
     }
 }
 
+impl<'a> OpCollector<'a> for HastFieldCollector<'a> {
+    type Kind = Hast;
+    // OP_U8 / OP_U32 / OP_ALIGN are MDAST-only; HAST reports them as unknown
+    // commands.
+    const NUMERIC_OPS: bool = false;
+
+    fn open(node_type: u8) -> Self {
+        HastFieldCollector {
+            node_type,
+            ..Default::default()
+        }
+    }
+
+    /// HAST twin of the MDAST `check_tag`.
+    fn check_tag(tag: u8) -> Result<(), CommandError> {
+        let known = HastNodeType::from_u8(tag).is_some();
+        #[cfg(not(feature = "mdx"))]
+        let known = known
+            && !matches!(
+                HastNodeType::from_u8(tag),
+                Some(
+                    HastNodeType::MdxJsxElement
+                        | HastNodeType::MdxJsxTextElement
+                        | HastNodeType::MdxFlowExpression
+                        | HastNodeType::MdxEsm
+                        | HastNodeType::MdxTextExpression
+                )
+            );
+        if known {
+            Ok(())
+        } else {
+            Err(CommandError::UnknownNodeType(format!(
+                "op-stream tag {tag}"
+            )))
+        }
+    }
+
+    fn finalize(&mut self, builder: &mut ArenaBuilder<Hast>) {
+        finalize_hast_collector(self, builder);
+    }
+
+    fn str_field(&mut self, field: u8, value: &'a str) {
+        match field {
+            OF_TAGNAME | OF_NAME => self.tag = Some(value),
+            OF_VALUE => self.value = Some(value),
+            _ => {}
+        }
+    }
+
+    fn bool_field(&mut self, field: u8, value: bool) {
+        if field == OF_EXPLICIT {
+            self.explicit = Some(value);
+        }
+    }
+
+    fn prop(&mut self, name: &'a str, kind: u8, value: &'a str) {
+        self.props.push((name, kind, value));
+    }
+
+    fn data(&mut self, bytes: &'a [u8]) {
+        self.data = Some(bytes);
+    }
+}
+
 fn replay_hast_opstream(
     ops: &[u8],
     orig: &Arena<Hast>,
     anchor: u32,
 ) -> Result<Arena<Hast>, CommandError> {
-    let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    let mut reader = BufReader::new(ops);
-    let mut stack: Vec<HastFieldCollector<'_>> = Vec::new();
-
-    while reader.remaining() > 0 {
-        match reader.read_u8()? {
-            OP_OPEN => {
-                if let Some(c) = stack.last_mut() {
-                    finalize_hast_collector(c, &mut builder);
-                }
-                let node_type = reader.read_u8()?;
-                builder.open_node_raw(node_type);
-                stack.push(HastFieldCollector {
-                    node_type,
-                    ..Default::default()
-                });
-            }
-            OP_CLOSE => {
-                if let Some(mut c) = stack.pop() {
-                    finalize_hast_collector(&mut c, &mut builder);
-                }
-                builder.close_node();
-            }
-            OP_REF => {
-                if let Some(c) = stack.last_mut() {
-                    finalize_hast_collector(c, &mut builder);
-                }
-                let id = reader.read_u32()?;
-                emit_ref_node(id, &mut builder);
-            }
-            OP_KEEP_CHILDREN => {
-                if let Some(c) = stack.last_mut() {
-                    finalize_hast_collector(c, &mut builder);
-                }
-                for &child in orig.get_children(anchor) {
-                    emit_ref_node(child, &mut builder);
-                }
-            }
-            OP_STR => {
-                let field = reader.read_u8()?;
-                let len = reader.read_u32()? as usize;
-                let value = reader.read_str(len)?;
-                if let Some(c) = stack.last_mut() {
-                    match field {
-                        OF_TAGNAME | OF_NAME => c.tag = Some(value),
-                        OF_VALUE => c.value = Some(value),
-                        _ => {}
-                    }
-                }
-            }
-            OP_BOOL => {
-                let field = reader.read_u8()?;
-                let value = reader.read_u8()? != 0;
-                if let Some(c) = stack.last_mut() {
-                    if field == OF_EXPLICIT {
-                        c.explicit = Some(value);
-                    }
-                }
-            }
-            OP_PROP => {
-                let name_len = reader.read_u32()? as usize;
-                let name = reader.read_str(name_len)?;
-                let kind = reader.read_u8()?;
-                let val_len = reader.read_u32()? as usize;
-                let value = reader.read_str(val_len)?;
-                if let Some(c) = stack.last_mut() {
-                    c.props.push((name, kind, value));
-                }
-            }
-            OP_DATA => {
-                let len = reader.read_u32()? as usize;
-                let bytes = reader.read_bytes(len)?;
-                if let Some(c) = stack.last_mut() {
-                    c.data = Some(bytes);
-                }
-            }
-            other => return Err(CommandError::UnknownCommand(other)),
-        }
-    }
-
-    Ok(builder.finish())
+    replay_opstream::<HastFieldCollector>(ops, orig, anchor)
 }
 
 /// Returns (arena, keep_children) for a HAST sub-tree payload. `PAYLOAD_OPSTREAM`
@@ -1836,6 +1810,103 @@ mod tests {
             arena.get_str(decode_string_ref_data(arena.get_type_data(p_text))),
             "Body"
         );
+    }
+
+    #[test]
+    fn opstream_replay_rejects_unbalanced_close() {
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+        let err = replay_mdast_opstream(&[OP_CLOSE], &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnbalancedOpstream));
+
+        let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
+        let err = replay_hast_opstream(&[OP_CLOSE], &empty_hast, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnbalancedOpstream));
+
+        // A balanced prefix doesn't excuse a trailing extra close.
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Paragraph);
+        op_close(&mut ops);
+        op_close(&mut ops);
+        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnbalancedOpstream));
+    }
+
+    #[test]
+    fn opstream_replay_rejects_unknown_tags() {
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+        let err = replay_mdast_opstream(&[OP_OPEN, 200], &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnknownNodeType(_)));
+
+        let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
+        let err = replay_hast_opstream(&[OP_OPEN, 200], &empty_hast, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnknownNodeType(_)));
+    }
+
+    #[test]
+    fn opstream_keep_children_splices_original_children() {
+        // orig: root > paragraph > text("Hello"); replace the paragraph with
+        // heading(2) keeping its children.
+        let orig = test_parse_markdown("Hello");
+        let para = orig.get_children(0)[0];
+        let orig_text = orig.get_children(para)[0];
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Heading);
+        op_u8(&mut ops, OF_DEPTH, 2);
+        ops.push(OP_KEEP_CHILDREN);
+        op_close(&mut ops);
+
+        let arena = replay_mdast_opstream(&ops, &orig, para).unwrap();
+        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Heading as u8);
+        assert_eq!(decode_heading_data(arena.get_type_data(0)).depth, 2);
+        let children = arena.get_children(0).to_vec();
+        assert_eq!(children.len(), 1);
+        assert_eq!(arena.get_node(children[0]).node_type, REF_NODE_TYPE);
+        assert_eq!(
+            u32::from_le_bytes(arena.get_type_data(children[0]).try_into().unwrap()),
+            orig_text
+        );
+    }
+
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn mdx_jsx_set_property_replaces_named_attrs_and_keeps_explicit() {
+        use satteri_ast::shared::MDX_ATTR_EXPRESSION_PROP;
+
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::MdxJsxElement as u8);
+        let elem_name = b.alloc_string("Box");
+        let foo = b.alloc_string("foo");
+        let expr = b.alloc_string("1+1");
+        let rest = b.alloc_string("rest");
+        let attrs = vec![
+            (MDX_ATTR_EXPRESSION_PROP, foo, expr),
+            (MDX_ATTR_SPREAD, StringRef::empty(), rest),
+        ];
+        b.set_data_current(&encode_mdx_jsx_element_data(elem_name, &attrs, true));
+        b.close_node();
+        b.close_node();
+        let mut arena = b.finish();
+
+        // Replaces the expression-valued `foo` (no duplicate) and appends
+        // after the spread so the write wins.
+        apply_hast_mdx_jsx_attribute(&mut arena, 1, "foo", PROP_STRING, "x").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(decode_mdx_jsx_attr_count(&data), 2);
+        assert!(decode_mdx_jsx_explicit(&data));
+        let (k0, _, _) = decode_mdx_jsx_attr(&data, 0);
+        assert_eq!(k0, MDX_ATTR_SPREAD);
+        let (k1, n1, v1) = decode_mdx_jsx_attr(&data, 1);
+        assert_eq!(k1, MDX_ATTR_LITERAL_PROP);
+        assert_eq!(arena.get_str(n1), "foo");
+        assert_eq!(arena.get_str(v1), "x");
+
+        // Appending a brand-new attribute must not clear the explicit flag.
+        apply_hast_mdx_jsx_attribute(&mut arena, 1, "id", PROP_STRING, "intro").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(decode_mdx_jsx_attr_count(&data), 3);
+        assert!(decode_mdx_jsx_explicit(&data));
     }
 
     fn test_parse_markdown(source: &str) -> Arena<Mdast> {

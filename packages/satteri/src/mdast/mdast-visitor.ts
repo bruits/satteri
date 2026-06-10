@@ -1,10 +1,15 @@
 import { materializeNode } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
-import { CommandBuffer, classifyReturn } from "../command-buffer.js";
+import { CommandBuffer, classifyReturn, type StructuralOp } from "../command-buffer.js";
 import { restorePhantomSpaces } from "../phantom.js";
-import { ru16, ru32, rstr } from "./wire-read.js";
+import { ru16, ru32, rstr, readPosition } from "./wire-read.js";
 import { decodeMdastTypeData } from "./generated/layout.js";
-import { TYPE_NAMES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
+import {
+  TYPE_NAMES,
+  NAME_TO_TYPE,
+  VISITOR_KEYS,
+  MDAST_OPSTREAM_TYPES,
+} from "./generated/node-types.js";
 import {
   OpWriter,
   OF_VALUE,
@@ -27,7 +32,9 @@ import {
   emitMdxAttr,
 } from "../op-stream.js";
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
-import { walkMdastHandle, serializeHandle, mdastTextContentHandle } from "#binding";
+import { walkMdastHandle, mdastTextContentHandle } from "#binding";
+import { LazyChildResolver } from "../lazy-child-resolver.js";
+import type { MdastHandle } from "../handles.js";
 import type {
   Blockquote,
   Break,
@@ -75,8 +82,24 @@ export interface MdastDiagnostic {
 /** Maps MdastNode objects to their arena node IDs without Object.defineProperty overhead. */
 const mdastNodeIdMap: WeakMap<object, number> = new WeakMap();
 
-function nid(node: MdastNode): number {
+function nid(node: MdastNode): number | undefined {
   return mdastNodeIdMap.get(node as object) ?? (node as MdastNodeInternal)._nodeId;
+}
+
+/**
+ * Arena id for a node passed to a context method. Plugin-built nodes have no
+ * id; without this check the id would coerce to 0 in the command buffer and
+ * the mutation would silently target the document root.
+ */
+function requireNid(node: MdastNode, method: string): number {
+  const id = nid(node);
+  if (id === undefined) {
+    throw new Error(
+      `${method}: node has no arena id — it was built in JS, not read from this tree. ` +
+        `Pass plugin-built nodes as new content (e.g. the second argument of insertAfter).`,
+    );
+  }
+  return id;
 }
 
 function asArray<T>(value: T | T[]): T[] {
@@ -108,25 +131,17 @@ export class MdastVisitorContext {
   }
 
   removeNode(node: Readonly<MdastNode>): void {
-    this.#commandBuffer.removeNode(nid(node as MdastNode));
+    this.#commandBuffer.removeNode(requireNid(node as MdastNode, "removeNode"));
   }
 
   insertBefore(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
-    const id = nid(node as MdastNode);
-    for (const n of asArray(newNode)) {
-      const c = compileOrJson(n);
-      if (c instanceof Uint8Array) this.#commandBuffer.insertBeforeOpstream(id, c);
-      else this.#commandBuffer.insertBefore(id, c);
-    }
+    const id = requireNid(node as MdastNode, "insertBefore");
+    for (const n of asArray(newNode)) emitMdastTree(this.#commandBuffer, "insertBefore", id, n);
   }
 
   insertAfter(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
-    const id = nid(node as MdastNode);
-    for (const n of asArray(newNode)) {
-      const c = compileOrJson(n);
-      if (c instanceof Uint8Array) this.#commandBuffer.insertAfterOpstream(id, c);
-      else this.#commandBuffer.insertAfter(id, c);
-    }
+    const id = requireNid(node as MdastNode, "insertAfter");
+    for (const n of asArray(newNode)) emitMdastTree(this.#commandBuffer, "insertAfter", id, n);
   }
 
   /**
@@ -134,28 +149,18 @@ export class MdastVisitorContext {
    * children `parentNode` declares are kept after it.
    */
   wrapNode(node: Readonly<MdastNode>, parentNode: MdastContent): void {
-    const id = nid(node as MdastNode);
-    const c = compileOrJson(parentNode);
-    if (c instanceof Uint8Array) this.#commandBuffer.wrapNodeOpstream(id, c);
-    else this.#commandBuffer.wrapNode(id, c);
+    const id = requireNid(node as MdastNode, "wrapNode");
+    emitMdastTree(this.#commandBuffer, "wrapNode", id, parentNode);
   }
 
   prependChild(node: Readonly<MdastNode>, childNode: MdastContent | MdastContent[]): void {
-    const id = nid(node as MdastNode);
-    for (const n of asArray(childNode)) {
-      const c = compileOrJson(n);
-      if (c instanceof Uint8Array) this.#commandBuffer.prependChildOpstream(id, c);
-      else this.#commandBuffer.prependChild(id, c);
-    }
+    const id = requireNid(node as MdastNode, "prependChild");
+    for (const n of asArray(childNode)) emitMdastTree(this.#commandBuffer, "prependChild", id, n);
   }
 
   appendChild(node: Readonly<MdastNode>, childNode: MdastContent | MdastContent[]): void {
-    const id = nid(node as MdastNode);
-    for (const n of asArray(childNode)) {
-      const c = compileOrJson(n);
-      if (c instanceof Uint8Array) this.#commandBuffer.appendChildOpstream(id, c);
-      else this.#commandBuffer.appendChild(id, c);
-    }
+    const id = requireNid(node as MdastNode, "appendChild");
+    for (const n of asArray(childNode)) emitMdastTree(this.#commandBuffer, "appendChild", id, n);
   }
 
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -181,10 +186,8 @@ export class MdastVisitorContext {
   }
 
   replaceNode(node: Readonly<MdastNode>, newNode: MdastContent): void {
-    const id = nid(node as MdastNode);
-    const c = compileOrJson(newNode);
-    if (c instanceof Uint8Array) this.#commandBuffer.replaceOpstream(id, c);
-    else this.#commandBuffer.replace(id, c);
+    const id = requireNid(node as MdastNode, "replaceNode");
+    emitMdastTree(this.#commandBuffer, "replace", id, newNode, true);
   }
 
   setProperty<N extends MdastNode, K extends keyof N & string>(
@@ -195,20 +198,26 @@ export class MdastVisitorContext {
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
+      const id = requireNid(node as MdastNode, "setProperty");
+      const ops = compileMdastChildrenToOpstream(value);
+      if (ops) {
+        this.#commandBuffer.setChildrenOpstream(id, ops);
+        return;
+      }
       const wrapper = refifyReusedNodes({ type: "root", children: value }, true);
-      this.#commandBuffer.setChildren(nid(node as MdastNode), JSON.stringify(wrapper));
+      this.#commandBuffer.setChildren(id, JSON.stringify(wrapper));
       return;
     }
     if (key === "data") {
       // data is stored as JSON in the arena, serialize it for the command buffer
       this.#commandBuffer.setProperty(
-        nid(node as MdastNode),
+        requireNid(node as MdastNode, "setProperty"),
         key,
         value != null ? JSON.stringify(value) : null,
       );
       return;
     }
-    this.#commandBuffer.setProperty(nid(node as MdastNode), key, value);
+    this.#commandBuffer.setProperty(requireNid(node as MdastNode, "setProperty"), key, value);
   }
 
   /** Collect the concatenated text of all descendant text nodes (like mdast-util-to-string). */
@@ -216,7 +225,11 @@ export class MdastVisitorContext {
     node: Readonly<MdastNode>,
     options?: { includeImageAlt?: boolean; includeHtml?: boolean },
   ): string {
-    return mdastTextContentHandle(this.#handle, nid(node as MdastNode), options);
+    return mdastTextContentHandle(
+      this.#handle,
+      requireNid(node as MdastNode, "textContent"),
+      options,
+    );
   }
 
   report({
@@ -331,8 +344,7 @@ function mergeAndReset(
 
 // Handle-based MDAST visitor (arena stays in Rust)
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type MdastHandle = any;
+export type { MdastHandle };
 
 interface MdastSubscription {
   nodeType: number;
@@ -356,33 +368,13 @@ export function resolveMdastSubscriptions(plugin: MdastPluginInstance): MdastSub
   return subs;
 }
 
-/**
- * Lazy child materializer for the MDAST handle walk path.
- * Serializes the handle once on first child access, then materializes
- * children via MdastReader + materializeNode.
- */
-class MdastLazyChildResolver {
-  #handle: MdastHandle;
-  #reader: MdastReader | null = null;
-
-  constructor(handle: MdastHandle) {
-    this.#handle = handle;
+class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
+  protected override createReader(wire: Uint8Array): MdastReader {
+    return new MdastReader(wire);
   }
 
-  #ensure(): MdastReader {
-    if (!this.#reader) {
-      this.#reader = new MdastReader(serializeHandle(this.#handle));
-    }
-    return this.#reader;
-  }
-
-  materializeChildren(childIds: number[]): MdastNode[] {
-    // The serialized buffer already carries each node's `data` blob (read
-    // eagerly by materializeNode), and the arena isn't mutated mid-visit — so
-    // no separate lazy NAPI fetch is needed. This also keeps walk-path children
-    // consistent with `markdownToMdast` (no `data` key when a node has none).
-    const reader = this.#ensure();
-    return childIds.map((id) => materializeNode(reader, id));
+  protected override materializeNode(reader: MdastReader, nodeId: number): MdastNode {
+    return materializeNode(reader, nodeId);
   }
 }
 
@@ -418,22 +410,7 @@ function readMdastMatchedNode(
     pos += dataJsonLen;
   }
 
-  // Position. Synthesized nodes (no source range) store an all-zero block;
-  // surface those as `position: undefined`, matching the hast walk path and
-  // the MdastReader so a node reads the same however it's reached.
-  const startOffset = ru32(view, pos);
-  const startLine = ru32(view, pos + 8);
-  const position =
-    startLine === 0 && startOffset === 0
-      ? undefined
-      : {
-          start: { offset: startOffset, line: startLine, column: ru32(view, pos + 12) },
-          end: {
-            offset: ru32(view, pos + 4),
-            line: ru32(view, pos + 16),
-            column: ru32(view, pos + 20),
-          },
-        };
+  const position = readPosition(view, pos);
   pos += 24;
 
   // Children, read IDs, materialize lazily via resolver
@@ -618,37 +595,39 @@ function refifyReusedNodes(node: unknown, isRoot: boolean): MdastNode {
 }
 
 /**
- * MDAST types the op-stream replay reconstructs byte-identically to the JSON
- * path (`finalize_collector` in js_commands.rs). Covers everything a plugin can
- * build: imageReference (alt), table (align via OP_ALIGN), directives (30–32:
- * name + attributes), MDX JSX elements (100/101: name + typed attributes +
- * explicit), and MDX expression/ESM (102–104: value). Only `root` falls back to
- * JSON (degenerate as a replacement).
- */
-const MDAST_OPSTREAM_TYPES = new Set<number>([
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-  28, 30, 31, 32, 100, 101, 102, 103, 104,
-]);
-
-/**
  * Compile a declarative MDAST replacement tree to the op-stream — the structural
  * backend the rebuild already uses, but skipping JSON + the JsNode deserialize.
  * Reused nodes (those still carrying an arena id) become `ref`s, exactly like
- * `refifyReusedNodes`. Returns null when the tree contains a node type the
- * replay can't reproduce identically, so the caller falls back to JSON.
+ * `refifyReusedNodes`. Returns null when the replay can't reproduce the tree
+ * identically (unsupported node type, out-of-range numeric field, or a
+ * `_keepChildren` marker outside a replace), so the caller falls back to JSON.
  */
 // Reused across every replacement in a pass: compile is synchronous and its
 // result is copied into the command buffer before the next call, so a single
 // writer is safe and avoids a 512-byte allocation per built node.
 const mdastWriter = new OpWriter();
 
-function compileMdastToOpstream(root: unknown): Uint8Array | null {
+function compileMdastToOpstream(root: unknown, forReplace = false): Uint8Array | null {
   mdastWriter.reset();
-  if (!emitMdastOp(mdastWriter, root, true)) return null;
+  if (!emitMdastOp(mdastWriter, root, true, forReplace)) return null;
   return mdastWriter.take();
 }
 
-function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
+/** Compile a set-children payload: a root-wrapped child list, the shape
+ *  `Patch::SetChildren` splices in. Reused children become refs, like the
+ *  JSON wrapper's `refifyReusedNodes`. */
+function compileMdastChildrenToOpstream(children: unknown): Uint8Array | null {
+  if (!Array.isArray(children)) return null;
+  mdastWriter.reset();
+  mdastWriter.open(NAME_TO_TYPE.root!);
+  for (const c of children) {
+    if (!emitMdastOp(mdastWriter, c, false, false)) return null;
+  }
+  mdastWriter.close();
+  return mdastWriter.take();
+}
+
+function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
     const id = reusedId(node);
@@ -670,9 +649,17 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
   if (typeof n.identifier === "string") w.str(OF_IDENTIFIER, n.identifier);
   if (typeof n.label === "string") w.str(OF_LABEL, n.label);
   if (typeof n.referenceType === "string") w.str(OF_REFERENCE_TYPE, n.referenceType);
-  if (typeof n.depth === "number") w.u8(OF_DEPTH, n.depth);
+  // Out-of-range numbers fall back to JSON, where serde's Option<u8>/Option<u32>
+  // rejects the node with a visible error instead of silently masking the bits.
+  if (typeof n.depth === "number") {
+    if (!Number.isInteger(n.depth) || n.depth < 0 || n.depth > 255) return false;
+    w.u8(OF_DEPTH, n.depth);
+  }
   if (typeof n.checked === "boolean") w.u8(OF_CHECKED, n.checked ? 1 : 0);
-  if (typeof n.start === "number") w.u32(OF_START, n.start);
+  if (typeof n.start === "number") {
+    if (!Number.isInteger(n.start) || n.start < 0 || n.start > 4294967295) return false;
+    w.u32(OF_START, n.start);
+  }
   if (typeof n.ordered === "boolean") w.bool(OF_ORDERED, n.ordered);
   if (typeof n.spread === "boolean") w.bool(OF_SPREAD, n.spread);
   if (typeof n.name === "string") w.str(OF_NAME, n.name);
@@ -693,9 +680,17 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
     w.bool(OF_EXPLICIT, true);
   }
   if (n.data != null) w.data(n.data);
-  const children = n.children;
-  if (Array.isArray(children)) {
-    for (const c of children) if (!emitMdastOp(w, c, false)) return false;
+  if (isRoot && n._keepChildren === true) {
+    // Replace splices the target's original children, discarding any the
+    // replacement declares — same as the JSON path's keep_children. Other
+    // commands ignore the marker, so fall back to JSON for exact parity.
+    if (!forReplace) return false;
+    w.keepChildren();
+  } else {
+    const children = n.children;
+    if (Array.isArray(children)) {
+      for (const c of children) if (!emitMdastOp(w, c, false, forReplace)) return false;
+    }
   }
   w.close();
   return true;
@@ -711,8 +706,22 @@ function alignCode(a: unknown): number {
  * JSON-ready node (raw escape hatches + unsupported types). The op-stream and
  * JSON paths produce identical arenas; this just picks the cheaper encoding.
  */
-function compileOrJson(content: MdastContent): Uint8Array | MdastNode {
-  return compileMdastToOpstream(content) ?? refifyReusedNodes(content, true);
+function compileOrJson(content: MdastContent, forReplace = false): Uint8Array | MdastNode {
+  return compileMdastToOpstream(content, forReplace) ?? refifyReusedNodes(content, true);
+}
+
+/** Encode `content` (op-stream when compilable, JSON otherwise) and write it
+ *  as the `op` structural command — the one place that picks the encoding. */
+function emitMdastTree(
+  buffer: CommandBuffer,
+  op: StructuralOp,
+  id: number,
+  content: MdastContent,
+  forReplace = false,
+): void {
+  const c = compileOrJson(content, forReplace);
+  if (c instanceof Uint8Array) buffer[`${op}Opstream`](id, c);
+  else buffer[op](id, c);
 }
 
 function applyMdastVisitResult(
@@ -731,12 +740,9 @@ function applyMdastVisitResult(
     case "raw_html":
       returnBuffer.replace(nodeId, result as unknown as { rawHtml: string });
       break;
-    case "structured_node": {
-      const c = compileMdastToOpstream(result);
-      if (c) returnBuffer.replaceOpstream(nodeId, c);
-      else returnBuffer.replace(nodeId, refifyReusedNodes(result, true));
+    case "structured_node":
+      emitMdastTree(returnBuffer, "replace", nodeId, result as MdastContent, true);
       break;
-    }
   }
 }
 
@@ -801,10 +807,15 @@ export function visitMdastHandle(
       for (const { nodeId, result, originalNode } of results) {
         applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
       }
+      // End of the pass — the caller applies the returned command buffer next,
+      // renumbering the arena, so later snapshots would resolve match-time
+      // child ids against wrong nodes. This is the last point we control.
+      resolver.seal();
       return finalizeMdastVisit(handle, context, returnBuffer);
     });
   }
 
+  resolver.seal();
   return finalizeMdastVisit(handle, context, returnBuffer);
 }
 

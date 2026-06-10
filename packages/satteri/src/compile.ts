@@ -2,6 +2,7 @@ import { visitHastHandle, resolveSubscriptions, type HastHandle } from "./hast/h
 import {
   visitMdastHandle,
   resolveMdastSubscriptions,
+  type MdastHandle,
   type MdastPluginInstance,
 } from "./mdast/mdast-visitor.js";
 import type {
@@ -94,9 +95,6 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
   }
   return { features: result, convertOptions };
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type MdastHandle = any;
 
 type MdastPipelineResult = { handle: MdastHandle };
 

@@ -82,6 +82,88 @@ export const NAME_TO_TYPE: Readonly<Record<string, number>> = {
   mdxjsEsm: 104,
 };
 
+/** Node-type tag by Rust enum variant name. */
+export const NodeType = Object.freeze({
+  Root: 0,
+  Paragraph: 1,
+  Heading: 2,
+  ThematicBreak: 3,
+  Blockquote: 4,
+  List: 5,
+  ListItem: 6,
+  Html: 7,
+  Code: 8,
+  Definition: 9,
+  Text: 10,
+  Emphasis: 11,
+  Strong: 12,
+  InlineCode: 13,
+  Break: 14,
+  Link: 15,
+  Image: 16,
+  LinkReference: 17,
+  ImageReference: 18,
+  FootnoteDefinition: 19,
+  FootnoteReference: 20,
+  Table: 21,
+  TableRow: 22,
+  TableCell: 23,
+  Delete: 24,
+  Yaml: 25,
+  Toml: 26,
+  Math: 27,
+  InlineMath: 28,
+  ContainerDirective: 30,
+  LeafDirective: 31,
+  TextDirective: 32,
+  MdxJsxFlowElement: 100,
+  MdxJsxTextElement: 101,
+  MdxFlowExpression: 102,
+  MdxTextExpression: 103,
+  MdxjsEsm: 104,
+} as const);
+
+/** Node-type tag -> Rust variant name (`typeName` diagnostics). */
+export const NodeTypeName: Readonly<Record<number, string>> = {
+  0: "Root",
+  1: "Paragraph",
+  2: "Heading",
+  3: "ThematicBreak",
+  4: "Blockquote",
+  5: "List",
+  6: "ListItem",
+  7: "Html",
+  8: "Code",
+  9: "Definition",
+  10: "Text",
+  11: "Emphasis",
+  12: "Strong",
+  13: "InlineCode",
+  14: "Break",
+  15: "Link",
+  16: "Image",
+  17: "LinkReference",
+  18: "ImageReference",
+  19: "FootnoteDefinition",
+  20: "FootnoteReference",
+  21: "Table",
+  22: "TableRow",
+  23: "TableCell",
+  24: "Delete",
+  25: "Yaml",
+  26: "Toml",
+  27: "Math",
+  28: "InlineMath",
+  30: "ContainerDirective",
+  31: "LeafDirective",
+  32: "TextDirective",
+  100: "MdxJsxFlowElement",
+  101: "MdxJsxTextElement",
+  102: "MdxFlowExpression",
+  103: "MdxTextExpression",
+  104: "MdxjsEsm",
+};
+
 /** Names a plugin can subscribe to (every node except `root`). */
 export const VISITOR_KEYS: ReadonlySet<string> = new Set([
   "paragraph",
@@ -120,4 +202,45 @@ export const VISITOR_KEYS: ReadonlySet<string> = new Set([
   "mdxFlowExpression",
   "mdxTextExpression",
   "mdxjsEsm",
+]);
+
+/** Tags the op-stream replay rebuilds byte-identically to the JSON path;
+ *  excluded tags fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */
+export const MDAST_OPSTREAM_TYPES: ReadonlySet<number> = new Set([
+  1, // paragraph
+  2, // heading
+  3, // thematicBreak
+  4, // blockquote
+  5, // list
+  6, // listItem
+  7, // html
+  8, // code
+  9, // definition
+  10, // text
+  11, // emphasis
+  12, // strong
+  13, // inlineCode
+  14, // break
+  15, // link
+  16, // image
+  17, // linkReference
+  18, // imageReference
+  19, // footnoteDefinition
+  20, // footnoteReference
+  21, // table
+  22, // tableRow
+  23, // tableCell
+  24, // delete
+  25, // yaml
+  26, // toml
+  27, // math
+  28, // inlineMath
+  30, // containerDirective
+  31, // leafDirective
+  32, // textDirective
+  100, // mdxJsxFlowElement
+  101, // mdxJsxTextElement
+  102, // mdxFlowExpression
+  103, // mdxTextExpression
+  104, // mdxjsEsm
 ]);
