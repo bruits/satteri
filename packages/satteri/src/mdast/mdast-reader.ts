@@ -1,6 +1,6 @@
 import type { MdastNodeRaw, BufferHeader, StringRefRaw, MdxJsxAttributeUnion } from "../types.js";
 import { restorePhantomSpaces } from "../phantom.js";
-import { readPosition } from "./wire-read.js";
+import { readPosition } from "../wire-read.js";
 import { NodeTypeName } from "./generated/node-types.js";
 import { ARENA_MAGIC, KIND_MDAST, FIELD, HEADER } from "../generated/arena-layout.js";
 

@@ -322,8 +322,6 @@ fn copy_node<K: ArenaKind>(
             active,
         );
     } else {
-        // The read-only `orig` borrow coexists with the recursive calls, so the
-        // child list need not be copied out first.
         for &child_id in orig.get_children(node_id) {
             copy_node(child_id, orig, builder, patch_map, deleted, visited, active);
         }
@@ -833,8 +831,6 @@ fn copy_node_raw<K: ArenaKind>(
             active,
         );
     } else {
-        // The read-only `orig` borrow coexists with the recursive calls, so the
-        // child list need not be copied out first.
         for &child_id in orig.get_children(node_id) {
             copy_node(child_id, orig, builder, patch_map, deleted, visited, active);
         }

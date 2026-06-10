@@ -21,29 +21,16 @@ import { materializeMdastTree } from "../src/mdast/mdast-materializer.js";
 import { HastReader } from "../src/hast/hast-reader.js";
 import { materializeHastTree } from "../src/hast/hast-materializer.js";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
-import type { MdastNode, HastNode } from "../src/types.js";
+import type { MdastPluginDefinition } from "../src/plugin.js";
+import type { MdastNode } from "../src/types.js";
 import type { MdxJsxFlowElementHast } from "../src/mdx-types.js";
 import type { Link, Paragraph, Strong, Text as MdastText } from "mdast";
 import type { Element, ElementContent, Text as HastText } from "hast";
 import type { Position } from "unist";
+import { collect, type TreeNode } from "./fixtures.js";
 
-const PHANTOM = "";
-
-/** Structural tree shape both mdast and hast nodes satisfy. */
-interface TreeNode {
-  type: string;
-  children?: TreeNode[];
-}
-
-function collect<T extends TreeNode>(
-  node: TreeNode,
-  pred: (n: TreeNode) => n is T,
-  out: T[] = [],
-): T[] {
-  if (pred(node)) out.push(node);
-  if (node.children) for (const c of node.children) collect(c, pred, out);
-  return out;
-}
+// Phantom-space sentinel; mirrors the unexported PHANTOM_SPACE in src/phantom.ts.
+const PHANTOM = "\uF002";
 
 type MdastNodeOf<T extends MdastNode["type"]> = Extract<MdastNode, { type: T }>;
 
@@ -53,11 +40,14 @@ function walkAndReader<T extends MdastNode["type"]>(md: string, type: T, mdx = f
   const handle = mdx ? createMdxMdastHandle(md) : createMdastHandle(md);
   const source = getHandleSource(handle);
   const walked: MdastNodeOf<T>[] = [];
-  const plugin = {
+  // Explicit type argument: the computed key infers as an index signature,
+  // which the weak-type check would otherwise reject at the visit call sites.
+  const plugin = defineMdastPlugin<MdastPluginDefinition>({
+    name: "walk-reader-capture",
     [type](node: MdastNodeOf<T>) {
       walked.push(node);
     },
-  };
+  });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
   const tree = materializeMdastTree(new MdastReader(serializeHandle(handle)));
   const materialized = collect(tree, (n): n is MdastNodeOf<T> => n.type === type);
@@ -210,8 +200,8 @@ test("P1: setProperty after replaceNode (fold path) space-joins arrays the same 
     name: "replace-then-set",
     mdxJsxFlowElement: {
       filter: ["Box"],
-      visit(node: HastNode, ctx) {
-        ctx.replaceNode(node, { ...(node as MdxJsxFlowElementHast), attributes: [] });
+      visit(node, ctx) {
+        ctx.replaceNode(node, { ...node, attributes: [] });
         ctx.setProperty(node, "className", ["a", "b"]);
       },
     },

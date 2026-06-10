@@ -1,4 +1,4 @@
-import { stubDescriptors } from "../child-stub.js";
+import { flatByTag, stubDescriptors } from "../child-stub.js";
 import type { LazyChildResolver } from "../lazy-child-resolver.js";
 import type { HastNode } from "../types.js";
 import type { HastReader } from "./hast-reader.js";
@@ -23,9 +23,13 @@ const HAST_STUB_FIELDS: Readonly<Record<number, readonly string[]>> = {
   [N.mdxjsEsm!]: ["value"],
 };
 
-const HAST_STUB_DESCRIPTORS: ReadonlyMap<number, PropertyDescriptorMap> = new Map(
-  Object.entries(HAST_STUB_FIELDS).map(([tag, fields]) => [Number(tag), stubDescriptors(fields)]),
-);
+const TYPE_NAME_BY_TAG = flatByTag(TYPE_NAMES);
+
+const HAST_STUB_DESCRIPTORS: (PropertyDescriptorMap | undefined)[] = [];
+for (const tag of Object.keys(HAST_STUB_FIELDS)) {
+  const nodeType = Number(tag);
+  HAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(HAST_STUB_FIELDS[nodeType]!);
+}
 
 /** Unknown node types still expose the prelude-backed lazy fields. */
 const FALLBACK_DESCRIPTORS = stubDescriptors([]);
@@ -33,9 +37,9 @@ const FALLBACK_DESCRIPTORS = stubDescriptors([]);
 /**
  * Walk-path child stub: arena id + `type` eagerly, every other field a lazy
  * forward to the materialized node (first read snapshots the arena via
- * `materializeOne`, which enforces the pass seal). `nid()` recognizes genuine
- * stubs by `instanceof` and emits one-word refs; spread copies are not
- * `instanceof` and read as new content.
+ * `materializeOne`, which enforces the handle epoch — the pass seal is checked
+ * where the stubs are built). Spread/identity rules are enforced by `nid()`
+ * in hast-visitor.ts.
  */
 export class HastChildStub {
   _resolver: HastResolver;
@@ -45,7 +49,7 @@ export class HastChildStub {
   constructor(resolver: HastResolver, id: number, nodeType: number) {
     this._resolver = resolver;
     this._id = id;
-    this.type = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
-    Object.defineProperties(this, HAST_STUB_DESCRIPTORS.get(nodeType) ?? FALLBACK_DESCRIPTORS);
+    this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
+    Object.defineProperties(this, HAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
   }
 }

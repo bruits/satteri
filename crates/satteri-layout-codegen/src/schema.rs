@@ -347,9 +347,12 @@ pub const MDAST_NODES: &[Node] = &[
 
 pub const HAST_NODES: &[Node] = &[
     c(Hast, 0, "Root", "root"),
+    // HAST layouts are not generated yet (only tag/name are read back): every
+    // walk tail below — element, MDX, and the single-value nodes — is
+    // hand-written on BOTH sides (walk.rs `serialize_hast_node_inline` +
+    // hast-visitor.ts) and must be kept in sync manually.
     x(Hast, 1, "Element", "element"),
-    // text/comment/raw store a single value StringRef (`encode_text_data`);
-    // HAST layouts are not generated yet, so only tag/name are read back.
+    // text/comment/raw store a single value StringRef (`encode_text_data`).
     n(Hast, 2, "Text", "text", VALUE),
     n(Hast, 3, "Comment", "comment", VALUE),
     c(Hast, 4, "Doctype", "doctype"),
@@ -364,7 +367,9 @@ pub const HAST_NODES: &[Node] = &[
 /// AST names whose op-stream replay falls back to JSON. `finalize_collector`
 /// (js_commands.rs) silently encodes no type_data for tags it has no arm for,
 /// so a NEW node type must either gain a finalize/generated encode arm or be
-/// listed here.
+/// listed here. The set-property dispatch in js_commands.rs
+/// (`resolve_mdast_field` + the `set_mdast_string_ref` offset table) also
+/// restates these field offsets by hand and must be updated alongside.
 pub const MDAST_OPSTREAM_EXCLUDED: &[&str] = &["root"];
 /// HAST twin (`finalize_hast_collector`); `doctype` has no finalize arm either.
 pub const HAST_OPSTREAM_EXCLUDED: &[&str] = &["root", "doctype"];

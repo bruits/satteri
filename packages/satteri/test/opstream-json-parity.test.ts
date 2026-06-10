@@ -11,7 +11,7 @@
 // layout matches); the semantic tree comparison runs first only to give a
 // readable diff if the stronger byte pin ever breaks.
 
-import { test, expect } from "vitest";
+import { test, expect, vi } from "vitest";
 import {
   createMdastHandle,
   createMdxMdastHandle,
@@ -32,6 +32,7 @@ import { materializeHastTree } from "../src/hast/hast-materializer.js";
 import { defineMdastPlugin, defineHastPlugin } from "../src/plugin.js";
 import type { MdxJsxFlowElement, MdxJsxFlowElementData } from "../src/mdx-types.js";
 import type { MdastNode, MdastNodeInternal, HastNode, HastNodeInternal } from "../src/types.js";
+import { findByType } from "./fixtures.js";
 
 // Wire constants, must match command-buffer.ts. The payload-type byte is the
 // guard that each side really took its intended path — without it a silent
@@ -39,20 +40,6 @@ import type { MdastNode, MdastNodeInternal, HastNode, HastNodeInternal } from ".
 const CMD_REPLACE = 0x0b;
 const PAYLOAD_SERDE_JSON = 0x12;
 const PAYLOAD_OPSTREAM = 0x14;
-
-interface TreeNode {
-  type: string;
-  children?: TreeNode[];
-}
-
-function findByType(node: TreeNode, type: string): TreeNode | undefined {
-  if (node.type === type) return node;
-  for (const c of node.children ?? []) {
-    const hit = findByType(c, type);
-    if (hit) return hit;
-  }
-  return undefined;
-}
 
 function expectIdenticalArenas(viaOpstream: Uint8Array, viaJson: Uint8Array): void {
   expect(viaOpstream).toEqual(viaJson);
@@ -248,6 +235,36 @@ test("mdast: bare text with a value", () => {
   expectMdastParity({ type: "text", value: "plain text replacement" } satisfies MdastNode);
 });
 
+test("mdast: non-ASCII strings ride encodeInto's bulk path with a correct length backpatch", () => {
+  expectMdastParity({
+    type: "paragraph",
+    children: [
+      { type: "text", value: "emoji 🎉🚀 mixed with CJK 日本語のテキスト" },
+      {
+        type: "link",
+        url: "https://example.com/路径/ページ?q=🎯",
+        title: "タイトル 🌟 标题",
+        children: [{ type: "text", value: "リンク 🔗" }],
+      },
+    ],
+  } satisfies MdastNode);
+});
+
+test("mdast: a large replacement tree grows the op-stream writer past its initial buffer", () => {
+  // Well past OpWriter's 512-byte initial size (and any growth left over from
+  // earlier tests reusing the module-level writer), forcing ByteWriter.ensure.
+  const children = Array.from({ length: 64 }, (_, i) => ({
+    type: "paragraph" as const,
+    children: [
+      {
+        type: "text" as const,
+        value: `paragraph body ${i} with enough text to push the op-stream well past its initial buffer`,
+      },
+    ],
+  }));
+  expectMdastParity({ type: "blockquote", children } satisfies MdastNode);
+});
+
 // HAST: visitor return value (op-stream) vs hand-built replaceRawJson carrying
 // the same markHast-shaped JSON the visitor's fallback emits (`_hast: true` on
 // every node, only the fields the node actually has).
@@ -278,6 +295,11 @@ test("hast: element replacement with properties and nested children", () => {
       },
     },
   });
+  // The hast visitor applies its commands internally, so the payload-type byte
+  // is out of reach; spy on the CommandBuffer methods instead to guard that
+  // this side really took the op-stream path (no silent JSON fallback).
+  const opstreamSpy = vi.spyOn(CommandBuffer.prototype, "replaceOpstream");
+  const jsonFallbackSpy = vi.spyOn(CommandBuffer.prototype, "replaceRawJson");
   visitHastHandle(
     handleA,
     plugin,
@@ -285,6 +307,10 @@ test("hast: element replacement with properties and nested children", () => {
     getHandleSource(handleA),
     undefined,
   );
+  expect(opstreamSpy).toHaveBeenCalledTimes(1);
+  expect(jsonFallbackSpy).not.toHaveBeenCalled();
+  opstreamSpy.mockRestore();
+  jsonFallbackSpy.mockRestore();
   const viaOpstream = serializeHandle(handleA);
 
   const handleB = createHastHandle(md);

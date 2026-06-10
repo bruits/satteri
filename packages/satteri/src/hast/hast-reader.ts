@@ -1,7 +1,7 @@
 import type { BufferHeader } from "../types.js";
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "../mdx-types.js";
 import { restorePhantomSpaces } from "../phantom.js";
-import { readPosition } from "../mdast/wire-read.js";
+import { readPosition } from "../wire-read.js";
 import type { Position } from "unist";
 import {
   PROP_STRING,

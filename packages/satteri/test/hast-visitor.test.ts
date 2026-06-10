@@ -10,6 +10,8 @@ import {
   getHandleSource,
 } from "../index.js";
 import { defineHastPlugin } from "../src/plugin.js";
+import { dropHandle } from "../src/index.js";
+import { collect } from "./fixtures.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { Element, ElementContent, Text } from "hast";
@@ -694,6 +696,22 @@ describe("visitHastHandle - mutations", () => {
     const html = renderHandle(handle);
     expect(html).toContain("<h1>A B Hello</h1>");
   });
+
+  test("context mutations reject plugin-built nodes with no arena id", () => {
+    const { handle, source } = setup();
+    const plugin = defineHastPlugin({
+      name: "remove-fresh-node",
+      element: {
+        filter: ["h1"],
+        visit(_node, ctx) {
+          ctx.removeNode({ type: "text", value: "x" });
+        },
+      },
+    });
+    expect(() =>
+      visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
+    ).toThrow(/no arena id/);
+  });
 });
 
 // Diagnostics
@@ -1124,6 +1142,26 @@ describe("visitHastHandle - child stubs", () => {
     expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
   });
 
+  test("a stub materialized after dropHandle throws the retention error", () => {
+    const { handle, source } = setup();
+    let retained: ElementContent[] = [];
+    const plugin = defineHastPlugin({
+      name: "retain-children-then-drop",
+      element: {
+        filter: ["h1"],
+        visit(node) {
+          retained = node.children;
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    // The wrapped dropHandle bumps the handle epoch, so a deferred snapshot of
+    // the dropped arena fails with the retention error, not a RangeError.
+    dropHandle(handle);
+    expect(retained[0]!.type).toBe("text");
+    expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
+  });
+
   test("a spread copy of a child stub is new content, not a reused ref", () => {
     const { handle, source } = setup("# Hello");
     const plugin = defineHastPlugin({
@@ -1172,4 +1210,35 @@ test("a spread copy of a matched node is new content, not a reused ref", () => {
   visitHastHandle(handle, plugin, subs, source, undefined);
   const html = renderHandle(handle);
   expect(html).toContain("<section><h2>Hello</h2></section>");
+});
+
+test("a bare spread replacement keeps properties and children without re-specifying them", () => {
+  const { handle, source } = setup('[hello **bold**](/x "T")');
+  let copyKeys: string[] = [];
+  const plugin = defineHastPlugin({
+    name: "replace-with-bare-spread-copy",
+    element: {
+      filter: ["a"],
+      visit(node, ctx) {
+        // `properties`/`children` are own enumerable getters on matched nodes,
+        // so a plain spread must carry them — and none of the internals.
+        const copy = { ...node, tagName: "h2" };
+        copyKeys = Object.keys(copy);
+        ctx.replaceNode(node, copy);
+      },
+    },
+  });
+  visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+  expect(copyKeys).toEqual(expect.arrayContaining(["properties", "children"]));
+  expect(copyKeys.filter((k) => k.startsWith("_"))).toEqual([]);
+  const tree = materializeHastTree(new HastReader(serializeHandle(handle)));
+  const h2 = collect(
+    tree,
+    (n): n is Element => n.type === "element" && (n as Element).tagName === "h2",
+  )[0]!;
+  expect(h2.properties).toEqual({ href: "/x", title: "T" });
+  expect(h2.children).toMatchObject([
+    { type: "text", value: "hello " },
+    { type: "element", tagName: "strong" },
+  ]);
 });

@@ -12,9 +12,7 @@ interface StubResolver {
 }
 
 /** Stub host shape: `_id`/`_resolver` are enumerable plain fields for
- *  construction speed. A spread copy carries them, but identity checks key off
- *  `instanceof` (and mdast's `_nodeId` fallback, a different key), so copies
- *  correctly read as new content. */
+ *  construction speed; spread/identity rules are enforced by the visitors' `nid()`. */
 interface StubHost {
   _resolver: StubResolver;
   _id: number;
@@ -62,4 +60,15 @@ export function stubDescriptors(fields: readonly string[]): PropertyDescriptorMa
     map[key] = { get: fieldGetter(key), enumerable: true, configurable: true };
   }
   return map;
+}
+
+/** Node tags are dense small ints, so the per-child stub loop indexes flat
+ *  arrays instead of paying Map/dictionary lookups. */
+export function flatByTag<T>(table: Readonly<Record<number, T>>): readonly (T | undefined)[] {
+  const flat: (T | undefined)[] = [];
+  for (const tag of Object.keys(table)) {
+    const nodeType = Number(tag);
+    flat[nodeType] = table[nodeType];
+  }
+  return flat;
 }

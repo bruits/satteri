@@ -2,7 +2,7 @@ import { materializeNode } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
 import { CommandBuffer, classifyReturn, type StructuralOp } from "../command-buffer.js";
 import { restorePhantomSpaces } from "../phantom.js";
-import { ru16, ru32, rstr, readPosition } from "./wire-read.js";
+import { ru16, ru32, rstr, readPosition } from "../wire-read.js";
 import { decodeMdastTypeData } from "./generated/layout.js";
 import {
   TYPE_NAMES,
@@ -33,6 +33,7 @@ import {
 } from "../op-stream.js";
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
+import { asArray, makeRequireNid, mergeAndReset } from "../visitor-shared.js";
 import { LazyChildResolver } from "../lazy-child-resolver.js";
 import { MdastChildStub } from "./child-stub.js";
 import type { MdastHandle } from "../handles.js";
@@ -90,25 +91,7 @@ function nid(node: MdastNode): number | undefined {
   return mdastNodeIdMap.get(node as object) ?? (node as MdastNodeInternal)._nodeId;
 }
 
-/**
- * Arena id for a node passed to a context method. Plugin-built nodes have no
- * id; without this check the id would coerce to 0 in the command buffer and
- * the mutation would silently target the document root.
- */
-function requireNid(node: MdastNode, method: string): number {
-  const id = nid(node);
-  if (id === undefined) {
-    throw new Error(
-      `${method}: node has no arena id — it was built in JS, not read from this tree. ` +
-        `Pass plugin-built nodes as new content (e.g. the second argument of insertAfter).`,
-    );
-  }
-  return id;
-}
-
-function asArray<T>(value: T | T[]): T[] {
-  return Array.isArray(value) ? value : [value];
-}
+const requireNid = makeRequireNid(nid);
 
 export class MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = new CommandBuffer();
@@ -322,28 +305,6 @@ interface MdastVisitResult {
   hasMutations: boolean;
 }
 
-const EMPTY_BYTES = new Uint8Array(0);
-
-function mergeAndReset(
-  returnBuffer: CommandBuffer,
-  ctx: MdastVisitorContext,
-): { merged: Uint8Array; hasMutations: boolean } {
-  const ctxCmdBuf = ctx.getCommandBuffer();
-  // The common case — no mutations this pass — allocates nothing.
-  if (returnBuffer.length === 0 && ctxCmdBuf.length === 0) {
-    return { merged: EMPTY_BYTES, hasMutations: false };
-  }
-  const ctxBuf = ctxCmdBuf.getBuffer();
-  const retBuf = returnBuffer.getBuffer();
-  const merged = new Uint8Array(retBuf.length + ctxBuf.length);
-  merged.set(retBuf, 0);
-  merged.set(ctxBuf, retBuf.length);
-
-  returnBuffer.reset();
-  ctxCmdBuf.reset();
-  return { merged, hasMutations: true };
-}
-
 export type { MdastHandle };
 
 interface MdastSubscription {
@@ -401,11 +362,79 @@ function readMdastChildStubs(
   return stubs;
 }
 
+/** Shared slot descriptor for the lazy-children locals: they ride on the node
+ *  itself (no per-node closure) but stay non-enumerable, so a spread copy is a
+ *  plain plugin-built tree. */
+const HIDDEN_SLOT: PropertyDescriptor = {
+  value: undefined,
+  writable: true,
+  enumerable: false,
+  configurable: true,
+};
+
+interface LazyChildrenHost {
+  _view: DataView;
+  _buf: Uint8Array;
+  _childIdsPos: number;
+  _childTypesPos: number;
+  _childCount: number;
+  _resolver: MdastLazyChildResolver;
+}
+
+/** Own enumerable getter (so spreads carry the value), self-replacing with the
+ *  one stable stub array on first read. */
+function lazyChildrenGetter(this: LazyChildrenHost): MdastNode[] {
+  const val = readMdastChildStubs(
+    this._view,
+    this._buf,
+    this._childIdsPos,
+    this._childTypesPos,
+    this._childCount,
+    this._resolver,
+  );
+  Object.defineProperty(this, "children", {
+    value: val,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  return val;
+}
+
+const LAZY_CHILDREN_DESCRIPTORS: PropertyDescriptorMap = {
+  _view: HIDDEN_SLOT,
+  _buf: HIDDEN_SLOT,
+  _childIdsPos: HIDDEN_SLOT,
+  _childTypesPos: HIDDEN_SLOT,
+  _childCount: HIDDEN_SLOT,
+  _resolver: HIDDEN_SLOT,
+  children: { get: lazyChildrenGetter, enumerable: true, configurable: true },
+};
+
+function makeLazyChildren(
+  node: object,
+  view: DataView,
+  buf: Uint8Array,
+  childIdsPos: number,
+  childTypesPos: number,
+  childCount: number,
+  resolver: MdastLazyChildResolver,
+): void {
+  Object.defineProperties(node, LAZY_CHILDREN_DESCRIPTORS);
+  const host = node as LazyChildrenHost;
+  host._view = view;
+  host._buf = buf;
+  host._childIdsPos = childIdsPos;
+  host._childTypesPos = childTypesPos;
+  host._childCount = childCount;
+  host._resolver = resolver;
+}
+
 /**
  * Read an MDAST node from the inline data in a match buffer entry.
  *
  * Inline format (from Rust serialize_mdast_node_inline):
- *   [node_data: u32+bytes][position: 6×u32 = 24B][child_count: u16][child_ids: N×u32]
+ *   [node_data: u32+bytes][position: 6×u32 = 24B][child_count: u32][child_ids: N×u32]
  *   [child_types: N×u8][type-specific data]
  */
 function readMdastMatchedNode(
@@ -425,8 +454,10 @@ function readMdastMatchedNode(
     const jsonStr = rstr(buf, pos, dataJsonLen);
     try {
       initialData = JSON.parse(jsonStr);
-    } catch {
-      /* ignore */
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`readMdastMatchedNode: malformed node_data for nodeId=${nodeId}`, err);
+      }
     }
     pos += dataJsonLen;
   }
@@ -434,8 +465,8 @@ function readMdastMatchedNode(
   const position = readPosition(view, pos);
   pos += 24;
 
-  const childCount = ru16(view, pos);
-  pos += 2;
+  const childCount = ru32(view, pos);
+  pos += 4;
   // Ids/types decode lazily with `.children` — most matched nodes never read them.
   const childIdsPos = pos;
   pos += childCount * 4;
@@ -447,27 +478,7 @@ function readMdastMatchedNode(
   const node: Record<string, unknown> = { type: typeName };
   if (position !== undefined) node.position = position;
   if (childCount > 0) {
-    Object.defineProperty(node, "children", {
-      get() {
-        const val = readMdastChildStubs(
-          view,
-          buf,
-          childIdsPos,
-          childTypesPos,
-          childCount,
-          resolver,
-        );
-        Object.defineProperty(this, "children", {
-          value: val,
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        });
-        return val;
-      },
-      configurable: true,
-      enumerable: true,
-    });
+    makeLazyChildren(node, view, buf, childIdsPos, childTypesPos, childCount, resolver);
   }
 
   // Fixed-field types decode from the generated layout table; the rest

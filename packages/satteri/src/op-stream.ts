@@ -66,16 +66,6 @@ export class OpWriter extends ByteWriter {
     super(512);
   }
 
-  #u32(v: number): void {
-    const buf = this.buf;
-    let n = this.n;
-    buf[n++] = v & 255;
-    buf[n++] = (v >> 8) & 255;
-    buf[n++] = (v >> 16) & 255;
-    buf[n++] = (v >>> 24) & 255;
-    this.n = n;
-  }
-
   open(type: number): void {
     this.ensure(2);
     this.buf[this.n++] = OP_OPEN;
@@ -105,7 +95,7 @@ export class OpWriter extends ByteWriter {
     this.ensure(6);
     this.buf[this.n++] = OP_U32;
     this.buf[this.n++] = field;
-    this.#u32(v);
+    this.writeU32(v);
   }
 
   bool(field: number, v: boolean): void {
@@ -133,14 +123,14 @@ export class OpWriter extends ByteWriter {
   ref(id: number): void {
     this.ensure(5);
     this.buf[this.n++] = OP_REF;
-    this.#u32(id);
+    this.writeU32(id);
   }
 
   /** Table column-alignment codes (0=none, 1=left, 2=right, 3=center). */
   align(codes: readonly number[]): void {
     this.ensure(5 + codes.length);
     this.buf[this.n++] = OP_ALIGN;
-    this.#u32(codes.length);
+    this.writeU32(codes.length);
     for (let i = 0; i < codes.length; i++) this.buf[this.n++] = codes[i]! & 255;
   }
 

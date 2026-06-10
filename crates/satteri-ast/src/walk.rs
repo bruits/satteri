@@ -16,11 +16,14 @@
 //!   per matched node: inline resolved data (format depends on node type)
 //! ```
 //!
+//! `data_len` is advisory only: no consumer reads it (lengths are parsed inline
+//! from the payload) and it wraps for >64 KiB payloads.
+//!
 //! Every matched node's payload shares the same prelude (MDAST and HAST alike):
 //! ```text
 //! [node_data: u32 len + utf8 JSON bytes]   ; 0-length when the node has no `data`
 //! [position: 6×u32 = 24B]                  ; start_offset, end_offset, start_line, start_col, end_line, end_col
-//! [child_count: u16][child_ids: child_count × u32][child_types: child_count × u8]
+//! [child_count: u32][child_ids: child_count × u32][child_types: child_count × u8]
 //! [type-specific resolved data]
 //! ```
 //! Child types ride along with the ids so JS can build typed child stubs
@@ -190,15 +193,9 @@ fn walk_and_collect_inner<K: ArenaKind>(
     out
 }
 
-/// MDAST node inline serialization: the shared prelude (see the module header)
-/// followed by the type-specific tail.
-fn serialize_mdast_node_inline(
-    arena: &Arena<Mdast>,
-    node_id: u32,
-    node_type: u8,
-    type_data: &[u8],
-    out: &mut Vec<u8>,
-) {
+/// The shared per-match prelude (see the module header): node-data JSON block,
+/// position, then child ids + types.
+fn write_walk_prelude<K: ArenaKind>(arena: &Arena<K>, node_id: u32, out: &mut Vec<u8>) {
     let node = arena.get_node(node_id);
 
     // Node data (JSON bytes), length-prefixed, always first so JS can read it at a known offset
@@ -217,15 +214,26 @@ fn serialize_mdast_node_inline(
     out.extend_from_slice(&node.end_line.to_le_bytes());
     out.extend_from_slice(&node.end_column.to_le_bytes());
 
-    // Children (for parent nodes)
     let children = arena.get_children(node_id);
-    out.extend_from_slice(&(children.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(children.len() as u32).to_le_bytes());
     for &child_id in children {
         out.extend_from_slice(&child_id.to_le_bytes());
     }
     for &child_id in children {
         out.push(arena.get_node(child_id).node_type);
     }
+}
+
+/// MDAST node inline serialization: the shared prelude (see the module header)
+/// followed by the type-specific tail.
+fn serialize_mdast_node_inline(
+    arena: &Arena<Mdast>,
+    node_id: u32,
+    node_type: u8,
+    type_data: &[u8],
+    out: &mut Vec<u8>,
+) {
+    write_walk_prelude(arena, node_id, out);
 
     // Fixed-field leaf types are generated from the layout table; this returns
     // false for the variable-length / cross-field types handled below.
@@ -370,31 +378,7 @@ fn serialize_hast_node_inline(
     type_data: &[u8],
     out: &mut Vec<u8>,
 ) {
-    let node = arena.get_node(node_id);
-
-    // Node data (JSON bytes), length-prefixed, always first so JS can read it at a known offset
-    if let Some(data) = arena.get_node_data(node_id) {
-        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        out.extend_from_slice(data);
-    } else {
-        out.extend_from_slice(&0u32.to_le_bytes());
-    }
-
-    out.extend_from_slice(&node.start_offset.to_le_bytes());
-    out.extend_from_slice(&node.end_offset.to_le_bytes());
-    out.extend_from_slice(&node.start_line.to_le_bytes());
-    out.extend_from_slice(&node.start_column.to_le_bytes());
-    out.extend_from_slice(&node.end_line.to_le_bytes());
-    out.extend_from_slice(&node.end_column.to_le_bytes());
-
-    let children = arena.get_children(node_id);
-    out.extend_from_slice(&(children.len() as u16).to_le_bytes());
-    for &child_id in children {
-        out.extend_from_slice(&child_id.to_le_bytes());
-    }
-    for &child_id in children {
-        out.push(arena.get_node(child_id).node_type);
-    }
+    write_walk_prelude(arena, node_id, out);
 
     match node_type {
         // HAST element: tag + properties
@@ -404,15 +388,15 @@ fn serialize_hast_node_inline(
                 out.extend_from_slice(&0u16.to_le_bytes()); // 0 props
                 return;
             }
-            write_str16(arena, out, type_data, 0); // tag
+            write_str16(arena, out, type_data, 0);
 
             let prop_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
             out.extend_from_slice(&(prop_count as u16).to_le_bytes());
             for i in 0..prop_count {
                 let base = 16 + i * 20;
-                write_str16(arena, out, type_data, base); // name
-                out.push(type_data[base + 8]); // kind
-                write_str16(arena, out, type_data, base + 12); // value
+                write_str16(arena, out, type_data, base);
+                out.push(type_data[base + 8]);
+                write_str16(arena, out, type_data, base + 12);
             }
         }
 
@@ -423,15 +407,15 @@ fn serialize_hast_node_inline(
                 out.extend_from_slice(&0u16.to_le_bytes()); // 0 attrs
                 return;
             }
-            write_str16(arena, out, type_data, 0); // element name
+            write_str16(arena, out, type_data, 0);
 
             let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
             out.extend_from_slice(&(attr_count as u16).to_le_bytes());
             for i in 0..attr_count {
                 let base = 16 + i * 20;
-                out.push(type_data[base]); // kind
-                write_str16(arena, out, type_data, base + 4); // attr name
-                write_str32(arena, out, type_data, base + 12); // attr value
+                out.push(type_data[base]);
+                write_str16(arena, out, type_data, base + 4);
+                write_str32(arena, out, type_data, base + 12);
             }
         }
 
@@ -573,8 +557,8 @@ mod tests {
         let data_len = u16::from_le_bytes(buf[4 + 10..4 + 12].try_into().unwrap()) as usize;
         assert!(data_len > 0);
         // Skip prelude:
-        // [data_len=0: 4B][position: 24B][child_count=1: 2B][child_id: 4B][child_type: 1B] = 35B
-        let tag_off = data_offset + 4 + 24 + 2 + 4 + 1;
+        // [data_len=0: 4B][position: 24B][child_count=1: 4B][child_id: 4B][child_type: 1B] = 37B
+        let tag_off = data_offset + 4 + 24 + 4 + 4 + 1;
         let tag_len = u16::from_le_bytes(buf[tag_off..tag_off + 2].try_into().unwrap()) as usize;
         assert_eq!(tag_len, 1); // "a"
         let tag = std::str::from_utf8(&buf[tag_off + 2..tag_off + 2 + tag_len]).unwrap();

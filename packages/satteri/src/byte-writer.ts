@@ -6,7 +6,8 @@
  * fields after an `ensure` for the whole record (one bounds check per record,
  * not per byte, and no per-byte call in unoptimized tiers — CodSpeed's
  * Simulation mode runs too few iterations for V8 to inline method calls).
- * Only the non-trivial logic lives here: growth and UTF-8 string encoding.
+ * Only the non-trivial logic lives here: growth, u32 writes, and UTF-8
+ * string encoding.
  */
 
 const encoder = new TextEncoder();
@@ -61,6 +62,17 @@ export class ByteWriter {
     this.buf = grown;
   }
 
+  /** Write a u32 (LE) at the cursor; caller must have `ensure`d 4 bytes. */
+  protected writeU32(v: number): void {
+    const buf = this.buf;
+    let n = this.n;
+    buf[n++] = v & 255;
+    buf[n++] = (v >> 8) & 255;
+    buf[n++] = (v >> 16) & 255;
+    buf[n++] = (v >>> 24) & 255;
+    this.n = n;
+  }
+
   /** u32 byte length + UTF-8 bytes (self-ensuring). */
   protected utf8WithU32Len(s: string): void {
     const len = s.length;
@@ -77,12 +89,9 @@ export class ByteWriter {
         }
       }
       if (ascii) {
+        this.writeU32(len);
         const buf = this.buf;
-        let n = this.n;
-        buf[n++] = len & 255;
-        buf[n++] = (len >> 8) & 255;
-        buf[n++] = (len >> 16) & 255;
-        buf[n++] = (len >>> 24) & 255;
+        const n = this.n;
         for (let i = 0; i < len; i++) buf[n + i] = s.charCodeAt(i);
         this.n = n + len;
         return;
@@ -90,14 +99,12 @@ export class ByteWriter {
     }
 
     // Bulk path: encodeInto writes UTF-8 straight into the buffer (no alloc, no
-    // per-char loop); backpatch the byte length once it's known.
+    // per-char loop); the byte length is only known afterwards, so encode past
+    // the length slot, then rewind the cursor to fill it in.
     const lenPos = this.n;
-    this.n += 4;
-    const written = encoder.encodeInto(s, this.buf.subarray(this.n)).written;
-    this.buf[lenPos] = written & 255;
-    this.buf[lenPos + 1] = (written >> 8) & 255;
-    this.buf[lenPos + 2] = (written >> 16) & 255;
-    this.buf[lenPos + 3] = (written >>> 24) & 255;
+    const written = encoder.encodeInto(s, this.buf.subarray(lenPos + 4)).written;
+    this.n = lenPos;
+    this.writeU32(written);
     this.n += written;
   }
 }

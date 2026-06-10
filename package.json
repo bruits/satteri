@@ -9,7 +9,7 @@
     "lint:fix": "oxlint --fix && cargo clippy --fix --allow-dirty",
     "format": "oxfmt && cargo fmt",
     "codegen": "cargo run -p satteri-layout-codegen && pnpm format",
-    "codegen:check": "pnpm codegen && git diff --exit-code"
+    "codegen:check": "pnpm codegen && git diff --exit-code && test -z \"$(git status --porcelain)\""
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.6.0",

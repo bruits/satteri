@@ -2,8 +2,10 @@
  * Binary command buffer for efficient JS→Rust mutation serialization.
  *
  * Simple mutations (remove, setProperty) are encoded as compact binary commands.
- * Structural mutations (insert, replace) carry payloads that can be raw strings
- * (for Rust to re-parse) or JSON-serialized node trees.
+ * Structural mutations (insert, replace, …) carry one of three payload kinds:
+ * raw markdown/HTML strings (re-parsed by Rust), JSON-serialized node trees,
+ * or compiled op-streams (`PAYLOAD_OPSTREAM`, replayed straight into the arena
+ * — see op-stream.ts).
  *
  * All multi-byte integers are little-endian to match native x86/ARM layout and
  * avoid byte-swapping on the Rust side.
@@ -63,20 +65,10 @@ export class CommandBuffer extends ByteWriter {
     super(INITIAL_SIZE);
   }
 
-  #u32(v: number): void {
-    const buf = this.buf;
-    let n = this.n;
-    buf[n++] = v & 255;
-    buf[n++] = (v >> 8) & 255;
-    buf[n++] = (v >> 16) & 255;
-    buf[n++] = (v >>> 24) & 255;
-    this.n = n;
-  }
-
   removeNode(nodeId: number): void {
     this.ensure(5);
     this.buf[this.n++] = CMD_REMOVE;
-    this.#u32(nodeId);
+    this.writeU32(nodeId);
   }
 
   /** Unified set-property for both MDAST and HAST nodes. */
@@ -107,7 +99,7 @@ export class CommandBuffer extends ByteWriter {
     // 1(cmd) + 4(nodeId) + 1(valueType); name and value are length-prefixed strings
     this.ensure(6);
     this.buf[this.n++] = CMD_SET_PROPERTY;
-    this.#u32(nodeId);
+    this.writeU32(nodeId);
     this.buf[this.n++] = valueType;
     this.utf8WithU32Len(key);
     this.utf8WithU32Len(str);
@@ -174,7 +166,7 @@ export class CommandBuffer extends ByteWriter {
   private writePayloadCommand(cmd: number, nodeId: number, payloadType: number, s: string): void {
     this.ensure(6);
     this.buf[this.n++] = cmd;
-    this.#u32(nodeId);
+    this.writeU32(nodeId);
     this.buf[this.n++] = payloadType;
     this.utf8WithU32Len(s);
   }
@@ -211,9 +203,9 @@ export class CommandBuffer extends ByteWriter {
   private writeOpstreamCommand(cmd: number, nodeId: number, ops: Uint8Array): void {
     this.ensure(10 + ops.length);
     this.buf[this.n++] = cmd;
-    this.#u32(nodeId);
+    this.writeU32(nodeId);
     this.buf[this.n++] = PAYLOAD_OPSTREAM;
-    this.#u32(ops.length);
+    this.writeU32(ops.length);
     this.buf.set(ops, this.n);
     this.n += ops.length;
   }

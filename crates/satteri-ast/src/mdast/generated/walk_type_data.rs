@@ -13,11 +13,7 @@ pub(crate) fn write_mdast_type_data_inline(
 ) -> bool {
     match node_type {
         2 => {
-            out.push(if !type_data.is_empty() {
-                type_data[0]
-            } else {
-                1
-            });
+            out.push(if !type_data.is_empty() { type_data[0] } else { 1 });
         }
         7 | 10 | 13 | 25 | 26 => {
             write_str32(arena, out, type_data, 0);
@@ -45,20 +41,12 @@ pub(crate) fn write_mdast_type_data_inline(
         17 => {
             write_str16(arena, out, type_data, 0);
             write_str16(arena, out, type_data, 8);
-            out.push(if type_data.len() > 16 {
-                type_data[16]
-            } else {
-                0
-            });
+            out.push(if type_data.len() > 16 { type_data[16] } else { 0 });
         }
         18 => {
             write_str16(arena, out, type_data, 0);
             write_str16(arena, out, type_data, 8);
-            out.push(if type_data.len() > 16 {
-                type_data[16]
-            } else {
-                0
-            });
+            out.push(if type_data.len() > 16 { type_data[16] } else { 0 });
             write_str16(arena, out, type_data, 20);
         }
         19 => {
@@ -68,11 +56,7 @@ pub(crate) fn write_mdast_type_data_inline(
         20 => {
             write_str16(arena, out, type_data, 0);
             write_str16(arena, out, type_data, 8);
-            out.push(if type_data.len() > 16 {
-                type_data[16]
-            } else {
-                0
-            });
+            out.push(if type_data.len() > 16 { type_data[16] } else { 0 });
         }
         27 => {
             write_str16(arena, out, type_data, 0);

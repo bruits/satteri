@@ -15,7 +15,7 @@ import {
 import type { MdastNode } from "../src/types.js";
 import type { Heading, Text } from "mdast";
 import { defineMdastPlugin } from "../src/plugin.js";
-import { markdownToHtml } from "../src/index.js";
+import { markdownToHtml, applyCommandsToMdastHandle } from "../src/index.js";
 
 /** Helper: run a visitor on markdown, apply mutations, convert to HAST, render HTML. */
 function visitAndRender(
@@ -738,6 +738,34 @@ test("stub `.type` stays readable after the pass; first materialization throws",
   });
   markdownToHtml("# Hello\n\nWorld", { mdastPlugins: [plugin] });
   expect(retained).toHaveLength(1);
+  expect(retained[0]!.type).toBe("text");
+  expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
+});
+
+test("a stub materialized after a manual applyCommandsToMdastHandle throws the retention error", () => {
+  const { handle, source } = setup();
+  let retained: Heading["children"] = [];
+  const plugin = defineMdastPlugin({
+    name: "retain-children-manual-apply",
+    heading(node) {
+      retained = node.children;
+      return {
+        type: "heading",
+        depth: 2,
+        children: [{ type: "text", value: "x" }],
+      } satisfies MdastNode;
+    },
+  });
+  const result = visitMdastHandle(
+    handle,
+    plugin,
+    resolveMdastSubscriptions(plugin),
+    source,
+    undefined,
+  ) as { commandBuffer: Uint8Array };
+  // The wrapped mutator bumps the handle epoch: the rebuilt arena renumbered
+  // the stub's id, so it must hit the retention error, not a RangeError.
+  applyCommandsToMdastHandle(handle, result.commandBuffer);
   expect(retained[0]!.type).toBe("text");
   expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
 });

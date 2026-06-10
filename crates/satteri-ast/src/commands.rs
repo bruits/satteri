@@ -128,8 +128,13 @@ pub enum CommandError {
     /// A patch's anchor lives inside a subtree whose root was removed, so
     /// the patch can never apply.
     PatchOnRemovedSubtree(u32),
-    /// An op-stream contained more `OP_CLOSE` ops than `OP_OPEN`s.
+    /// An op-stream's `OP_OPEN`s and `OP_CLOSE`s did not pair up.
     UnbalancedOpstream,
+    /// A wire-supplied node id does not exist in the target arena.
+    InvalidNodeId(u32),
+    /// A stored node's `type_data` is shorter than its declared layout, so a
+    /// field write would spill into the next node's data.
+    TypeDataTooShort,
 }
 
 impl std::fmt::Display for CommandError {
@@ -152,7 +157,16 @@ impl std::fmt::Display for CommandError {
                 write!(f, "wrapNode targets node {id} which is also removed")
             }
             Self::UnbalancedOpstream => {
-                write!(f, "unbalanced op-stream: CLOSE without a matching OPEN")
+                write!(f, "unbalanced op-stream: OPEN and CLOSE ops do not pair up")
+            }
+            Self::InvalidNodeId(id) => {
+                write!(f, "node id {id} does not exist in the target arena")
+            }
+            Self::TypeDataTooShort => {
+                write!(
+                    f,
+                    "stored node type_data is shorter than its layout requires"
+                )
             }
             Self::ChildPatchOnRemovedNode(id) => write!(
                 f,

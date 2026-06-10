@@ -64,15 +64,23 @@ const replaceLinksHast = defineHastPlugin({
   name: "replace-links",
   element: {
     filter: ["a"],
-    visit(node: HastNode, ctx: HastVisitorContext) {
-      const el = node as { properties?: Record<string, unknown>; children: HastNode[] };
+    visit(node, ctx) {
       ctx.replaceNode(node, {
         type: "element",
         tagName: "span",
-        properties: { className: ["link"], "data-href": String(el.properties?.href ?? "") },
-        children: el.children,
-      } as unknown as HastNode);
+        properties: { className: ["link"], "data-href": String(node.properties.href ?? "") },
+        children: node.children,
+      });
     },
+  },
+});
+
+// MDAST mirror of the keep-children fast path: passing `node.children` through
+// compiles them to refs and skips the arena snapshot.
+const replaceLinksMdast = defineMdastPlugin({
+  name: "replace-links-mdast",
+  link(node, ctx) {
+    ctx.replaceNode(node, { type: "emphasis", children: node.children });
   },
 });
 
@@ -86,7 +94,7 @@ const buildSubtreeMdast = defineMdastPlugin({
         { type: "heading", depth: 3, children: [{ type: "text", value: "Note" }] },
         { type: "paragraph", children: [{ type: "text", value: "Rebuilt paragraph body." }] },
       ],
-    } as unknown as MdastNode;
+    } satisfies MdastNode;
   },
 });
 
@@ -122,6 +130,10 @@ describe("markdownToHtml", () => {
 describe("markdownToHtml (plugin transforms)", () => {
   bench("HAST replaceNode keep-children (links)", () => {
     markdownToHtml(MARKDOWN, { hastPlugins: [replaceLinksHast] });
+  });
+
+  bench("MDAST replaceNode keep-children (links)", () => {
+    markdownToHtml(MARKDOWN, { mdastPlugins: [replaceLinksMdast] });
   });
 
   bench("MDAST build-subtree (paragraphs)", () => {

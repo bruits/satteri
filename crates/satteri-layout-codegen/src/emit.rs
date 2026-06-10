@@ -270,6 +270,9 @@ fn ts_field(f: &crate::schema::Field) -> String {
             Wire::U8 => "u8",
         }
     ));
+    if f.u8_default != 0 {
+        parts.push(format!("default: {}", f.u8_default));
+    }
     match f.js_kind {
         Js::StrNull => parts.push("nullable: true".to_string()),
         Js::Enum(values) => {
@@ -361,7 +364,7 @@ pub fn node_types_ts(
 /// The TS walk-path decoder: a descriptor table plus one generic decode loop.
 pub fn layout_ts(layouts: &[Layout]) -> String {
     let mut out = String::from(HEADER_TS);
-    out.push_str("import { ru16, ru32, rstr } from \"../wire-read.js\";\n");
+    out.push_str("import { ru16, ru32, rstr } from \"../../wire-read.js\";\n");
     out.push_str("import { restorePhantomSpaces } from \"../../phantom.js\";\n");
     out.push_str("import { lazyGroup } from \"../../lazy-props.js\";\n");
     out.push_str("import type { MdastReader } from \"../mdast-reader.js\";\n\n");
@@ -370,6 +373,7 @@ pub fn layout_ts(layouts: &[Layout]) -> String {
     out.push_str("  readonly js: string;\n");
     out.push_str("  readonly offset: number;\n");
     out.push_str("  readonly kind: FieldKind;\n");
+    out.push_str("  readonly default?: number;\n");
     out.push_str("  readonly nullable?: boolean;\n");
     out.push_str("  readonly values?: readonly string[];\n");
     out.push_str("  readonly skip?: boolean;\n");
@@ -475,7 +479,9 @@ export function materializeMdastFields(
     const out: Record<string, unknown> = {};
     for (const f of fields) {
       if (f.kind === "u8") {
-        const b = data[f.offset] ?? 0;
+        // Short type_data falls back to the layout's declared default,
+        // matching the Rust walk serializer.
+        const b = data[f.offset] ?? f.default ?? 0;
         if (!f.skip) out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
       } else {
         // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
@@ -525,6 +531,20 @@ pub fn wire_constants_rs(tables: &[&WireTable], module_doc: &[&str]) -> String {
             } else {
                 let _ = writeln!(out, "pub const {}: u8 = {val}; // {}", c.name, c.doc);
             }
+        }
+        // One-past-max of the op-field ids: scratch tables indexed by an OF_*
+        // (e.g. `FieldCollector.strs`) size with this so a new field id can
+        // never out-index them. The tables are `const`s, so identify OP_FIELDS
+        // by its id namespace rather than by address.
+        let is_op_fields =
+            !table.consts.is_empty() && table.consts.iter().all(|c| c.name.starts_with("OF_"));
+        if is_op_fields {
+            let count = table.consts.iter().map(|c| c.value).max().unwrap_or(0) as usize + 1;
+            let _ = writeln!(
+                out,
+                "// One past the highest op-field id; sizes per-node field scratch tables."
+            );
+            let _ = writeln!(out, "pub const OF_FIELD_COUNT: usize = {count};");
         }
     }
     out

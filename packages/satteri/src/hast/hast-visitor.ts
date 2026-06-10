@@ -17,7 +17,12 @@ import {
   HAST_MDX_TEXT_EXPRESSION,
   HAST_MDX_ESM,
 } from "./hast-reader.js";
-import { NAME_TO_TYPE, VISITOR_KEYS, HAST_OPSTREAM_TYPES } from "./generated/node-types.js";
+import {
+  TYPE_NAMES,
+  NAME_TO_TYPE,
+  VISITOR_KEYS,
+  HAST_OPSTREAM_TYPES,
+} from "./generated/node-types.js";
 import { CommandBuffer, type StructuralOp } from "../command-buffer.js";
 import {
   OpWriter,
@@ -34,7 +39,7 @@ import {
   emitMdxAttr,
 } from "../op-stream.js";
 import { restorePhantomSpaces } from "../phantom.js";
-import { readPosition, rstr } from "../mdast/wire-read.js";
+import { readPosition, rstr } from "../wire-read.js";
 import {
   walkHandle,
   applyCommandsToHandle,
@@ -43,6 +48,7 @@ import {
   parseEsm as napiParseEsm,
 } from "#binding";
 
+import { asArray, makeRequireNid, mergeAndReset } from "../visitor-shared.js";
 import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js";
 import { HastChildStub } from "./child-stub.js";
 import type { HastHandle } from "../handles.js";
@@ -144,12 +150,15 @@ function markHast(node: HastNode, isRoot = true): Record<string, unknown> {
 }
 
 /**
- * Arena identity of a node, rejecting impostors: `WalkElement` and
- * `HastChildStub` carry their id as a fast plain field, which object spread
- * would copy onto plain objects — trusting it blindly would splice an edited
- * copy as a reused ref and drop its edits. Plain objects are trusted only via
- * the WeakMap or a NON-enumerable `_nodeId` (the materializers' convention,
- * which spread cannot copy; stub copies carry `_id`, a different key).
+ * Arena identity of a node, rejecting impostors — the one place the
+ * spread/identity invariant is enforced. A spread copy of a matched node or
+ * stub must read as NEW content: trusting a copied id would splice the
+ * original in as a ref and drop the copy's edits. Real `WalkElement`s
+ * (non-enumerable `_nodeId`, invisible to spread) and `HastChildStub`s
+ * (enumerable `_id`, but that key is ignored on plain objects) are recognized
+ * by `instanceof`. Plain objects are trusted only via the WeakMap or a
+ * NON-enumerable `_nodeId` (the materializers' convention, which spread
+ * cannot copy).
  */
 function nid(node: HastNode): number | undefined {
   if (node instanceof WalkElement) return node._nodeId;
@@ -160,21 +169,7 @@ function nid(node: HastNode): number | undefined {
   return d !== undefined && !d.enumerable ? (d.value as number) : undefined;
 }
 
-/**
- * Arena id for a node passed to a context method. Plugin-built nodes have no
- * id; without this check the id would coerce to 0 in the command buffer and
- * the mutation would silently target the document root.
- */
-function requireNid(node: HastNode, method: string): number {
-  const id = nid(node);
-  if (id === undefined) {
-    throw new Error(
-      `${method}: node has no arena id — it was built in JS, not read from this tree. ` +
-        `Pass plugin-built nodes as new content (e.g. the second argument of insertAfter).`,
-    );
-  }
-  return id;
-}
+const requireNid = makeRequireNid(nid);
 
 /** New content for a HAST structural mutation. Unlike [`MdastContent`], HAST has
  *  a `raw` node type, so it needs no raw/rawHtml escape hatch. */
@@ -307,10 +302,6 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
   else if (typeof value === "number") w.prop(name, PROP_INT, String(value));
   else if (Array.isArray(value))
     w.prop(name, PROP_SPACE_SEP, value.filter((v) => typeof v === "string").join(" "));
-}
-
-function asArray<T>(value: T | T[]): T[] {
-  return Array.isArray(value) ? value : [value];
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
@@ -603,55 +594,99 @@ function decodeProperties(
   return properties;
 }
 
+/** Shared slot descriptor for the lazy-field wire locals: they ride on the
+ *  node itself (no per-node closure) but stay non-enumerable, so a spread copy
+ *  is a plain plugin-built tree. */
+const HIDDEN_SLOT: PropertyDescriptor = {
+  value: undefined,
+  writable: true,
+  enumerable: false,
+  configurable: true,
+};
+
+interface LazyChildrenHost {
+  _view: DataView;
+  _buf: Uint8Array;
+  _childIdsPos: number;
+  _childTypesPos: number;
+  _childCount: number;
+  _resolver: HastLazyChildResolver;
+}
+
+/** Own enumerable getter (so spreads carry the value), self-replacing with the
+ *  one stable stub array on first read. */
+function lazyChildrenGetter(this: LazyChildrenHost): HastNode[] {
+  const val = readChildStubs(
+    this._view,
+    this._buf,
+    this._childIdsPos,
+    this._childTypesPos,
+    this._childCount,
+    this._resolver,
+  );
+  Object.defineProperty(this, "children", {
+    value: val,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  return val;
+}
+
 /**
- * Walk-path element node: prototype getters instead of per-instance
- * Object.defineProperty. V8 optimises shared hidden classes far better —
- * ~16x faster to construct.
+ * Walk-path element node. `properties`/`children` are OWN enumerable getters
+ * (prototype getters are invisible to spread, so `{ ...node }` would silently
+ * drop them), installed from one shared descriptor map: every instance walks
+ * the same hidden-class chain with no per-node descriptor or closure
+ * allocation.
  */
 class WalkElement {
   readonly type = "element" as const;
   declare tagName: string;
   declare position?: Position | undefined;
   declare data?: Record<string, unknown> | undefined;
+  declare properties: Record<string, string | number | boolean | string[]>;
+  declare children: HastNode[];
 
-  /** @internal */ _view!: DataView;
-  /** @internal */ _buf!: Uint8Array;
-  /** @internal */ _propsPos!: number;
-  /** @internal */ _childIdsPos!: number;
-  /** @internal */ _childTypesPos!: number;
-  /** @internal */ _childCount!: number;
-  /** @internal */ _resolver!: HastLazyChildResolver;
-  /** @internal */ _nodeId!: number;
+  /** @internal */ declare _view: DataView;
+  /** @internal */ declare _buf: Uint8Array;
+  /** @internal */ declare _propsPos: number;
+  /** @internal */ declare _childIdsPos: number;
+  /** @internal */ declare _childTypesPos: number;
+  /** @internal */ declare _childCount: number;
+  /** @internal */ declare _resolver: HastLazyChildResolver;
+  /** @internal */ declare _nodeId: number;
 
-  get properties(): Record<string, string | number | boolean | string[]> {
-    const val = decodeProperties(this._view, this._buf, this._propsPos);
-    Object.defineProperty(this, "properties", {
-      value: val,
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
-    return val;
-  }
-
-  get children(): HastNode[] {
-    const val = readChildStubs(
-      this._view,
-      this._buf,
-      this._childIdsPos,
-      this._childTypesPos,
-      this._childCount,
-      this._resolver,
-    );
-    Object.defineProperty(this, "children", {
-      value: val,
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
-    return val;
+  constructor() {
+    Object.defineProperties(this, WALK_ELEMENT_DESCRIPTORS);
   }
 }
+
+const WALK_ELEMENT_DESCRIPTORS: PropertyDescriptorMap = {
+  _view: HIDDEN_SLOT,
+  _buf: HIDDEN_SLOT,
+  _propsPos: HIDDEN_SLOT,
+  _childIdsPos: HIDDEN_SLOT,
+  _childTypesPos: HIDDEN_SLOT,
+  _childCount: HIDDEN_SLOT,
+  _resolver: HIDDEN_SLOT,
+  _nodeId: HIDDEN_SLOT,
+  properties: {
+    get(this: WalkElement): Record<string, string | number | boolean | string[]> {
+      const val = decodeProperties(this._view, this._buf, this._propsPos);
+      Object.defineProperty(this, "properties", {
+        value: val,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      return val;
+    },
+    enumerable: true,
+    configurable: true,
+  },
+  children: { get: lazyChildrenGetter, enumerable: true, configurable: true },
+};
 
 /** Build the child-stub list for a matched node from the wire's `[child_ids]
  *  [child_types]` blocks — no arena snapshot. The seal check still applies:
@@ -836,7 +871,7 @@ function readMatchedNode(
   let pos = offset;
 
   // Shared prelude (matches serialize_hast_node_inline / serialize_mdast_node_inline):
-  //   [data_len: u32][data_bytes][position: 24B][child_count: u16][child_ids: N×u32][child_types: N×u8]
+  //   [data_len: u32][data_bytes][position: 24B][child_count: u32][child_ids: N×u32][child_types: N×u8]
   const dataLen = view.getUint32(pos, true);
   pos += 4;
   let data: Record<string, unknown> | null = null;
@@ -844,8 +879,10 @@ function readMatchedNode(
     const jsonStr = rstr(buf, pos, dataLen);
     try {
       data = JSON.parse(jsonStr) as Record<string, unknown>;
-    } catch {
-      /* ignore malformed JSON */
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`readMatchedNode: malformed node_data for nodeId=${nodeId}`, err);
+      }
     }
     pos += dataLen;
   }
@@ -853,8 +890,8 @@ function readMatchedNode(
   const position = readPosition(view, pos);
   pos += 24;
 
-  const childCount = view.getUint16(pos, true);
-  pos += 2;
+  const childCount = view.getUint32(pos, true);
+  pos += 4;
   // Ids/types decode lazily with `.children` — most matched nodes never read them.
   const childIdsPos = pos;
   pos += childCount * 4;
@@ -899,8 +936,8 @@ function readMatchedNode(
       data,
     );
   }
-  // Fallback: minimal node carrying whatever prelude data we found
-  const base: Record<string, unknown> = { type: `unknown(${nodeType})` };
+  // Fallback (e.g. doctype): minimal node carrying whatever prelude data we found
+  const base: Record<string, unknown> = { type: TYPE_NAMES[nodeType] ?? `unknown(${nodeType})` };
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   const node = base as unknown as HastNode;
@@ -918,6 +955,16 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
   }
 }
 
+const LAZY_CHILDREN_DESCRIPTORS: PropertyDescriptorMap = {
+  _view: HIDDEN_SLOT,
+  _buf: HIDDEN_SLOT,
+  _childIdsPos: HIDDEN_SLOT,
+  _childTypesPos: HIDDEN_SLOT,
+  _childCount: HIDDEN_SLOT,
+  _resolver: HIDDEN_SLOT,
+  children: { get: lazyChildrenGetter, enumerable: true, configurable: true },
+};
+
 function makeLazyChildren(
   node: object,
   view: DataView,
@@ -927,20 +974,14 @@ function makeLazyChildren(
   childCount: number,
   resolver: HastLazyChildResolver,
 ): void {
-  Object.defineProperty(node, "children", {
-    get() {
-      const children = readChildStubs(view, buf, childIdsPos, childTypesPos, childCount, resolver);
-      Object.defineProperty(this, "children", {
-        value: children,
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
-      return children;
-    },
-    configurable: true,
-    enumerable: true,
-  });
+  Object.defineProperties(node, LAZY_CHILDREN_DESCRIPTORS);
+  const host = node as LazyChildrenHost;
+  host._view = view;
+  host._buf = buf;
+  host._childIdsPos = childIdsPos;
+  host._childTypesPos = childTypesPos;
+  host._childCount = childCount;
+  host._resolver = resolver;
 }
 
 /** A result that is the same object as the input node is a no-op, so context
@@ -993,28 +1034,6 @@ function dispatchMatches(
   }
 
   return deferred;
-}
-
-const EMPTY_BYTES = new Uint8Array(0);
-
-function mergeAndReset(
-  returnBuffer: CommandBuffer,
-  ctx: HastVisitorContextImpl,
-): { merged: Uint8Array; hasMutations: boolean } {
-  const ctxCmdBuf = ctx.getCommandBuffer();
-  // The common case — no mutations this pass — allocates nothing.
-  if (returnBuffer.length === 0 && ctxCmdBuf.length === 0) {
-    return { merged: EMPTY_BYTES, hasMutations: false };
-  }
-  const ctxBuf = ctxCmdBuf.getBuffer();
-  const retBuf = returnBuffer.getBuffer();
-  const merged = new Uint8Array(retBuf.length + ctxBuf.length);
-  merged.set(retBuf, 0);
-  merged.set(ctxBuf, retBuf.length);
-
-  returnBuffer.reset();
-  ctxCmdBuf.reset();
-  return { merged, hasMutations: true };
 }
 
 /**

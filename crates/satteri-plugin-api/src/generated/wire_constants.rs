@@ -35,6 +35,8 @@ pub const OF_ORDERED: u8 = 13;
 pub const OF_SPREAD: u8 = 14;
 pub const OF_TAGNAME: u8 = 15; // HAST element tag name
 pub const OF_EXPLICIT: u8 = 16; // MDX JSX `_mdxExplicitJsx` flag
+// One past the highest op-field id; sizes per-node field scratch tables.
+pub const OF_FIELD_COUNT: usize = 17;
 
 // Command bytes (0x01–0x0F range). Each is followed by [nodeId: u32 LE];
 // structural commands then carry [payloadType: u8][payload…].
