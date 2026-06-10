@@ -339,21 +339,22 @@ pub fn node_types_ts(
         let _ = writeln!(out, "  {:?},", node.name);
     }
     out.push_str("]);\n\n");
-    out.push_str("/** Tags the op-stream replay rebuilds byte-identically to the JSON path;\n");
+    out.push_str("/** Name -> tag for the types the op-stream replay rebuilds byte-identically\n");
     out.push_str(
-        " *  excluded tags fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */\n",
+        " *  to the JSON path; one lookup gates AND resolves the emit-path tag. Excluded\n",
     );
+    out.push_str(" *  names fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */\n");
     let _ = writeln!(
         out,
-        "export const {prefix}_OPSTREAM_TYPES: ReadonlySet<number> = new Set(["
+        "export const {prefix}_OPSTREAM_TYPES: Readonly<Record<string, number>> = {{"
     );
     for node in nodes
         .iter()
         .filter(|n| !opstream_excluded.contains(&n.name))
     {
-        let _ = writeln!(out, "  {}, // {}", node.tag, node.name);
+        let _ = writeln!(out, "  {}: {},", node.name, node.tag);
     }
-    out.push_str("]);\n");
+    out.push_str("};\n");
     out
 }
 

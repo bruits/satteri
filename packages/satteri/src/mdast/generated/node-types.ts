@@ -204,43 +204,44 @@ export const VISITOR_KEYS: ReadonlySet<string> = new Set([
   "mdxjsEsm",
 ]);
 
-/** Tags the op-stream replay rebuilds byte-identically to the JSON path;
- *  excluded tags fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */
-export const MDAST_OPSTREAM_TYPES: ReadonlySet<number> = new Set([
-  1, // paragraph
-  2, // heading
-  3, // thematicBreak
-  4, // blockquote
-  5, // list
-  6, // listItem
-  7, // html
-  8, // code
-  9, // definition
-  10, // text
-  11, // emphasis
-  12, // strong
-  13, // inlineCode
-  14, // break
-  15, // link
-  16, // image
-  17, // linkReference
-  18, // imageReference
-  19, // footnoteDefinition
-  20, // footnoteReference
-  21, // table
-  22, // tableRow
-  23, // tableCell
-  24, // delete
-  25, // yaml
-  26, // toml
-  27, // math
-  28, // inlineMath
-  30, // containerDirective
-  31, // leafDirective
-  32, // textDirective
-  100, // mdxJsxFlowElement
-  101, // mdxJsxTextElement
-  102, // mdxFlowExpression
-  103, // mdxTextExpression
-  104, // mdxjsEsm
-]);
+/** Name -> tag for the types the op-stream replay rebuilds byte-identically
+ *  to the JSON path; one lookup gates AND resolves the emit-path tag. Excluded
+ *  names fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */
+export const MDAST_OPSTREAM_TYPES: Readonly<Record<string, number>> = {
+  paragraph: 1,
+  heading: 2,
+  thematicBreak: 3,
+  blockquote: 4,
+  list: 5,
+  listItem: 6,
+  html: 7,
+  code: 8,
+  definition: 9,
+  text: 10,
+  emphasis: 11,
+  strong: 12,
+  inlineCode: 13,
+  break: 14,
+  link: 15,
+  image: 16,
+  linkReference: 17,
+  imageReference: 18,
+  footnoteDefinition: 19,
+  footnoteReference: 20,
+  table: 21,
+  tableRow: 22,
+  tableCell: 23,
+  delete: 24,
+  yaml: 25,
+  toml: 26,
+  math: 27,
+  inlineMath: 28,
+  containerDirective: 30,
+  leafDirective: 31,
+  textDirective: 32,
+  mdxJsxFlowElement: 100,
+  mdxJsxTextElement: 101,
+  mdxFlowExpression: 102,
+  mdxTextExpression: 103,
+  mdxjsEsm: 104,
+};

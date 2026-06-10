@@ -58,14 +58,25 @@ export type StructuralOp =
   | "appendChild"
   | "wrapNode";
 
-export class CommandBuffer {
-  #w = new ByteWriter(INITIAL_SIZE);
+export class CommandBuffer extends ByteWriter {
+  constructor() {
+    super(INITIAL_SIZE);
+  }
+
+  #u32(v: number): void {
+    const buf = this.buf;
+    let n = this.n;
+    buf[n++] = v & 255;
+    buf[n++] = (v >> 8) & 255;
+    buf[n++] = (v >> 16) & 255;
+    buf[n++] = (v >>> 24) & 255;
+    this.n = n;
+  }
 
   removeNode(nodeId: number): void {
-    const w = this.#w;
-    w.ensure(5);
-    w.u8(CMD_REMOVE);
-    w.u32(nodeId);
+    this.ensure(5);
+    this.buf[this.n++] = CMD_REMOVE;
+    this.#u32(nodeId);
   }
 
   /** Unified set-property for both MDAST and HAST nodes. */
@@ -94,13 +105,12 @@ export class CommandBuffer {
     }
 
     // 1(cmd) + 4(nodeId) + 1(valueType); name and value are length-prefixed strings
-    const w = this.#w;
-    w.ensure(6);
-    w.u8(CMD_SET_PROPERTY);
-    w.u32(nodeId);
-    w.u8(valueType);
-    w.utf8WithU32Len(key);
-    w.utf8WithU32Len(str);
+    this.ensure(6);
+    this.buf[this.n++] = CMD_SET_PROPERTY;
+    this.#u32(nodeId);
+    this.buf[this.n++] = valueType;
+    this.utf8WithU32Len(key);
+    this.utf8WithU32Len(str);
   }
 
   insertBefore(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
@@ -164,12 +174,11 @@ export class CommandBuffer {
 
   /** Header (cmd + nodeId + payloadType) followed by a length-prefixed string payload. */
   private writePayloadCommand(cmd: number, nodeId: number, payloadType: number, s: string): void {
-    const w = this.#w;
-    w.ensure(6);
-    w.u8(cmd);
-    w.u32(nodeId);
-    w.u8(payloadType);
-    w.utf8WithU32Len(s);
+    this.ensure(6);
+    this.buf[this.n++] = cmd;
+    this.#u32(nodeId);
+    this.buf[this.n++] = payloadType;
+    this.utf8WithU32Len(s);
   }
 
   // Imperative-builder op-stream payloads (the fast structural path).
@@ -204,28 +213,24 @@ export class CommandBuffer {
   }
 
   private writeOpstreamCommand(cmd: number, nodeId: number, ops: Uint8Array): void {
-    const w = this.#w;
-    w.ensure(10 + ops.length);
-    w.u8(cmd);
-    w.u32(nodeId);
-    w.u8(PAYLOAD_OPSTREAM);
-    w.u32(ops.length);
-    w.bytes(ops);
+    this.ensure(10 + ops.length);
+    this.buf[this.n++] = cmd;
+    this.#u32(nodeId);
+    this.buf[this.n++] = PAYLOAD_OPSTREAM;
+    this.#u32(ops.length);
+    this.buf.set(ops, this.n);
+    this.n += ops.length;
   }
 
   /** Return a Uint8Array view of the written bytes (no copy). */
   getBuffer(): Uint8Array {
-    return this.#w.take();
-  }
-
-  /** Number of bytes written so far. */
-  get length(): number {
-    return this.#w.length;
+    return this.take();
   }
 
   /** Reset for reuse, releasing the old buffer (handed-out views stay intact). */
-  reset(): void {
-    this.#w = new ByteWriter(INITIAL_SIZE);
+  override reset(): void {
+    this.buf = new Uint8Array(INITIAL_SIZE);
+    this.n = 0;
   }
 
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {

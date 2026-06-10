@@ -44,16 +44,17 @@ export const VISITOR_KEYS: ReadonlySet<string> = new Set([
   "mdxTextExpression",
 ]);
 
-/** Tags the op-stream replay rebuilds byte-identically to the JSON path;
- *  excluded tags fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */
-export const HAST_OPSTREAM_TYPES: ReadonlySet<number> = new Set([
-  1, // element
-  2, // text
-  3, // comment
-  5, // raw
-  10, // mdxJsxFlowElement
-  11, // mdxJsxTextElement
-  12, // mdxFlowExpression
-  13, // mdxjsEsm
-  14, // mdxTextExpression
-]);
+/** Name -> tag for the types the op-stream replay rebuilds byte-identically
+ *  to the JSON path; one lookup gates AND resolves the emit-path tag. Excluded
+ *  names fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */
+export const HAST_OPSTREAM_TYPES: Readonly<Record<string, number>> = {
+  element: 1,
+  text: 2,
+  comment: 3,
+  raw: 5,
+  mdxJsxFlowElement: 10,
+  mdxJsxTextElement: 11,
+  mdxFlowExpression: 12,
+  mdxjsEsm: 13,
+  mdxTextExpression: 14,
+};

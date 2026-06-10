@@ -1,10 +1,12 @@
 /**
- * Growable little-endian byte writer shared by the op-stream and command-buffer
+ * Growable little-endian byte buffer shared by the op-stream and command-buffer
  * encoders — the two hottest write paths in the package.
  *
- * Numeric writes (`u8`/`u32`/`bytes`) are unchecked: callers `ensure` the full
- * record up front so each record pays one bounds check, not one per byte.
- * String writes self-ensure because their byte length is data-dependent.
+ * Subclasses write single bytes directly through the protected `buf`/`n`
+ * fields after an `ensure` for the whole record (one bounds check per record,
+ * not per byte, and no per-byte call in unoptimized tiers — CodSpeed's
+ * Simulation mode runs too few iterations for V8 to inline method calls).
+ * Only the non-trivial logic lives here: growth and UTF-8 string encoding.
  */
 
 const encoder = new TextEncoder();
@@ -16,56 +18,40 @@ const encoder = new TextEncoder();
 const INLINE_STR_MAX = 16;
 
 export class ByteWriter {
-  #buf: Uint8Array;
-  #n = 0;
+  protected buf: Uint8Array;
+  protected n = 0;
 
   constructor(initialSize: number) {
-    this.#buf = new Uint8Array(initialSize);
+    this.buf = new Uint8Array(initialSize);
   }
 
   /** Number of bytes written so far. */
   get length(): number {
-    return this.#n;
+    return this.n;
   }
 
   /** Reset for reuse; the grown buffer is retained so steady state is alloc-free. */
   reset(): void {
-    this.#n = 0;
+    this.n = 0;
   }
 
   /** View of the bytes written so far (no copy; valid until the next write or reset). */
   take(): Uint8Array {
-    return this.#buf.subarray(0, this.#n);
+    return this.buf.subarray(0, this.n);
   }
 
   /** Grow (doubling) so `extra` more bytes fit; required before unchecked writes. */
   ensure(extra: number): void {
-    if (this.#n + extra <= this.#buf.length) return;
-    let size = this.#buf.length * 2;
-    while (this.#n + extra > size) size *= 2;
+    if (this.n + extra <= this.buf.length) return;
+    let size = this.buf.length * 2;
+    while (this.n + extra > size) size *= 2;
     const grown = new Uint8Array(size);
-    grown.set(this.#buf);
-    this.#buf = grown;
-  }
-
-  u8(v: number): void {
-    this.#buf[this.#n++] = v & 255;
-  }
-
-  u32(v: number): void {
-    this.#buf[this.#n++] = v & 255;
-    this.#buf[this.#n++] = (v >> 8) & 255;
-    this.#buf[this.#n++] = (v >> 16) & 255;
-    this.#buf[this.#n++] = (v >>> 24) & 255;
-  }
-
-  bytes(src: Uint8Array): void {
-    this.#buf.set(src, this.#n);
-    this.#n += src.length;
+    grown.set(this.buf);
+    this.buf = grown;
   }
 
   /** u32 byte length + UTF-8 bytes (self-ensuring). */
-  utf8WithU32Len(s: string): void {
+  protected utf8WithU32Len(s: string): void {
     const len = s.length;
     this.ensure(4 + len * 3); // worst-case UTF-8 is 3 bytes per UTF-16 unit
 
@@ -80,24 +66,27 @@ export class ByteWriter {
         }
       }
       if (ascii) {
-        this.u32(len);
-        const buf = this.#buf;
-        const n = this.#n;
+        const buf = this.buf;
+        let n = this.n;
+        buf[n++] = len & 255;
+        buf[n++] = (len >> 8) & 255;
+        buf[n++] = (len >> 16) & 255;
+        buf[n++] = (len >>> 24) & 255;
         for (let i = 0; i < len; i++) buf[n + i] = s.charCodeAt(i);
-        this.#n = n + len;
+        this.n = n + len;
         return;
       }
     }
 
     // Bulk path: encodeInto writes UTF-8 straight into the buffer (no alloc, no
     // per-char loop); backpatch the byte length once it's known.
-    const lenPos = this.#n;
-    this.#n += 4;
-    const written = encoder.encodeInto(s, this.#buf.subarray(this.#n)).written;
-    this.#buf[lenPos] = written & 255;
-    this.#buf[lenPos + 1] = (written >> 8) & 255;
-    this.#buf[lenPos + 2] = (written >> 16) & 255;
-    this.#buf[lenPos + 3] = (written >>> 24) & 255;
-    this.#n += written;
+    const lenPos = this.n;
+    this.n += 4;
+    const written = encoder.encodeInto(s, this.buf.subarray(this.n)).written;
+    this.buf[lenPos] = written & 255;
+    this.buf[lenPos + 1] = (written >> 8) & 255;
+    this.buf[lenPos + 2] = (written >> 16) & 255;
+    this.buf[lenPos + 3] = (written >>> 24) & 255;
+    this.n += written;
   }
 }

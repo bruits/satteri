@@ -61,101 +61,92 @@ export {
   MDX_ATTR_SPREAD,
 } from "./generated/wire-constants.js";
 
-export class OpWriter {
-  readonly #w = new ByteWriter(512);
-
-  /** Reset for reuse; the grown buffer is retained so steady state is alloc-free. */
-  reset(): void {
-    this.#w.reset();
+export class OpWriter extends ByteWriter {
+  constructor() {
+    super(512);
   }
 
-  /** The op-stream written so far (valid until the next reset). */
-  take(): Uint8Array {
-    return this.#w.take();
+  #u32(v: number): void {
+    const buf = this.buf;
+    let n = this.n;
+    buf[n++] = v & 255;
+    buf[n++] = (v >> 8) & 255;
+    buf[n++] = (v >> 16) & 255;
+    buf[n++] = (v >>> 24) & 255;
+    this.n = n;
   }
 
   open(type: number): void {
-    const w = this.#w;
-    w.ensure(2);
-    w.u8(OP_OPEN);
-    w.u8(type);
+    this.ensure(2);
+    this.buf[this.n++] = OP_OPEN;
+    this.buf[this.n++] = type;
   }
 
   close(): void {
-    const w = this.#w;
-    w.ensure(1);
-    w.u8(OP_CLOSE);
+    this.ensure(1);
+    this.buf[this.n++] = OP_CLOSE;
   }
 
   str(field: number, s: string): void {
-    const w = this.#w;
-    w.ensure(2);
-    w.u8(OP_STR);
-    w.u8(field);
-    w.utf8WithU32Len(s);
+    this.ensure(2);
+    this.buf[this.n++] = OP_STR;
+    this.buf[this.n++] = field;
+    this.utf8WithU32Len(s);
   }
 
   u8(field: number, v: number): void {
-    const w = this.#w;
-    w.ensure(3);
-    w.u8(OP_U8);
-    w.u8(field);
-    w.u8(v);
+    this.ensure(3);
+    this.buf[this.n++] = OP_U8;
+    this.buf[this.n++] = field;
+    this.buf[this.n++] = v & 255;
   }
 
   u32(field: number, v: number): void {
-    const w = this.#w;
-    w.ensure(6);
-    w.u8(OP_U32);
-    w.u8(field);
-    w.u32(v);
+    this.ensure(6);
+    this.buf[this.n++] = OP_U32;
+    this.buf[this.n++] = field;
+    this.#u32(v);
   }
 
   bool(field: number, v: boolean): void {
-    const w = this.#w;
-    w.ensure(3);
-    w.u8(OP_BOOL);
-    w.u8(field);
-    w.u8(v ? 1 : 0);
+    this.ensure(3);
+    this.buf[this.n++] = OP_BOOL;
+    this.buf[this.n++] = field;
+    this.buf[this.n++] = v ? 1 : 0;
   }
 
   data(value: unknown): void {
-    const w = this.#w;
-    w.ensure(1);
-    w.u8(OP_DATA);
-    w.utf8WithU32Len(JSON.stringify(value));
+    this.ensure(1);
+    this.buf[this.n++] = OP_DATA;
+    this.utf8WithU32Len(JSON.stringify(value));
   }
 
   prop(name: string, kind: number, value: string): void {
-    const w = this.#w;
-    w.ensure(1);
-    w.u8(OP_PROP);
-    w.utf8WithU32Len(name);
-    w.ensure(1);
-    w.u8(kind);
-    w.utf8WithU32Len(value);
+    this.ensure(1);
+    this.buf[this.n++] = OP_PROP;
+    this.utf8WithU32Len(name);
+    this.ensure(1);
+    this.buf[this.n++] = kind;
+    this.utf8WithU32Len(value);
   }
 
   ref(id: number): void {
-    const w = this.#w;
-    w.ensure(5);
-    w.u8(OP_REF);
-    w.u32(id);
+    this.ensure(5);
+    this.buf[this.n++] = OP_REF;
+    this.#u32(id);
   }
 
   /** Table column-alignment codes (0=none, 1=left, 2=right, 3=center). */
   align(codes: readonly number[]): void {
-    const w = this.#w;
-    w.ensure(5 + codes.length);
-    w.u8(OP_ALIGN);
-    w.u32(codes.length);
-    for (let i = 0; i < codes.length; i++) w.u8(codes[i]!);
+    this.ensure(5 + codes.length);
+    this.buf[this.n++] = OP_ALIGN;
+    this.#u32(codes.length);
+    for (let i = 0; i < codes.length; i++) this.buf[this.n++] = codes[i]! & 255;
   }
 
   keepChildren(): void {
-    const w = this.#w;
-    w.ensure(1);
-    w.u8(OP_KEEP_CHILDREN);
+    this.ensure(1);
+    this.buf[this.n++] = OP_KEEP_CHILDREN;
   }
 }
 

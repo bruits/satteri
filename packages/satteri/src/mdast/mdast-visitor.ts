@@ -637,8 +637,8 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
     }
   }
   const n = node as Record<string, unknown>;
-  const type = NAME_TO_TYPE[n.type as string];
-  if (type === undefined || !MDAST_OPSTREAM_TYPES.has(type)) return false;
+  const type = MDAST_OPSTREAM_TYPES[n.type as string];
+  if (type === undefined) return false;
   w.open(type);
   if (typeof n.value === "string") w.str(OF_VALUE, n.value);
   if (typeof n.url === "string") w.str(OF_URL, n.url);
@@ -711,7 +711,9 @@ function compileOrJson(content: MdastContent, forReplace = false): Uint8Array | 
 }
 
 /** Encode `content` (op-stream when compilable, JSON otherwise) and write it
- *  as the `op` structural command — the one place that picks the encoding. */
+ *  as the `op` structural command — the one place that picks the encoding. The
+ *  switch keeps the buffer calls monomorphic (computed method names allocate
+ *  and defeat inline caches on this warm path). */
 function emitMdastTree(
   buffer: CommandBuffer,
   op: StructuralOp,
@@ -720,8 +722,36 @@ function emitMdastTree(
   forReplace = false,
 ): void {
   const c = compileOrJson(content, forReplace);
-  if (c instanceof Uint8Array) buffer[`${op}Opstream`](id, c);
-  else buffer[op](id, c);
+  if (c instanceof Uint8Array) {
+    switch (op) {
+      case "replace":
+        return buffer.replaceOpstream(id, c);
+      case "insertBefore":
+        return buffer.insertBeforeOpstream(id, c);
+      case "insertAfter":
+        return buffer.insertAfterOpstream(id, c);
+      case "prependChild":
+        return buffer.prependChildOpstream(id, c);
+      case "appendChild":
+        return buffer.appendChildOpstream(id, c);
+      case "wrapNode":
+        return buffer.wrapNodeOpstream(id, c);
+    }
+  }
+  switch (op) {
+    case "replace":
+      return buffer.replace(id, c);
+    case "insertBefore":
+      return buffer.insertBefore(id, c);
+    case "insertAfter":
+      return buffer.insertAfter(id, c);
+    case "prependChild":
+      return buffer.prependChild(id, c);
+    case "appendChild":
+      return buffer.appendChild(id, c);
+    case "wrapNode":
+      return buffer.wrapNode(id, c);
+  }
 }
 
 function applyMdastVisitResult(

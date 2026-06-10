@@ -37,8 +37,16 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
   const nodeType = reader.getNodeType(nodeId);
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
-  const position = reader.getPosition(nodeId);
-  const node = (position ? { type: typeName, position } : { type: typeName }) as HastNode;
+  const node = { type: typeName } as HastNode;
+  // Position decodes to three objects; defer it — passthrough children (e.g.
+  // replaceNode keeping `node.children`) never read it.
+  if (reader.hasPosition(nodeId)) {
+    Object.defineProperty(
+      node,
+      "position",
+      lazyProp("position", () => reader.getPosition(nodeId)),
+    );
+  }
 
   // _nodeId: non-enumerable internal reference
   Object.defineProperty(node, "_nodeId", {

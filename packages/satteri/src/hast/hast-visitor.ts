@@ -196,11 +196,42 @@ function compileHastChildrenToOpstream(children: unknown): Uint8Array | null {
 }
 
 /** Encode `node` (op-stream when compilable, JSON otherwise) and write it as
- *  the `op` structural command — the one place that picks the encoding. */
+ *  the `op` structural command — the one place that picks the encoding. The
+ *  switch keeps the buffer calls monomorphic (computed method names allocate
+ *  and defeat inline caches on this warm path). */
 function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
   const ops = compileHastToOpstream(node);
-  if (ops) buffer[`${op}Opstream`](id, ops);
-  else buffer[`${op}RawJson`](id, JSON.stringify(markHast(node)));
+  if (ops) {
+    switch (op) {
+      case "replace":
+        return buffer.replaceOpstream(id, ops);
+      case "insertBefore":
+        return buffer.insertBeforeOpstream(id, ops);
+      case "insertAfter":
+        return buffer.insertAfterOpstream(id, ops);
+      case "prependChild":
+        return buffer.prependChildOpstream(id, ops);
+      case "appendChild":
+        return buffer.appendChildOpstream(id, ops);
+      case "wrapNode":
+        return buffer.wrapNodeOpstream(id, ops);
+    }
+  }
+  const json = JSON.stringify(markHast(node));
+  switch (op) {
+    case "replace":
+      return buffer.replaceRawJson(id, json);
+    case "insertBefore":
+      return buffer.insertBeforeRawJson(id, json);
+    case "insertAfter":
+      return buffer.insertAfterRawJson(id, json);
+    case "prependChild":
+      return buffer.prependChildRawJson(id, json);
+    case "appendChild":
+      return buffer.appendChildRawJson(id, json);
+    case "wrapNode":
+      return buffer.wrapNodeRawJson(id, json);
+  }
 }
 
 function compileHastToOpstream(root: unknown): Uint8Array | null {
@@ -219,8 +250,8 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
     }
   }
   const n = node as Record<string, unknown>;
-  const type = NAME_TO_TYPE[n.type as string];
-  if (type === undefined || !HAST_OPSTREAM_TYPES.has(type)) return false;
+  const type = HAST_OPSTREAM_TYPES[n.type as string];
+  if (type === undefined) return false;
   w.open(type);
   if (type === HAST_ELEMENT) {
     w.str(OF_TAGNAME, typeof n.tagName === "string" ? n.tagName : "div");
