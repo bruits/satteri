@@ -136,10 +136,6 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
     case HAST_MDX_FLOW_EXPRESSION:
     case HAST_MDX_TEXT_EXPRESSION:
       Object.defineProperties(node, {
-        // Substitute U+F002 phantom-space sentinels (see PHANTOM_SPACE in
-        // satteri-pulldown-cmark/src/mdx.rs) back to regular spaces — mdast
-        // and hast keep phantoms in the value field; only the compile path
-        // drops them.
         value: lazyProp("value", () => restorePhantomSpaces(reader.getTextValue(nodeId))),
       });
       break;

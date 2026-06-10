@@ -934,13 +934,12 @@ fn encode_hast_js_node_data(
     }
 }
 
-// ── Imperative-builder op-stream replay ──────────────────────────────────────
-//
-// The JS `m` builder emits an op-stream (OPEN/CLOSE/field sets/REF/KEEP_CHILDREN)
-// that we replay directly into an ArenaBuilder — no `JsNode` tree, no heap
-// allocation per node beyond the arena itself. A node's fields are collected
-// after its OPEN and flushed into its type_data the moment the next op needs the
-// node finalized (a child OPEN, a CLOSE, or a spliced REF/KEEP_CHILDREN).
+// The JS visitors compile declarative trees to an op-stream (OPEN/CLOSE/field
+// sets/REF/KEEP_CHILDREN) that we replay directly into an ArenaBuilder — no
+// `JsNode` tree, no heap allocation per node beyond the arena itself. A node's
+// fields are collected after its OPEN and flushed into its type_data the moment
+// the next op needs the node finalized (a child OPEN, a CLOSE, or a spliced
+// REF/KEEP_CHILDREN).
 
 /// Per-kind hooks for [`replay_opstream`]. `Kind` ties a collector to one
 /// arena flavor, so a cross-kind replay stays a compile error (see the module

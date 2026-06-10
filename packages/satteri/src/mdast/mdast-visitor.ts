@@ -322,7 +322,6 @@ interface MdastVisitResult {
   hasMutations: boolean;
 }
 
-/** Merge return-value + context command buffers and release internals. */
 const EMPTY_BYTES = new Uint8Array(0);
 
 function mergeAndReset(
@@ -330,7 +329,7 @@ function mergeAndReset(
   ctx: MdastVisitorContext,
 ): { merged: Uint8Array; hasMutations: boolean } {
   const ctxCmdBuf = ctx.getCommandBuffer();
-  // The common case — no mutations this match — allocates nothing.
+  // The common case — no mutations this pass — allocates nothing.
   if (returnBuffer.length === 0 && ctxCmdBuf.length === 0) {
     return { merged: EMPTY_BYTES, hasMutations: false };
   }
@@ -345,8 +344,6 @@ function mergeAndReset(
   return { merged, hasMutations: true };
 }
 
-// Handle-based MDAST visitor (arena stays in Rust)
-
 export type { MdastHandle };
 
 interface MdastSubscription {
@@ -354,7 +351,6 @@ interface MdastSubscription {
   visitFn: (node: MdastNode, context: MdastVisitorContext) => unknown;
 }
 
-/** Resolve subscriptions from a plugin instance. */
 export function resolveMdastSubscriptions(plugin: MdastPluginInstance): MdastSubscription[] {
   const subs: MdastSubscription[] = [];
   for (const [name, fn] of Object.entries(plugin)) {
@@ -412,8 +408,6 @@ function readMdastChildStubs(
  *   [node_data: u32+bytes][position: 6×u32 = 24B][child_count: u16][child_ids: N×u32]
  *   [child_types: N×u8][type-specific data]
  */
-const encoder = new TextEncoder();
-
 function readMdastMatchedNode(
   view: DataView,
   buf: Uint8Array,
@@ -424,7 +418,6 @@ function readMdastMatchedNode(
 ): MdastNode {
   let pos = dataOffset;
 
-  // Node data (JSON bytes), always first
   const dataJsonLen = ru32(view, pos);
   pos += 4;
   let initialData: Record<string, unknown> | null = null;
@@ -451,7 +444,6 @@ function readMdastMatchedNode(
 
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
-  // Build node with type-specific fields
   const node: Record<string, unknown> = { type: typeName };
   if (position !== undefined) node.position = position;
   if (childCount > 0) {
@@ -593,9 +585,6 @@ function readMdastMatchedNode(
   return node as unknown as MdastNode;
 }
 
-/** Apply a sync visitor result to the return buffer.
- *  If the result is the same object as the input node, treat it as a no-op
- *  so that context mutations (e.g. setProperty) are not clobbered. */
 /** The arena id of a node if it is an existing (materialized) node, else
  *  undefined for a freshly-built one. */
 function reusedId(node: unknown): number | undefined {
@@ -628,6 +617,11 @@ function refifyReusedNodes(node: unknown, isRoot: boolean): MdastNode {
   return node as MdastNode;
 }
 
+// Reused across every replacement in a pass: compile is synchronous and its
+// result is copied into the command buffer before the next call, so a single
+// writer is safe and avoids a 512-byte allocation per built node.
+const mdastWriter = new OpWriter();
+
 /**
  * Compile a declarative MDAST replacement tree to the op-stream — the structural
  * backend the rebuild already uses, but skipping JSON + the JsNode deserialize.
@@ -636,11 +630,6 @@ function refifyReusedNodes(node: unknown, isRoot: boolean): MdastNode {
  * identically (unsupported node type, out-of-range numeric field, or a
  * `_keepChildren` marker outside a replace), so the caller falls back to JSON.
  */
-// Reused across every replacement in a pass: compile is synchronous and its
-// result is copied into the command buffer before the next call, so a single
-// writer is safe and avoids a 512-byte allocation per built node.
-const mdastWriter = new OpWriter();
-
 function compileMdastToOpstream(root: unknown, forReplace = false): Uint8Array | null {
   mdastWriter.reset();
   if (!emitMdastOp(mdastWriter, root, true, forReplace)) return null;
@@ -699,7 +688,6 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   if (typeof n.name === "string") w.str(OF_NAME, n.name);
   const attrs = n.attributes;
   if (Array.isArray(attrs)) {
-    // MDX JSX attributes (boolean / literal / expression / spread).
     for (const a of attrs) emitMdxAttr(w, a as Record<string, unknown>);
   } else if (attrs !== null && typeof attrs === "object") {
     // Directive attributes: a string→string map. Non-string values are dropped,
@@ -788,6 +776,8 @@ function emitMdastTree(
   }
 }
 
+/** A result that is the same object as the input node is a no-op, so context
+ *  mutations (e.g. setProperty) are not clobbered. */
 function applyMdastVisitResult(
   result: MdastVisitorResult,
   nodeId: number,

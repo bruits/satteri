@@ -8,7 +8,7 @@
 //!   * the walk serializers + layout decoders (`walk_type_data.rs`, `layout.ts`),
 //!   * compile-time layout assertions (`assert_layouts.rs`).
 //!
-//! Add a node here once; every list that used to repeat it is regenerated.
+//! Add a node here once; every downstream list is regenerated from it.
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tree {

@@ -16,7 +16,7 @@
 //!   per matched node: inline resolved data (format depends on node type)
 //! ```
 //!
-//! Every HAST node payload shares the same prelude (matching `serialize_mdast_node_inline`):
+//! Every matched node's payload shares the same prelude (MDAST and HAST alike):
 //! ```text
 //! [node_data: u32 len + utf8 JSON bytes]   ; 0-length when the node has no `data`
 //! [position: 6×u32 = 24B]                  ; start_offset, end_offset, start_line, start_col, end_line, end_col
@@ -48,10 +48,9 @@
 //! [value_len: u32][value: utf8...]
 //! ```
 //!
-//! ### Code (node_type=8)
-//! ```text
-//! [lang_len: u16][lang: utf8...][meta_len: u16][meta: utf8...][value_len: u32][value: utf8...]
-//! ```
+//! MDAST fixed-field tails are emitted by the generated
+//! `write_mdast_type_data_inline`; the variable-length MDAST types are
+//! documented at their match arms in `serialize_mdast_node_inline`.
 
 use satteri_arena::{Arena, ArenaKind, Hast, Mdast, StringRef};
 
@@ -191,14 +190,8 @@ fn walk_and_collect_inner<K: ArenaKind>(
     out
 }
 
-/// MDAST node inline serialization.
-///
-/// Format per matched node:
-/// ```text
-/// [position: 6×u32 (24 bytes)]: start_offset, end_offset, start_line, start_col, end_line, end_col
-/// [child_count: u16][child_ids: child_count × u32][child_types: child_count × u8]: for parent nodes
-/// [type-specific resolved data]
-/// ```
+/// MDAST node inline serialization: the shared prelude (see the module header)
+/// followed by the type-specific tail.
 fn serialize_mdast_node_inline(
     arena: &Arena<Mdast>,
     node_id: u32,
@@ -368,9 +361,8 @@ pub(crate) fn write_str32<K: ArenaKind>(
     }
 }
 
-/// HAST inline serialization: write node data with all strings resolved
-/// (no StringRefs). Element data includes child node IDs so plugins can
-/// reference them.
+/// HAST inline serialization: the shared prelude followed by the type-specific
+/// tail, with all strings resolved (no StringRefs).
 fn serialize_hast_node_inline(
     arena: &Arena<Hast>,
     node_id: u32,
@@ -379,9 +371,6 @@ fn serialize_hast_node_inline(
     out: &mut Vec<u8>,
 ) {
     let node = arena.get_node(node_id);
-
-    // Shared prelude (mirrors serialize_mdast_node_inline):
-    // [data: u32 len + bytes][position: 24B][child_count: u16][child_ids: N×u32][child_types: N×u8]
 
     // Node data (JSON bytes), length-prefixed, always first so JS can read it at a known offset
     if let Some(data) = arena.get_node_data(node_id) {

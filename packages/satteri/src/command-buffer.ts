@@ -137,7 +137,6 @@ export class CommandBuffer extends ByteWriter {
     this.writeStructuralCommand(CMD_REPLACE, nodeId, newNode);
   }
 
-  /** Write a REPLACE command with a pre-serialized JSON payload. */
   replaceRawJson(nodeId: number, json: string): void {
     this.writeRawJsonCommand(CMD_REPLACE, nodeId, json);
   }
@@ -147,7 +146,6 @@ export class CommandBuffer extends ByteWriter {
     this.writeRawJsonCommand(CMD_SET_CHILDREN, nodeId, json);
   }
 
-  /** Write any structural command with a pre-serialized JSON payload. */
   insertBeforeRawJson(nodeId: number, json: string): void {
     this.writeRawJsonCommand(CMD_INSERT_BEFORE, nodeId, json);
   }
@@ -180,8 +178,6 @@ export class CommandBuffer extends ByteWriter {
     this.buf[this.n++] = payloadType;
     this.utf8WithU32Len(s);
   }
-
-  // Imperative-builder op-stream payloads (the fast structural path).
 
   replaceOpstream(nodeId: number, ops: Uint8Array): void {
     this.writeOpstreamCommand(CMD_REPLACE, nodeId, ops);

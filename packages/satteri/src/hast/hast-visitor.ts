@@ -1,5 +1,5 @@
 import { materializeHastNode, type HastNode } from "./hast-materializer.js";
-import type { HastNodeInternal, HastRaw, MdxJsxAttributeUnion, Position } from "../types.js";
+import type { HastRaw, MdxJsxAttributeUnion, Position } from "../types.js";
 import type { Element, Text, Comment, Doctype } from "hast";
 import type { Program } from "estree-jsx";
 import type { MdxJsxFlowElementHast, MdxJsxTextElementHast } from "../mdx-types.js";
@@ -186,12 +186,6 @@ function hastReusedId(node: unknown): number | undefined {
   return typeof id === "number" ? id : undefined;
 }
 
-/**
- * Compile a declarative HAST replacement tree to the op-stream — the structural
- * backend the rebuild already uses, skipping JSON + the JsNode deserialize.
- * Reused nodes become `ref`s (transparent passthrough). Returns null when the
- * tree holds a type the replay can't reproduce identically (JSON fallback).
- */
 // Reused across replacements in a pass — see the note on `mdastWriter`.
 const hastWriter = new OpWriter();
 
@@ -248,6 +242,12 @@ function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node:
   }
 }
 
+/**
+ * Compile a declarative HAST replacement tree to the op-stream — the structural
+ * backend the rebuild already uses, skipping JSON + the JsNode deserialize.
+ * Reused nodes become `ref`s (transparent passthrough). Returns null when the
+ * tree holds a type the replay can't reproduce identically (JSON fallback).
+ */
 function compileHastToOpstream(root: unknown): Uint8Array | null {
   hastWriter.reset();
   if (!emitHastOp(hastWriter, root, true)) return null;
@@ -409,7 +409,6 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
     if (node.type === "element") {
-      // Fast binary path, no materialization, no JSON serialization
       this.#commandBuffer.setProperty(id, key, value);
       return;
     }
@@ -444,16 +443,15 @@ class HastVisitorContextImpl implements HastVisitorContext {
         this.replaceNode(node, updated);
         return;
       }
-      // Fast binary path: upsert a single JSX attribute in the arena's
-      // type_data — no JSON, and no child materialization. Rust maps the
-      // value-type to a boolean (true/null) or literal (string/number/false)
-      // attribute, mirroring the fold path above.
+      // Binary attribute upsert in the arena's type_data — no child
+      // materialization. Rust maps the value-type to a boolean (true/null) or
+      // literal (string/number/false) attribute, mirroring the fold path above.
       this.#commandBuffer.setProperty(id, key, value);
       return;
     }
 
-    // Text-like nodes (text, comment, raw, expressions, esm), fast binary path.
-    // Rust handles "value" setProperty directly on these types.
+    // Text-like nodes (text, comment, raw, expressions, esm): Rust handles
+    // `value` directly on these types.
     this.#commandBuffer.setProperty(id, key, value);
   }
 
@@ -516,8 +514,6 @@ export interface HastVisitorInstance {
   mdxjsEsm?: HastVisitorFn<MdxjsEsmHast & { parseExpression(): EstreeProgram | null }>;
 }
 
-// Selective walk helpers
-
 interface ResolvedSubscription {
   nodeType: number;
   tagFilter: string[];
@@ -531,7 +527,6 @@ function isFilteredVisitor(v: unknown): v is HastFilteredVisitor {
 /** Node types that use filtered visitors (have tag/component names). */
 const FILTERED_METHODS = new Set(["element", "mdxJsxFlowElement", "mdxJsxTextElement"]);
 
-/** Resolve subscriptions from a plugin instance. */
 export function resolveSubscriptions(plugin: HastVisitorInstance): ResolvedSubscription[] {
   const subs: ResolvedSubscription[] = [];
 
@@ -562,11 +557,6 @@ const METHOD_TO_TYPE: Record<string, number> = Object.fromEntries(
   [...VISITOR_KEYS].map((name) => [name, NAME_TO_TYPE[name]!] as const),
 );
 
-/**
- * Selective walk path: Rust walks the tree, only sends matched nodes to JS.
- */
-
-/** Decode properties from the walk buffer at the given position. */
 function decodeProperties(
   view: DataView,
   buf: Uint8Array,
@@ -614,12 +604,9 @@ function decodeProperties(
 }
 
 /**
- * Walk-path element node: uses prototype getters instead of per-instance
- * Object.defineProperty. V8 optimises shared hidden classes far better,
- * this is ~16x faster for construction than the defineProperty approach.
- *
- * The buffer reference data is stored on private instance fields so the
- * prototype getter can decode lazily on first access.
+ * Walk-path element node: prototype getters instead of per-instance
+ * Object.defineProperty. V8 optimises shared hidden classes far better —
+ * ~16x faster to construct.
  */
 class WalkElement {
   readonly type = "element" as const;
@@ -714,7 +701,6 @@ function readElementFromBinary(
 
   const propsPos = pos;
 
-  // Build node using class (prototype getters, no per-instance defineProperty)
   const node = new WalkElement();
   node.tagName = tagName;
   if (position !== undefined) node.position = position;
@@ -738,7 +724,6 @@ const TEXT_NODE_TYPES: Record<number, string> = Object.fromEntries(
   ),
 );
 
-/** Read a text/comment/raw/expression node from the binary data section. */
 function readTextFromBinary(
   view: DataView,
   buf: Uint8Array,
@@ -769,7 +754,6 @@ function readTextFromBinary(
   return node;
 }
 
-/** Read an MDX JSX element from the binary data section. */
 function readMdxJsxFromBinary(
   view: DataView,
   buf: Uint8Array,
@@ -785,7 +769,6 @@ function readMdxJsxFromBinary(
 ): HastNode {
   let pos = offset;
 
-  // Name
   const nameLen = view.getUint16(pos, true);
   pos += 2;
   const name = nameLen > 0 ? rstr(buf, pos, nameLen) : null;
@@ -854,8 +837,6 @@ function readMatchedNode(
 
   // Shared prelude (matches serialize_hast_node_inline / serialize_mdast_node_inline):
   //   [data_len: u32][data_bytes][position: 24B][child_count: u16][child_ids: N×u32][child_types: N×u8]
-
-  // Data (JSON), eagerly parsed
   const dataLen = view.getUint32(pos, true);
   pos += 4;
   let data: Record<string, unknown> | null = null;
@@ -927,8 +908,6 @@ function readMatchedNode(
   return node;
 }
 
-// Shared helpers
-
 class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
   protected override createReader(wire: Uint8Array): HastReader {
     return new HastReader(wire);
@@ -939,7 +918,6 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
   }
 }
 
-/** Create a lazy `children` property that builds child stubs on first read. */
 function makeLazyChildren(
   node: object,
   view: DataView,
@@ -965,9 +943,8 @@ function makeLazyChildren(
   });
 }
 
-/** Handle a visitor result (sync).
- *  If the result is the same object as the input node, treat it as a no-op
- *  so that context mutations (e.g. setProperty) are not clobbered. */
+/** A result that is the same object as the input node is a no-op, so context
+ *  mutations (e.g. setProperty) are not clobbered. */
 function handleVisitResult(
   result: HastNode | void | Promise<HastNode | void>,
   nodeId: number,
@@ -1018,7 +995,6 @@ function dispatchMatches(
   return deferred;
 }
 
-/** Merge return-value + context command buffers and release internals. */
 const EMPTY_BYTES = new Uint8Array(0);
 
 function mergeAndReset(
@@ -1026,7 +1002,7 @@ function mergeAndReset(
   ctx: HastVisitorContextImpl,
 ): { merged: Uint8Array; hasMutations: boolean } {
   const ctxCmdBuf = ctx.getCommandBuffer();
-  // The common case — no mutations this match — allocates nothing.
+  // The common case — no mutations this pass — allocates nothing.
   if (returnBuffer.length === 0 && ctxCmdBuf.length === 0) {
     return { merged: EMPTY_BYTES, hasMutations: false };
   }
@@ -1040,8 +1016,6 @@ function mergeAndReset(
   ctxCmdBuf.reset();
   return { merged, hasMutations: true };
 }
-
-// Handle-based visitor
 
 /**
  * Walk a handle's arena in Rust, dispatch matched nodes to JS visitor functions,

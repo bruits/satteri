@@ -358,8 +358,7 @@ pub fn node_types_ts(
     out
 }
 
-/// The TS walk-path decoder: a descriptor table plus one generic loop that
-/// replaces the hand-written per-type `switch` in `readMdastMatchedNode`.
+/// The TS walk-path decoder: a descriptor table plus one generic decode loop.
 pub fn layout_ts(layouts: &[Layout]) -> String {
     let mut out = String::from(HEADER_TS);
     out.push_str("import { ru16, ru32, rstr } from \"../wire-read.js\";\n");
@@ -455,8 +454,7 @@ export function decodeMdastTypeData(
 "#;
 
 /// The arena-snapshot decoder: the same `MDAST_LAYOUTS`, but resolving each
-/// `StringRef` from the string pool instead of reading an inline wire. Replaces
-/// the per-type getters in `mdast-reader.ts` and their `lazyGroup` wiring.
+/// `StringRef` from the string pool instead of reading an inline wire.
 const STORED_DECODER_TS: &str = r#"
 /**
  * Attach a node's fixed `type_data` fields, materialized from the arena
