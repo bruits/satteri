@@ -92,3 +92,15 @@ fn combined_flag_still_works() {
     assert!(!html.contains("--"), "no ASCII dashes");
     assert!(!html.contains("..."), "no ASCII dots");
 }
+
+#[test]
+fn double_quote_closes_before_ascii_letter() {
+    let html = render(r#""About Me"x"#, opts_quotes_only());
+    assert_eq!(html, "<p>“About Me”x</p>\n");
+}
+
+#[test]
+fn double_quote_closes_before_non_ascii_letter() {
+    let html = render(r#""About Me"로"#, opts_quotes_only());
+    assert_eq!(html, "<p>“About Me”로</p>\n");
+}

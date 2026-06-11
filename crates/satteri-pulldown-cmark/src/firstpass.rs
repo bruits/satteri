@@ -5682,6 +5682,14 @@ fn delim_run_can_close(
                 && (next_char.is_whitespace() || is_punctuation(next_char)));
     }
 
+    // Double quotes can close before a non-space word character. For example, `"About Me"로` has
+    // Korean text attached directly after the quoted phrase.
+    if delim == b'"' {
+        return !is_punctuation(prev_char)
+            || next_char.is_whitespace()
+            || is_punctuation(next_char);
+    }
+
     next_char.is_whitespace() || is_punctuation(next_char)
 }
 
