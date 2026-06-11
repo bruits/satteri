@@ -52,6 +52,68 @@ describe("frontmatter extraction", () => {
   });
 });
 
+describe("features.superscript / features.subscript", () => {
+  test("superscript renders <sup>", () => {
+    const result = markdownToHtml("2^10^", { features: { superscript: true } });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<p>2<sup>10</sup></p>");
+  });
+
+  test("subscript renders <sub>", () => {
+    const result = markdownToHtml("H~2~O", { features: { subscript: true } });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<p>H<sub>2</sub>O</p>");
+  });
+
+  test("both features together", () => {
+    const result = markdownToHtml("H~2~O and 2^10^.", {
+      features: { superscript: true, subscript: true },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<p>H<sub>2</sub>O and 2<sup>10</sup>.</p>");
+  });
+
+  test("disabled by default: delimiters stay literal", () => {
+    const result = markdownToHtml("H~2~O and 2^10^.");
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).not.toContain("<sub>");
+    expect(result.html).not.toContain("<sup>");
+  });
+
+  test("mdast exposes superscript / subscript node types", () => {
+    const ast = markdownToMdast("H~2~O and 2^10^.", {
+      features: { superscript: true, subscript: true },
+    });
+    expect(ast.type).toBe("root");
+    if (ast.type !== "root") return;
+    const para = ast.children[0];
+    expect(para?.type).toBe("paragraph");
+    if (para?.type !== "paragraph") return;
+    expect(para.children.map((c) => c.type)).toEqual([
+      "text",
+      "subscript",
+      "text",
+      "superscript",
+      "text",
+    ]);
+  });
+
+  test("mdast plugin visits superscript and replacement survives rebuild", () => {
+    const plugin = defineMdastPlugin({
+      name: "swap-sup-to-sub",
+      superscript() {
+        return { type: "subscript", children: [{ type: "text", value: "swapped" }] };
+      },
+    });
+    const result = markdownToHtml("a^x^b", {
+      features: { superscript: true, subscript: true },
+      mdastPlugins: [plugin],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<p>a<sub>swapped</sub>b</p>");
+  });
+});
+
 describe("features.math.singleDollarTextMath", () => {
   test("default keeps single-$ as inline math", () => {
     const result = markdownToHtml("inline $x$ here", { features: { math: true } });

@@ -30,7 +30,7 @@ import {
   PROP_STRING,
   emitMdxAttr,
 } from "../op-stream.js";
-import type { MdastNode, Toml, MathNode, InlineMath } from "../types.js";
+import type { MdastNode, Toml, MathNode, InlineMath, Superscript, Subscript } from "../types.js";
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
 import {
   asArray,
@@ -297,6 +297,8 @@ export interface MdastPluginInstance {
   containerDirective?: MdastVisitorFn<ContainerDirective>;
   leafDirective?: MdastVisitorFn<LeafDirective>;
   textDirective?: MdastVisitorFn<TextDirective>;
+  superscript?: MdastVisitorFn<Superscript>;
+  subscript?: MdastVisitorFn<Subscript>;
   mdxJsxFlowElement?: MdastVisitorFn<MdxJsxFlowElement>;
   mdxJsxTextElement?: MdastVisitorFn<MdxJsxTextElement>;
   mdxFlowExpression?: MdastVisitorFn<MdxFlowExpression>;

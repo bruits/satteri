@@ -1325,6 +1325,24 @@ fn convert_node(
             builder.close_node();
         }
 
+        Some(MdastNodeType::Superscript) => {
+            let action = open_h_element(builder, view, node_id, "sup", &[]);
+            copy_position(node_id, view, builder);
+            if matches!(action, ChildrenAction::Recurse) {
+                convert_children(node_id, view, builder, ctx);
+            }
+            builder.close_node();
+        }
+
+        Some(MdastNodeType::Subscript) => {
+            let action = open_h_element(builder, view, node_id, "sub", &[]);
+            copy_position(node_id, view, builder);
+            if matches!(action, ChildrenAction::Recurse) {
+                convert_children(node_id, view, builder, ctx);
+            }
+            builder.close_node();
+        }
+
         Some(MdastNodeType::Table) => {
             let alignments = decode_table_alignments(view.get_type_data(node_id));
             let action = open_h_element(builder, view, node_id, "table", &[]);

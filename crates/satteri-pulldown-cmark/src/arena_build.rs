@@ -1249,9 +1249,15 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         );
                         inner.tree.push();
                     }
-                    // Superscript/Subscript → Emphasis for now.
-                    ItemBody::Superscript | ItemBody::Subscript => {
-                        builder.open_node(MdastNodeType::Emphasis as u8);
+                    ItemBody::Superscript => {
+                        builder.open_node(MdastNodeType::Superscript as u8);
+                        builder.set_position_current(
+                            start, end, start_line, start_col, end_line, end_col,
+                        );
+                        inner.tree.push();
+                    }
+                    ItemBody::Subscript => {
+                        builder.open_node(MdastNodeType::Subscript as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );

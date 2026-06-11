@@ -1,5 +1,10 @@
 import type { Position } from "unist";
-import type { Literal as MdastLiteral, Nodes as MdastStdNodes } from "mdast";
+import type {
+  Literal as MdastLiteral,
+  Nodes as MdastStdNodes,
+  Parent as MdastParent,
+  PhrasingContent,
+} from "mdast";
 import type { Nodes as HastStdNodes } from "hast";
 
 // Re-export standard position types from unist.
@@ -49,6 +54,16 @@ export interface InlineMath extends MdastLiteral {
   type: "inlineMath";
 }
 
+export interface Superscript extends MdastParent {
+  type: "superscript";
+  children: PhrasingContent[];
+}
+
+export interface Subscript extends MdastParent {
+  type: "subscript";
+  children: PhrasingContent[];
+}
+
 declare module "mdast" {
   interface FrontmatterContentMap {
     toml: Toml;
@@ -57,9 +72,13 @@ declare module "mdast" {
     toml: Toml;
     math: MathNode;
     inlineMath: InlineMath;
+    superscript: Superscript;
+    subscript: Subscript;
   }
   interface PhrasingContentMap {
     inlineMath: InlineMath;
+    superscript: Superscript;
+    subscript: Subscript;
   }
   interface BlockContentMap {
     math: MathNode;

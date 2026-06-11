@@ -597,6 +597,8 @@ pub const MDAST_NODES: &[Node] = &[
     ),
     xt(Mdast, 31, "LeafDirective", "leafDirective", DIRECTIVE_TAIL),
     xt(Mdast, 32, "TextDirective", "textDirective", DIRECTIVE_TAIL),
+    c(Mdast, 33, "Superscript", "superscript"),
+    c(Mdast, 34, "Subscript", "subscript"),
     xts(
         Mdast,
         100,
