@@ -26,15 +26,50 @@ const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {
   13: [{ js: "value", offset: 0, kind: "str32" }],
   25: [{ js: "value", offset: 0, kind: "str32" }],
   26: [{ js: "value", offset: 0, kind: "str32" }],
-  8: [{ js: "lang", offset: 0, kind: "str16", nullable: true }, { js: "meta", offset: 8, kind: "str16", nullable: true }, { js: "value", offset: 16, kind: "str32" }],
-  9: [{ js: "url", offset: 0, kind: "str16" }, { js: "title", offset: 8, kind: "str16", nullable: true }, { js: "identifier", offset: 16, kind: "str16" }, { js: "label", offset: 24, kind: "str16" }],
-  15: [{ js: "url", offset: 0, kind: "str16" }, { js: "title", offset: 8, kind: "str16", nullable: true }],
-  16: [{ js: "url", offset: 0, kind: "str16" }, { js: "alt", offset: 8, kind: "str16" }, { js: "title", offset: 16, kind: "str16", nullable: true }],
-  17: [{ js: "identifier", offset: 0, kind: "str16" }, { js: "label", offset: 8, kind: "str16" }, { js: "referenceType", offset: 16, kind: "u8", values: ["shortcut", "collapsed", "full"] }],
-  18: [{ js: "identifier", offset: 0, kind: "str16" }, { js: "label", offset: 8, kind: "str16" }, { js: "referenceType", offset: 16, kind: "u8", values: ["shortcut", "collapsed", "full"] }, { js: "alt", offset: 20, kind: "str16" }],
-  19: [{ js: "identifier", offset: 0, kind: "str16" }, { js: "label", offset: 8, kind: "str16" }],
-  20: [{ js: "identifier", offset: 0, kind: "str16" }, { js: "label", offset: 8, kind: "str16" }, { js: "", offset: 16, kind: "u8", skip: true }],
-  27: [{ js: "meta", offset: 0, kind: "str16", nullable: true }, { js: "value", offset: 8, kind: "str32" }],
+  8: [
+    { js: "lang", offset: 0, kind: "str16", nullable: true },
+    { js: "meta", offset: 8, kind: "str16", nullable: true },
+    { js: "value", offset: 16, kind: "str32" },
+  ],
+  9: [
+    { js: "url", offset: 0, kind: "str16" },
+    { js: "title", offset: 8, kind: "str16", nullable: true },
+    { js: "identifier", offset: 16, kind: "str16" },
+    { js: "label", offset: 24, kind: "str16" },
+  ],
+  15: [
+    { js: "url", offset: 0, kind: "str16" },
+    { js: "title", offset: 8, kind: "str16", nullable: true },
+  ],
+  16: [
+    { js: "url", offset: 0, kind: "str16" },
+    { js: "alt", offset: 8, kind: "str16" },
+    { js: "title", offset: 16, kind: "str16", nullable: true },
+  ],
+  17: [
+    { js: "identifier", offset: 0, kind: "str16" },
+    { js: "label", offset: 8, kind: "str16" },
+    { js: "referenceType", offset: 16, kind: "u8", values: ["shortcut", "collapsed", "full"] },
+  ],
+  18: [
+    { js: "identifier", offset: 0, kind: "str16" },
+    { js: "label", offset: 8, kind: "str16" },
+    { js: "referenceType", offset: 16, kind: "u8", values: ["shortcut", "collapsed", "full"] },
+    { js: "alt", offset: 20, kind: "str16" },
+  ],
+  19: [
+    { js: "identifier", offset: 0, kind: "str16" },
+    { js: "label", offset: 8, kind: "str16" },
+  ],
+  20: [
+    { js: "identifier", offset: 0, kind: "str16" },
+    { js: "label", offset: 8, kind: "str16" },
+    { js: "", offset: 16, kind: "u8", skip: true },
+  ],
+  27: [
+    { js: "meta", offset: 0, kind: "str16", nullable: true },
+    { js: "value", offset: 8, kind: "str32" },
+  ],
   28: [{ js: "value", offset: 8, kind: "str32" }],
   102: [{ js: "value", offset: 0, kind: "str32", phantom: true }],
   103: [{ js: "value", offset: 0, kind: "str32", phantom: true }],
@@ -127,7 +162,9 @@ export function materializeMdastFields(
         // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
         // yields an empty ref, mirroring the Rust decoders' bounds checks.
         const ref =
-          f.offset + 8 <= data.length ? reader.readStringRef(data, f.offset) : { offset: 0, len: 0 };
+          f.offset + 8 <= data.length
+            ? reader.readStringRef(data, f.offset)
+            : { offset: 0, len: 0 };
         if (f.skip) continue;
         const s = f.nullable && ref.len === 0 ? null : reader.getString(ref.offset, ref.len);
         out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;

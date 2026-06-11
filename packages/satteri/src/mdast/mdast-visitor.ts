@@ -362,55 +362,10 @@ function readMdastChildStubs(
   return stubs;
 }
 
-/** Shared slot descriptor for the lazy-children locals: they ride on the node
- *  itself (no per-node closure) but stay non-enumerable, so a spread copy is a
- *  plain plugin-built tree. */
-const HIDDEN_SLOT: PropertyDescriptor = {
-  value: undefined,
-  writable: true,
-  enumerable: false,
-  configurable: true,
-};
-
-interface LazyChildrenHost {
-  _view: DataView;
-  _buf: Uint8Array;
-  _childIdsPos: number;
-  _childTypesPos: number;
-  _childCount: number;
-  _resolver: MdastLazyChildResolver;
-}
-
-/** Own enumerable getter (so spreads carry the value), self-replacing with the
- *  one stable stub array on first read. */
-function lazyChildrenGetter(this: LazyChildrenHost): MdastNode[] {
-  const val = readMdastChildStubs(
-    this._view,
-    this._buf,
-    this._childIdsPos,
-    this._childTypesPos,
-    this._childCount,
-    this._resolver,
-  );
-  Object.defineProperty(this, "children", {
-    value: val,
-    writable: true,
-    enumerable: true,
-    configurable: true,
-  });
-  return val;
-}
-
-const LAZY_CHILDREN_DESCRIPTORS: PropertyDescriptorMap = {
-  _view: HIDDEN_SLOT,
-  _buf: HIDDEN_SLOT,
-  _childIdsPos: HIDDEN_SLOT,
-  _childTypesPos: HIDDEN_SLOT,
-  _childCount: HIDDEN_SLOT,
-  _resolver: HIDDEN_SLOT,
-  children: { get: lazyChildrenGetter, enumerable: true, configurable: true },
-};
-
+/** Install `children` as an own enumerable getter (spread must carry it),
+ *  self-replacing with the one stable stub array on first read. One closure
+ *  and one define per node — installing the wire locals as hidden slots
+ *  instead measurably regressed every matching pipeline. */
 function makeLazyChildren(
   node: object,
   view: DataView,
@@ -420,14 +375,20 @@ function makeLazyChildren(
   childCount: number,
   resolver: MdastLazyChildResolver,
 ): void {
-  Object.defineProperties(node, LAZY_CHILDREN_DESCRIPTORS);
-  const host = node as LazyChildrenHost;
-  host._view = view;
-  host._buf = buf;
-  host._childIdsPos = childIdsPos;
-  host._childTypesPos = childTypesPos;
-  host._childCount = childCount;
-  host._resolver = resolver;
+  Object.defineProperty(node, "children", {
+    get(this: object): MdastNode[] {
+      const val = readMdastChildStubs(view, buf, childIdsPos, childTypesPos, childCount, resolver);
+      Object.defineProperty(this, "children", {
+        value: val,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      return val;
+    },
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 /**
@@ -839,7 +800,7 @@ export function visitMdastHandle(
     | null = null;
 
   for (let i = 0; i < matchCount; i++) {
-    const indexBase = 4 + i * 12;
+    const indexBase = 4 + i * 10;
     const nodeId = ru32(matchView, indexBase);
     const subIndex = matchBuf[indexBase + 4]!;
     const dataOffset = ru32(matchView, indexBase + 6);

@@ -13,7 +13,11 @@ pub(crate) fn write_mdast_type_data_inline(
 ) -> bool {
     match node_type {
         2 => {
-            out.push(if !type_data.is_empty() { type_data[0] } else { 1 });
+            out.push(if !type_data.is_empty() {
+                type_data[0]
+            } else {
+                1
+            });
         }
         7 | 10 | 13 | 25 | 26 => {
             write_str32(arena, out, type_data, 0);
@@ -41,12 +45,20 @@ pub(crate) fn write_mdast_type_data_inline(
         17 => {
             write_str16(arena, out, type_data, 0);
             write_str16(arena, out, type_data, 8);
-            out.push(if type_data.len() > 16 { type_data[16] } else { 0 });
+            out.push(if type_data.len() > 16 {
+                type_data[16]
+            } else {
+                0
+            });
         }
         18 => {
             write_str16(arena, out, type_data, 0);
             write_str16(arena, out, type_data, 8);
-            out.push(if type_data.len() > 16 { type_data[16] } else { 0 });
+            out.push(if type_data.len() > 16 {
+                type_data[16]
+            } else {
+                0
+            });
             write_str16(arena, out, type_data, 20);
         }
         19 => {
@@ -56,7 +68,11 @@ pub(crate) fn write_mdast_type_data_inline(
         20 => {
             write_str16(arena, out, type_data, 0);
             write_str16(arena, out, type_data, 8);
-            out.push(if type_data.len() > 16 { type_data[16] } else { 0 });
+            out.push(if type_data.len() > 16 {
+                type_data[16]
+            } else {
+                0
+            });
         }
         27 => {
             write_str16(arena, out, type_data, 0);
@@ -67,6 +83,45 @@ pub(crate) fn write_mdast_type_data_inline(
         }
         102 | 103 | 104 => {
             write_str32(arena, out, type_data, 0);
+        }
+        30 | 31 | 32 => {
+            write_str16(arena, out, type_data, 0);
+            if type_data.len() >= 16 {
+                let stored = u32::from_le_bytes(type_data[8..12].try_into().unwrap());
+                // Clamp like write_str16: an oversized list truncates visibly
+                // instead of wrapping the u16 count prefix.
+                let count = (stored as usize).min(u16::MAX as usize);
+                out.extend_from_slice(&(count as u16).to_le_bytes());
+                for i in 0..count {
+                    let base = 16 + i * 16;
+                    write_str16(arena, out, type_data, base);
+                    write_str16(arena, out, type_data, base + 8);
+                }
+            } else {
+                out.extend_from_slice(&0u16.to_le_bytes());
+            }
+        }
+        100 | 101 => {
+            write_str16(arena, out, type_data, 0);
+            if type_data.len() >= 16 {
+                let stored = u32::from_le_bytes(type_data[8..12].try_into().unwrap());
+                // Clamp like write_str16: an oversized list truncates visibly
+                // instead of wrapping the u16 count prefix.
+                let count = (stored as usize).min(u16::MAX as usize);
+                out.extend_from_slice(&(count as u16).to_le_bytes());
+                for i in 0..count {
+                    let base = 16 + i * 20;
+                    out.push(if type_data.len() > base {
+                        type_data[base]
+                    } else {
+                        0
+                    });
+                    write_str16(arena, out, type_data, base + 4);
+                    write_str32(arena, out, type_data, base + 12);
+                }
+            } else {
+                out.extend_from_slice(&0u16.to_le_bytes());
+            }
         }
         _ => return false,
     }

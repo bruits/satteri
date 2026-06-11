@@ -35,24 +35,8 @@ use satteri_ast::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP, PROP_STRING,
 };
 
+use crate::generated::prop_slots::{mdast_prop_slot, MdastPropSlot};
 use crate::generated::wire_constants::*;
-
-// MDAST field IDs: internal to the set_string_ref / resolve_mdast_field dispatch
-const FIELD_DEPTH: u16 = 0x0001;
-const FIELD_URL: u16 = 0x0010;
-const FIELD_TITLE: u16 = 0x0011;
-const FIELD_LANG: u16 = 0x0020;
-const FIELD_META: u16 = 0x0021;
-const FIELD_VALUE: u16 = 0x0022;
-const FIELD_ALT: u16 = 0x0030;
-const FIELD_ORDERED: u16 = 0x0040;
-const FIELD_START: u16 = 0x0041;
-const FIELD_SPREAD: u16 = 0x0042;
-const FIELD_CHECKED: u16 = 0x0050;
-const FIELD_IDENTIFIER: u16 = 0x0060;
-const FIELD_LABEL: u16 = 0x0061;
-const FIELD_REFERENCE_TYPE: u16 = 0x0062;
-const FIELD_NAME: u16 = 0x0070;
 
 struct BufReader<'a> {
     data: &'a [u8],
@@ -131,36 +115,6 @@ fn apply_data_property<K: ArenaKind>(
     }
 }
 
-/// Resolve an MDAST property name to its field ID for a given node type.
-fn resolve_mdast_field(node_type: u8, name: &str) -> Option<u16> {
-    match (node_type, name) {
-        (2, "depth") => Some(FIELD_DEPTH),
-        (8, "lang") => Some(FIELD_LANG),
-        (8, "meta") => Some(FIELD_META),
-        (8, "value") => Some(FIELD_VALUE),
-        (15, "url") => Some(FIELD_URL),
-        (15, "title") => Some(FIELD_TITLE),
-        (16, "url") => Some(FIELD_URL),
-        (16, "alt") => Some(FIELD_ALT),
-        (16, "title") => Some(FIELD_TITLE),
-        (10 | 13 | 7 | 25 | 26 | 28, "value") => Some(FIELD_VALUE),
-        (27, "meta") => Some(FIELD_META),
-        (27, "value") => Some(FIELD_VALUE),
-        (102..=104, "value") => Some(FIELD_VALUE),
-        (9, "url") => Some(FIELD_URL),
-        (9, "title") => Some(FIELD_TITLE),
-        (5, "ordered") => Some(FIELD_ORDERED),
-        (5, "start") => Some(FIELD_START),
-        (5 | 6, "spread") => Some(FIELD_SPREAD),
-        (6, "checked") => Some(FIELD_CHECKED),
-        (9 | 17 | 18 | 19 | 20, "identifier") => Some(FIELD_IDENTIFIER),
-        (9 | 17 | 18 | 19 | 20, "label") => Some(FIELD_LABEL),
-        (17 | 18 | 20, "referenceType") => Some(FIELD_REFERENCE_TYPE),
-        (100 | 101, "name") => Some(FIELD_NAME),
-        _ => None,
-    }
-}
-
 /// The canonical MDAST type name for a node-type byte, for error messages.
 fn mdast_type_name(node_type: u8) -> String {
     match MdastNodeType::from_u8(node_type) {
@@ -189,175 +143,109 @@ fn apply_mdast_set_property(
 
     let node_type = arena.get_node(node_id).node_type;
 
-    // The field name doesn't resolve for this node type at all.
-    let field_id =
-        resolve_mdast_field(node_type, prop_name).ok_or_else(|| CommandError::UnknownField {
-            node_type: mdast_type_name(node_type),
-            name: prop_name.to_string(),
-        })?;
+    // The property doesn't resolve to a slot for this node type at all.
+    let slot = mdast_prop_slot(node_type, prop_name).ok_or_else(|| CommandError::UnknownField {
+        node_type: mdast_type_name(node_type),
+        name: prop_name.to_string(),
+    })?;
 
-    // The field resolved, so a `None` from the inner writers means the value's
-    // type is one the field can't hold — report that rather than "unknown".
-    let written: Option<()> = match value_type {
-        PROP_STRING | PROP_SPACE_SEP => {
-            let sref = arena.alloc_string(value_str);
-            set_mdast_string_ref(arena, node_id, field_id, sref)?
-        }
-        PROP_BOOL_TRUE => apply_mdast_bool(arena, node_id, node_type, field_id, true),
-        PROP_BOOL_FALSE => apply_mdast_bool(arena, node_id, node_type, field_id, false),
-        PROP_INT => {
-            // Integer fields (depth, list start, checked). Accept a float
-            // spelling like "3" or "3.0" leniently rather than truncating to 0.
-            let value = value_str
-                .parse::<i64>()
-                .or_else(|_| value_str.parse::<f64>().map(|f| f as i64))
-                .unwrap_or(0);
-            apply_mdast_int(arena, node_id, node_type, field_id, value)
-        }
-        PROP_NULL => apply_mdast_null(arena, node_id, node_type, field_id)?,
-        _ => return Err(CommandError::UnknownCommand(value_type)),
-    };
+    // The slot resolved, so a `None` from the writer means the value's type is
+    // one the slot can't hold — report that rather than "unknown".
+    let written = write_mdast_prop_slot(arena, node_id, slot, value_type, value_str)?;
     written.ok_or_else(|| CommandError::InvalidPropertyValue {
         node_type: mdast_type_name(node_type),
         name: prop_name.to_string(),
     })
 }
 
-fn apply_mdast_int(
+/// Write a resolved slot. `Ok(None)` means the slot can't hold this value
+/// type. String slots error `TypeDataTooShort` on short `type_data`; scalar
+/// slots skip the write silently instead (the historical semantics).
+fn write_mdast_prop_slot(
     arena: &mut Arena<Mdast>,
     node_id: u32,
-    node_type: u8,
-    field_id: u16,
-    value: i64,
-) -> Option<()> {
-    let data_offset = arena.get_node(node_id).data_offset as usize;
-    let data_len = arena.get_node(node_id).data_len as usize;
-    match (node_type, field_id) {
-        (2, FIELD_DEPTH) => {
-            if data_len >= 1 {
-                arena.type_data[data_offset] = value as u8;
-            }
-        }
-        (5, FIELD_START) => {
-            if data_len >= 4 {
-                arena.type_data[data_offset..data_offset + 4]
-                    .copy_from_slice(&(value as u32).to_ne_bytes());
-            }
-        }
-        (6, FIELD_CHECKED) => {
-            if data_len >= 1 {
-                arena.type_data[data_offset] = value as u8;
-            }
-        }
-        _ => return None,
-    }
-    Some(())
-}
-
-fn apply_mdast_bool(
-    arena: &mut Arena<Mdast>,
-    node_id: u32,
-    node_type: u8,
-    field_id: u16,
-    value: bool,
-) -> Option<()> {
-    let data_offset = arena.get_node(node_id).data_offset as usize;
-    let data_len = arena.get_node(node_id).data_len as usize;
-    match (node_type, field_id) {
-        (5, FIELD_ORDERED) => {
-            if data_len >= 5 {
-                arena.type_data[data_offset + 4] = value as u8;
-            }
-        }
-        (5, FIELD_SPREAD) => {
-            if data_len >= 6 {
-                arena.type_data[data_offset + 5] = value as u8;
-            }
-        }
-        (6, FIELD_SPREAD) => {
-            if data_len >= 2 {
-                arena.type_data[data_offset + 1] = value as u8;
-            }
-        }
-        _ => return None,
-    }
-    Some(())
-}
-
-fn apply_mdast_null(
-    arena: &mut Arena<Mdast>,
-    node_id: u32,
-    node_type: u8,
-    field_id: u16,
+    slot: MdastPropSlot,
+    value_type: u8,
+    value_str: &str,
 ) -> Result<Option<()>, CommandError> {
-    match (node_type, field_id) {
-        (6, FIELD_CHECKED) => {
-            let data_offset = arena.get_node(node_id).data_offset as usize;
-            let data_len = arena.get_node(node_id).data_len as usize;
-            if data_len >= 1 {
-                arena.type_data[data_offset] = 2;
+    use MdastPropSlot as S;
+    match value_type {
+        PROP_STRING | PROP_SPACE_SEP => match slot {
+            S::Str { offset } => {
+                let sref = arena.alloc_string(value_str);
+                set_mdast_string_ref(arena, node_id, offset, sref)?;
             }
-            Ok(Some(()))
+            S::Enum8 { offset, values } => {
+                let Some(v) = values.iter().position(|v| *v == value_str) else {
+                    return Ok(None);
+                };
+                set_mdast_scalar(arena, node_id, offset, &[v as u8]);
+            }
+            _ => return Ok(None),
+        },
+        PROP_BOOL_TRUE | PROP_BOOL_FALSE => match slot {
+            S::Bool { offset } => {
+                let value = value_type == PROP_BOOL_TRUE;
+                set_mdast_scalar(arena, node_id, offset, &[value as u8]);
+            }
+            _ => return Ok(None),
+        },
+        PROP_INT => {
+            // Integer slots (depth, list start, checked). Accept a float
+            // spelling like "3" or "3.0" leniently rather than truncating to 0.
+            let value = value_str
+                .parse::<i64>()
+                .or_else(|_| value_str.parse::<f64>().map(|f| f as i64))
+                .unwrap_or(0);
+            match slot {
+                S::U8 { offset } | S::CheckedTri { offset } => {
+                    set_mdast_scalar(arena, node_id, offset, &[value as u8]);
+                }
+                S::U32 { offset } => {
+                    set_mdast_scalar(arena, node_id, offset, &(value as u32).to_le_bytes());
+                }
+                _ => return Ok(None),
+            }
         }
-        _ => set_mdast_string_ref(arena, node_id, field_id, StringRef::empty()),
+        PROP_NULL => match slot {
+            // 2 = not a task item.
+            S::CheckedTri { offset } => set_mdast_scalar(arena, node_id, offset, &[2]),
+            S::Str { offset } => set_mdast_string_ref(arena, node_id, offset, StringRef::empty())?,
+            _ => return Ok(None),
+        },
+        _ => return Err(CommandError::UnknownCommand(value_type)),
     }
+    Ok(Some(()))
 }
 
-/// `Ok(None)` means the field has no string slot on this node type (the caller
-/// reports a value-type mismatch).
+/// Write an 8-byte `StringRef` at `offset` into the node's `type_data`.
 fn set_mdast_string_ref(
     arena: &mut Arena<Mdast>,
     node_id: u32,
-    field_id: u16,
+    offset: usize,
     sref: StringRef,
-) -> Result<Option<()>, CommandError> {
+) -> Result<(), CommandError> {
     let node = arena.get_node(node_id);
-    let node_type = node.node_type;
     let data_offset = node.data_offset as usize;
     let data_len = node.data_len as usize;
-
-    let ref_offset = match (node_type, field_id) {
-        // Text/InlineCode/Html/Yaml/Toml/InlineMath: StringRef at 0
-        (10 | 13 | 7 | 25 | 26 | 28, FIELD_VALUE) => 0,
-        // Link: LinkData { url: 0, title: 8 }
-        (15, FIELD_URL) => 0,
-        (15, FIELD_TITLE) => 8,
-        // Image: ImageData { url: 0, alt: 8, title: 16 }
-        (16, FIELD_URL) => 0,
-        (16, FIELD_ALT) => 8,
-        (16, FIELD_TITLE) => 16,
-        // Code: CodeData { lang: 0, meta: 8, value: 16 }
-        (8, FIELD_LANG) => 0,
-        (8, FIELD_META) => 8,
-        (8, FIELD_VALUE) => 16,
-        // Math: MathData { meta: 0, value: 8 }
-        (27, FIELD_META) => 0,
-        (27, FIELD_VALUE) => 8,
-        // Definition: DefinitionData { url: 0, title: 8, identifier: 16, label: 24 }
-        (9, FIELD_URL) => 0,
-        (9, FIELD_TITLE) => 8,
-        (9, FIELD_IDENTIFIER) => 16,
-        (9, FIELD_LABEL) => 24,
-        // LinkReference/ImageReference/FootnoteReference: ReferenceData { identifier: 0, label: 8 }
-        (17 | 18 | 20, FIELD_IDENTIFIER) => 0,
-        (17 | 18 | 20, FIELD_LABEL) => 8,
-        // FootnoteDefinition: FootnoteDefinitionData { identifier: 0, label: 8 }
-        (19, FIELD_IDENTIFIER) => 0,
-        (19, FIELD_LABEL) => 8,
-        // MdxJsxElement: MdxJsxElementData { name: 0 }
-        (100 | 101, FIELD_NAME) => 0,
-        // MdxExpression/MdxjsEsm: ExpressionData { value: 0 }
-        (102..=104, FIELD_VALUE) => 0,
-        _ => return Ok(None),
-    };
-
-    if data_len < ref_offset + 8 {
+    if data_len < offset + 8 {
         return Err(CommandError::TypeDataTooShort);
     }
-    let abs_offset = data_offset + ref_offset;
+    let abs_offset = data_offset + offset;
     arena.type_data[abs_offset..abs_offset + 8].copy_from_slice(&sref.as_bytes());
+    Ok(())
+}
 
-    Ok(Some(()))
+/// Write a scalar at `offset` into the node's `type_data`; too-short data
+/// skips the write.
+fn set_mdast_scalar(arena: &mut Arena<Mdast>, node_id: u32, offset: usize, bytes: &[u8]) {
+    let node = arena.get_node(node_id);
+    let data_offset = node.data_offset as usize;
+    let data_len = node.data_len as usize;
+    if data_len >= offset + bytes.len() {
+        let abs_offset = data_offset + offset;
+        arena.type_data[abs_offset..abs_offset + bytes.len()].copy_from_slice(bytes);
+    }
 }
 
 /// Escape `{` and `}` in HTML text content so they are not interpreted as MDX
@@ -1858,9 +1746,7 @@ mod tests {
         let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnbalancedOpstream));
 
-        let mut hast_ops = Vec::new();
-        hast_ops.push(OP_OPEN);
-        hast_ops.push(HastNodeType::Element as u8);
+        let hast_ops = vec![OP_OPEN, HastNodeType::Element as u8];
         let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
         let err = replay_hast_opstream(&hast_ops, &empty_hast, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnbalancedOpstream));
@@ -2267,6 +2153,83 @@ mod tests {
             err.to_string(),
             "property 'depth' on a 'heading' node cannot hold a value of this type"
         );
+    }
+
+    /// Build root > one leaf node of `node_type` carrying `type_data`.
+    fn build_single_node(node_type: MdastNodeType, type_data: &[u8]) -> Arena<Mdast> {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(node_type as u8);
+        b.set_data_current(type_data);
+        b.close_node();
+        b.close_node();
+        b.finish()
+    }
+
+    #[test]
+    fn set_property_image_reference_alt_roundtrip() {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(MdastNodeType::ImageReference as u8);
+        let identifier = b.alloc_string("img");
+        let alt = b.alloc_string("old");
+        b.set_data_current(&encode_image_reference_data(identifier, identifier, 0, alt));
+        b.close_node();
+        b.close_node();
+        let arena = b.finish();
+        let image_ref_id = arena.get_children(0)[0];
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, image_ref_id, PROP_STRING, "alt", "new alt");
+
+        let result = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap();
+        let alt = decode_image_reference_alt(result.get_type_data(image_ref_id));
+        assert_eq!(result.get_str(alt), "new alt");
+    }
+
+    #[test]
+    fn set_property_reference_type_valid_and_invalid() {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(MdastNodeType::LinkReference as u8);
+        let identifier = b.alloc_string("ref");
+        b.set_data_current(&encode_reference_data(identifier, identifier, 0));
+        b.close_node();
+        b.close_node();
+        let arena = b.finish();
+        let link_ref_id = arena.get_children(0)[0];
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, link_ref_id, PROP_STRING, "referenceType", "full");
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let reference = decode_reference_data(result.get_type_data(link_ref_id));
+        assert_eq!(reference.reference_kind, 2);
+
+        // A value outside the declared list is a value error, not a silent 0.
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, link_ref_id, PROP_STRING, "referenceType", "bogus");
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::InvalidPropertyValue { ref name, ref node_type }
+                if name == "referenceType" && node_type == "linkReference"
+        ));
+    }
+
+    #[test]
+    fn set_property_list_start_and_ordered() {
+        let arena = build_single_node(MdastNodeType::List, &encode_list_data(false, 1, false));
+        let list_id = arena.get_children(0)[0];
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, list_id, PROP_INT, "start", "5");
+        push_set_property(&mut buf, list_id, PROP_BOOL_TRUE, "ordered", "");
+
+        let result = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap();
+        let list = decode_list_data(result.get_type_data(list_id));
+        assert_eq!(list.start, 5);
+        assert!(list.ordered);
+        assert!(!list.spread);
     }
 
     #[test]

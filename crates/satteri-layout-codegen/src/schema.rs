@@ -6,6 +6,7 @@
 //!   * the `MdastNodeType` / `HastNodeType` enums (`generated/node_types.rs`),
 //!   * the TS name maps and visitor keys (`generated/node-types.ts`),
 //!   * the walk serializers + layout decoders (`walk_type_data.rs`, `layout.ts`),
+//!   * the MDAST set-property slot dispatch (`prop_slots.rs`),
 //!   * compile-time layout assertions (`assert_layouts.rs`).
 //!
 //! Add a node here once; every downstream list is regenerated from it.
@@ -61,6 +62,55 @@ pub struct Field {
     pub phantom: bool,
 }
 
+/// How the set-property dispatch writes a [`SetSlot`]. Fixed [`Field`]s derive
+/// their slot kind from `wire`/`js_kind`; these cover the stored scalars that
+/// never cross the walk wire as fields.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    /// 8-byte `StringRef` written in place.
+    Str,
+    /// Single numeric byte (derived from [`Js::Num`] fields; no declarations).
+    U8,
+    /// u32 little-endian scalar.
+    U32,
+    /// bool byte (0/1).
+    Bool,
+    /// Tri-state checked byte: true=1, false=0, null=2.
+    CheckedTri,
+    /// Byte mapped through an enum value list.
+    Enum8(&'static [&'static str]),
+}
+
+/// A settable `type_data` slot consumed only by the set-property dispatch
+/// (`prop_slots.rs`) — never part of the walk/op-stream layouts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SetSlot {
+    /// JS property name.
+    pub js: &'static str,
+    /// Byte offset within the node's stored `type_data`.
+    pub offset: usize,
+    pub kind: Slot,
+}
+
+/// A variable-length list tail on the walk wire: `head` fields, then a `u16`
+/// item count (the stored u32 at `count_offset`, clamped to `u16::MAX`) and
+/// `count` fixed-stride items starting at `items_offset`. Item field offsets
+/// are relative to the item base and pinned against `entry_struct` by
+/// [`check_struct_layouts`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Tail {
+    /// Fields written before the count (the element/directive name).
+    pub head: &'static [Field],
+    pub count_offset: usize,
+    pub items_offset: usize,
+    /// Stored item stride; must equal the entry struct's size.
+    pub stride: usize,
+    pub item: &'static [Field],
+    /// The codec entry struct ([`MDAST_STRUCTS`] / [`HAST_STRUCTS`]) backing
+    /// one stored item.
+    pub entry_struct: &'static str,
+}
+
 pub struct Node {
     /// Kept for readability of the registry; the two tree tables are already
     /// split, so the generators don't read it back.
@@ -77,6 +127,15 @@ pub struct Node {
     pub fields: &'static [Field],
     /// Variable-length `type_data` handled by hand-written code on both sides.
     pub custom: bool,
+    /// Extra settable slots for the set-property dispatch: the custom nodes'
+    /// fixed-offset scalars, plus stored bytes the walk wire hides
+    /// (footnoteReference's kind byte). Non-skip/const [`Field`]s are settable
+    /// already and don't repeat here.
+    pub set_slots: &'static [SetSlot],
+    /// Generated head+count+items walk tail of a `custom` node. The stored
+    /// codec and the TS decoders stay hand-written; only the Rust walk
+    /// serializer is generated from this.
+    pub tail: Option<Tail>,
 }
 
 /// One fixed-field wire layout shared by every tag with the same field list.
@@ -175,12 +234,69 @@ const fn konst(js: &'static str, offset: usize, value: u8) -> Field {
     }
 }
 
+const fn sl(js: &'static str, offset: usize, kind: Slot) -> SetSlot {
+    SetSlot { js, offset, kind }
+}
+
 const REF_KINDS: &[&str] = &["shortcut", "collapsed", "full"];
+
+/// `ListData`: start u32 @0, ordered @4, spread @5.
+const LIST_SLOTS: &[SetSlot] = &[
+    sl("start", 0, Slot::U32),
+    sl("ordered", 4, Slot::Bool),
+    sl("spread", 5, Slot::Bool),
+];
+/// `ListItemData`: checked tri-state @0, spread @1.
+const LIST_ITEM_SLOTS: &[SetSlot] = &[
+    sl("checked", 0, Slot::CheckedTri),
+    sl("spread", 1, Slot::Bool),
+];
+/// `MdxJsxElementData`: name `StringRef` @0.
+const MDX_JSX_SLOTS: &[SetSlot] = &[sl("name", 0, Slot::Str)];
+/// `ReferenceData.reference_kind` stays settable on footnoteReference even
+/// though the walk wire skips it there (the mdast spec hides it).
+const FOOTNOTE_REF_SLOTS: &[SetSlot] = &[sl("referenceType", 16, Slot::Enum8(REF_KINDS))];
 
 const VALUE: &[Field] = &[s32("value", 0)];
 const EXPR_VALUE: &[Field] = &[s32p("value", 0)];
 const MATH: &[Field] = &[s16n("meta", 0), s32("value", 8)];
 const NONE: &[Field] = &[];
+
+/// The head shared by every list tail: a name `StringRef` at offset 0.
+const NAME_HEAD: &[Field] = &[s16("name", 0)];
+
+/// MDX JSX elements: 16-byte header, then 20-byte attribute entries
+/// (`encode_mdx_jsx_element_data`, shared by the MDAST and HAST codecs).
+const MDX_JSX_TAIL: Tail = Tail {
+    head: NAME_HEAD,
+    count_offset: 8,
+    items_offset: 16,
+    stride: 20,
+    item: &[num("kind", 0, 0), s16("name", 4), s32("value", 12)],
+    entry_struct: "MdxJsxAttributeEntry",
+};
+
+/// Directives: 16-byte header, then 16-byte key/value attribute entries
+/// (`encode_directive_data`).
+const DIRECTIVE_TAIL: Tail = Tail {
+    head: NAME_HEAD,
+    count_offset: 8,
+    items_offset: 16,
+    stride: 16,
+    item: &[s16("key", 0), s16("value", 8)],
+    entry_struct: "DirectiveAttributeEntry",
+};
+
+/// HAST elements: 16-byte header, then 20-byte property entries
+/// (`encode_element_data`).
+const ELEMENT_TAIL: Tail = Tail {
+    head: &[s16("tagName", 0)],
+    count_offset: 8,
+    items_offset: 16,
+    stride: 20,
+    item: &[s16("name", 0), num("kind", 8, 0), s16("value", 12)],
+    entry_struct: "PropertyEntry",
+};
 
 use Tree::{Hast, Mdast};
 
@@ -193,6 +309,8 @@ const fn c(tree: Tree, tag: u8, variant: &'static str, name: &'static str) -> No
         name,
         fields: NONE,
         custom: false,
+        set_slots: &[],
+        tail: None,
     }
 }
 /// A leaf node with a fixed-field layout.
@@ -210,6 +328,28 @@ const fn n(
         name,
         fields,
         custom: false,
+        set_slots: &[],
+        tail: None,
+    }
+}
+/// A fixed-field leaf node with extra walk-hidden settable slots.
+const fn ns(
+    tree: Tree,
+    tag: u8,
+    variant: &'static str,
+    name: &'static str,
+    fields: &'static [Field],
+    set_slots: &'static [SetSlot],
+) -> Node {
+    Node {
+        tree,
+        tag,
+        variant,
+        name,
+        fields,
+        custom: false,
+        set_slots,
+        tail: None,
     }
 }
 /// A node whose variable-length `type_data` codec stays hand-written.
@@ -221,6 +361,60 @@ const fn x(tree: Tree, tag: u8, variant: &'static str, name: &'static str) -> No
         name,
         fields: NONE,
         custom: true,
+        set_slots: &[],
+        tail: None,
+    }
+}
+/// A custom node with settable fixed-offset `type_data` slots.
+const fn xs(
+    tree: Tree,
+    tag: u8,
+    variant: &'static str,
+    name: &'static str,
+    set_slots: &'static [SetSlot],
+) -> Node {
+    Node {
+        tree,
+        tag,
+        variant,
+        name,
+        fields: NONE,
+        custom: true,
+        set_slots,
+        tail: None,
+    }
+}
+/// A custom node whose walk tail is a generated head+count+items list.
+const fn xt(tree: Tree, tag: u8, variant: &'static str, name: &'static str, tail: Tail) -> Node {
+    Node {
+        tree,
+        tag,
+        variant,
+        name,
+        fields: NONE,
+        custom: true,
+        set_slots: &[],
+        tail: Some(tail),
+    }
+}
+/// [`xt`] with settable fixed-offset `type_data` slots.
+const fn xts(
+    tree: Tree,
+    tag: u8,
+    variant: &'static str,
+    name: &'static str,
+    tail: Tail,
+    set_slots: &'static [SetSlot],
+) -> Node {
+    Node {
+        tree,
+        tag,
+        variant,
+        name,
+        fields: NONE,
+        custom: true,
+        set_slots,
+        tail: Some(tail),
     }
 }
 
@@ -230,8 +424,8 @@ pub const MDAST_NODES: &[Node] = &[
     n(Mdast, 2, "Heading", "heading", &[num("depth", 0, 1)]),
     c(Mdast, 3, "ThematicBreak", "thematicBreak"),
     c(Mdast, 4, "Blockquote", "blockquote"),
-    x(Mdast, 5, "List", "list"),
-    x(Mdast, 6, "ListItem", "listItem"),
+    xs(Mdast, 5, "List", "list", LIST_SLOTS),
+    xs(Mdast, 6, "ListItem", "listItem", LIST_ITEM_SLOTS),
     n(Mdast, 7, "Html", "html", VALUE),
     n(
         Mdast,
@@ -306,12 +500,13 @@ pub const MDAST_NODES: &[Node] = &[
         "footnoteDefinition",
         &[s16("identifier", 0), s16("label", 8)],
     ),
-    n(
+    ns(
         Mdast,
         20,
         "FootnoteReference",
         "footnoteReference",
         &[s16("identifier", 0), s16("label", 8), skip8(16)],
+        FOOTNOTE_REF_SLOTS,
     ),
     x(Mdast, 21, "Table", "table"),
     c(Mdast, 22, "TableRow", "tableRow"),
@@ -323,11 +518,31 @@ pub const MDAST_NODES: &[Node] = &[
     // InlineMath shares Math's stored `MathData` (meta@0, value@8) but the mdast
     // spec gives it no `meta`, so only `value` is surfaced.
     n(Mdast, 28, "InlineMath", "inlineMath", &[s32("value", 8)]),
-    x(Mdast, 30, "ContainerDirective", "containerDirective"),
-    x(Mdast, 31, "LeafDirective", "leafDirective"),
-    x(Mdast, 32, "TextDirective", "textDirective"),
-    x(Mdast, 100, "MdxJsxFlowElement", "mdxJsxFlowElement"),
-    x(Mdast, 101, "MdxJsxTextElement", "mdxJsxTextElement"),
+    xt(
+        Mdast,
+        30,
+        "ContainerDirective",
+        "containerDirective",
+        DIRECTIVE_TAIL,
+    ),
+    xt(Mdast, 31, "LeafDirective", "leafDirective", DIRECTIVE_TAIL),
+    xt(Mdast, 32, "TextDirective", "textDirective", DIRECTIVE_TAIL),
+    xts(
+        Mdast,
+        100,
+        "MdxJsxFlowElement",
+        "mdxJsxFlowElement",
+        MDX_JSX_TAIL,
+        MDX_JSX_SLOTS,
+    ),
+    xts(
+        Mdast,
+        101,
+        "MdxJsxTextElement",
+        "mdxJsxTextElement",
+        MDX_JSX_TAIL,
+        MDX_JSX_SLOTS,
+    ),
     n(
         Mdast,
         102,
@@ -347,29 +562,47 @@ pub const MDAST_NODES: &[Node] = &[
 
 pub const HAST_NODES: &[Node] = &[
     c(Hast, 0, "Root", "root"),
-    // HAST layouts are not generated yet (only tag/name are read back): every
-    // walk tail below — element, MDX, and the single-value nodes — is
-    // hand-written on BOTH sides (walk.rs `serialize_hast_node_inline` +
-    // hast-visitor.ts) and must be kept in sync manually.
-    x(Hast, 1, "Element", "element"),
+    // The HAST fields/tails below drive only the generated Rust walk
+    // serializer (`hast/generated/walk_type_data.rs`); the stored codecs and
+    // the TS decoders (hast-visitor.ts) stay hand-written.
+    xt(Hast, 1, "Element", "element", ELEMENT_TAIL),
     // text/comment/raw store a single value StringRef (`encode_text_data`).
     n(Hast, 2, "Text", "text", VALUE),
     n(Hast, 3, "Comment", "comment", VALUE),
     c(Hast, 4, "Doctype", "doctype"),
     n(Hast, 5, "Raw", "raw", VALUE),
-    x(Hast, 10, "MdxJsxElement", "mdxJsxFlowElement"),
-    x(Hast, 11, "MdxJsxTextElement", "mdxJsxTextElement"),
-    x(Hast, 12, "MdxFlowExpression", "mdxFlowExpression"),
-    x(Hast, 13, "MdxEsm", "mdxjsEsm"),
-    x(Hast, 14, "MdxTextExpression", "mdxTextExpression"),
+    xt(Hast, 10, "MdxJsxElement", "mdxJsxFlowElement", MDX_JSX_TAIL),
+    xt(
+        Hast,
+        11,
+        "MdxJsxTextElement",
+        "mdxJsxTextElement",
+        MDX_JSX_TAIL,
+    ),
+    // The s32p/s32 split mirrors the TS side: expression values get MDX
+    // phantom-space restoration, ESM does not. Both emit `write_str32`.
+    n(
+        Hast,
+        12,
+        "MdxFlowExpression",
+        "mdxFlowExpression",
+        EXPR_VALUE,
+    ),
+    n(Hast, 13, "MdxEsm", "mdxjsEsm", VALUE),
+    n(
+        Hast,
+        14,
+        "MdxTextExpression",
+        "mdxTextExpression",
+        EXPR_VALUE,
+    ),
 ];
 
 /// AST names whose op-stream replay falls back to JSON. `finalize_collector`
 /// (js_commands.rs) silently encodes no type_data for tags it has no arm for,
 /// so a NEW node type must either gain a finalize/generated encode arm or be
-/// listed here. The set-property dispatch in js_commands.rs
-/// (`resolve_mdast_field` + the `set_mdast_string_ref` offset table) also
-/// restates these field offsets by hand and must be updated alongside.
+/// listed here. (The set-property dispatch is generated — `prop_slots.rs` —
+/// but `finalize_collector`'s custom-node arms stay hand-written.)
 pub const MDAST_OPSTREAM_EXCLUDED: &[&str] = &["root"];
 /// HAST twin (`finalize_hast_collector`); `doctype` has no finalize arm either.
 pub const HAST_OPSTREAM_EXCLUDED: &[&str] = &["root", "doctype"];
@@ -406,6 +639,28 @@ pub fn layouts(nodes: &[Node]) -> Vec<Layout> {
             None => out.push(Layout {
                 tags: vec![node.tag],
                 fields: node.fields,
+            }),
+        }
+    }
+    out
+}
+
+/// One generated walk tail shared by every tag with an identical [`Tail`].
+pub struct TailLayout {
+    pub tags: Vec<u8>,
+    pub tail: Tail,
+}
+
+/// Group a tree's tail nodes the same way [`layouts`] groups fixed fields.
+pub fn tail_layouts(nodes: &[Node]) -> Vec<TailLayout> {
+    let mut out: Vec<TailLayout> = Vec::new();
+    for node in nodes {
+        let Some(tail) = node.tail else { continue };
+        match out.iter_mut().find(|t| t.tail == tail) {
+            Some(t) => t.tags.push(node.tag),
+            None => out.push(TailLayout {
+                tags: vec![node.tag],
+                tail,
             }),
         }
     }
@@ -453,7 +708,24 @@ pub const MDAST_STRUCTS: &[ArenaStruct] = &[
         size: 16,
         offsets: &[("identifier", 0), ("label", 8)],
     },
+    ArenaStruct {
+        rust: "DirectiveAttributeEntry",
+        size: 16,
+        offsets: &[("key", 0), ("value", 8)],
+    },
+    ArenaStruct {
+        rust: "MdxJsxAttributeEntry",
+        size: 20,
+        offsets: &[("kind", 0), ("name", 4), ("value", 12)],
+    },
 ];
+
+/// HAST twin of [`MDAST_STRUCTS`], pinned by `hast/generated/assert_layouts.rs`.
+pub const HAST_STRUCTS: &[ArenaStruct] = &[ArenaStruct {
+    rust: "PropertyEntry",
+    size: 20,
+    offsets: &[("name", 0), ("value_type", 8), ("value", 12)],
+}];
 
 /// Which [`MDAST_STRUCTS`] entry backs each fixed-field node's stored
 /// `type_data`. Nodes absent here store a bare `StringRef` (`VALUE` /
@@ -546,11 +818,60 @@ pub fn check_struct_layouts() {
             node.name
         );
     }
+    // Tail items are pinned the same way: the stride must equal the entry
+    // struct's size and every item field must start on a declared offset.
+    for node in MDAST_NODES.iter().chain(HAST_NODES) {
+        let Some(tail) = node.tail else { continue };
+        assert!(node.custom, "{}: tails require a custom codec", node.name);
+        let st = MDAST_STRUCTS
+            .iter()
+            .chain(HAST_STRUCTS)
+            .find(|s| s.rust == tail.entry_struct)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: unknown tail entry struct {:?}",
+                    node.name, tail.entry_struct
+                )
+            });
+        assert_eq!(
+            tail.stride, st.size,
+            "{}: tail stride {} != {} size {}",
+            node.name, tail.stride, st.rust, st.size
+        );
+        for f in tail.item {
+            let extent = f.offset
+                + match f.wire {
+                    Wire::Str16 | Wire::Str32 => 8,
+                    Wire::U8 => 1,
+                };
+            assert!(
+                extent <= st.size,
+                "{}: tail item field {:?} (offset {}) straddles the end of {} (size {})",
+                node.name,
+                f.js,
+                f.offset,
+                st.rust,
+                st.size
+            );
+            assert!(
+                st.offsets.iter().any(|&(_, off)| off == f.offset),
+                "{}: tail item field {:?} at offset {} matches no {} field",
+                node.name,
+                f.js,
+                f.offset,
+                st.rust
+            );
+        }
+    }
     // Every pinned struct must be reachable from a node, or it drifted loose.
-    for s in MDAST_STRUCTS {
+    for s in MDAST_STRUCTS.iter().chain(HAST_STRUCTS) {
+        let in_tail = MDAST_NODES
+            .iter()
+            .chain(HAST_NODES)
+            .any(|n| n.tail.is_some_and(|t| t.entry_struct == s.rust));
         assert!(
-            STRUCT_BY_NODE.iter().any(|&(_, st)| st == s.rust),
-            "MDAST_STRUCTS entry {} is mapped to no node",
+            STRUCT_BY_NODE.iter().any(|&(_, st)| st == s.rust) || in_tail,
+            "struct table entry {} is mapped to no node",
             s.rust
         );
     }
