@@ -1,5 +1,11 @@
 # satteri-pulldown-cmark
 
+## 0.5.3 — 2026-06-11
+
+### Patch changes
+
+- [42835bc](https://github.com/bruits/satteri/commit/42835bcad387064678421d5623067500c4cefa1c) Fixes a smart punctuation issue where double quotes could be rendered with the wrong direction when quoted text appeared next to text without whitespace. — Thanks @HiDeoo for your first contribution 🎉!
+
 ## 0.5.2 — 2026-06-08
 
 ### Patch changes
