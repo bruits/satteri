@@ -53,5 +53,4 @@ pub const CMD_SET_CHILDREN: u8 = 0x0d; // payload is a Root-wrapped child list
 // Structural-command payload types (0x10+, a range distinct from commands).
 pub const PAYLOAD_RAW_MARKDOWN: u8 = 0x10; // [len: u32 LE][utf8] — re-parsed as markdown
 pub const PAYLOAD_RAW_HTML: u8 = 0x11; // [len: u32 LE][utf8] — re-parsed as HTML/MDX
-pub const PAYLOAD_SERDE_JSON: u8 = 0x12; // [len: u32 LE][JSON node tree]
-pub const PAYLOAD_OPSTREAM: u8 = 0x14; // [len: u32 LE][op bytes] — replayed straight into the arena, no JsNode hop
+pub const PAYLOAD_OPSTREAM: u8 = 0x14; // [len: u32 LE][op bytes] — replayed straight into the arena

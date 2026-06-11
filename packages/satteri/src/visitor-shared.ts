@@ -13,6 +13,18 @@ export function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
+/** Thrown when declarative replacement content can't be compiled to the
+ *  structural op-stream — an unsupported node type (e.g. a bare `root`/`doctype`
+ *  handed in as content) or an out-of-range numeric field. The op-stream is the
+ *  only structural encoding, so this is a hard error rather than a fallback. */
+export function unencodableContentError(content: unknown): Error {
+  const type = (content as { type?: unknown } | null)?.type;
+  return new Error(
+    `satteri: cannot encode replacement content${typeof type === "string" ? ` of type "${type}"` : ""} ` +
+      "into the structural op-stream — unsupported node type or out-of-range numeric field.",
+  );
+}
+
 /**
  * Arena id for a node passed to a context method, via a per-kind `nid` lookup
  * (closure keeps each kind's call site monomorphic). Plugin-built nodes have

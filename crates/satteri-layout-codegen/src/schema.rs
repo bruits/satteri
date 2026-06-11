@@ -92,6 +92,47 @@ pub struct SetSlot {
     pub kind: Slot,
 }
 
+/// How a tail's decoded head + items assemble into JS node fields. `None` keeps
+/// the type's decode hand-written — used where the item shape isn't a plain
+/// string map (MDX JSX's attribute-kind dispatch, HAST element properties).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TailJs {
+    /// Items become a `{ [key]: value }` object on `node[attrs_key]`, keyed by
+    /// the item fields named `key` and `value` (directive attributes). `codec`
+    /// is the arena encoder the generated op-stream `finalize` calls with the
+    /// head string and the interned `(key, value)` pairs.
+    Map {
+        attrs_key: &'static str,
+        key: &'static str,
+        value: &'static str,
+        codec: &'static str,
+    },
+    /// Items carry a `kind` byte (`MDX_ATTR_*`) and assemble into a typed
+    /// attribute array on `node[attrs_key]`, with a nullable head `name`. The
+    /// per-item dispatch is the shared `decodeMdxJsxAttr` (decode) /
+    /// `intern_mdx_jsx_attrs` (encode); `codec` is the arena encoder. MDX JSX
+    /// only, so the generated encode arm and its imports are `mdx`-gated.
+    JsxAttrs {
+        attrs_key: &'static str,
+        codec: &'static str,
+    },
+    /// HAST element properties: items `(name, kind, value)` keyed by `name`,
+    /// where the bool kinds (`PROP_BOOL_TRUE`/`FALSE`) carry no value. Decodes
+    /// to a `properties` object via the shared `decodeElementProp`; `codec` is
+    /// the `hast::codec` arena encoder. The head is the element `tagName`.
+    ElementProps {
+        attrs_key: &'static str,
+        codec: &'static str,
+    },
+    /// A head-less list of single enum bytes (table column alignment). Decodes
+    /// to an array on `node[attrs_key]` via the shared `decodeColumnAlign`;
+    /// encodes from the collector's `align` bytes via `codec`.
+    ByteList {
+        attrs_key: &'static str,
+        codec: &'static str,
+    },
+}
+
 /// A variable-length list tail on the walk wire: `head` fields, then a `u16`
 /// item count (the stored u32 at `count_offset`, clamped to `u16::MAX`) and
 /// `count` fixed-stride items starting at `items_offset`. Item field offsets
@@ -106,9 +147,12 @@ pub struct Tail {
     /// Stored item stride; must equal the entry struct's size.
     pub stride: usize,
     pub item: &'static [Field],
-    /// The codec entry struct ([`MDAST_STRUCTS`] / [`HAST_STRUCTS`]) backing
-    /// one stored item.
-    pub entry_struct: &'static str,
+    /// The codec entry struct ([`MDAST_STRUCTS`] / [`HAST_STRUCTS`]) backing one
+    /// stored item, or `None` for a raw single-byte item list (table align) with
+    /// no struct — pinned only by `stride == 1`.
+    pub entry_struct: Option<&'static str>,
+    /// JS assembly for the generated decoder; `None` leaves decode hand-written.
+    pub js: Option<TailJs>,
 }
 
 pub struct Node {
@@ -132,9 +176,10 @@ pub struct Node {
     /// (footnoteReference's kind byte). Non-skip/const [`Field`]s are settable
     /// already and don't repeat here.
     pub set_slots: &'static [SetSlot],
-    /// Generated head+count+items walk tail of a `custom` node. The stored
-    /// codec and the TS decoders stay hand-written; only the Rust walk
-    /// serializer is generated from this.
+    /// Generated head+count+items walk tail of a `custom` node. The Rust walk
+    /// serializer is always generated from this; when `tail.js` is set, the
+    /// op-stream encode (`finalize`) and the walk decode are too. The stored
+    /// arena codec (`encode_*_data`) stays hand-written, pinned by the asserts.
     pub tail: Option<Tail>,
 }
 
@@ -273,7 +318,11 @@ const MDX_JSX_TAIL: Tail = Tail {
     items_offset: 16,
     stride: 20,
     item: &[num("kind", 0, 0), s16("name", 4), s32("value", 12)],
-    entry_struct: "MdxJsxAttributeEntry",
+    entry_struct: Some("MdxJsxAttributeEntry"),
+    js: Some(TailJs::JsxAttrs {
+        attrs_key: "attributes",
+        codec: "encode_mdx_jsx_element_data",
+    }),
 };
 
 /// Directives: 16-byte header, then 16-byte key/value attribute entries
@@ -284,7 +333,13 @@ const DIRECTIVE_TAIL: Tail = Tail {
     items_offset: 16,
     stride: 16,
     item: &[s16("key", 0), s16("value", 8)],
-    entry_struct: "DirectiveAttributeEntry",
+    entry_struct: Some("DirectiveAttributeEntry"),
+    js: Some(TailJs::Map {
+        attrs_key: "attributes",
+        key: "key",
+        value: "value",
+        codec: "encode_directive_data",
+    }),
 };
 
 /// HAST elements: 16-byte header, then 20-byte property entries
@@ -295,7 +350,26 @@ const ELEMENT_TAIL: Tail = Tail {
     items_offset: 16,
     stride: 20,
     item: &[s16("name", 0), num("kind", 8, 0), s16("value", 12)],
-    entry_struct: "PropertyEntry",
+    entry_struct: Some("PropertyEntry"),
+    js: Some(TailJs::ElementProps {
+        attrs_key: "properties",
+        codec: "encode_element_data",
+    }),
+};
+
+/// Table column alignment: a head-less list of single `ColumnAlign` bytes
+/// (`align_count` u32 @0, then `count` bytes @4; `encode_table_data`).
+const TABLE_TAIL: Tail = Tail {
+    head: &[],
+    count_offset: 0,
+    items_offset: 4,
+    stride: 1,
+    item: &[num("align", 0, 0)],
+    entry_struct: None,
+    js: Some(TailJs::ByteList {
+        attrs_key: "align",
+        codec: "encode_table_data",
+    }),
 };
 
 use Tree::{Hast, Mdast};
@@ -349,19 +423,6 @@ const fn ns(
         fields,
         custom: false,
         set_slots,
-        tail: None,
-    }
-}
-/// A node whose variable-length `type_data` codec stays hand-written.
-const fn x(tree: Tree, tag: u8, variant: &'static str, name: &'static str) -> Node {
-    Node {
-        tree,
-        tag,
-        variant,
-        name,
-        fields: NONE,
-        custom: true,
-        set_slots: &[],
         tail: None,
     }
 }
@@ -508,7 +569,7 @@ pub const MDAST_NODES: &[Node] = &[
         &[s16("identifier", 0), s16("label", 8), skip8(16)],
         FOOTNOTE_REF_SLOTS,
     ),
-    x(Mdast, 21, "Table", "table"),
+    xt(Mdast, 21, "Table", "table", TABLE_TAIL),
     c(Mdast, 22, "TableRow", "tableRow"),
     c(Mdast, 23, "TableCell", "tableCell"),
     c(Mdast, 24, "Delete", "delete"),
@@ -598,11 +659,11 @@ pub const HAST_NODES: &[Node] = &[
     ),
 ];
 
-/// AST names whose op-stream replay falls back to JSON. `finalize_collector`
-/// (js_commands.rs) silently encodes no type_data for tags it has no arm for,
-/// so a NEW node type must either gain a finalize/generated encode arm or be
-/// listed here. (The set-property dispatch is generated — `prop_slots.rs` —
-/// but `finalize_collector`'s custom-node arms stay hand-written.)
+/// AST names that can't be handed in as op-stream replacement content (the
+/// op-stream is the only structural encoding, so the visitor throws on these
+/// rather than falling back). `root` is a document container, never a
+/// replacement; `finalize_collector` (js_commands.rs) also has no arm for it.
+/// A NEW node type must gain a finalize/generated encode arm or be listed here.
 pub const MDAST_OPSTREAM_EXCLUDED: &[&str] = &["root"];
 /// HAST twin (`finalize_hast_collector`); `doctype` has no finalize arm either.
 pub const HAST_OPSTREAM_EXCLUDED: &[&str] = &["root", "doctype"];
@@ -823,16 +884,21 @@ pub fn check_struct_layouts() {
     for node in MDAST_NODES.iter().chain(HAST_NODES) {
         let Some(tail) = node.tail else { continue };
         assert!(node.custom, "{}: tails require a custom codec", node.name);
+        // A struct-less tail (table align) is a raw single-byte item list, pinned
+        // only by `stride == 1`; it has no entry struct to cross-check.
+        let Some(entry_struct) = tail.entry_struct else {
+            assert_eq!(
+                tail.stride, 1,
+                "{}: struct-less tail must have stride 1",
+                node.name
+            );
+            continue;
+        };
         let st = MDAST_STRUCTS
             .iter()
             .chain(HAST_STRUCTS)
-            .find(|s| s.rust == tail.entry_struct)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{}: unknown tail entry struct {:?}",
-                    node.name, tail.entry_struct
-                )
-            });
+            .find(|s| s.rust == entry_struct)
+            .unwrap_or_else(|| panic!("{}: unknown tail entry struct {entry_struct:?}", node.name));
         assert_eq!(
             tail.stride, st.size,
             "{}: tail stride {} != {} size {}",
@@ -868,7 +934,7 @@ pub fn check_struct_layouts() {
         let in_tail = MDAST_NODES
             .iter()
             .chain(HAST_NODES)
-            .any(|n| n.tail.is_some_and(|t| t.entry_struct == s.rust));
+            .any(|n| n.tail.is_some_and(|t| t.entry_struct == Some(s.rust)));
         assert!(
             STRUCT_BY_NODE.iter().any(|&(_, st)| st == s.rust) || in_tail,
             "struct table entry {} is mapped to no node",
@@ -1005,11 +1071,10 @@ pub const PAYLOADS: WireTable = WireTable {
             0x11,
             "[len: u32 LE][utf8] — re-parsed as HTML/MDX",
         ),
-        wc("PAYLOAD_SERDE_JSON", 0x12, "[len: u32 LE][JSON node tree]"),
         wc(
             "PAYLOAD_OPSTREAM",
             0x14,
-            "[len: u32 LE][op bytes] — replayed straight into the arena, no JsNode hop",
+            "[len: u32 LE][op bytes] — replayed straight into the arena",
         ),
     ],
 };

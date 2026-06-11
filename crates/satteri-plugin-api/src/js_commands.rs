@@ -21,14 +21,11 @@
 //! signature on each entry point makes a cross-kind call a compile error.
 
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
-use satteri_ast::commands::{CommandError, JsNode};
-use satteri_ast::hast::codec::encode_element_data;
+use satteri_ast::commands::CommandError;
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::rebuild::{Patch, REF_NODE_TYPE};
-#[cfg(feature = "mdx")]
-use satteri_ast::shared::encode_js_jsx_attrs;
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
@@ -88,16 +85,6 @@ impl<'a> BufReader<'a> {
         let bytes = self.read_bytes(len)?;
         std::str::from_utf8(bytes).map_err(|_| CommandError::InvalidUtf8)
     }
-}
-
-/// Whether a plugin-supplied `data` blob carries the `_mdxExplicitJsx: true`
-/// marker — used to set the matching fast-path bit in `MdxJsxElementData`.
-#[cfg(feature = "mdx")]
-fn js_data_is_mdx_explicit(data: &Option<serde_json::Map<String, serde_json::Value>>) -> bool {
-    data.as_ref()
-        .and_then(|m| m.get("_mdxExplicitJsx"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
 }
 
 /// `data` JSON blob is stored in the per-node `node_data` map; it doesn't
@@ -292,30 +279,6 @@ fn escape_braces_in_html_text(html: &str) -> String {
     result
 }
 
-fn js_node_to_mdast_arena(js_node: &JsNode) -> Result<(Arena<Mdast>, bool), CommandError> {
-    if js_node.is_hast {
-        return Err(CommandError::UnknownNodeType(format!(
-            "expected mdast node, got hast-flagged `{}`",
-            js_node.node_type
-        )));
-    }
-    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
-    emit_mdast_js_node(js_node, &mut builder)?;
-    Ok((builder.finish(), js_node.keep_children))
-}
-
-fn js_node_to_hast_arena(js_node: &JsNode) -> Result<(Arena<Hast>, bool), CommandError> {
-    if !js_node.is_hast {
-        return Err(CommandError::UnknownNodeType(format!(
-            "expected hast node, got mdast-flagged `{}`",
-            js_node.node_type
-        )));
-    }
-    let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    emit_hast_js_node(js_node, &mut builder)?;
-    Ok((builder.finish(), js_node.keep_children))
-}
-
 /// Emit a reference placeholder: a `REF_NODE_TYPE` node carrying the target
 /// original id (u32 LE) in its type_data. The rebuild resolves it by splicing
 /// that original subtree and applying any pending patch on it.
@@ -325,138 +288,12 @@ fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) {
     builder.close_node();
 }
 
-fn emit_mdast_js_node(
-    js_node: &JsNode,
-    builder: &mut ArenaBuilder<Mdast>,
-) -> Result<(), CommandError> {
-    if let Some(ref_id) = js_node.ref_id {
-        emit_ref_node(ref_id, builder);
-        return Ok(());
-    }
-
-    if js_node.is_hast {
-        return Err(CommandError::UnknownNodeType(format!(
-            "expected mdast node, got hast-flagged `{}`",
-            js_node.node_type
-        )));
-    }
-
-    let node_type = name_to_node_type(&js_node.node_type)?;
-    builder.open_node(node_type as u8);
-
-    let type_data = encode_js_node_data(js_node, node_type, builder);
-    if !type_data.is_empty() {
-        builder.set_data_current(&type_data);
-    }
-
-    write_js_node_data(js_node, builder)?;
-
-    if let Some(children) = &js_node.children {
-        for child in children {
-            emit_mdast_js_node(child, builder)?;
-        }
-    }
-
-    builder.close_node();
-    Ok(())
-}
-
-fn write_js_node_data<K: ArenaKind>(
-    js_node: &JsNode,
-    builder: &mut ArenaBuilder<K>,
-) -> Result<(), CommandError> {
-    let Some(data) = &js_node.data else {
-        return Ok(());
-    };
-    let id = builder.current_node_id();
-    let json = serde_json::to_vec(data).map_err(|e| CommandError::InvalidJson(e.to_string()))?;
-    builder.arena_mut().set_node_data(id, json);
-    Ok(())
-}
-
-// Generated per-type arena encoders, driven by the node registry. See
+// Generated per-type arena encoder, driven by the node registry. See
 // `crates/satteri-layout-codegen`.
 use crate::generated::encode::{
-    encode_mdast_type_data, encode_mdast_type_data_from_ops, MAX_FIXED_TYPE_DATA,
+    encode_hast_tail_from_ops, encode_mdast_tail_from_ops, encode_mdast_type_data_from_ops,
+    MAX_FIXED_TYPE_DATA,
 };
-
-fn encode_js_node_data(
-    js_node: &JsNode,
-    node_type: MdastNodeType,
-    builder: &mut ArenaBuilder<Mdast>,
-) -> Vec<u8> {
-    let mut fixed = [0u8; MAX_FIXED_TYPE_DATA];
-    if let Some(len) = encode_mdast_type_data(js_node, node_type as u8, builder, &mut fixed) {
-        return fixed[..len].to_vec();
-    }
-    match node_type {
-        MdastNodeType::List => {
-            let ordered = js_node.ordered.unwrap_or(false);
-            let start = js_node.start.unwrap_or(1);
-            let spread = js_node.spread.unwrap_or(false);
-            encode_list_data(ordered, start, spread)
-        }
-        MdastNodeType::ListItem => {
-            let checked = match js_node.checked {
-                Some(true) => 1u8,
-                Some(false) => 0u8,
-                None => 2u8, // not a task item
-            };
-            let spread = js_node.spread.unwrap_or(false);
-            encode_list_item_data(checked, spread)
-        }
-        MdastNodeType::Table => encode_table_data(&column_aligns(js_node.align.as_deref())),
-        #[cfg(feature = "mdx")]
-        MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement => {
-            let name_ref = alloc_opt_str(builder, js_node.name.as_deref());
-            let attr_tuples = encode_js_jsx_attrs(
-                builder,
-                js_node.attributes.as_ref().and_then(|a| a.as_jsx()),
-            );
-            let explicit = js_data_is_mdx_explicit(&js_node.data);
-            encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit)
-        }
-        MdastNodeType::ContainerDirective
-        | MdastNodeType::LeafDirective
-        | MdastNodeType::TextDirective => {
-            let name = js_node.name.as_deref().unwrap_or("");
-            let name_ref = builder.alloc_string(name);
-            let attr_pairs = encode_js_directive_attrs(builder, js_node.attributes.as_ref());
-            encode_directive_data(name_ref, &attr_pairs)
-        }
-        // Nodes with no type-specific data
-        _ => Vec::new(),
-    }
-}
-
-fn encode_js_directive_attrs(
-    builder: &mut ArenaBuilder<Mdast>,
-    attrs: Option<&satteri_ast::commands::JsNodeAttributes>,
-) -> Vec<(StringRef, StringRef)> {
-    let Some(map) = attrs.and_then(|a| a.as_directive()) else {
-        return Vec::new();
-    };
-    map.iter()
-        .filter_map(|(k, v)| {
-            let val = v.as_str()?;
-            Some((builder.alloc_string(k), builder.alloc_string(val)))
-        })
-        .collect()
-}
-
-/// Map an mdast table `align` array to arena [`ColumnAlign`] bytes.
-fn column_aligns(align: Option<&[Option<String>]>) -> Vec<ColumnAlign> {
-    align
-        .unwrap_or(&[])
-        .iter()
-        .map(|a| match a.as_deref() {
-            Some("left") => ColumnAlign::Left,
-            Some("right") => ColumnAlign::Right,
-            Some("center") => ColumnAlign::Center,
-            _ => ColumnAlign::None,
-        })
-        .collect()
-}
 
 pub(crate) fn alloc_opt_str<K: ArenaKind>(
     builder: &mut ArenaBuilder<K>,
@@ -466,24 +303,6 @@ pub(crate) fn alloc_opt_str<K: ArenaKind>(
         Some(v) if !v.is_empty() => builder.alloc_string(v),
         _ => StringRef::empty(),
     }
-}
-
-fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
-    let node_type = MdastNodeType::from_name(name)
-        .ok_or_else(|| CommandError::UnknownNodeType(name.to_string()))?;
-    // MDX node types only exist when the feature is on; reject them otherwise.
-    #[cfg(not(feature = "mdx"))]
-    if matches!(
-        node_type,
-        MdastNodeType::MdxJsxFlowElement
-            | MdastNodeType::MdxJsxTextElement
-            | MdastNodeType::MdxFlowExpression
-            | MdastNodeType::MdxTextExpression
-            | MdastNodeType::MdxjsEsm
-    ) {
-        return Err(CommandError::UnknownNodeType(name.to_string()));
-    }
-    Ok(node_type)
 }
 
 // HAST command handlers
@@ -668,162 +487,9 @@ fn apply_hast_element_property(
     Ok(())
 }
 
-/// Emit a HAST JS node (from plugin JSON) into an ArenaBuilder.
-fn emit_hast_js_node(
-    js_node: &JsNode,
-    builder: &mut ArenaBuilder<Hast>,
-) -> Result<(), CommandError> {
-    if let Some(ref_id) = js_node.ref_id {
-        emit_ref_node(ref_id, builder);
-        return Ok(());
-    }
-
-    let raw_type = name_to_hast_type(&js_node.node_type)
-        .ok_or_else(|| CommandError::UnknownNodeType(js_node.node_type.clone()))?;
-    builder.open_node_raw(raw_type as u8);
-
-    let type_data = encode_hast_js_node_data(js_node, raw_type, builder);
-    if !type_data.is_empty() {
-        builder.set_data_current(&type_data);
-    }
-
-    write_js_node_data(js_node, builder)?;
-
-    if let Some(children) = &js_node.children {
-        for child in children {
-            emit_hast_js_node(child, builder)?;
-        }
-    }
-
-    builder.close_node();
-    Ok(())
-}
-
-fn name_to_hast_type(name: &str) -> Option<HastNodeType> {
-    match name {
-        "root" => Some(HastNodeType::Root),
-        "element" => Some(HastNodeType::Element),
-        "text" => Some(HastNodeType::Text),
-        "comment" => Some(HastNodeType::Comment),
-        "doctype" => Some(HastNodeType::Doctype),
-        "raw" => Some(HastNodeType::Raw),
-        #[cfg(feature = "mdx")]
-        "mdxJsxFlowElement" => Some(HastNodeType::MdxJsxElement),
-        #[cfg(feature = "mdx")]
-        "mdxJsxTextElement" => Some(HastNodeType::MdxJsxTextElement),
-        #[cfg(feature = "mdx")]
-        "mdxFlowExpression" => Some(HastNodeType::MdxFlowExpression),
-        #[cfg(feature = "mdx")]
-        "mdxTextExpression" => Some(HastNodeType::MdxTextExpression),
-        #[cfg(feature = "mdx")]
-        "mdxjsEsm" => Some(HastNodeType::MdxEsm),
-        _ => None,
-    }
-}
-
-fn encode_hast_js_node_data(
-    js_node: &JsNode,
-    node_type: HastNodeType,
-    builder: &mut ArenaBuilder<Hast>,
-) -> Vec<u8> {
-    match node_type {
-        HastNodeType::Element => {
-            let tag = js_node.tag_name.as_deref().unwrap_or("div");
-            let tag_ref = builder.alloc_string(tag);
-
-            let mut props: Vec<(StringRef, u8, StringRef)> = Vec::new();
-            if let Some(properties) = &js_node.properties {
-                for (key, value) in properties {
-                    let name_ref = builder.alloc_string(key);
-                    match value {
-                        serde_json::Value::Bool(true) => {
-                            props.push((name_ref, PROP_BOOL_TRUE, StringRef::empty()));
-                        }
-                        serde_json::Value::Bool(false) => {
-                            props.push((name_ref, PROP_BOOL_FALSE, StringRef::empty()));
-                        }
-                        serde_json::Value::String(s) => {
-                            let val_ref = builder.alloc_string(s);
-                            props.push((name_ref, PROP_STRING, val_ref));
-                        }
-                        serde_json::Value::Number(n) => {
-                            let val_ref = builder.alloc_string(&n.to_string());
-                            props.push((name_ref, PROP_INT, val_ref));
-                        }
-                        serde_json::Value::Array(arr) => {
-                            let joined: String = arr
-                                .iter()
-                                .filter_map(|v| v.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            let val_ref = builder.alloc_string(&joined);
-                            props.push((name_ref, PROP_SPACE_SEP, val_ref));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            let mut out = Vec::with_capacity(16 + props.len() * 20);
-            out.extend_from_slice(&tag_ref.offset.to_le_bytes());
-            out.extend_from_slice(&tag_ref.len.to_le_bytes());
-            out.extend_from_slice(&(props.len() as u32).to_le_bytes());
-            out.extend_from_slice(&0u32.to_le_bytes());
-            for (name_ref, kind, val_ref) in &props {
-                out.extend_from_slice(&name_ref.offset.to_le_bytes());
-                out.extend_from_slice(&name_ref.len.to_le_bytes());
-                out.push(*kind);
-                out.extend_from_slice(&[0u8; 3]);
-                out.extend_from_slice(&val_ref.offset.to_le_bytes());
-                out.extend_from_slice(&val_ref.len.to_le_bytes());
-            }
-            out
-        }
-
-        HastNodeType::Text | HastNodeType::Comment | HastNodeType::Raw => {
-            let value = js_node.value.as_deref().unwrap_or("");
-            let sref = builder.alloc_string(value);
-            let mut out = [0u8; 8];
-            out[0..4].copy_from_slice(&sref.offset.to_le_bytes());
-            out[4..8].copy_from_slice(&sref.len.to_le_bytes());
-            out.to_vec()
-        }
-
-        #[cfg(feature = "mdx")]
-        HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => {
-            let name = js_node
-                .name
-                .as_deref()
-                .or(js_node.tag_name.as_deref())
-                .unwrap_or("");
-            let name_ref = builder.alloc_string(name);
-            let attr_tuples = encode_js_jsx_attrs(
-                builder,
-                js_node.attributes.as_ref().and_then(|a| a.as_jsx()),
-            );
-            let explicit = js_data_is_mdx_explicit(&js_node.data);
-            encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit)
-        }
-
-        #[cfg(feature = "mdx")]
-        HastNodeType::MdxFlowExpression
-        | HastNodeType::MdxTextExpression
-        | HastNodeType::MdxEsm => {
-            let value = js_node.value.as_deref().unwrap_or("");
-            let sref = builder.alloc_string(value);
-            let mut out = [0u8; 8];
-            out[0..4].copy_from_slice(&sref.offset.to_le_bytes());
-            out[4..8].copy_from_slice(&sref.len.to_le_bytes());
-            out.to_vec()
-        }
-
-        _ => Vec::new(),
-    }
-}
-
 // The JS visitors compile declarative trees to an op-stream (OPEN/CLOSE/field
 // sets/REF/KEEP_CHILDREN) that we replay directly into an ArenaBuilder — no
-// `JsNode` tree, no heap allocation per node beyond the arena itself. A node's
+// intermediate node tree, no heap allocation per node beyond the arena itself. A node's
 // fields are collected after its OPEN and flushed into its type_data the moment
 // the next op needs the node finalized (a child OPEN, a CLOSE, or a spliced
 // REF/KEEP_CHILDREN).
@@ -963,7 +629,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
 /// Intern MDX-JSX attribute strings into `(kind, name, value)` rows; spreads
 /// carry no name, boolean attrs no value.
 #[cfg(feature = "mdx")]
-fn intern_mdx_jsx_attrs<K: ArenaKind>(
+pub(crate) fn intern_mdx_jsx_attrs<K: ArenaKind>(
     props: &[(&str, u8, &str)],
     builder: &mut ArenaBuilder<K>,
 ) -> Vec<(u8, StringRef, StringRef)> {
@@ -997,11 +663,11 @@ pub(crate) struct FieldCollector<'a> {
     ordered: Option<bool>,
     spread: Option<bool>,
     /// Directive / MDX JSX attributes (`OP_PROP`): (name, kind, value).
-    props: Vec<(&'a str, u8, &'a str)>,
+    pub(crate) props: Vec<(&'a str, u8, &'a str)>,
     /// Table column-alignment bytes (`OP_ALIGN`).
-    align: Option<&'a [u8]>,
+    pub(crate) align: Option<&'a [u8]>,
     /// MDX JSX `_mdxExplicitJsx` flag (`OP_BOOL` on `OF_EXPLICIT`).
-    explicit: Option<bool>,
+    pub(crate) explicit: Option<bool>,
     data: Option<&'a [u8]>,
 }
 
@@ -1009,23 +675,17 @@ pub(crate) struct FieldCollector<'a> {
 fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mdast>) {
     const LIST: u8 = MdastNodeType::List as u8;
     const LIST_ITEM: u8 = MdastNodeType::ListItem as u8;
-    const TABLE: u8 = MdastNodeType::Table as u8;
-    #[cfg(feature = "mdx")]
-    const MDX_JSX_FLOW: u8 = MdastNodeType::MdxJsxFlowElement as u8;
-    #[cfg(feature = "mdx")]
-    const MDX_JSX_TEXT: u8 = MdastNodeType::MdxJsxTextElement as u8;
-    const CONTAINER_DIRECTIVE: u8 = MdastNodeType::ContainerDirective as u8;
-    const LEAF_DIRECTIVE: u8 = MdastNodeType::LeafDirective as u8;
-    const TEXT_DIRECTIVE: u8 = MdastNodeType::TextDirective as u8;
 
     if c.finalized {
         return;
     }
     c.finalized = true;
-    let s = |i: u8| c.strs[i as usize];
     let mut fixed = [0u8; MAX_FIXED_TYPE_DATA];
     if let Some(len) = encode_mdast_type_data_from_ops(c, c.node_type, builder, &mut fixed) {
         builder.set_data_current(&fixed[..len]);
+    } else if let Some(type_data) = encode_mdast_tail_from_ops(c, c.node_type, builder) {
+        // Generated tail encoder (directive attributes, MDX JSX); see encode.rs.
+        builder.set_data_current(&type_data);
     } else {
         let type_data: Vec<u8> = match c.node_type {
             LIST => encode_list_data(
@@ -1035,31 +695,6 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
             ),
             // checked: 2 = not a task item
             LIST_ITEM => encode_list_item_data(c.checked.unwrap_or(2), c.spread.unwrap_or(false)),
-            TABLE => {
-                let aligns: Vec<ColumnAlign> = c
-                    .align
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(|&b| ColumnAlign::from_u8(b).unwrap_or(ColumnAlign::None))
-                    .collect();
-                encode_table_data(&aligns)
-            }
-            #[cfg(feature = "mdx")]
-            MDX_JSX_FLOW | MDX_JSX_TEXT => {
-                let name_ref = builder.alloc_string(s(OF_NAME).unwrap_or(""));
-                let attrs = intern_mdx_jsx_attrs(&c.props, builder);
-                encode_mdx_jsx_element_data(name_ref, &attrs, c.explicit.unwrap_or(false))
-            }
-            CONTAINER_DIRECTIVE | LEAF_DIRECTIVE | TEXT_DIRECTIVE => {
-                let name_ref = builder.alloc_string(s(OF_NAME).unwrap_or(""));
-                let mut attrs: Vec<(StringRef, StringRef)> = Vec::with_capacity(c.props.len());
-                for &(key, _kind, value) in &c.props {
-                    let kr = builder.alloc_string(key);
-                    let vr = builder.alloc_string(value);
-                    attrs.push((kr, vr));
-                }
-                encode_directive_data(name_ref, &attrs)
-            }
             // Remaining tags carry no type_data.
             _ => Vec::new(),
         };
@@ -1085,8 +720,7 @@ impl<'a> OpCollector<'a> for FieldCollector<'a> {
     }
 
     /// Reject op-stream tags this build can't construct — unknown bytes
-    /// always, MDX tags without the `mdx` feature — matching the JSON path's
-    /// `name_to_node_type` errors.
+    /// always, MDX tags without the `mdx` feature.
     fn check_tag(tag: u8) -> Result<(), CommandError> {
         let known = MdastNodeType::from_u8(tag).is_some();
         #[cfg(not(feature = "mdx"))]
@@ -1187,12 +821,6 @@ fn read_mdast_payload(
             let escaped = escape_braces_in_html_text(html);
             Ok((parse_markdown(&escaped), false))
         }
-        PAYLOAD_SERDE_JSON => {
-            let json_str = reader.read_str(len)?;
-            let js_node: JsNode = serde_json::from_str(json_str)
-                .map_err(|e| CommandError::InvalidJson(e.to_string()))?;
-            js_node_to_mdast_arena(&js_node)
-        }
         PAYLOAD_OPSTREAM => {
             let ops = reader.read_bytes(len)?;
             Ok((replay_mdast_opstream(ops, orig, anchor)?, false))
@@ -1205,65 +833,45 @@ fn read_mdast_payload(
 /// (tag + properties) and text/comment/raw values; `OP_PROP` carries properties,
 /// `OF_TAGNAME` the tag.
 #[derive(Default)]
-struct HastFieldCollector<'a> {
+pub(crate) struct HastFieldCollector<'a> {
     node_type: u8,
     finalized: bool,
     /// HAST element `tagName` or MDX JSX element `name`.
-    tag: Option<&'a str>,
+    pub(crate) tag: Option<&'a str>,
     value: Option<&'a str>,
-    props: Vec<(&'a str, u8, &'a str)>,
+    pub(crate) props: Vec<(&'a str, u8, &'a str)>,
     /// MDX JSX `_mdxExplicitJsx` flag (`OP_BOOL` on `OF_EXPLICIT`).
-    explicit: Option<bool>,
+    pub(crate) explicit: Option<bool>,
     data: Option<&'a [u8]>,
 }
 
 fn finalize_hast_collector(c: &mut HastFieldCollector<'_>, builder: &mut ArenaBuilder<Hast>) {
-    const ELEMENT: u8 = HastNodeType::Element as u8;
     const TEXT: u8 = HastNodeType::Text as u8;
     const COMMENT: u8 = HastNodeType::Comment as u8;
     const RAW: u8 = HastNodeType::Raw as u8;
     const MDX_FLOW_EXPRESSION: u8 = HastNodeType::MdxFlowExpression as u8;
     const MDX_ESM: u8 = HastNodeType::MdxEsm as u8;
     const MDX_TEXT_EXPRESSION: u8 = HastNodeType::MdxTextExpression as u8;
-    #[cfg(feature = "mdx")]
-    const MDX_JSX_FLOW: u8 = HastNodeType::MdxJsxElement as u8;
-    #[cfg(feature = "mdx")]
-    const MDX_JSX_TEXT: u8 = HastNodeType::MdxJsxTextElement as u8;
 
     if c.finalized {
         return;
     }
     c.finalized = true;
-    let type_data: Vec<u8> = match c.node_type {
-        ELEMENT => {
-            let tag_ref = builder.alloc_string(c.tag.unwrap_or("div"));
-            let mut prop_refs: Vec<(StringRef, u8, StringRef)> = Vec::with_capacity(c.props.len());
-            for &(name, kind, value) in &c.props {
-                let n = builder.alloc_string(name);
-                let v = if kind == PROP_BOOL_TRUE || kind == PROP_BOOL_FALSE {
-                    StringRef::empty()
-                } else {
-                    builder.alloc_string(value)
-                };
-                prop_refs.push((n, kind, v));
-            }
-            encode_element_data(tag_ref, &prop_refs)
-        }
-        TEXT | COMMENT | RAW | MDX_FLOW_EXPRESSION | MDX_ESM | MDX_TEXT_EXPRESSION => {
-            let sref = builder.alloc_string(c.value.unwrap_or(""));
-            encode_string_ref_data(sref)
-        }
-        #[cfg(feature = "mdx")]
-        MDX_JSX_FLOW | MDX_JSX_TEXT => {
-            let name_ref = builder.alloc_string(c.tag.unwrap_or(""));
-            let attrs = intern_mdx_jsx_attrs(&c.props, builder);
-            encode_mdx_jsx_element_data(name_ref, &attrs, c.explicit.unwrap_or(false))
-        }
-        // Remaining tags carry no type_data.
-        _ => Vec::new(),
-    };
-    if !type_data.is_empty() {
+    if let Some(type_data) = encode_hast_tail_from_ops(c, c.node_type, builder) {
+        // Generated tail encoder (element properties, MDX JSX); see encode.rs.
         builder.set_data_current(&type_data);
+    } else {
+        let type_data: Vec<u8> = match c.node_type {
+            TEXT | COMMENT | RAW | MDX_FLOW_EXPRESSION | MDX_ESM | MDX_TEXT_EXPRESSION => {
+                let sref = builder.alloc_string(c.value.unwrap_or(""));
+                encode_string_ref_data(sref)
+            }
+            // Remaining tags carry no type_data.
+            _ => Vec::new(),
+        };
+        if !type_data.is_empty() {
+            builder.set_data_current(&type_data);
+        }
     }
     if let Some(data) = c.data {
         let id = builder.current_node_id();
@@ -1341,9 +949,9 @@ fn replay_hast_opstream(
     replay_opstream::<HastFieldCollector>(ops, orig, anchor)
 }
 
-/// Returns (arena, keep_children) for a HAST sub-tree payload. `PAYLOAD_OPSTREAM`
-/// (declarative-compiled) and `PAYLOAD_SERDE_JSON` (declarative JSON fallback) are
-/// accepted — HAST has no source grammar, so raw markdown / HTML are not.
+/// Returns (arena, keep_children) for a HAST sub-tree payload. Only
+/// `PAYLOAD_OPSTREAM` (declarative-compiled) is accepted — HAST has no source
+/// grammar, so raw markdown / HTML are not, and there is no JSON path.
 fn read_hast_payload(
     reader: &mut BufReader<'_>,
     orig: &Arena<Hast>,
@@ -1353,12 +961,6 @@ fn read_hast_payload(
     let len = reader.read_u32()? as usize;
 
     match payload_type {
-        PAYLOAD_SERDE_JSON => {
-            let json_str = reader.read_str(len)?;
-            let js_node: JsNode = serde_json::from_str(json_str)
-                .map_err(|e| CommandError::InvalidJson(e.to_string()))?;
-            js_node_to_hast_arena(&js_node)
-        }
         PAYLOAD_OPSTREAM => {
             let ops = reader.read_bytes(len)?;
             Ok((replay_hast_opstream(ops, orig, anchor)?, false))
@@ -1520,7 +1122,7 @@ pub fn apply_mdast_commands_lenient(
 /// objects and applied via `rebuild()`. Errors if a patch is stranded inside a
 /// removed/replaced subtree; [`apply_hast_commands_lenient`] drops it instead.
 ///
-/// HAST plugins inject sub-trees via `PAYLOAD_SERDE_JSON` only — there is
+/// HAST plugins inject sub-trees via `PAYLOAD_OPSTREAM` only — there is
 /// no `parse_markdown` callback because HAST has no source-level grammar.
 ///
 /// Passing an MDAST arena is a compile error:
@@ -1994,92 +1596,6 @@ mod tests {
     }
 
     #[test]
-    fn replace_with_serde_json() {
-        let arena = build_hello_world();
-        let heading_id = arena.get_children(0)[0];
-
-        let json =
-            r#"{"type":"heading","depth":2,"children":[{"type":"text","value":"Replaced"}]}"#;
-        let mut buf = Vec::new();
-        buf.push(CMD_REPLACE);
-        push_u32(&mut buf, heading_id);
-        buf.push(PAYLOAD_SERDE_JSON);
-        push_u32(&mut buf, json.len() as u32);
-        buf.extend_from_slice(json.as_bytes());
-
-        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
-        let root_children = result.get_children(0);
-        assert_eq!(root_children.len(), 2);
-        let new_heading = root_children[0];
-        assert_eq!(
-            result.get_node(new_heading).node_type,
-            MdastNodeType::Heading as u8
-        );
-        let heading_data = result.get_type_data(new_heading);
-        assert_eq!(decode_heading_data(heading_data).depth, 2);
-    }
-
-    #[test]
-    fn replace_with_directive_child() {
-        // Directives serialize `attributes` as a map (`{}`), not the array form
-        // used by MDX JSX. The deserializer must accept both shapes; without
-        // that, any plugin returning a tree containing a directive child fails
-        // with "invalid type: map, expected a sequence".
-        let arena = build_hello_world();
-        let heading_id = arena.get_children(0)[0];
-
-        let json = r#"{"type":"paragraph","children":[{"type":"text","value":"hi "},{"type":"textDirective","name":"inline","attributes":{},"children":[]}]}"#;
-        let mut buf = Vec::new();
-        buf.push(CMD_REPLACE);
-        push_u32(&mut buf, heading_id);
-        buf.push(PAYLOAD_SERDE_JSON);
-        push_u32(&mut buf, json.len() as u32);
-        buf.extend_from_slice(json.as_bytes());
-
-        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
-        let root_children = result.get_children(0);
-        let new_para = root_children[0];
-        assert_eq!(
-            result.get_node(new_para).node_type,
-            MdastNodeType::Paragraph as u8
-        );
-        let para_children = result.get_children(new_para);
-        assert_eq!(para_children.len(), 2);
-        let directive = para_children[1];
-        assert_eq!(
-            result.get_node(directive).node_type,
-            MdastNodeType::TextDirective as u8
-        );
-        let dir_data = result.get_type_data(directive);
-        assert_eq!(decode_directive_attr_count(dir_data), 0);
-    }
-
-    #[test]
-    fn replace_with_directive_attrs() {
-        // Same as above but with non-empty directive attrs to confirm the map
-        // shape round-trips into the arena's directive type_data.
-        let arena = build_hello_world();
-        let heading_id = arena.get_children(0)[0];
-
-        let json = r#"{"type":"containerDirective","name":"tip","attributes":{"id":"foo","class":"bar"},"children":[]}"#;
-        let mut buf = Vec::new();
-        buf.push(CMD_REPLACE);
-        push_u32(&mut buf, heading_id);
-        buf.push(PAYLOAD_SERDE_JSON);
-        push_u32(&mut buf, json.len() as u32);
-        buf.extend_from_slice(json.as_bytes());
-
-        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
-        let directive = result.get_children(0)[0];
-        assert_eq!(
-            result.get_node(directive).node_type,
-            MdastNodeType::ContainerDirective as u8
-        );
-        let dir_data = result.get_type_data(directive);
-        assert_eq!(decode_directive_attr_count(dir_data), 2);
-    }
-
-    #[test]
     fn multiple_commands() {
         let arena = build_hello_world();
         let heading_id = arena.get_children(0)[0];
@@ -2230,70 +1746,6 @@ mod tests {
         assert_eq!(list.start, 5);
         assert!(list.ordered);
         assert!(!list.spread);
-    }
-
-    #[test]
-    fn js_node_to_arena_basic() {
-        let js = JsNode {
-            node_type: "heading".to_string(),
-            children: Some(vec![JsNode {
-                node_type: "text".to_string(),
-                children: None,
-                value: Some("Hello".to_string()),
-                depth: None,
-                url: None,
-                title: None,
-                alt: None,
-                lang: None,
-                meta: None,
-                ordered: None,
-                start: None,
-                spread: None,
-                checked: None,
-                align: None,
-                identifier: None,
-                label: None,
-                reference_type: None,
-                name: None,
-                attributes: None,
-                tag_name: None,
-                properties: None,
-                is_hast: false,
-                keep_children: false,
-                ref_id: None,
-                data: None,
-            }]),
-            depth: Some(2),
-            value: None,
-            url: None,
-            title: None,
-            alt: None,
-            lang: None,
-            meta: None,
-            ordered: None,
-            start: None,
-            spread: None,
-            checked: None,
-            align: None,
-            identifier: None,
-            label: None,
-            reference_type: None,
-            name: None,
-            attributes: None,
-            tag_name: None,
-            properties: None,
-            is_hast: false,
-            keep_children: false,
-            ref_id: None,
-            data: None,
-        };
-
-        let (arena, _keep) = js_node_to_mdast_arena(&js).unwrap();
-        assert_eq!(arena.len(), 2);
-        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Heading as u8);
-        assert_eq!(arena.get_children(0).len(), 1);
-        let text_id = arena.get_children(0)[0];
-        assert_eq!(arena.get_node(text_id).node_type, MdastNodeType::Text as u8);
     }
 
     #[test]

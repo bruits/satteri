@@ -52,9 +52,9 @@
 //! emitted by the generated `write_mdast_type_data_inline` /
 //! `write_hast_type_data_inline` (`{mdast,hast}/generated/walk_type_data.rs`),
 //! driven by the registry in `satteri-layout-codegen/src/schema.rs`. The
-//! raw-byte MDAST tails (list, listItem, table) stay hand-written at their
-//! match arms in `serialize_mdast_node_inline`; unmatched HAST tags fall back
-//! to a u16-length-prefixed raw `type_data` blob.
+//! fixed-scalar MDAST tails (list, listItem) stay hand-written at their match
+//! arms in `serialize_mdast_node_inline`; unmatched HAST tags fall back to a
+//! u16-length-prefixed raw `type_data` blob.
 
 use satteri_arena::{Arena, ArenaKind, Hast, Mdast, StringRef};
 
@@ -257,18 +257,6 @@ fn serialize_mdast_node_inline(
                 out.extend_from_slice(&type_data[0..2]);
             } else {
                 out.extend_from_slice(&[0u8; 2]);
-            }
-        }
-
-        // Table(21): align_count(0..4) + align bytes
-        21 => {
-            if type_data.len() >= 4 {
-                let count = u32::from_le_bytes(type_data[0..4].try_into().unwrap()) as usize;
-                out.extend_from_slice(&(count as u16).to_le_bytes());
-                let end = (4 + count).min(type_data.len());
-                out.extend_from_slice(&type_data[4..end]);
-            } else {
-                out.extend_from_slice(&0u16.to_le_bytes());
             }
         }
 

@@ -2,10 +2,10 @@
  * Binary command buffer for efficient JS→Rust mutation serialization.
  *
  * Simple mutations (remove, setProperty) are encoded as compact binary commands.
- * Structural mutations (insert, replace, …) carry one of three payload kinds:
- * raw markdown/HTML strings (re-parsed by Rust), JSON-serialized node trees,
- * or compiled op-streams (`PAYLOAD_OPSTREAM`, replayed straight into the arena
- * — see op-stream.ts).
+ * Structural mutations (insert, replace, …) carry one of two payload kinds:
+ * compiled op-streams (`PAYLOAD_OPSTREAM`, replayed straight into the arena —
+ * see op-stream.ts) for declarative content, or raw markdown/HTML strings
+ * (re-parsed by Rust) for the `{raw}`/`{rawHtml}` escape hatches.
  *
  * All multi-byte integers are little-endian to match native x86/ARM layout and
  * avoid byte-swapping on the Rust side.
@@ -33,7 +33,6 @@ import {
   CMD_SET_CHILDREN,
   PAYLOAD_RAW_MARKDOWN,
   PAYLOAD_RAW_HTML,
-  PAYLOAD_SERDE_JSON,
   PAYLOAD_OPSTREAM,
 } from "./generated/wire-constants.js";
 
@@ -50,8 +49,8 @@ export function classifyReturn(value: unknown): ReturnClass {
 
 const INITIAL_SIZE = 4096;
 
-/** Structural commands that carry a subtree payload, named after the JSON-path
- *  method; `${op}Opstream` / `${op}RawJson` are the binary/raw twins. */
+/** Structural commands that carry a subtree payload. Each has an `${op}Opstream`
+ *  twin (declarative content) and a raw twin (`{raw}`/`{rawHtml}` escape hatch). */
 export type StructuralOp =
   | "replace"
   | "insertBefore"
@@ -129,39 +128,6 @@ export class CommandBuffer extends ByteWriter {
     this.writeStructuralCommand(CMD_REPLACE, nodeId, newNode);
   }
 
-  replaceRawJson(nodeId: number, json: string): void {
-    this.writeRawJsonCommand(CMD_REPLACE, nodeId, json);
-  }
-
-  /** Replace a node's child list (Root-wrapped `json`) while keeping the node. */
-  setChildren(nodeId: number, json: string): void {
-    this.writeRawJsonCommand(CMD_SET_CHILDREN, nodeId, json);
-  }
-
-  insertBeforeRawJson(nodeId: number, json: string): void {
-    this.writeRawJsonCommand(CMD_INSERT_BEFORE, nodeId, json);
-  }
-
-  insertAfterRawJson(nodeId: number, json: string): void {
-    this.writeRawJsonCommand(CMD_INSERT_AFTER, nodeId, json);
-  }
-
-  prependChildRawJson(nodeId: number, json: string): void {
-    this.writeRawJsonCommand(CMD_PREPEND_CHILD, nodeId, json);
-  }
-
-  appendChildRawJson(nodeId: number, json: string): void {
-    this.writeRawJsonCommand(CMD_APPEND_CHILD, nodeId, json);
-  }
-
-  wrapNodeRawJson(nodeId: number, json: string): void {
-    this.writeRawJsonCommand(CMD_WRAP, nodeId, json);
-  }
-
-  private writeRawJsonCommand(cmd: number, nodeId: number, json: string): void {
-    this.writePayloadCommand(cmd, nodeId, PAYLOAD_SERDE_JSON, json);
-  }
-
   /** Header (cmd + nodeId + payloadType) followed by a length-prefixed string payload. */
   private writePayloadCommand(cmd: number, nodeId: number, payloadType: number, s: string): void {
     this.ensure(6);
@@ -221,6 +187,8 @@ export class CommandBuffer extends ByteWriter {
     this.release();
   }
 
+  /** Raw structural content (`{raw}`/`{rawHtml}` escape hatches). Declarative
+   *  nodes go through the `*Opstream` methods, not here. */
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {
     const v = node as Record<string, unknown>;
     if (typeof v.raw === "string") {
@@ -228,7 +196,7 @@ export class CommandBuffer extends ByteWriter {
     } else if (typeof v.rawHtml === "string") {
       this.writePayloadCommand(cmd, nodeId, PAYLOAD_RAW_HTML, v.rawHtml as string);
     } else {
-      this.writePayloadCommand(cmd, nodeId, PAYLOAD_SERDE_JSON, JSON.stringify(node));
+      throw new Error("CommandBuffer: structural content must be {raw} or {rawHtml}");
     }
   }
 }

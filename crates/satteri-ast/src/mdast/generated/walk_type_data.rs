@@ -84,6 +84,25 @@ pub(crate) fn write_mdast_type_data_inline(
         102 | 103 | 104 => {
             write_str32(arena, out, type_data, 0);
         }
+        21 => {
+            if type_data.len() >= 4 {
+                let stored = u32::from_le_bytes(type_data[0..4].try_into().unwrap());
+                // Clamp like write_str16: an oversized list truncates visibly
+                // instead of wrapping the u16 count prefix.
+                let count = (stored as usize).min(u16::MAX as usize);
+                out.extend_from_slice(&(count as u16).to_le_bytes());
+                for i in 0..count {
+                    let base = 4 + i;
+                    out.push(if type_data.len() > base {
+                        type_data[base]
+                    } else {
+                        0
+                    });
+                }
+            } else {
+                out.extend_from_slice(&0u16.to_le_bytes());
+            }
+        }
         30 | 31 | 32 => {
             write_str16(arena, out, type_data, 0);
             if type_data.len() >= 16 {

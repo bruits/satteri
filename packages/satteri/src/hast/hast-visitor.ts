@@ -34,11 +34,12 @@ import {
   PROP_BOOL_TRUE,
   PROP_BOOL_FALSE,
   PROP_SPACE_SEP,
-  PROP_COMMA_SEP,
   PROP_INT,
   emitMdxAttr,
 } from "../op-stream.js";
 import { restorePhantomSpaces } from "../phantom.js";
+import { decodeMdxJsxAttr } from "../mdx-attr.js";
+import { decodeElementProp } from "./element-props.js";
 import { readPosition, rstr } from "../wire-read.js";
 import {
   walkHandle,
@@ -48,7 +49,12 @@ import {
   parseEsm as napiParseEsm,
 } from "#binding";
 
-import { asArray, makeRequireNid, mergeAndReset } from "../visitor-shared.js";
+import {
+  asArray,
+  makeRequireNid,
+  mergeAndReset,
+  unencodableContentError,
+} from "../visitor-shared.js";
 import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js";
 import { HastChildStub } from "./child-stub.js";
 import type { HastHandle } from "../handles.js";
@@ -125,31 +131,6 @@ export interface HastVisitorContext {
 }
 
 /**
- * Serialize a HastNode for the command buffer. Marks each node `_hast: true`,
- * and — except at the root, which is the new replacement content — emits a
- * reused (materialized) node as a `{ _ref: id }` placeholder so the rebuild
- * splices the original in place (preserving its id, applying any pending patch
- * on it) instead of rebuilding it fresh.
- */
-function markHast(node: HastNode, isRoot = true): Record<string, unknown> {
-  if (!isRoot) {
-    const id = hastReusedId(node);
-    if (id !== undefined) return { _ref: id };
-  }
-  const obj: Record<string, unknown> = { _hast: true, type: node.type };
-  if ("tagName" in node) obj.tagName = node.tagName;
-  if ("properties" in node) obj.properties = node.properties;
-  if ("value" in node) obj.value = node.value;
-  if ("name" in node) obj.name = node.name;
-  if ("attributes" in node) obj.attributes = node.attributes;
-  if ("data" in node && node.data != null) obj.data = node.data;
-  if ("children" in node) {
-    obj.children = node.children.map((c) => markHast(c, false));
-  }
-  return obj;
-}
-
-/**
  * Arena identity of a node, rejecting impostors — the one place the
  * spread/identity invariant is enforced. A spread copy of a matched node or
  * stub must read as NEW content: trusting a copied id would splice the
@@ -186,8 +167,7 @@ function hastReusedId(node: unknown): number | undefined {
 const hastWriter = new OpWriter();
 
 /** Compile a set-children payload: a root-wrapped child list, the shape
- *  `Patch::SetChildren` splices in. Reused children become refs, like the
- *  JSON wrapper's `markHast(child, false)`. */
+ *  `Patch::SetChildren` splices in. Reused children become refs. */
 function compileHastChildrenToOpstream(children: unknown): Uint8Array | null {
   if (!Array.isArray(children)) return null;
   hastWriter.reset();
@@ -199,42 +179,27 @@ function compileHastChildrenToOpstream(children: unknown): Uint8Array | null {
   return hastWriter.take();
 }
 
-/** Encode `node` (op-stream when compilable, JSON otherwise) and write it as
- *  the `op` structural command — the one place that picks the encoding. The
- *  switch keeps the buffer calls monomorphic (computed method names allocate
- *  and defeat inline caches on this warm path). */
+/** Encode `node` as the `op` structural command. HAST content is always a
+ *  declarative node (no raw escape hatch), so it compiles to the op-stream or
+ *  it's a hard error — the op-stream is the only structural encoding. The
+ *  switch stays inline so the buffer calls are monomorphic (computed method
+ *  names defeat inline caches on this warm path). */
 function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
   const ops = compileHastToOpstream(node);
-  if (ops) {
-    switch (op) {
-      case "replace":
-        return buffer.replaceOpstream(id, ops);
-      case "insertBefore":
-        return buffer.insertBeforeOpstream(id, ops);
-      case "insertAfter":
-        return buffer.insertAfterOpstream(id, ops);
-      case "prependChild":
-        return buffer.prependChildOpstream(id, ops);
-      case "appendChild":
-        return buffer.appendChildOpstream(id, ops);
-      case "wrapNode":
-        return buffer.wrapNodeOpstream(id, ops);
-    }
-  }
-  const json = JSON.stringify(markHast(node));
+  if (ops === null) throw unencodableContentError(node);
   switch (op) {
     case "replace":
-      return buffer.replaceRawJson(id, json);
+      return buffer.replaceOpstream(id, ops);
     case "insertBefore":
-      return buffer.insertBeforeRawJson(id, json);
+      return buffer.insertBeforeOpstream(id, ops);
     case "insertAfter":
-      return buffer.insertAfterRawJson(id, json);
+      return buffer.insertAfterOpstream(id, ops);
     case "prependChild":
-      return buffer.prependChildRawJson(id, json);
+      return buffer.prependChildOpstream(id, ops);
     case "appendChild":
-      return buffer.appendChildRawJson(id, json);
+      return buffer.appendChildOpstream(id, ops);
     case "wrapNode":
-      return buffer.wrapNodeRawJson(id, json);
+      return buffer.wrapNodeOpstream(id, ops);
   }
 }
 
@@ -384,16 +349,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
       const ops = compileHastChildrenToOpstream(value);
-      if (ops) {
-        this.#commandBuffer.setChildrenOpstream(id, ops);
-        return;
-      }
-      const wrapper = {
-        _hast: true,
-        type: "root",
-        children: (value as HastNode[]).map((child) => markHast(child, false)),
-      };
-      this.#commandBuffer.setChildren(id, JSON.stringify(wrapper));
+      if (!ops) throw unencodableContentError(value);
+      this.#commandBuffer.setChildrenOpstream(id, ops);
       return;
     }
     if (key === "data") {
@@ -568,29 +525,7 @@ function decodeProperties(
     pos += 2;
     const valStr = rstr(buf, pos, valLen);
     pos += valLen;
-    switch (kind) {
-      case PROP_STRING:
-        properties[name] = valStr;
-        break;
-      case PROP_BOOL_TRUE:
-        properties[name] = true;
-        break;
-      case PROP_BOOL_FALSE:
-        properties[name] = false;
-        break;
-      case PROP_SPACE_SEP:
-        properties[name] = valStr.split(" ").filter((s) => s.length > 0);
-        break;
-      case PROP_COMMA_SEP:
-        properties[name] = valStr
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0);
-        break;
-      case PROP_INT:
-        properties[name] = Number(valStr);
-        break;
-    }
+    properties[name] = decodeElementProp(kind, valStr);
   }
   return properties;
 }
@@ -829,7 +764,7 @@ function readMdxJsxFromBinary(
   // Attributes: [kind: u8][nameLen: u16][name][valLen: u32][val]
   const attrCount = view.getUint16(pos, true);
   pos += 2;
-  const attributes: { type: string; name?: string; value: unknown }[] = [];
+  const attributes: MdxJsxAttributeUnion[] = [];
   for (let i = 0; i < attrCount; i++) {
     const kind = buf[pos]!;
     pos += 1;
@@ -841,31 +776,7 @@ function readMdxJsxFromBinary(
     pos += 4;
     const attrVal = rstr(buf, pos, attrValLen);
     pos += attrValLen;
-
-    switch (kind) {
-      case 0: // BooleanProp
-        attributes.push({ type: "mdxJsxAttribute", name: attrName, value: null });
-        break;
-      case 1: // LiteralProp
-        attributes.push({ type: "mdxJsxAttribute", name: attrName, value: attrVal });
-        break;
-      case 2: // ExpressionProp
-        attributes.push({
-          type: "mdxJsxAttribute",
-          name: attrName,
-          value: {
-            type: "mdxJsxAttributeValueExpression",
-            value: restorePhantomSpaces(attrVal),
-          },
-        });
-        break;
-      case 3: // Spread
-        attributes.push({
-          type: "mdxJsxExpressionAttribute",
-          value: restorePhantomSpaces(attrVal),
-        });
-        break;
-    }
+    attributes.push(decodeMdxJsxAttr(kind, attrName, attrVal));
   }
 
   const typeName = nodeType === HAST_MDX_JSX_ELEMENT ? "mdxJsxFlowElement" : "mdxJsxTextElement";

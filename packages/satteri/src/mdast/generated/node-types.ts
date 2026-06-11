@@ -245,3 +245,17 @@ export const MDAST_OPSTREAM_TYPES: Readonly<Record<string, number>> = {
   mdxTextExpression: 103,
   mdxjsEsm: 104,
 };
+
+/** Names of the variable-length `custom` node types (hand-written or
+ *  `Tail`-generated codec). The op-stream round-trip oracle asserts it covers
+ *  every one, so a forgotten or drifted encode/decode arm fails loudly. */
+export const MDAST_CUSTOM_TYPES: readonly string[] = [
+  "list",
+  "listItem",
+  "table",
+  "containerDirective",
+  "leafDirective",
+  "textDirective",
+  "mdxJsxFlowElement",
+  "mdxJsxTextElement",
+];

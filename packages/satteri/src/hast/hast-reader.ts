@@ -4,17 +4,12 @@ import { restorePhantomSpaces } from "../phantom.js";
 import { readPosition } from "../wire-read.js";
 import type { Position } from "unist";
 import {
-  PROP_STRING,
-  PROP_BOOL_TRUE,
-  PROP_BOOL_FALSE,
-  PROP_SPACE_SEP,
-  PROP_COMMA_SEP,
-  PROP_INT,
   MDX_ATTR_BOOLEAN_PROP,
   MDX_ATTR_LITERAL_PROP,
   MDX_ATTR_EXPRESSION_PROP,
   MDX_ATTR_SPREAD,
 } from "../op-stream.js";
+import { decodeElementProp } from "./element-props.js";
 import { NAME_TO_TYPE } from "./generated/node-types.js";
 import { ARENA_MAGIC, KIND_HAST, FIELD, HEADER } from "../generated/arena-layout.js";
 
@@ -242,39 +237,8 @@ export class HastReader {
       const name = this.getString(nameRef.offset, nameRef.len);
       const valueType = data[base + 8];
       const valueRef = this.#readStringRef(data, base + 12);
-
-      switch (valueType) {
-        case PROP_BOOL_TRUE:
-          properties.push({ name, value: true });
-          break;
-        case PROP_BOOL_FALSE:
-          properties.push({ name, value: false });
-          break;
-        case PROP_STRING:
-          properties.push({ name, value: this.getString(valueRef.offset, valueRef.len) });
-          break;
-        case PROP_SPACE_SEP: {
-          const raw = this.getString(valueRef.offset, valueRef.len);
-          properties.push({ name, value: raw.split(" ").filter((s) => s.length > 0) });
-          break;
-        }
-        case PROP_COMMA_SEP: {
-          const raw = this.getString(valueRef.offset, valueRef.len);
-          properties.push({
-            name,
-            value: raw
-              .split(",")
-              .map((s) => s.trim())
-              .filter((s) => s.length > 0),
-          });
-          break;
-        }
-        case PROP_INT: {
-          const raw = this.getString(valueRef.offset, valueRef.len);
-          properties.push({ name, value: Number(raw) });
-          break;
-        }
-      }
+      const valueStr = this.getString(valueRef.offset, valueRef.len);
+      properties.push({ name, value: decodeElementProp(valueType!, valueStr) });
     }
 
     return { tagName, properties };

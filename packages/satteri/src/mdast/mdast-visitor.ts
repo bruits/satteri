@@ -1,8 +1,7 @@
 import { materializeNode } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
 import { CommandBuffer, classifyReturn, type StructuralOp } from "../command-buffer.js";
-import { restorePhantomSpaces } from "../phantom.js";
-import { ru16, ru32, rstr, readPosition } from "../wire-read.js";
+import { ru32, rstr, readPosition } from "../wire-read.js";
 import { decodeMdastTypeData } from "./generated/layout.js";
 import {
   TYPE_NAMES,
@@ -33,7 +32,12 @@ import {
 } from "../op-stream.js";
 import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
-import { asArray, makeRequireNid, mergeAndReset } from "../visitor-shared.js";
+import {
+  asArray,
+  makeRequireNid,
+  mergeAndReset,
+  unencodableContentError,
+} from "../visitor-shared.js";
 import { LazyChildResolver } from "../lazy-child-resolver.js";
 import { MdastChildStub } from "./child-stub.js";
 import type { MdastHandle } from "../handles.js";
@@ -187,12 +191,8 @@ export class MdastVisitorContext {
       // child list (reused children keep their id).
       const id = requireNid(node as MdastNode, "setProperty");
       const ops = compileMdastChildrenToOpstream(value);
-      if (ops) {
-        this.#commandBuffer.setChildrenOpstream(id, ops);
-        return;
-      }
-      const wrapper = refifyReusedNodes({ type: "root", children: value }, true);
-      this.#commandBuffer.setChildren(id, JSON.stringify(wrapper));
+      if (!ops) throw unencodableContentError(value);
+      this.#commandBuffer.setChildrenOpstream(id, ops);
       return;
     }
     if (key === "data") {
@@ -461,88 +461,8 @@ function readMdastMatchedNode(
         node.spread = buf[pos + 1]! !== 0;
         break;
       }
-      case 21: {
-        // table
-        const count = ru16(view, pos);
-        pos += 2;
-        const alignNames: (string | null)[] = [null, "left", "right", "center"];
-        node.align = Array.from({ length: count }, (_, i) => alignNames[buf[pos + i]!] ?? null);
-        break;
-      }
-      case 30:
-      case 31:
-      case 32: {
-        // containerDirective, leafDirective, textDirective
-        const nameLen = ru16(view, pos);
-        pos += 2;
-        node.name = rstr(buf, pos, nameLen);
-        pos += nameLen;
-        const attrCount = ru16(view, pos);
-        pos += 2;
-        const attributes: Record<string, string> = {};
-        for (let i = 0; i < attrCount; i++) {
-          const keyLen = ru16(view, pos);
-          pos += 2;
-          const key = rstr(buf, pos, keyLen);
-          pos += keyLen;
-          const valLen = ru16(view, pos);
-          pos += 2;
-          const val = rstr(buf, pos, valLen);
-          pos += valLen;
-          attributes[key] = val;
-        }
-        node.attributes = attributes;
-        break;
-      }
-      case 100:
-      case 101: {
-        // mdxJsxFlowElement, mdxJsxTextElement
-        const nameLen = ru16(view, pos);
-        pos += 2;
-        node.name = nameLen > 0 ? rstr(buf, pos, nameLen) : null;
-        pos += nameLen;
-        const attrCount = ru16(view, pos);
-        pos += 2;
-        const attributes: { type: string; name?: string; value: unknown }[] = [];
-        for (let i = 0; i < attrCount; i++) {
-          const kind = buf[pos]!;
-          pos += 1;
-          const anLen = ru16(view, pos);
-          pos += 2;
-          const an = rstr(buf, pos, anLen);
-          pos += anLen;
-          const avLen = ru32(view, pos);
-          pos += 4;
-          const av = rstr(buf, pos, avLen);
-          pos += avLen;
-          switch (kind) {
-            case 0:
-              attributes.push({ type: "mdxJsxAttribute", name: an, value: null });
-              break;
-            case 1:
-              attributes.push({ type: "mdxJsxAttribute", name: an, value: av });
-              break;
-            case 2:
-              attributes.push({
-                type: "mdxJsxAttribute",
-                name: an,
-                value: {
-                  type: "mdxJsxAttributeValueExpression",
-                  value: restorePhantomSpaces(av),
-                },
-              });
-              break;
-            case 3:
-              attributes.push({
-                type: "mdxJsxExpressionAttribute",
-                value: restorePhantomSpaces(av),
-              });
-              break;
-          }
-        }
-        node.attributes = attributes;
-        break;
-      }
+      // table (21), directives (30/31/32) and mdxJsx elements (100/101) are
+      // decoded by the generated `decodeMdastTypeData` from their tails.
       // root(0), paragraph(1), thematicBreak(3), blockquote(4), emphasis(11),
       // strong(12), break(14), tableRow(22), tableCell(23), delete(24): no extra data
     }
@@ -565,42 +485,18 @@ function reusedId(node: unknown): number | undefined {
   return typeof id === "number" ? id : undefined;
 }
 
-/**
- * Rewrite a returned replacement tree so every *reused* node (one that came
- * from the arena, at any depth) becomes a `{ _ref: id }` placeholder. The
- * rebuild splices those originals back in place, preserving their ids — so a
- * patch a nested visitor queued on a passed-through child still lands, in the
- * same pass. Freshly-built nodes serialize as before. The root is never reffed:
- * it is the new shape replacing the visited node.
- */
-function refifyReusedNodes(node: unknown, isRoot: boolean): MdastNode {
-  if (node === null || typeof node !== "object") return node as MdastNode;
-  if (!isRoot) {
-    const id = reusedId(node);
-    if (id !== undefined) return { _ref: id } as unknown as MdastNode;
-  }
-  const children = (node as { children?: unknown }).children;
-  if (Array.isArray(children)) {
-    return {
-      ...(node as object),
-      children: children.map((c) => refifyReusedNodes(c, false)),
-    } as unknown as MdastNode;
-  }
-  return node as MdastNode;
-}
-
 // Reused across every replacement in a pass: compile is synchronous and its
 // result is copied into the command buffer before the next call, so a single
 // writer is safe and avoids a 512-byte allocation per built node.
 const mdastWriter = new OpWriter();
 
 /**
- * Compile a declarative MDAST replacement tree to the op-stream — the structural
- * backend the rebuild already uses, but skipping JSON + the JsNode deserialize.
- * Reused nodes (those still carrying an arena id) become `ref`s, exactly like
- * `refifyReusedNodes`. Returns null when the replay can't reproduce the tree
- * identically (unsupported node type, out-of-range numeric field, or a
- * `_keepChildren` marker outside a replace), so the caller falls back to JSON.
+ * Compile a declarative MDAST replacement tree to the op-stream — the only
+ * structural encoding. Reused nodes (those still carrying an arena id) become
+ * `ref`s so the rebuild splices the original back in place. Returns null when
+ * the replay can't reproduce the tree identically (unsupported node type,
+ * out-of-range numeric field, or a `_keepChildren` marker outside a replace);
+ * the caller turns that into a hard error.
  */
 function compileMdastToOpstream(root: unknown, forReplace = false): Uint8Array | null {
   mdastWriter.reset();
@@ -609,8 +505,7 @@ function compileMdastToOpstream(root: unknown, forReplace = false): Uint8Array |
 }
 
 /** Compile a set-children payload: a root-wrapped child list, the shape
- *  `Patch::SetChildren` splices in. Reused children become refs, like the
- *  JSON wrapper's `refifyReusedNodes`. */
+ *  `Patch::SetChildren` splices in. Reused children become refs. */
 function compileMdastChildrenToOpstream(children: unknown): Uint8Array | null {
   if (!Array.isArray(children)) return null;
   mdastWriter.reset();
@@ -674,13 +569,13 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
     w.bool(OF_EXPLICIT, true);
   }
   if (n.data != null) w.data(n.data);
-  if (isRoot && n._keepChildren === true) {
+  if (isRoot && forReplace && n._keepChildren === true) {
     // Replace splices the target's original children, discarding any the
-    // replacement declares — same as the JSON path's keep_children. Other
-    // commands ignore the marker, so fall back to JSON for exact parity.
-    if (!forReplace) return false;
+    // replacement declares — same as the JSON path's keep_children.
     w.keepChildren();
   } else {
+    // `_keepChildren` only applies to replace; other ops ignore the marker and
+    // emit the declared children (the prior JSON-path behavior).
     const children = n.children;
     if (Array.isArray(children)) {
       for (const c of children) if (!emitMdastOp(w, c, false, forReplace)) return false;
@@ -695,19 +590,22 @@ function alignCode(a: unknown): number {
   return a === "left" ? 1 : a === "right" ? 2 : a === "center" ? 3 : 0;
 }
 
-/**
- * Resolve declarative content to either an op-stream (fast path) or a
- * JSON-ready node (raw escape hatches + unsupported types). The op-stream and
- * JSON paths produce identical arenas; this just picks the cheaper encoding.
- */
-function compileOrJson(content: MdastContent, forReplace = false): Uint8Array | MdastNode {
-  return compileMdastToOpstream(content, forReplace) ?? refifyReusedNodes(content, true);
+/** True for the `{raw}` / `{rawHtml}` escape hatches — re-parsed by Rust rather
+ *  than compiled to an op-stream, so they ride the RAW_MARKDOWN / RAW_HTML
+ *  payloads instead of the declarative encoder. */
+function isRawMdastContent(
+  content: MdastContent,
+): content is { raw: string } | { rawHtml: string } {
+  const c = content as Record<string, unknown>;
+  return typeof c.raw === "string" || typeof c.rawHtml === "string";
 }
 
-/** Encode `content` (op-stream when compilable, JSON otherwise) and write it
- *  as the `op` structural command — the one place that picks the encoding. The
- *  switch keeps the buffer calls monomorphic (computed method names allocate
- *  and defeat inline caches on this warm path). */
+/** Encode `content` as the `op` structural command. Declarative nodes compile
+ *  to the op-stream; the `{raw}`/`{rawHtml}` escape hatches ride the raw
+ *  re-parse payloads. Anything that compiles to neither is a hard error — the
+ *  op-stream is the only declarative encoding. The switches stay inline so the
+ *  buffer calls are monomorphic (computed method names defeat inline caches on
+ *  this warm path). */
 function emitMdastTree(
   buffer: CommandBuffer,
   op: StructuralOp,
@@ -715,36 +613,37 @@ function emitMdastTree(
   content: MdastContent,
   forReplace = false,
 ): void {
-  const c = compileOrJson(content, forReplace);
-  if (c instanceof Uint8Array) {
+  if (isRawMdastContent(content)) {
     switch (op) {
       case "replace":
-        return buffer.replaceOpstream(id, c);
+        return buffer.replace(id, content);
       case "insertBefore":
-        return buffer.insertBeforeOpstream(id, c);
+        return buffer.insertBefore(id, content);
       case "insertAfter":
-        return buffer.insertAfterOpstream(id, c);
+        return buffer.insertAfter(id, content);
       case "prependChild":
-        return buffer.prependChildOpstream(id, c);
+        return buffer.prependChild(id, content);
       case "appendChild":
-        return buffer.appendChildOpstream(id, c);
+        return buffer.appendChild(id, content);
       case "wrapNode":
-        return buffer.wrapNodeOpstream(id, c);
+        return buffer.wrapNode(id, content);
     }
   }
+  const ops = compileMdastToOpstream(content, forReplace);
+  if (ops === null) throw unencodableContentError(content);
   switch (op) {
     case "replace":
-      return buffer.replace(id, c);
+      return buffer.replaceOpstream(id, ops);
     case "insertBefore":
-      return buffer.insertBefore(id, c);
+      return buffer.insertBeforeOpstream(id, ops);
     case "insertAfter":
-      return buffer.insertAfter(id, c);
+      return buffer.insertAfterOpstream(id, ops);
     case "prependChild":
-      return buffer.prependChild(id, c);
+      return buffer.prependChildOpstream(id, ops);
     case "appendChild":
-      return buffer.appendChild(id, c);
+      return buffer.appendChildOpstream(id, ops);
     case "wrapNode":
-      return buffer.wrapNode(id, c);
+      return buffer.wrapNodeOpstream(id, ops);
   }
 }
 

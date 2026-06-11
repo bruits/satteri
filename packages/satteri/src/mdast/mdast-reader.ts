@@ -1,6 +1,7 @@
 import type { MdastNodeRaw, BufferHeader, StringRefRaw, MdxJsxAttributeUnion } from "../types.js";
 import { restorePhantomSpaces } from "../phantom.js";
 import { readPosition } from "../wire-read.js";
+import { decodeColumnAlign } from "./column-align.js";
 import { NodeTypeName } from "./generated/node-types.js";
 import { ARENA_MAGIC, KIND_MDAST, FIELD, HEADER } from "../generated/arena-layout.js";
 
@@ -230,10 +231,9 @@ export class MdastReader {
     if (data.length < 4) return [];
     const view = new DataView(data.buffer, data.byteOffset);
     const count = view.getUint32(0, true);
-    const alignNames: (string | null)[] = [null, "left", "right", "center"];
     const result: (string | null)[] = [];
     for (let i = 0; i < count; i++) {
-      result.push(alignNames[data[4 + i]!] ?? null);
+      result.push(decodeColumnAlign(data[4 + i]!));
     }
     return result;
   }

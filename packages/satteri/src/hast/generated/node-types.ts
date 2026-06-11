@@ -58,3 +58,12 @@ export const HAST_OPSTREAM_TYPES: Readonly<Record<string, number>> = {
   mdxjsEsm: 13,
   mdxTextExpression: 14,
 };
+
+/** Names of the variable-length `custom` node types (hand-written or
+ *  `Tail`-generated codec). The op-stream round-trip oracle asserts it covers
+ *  every one, so a forgotten or drifted encode/decode arm fails loudly. */
+export const HAST_CUSTOM_TYPES: readonly string[] = [
+  "element",
+  "mdxJsxFlowElement",
+  "mdxJsxTextElement",
+];

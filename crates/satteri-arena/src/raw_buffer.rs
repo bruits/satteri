@@ -88,7 +88,10 @@ impl<K: ArenaKind> Arena<K> {
             if cached {
                 for (i, &(cp_start, cp_end)) in self.cp_offsets.iter().enumerate() {
                     let node = &self.nodes[i];
-                    if node.start_line == 0 && node.start_offset == 0 {
+                    // A zero start line marks a synthesized node with no source
+                    // range (lines are 1-based), even when the rebuild left it a
+                    // non-zero spliced offset — nothing to convert.
+                    if node.start_line == 0 {
                         continue;
                     }
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
@@ -104,7 +107,10 @@ impl<K: ArenaKind> Arena<K> {
                 let line_index = LineIndex::from_source(&self.source);
                 let mut cursor = line_index.cursor();
                 for (i, node) in self.nodes.iter().enumerate() {
-                    if node.start_line == 0 && node.start_offset == 0 {
+                    // A zero start line marks a synthesized node with no source
+                    // range (lines are 1-based), even when the rebuild left it a
+                    // non-zero spliced offset — nothing to convert.
+                    if node.start_line == 0 {
                         continue;
                     }
                     let cp_start = cursor.byte_to_cp_offset(node.start_offset);

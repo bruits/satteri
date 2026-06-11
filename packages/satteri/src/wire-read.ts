@@ -45,14 +45,17 @@ export function rstr(buf: Uint8Array, off: number, len: number): string {
 /**
  * Decode the 24-byte position block ([startOffset, endOffset, startLine,
  * startColumn, endLine, endColumn], u32 LE each) shared by the walk prefixes
- * and the snapshot node structs. Line 0 + offset 0 is the sentinel for
- * synthesized nodes with no source range (e.g. GFM autolink-literal nodes),
- * surfaced as `undefined` so a node reads the same however it's reached.
+ * and the snapshot node structs. A zero start line is the sentinel for
+ * synthesized nodes with no source range (e.g. GFM autolink-literal nodes, or a
+ * plugin-built replacement spliced by the rebuild): unist lines are 1-based, so
+ * line 0 always means "no source position" — even when the rebuild has rebased
+ * the (otherwise zero) offset by the spliced subtree's source base. Surfaced as
+ * `undefined` so a node reads the same however it's reached.
  */
 export function readPosition(view: DataView, off: number): Position | undefined {
-  const startOffset = ru32(view, off);
   const startLine = ru32(view, off + 8);
-  if (startLine === 0 && startOffset === 0) return undefined;
+  if (startLine === 0) return undefined;
+  const startOffset = ru32(view, off);
   return {
     start: { offset: startOffset, line: startLine, column: ru32(view, off + 12) },
     end: { offset: ru32(view, off + 4), line: ru32(view, off + 16), column: ru32(view, off + 20) },

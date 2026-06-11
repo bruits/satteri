@@ -96,7 +96,7 @@ fn main() {
     write(&plugin_rs.join("mod.rs"), PLUGIN_MOD_RS);
     write(
         &plugin_rs.join("encode.rs"),
-        &emit::encode_rs(&mdast_layouts),
+        &emit::encode_rs(&mdast_layouts, &mdast_tails, &hast_tails),
     );
     write(
         &plugin_rs.join("prop_slots.rs"),
@@ -114,7 +114,7 @@ fn main() {
     );
     write(
         &mdast_ts.join("layout.ts"),
-        &emit::layout_ts(&mdast_layouts),
+        &emit::layout_ts(&mdast_layouts, &mdast_tails),
     );
 
     // HAST (TS)

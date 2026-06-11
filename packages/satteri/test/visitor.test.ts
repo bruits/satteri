@@ -603,7 +603,7 @@ test("an out-of-range list start fails loudly instead of being silently masked",
       return { ...node, start: -1 };
     },
   });
-  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/command error/);
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
 });
 
 test("context mutations reject plugin-built nodes with no arena id", () => {

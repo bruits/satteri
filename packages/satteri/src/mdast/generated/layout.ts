@@ -3,6 +3,8 @@
 import { ru16, ru32, rstr } from "../../wire-read.js";
 import { restorePhantomSpaces } from "../../phantom.js";
 import { lazyGroup } from "../../lazy-props.js";
+import { decodeMdxJsxAttr } from "../../mdx-attr.js";
+import { decodeColumnAlign } from "../column-align.js";
 import type { MdastReader } from "../mdast-reader.js";
 
 type FieldKind = "str16" | "str32" | "u8";
@@ -101,11 +103,92 @@ export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
   104: ["value"],
 };
 
+/** Walk-wire tail descriptors (a name head, then a counted item list) for
+ *  the variable-length attribute types the generic decoder below handles
+ *  without a hand-written case: `map` is a string key/value object
+ *  (directives), `jsx` a typed MDX-JSX attribute array. */
+const MDAST_TAILS: Readonly<Record<number, TailDescriptor>> = {
+  21: { head: [], item: [{ js: "align", kind: "u8" }], bytes: { attrsKey: "align" } },
+  30: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "key", kind: "str16" },
+      { js: "value", kind: "str16" },
+    ],
+    map: { attrsKey: "attributes", key: "key", value: "value" },
+  },
+  31: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "key", kind: "str16" },
+      { js: "value", kind: "str16" },
+    ],
+    map: { attrsKey: "attributes", key: "key", value: "value" },
+  },
+  32: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "key", kind: "str16" },
+      { js: "value", kind: "str16" },
+    ],
+    map: { attrsKey: "attributes", key: "key", value: "value" },
+  },
+  100: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "kind", kind: "u8" },
+      { js: "name", kind: "str16" },
+      { js: "value", kind: "str32" },
+    ],
+    jsx: { attrsKey: "attributes" },
+  },
+  101: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "kind", kind: "u8" },
+      { js: "name", kind: "str16" },
+      { js: "value", kind: "str32" },
+    ],
+    jsx: { attrsKey: "attributes" },
+  },
+};
+
+interface TailField {
+  readonly js: string;
+  readonly kind: FieldKind;
+  readonly phantom?: boolean;
+}
+
+interface TailDescriptor {
+  readonly head: readonly TailField[];
+  readonly item: readonly TailField[];
+  // Exactly one assembly is present: `map` for a string key/value object,
+  // `jsx` for a typed MDX-JSX attribute array (kind-dispatched per item),
+  // `bytes` for an enum-byte array (table column alignment).
+  readonly map?: { readonly attrsKey: string; readonly key: string; readonly value: string };
+  readonly jsx?: { readonly attrsKey: string };
+  readonly bytes?: { readonly attrsKey: string };
+}
+
+/** Read one walk-wire field at `pos`; returns its value and the advanced cursor. */
+function readWalkField(
+  view: DataView,
+  buf: Uint8Array,
+  pos: number,
+  f: TailField,
+): [string | number, number] {
+  if (f.kind === "u8") return [buf[pos]!, pos + 1];
+  const len = f.kind === "str32" ? ru32(view, pos) : ru16(view, pos);
+  const at = pos + (f.kind === "str32" ? 4 : 2);
+  const raw = rstr(buf, at, len);
+  return [f.phantom ? restorePhantomSpaces(raw) : raw, at + len];
+}
+
 /**
  * Decode a node's type-specific `type_data` from the walk buffer onto `node`,
- * driven entirely by `MDAST_LAYOUTS`. Returns `false` for tags with no entry, so
- * the caller falls through to the hand-written cases (list, table, directives,
- * MDX JSX).
+ * driven by `MDAST_LAYOUTS` (fixed-field types) and `MDAST_TAILS` (counted
+ * attribute lists). Returns `false` for tags in neither, so the caller falls
+ * through to the remaining hand-written cases (list, table, MDX JSX).
  */
 export function decodeMdastTypeData(
   view: DataView,
@@ -115,24 +198,74 @@ export function decodeMdastTypeData(
   node: Record<string, unknown>,
 ): boolean {
   const fields = MDAST_LAYOUTS[nodeType];
-  if (fields === undefined) return false;
-  let pos = start;
-  for (const f of fields) {
-    if (f.kind === "u8") {
-      const b = buf[pos]!;
-      pos += 1;
-      if (f.skip) continue;
-      node[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
-    } else {
-      const len = f.kind === "str32" ? ru32(view, pos) : ru16(view, pos);
-      pos += f.kind === "str32" ? 4 : 2;
-      const raw = rstr(buf, pos, len);
-      pos += len;
-      if (f.skip) continue;
-      node[f.js] = f.nullable && len === 0 ? null : f.phantom ? restorePhantomSpaces(raw) : raw;
+  if (fields !== undefined) {
+    let pos = start;
+    for (const f of fields) {
+      if (f.kind === "u8") {
+        const b = buf[pos]!;
+        pos += 1;
+        if (f.skip) continue;
+        node[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
+      } else {
+        const len = f.kind === "str32" ? ru32(view, pos) : ru16(view, pos);
+        pos += f.kind === "str32" ? 4 : 2;
+        const raw = rstr(buf, pos, len);
+        pos += len;
+        if (f.skip) continue;
+        node[f.js] = f.nullable && len === 0 ? null : f.phantom ? restorePhantomSpaces(raw) : raw;
+      }
     }
+    return true;
   }
-  return true;
+
+  const tail = MDAST_TAILS[nodeType];
+  if (tail !== undefined) {
+    let pos = start;
+    for (const f of tail.head) {
+      const [value, next] = readWalkField(view, buf, pos, f);
+      pos = next;
+      // MDX JSX elements carry a nullable name (empty → null); map heads keep it.
+      node[f.js] = tail.jsx !== undefined && value === "" ? null : value;
+    }
+    const count = ru16(view, pos);
+    pos += 2;
+    const readItem = (): Record<string, string | number> => {
+      const item: Record<string, string | number> = {};
+      for (const f of tail.item) {
+        const [value, next] = readWalkField(view, buf, pos, f);
+        pos = next;
+        item[f.js] = value;
+      }
+      return item;
+    };
+    if (tail.map !== undefined) {
+      const attrs: Record<string, string | number> = {};
+      for (let i = 0; i < count; i++) {
+        const item = readItem();
+        attrs[item[tail.map.key] as string] = item[tail.map.value]!;
+      }
+      node[tail.map.attrsKey] = attrs;
+    } else if (tail.jsx !== undefined) {
+      const attrs: ReturnType<typeof decodeMdxJsxAttr>[] = [];
+      for (let i = 0; i < count; i++) {
+        const item = readItem();
+        attrs.push(
+          decodeMdxJsxAttr(item.kind as number, item.name as string, item.value as string),
+        );
+      }
+      node[tail.jsx.attrsKey] = attrs;
+    } else {
+      const align: (string | null)[] = [];
+      for (let i = 0; i < count; i++) {
+        const item = readItem();
+        align.push(decodeColumnAlign(item.align as number));
+      }
+      node[tail.bytes!.attrsKey] = align;
+    }
+    return true;
+  }
+
+  return false;
 }
 
 /**
