@@ -89,9 +89,14 @@ export class ByteWriter {
         }
       }
       if (ascii) {
-        this.writeU32(len);
+        // Inline stores, not writeU32: a per-string method call in the
+        // unoptimized tier is exactly what this class's header rules out.
         const buf = this.buf;
-        const n = this.n;
+        let n = this.n;
+        buf[n++] = len & 255;
+        buf[n++] = (len >> 8) & 255;
+        buf[n++] = (len >> 16) & 255;
+        buf[n++] = (len >>> 24) & 255;
         for (let i = 0; i < len; i++) buf[n + i] = s.charCodeAt(i);
         this.n = n + len;
         return;
@@ -99,12 +104,14 @@ export class ByteWriter {
     }
 
     // Bulk path: encodeInto writes UTF-8 straight into the buffer (no alloc, no
-    // per-char loop); the byte length is only known afterwards, so encode past
-    // the length slot, then rewind the cursor to fill it in.
+    // per-char loop); backpatch the byte length once it's known.
     const lenPos = this.n;
-    const written = encoder.encodeInto(s, this.buf.subarray(lenPos + 4)).written;
-    this.n = lenPos;
-    this.writeU32(written);
+    this.n += 4;
+    const written = encoder.encodeInto(s, this.buf.subarray(this.n)).written;
+    this.buf[lenPos] = written & 255;
+    this.buf[lenPos + 1] = (written >> 8) & 255;
+    this.buf[lenPos + 2] = (written >> 16) & 255;
+    this.buf[lenPos + 3] = (written >>> 24) & 255;
     this.n += written;
   }
 }

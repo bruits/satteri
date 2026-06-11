@@ -153,13 +153,16 @@ function markHast(node: HastNode, isRoot = true): Record<string, unknown> {
  * Arena identity of a node, rejecting impostors — the one place the
  * spread/identity invariant is enforced. A spread copy of a matched node or
  * stub must read as NEW content: trusting a copied id would splice the
- * original in as a ref and drop the copy's edits. Walk-built nodes are keyed
- * in the WeakMap (invisible to spread); `HastChildStub`s (enumerable `_id`,
- * but that key is ignored on plain objects) are recognized by `instanceof`.
- * Plain objects are trusted only via the WeakMap or a NON-enumerable
- * `_nodeId` (the materializers' convention, which spread cannot copy).
+ * original in as a ref and drop the copy's edits. Walk elements carry their
+ * id in a private field behind `instanceof` (spread copies fail the check);
+ * other walk-built nodes are keyed in the WeakMap (invisible to spread);
+ * `HastChildStub`s (enumerable `_id`, but that key is ignored on plain
+ * objects) are recognized by `instanceof`. Plain objects are trusted only via
+ * the WeakMap or a NON-enumerable `_nodeId` (the materializers' convention,
+ * which spread cannot copy).
  */
 function nid(node: HastNode): number | undefined {
+  if (node instanceof WalkElement) return node._nid;
   if (node instanceof HastChildStub) return node._id;
   const id = nodeIdMap.get(node);
   if (id !== undefined) return id;
@@ -616,6 +619,116 @@ function readChildStubs(
   return stubs;
 }
 
+type HastProperties = Record<string, string | number | boolean | string[]>;
+
+// Shared own-getter descriptors for WalkElement's lazy fields, populated in
+// its static block so the getters can read the private wire fields.
+let WALK_PROPS_DESC!: PropertyDescriptor;
+let WALK_CHILDREN_DESC!: PropertyDescriptor;
+
+/**
+ * Walk-path element. Spread-correctness requires `properties`/`children` as
+ * own enumerable keys (`{ ...node }` copies nothing else), but construction
+ * runs per matched element, so everything stays off the expensive paths:
+ * wire state in private fields (plain stores, invisible to spread — a WeakMap
+ * entry per element caused major-GC ephemeron stalls at this volume), shared
+ * getter functions instead of per-node closures, at most one define per lazy
+ * field, and `instanceof` gating identity so copies read as new content.
+ */
+class WalkElement {
+  readonly type = "element" as const;
+  tagName: string;
+  declare properties: HastProperties;
+  declare position?: Position;
+  declare data?: Record<string, unknown>;
+  declare children?: HastNode[];
+
+  readonly #nodeId: number;
+  #view: DataView;
+  #buf: Uint8Array;
+  #propsPos: number;
+  #childIdsPos: number;
+  #childTypesPos: number;
+  #childCount: number;
+  #resolver: HastLazyChildResolver;
+
+  constructor(
+    tagName: string,
+    nodeId: number,
+    view: DataView,
+    buf: Uint8Array,
+    propsPos: number,
+    propCount: number,
+    childIdsPos: number,
+    childTypesPos: number,
+    childCount: number,
+    resolver: HastLazyChildResolver,
+  ) {
+    this.tagName = tagName;
+    this.#nodeId = nodeId;
+    this.#view = view;
+    this.#buf = buf;
+    this.#propsPos = propsPos;
+    this.#childIdsPos = childIdsPos;
+    this.#childTypesPos = childTypesPos;
+    this.#childCount = childCount;
+    this.#resolver = resolver;
+    if (propCount === 0) {
+      this.properties = {};
+    } else {
+      Object.defineProperty(this, "properties", WALK_PROPS_DESC);
+    }
+    if (childCount === 0) {
+      this.children = [];
+    } else {
+      Object.defineProperty(this, "children", WALK_CHILDREN_DESC);
+    }
+  }
+
+  /** @internal */
+  get _nid(): number {
+    return this.#nodeId;
+  }
+
+  static {
+    WALK_PROPS_DESC = {
+      enumerable: true,
+      configurable: true,
+      get(this: WalkElement): HastProperties {
+        const val = decodeProperties(this.#view, this.#buf, this.#propsPos);
+        Object.defineProperty(this, "properties", {
+          value: val,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+        return val;
+      },
+    };
+    WALK_CHILDREN_DESC = {
+      enumerable: true,
+      configurable: true,
+      get(this: WalkElement): HastNode[] {
+        const val = readChildStubs(
+          this.#view,
+          this.#buf,
+          this.#childIdsPos,
+          this.#childTypesPos,
+          this.#childCount,
+          this.#resolver,
+        );
+        Object.defineProperty(this, "children", {
+          value: val,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+        return val;
+      },
+    };
+  }
+}
+
 /** Read the tail of a matched element node (tag + properties).
  *  Common prelude (data/position/children) is already consumed by `readMatchedNode`. */
 function readElementFromBinary(
@@ -638,42 +751,22 @@ function readElementFromBinary(
   const tagName = rstr(buf, pos, tagLen);
   pos += tagLen;
 
-  const propsPos = pos;
-
-  // `properties`/`children` must be OWN enumerable getters (prototype getters
-  // are invisible to spread, so `{ ...node }` would silently drop them).
-  // Literal accessors give exactly that from one engine-cached object shape —
-  // per-node `Object.defineProperties` here measurably regressed every
-  // element-matching pipeline. Wire state lives in the closure, so no hidden
-  // fields ride on the node; both getters self-replace on first read.
-  const node = {
-    type: "element" as const,
+  const propCount = view.getUint16(pos, true);
+  const node = new WalkElement(
     tagName,
-    get properties(): Record<string, string | number | boolean | string[]> {
-      const val = decodeProperties(view, buf, propsPos);
-      Object.defineProperty(this, "properties", {
-        value: val,
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
-      return val;
-    },
-    get children(): HastNode[] {
-      const val = readChildStubs(view, buf, childIdsPos, childTypesPos, childCount, resolver);
-      Object.defineProperty(this, "children", {
-        value: val,
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
-      return val;
-    },
-  } as unknown as HastNode & { position?: Position; data?: Record<string, unknown> };
+    nodeId,
+    view,
+    buf,
+    pos,
+    propCount,
+    childIdsPos,
+    childTypesPos,
+    childCount,
+    resolver,
+  );
   if (position !== undefined) node.position = position;
   if (data !== null) node.data = data;
-  nodeIdMap.set(node, nodeId);
-  return node;
+  return node as unknown as HastNode;
 }
 
 /** Value-carrying types read by `readTextFromBinary` (tag → AST name). */
