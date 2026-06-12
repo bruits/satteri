@@ -2,6 +2,7 @@ import { visitHastHandle, resolveSubscriptions, type HastHandle } from "./hast/h
 import {
   visitMdastHandle,
   resolveMdastSubscriptions,
+  type MdastHandle,
   type MdastPluginInstance,
 } from "./mdast/mdast-visitor.js";
 import type {
@@ -26,6 +27,7 @@ import {
 } from "#binding";
 import { MdastReader } from "./mdast/mdast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
+import { markHandleMutated } from "./lazy-child-resolver.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
 import type { MdastNode, HastNode } from "./types.js";
@@ -95,10 +97,15 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
   return { features: result, convertOptions };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type MdastHandle = any;
-
 type MdastPipelineResult = { handle: MdastHandle };
+
+/** Drop a handle after bumping its epoch: the arena dies with the handle, so a
+ *  child stub retained past the pipeline must hit the designed retention error,
+ *  not a cryptic RangeError from snapshotting the freed arena. */
+function disposeHandle(handle: AnyHandle): void {
+  markHandleMutated(handle);
+  dropHandle(handle);
+}
 
 function warnDroppedTransforms(
   plugin: { name?: string },
@@ -128,6 +135,7 @@ function runMdastPluginsOnHandle(
     const result = visitMdastHandle(handle, plugin, subs, () => getHandleSource(handle), fileURL);
     const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
       if (!r.hasMutations) return;
+      markHandleMutated(handle);
       const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
       if (dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
     };
@@ -517,7 +525,7 @@ export function markdownToHtml(
       const html = renderHandle(h);
       return { html, frontmatter };
     } finally {
-      dropHandle(h);
+      disposeHandle(h);
     }
   };
 
@@ -528,14 +536,14 @@ export function markdownToHtml(
     try {
       hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL);
     } catch (err) {
-      dropHandle(r.hastHandle);
+      disposeHandle(r.hastHandle);
       throw err;
     }
     if (hastResult instanceof Promise) {
       return hastResult.then(
         () => renderAndDrop(r.hastHandle, r.frontmatter),
         (err) => {
-          dropHandle(r.hastHandle);
+          disposeHandle(r.hastHandle);
           throw err;
         },
       );
@@ -574,7 +582,7 @@ export function mdxToJs(
       const code = compileHandle(h, mdxOptions);
       return { code, frontmatter };
     } finally {
-      dropHandle(h);
+      disposeHandle(h);
     }
   };
 
@@ -583,14 +591,14 @@ export function mdxToJs(
     try {
       hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL);
     } catch (err) {
-      dropHandle(r.hastHandle);
+      disposeHandle(r.hastHandle);
       throw err;
     }
     if (hastResult instanceof Promise) {
       return hastResult.then(
         () => compileAndDrop(r.hastHandle, r.frontmatter),
         (err) => {
-          dropHandle(r.hastHandle);
+          disposeHandle(r.hastHandle);
           throw err;
         },
       );
@@ -668,15 +676,18 @@ function createHastHandleFromMdast(
     ? createMdxMdastHandle(source, nativeFeatures)
     : createMdastHandle(source, nativeFeatures);
 
-  // finally{drop} is intentional: convertMdastToHastHandle empties the arena
+  // finally{dispose} is intentional: convertMdastToHastHandle empties the arena
   // on success, but if any step here throws the handle would otherwise leak.
   const finalize = (r: MdastPipelineResult): HastWithFrontmatter => {
     try {
       const frontmatter = readFrontmatter(r.handle);
+      // The conversion empties the mdast arena; bump the epoch so a stub
+      // retained past the mdast pass fails with the retention error.
+      markHandleMutated(r.handle);
       const hastHandle = convertMdastToHastHandle(r.handle, nativeConvertOptions);
       return { hastHandle, frontmatter };
     } finally {
-      dropHandle(r.handle);
+      disposeHandle(r.handle);
     }
   };
 
@@ -689,13 +700,13 @@ function createHastHandleFromMdast(
 
     if (mdastResult instanceof Promise) {
       return mdastResult.then(finalize, (err) => {
-        dropHandle(mdastHandle);
+        disposeHandle(mdastHandle);
         throw err;
       });
     }
     return finalize(mdastResult);
   } catch (err) {
-    dropHandle(mdastHandle);
+    disposeHandle(mdastHandle);
     throw err;
   }
 }
@@ -708,7 +719,7 @@ export function markdownToMdast(source: string, options: { features?: Features }
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
-    dropHandle(handle);
+    disposeHandle(handle);
   }
 }
 
@@ -718,7 +729,7 @@ export function mdxToMdast(source: string, options: { features?: Features } = {}
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
-    dropHandle(handle);
+    disposeHandle(handle);
   }
 }
 
@@ -729,7 +740,7 @@ export function markdownToHast(source: string, options: { features?: Features } 
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
-    dropHandle(handle);
+    disposeHandle(handle);
   }
 }
 
@@ -740,6 +751,6 @@ export function mdxToHast(source: string, options: { features?: Features } = {})
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
-    dropHandle(handle);
+    disposeHandle(handle);
   }
 }

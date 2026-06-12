@@ -1,6 +1,7 @@
 //! MDAST-specific node types and codecs.
 
 pub mod codec;
+pub(crate) mod generated;
 pub mod node;
 
 pub use codec::*;

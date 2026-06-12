@@ -35,6 +35,7 @@ export type {
   HastVisitorInstance,
   HastVisitorContext,
   HastFilteredVisitor,
+  HastContent,
   EstreeProgram,
 } from "./hast/hast-visitor.js";
 
@@ -64,7 +65,7 @@ export type {
 
 // Visitor pipeline (for manual plugin execution)
 export { visitMdastHandle, resolveMdastSubscriptions } from "./mdast/mdast-visitor.js";
-export type { MdastPluginInstance } from "./mdast/mdast-visitor.js";
+export type { MdastPluginInstance, MdastContent } from "./mdast/mdast-visitor.js";
 export {
   visitHastHandle,
   resolveSubscriptions as resolveHastSubscriptions,
@@ -81,12 +82,49 @@ export {
   createMdxMdastHandle,
   createHastHandle,
   createMdxHastHandle,
-  convertMdastToHastHandle,
   serializeHandle,
   renderHandle,
   compileHandle,
-  dropHandle,
-  applyCommandsToMdastHandle,
-  applyCommandsAndConvertToHastHandle,
   getHandleSource,
 } from "#binding";
+
+import {
+  applyCommandsToMdastHandle as napiApplyCommandsToMdastHandle,
+  applyCommandsAndConvertToHastHandle as napiApplyCommandsAndConvertToHastHandle,
+  convertMdastToHastHandle as napiConvertMdastToHastHandle,
+  dropHandle as napiDropHandle,
+} from "#binding";
+import type { AnyHandle } from "./handles.js";
+import { markHandleMutated } from "./lazy-child-resolver.js";
+
+// The raw NAPI mutators renumber or empty the arena; without the epoch bump a
+// child stub retained past a manual-pipeline pass would silently snapshot the
+// changed arena (or die with an opaque RangeError) instead of hitting the
+// retention error.
+
+export function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): number {
+  markHandleMutated(handle);
+  return napiApplyCommandsToMdastHandle(handle, commandBuf);
+}
+
+export function convertMdastToHastHandle(
+  handle: MdastHandle,
+  convertOptions?: Parameters<typeof napiConvertMdastToHastHandle>[1],
+): HastHandle {
+  markHandleMutated(handle);
+  return napiConvertMdastToHastHandle(handle, convertOptions);
+}
+
+export function dropHandle(handle: AnyHandle): void {
+  markHandleMutated(handle);
+  napiDropHandle(handle);
+}
+
+export function applyCommandsAndConvertToHastHandle(
+  handle: MdastHandle,
+  commandBuf: Uint8Array,
+  convertOptions?: Parameters<typeof napiApplyCommandsAndConvertToHastHandle>[2],
+): HastHandle {
+  markHandleMutated(handle);
+  return napiApplyCommandsAndConvertToHastHandle(handle, commandBuf, convertOptions);
+}

@@ -1097,6 +1097,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "satteri-layout-codegen"
+version = "0.0.0"
+
+[[package]]
 name = "satteri-mdxjs"
 version = "0.3.3"
 dependencies = [

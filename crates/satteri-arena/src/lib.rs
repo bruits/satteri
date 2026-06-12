@@ -10,6 +10,7 @@
 pub mod arena;
 pub mod builder;
 pub mod codec;
+mod generated;
 pub mod kind;
 pub mod line_index;
 pub mod mdx_types;

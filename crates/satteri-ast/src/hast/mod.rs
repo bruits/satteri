@@ -1,6 +1,7 @@
 //! HAST-specific node types, codecs, and rendering.
 
 pub mod codec;
+pub(crate) mod generated;
 pub mod node;
 pub mod properties;
 pub mod render;

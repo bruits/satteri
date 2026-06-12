@@ -2,8 +2,10 @@ import { test, expect } from "vitest";
 import {
   visitMdastHandle,
   resolveMdastSubscriptions,
+  type MdastHandle,
   type MdastVisitorContext,
 } from "../src/mdast/mdast-visitor.js";
+import type { HastHandle } from "../src/hast/hast-visitor.js";
 import {
   createMdastHandle,
   getHandleSource,
@@ -11,7 +13,9 @@ import {
   renderHandle,
 } from "../index.js";
 import type { MdastNode } from "../src/types.js";
+import type { Heading, Text } from "mdast";
 import { defineMdastPlugin } from "../src/plugin.js";
+import { markdownToHtml, applyCommandsToMdastHandle } from "../src/index.js";
 
 /** Helper: run a visitor on markdown, apply mutations, convert to HAST, render HTML. */
 function visitAndRender(
@@ -563,4 +567,289 @@ test("containerDirective replaceNode rewrites to an aside-style block", () => {
   const hastHandle = applyCommandsAndConvertToHastHandle(handle, result.commandBuffer);
   const html = renderHandle(hastHandle);
   expect(html).toContain('<aside class="tip">body</aside>');
+});
+
+test("returning a replacement with _keepChildren keeps the original children", () => {
+  const heading = { type: "heading", depth: 2, children: [] } satisfies MdastNode;
+  const replacement = { ...heading, _keepChildren: true };
+  const plugin = defineMdastPlugin({
+    name: "promote-heading-keep-children",
+    heading() {
+      return replacement;
+    },
+  });
+  const html = visitAndRender("# Hello\n\nWorld", plugin);
+  expect(html).toContain("<h2>Hello</h2>");
+});
+
+test("insertAfter ignores _keepChildren", () => {
+  const heading = { type: "heading", depth: 3, children: [] } satisfies MdastNode;
+  const inserted = { ...heading, _keepChildren: true };
+  const plugin = defineMdastPlugin({
+    name: "insert-after-keep-children",
+    heading(node, ctx) {
+      ctx.insertAfter(node, inserted);
+    },
+  });
+  const html = visitAndRender("# Hello", plugin);
+  expect(html).toContain("<h1>Hello</h1>");
+  expect(html).toContain("<h3></h3>");
+});
+
+test("an out-of-range list start fails loudly instead of being silently masked", () => {
+  const plugin = defineMdastPlugin({
+    name: "bad-list-start",
+    list(node) {
+      return { ...node, start: -1 };
+    },
+  });
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
+});
+
+test("a list start one past the u32 boundary fails loudly", () => {
+  const plugin = defineMdastPlugin({
+    name: "list-start-past-u32",
+    list(node) {
+      return { ...node, start: 4294967296 };
+    },
+  });
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
+});
+
+test("a non-integer list start fails loudly", () => {
+  const plugin = defineMdastPlugin({
+    name: "fractional-list-start",
+    list(node) {
+      return { ...node, start: 1.5 };
+    },
+  });
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
+});
+
+test("a heading depth past the u8 boundary fails loudly", () => {
+  const plugin = defineMdastPlugin({
+    name: "bad-heading-depth",
+    heading(node) {
+      // Deliberately outside Heading["depth"]'s 1-6 union: the wire boundary
+      // (a stored u8) is what's pinned here.
+      return { ...node, depth: 256 as Heading["depth"], children: [] };
+    },
+  });
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/out-of-range/);
+});
+
+test("a bare root as replacement content fails loudly", () => {
+  const plugin = defineMdastPlugin({
+    name: "root-as-content",
+    heading() {
+      return { type: "root", children: [] } satisfies MdastNode;
+    },
+  });
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/cannot encode replacement content/);
+});
+
+test("setProperty with an out-of-range number fails at apply instead of masking bits", () => {
+  const plugin = defineMdastPlugin({
+    name: "set-depth-out-of-range",
+    heading(node, ctx) {
+      // setProperty rides CMD_SET_PROPERTY, not the op-stream; Rust enforces
+      // the slot range. 9999 is deliberately outside the depth union.
+      ctx.setProperty(node, "depth", 9999 as Heading["depth"]);
+    },
+  });
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/between 0 and 255/);
+});
+
+test("a replacement nested past the replay depth cap fails loudly", () => {
+  let node: MdastNode = { type: "paragraph", children: [{ type: "text", value: "leaf" }] };
+  for (let i = 0; i < 200; i++) node = { type: "blockquote", children: [node] };
+  const deep = node;
+  const plugin = defineMdastPlugin({
+    name: "too-deep",
+    paragraph() {
+      return deep;
+    },
+  });
+  expect(() => visitAndRender("Hello", plugin)).toThrow(/nests deeper/);
+});
+
+test("context mutations reject plugin-built nodes with no arena id", () => {
+  const plugin = defineMdastPlugin({
+    name: "remove-fresh-node",
+    heading(_node, ctx) {
+      ctx.removeNode({ type: "text", value: "x" });
+    },
+  });
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/no arena id/);
+});
+
+test("setProperty(node, 'children', ...) rides the op-stream", () => {
+  const { handle, source } = setup();
+  const plugin = defineMdastPlugin({
+    name: "swap-children-opstream",
+    heading(node, ctx) {
+      ctx.setProperty(node, "children", [{ type: "text", value: "swapped" }]);
+    },
+  });
+  const subs = resolveMdastSubscriptions(plugin);
+  const result = visitMdastHandle(handle, plugin, subs, source, undefined) as {
+    commandBuffer: Uint8Array;
+  };
+  expect(result.commandBuffer[0]).toBe(0x0d); // CMD_SET_CHILDREN
+  expect(result.commandBuffer[5]).toBe(0x14); // PAYLOAD_OPSTREAM
+});
+
+// Lazy-children lifecycle: matched nodes resolve `.children` from a snapshot
+// taken during the pass; after the pass the arena may be rebuilt with new ids,
+// so a first-time read must fail loudly instead of mapping stale ids.
+
+test("async visitor reads `.children` in a deferred callback", async () => {
+  const { handle, source } = setup();
+  let firstChild: Heading["children"][number] | undefined;
+  const plugin = defineMdastPlugin({
+    name: "async-children-read",
+    async heading(node) {
+      await new Promise((r) => setTimeout(r, 1));
+      firstChild = node.children[0];
+    },
+  });
+  const result = visitMdastHandle(
+    handle,
+    plugin,
+    resolveMdastSubscriptions(plugin),
+    source,
+    undefined,
+  );
+  expect(result).toBeInstanceOf(Promise);
+  await result;
+  expect(firstChild).toMatchObject({ type: "text", value: "Hello" });
+});
+
+test("a node retained past its visitor pass throws on its first `.children` read", () => {
+  const { handle, source } = setup();
+  let retained: Readonly<Heading> | undefined;
+  const plugin = defineMdastPlugin({
+    name: "retain-heading",
+    heading(node) {
+      retained = node;
+    },
+  });
+  visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
+  expect(retained).toBeDefined();
+  expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+});
+
+test("a retained node throws on `.children` after an async pass settles", async () => {
+  const { handle, source } = setup();
+  let retained: Readonly<Heading> | undefined;
+  const plugin = defineMdastPlugin({
+    name: "retain-heading-async",
+    async heading(node) {
+      await new Promise((r) => setTimeout(r, 1));
+      retained = node;
+    },
+  });
+  await visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
+  expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+});
+
+test("handles are kind-branded: cross-kind use is a compile error", () => {
+  const { handle, source } = setup();
+  const intoMdast = (h: MdastHandle): MdastHandle => h;
+  const intoHast = (h: HastHandle): HastHandle => h;
+  expect(intoMdast(handle)).toBe(handle);
+  // @ts-expect-error a mdast handle must not flow into a hast-typed slot
+  intoHast(handle);
+  expect(getHandleSource(handle)).toBe(source);
+});
+
+// Ref-stub children: `.children` of a matched node returns id+type stubs that
+// defer the arena snapshot until a real field is read, so passthrough children
+// compile to one-word refs without ever materializing.
+
+test("passthrough replacement keeps stub children rendering correctly", () => {
+  const plugin = defineMdastPlugin({
+    name: "heading-to-paragraph",
+    heading(node) {
+      return { type: "paragraph", children: node.children };
+    },
+  });
+  const html = visitAndRender("# Hello **bold**", plugin);
+  expect(html).toContain("<p>Hello <strong>bold</strong></p>");
+});
+
+test("reordering and filtering stub children works", () => {
+  const plugin = defineMdastPlugin({
+    name: "reverse-paragraph",
+    paragraph(node, ctx) {
+      // `type` is eager on stubs: this filter needs no materialization.
+      const kept = node.children.filter((c) => c.type !== "emphasis");
+      ctx.setProperty(node, "children", kept.reverse());
+    },
+  });
+  const html = visitAndRender("*a* x **b**", plugin);
+  expect(html).toContain("<strong>b</strong> x");
+  expect(html).not.toContain("<em>");
+});
+
+test("stub `.type` stays readable after the pass; first materialization throws", () => {
+  let retained: Heading["children"] = [];
+  const plugin = defineMdastPlugin({
+    name: "retain-heading-children",
+    heading(node, ctx) {
+      retained = node.children;
+      // A mutation: the arena rebuilds after the pass, so stale ids must
+      // refuse to materialize.
+      ctx.setProperty(node, "depth", 2);
+    },
+  });
+  markdownToHtml("# Hello\n\nWorld", { mdastPlugins: [plugin] });
+  expect(retained).toHaveLength(1);
+  const stub = retained[0]!;
+  expect(stub.type).toBe("text");
+  expect(() => stub.type === "text" && stub.value).toThrow(/retained past its visitor pass/);
+});
+
+test("a stub materialized after a manual applyCommandsToMdastHandle throws the retention error", () => {
+  const { handle, source } = setup();
+  let retained: Heading["children"] = [];
+  const plugin = defineMdastPlugin({
+    name: "retain-children-manual-apply",
+    heading(node) {
+      retained = node.children;
+      return {
+        type: "heading",
+        depth: 2,
+        children: [{ type: "text", value: "x" }],
+      } satisfies MdastNode;
+    },
+  });
+  const result = visitMdastHandle(
+    handle,
+    plugin,
+    resolveMdastSubscriptions(plugin),
+    source,
+    undefined,
+  ) as { commandBuffer: Uint8Array };
+  // The wrapped mutator bumps the handle epoch: the rebuilt arena renumbered
+  // the stub's id, so it must hit the retention error, not a RangeError.
+  applyCommandsToMdastHandle(handle, result.commandBuffer);
+  const stub = retained[0]!;
+  expect(stub.type).toBe("text");
+  expect(() => stub.type === "text" && stub.value).toThrow(/retained past its visitor pass/);
+});
+
+test("a spread copy of a child stub is new content, not a reused ref", () => {
+  const plugin = defineMdastPlugin({
+    name: "edit-spread-stub",
+    heading(node) {
+      const first = node.children[0]!;
+      if (first.type !== "text") return;
+      // A ref here would splice the original text and drop the edit.
+      const copy = { ...first, value: "Edited" };
+      return { type: "heading", depth: 2, children: [copy] };
+    },
+  });
+  const html = visitAndRender("# Hello", plugin);
+  expect(html).toContain("<h2>Edited</h2>");
 });

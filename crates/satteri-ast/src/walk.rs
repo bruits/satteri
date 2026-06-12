@@ -10,22 +10,24 @@
 //!
 //! ```text
 //! [match_count: u32]
-//! [match_index: match_count × 12 bytes]
-//!   per entry: [node_id: u32][subscription_index: u8][pad: u8][data_offset: u32][data_len: u16]
+//! [match_index: match_count × 10 bytes]
+//!   per entry: [node_id: u32][subscription_index: u8][pad: u8][data_offset: u32]
 //! [data section: variable length]
 //!   per matched node: inline resolved data (format depends on node type)
 //! ```
 //!
-//! Every HAST node payload shares the same prelude (matching `serialize_mdast_node_inline`):
+//! Every matched node's payload shares the same prelude (MDAST and HAST alike):
 //! ```text
 //! [node_data: u32 len + utf8 JSON bytes]   ; 0-length when the node has no `data`
 //! [position: 6×u32 = 24B]                  ; start_offset, end_offset, start_line, start_col, end_line, end_col
-//! [child_count: u16][child_ids: child_count × u32]
+//! [child_count: u32][child_ids: child_count × u32][child_types: child_count × u8]
 //! [type-specific resolved data]
 //! ```
+//! Child types ride along with the ids so JS can build typed child stubs
+//! without serializing the whole arena.
 //! Synthesized nodes (no source range) store all-zero position; JS surfaces those as `position: undefined`.
 //!
-//! Type-specific tails (after the shared prelude):
+//! HAST type-specific tails (after the shared prelude):
 //!
 //! ### Element (node_type=1)
 //! ```text
@@ -46,10 +48,13 @@
 //! [value_len: u32][value: utf8...]
 //! ```
 //!
-//! ### Code (node_type=8)
-//! ```text
-//! [lang_len: u16][lang: utf8...][meta_len: u16][meta: utf8...][value_len: u32][value: utf8...]
-//! ```
+//! These tails — and the MDAST fixed-field and name+count+items ones — are
+//! emitted by the generated `write_mdast_type_data_inline` /
+//! `write_hast_type_data_inline` (`{mdast,hast}/generated/walk_type_data.rs`),
+//! driven by the registry in `satteri-layout-codegen/src/schema.rs`. The
+//! fixed-scalar MDAST tails (list, listItem) stay hand-written at their match
+//! arms in `serialize_mdast_node_inline`; unmatched HAST tags fall back to a
+//! u16-length-prefixed raw `type_data` blob.
 
 use satteri_arena::{Arena, ArenaKind, Hast, Mdast, StringRef};
 
@@ -113,7 +118,7 @@ fn walk_and_collect_inner<K: ArenaKind>(
     // First pass: collect matches (node_id, sub_index) and serialize data
     let mut matches: Vec<(u32, u8)> = Vec::new();
     let mut data_section: Vec<u8> = Vec::new();
-    let mut data_offsets: Vec<(u32, u16)> = Vec::new(); // (offset, len) per match
+    let mut data_offsets: Vec<u32> = Vec::new(); // data-section offset per match
 
     let mut stack: Vec<u32> = vec![0];
 
@@ -146,9 +151,8 @@ fn walk_and_collect_inner<K: ArenaKind>(
                 if matched {
                     let data_start = data_section.len() as u32;
                     serialize(arena, node_id, node_type, type_data, &mut data_section);
-                    let data_len = (data_section.len() - data_start as usize) as u16;
                     matches.push((node_id, sub_idx));
-                    data_offsets.push((data_start, data_len));
+                    data_offsets.push(data_start);
                 }
             }
         }
@@ -162,7 +166,7 @@ fn walk_and_collect_inner<K: ArenaKind>(
 
     // Build output buffer: [count][index entries][data section]
     let match_count = matches.len() as u32;
-    let index_size = match_count as usize * 12;
+    let index_size = match_count as usize * 10;
     let header_size = 4; // match_count
     let total = header_size + index_size + data_section.len();
 
@@ -175,12 +179,10 @@ fn walk_and_collect_inner<K: ArenaKind>(
     let data_base = (header_size + index_size) as u32;
     for i in 0..matches.len() {
         let (node_id, sub_idx) = matches[i];
-        let (offset, len) = data_offsets[i];
         out.extend_from_slice(&node_id.to_le_bytes());
         out.push(sub_idx);
         out.push(0); // pad
-        out.extend_from_slice(&(data_base + offset).to_le_bytes());
-        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(data_base + data_offsets[i]).to_le_bytes());
     }
 
     // Data section
@@ -189,21 +191,9 @@ fn walk_and_collect_inner<K: ArenaKind>(
     out
 }
 
-/// MDAST node inline serialization.
-///
-/// Format per matched node:
-/// ```text
-/// [position: 6×u32 (24 bytes)]: start_offset, end_offset, start_line, start_col, end_line, end_col
-/// [child_count: u16][child_ids: child_count × u32]: for parent nodes
-/// [type-specific resolved data]
-/// ```
-fn serialize_mdast_node_inline(
-    arena: &Arena<Mdast>,
-    node_id: u32,
-    node_type: u8,
-    type_data: &[u8],
-    out: &mut Vec<u8>,
-) {
+/// The shared per-match prelude (see the module header): node-data JSON block,
+/// position, then child ids + types.
+fn write_walk_prelude<K: ArenaKind>(arena: &Arena<K>, node_id: u32, out: &mut Vec<u8>) {
     let node = arena.get_node(node_id);
 
     // Node data (JSON bytes), length-prefixed, always first so JS can read it at a known offset
@@ -222,83 +212,36 @@ fn serialize_mdast_node_inline(
     out.extend_from_slice(&node.end_line.to_le_bytes());
     out.extend_from_slice(&node.end_column.to_le_bytes());
 
-    // Children (for parent nodes)
     let children = arena.get_children(node_id);
-    out.extend_from_slice(&(children.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(children.len() as u32).to_le_bytes());
     for &child_id in children {
         out.extend_from_slice(&child_id.to_le_bytes());
     }
+    for &child_id in children {
+        out.push(arena.get_node(child_id).node_type);
+    }
+}
 
-    // Helper: write a resolved string ref as [len: u16][data]
-    let write_str16 = |out: &mut Vec<u8>, data: &[u8], offset: usize| {
-        if data.len() >= offset + 8 {
-            let sr = read_string_ref(data, offset);
-            let s = arena.get_str(sr);
-            out.extend_from_slice(&(s.len() as u16).to_le_bytes());
-            out.extend_from_slice(s.as_bytes());
-        } else {
-            out.extend_from_slice(&0u16.to_le_bytes());
-        }
-    };
+/// MDAST node inline serialization: the shared prelude (see the module header)
+/// followed by the type-specific tail.
+fn serialize_mdast_node_inline(
+    arena: &Arena<Mdast>,
+    node_id: u32,
+    node_type: u8,
+    type_data: &[u8],
+    out: &mut Vec<u8>,
+) {
+    write_walk_prelude(arena, node_id, out);
 
-    let write_str32 = |out: &mut Vec<u8>, data: &[u8], offset: usize| {
-        if data.len() >= offset + 8 {
-            let sr = read_string_ref(data, offset);
-            let s = arena.get_str(sr);
-            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
-            out.extend_from_slice(s.as_bytes());
-        } else {
-            out.extend_from_slice(&0u32.to_le_bytes());
-        }
-    };
+    // Fixed-field and name+count+items types are generated from the registry;
+    // this returns false for the raw-byte tails handled below.
+    if crate::mdast::generated::walk_type_data::write_mdast_type_data_inline(
+        arena, node_type, type_data, out,
+    ) {
+        return;
+    }
 
     match node_type {
-        // Heading: depth u8
-        2 => {
-            out.push(if !type_data.is_empty() {
-                type_data[0]
-            } else {
-                1
-            });
-        }
-
-        // Text(10), InlineCode(13), Html(7), Yaml(25), Toml(26): single StringRef value
-        10 | 13 | 7 | 25 | 26 => write_str32(out, type_data, 0),
-
-        // Code(8): lang(0) + meta(8) + value(16)
-        8 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            write_str32(out, type_data, 16);
-        }
-
-        // Math(27), InlineMath(28): meta(0) + value(8)
-        27 | 28 => {
-            write_str16(out, type_data, 0);
-            write_str32(out, type_data, 8);
-        }
-
-        // Link(15): url(0) + title(8)
-        15 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-        }
-
-        // Image(16): url(0) + alt(8) + title(16)
-        16 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            write_str16(out, type_data, 16);
-        }
-
-        // Definition(9): url(0) + title(8) + identifier(16) + label(24)
-        9 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            write_str16(out, type_data, 16);
-            write_str16(out, type_data, 24);
-        }
-
         // List(5): start(0..4), ordered(4), spread(5)
         5 => {
             if type_data.len() >= 6 {
@@ -317,94 +260,7 @@ fn serialize_mdast_node_inline(
             }
         }
 
-        // LinkReference(17), FootnoteReference(20): identifier(0) + label(8) + kind(16)
-        17 | 20 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            out.push(if type_data.len() > 16 {
-                type_data[16]
-            } else {
-                0
-            });
-        }
-
-        // ImageReference(18): like above, plus alt(20) so plugins can read it
-        18 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-            out.push(if type_data.len() > 16 {
-                type_data[16]
-            } else {
-                0
-            });
-            write_str16(out, type_data, 20);
-        }
-
-        // FootnoteDefinition(19): identifier(0) + label(8)
-        19 => {
-            write_str16(out, type_data, 0);
-            write_str16(out, type_data, 8);
-        }
-
-        // Table(21): align_count(0..4) + align bytes
-        21 => {
-            if type_data.len() >= 4 {
-                let count = u32::from_le_bytes(type_data[0..4].try_into().unwrap()) as usize;
-                out.extend_from_slice(&(count as u16).to_le_bytes());
-                let end = (4 + count).min(type_data.len());
-                out.extend_from_slice(&type_data[4..end]);
-            } else {
-                out.extend_from_slice(&0u16.to_le_bytes());
-            }
-        }
-
-        // MdxJsxFlowElement(100), MdxJsxTextElement(101): name(0) + attributes
-        100 | 101 => {
-            write_str16(out, type_data, 0);
-            if type_data.len() >= 16 {
-                let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
-                out.extend_from_slice(&(attr_count as u16).to_le_bytes());
-                for i in 0..attr_count {
-                    let base = 16 + i * 20;
-                    let kind = type_data[base];
-                    let attr_name = arena.get_str(read_string_ref(type_data, base + 4));
-                    let attr_val = arena.get_str(read_string_ref(type_data, base + 12));
-                    out.push(kind);
-                    out.extend_from_slice(&(attr_name.len() as u16).to_le_bytes());
-                    out.extend_from_slice(attr_name.as_bytes());
-                    out.extend_from_slice(&(attr_val.len() as u32).to_le_bytes());
-                    out.extend_from_slice(attr_val.as_bytes());
-                }
-            } else {
-                out.extend_from_slice(&0u16.to_le_bytes());
-            }
-        }
-
-        // ContainerDirective(30), LeafDirective(31), TextDirective(32): name + attributes
-        30..=32 => {
-            write_str16(out, type_data, 0);
-            if type_data.len() >= 16 {
-                let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
-                out.extend_from_slice(&(attr_count as u16).to_le_bytes());
-                for i in 0..attr_count {
-                    let base = 16 + i * 16;
-                    let key = arena.get_str(read_string_ref(type_data, base));
-                    let val = arena.get_str(read_string_ref(type_data, base + 8));
-                    out.extend_from_slice(&(key.len() as u16).to_le_bytes());
-                    out.extend_from_slice(key.as_bytes());
-                    out.extend_from_slice(&(val.len() as u16).to_le_bytes());
-                    out.extend_from_slice(val.as_bytes());
-                }
-            } else {
-                out.extend_from_slice(&0u16.to_le_bytes());
-            }
-        }
-
-        // MdxFlowExpression(102), MdxTextExpression(103), MdxjsEsm(104): value StringRef
-        102..=104 => write_str32(out, type_data, 0),
-
-        // Root(0), Paragraph(1), ThematicBreak(3), Blockquote(4), Emphasis(11),
-        // Strong(12), Break(14), TableRow(22), TableCell(23), Delete(24): no type data
+        // Containers and no-type-data nodes: nothing after the prelude.
         _ => {}
     }
 }
@@ -416,9 +272,48 @@ fn read_string_ref(data: &[u8], offset: usize) -> StringRef {
     )
 }
 
-/// HAST inline serialization: write node data with all strings resolved
-/// (no StringRefs). Element data includes child node IDs so plugins can
-/// reference them.
+/// Write a resolved `StringRef` (at `offset` in `data`) as `[len: u16][bytes]`
+/// onto the walk wire; an out-of-range offset emits an empty string. Used by
+/// the generated `write_{mdast,hast}_type_data_inline` serializers.
+pub(crate) fn write_str16<K: ArenaKind>(
+    arena: &Arena<K>,
+    out: &mut Vec<u8>,
+    data: &[u8],
+    offset: usize,
+) {
+    if data.len() >= offset + 8 {
+        let s = arena.get_str(read_string_ref(data, offset));
+        // Clamp at a char boundary: a >64 KiB field truncates visibly instead
+        // of wrapping the prefix and desynchronizing the decoder.
+        let mut len = s.len().min(u16::MAX as usize);
+        while !s.is_char_boundary(len) {
+            len -= 1;
+        }
+        out.extend_from_slice(&(len as u16).to_le_bytes());
+        out.extend_from_slice(&s.as_bytes()[..len]);
+    } else {
+        out.extend_from_slice(&0u16.to_le_bytes());
+    }
+}
+
+/// Like [`write_str16`] but with a `u32` length prefix, for large `value` fields.
+pub(crate) fn write_str32<K: ArenaKind>(
+    arena: &Arena<K>,
+    out: &mut Vec<u8>,
+    data: &[u8],
+    offset: usize,
+) {
+    if data.len() >= offset + 8 {
+        let s = arena.get_str(read_string_ref(data, offset));
+        out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+        out.extend_from_slice(s.as_bytes());
+    } else {
+        out.extend_from_slice(&0u32.to_le_bytes());
+    }
+}
+
+/// HAST inline serialization: the shared prelude followed by the type-specific
+/// tail, with all strings resolved (no StringRefs).
 fn serialize_hast_node_inline(
     arena: &Arena<Hast>,
     node_id: u32,
@@ -426,135 +321,47 @@ fn serialize_hast_node_inline(
     type_data: &[u8],
     out: &mut Vec<u8>,
 ) {
-    let node = arena.get_node(node_id);
+    write_walk_prelude(arena, node_id, out);
 
-    // Shared prelude (mirrors serialize_mdast_node_inline):
-    // [data: u32 len + bytes][position: 24B][child_count: u16][child_ids: N×u32]
-
-    // Node data (JSON bytes), length-prefixed, always first so JS can read it at a known offset
-    if let Some(data) = arena.get_node_data(node_id) {
-        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        out.extend_from_slice(data);
-    } else {
-        out.extend_from_slice(&0u32.to_le_bytes());
+    // Every typed tail (element, MDX JSX, single-value) is generated from the
+    // registry; what's left falls back to a generic length-prefixed blob.
+    if crate::hast::generated::walk_type_data::write_hast_type_data_inline(
+        arena, node_type, type_data, out,
+    ) {
+        return;
     }
 
-    out.extend_from_slice(&node.start_offset.to_le_bytes());
-    out.extend_from_slice(&node.end_offset.to_le_bytes());
-    out.extend_from_slice(&node.start_line.to_le_bytes());
-    out.extend_from_slice(&node.start_column.to_le_bytes());
-    out.extend_from_slice(&node.end_line.to_le_bytes());
-    out.extend_from_slice(&node.end_column.to_le_bytes());
-
-    let children = arena.get_children(node_id);
-    out.extend_from_slice(&(children.len() as u16).to_le_bytes());
-    for &child_id in children {
-        out.extend_from_slice(&child_id.to_le_bytes());
-    }
-
-    match node_type {
-        // HAST element: tag + properties
-        1 => {
-            if type_data.len() < 16 {
-                out.extend_from_slice(&0u16.to_le_bytes()); // empty tag
-                out.extend_from_slice(&0u16.to_le_bytes()); // 0 props
-                return;
-            }
-            let tag_ref = read_string_ref(type_data, 0);
-            let tag = arena.get_str(tag_ref);
-            out.extend_from_slice(&(tag.len() as u16).to_le_bytes());
-            out.extend_from_slice(tag.as_bytes());
-
-            let prop_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
-            out.extend_from_slice(&(prop_count as u16).to_le_bytes());
-            for i in 0..prop_count {
-                let base = 16 + i * 20;
-                let name_ref = read_string_ref(type_data, base);
-                let kind = type_data[base + 8];
-                let val_ref = read_string_ref(type_data, base + 12);
-                let name = arena.get_str(name_ref);
-                out.extend_from_slice(&(name.len() as u16).to_le_bytes());
-                out.extend_from_slice(name.as_bytes());
-                out.push(kind);
-                let val = arena.get_str(val_ref);
-                out.extend_from_slice(&(val.len() as u16).to_le_bytes());
-                out.extend_from_slice(val.as_bytes());
-            }
-        }
-
-        // MDX JSX elements (flow=10, text=11): name + attributes
-        10 | 11 => {
-            if type_data.len() < 16 {
-                out.extend_from_slice(&0u16.to_le_bytes()); // empty name
-                out.extend_from_slice(&0u16.to_le_bytes()); // 0 attrs
-                return;
-            }
-            let name_ref = read_string_ref(type_data, 0);
-            let name = arena.get_str(name_ref);
-            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
-            out.extend_from_slice(name.as_bytes());
-
-            let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
-            out.extend_from_slice(&(attr_count as u16).to_le_bytes());
-            for i in 0..attr_count {
-                let base = 16 + i * 20;
-                let kind = type_data[base];
-                let attr_name_ref = read_string_ref(type_data, base + 4);
-                let attr_val_ref = read_string_ref(type_data, base + 12);
-                let attr_name = arena.get_str(attr_name_ref);
-                let attr_val = arena.get_str(attr_val_ref);
-                out.push(kind);
-                out.extend_from_slice(&(attr_name.len() as u16).to_le_bytes());
-                out.extend_from_slice(attr_name.as_bytes());
-                out.extend_from_slice(&(attr_val.len() as u32).to_le_bytes());
-                out.extend_from_slice(attr_val.as_bytes());
-            }
-        }
-
-        // HAST text / comment / raw / MDX expressions / MDX ESM: single value
-        2 | 3 | 5 | 12 | 13 | 14 => {
-            if type_data.len() >= 8 {
-                let val_ref = read_string_ref(type_data, 0);
-                let val = arena.get_str(val_ref);
-                out.extend_from_slice(&(val.len() as u32).to_le_bytes());
-                out.extend_from_slice(val.as_bytes());
-            } else {
-                out.extend_from_slice(&0u32.to_le_bytes());
-            }
-        }
-
-        // Code (type 8): lang + meta + value
-        8 => {
-            if type_data.len() >= 24 {
-                let lang_ref = read_string_ref(type_data, 0);
-                let meta_ref = read_string_ref(type_data, 8);
-                let val_ref = read_string_ref(type_data, 16);
-                let lang = arena.get_str(lang_ref);
-                let meta = arena.get_str(meta_ref);
-                let val = arena.get_str(val_ref);
-                out.extend_from_slice(&(lang.len() as u16).to_le_bytes());
-                out.extend_from_slice(lang.as_bytes());
-                out.extend_from_slice(&(meta.len() as u16).to_le_bytes());
-                out.extend_from_slice(meta.as_bytes());
-                out.extend_from_slice(&(val.len() as u32).to_le_bytes());
-                out.extend_from_slice(val.as_bytes());
-            } else {
-                out.extend_from_slice(&[0u8; 8]); // empty lang, meta, value
-            }
-        }
-
-        _ => {
-            // Generic: copy raw type_data as length-prefixed blob
-            out.extend_from_slice(&(type_data.len() as u16).to_le_bytes());
-            out.extend_from_slice(type_data);
-        }
-    }
+    out.extend_from_slice(&(type_data.len() as u16).to_le_bytes());
+    out.extend_from_slice(type_data);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use satteri_arena::ArenaBuilder;
+
+    #[test]
+    fn write_str16_clamps_oversized_strings_at_a_char_boundary() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(0);
+        // 65534 ASCII bytes, then a 2-byte char straddling the u16 limit.
+        let big = format!("{}é{}", "a".repeat(65534), "b".repeat(100));
+        let sref = b.alloc_string(&big);
+        b.close_node();
+        let arena = b.finish();
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&sref.offset.to_le_bytes());
+        data.extend_from_slice(&sref.len.to_le_bytes());
+        let mut out = Vec::new();
+        write_str16(&arena, &mut out, &data, 0);
+
+        let len = u16::from_le_bytes(out[0..2].try_into().unwrap()) as usize;
+        assert_eq!(out.len(), 2 + len);
+        // Byte 65535 would split the 'é', so the clamp backs off to 65534.
+        assert_eq!(len, 65534);
+        assert!(std::str::from_utf8(&out[2..]).is_ok());
+    }
 
     fn build_hast_with_elements(tags: &[&str]) -> Arena<Hast> {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
@@ -587,7 +394,7 @@ mod tests {
     }
 
     fn read_match_sub_index(buf: &[u8], index: usize) -> u8 {
-        buf[4 + index * 12 + 4]
+        buf[4 + index * 10 + 4]
     }
 
     #[test]
@@ -650,12 +457,11 @@ mod tests {
         }];
         let buf = walk_hast(&arena, &subs);
         assert_eq!(read_match_count(&buf), 1);
-        // Read data offset and len from index
+        // Read data offset from index
         let data_offset = u32::from_le_bytes(buf[4 + 6..4 + 10].try_into().unwrap()) as usize;
-        let data_len = u16::from_le_bytes(buf[4 + 10..4 + 12].try_into().unwrap()) as usize;
-        assert!(data_len > 0);
-        // Skip prelude: [data_len=0: 4B][position: 24B][child_count=1: 2B][child_id: 4B] = 34B
-        let tag_off = data_offset + 4 + 24 + 2 + 4;
+        // Skip prelude:
+        // [data_len=0: 4B][position: 24B][child_count=1: 4B][child_id: 4B][child_type: 1B] = 37B
+        let tag_off = data_offset + 4 + 24 + 4 + 4 + 1;
         let tag_len = u16::from_le_bytes(buf[tag_off..tag_off + 2].try_into().unwrap()) as usize;
         assert_eq!(tag_len, 1); // "a"
         let tag = std::str::from_utf8(&buf[tag_off + 2..tag_off + 2 + tag_len]).unwrap();

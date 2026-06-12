@@ -1,5 +1,31 @@
 // Builds a minimal valid MDAST buffer in pure JS for testing MdastReader
-// without requiring the native module to be built.
+// without requiring the native module to be built, plus small structural
+// tree helpers shared across test files.
+
+/** Structural tree shape both mdast and hast nodes satisfy. */
+export interface TreeNode {
+  type: string;
+  children?: TreeNode[];
+}
+
+export function findByType(node: TreeNode, type: string): TreeNode | undefined {
+  if (node.type === type) return node;
+  for (const c of node.children ?? []) {
+    const hit = findByType(c, type);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+export function collect<T extends TreeNode>(
+  node: TreeNode,
+  pred: (n: TreeNode) => n is T,
+  out: T[] = [],
+): T[] {
+  if (pred(node)) out.push(node);
+  if (node.children) for (const c of node.children) collect(c, pred, out);
+  return out;
+}
 
 const MAGIC = 0x5241444d; // "MDAR" bytes [0x4d,0x44,0x41,0x52] read as little-endian u32
 const NODE_STRUCT_SIZE = 52;
@@ -92,14 +118,6 @@ export function buildTestBuffer({
 
   return buf;
 }
-
-export const NodeType = {
-  Root: 0,
-  Paragraph: 1,
-  Heading: 2,
-  Text: 10,
-  Link: 15,
-} as const;
 
 // A simple "# Hello\n\nWorld" arena
 // source = "# Hello\n\nWorld"
