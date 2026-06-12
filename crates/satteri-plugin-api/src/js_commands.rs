@@ -138,7 +138,7 @@ fn apply_mdast_set_property(
 
     // The slot resolved, so a `None` from the writer means the value's type is
     // one the slot can't hold — report that rather than "unknown".
-    let written = write_mdast_prop_slot(arena, node_id, slot, value_type, value_str)?;
+    let written = write_mdast_prop_slot(arena, node_id, slot, prop_name, value_type, value_str)?;
     written.ok_or_else(|| CommandError::InvalidPropertyValue {
         node_type: mdast_type_name(node_type),
         name: prop_name.to_string(),
@@ -152,6 +152,7 @@ fn write_mdast_prop_slot(
     arena: &mut Arena<Mdast>,
     node_id: u32,
     slot: MdastPropSlot,
+    prop_name: &str,
     value_type: u8,
     value_str: &str,
 ) -> Result<Option<()>, CommandError> {
@@ -178,18 +179,35 @@ fn write_mdast_prop_slot(
             _ => return Ok(None),
         },
         PROP_INT => {
-            // Integer slots (depth, list start, checked). Accept a float
-            // spelling like "3" or "3.0" leniently rather than truncating to 0.
-            let value = value_str
-                .parse::<i64>()
-                .or_else(|_| value_str.parse::<f64>().map(|f| f as i64))
-                .unwrap_or(0);
+            // Accept a float spelling like "3.0", but anything outside the
+            // slot's range must error — `as u8` would silently mask the bits.
+            let parsed = value_str.parse::<i64>().ok().or_else(|| {
+                value_str
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|f| f.is_finite() && f.fract() == 0.0)
+                    .map(|f| f as i64)
+            });
+            let node_type = arena.get_node(node_id).node_type;
+            let fitted = |max: u32| -> Result<u32, CommandError> {
+                match parsed {
+                    Some(v) if (0..=max as i64).contains(&v) => Ok(v as u32),
+                    _ => Err(CommandError::PropertyValueOutOfRange {
+                        node_type: mdast_type_name(node_type),
+                        name: prop_name.to_string(),
+                        value: value_str.to_string(),
+                        max,
+                    }),
+                }
+            };
             match slot {
                 S::U8 { offset } | S::CheckedTri { offset } => {
+                    let value = fitted(u8::MAX as u32)?;
                     set_mdast_scalar(arena, node_id, offset, &[value as u8]);
                 }
                 S::U32 { offset } => {
-                    set_mdast_scalar(arena, node_id, offset, &(value as u32).to_le_bytes());
+                    let value = fitted(u32::MAX)?;
+                    set_mdast_scalar(arena, node_id, offset, &value.to_le_bytes());
                 }
                 _ => return Ok(None),
             }
@@ -200,7 +218,7 @@ fn write_mdast_prop_slot(
             S::Str { offset } => set_mdast_string_ref(arena, node_id, offset, StringRef::empty())?,
             _ => return Ok(None),
         },
-        _ => return Err(CommandError::UnknownCommand(value_type)),
+        _ => return Err(CommandError::InvalidPropertyValueType(value_type)),
     }
     Ok(Some(()))
 }
@@ -516,6 +534,11 @@ trait OpCollector<'a>: Sized {
     fn align(&mut self, _bytes: &'a [u8]) {}
 }
 
+/// Deepest `OP_OPEN` nesting the replay accepts: the rebuild splices a
+/// replayed sub-arena recursively, so its depth must stay well inside the
+/// host stack. 128 = serde_json's default recursion limit, ample for content.
+const MAX_OPSTREAM_DEPTH: usize = 128;
+
 /// Replay an op-stream into a fresh sub-arena. `orig`/`anchor` resolve
 /// `KEEP_CHILDREN` (splice the replaced node's original children, as refs).
 fn replay_opstream<'a, C: OpCollector<'a>>(
@@ -535,6 +558,15 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 }
                 let node_type = reader.read_u8()?;
                 C::check_tag(node_type)?;
+                // A root is only valid as the stream's top-level wrapper
+                // (the rebuild splices its children); nested it would smuggle
+                // a node the JS visitors refuse to encode.
+                if !stack.is_empty() && node_type == <C::Kind as ArenaKind>::ROOT_TAG {
+                    return Err(CommandError::UnencodableNodeType("root"));
+                }
+                if stack.len() >= MAX_OPSTREAM_DEPTH {
+                    return Err(CommandError::OpstreamTooDeep(MAX_OPSTREAM_DEPTH));
+                }
                 builder.open_node(node_type);
                 stack.push(C::open(node_type));
             }
@@ -550,6 +582,11 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                     c.finalize(&mut builder);
                 }
                 let id = reader.read_u32()?;
+                // A stale id (e.g. a node cached across passes) would
+                // otherwise panic deep inside the rebuild's arena indexing.
+                if id as usize >= orig.len() {
+                    return Err(CommandError::InvalidNodeId(id));
+                }
                 emit_ref_node(id, &mut builder);
             }
             OP_KEEP_CHILDREN => {
@@ -892,6 +929,12 @@ impl<'a> OpCollector<'a> for HastFieldCollector<'a> {
 
     /// HAST twin of the MDAST `check_tag`.
     fn check_tag(tag: u8) -> Result<(), CommandError> {
+        // The JS visitor refuses to encode a doctype (it's not in
+        // `HAST_OPSTREAM_TYPES`); enforce the same here so a crafted buffer
+        // can't smuggle one in.
+        if HastNodeType::from_u8(tag) == Some(HastNodeType::Doctype) {
+            return Err(CommandError::UnencodableNodeType("doctype"));
+        }
         let known = HastNodeType::from_u8(tag).is_some();
         #[cfg(not(feature = "mdx"))]
         let known = known
@@ -1419,6 +1462,88 @@ mod tests {
         assert_eq!(
             u32::from_le_bytes(arena.get_type_data(children[0]).try_into().unwrap()),
             orig_text
+        );
+    }
+
+    #[test]
+    fn opstream_ref_rejects_out_of_range_id() {
+        // A stale id (a node cached across passes) must error at decode, not
+        // panic inside the rebuild's arena indexing.
+        let orig = test_parse_markdown("Hello");
+        let bad = orig.len() as u32 + 100;
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Paragraph);
+        ops.push(OP_REF);
+        ops.extend_from_slice(&bad.to_le_bytes());
+        op_close(&mut ops);
+
+        let err = replay_mdast_opstream(&ops, &orig, 0).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidNodeId(id) if id == bad));
+    }
+
+    #[test]
+    fn opstream_rejects_nested_root() {
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+
+        // Top-level root is the set-children wrapper and must pass.
+        let mut ok = Vec::new();
+        op_open(&mut ok, MdastNodeType::Root);
+        op_close(&mut ok);
+        assert!(replay_mdast_opstream(&ok, &empty, 0).is_ok());
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Root);
+        op_open(&mut ops, MdastNodeType::Root);
+        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnencodableNodeType("root")));
+    }
+
+    #[test]
+    fn hast_opstream_rejects_doctype() {
+        let empty = ArenaBuilder::<Hast>::new(String::new()).finish();
+        let ops = vec![OP_OPEN, HastNodeType::Doctype as u8, OP_CLOSE];
+        let err = replay_hast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnencodableNodeType("doctype")));
+    }
+
+    #[test]
+    fn opstream_rejects_over_deep_nesting() {
+        // The rebuild splices replayed content recursively, so unbounded
+        // nesting would overflow the host stack (an abort napi can't catch).
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+        let mut ops = Vec::new();
+        for _ in 0..(MAX_OPSTREAM_DEPTH + 1) {
+            op_open(&mut ops, MdastNodeType::Blockquote);
+        }
+        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::OpstreamTooDeep(_)));
+    }
+
+    #[test]
+    fn set_property_rejects_out_of_range_or_unparseable_int() {
+        // build_hello_world: root(0) > heading(1) > text(2), paragraph > text.
+        let heading_id = 1;
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_INT, "depth", "9999");
+        let err =
+            apply_mdast_commands(build_hello_world(), &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(err, CommandError::PropertyValueOutOfRange { .. }));
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_INT, "depth", "not-a-number");
+        let err =
+            apply_mdast_commands(build_hello_world(), &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(err, CommandError::PropertyValueOutOfRange { .. }));
+
+        // The boundary itself still writes.
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_INT, "depth", "255");
+        let arena = apply_mdast_commands(build_hello_world(), &buf, &test_parse_markdown).unwrap();
+        assert_eq!(
+            decode_heading_data(arena.get_type_data(heading_id)).depth,
+            255
         );
     }
 

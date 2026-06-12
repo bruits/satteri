@@ -30,7 +30,7 @@ import {
   PROP_STRING,
   emitMdxAttr,
 } from "../op-stream.js";
-import type { MdastNode, MdastNodeInternal, Toml, MathNode, InlineMath } from "../types.js";
+import type { MdastNode, Toml, MathNode, InlineMath } from "../types.js";
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
 import {
   asArray,
@@ -74,8 +74,8 @@ import type { MdxjsEsm } from "../mdx-types.js";
 import type { ContainerDirective, LeafDirective, TextDirective } from "../directive-types.js";
 
 /** New content for a structural mutation: a declarative node, or a raw markdown
- *  / HTML escape hatch. Declarative nodes ride the op-stream when the type is
- *  supported, falling back to JSON otherwise — both produce identical arenas. */
+ *  / HTML escape hatch. Declarative nodes compile to the op-stream; a type the
+ *  op-stream can't encode is a hard error. */
 export type MdastContent = MdastNode | { raw: string } | { rawHtml: string };
 
 export interface MdastDiagnostic {
@@ -92,7 +92,13 @@ function nid(node: MdastNode): number | undefined {
   // Genuine stubs carry their id as a plain field; a spread copy is not
   // `instanceof` and has no `_nodeId`, so it correctly reads as new content.
   if (node instanceof MdastChildStub) return node._id;
-  return mdastNodeIdMap.get(node as object) ?? (node as MdastNodeInternal)._nodeId;
+  const id = mdastNodeIdMap.get(node as object);
+  if (id !== undefined) return id;
+  // Plain objects are trusted only via the WeakMap or a NON-enumerable
+  // `_nodeId` (the materializer's convention, which spread cannot copy) — an
+  // enumerable one rode in on a copy and must read as new content.
+  const d = Object.getOwnPropertyDescriptor(node, "_nodeId");
+  return d !== undefined && !d.enumerable ? (d.value as number) : undefined;
 }
 
 const requireNid = makeRequireNid(nid);
@@ -494,27 +500,34 @@ const mdastWriter = new OpWriter();
  * Compile a declarative MDAST replacement tree to the op-stream — the only
  * structural encoding. Reused nodes (those still carrying an arena id) become
  * `ref`s so the rebuild splices the original back in place. Returns null when
- * the replay can't reproduce the tree identically (unsupported node type,
- * out-of-range numeric field, or a `_keepChildren` marker outside a replace);
- * the caller turns that into a hard error.
+ * the replay can't reproduce the tree identically (unsupported node type or
+ * out-of-range numeric field); the caller turns that into a hard error.
  */
 function compileMdastToOpstream(root: unknown, forReplace = false): Uint8Array | null {
-  mdastWriter.reset();
-  if (!emitMdastOp(mdastWriter, root, true, forReplace)) return null;
-  return mdastWriter.take();
+  mdastWriter.begin();
+  try {
+    if (!emitMdastOp(mdastWriter, root, true, forReplace)) return null;
+    return mdastWriter.take();
+  } finally {
+    mdastWriter.end();
+  }
 }
 
 /** Compile a set-children payload: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
 function compileMdastChildrenToOpstream(children: unknown): Uint8Array | null {
   if (!Array.isArray(children)) return null;
-  mdastWriter.reset();
-  mdastWriter.open(NAME_TO_TYPE.root!);
-  for (const c of children) {
-    if (!emitMdastOp(mdastWriter, c, false, false)) return null;
+  mdastWriter.begin();
+  try {
+    mdastWriter.open(NAME_TO_TYPE.root!);
+    for (const c of children) {
+      if (!emitMdastOp(mdastWriter, c, false, false)) return null;
+    }
+    mdastWriter.close();
+    return mdastWriter.take();
+  } finally {
+    mdastWriter.end();
   }
-  mdastWriter.close();
-  return mdastWriter.take();
 }
 
 function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean): boolean {
@@ -539,8 +552,8 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   if (typeof n.identifier === "string") w.str(OF_IDENTIFIER, n.identifier);
   if (typeof n.label === "string") w.str(OF_LABEL, n.label);
   if (typeof n.referenceType === "string") w.str(OF_REFERENCE_TYPE, n.referenceType);
-  // Out-of-range numbers fall back to JSON, where serde's Option<u8>/Option<u32>
-  // rejects the node with a visible error instead of silently masking the bits.
+  // Out-of-range numbers compile to null and the caller throws — a visible
+  // error instead of silently masking the bits.
   if (typeof n.depth === "number") {
     if (!Number.isInteger(n.depth) || n.depth < 0 || n.depth > 255) return false;
     w.u8(OF_DEPTH, n.depth);
@@ -557,8 +570,8 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   if (Array.isArray(attrs)) {
     for (const a of attrs) emitMdxAttr(w, a as Record<string, unknown>);
   } else if (attrs !== null && typeof attrs === "object") {
-    // Directive attributes: a string→string map. Non-string values are dropped,
-    // matching the JSON path's `encode_js_directive_attrs`.
+    // Directive attributes: a string→string map; non-string values are
+    // dropped, since the stored form holds only strings.
     for (const key in attrs as Record<string, unknown>) {
       const v = (attrs as Record<string, unknown>)[key];
       if (typeof v === "string") w.prop(key, PROP_STRING, v);
@@ -571,11 +584,11 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   if (n.data != null) w.data(n.data);
   if (isRoot && forReplace && n._keepChildren === true) {
     // Replace splices the target's original children, discarding any the
-    // replacement declares — same as the JSON path's keep_children.
+    // replacement declares.
     w.keepChildren();
   } else {
-    // `_keepChildren` only applies to replace; other ops ignore the marker and
-    // emit the declared children (the prior JSON-path behavior).
+    // `_keepChildren` only applies to replace; other ops ignore the marker
+    // and emit the declared children.
     const children = n.children;
     if (Array.isArray(children)) {
       for (const c of children) if (!emitMdastOp(w, c, false, forReplace)) return false;

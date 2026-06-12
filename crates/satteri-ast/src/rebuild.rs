@@ -187,11 +187,13 @@ pub fn rebuild_lenient<K: ArenaKind>(
 /// `visited` accumulates every reached anchor (deleted or not) so that the
 /// caller can detect anchors stranded inside discarded subtrees.
 ///
-/// `active` is the stack of anchors whose replacement is currently being
-/// emitted. A `REF_NODE_TYPE` that resolves to an anchor still on this stack
-/// re-parents the very node being replaced (e.g. "wrap this heading in a div
-/// containing the heading"); re-applying its `Replace` there would recurse
-/// forever, so the ref splices the original content once instead.
+/// `active` is the stack of anchors whose patch content (replacement, wrap,
+/// inserts, child patches) is currently being emitted. A `REF_NODE_TYPE`
+/// inside that content can resolve to the anchor itself or to one of its
+/// ancestors — whose walk re-reaches the anchor (e.g. "wrap this heading in
+/// a div containing the heading"); re-firing the anchor's patches there
+/// would recurse forever, so the re-entry splices the original content once
+/// instead.
 fn copy_node<K: ArenaKind>(
     node_id: u32,
     orig: &Arena<K>,
@@ -202,8 +204,31 @@ fn copy_node<K: ArenaKind>(
     active: &mut FxHashSet<u32>,
 ) -> bool {
     let node_patches: &[&Patch<K>] = patch_map.get(&node_id).map(Vec::as_slice).unwrap_or(&[]);
-    if !node_patches.is_empty() {
+
+    // Re-entered while this anchor's own patch content is mid-emission (a ref
+    // in it named the node or an ancestor). Re-firing its patches would
+    // recurse forever; contribute the anchor's own look once instead —
+    // nothing for a removed node, the original content otherwise.
+    if active.contains(&node_id) {
+        let replaced = node_patches
+            .iter()
+            .any(|p| matches!(p, Patch::Replace { .. }));
+        if deleted.contains(&node_id) && !replaced {
+            return false;
+        }
+        copy_node_raw(
+            node_id, orig, builder, patch_map, deleted, visited, active, false,
+        );
+        return true;
+    }
+
+    let has_patches = !node_patches.is_empty();
+    if has_patches {
         visited.insert(node_id);
+        // Every patch-content emission below may contain a ref whose splice
+        // walks back into this node; `active` turns that re-entry into a
+        // one-shot splice instead of a recursion.
+        active.insert(node_id);
     }
 
     // Pre-siblings emit before either the original node, its replacement, or
@@ -229,9 +254,6 @@ fn copy_node<K: ArenaKind>(
             _ => None,
         });
         if let Some((new_tree, keep_children)) = replacement {
-            // A self-referential ref in the replacement splices the original
-            // instead of recursing (see `active` in the doc).
-            active.insert(node_id);
             if keep_children {
                 emit_subtree_with_original_children(
                     new_tree, node_id, orig, builder, patch_map, deleted, visited, active,
@@ -239,7 +261,6 @@ fn copy_node<K: ArenaKind>(
             } else {
                 emit_subtree(new_tree, builder, orig, patch_map, deleted, visited, active);
             }
-            active.remove(&node_id);
         }
         // Post-siblings still apply for Remove and Replace.
         for patch in node_patches {
@@ -247,6 +268,7 @@ fn copy_node<K: ArenaKind>(
                 emit_subtree(new_tree, builder, orig, patch_map, deleted, visited, active);
             }
         }
+        active.remove(&node_id);
         return true;
     }
 
@@ -273,6 +295,7 @@ fn copy_node<K: ArenaKind>(
                 emit_subtree(new_tree, builder, orig, patch_map, deleted, visited, active);
             }
         }
+        active.remove(&node_id);
         return true;
     }
 
@@ -343,6 +366,7 @@ fn copy_node<K: ArenaKind>(
         }
     }
 
+    active.remove(&node_id);
     true
 }
 
@@ -426,14 +450,8 @@ fn emit_subtree_node<K: ArenaKind>(
     if node.node_type == REF_NODE_TYPE {
         let td = sub_arena.get_type_data(node_id);
         let target = u32::from_le_bytes([td[0], td[1], td[2], td[3]]);
-        if active.contains(&target) {
-            // The ref re-parents an anchor whose replacement is still being
-            // emitted. Re-applying its `Replace` would recurse forever, so copy
-            // the original directly (its own patch skipped, child patches kept).
-            copy_node_raw(target, orig, builder, patch_map, deleted, visited, active);
-        } else {
-            copy_node(target, orig, builder, patch_map, deleted, visited, active);
-        }
+        // No re-entry guard needed here: `copy_node` checks `active` on entry.
+        copy_node(target, orig, builder, patch_map, deleted, visited, active);
         return;
     }
 
@@ -732,13 +750,10 @@ fn emit_wrap_node<K: ArenaKind>(
         }
     }
 
-    // Guard the wrap the same way a replacement guards itself: if one of the
-    // wrapper's declared children references the node being wrapped, splice the
-    // original in place instead of re-triggering this wrap and recursing.
-    active.insert(original_node_id);
-
     // Copied directly, not via the patch map, so its own Wrap patch doesn't
-    // fire again.
+    // fire again. `copy_node` put the anchor in `active` for the duration of
+    // this wrap, so a wrapper child that references it splices the original
+    // instead of re-triggering the wrap and recursing.
     copy_node_raw(
         original_node_id,
         orig,
@@ -747,6 +762,7 @@ fn emit_wrap_node<K: ArenaKind>(
         deleted,
         visited,
         active,
+        true,
     );
 
     for child_id in parent_tree.get_children(0).to_vec() {
@@ -763,16 +779,19 @@ fn emit_wrap_node<K: ArenaKind>(
         );
     }
 
-    active.remove(&original_node_id);
-
     builder.close_node();
 }
 
-/// Copy a node and its children, applying child patches (`PrependChild` /
-/// `AppendChild`, plus any patches on descendants) but skipping the node's own
-/// structural self-patch. Used by wrap and self-referential refs to splice the
-/// original in place without re-entering the Wrap/Replace branch that put us
+/// Copy a node and its children, skipping the node's own structural
+/// self-patch (Wrap/Replace). Used by wrap and self-referential refs to
+/// splice the original in place without re-entering the branch that put us
 /// here. Sibling inserts on the node are positioned by that caller, not here.
+///
+/// `apply_child_patches` covers the node's own `PrependChild` / `AppendChild`
+/// / `SetChildren` (descendants' patches always apply): the wrap's first
+/// splice wants them; a re-entrant splice must not re-fire them, since their
+/// content is what re-reached this node.
+#[allow(clippy::too_many_arguments)]
 fn copy_node_raw<K: ArenaKind>(
     node_id: u32,
     orig: &Arena<K>,
@@ -781,8 +800,14 @@ fn copy_node_raw<K: ArenaKind>(
     deleted: &FxHashSet<u32>,
     visited: &mut FxHashSet<u32>,
     active: &mut FxHashSet<u32>,
+    apply_child_patches: bool,
 ) {
     let node_patches: &[&Patch<K>] = patch_map.get(&node_id).map(Vec::as_slice).unwrap_or(&[]);
+    let node_patches: &[&Patch<K>] = if apply_child_patches {
+        node_patches
+    } else {
+        &[]
+    };
     if !node_patches.is_empty() {
         visited.insert(node_id);
     }
@@ -1820,6 +1845,88 @@ mod tests {
         assert_eq!(
             types,
             vec![MdastNodeType::Break as u8, MdastNodeType::Text as u8]
+        );
+    }
+
+    /// Build a sub-arena holding a single `REF_NODE_TYPE` node targeting
+    /// `target`, optionally wrapped in a parent node.
+    fn ref_arena(target: u32, wrapper: Option<MdastNodeType>) -> Arena<Mdast> {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        if let Some(w) = wrapper {
+            b.open_node(w as u8);
+        }
+        b.open_node_raw(REF_NODE_TYPE);
+        b.set_data_current(&target.to_le_bytes());
+        b.close_node();
+        if wrapper.is_some() {
+            b.close_node();
+        }
+        b.finish()
+    }
+
+    /// A replacement that references an *ancestor* of the replaced node walks
+    /// back into the anchor. Re-applying its Replace would recurse forever
+    /// (a stack-overflow abort before the `active` re-entry guard); the
+    /// re-entry must splice the original content once instead.
+    #[test]
+    fn replace_with_ref_to_ancestor_splices_once() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+
+        let patches = vec![Patch::Replace {
+            node_id: heading_id,
+            new_tree: ref_arena(0, Some(MdastNodeType::Paragraph)),
+            keep_children: false,
+        }];
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
+
+        // root > [paragraph > root' > [heading(original), paragraph], paragraph]
+        let root_children = rebuilt.get_children(0);
+        assert_eq!(root_children.len(), 2);
+        let new_para = root_children[0];
+        assert_eq!(
+            rebuilt.get_node(new_para).node_type,
+            MdastNodeType::Paragraph as u8
+        );
+        let spliced_root = rebuilt.get_children(new_para)[0];
+        assert_eq!(
+            rebuilt.get_node(spliced_root).node_type,
+            MdastNodeType::Root as u8
+        );
+        let spliced = rebuilt.get_children(spliced_root).to_vec();
+        assert_eq!(spliced.len(), 2);
+        assert_eq!(
+            rebuilt.get_node(spliced[0]).node_type,
+            MdastNodeType::Heading as u8,
+            "the re-entered anchor must contribute its original content"
+        );
+    }
+
+    /// Sibling-insert content that references an ancestor re-reaches the
+    /// anchor the same way; the insert must not re-fire inside the splice.
+    #[test]
+    fn insert_before_with_ref_to_ancestor_terminates() {
+        let orig = build_hello_world();
+        let para_id = orig.get_children(0)[1];
+
+        let patches = vec![Patch::InsertBefore {
+            node_id: para_id,
+            new_tree: ref_arena(0, None),
+        }];
+        let rebuilt = rebuild(&orig, &patches).expect("rebuild failed");
+
+        // root > [heading, root'(spliced once), paragraph]
+        let root_children = rebuilt.get_children(0).to_vec();
+        assert_eq!(root_children.len(), 3);
+        assert_eq!(
+            rebuilt.get_node(root_children[1]).node_type,
+            MdastNodeType::Root as u8
+        );
+        let spliced = rebuilt.get_children(root_children[1]).to_vec();
+        assert_eq!(
+            spliced.len(),
+            2,
+            "the spliced ancestor copy must not re-fire the insert"
         );
     }
 }

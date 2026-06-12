@@ -170,13 +170,17 @@ const hastWriter = new OpWriter();
  *  `Patch::SetChildren` splices in. Reused children become refs. */
 function compileHastChildrenToOpstream(children: unknown): Uint8Array | null {
   if (!Array.isArray(children)) return null;
-  hastWriter.reset();
-  hastWriter.open(NAME_TO_TYPE.root!);
-  for (const c of children) {
-    if (!emitHastOp(hastWriter, c, false)) return null;
+  hastWriter.begin();
+  try {
+    hastWriter.open(NAME_TO_TYPE.root!);
+    for (const c of children) {
+      if (!emitHastOp(hastWriter, c, false)) return null;
+    }
+    hastWriter.close();
+    return hastWriter.take();
+  } finally {
+    hastWriter.end();
   }
-  hastWriter.close();
-  return hastWriter.take();
 }
 
 /** Encode `node` as the `op` structural command. HAST content is always a
@@ -204,15 +208,19 @@ function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node:
 }
 
 /**
- * Compile a declarative HAST replacement tree to the op-stream — the structural
- * backend the rebuild already uses, skipping JSON + the JsNode deserialize.
- * Reused nodes become `ref`s (transparent passthrough). Returns null when the
- * tree holds a type the replay can't reproduce identically (JSON fallback).
+ * Compile a declarative HAST replacement tree to the op-stream — the only
+ * structural encoding. Reused nodes become `ref`s (transparent passthrough).
+ * Returns null when the tree holds a type the replay can't reproduce
+ * identically; the caller throws.
  */
 function compileHastToOpstream(root: unknown): Uint8Array | null {
-  hastWriter.reset();
-  if (!emitHastOp(hastWriter, root, true)) return null;
-  return hastWriter.take();
+  hastWriter.begin();
+  try {
+    if (!emitHastOp(hastWriter, root, true)) return null;
+    return hastWriter.take();
+  } finally {
+    hastWriter.end();
+  }
 }
 
 function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
@@ -467,10 +475,6 @@ interface ResolvedSubscription {
   nodeType: number;
   tagFilter: string[];
   visitFn: (node: HastNode, ctx: HastVisitorContext) => HastNode | void;
-}
-
-function isFilteredVisitor(v: unknown): v is HastFilteredVisitor {
-  return typeof v === "object" && v !== null && "filter" in v && "visit" in v;
 }
 
 /** Node types that use filtered visitors (have tag/component names). */

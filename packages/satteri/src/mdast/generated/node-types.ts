@@ -204,9 +204,9 @@ export const VISITOR_KEYS: ReadonlySet<string> = new Set([
   "mdxjsEsm",
 ]);
 
-/** Name -> tag for the types the op-stream replay rebuilds byte-identically
- *  to the JSON path; one lookup gates AND resolves the emit-path tag. Excluded
- *  names fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */
+/** Name -> tag for the types the op-stream can encode; one lookup gates AND
+ *  resolves the emit-path tag. Excluded names (see `*_OPSTREAM_EXCLUDED` in
+ *  schema.rs) have no encoding — the visitor throws for them. */
 export const MDAST_OPSTREAM_TYPES: Readonly<Record<string, number>> = {
   paragraph: 1,
   heading: 2,

@@ -1138,8 +1138,9 @@ describe("visitHastHandle - child stubs", () => {
     });
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     expect(retained).toHaveLength(1);
-    expect(retained[0]!.type).toBe("text");
-    expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
+    const stub = retained[0]!;
+    expect(stub.type).toBe("text");
+    expect(() => stub.type === "text" && stub.value).toThrow(/retained past its visitor pass/);
   });
 
   test("a stub materialized after dropHandle throws the retention error", () => {
@@ -1158,8 +1159,9 @@ describe("visitHastHandle - child stubs", () => {
     // The wrapped dropHandle bumps the handle epoch, so a deferred snapshot of
     // the dropped arena fails with the retention error, not a RangeError.
     dropHandle(handle);
-    expect(retained[0]!.type).toBe("text");
-    expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
+    const stub = retained[0]!;
+    expect(stub.type).toBe("text");
+    expect(() => stub.type === "text" && stub.value).toThrow(/retained past its visitor pass/);
   });
 
   test("a spread copy of a child stub is new content, not a reused ref", () => {
@@ -1241,4 +1243,36 @@ test("a bare spread replacement keeps properties and children without re-specify
     { type: "text", value: "hello " },
     { type: "element", tagName: "strong" },
   ]);
+});
+
+test("a bare doctype as replacement content fails loudly", () => {
+  const { handle, source } = setup();
+  const plugin = defineHastPlugin({
+    name: "doctype-as-content",
+    element: {
+      filter: ["p"],
+      visit() {
+        return { type: "doctype" } satisfies HastNode;
+      },
+    },
+  });
+  expect(() =>
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
+  ).toThrow(/cannot encode replacement content of type "doctype"/);
+});
+
+test("a bare root as replacement content fails loudly", () => {
+  const { handle, source } = setup();
+  const plugin = defineHastPlugin({
+    name: "root-as-content",
+    element: {
+      filter: ["p"],
+      visit() {
+        return { type: "root", children: [] } satisfies HastNode;
+      },
+    },
+  });
+  expect(() =>
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
+  ).toThrow(/cannot encode replacement content of type "root"/);
 });

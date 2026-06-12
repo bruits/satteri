@@ -20,6 +20,22 @@ pub enum CommandError {
         node_type: String,
         name: String,
     },
+    /// A numeric property value is not an integer in the field's stored range.
+    /// Erroring beats writing `value as u8`, which would silently mask bits.
+    PropertyValueOutOfRange {
+        node_type: String,
+        name: String,
+        value: String,
+        max: u32,
+    },
+    /// A set-property value-type byte the dispatcher doesn't handle.
+    InvalidPropertyValueType(u8),
+    /// The node type exists but can never be built as plugin content (`root`
+    /// is only the stream's top-level wrapper; `doctype` carries nothing the
+    /// op-stream can express).
+    UnencodableNodeType(&'static str),
+    /// An op-stream nests OPENs deeper than the replay supports.
+    OpstreamTooDeep(usize),
     /// `wrapNode` was issued against a node that is also removed in the same
     /// command buffer. There's no defined way to "wrap then remove" or
     /// "remove then wrap" the same anchor.
@@ -47,7 +63,7 @@ impl std::fmt::Display for CommandError {
             Self::UnknownPayloadType(p) => write!(f, "unknown payload type: 0x{p:02x}"),
             Self::InvalidUtf8 => write!(f, "invalid UTF-8 in command buffer"),
             Self::InvalidJson(e) => write!(f, "invalid JSON in command payload: {e}"),
-            Self::UnknownNodeType(t) => write!(f, "unknown node type in JSON: {t}"),
+            Self::UnknownNodeType(t) => write!(f, "unknown node type: {t}"),
             Self::UnknownField { node_type, name } => {
                 write!(f, "cannot set property '{name}' on a '{node_type}' node")
             }
@@ -55,6 +71,24 @@ impl std::fmt::Display for CommandError {
                 f,
                 "property '{name}' on a '{node_type}' node cannot hold a value of this type"
             ),
+            Self::PropertyValueOutOfRange {
+                node_type,
+                name,
+                value,
+                max,
+            } => write!(
+                f,
+                "value {value} for property '{name}' on a '{node_type}' node must be an integer between 0 and {max}"
+            ),
+            Self::InvalidPropertyValueType(t) => {
+                write!(f, "unknown set-property value type: 0x{t:02x}")
+            }
+            Self::UnencodableNodeType(t) => {
+                write!(f, "node type '{t}' cannot appear in plugin-built content")
+            }
+            Self::OpstreamTooDeep(max) => {
+                write!(f, "plugin content nests deeper than {max} levels")
+            }
             Self::WrapOnRemovedNode(id) => {
                 write!(f, "wrapNode targets node {id} which is also removed")
             }

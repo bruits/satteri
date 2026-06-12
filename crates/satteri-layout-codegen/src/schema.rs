@@ -151,6 +151,11 @@ pub struct Tail {
     /// stored item, or `None` for a raw single-byte item list (table align) with
     /// no struct — pinned only by `stride == 1`.
     pub entry_struct: Option<&'static str>,
+    /// The codec header struct backing the stored bytes before the items:
+    /// `count_offset` must land on a declared struct offset, `items_offset`
+    /// must equal the struct's size, and head fields must land on declared
+    /// offsets. `None` only for the struct-less table tail.
+    pub head_struct: Option<&'static str>,
     /// JS assembly for the generated decoder; `None` leaves decode hand-written.
     pub js: Option<TailJs>,
 }
@@ -319,6 +324,7 @@ const MDX_JSX_TAIL: Tail = Tail {
     stride: 20,
     item: &[num("kind", 0, 0), s16("name", 4), s32("value", 12)],
     entry_struct: Some("MdxJsxAttributeEntry"),
+    head_struct: Some("MdxJsxElementData"),
     js: Some(TailJs::JsxAttrs {
         attrs_key: "attributes",
         codec: "encode_mdx_jsx_element_data",
@@ -334,6 +340,7 @@ const DIRECTIVE_TAIL: Tail = Tail {
     stride: 16,
     item: &[s16("key", 0), s16("value", 8)],
     entry_struct: Some("DirectiveAttributeEntry"),
+    head_struct: Some("DirectiveData"),
     js: Some(TailJs::Map {
         attrs_key: "attributes",
         key: "key",
@@ -351,6 +358,7 @@ const ELEMENT_TAIL: Tail = Tail {
     stride: 20,
     item: &[s16("name", 0), num("kind", 8, 0), s16("value", 12)],
     entry_struct: Some("PropertyEntry"),
+    head_struct: Some("ElementData"),
     js: Some(TailJs::ElementProps {
         attrs_key: "properties",
         codec: "encode_element_data",
@@ -366,6 +374,7 @@ const TABLE_TAIL: Tail = Tail {
     stride: 1,
     item: &[num("align", 0, 0)],
     entry_struct: None,
+    head_struct: None,
     js: Some(TailJs::ByteList {
         attrs_key: "align",
         codec: "encode_table_data",
@@ -735,6 +744,16 @@ pub const MDAST_STRUCTS: &[ArenaStruct] = &[
         offsets: &[("depth", 0)],
     },
     ArenaStruct {
+        rust: "ListData",
+        size: 8,
+        offsets: &[("start", 0), ("ordered", 4), ("spread", 5)],
+    },
+    ArenaStruct {
+        rust: "ListItemData",
+        size: 2,
+        offsets: &[("checked", 0), ("spread", 1)],
+    },
+    ArenaStruct {
         rust: "CodeData",
         size: 28,
         offsets: &[("lang", 0), ("meta", 8), ("value", 16), ("fence_char", 24)],
@@ -770,9 +789,19 @@ pub const MDAST_STRUCTS: &[ArenaStruct] = &[
         offsets: &[("identifier", 0), ("label", 8)],
     },
     ArenaStruct {
+        rust: "DirectiveData",
+        size: 16,
+        offsets: &[("name", 0), ("attr_count", 8)],
+    },
+    ArenaStruct {
         rust: "DirectiveAttributeEntry",
         size: 16,
         offsets: &[("key", 0), ("value", 8)],
+    },
+    ArenaStruct {
+        rust: "MdxJsxElementData",
+        size: 16,
+        offsets: &[("name", 0), ("attr_count", 8), ("explicit_jsx", 12)],
     },
     ArenaStruct {
         rust: "MdxJsxAttributeEntry",
@@ -782,11 +811,18 @@ pub const MDAST_STRUCTS: &[ArenaStruct] = &[
 ];
 
 /// HAST twin of [`MDAST_STRUCTS`], pinned by `hast/generated/assert_layouts.rs`.
-pub const HAST_STRUCTS: &[ArenaStruct] = &[ArenaStruct {
-    rust: "PropertyEntry",
-    size: 20,
-    offsets: &[("name", 0), ("value_type", 8), ("value", 12)],
-}];
+pub const HAST_STRUCTS: &[ArenaStruct] = &[
+    ArenaStruct {
+        rust: "ElementData",
+        size: 16,
+        offsets: &[("tag_name", 0), ("prop_count", 8)],
+    },
+    ArenaStruct {
+        rust: "PropertyEntry",
+        size: 20,
+        offsets: &[("name", 0), ("value_type", 8), ("value", 12)],
+    },
+];
 
 /// Which [`MDAST_STRUCTS`] entry backs each fixed-field node's stored
 /// `type_data`. Nodes absent here store a bare `StringRef` (`VALUE` /
@@ -804,6 +840,20 @@ const STRUCT_BY_NODE: &[(&str, &str)] = &[
     ("footnoteReference", "ReferenceData"),
     ("footnoteDefinition", "FootnoteDefinitionData"),
 ];
+
+/// Which struct backs the set-property slots of `custom` nodes whose stored
+/// layout has no `fields` and no tail head (list / listItem). Other slotted
+/// nodes resolve through [`STRUCT_BY_NODE`] or their tail's `head_struct`.
+const SET_SLOT_STRUCTS: &[(&str, &str)] = &[("list", "ListData"), ("listItem", "ListItemData")];
+
+/// Stored byte width of one settable slot.
+fn slot_width(kind: Slot) -> usize {
+    match kind {
+        Slot::Str => 8,
+        Slot::U32 => 4,
+        Slot::U8 | Slot::Bool | Slot::CheckedTri | Slot::Enum8(_) => 1,
+    }
+}
 
 /// Cross-check the per-node field lists against [`MDAST_STRUCTS`], so the two
 /// parallel tables can't drift apart silently. Field *names* aren't comparable
@@ -879,11 +929,91 @@ pub fn check_struct_layouts() {
             node.name
         );
     }
+    // Settable slots are pinned like fields: every slot must start on a
+    // declared offset of the struct backing the node's stored layout and fit
+    // within it, so reordering the codec struct can't silently corrupt
+    // set-property writes.
+    for node in MDAST_NODES.iter().chain(HAST_NODES) {
+        if node.set_slots.is_empty() {
+            continue;
+        }
+        let struct_name = STRUCT_BY_NODE
+            .iter()
+            .chain(SET_SLOT_STRUCTS)
+            .find(|&&(n, _)| n == node.name)
+            .map(|&(_, st)| st)
+            .or_else(|| node.tail.and_then(|t| t.head_struct))
+            .unwrap_or_else(|| panic!("{}: set slots are backed by no struct", node.name));
+        let st = MDAST_STRUCTS
+            .iter()
+            .chain(HAST_STRUCTS)
+            .find(|s| s.rust == struct_name)
+            .unwrap_or_else(|| panic!("{}: unknown slot struct {struct_name:?}", node.name));
+        for slot in node.set_slots {
+            assert!(
+                slot.offset + slot_width(slot.kind) <= st.size,
+                "{}: set slot {:?} (offset {}) straddles the end of {} (size {})",
+                node.name,
+                slot.js,
+                slot.offset,
+                st.rust,
+                st.size
+            );
+            assert!(
+                st.offsets.iter().any(|&(_, off)| off == slot.offset),
+                "{}: set slot {:?} at offset {} matches no {} field",
+                node.name,
+                slot.js,
+                slot.offset,
+                st.rust
+            );
+        }
+    }
     // Tail items are pinned the same way: the stride must equal the entry
     // struct's size and every item field must start on a declared offset.
+    // Tail heads are pinned against `head_struct`: the count must land on a
+    // declared offset, the items must start exactly past the header, and head
+    // fields must land on declared offsets.
     for node in MDAST_NODES.iter().chain(HAST_NODES) {
         let Some(tail) = node.tail else { continue };
         assert!(node.custom, "{}: tails require a custom codec", node.name);
+        if let Some(head_struct) = tail.head_struct {
+            let st = MDAST_STRUCTS
+                .iter()
+                .chain(HAST_STRUCTS)
+                .find(|s| s.rust == head_struct)
+                .unwrap_or_else(|| {
+                    panic!("{}: unknown tail head struct {head_struct:?}", node.name)
+                });
+            assert_eq!(
+                tail.items_offset, st.size,
+                "{}: tail items offset {} != {} size {}",
+                node.name, tail.items_offset, st.rust, st.size
+            );
+            assert!(
+                st.offsets.iter().any(|&(_, off)| off == tail.count_offset),
+                "{}: tail count offset {} matches no {} field",
+                node.name,
+                tail.count_offset,
+                st.rust
+            );
+            for f in tail.head {
+                assert!(
+                    st.offsets.iter().any(|&(_, off)| off == f.offset),
+                    "{}: tail head field {:?} at offset {} matches no {} field",
+                    node.name,
+                    f.js,
+                    f.offset,
+                    st.rust
+                );
+            }
+        } else {
+            assert!(
+                tail.head.is_empty(),
+                "{}: tail head fields require a head struct",
+                node.name
+            );
+        }
         // A struct-less tail (table align) is a raw single-byte item list, pinned
         // only by `stride == 1`; it has no entry struct to cross-check.
         let Some(entry_struct) = tail.entry_struct else {
@@ -931,12 +1061,16 @@ pub fn check_struct_layouts() {
     }
     // Every pinned struct must be reachable from a node, or it drifted loose.
     for s in MDAST_STRUCTS.iter().chain(HAST_STRUCTS) {
-        let in_tail = MDAST_NODES
-            .iter()
-            .chain(HAST_NODES)
-            .any(|n| n.tail.is_some_and(|t| t.entry_struct == Some(s.rust)));
+        let in_tail = MDAST_NODES.iter().chain(HAST_NODES).any(|n| {
+            n.tail
+                .is_some_and(|t| t.entry_struct == Some(s.rust) || t.head_struct == Some(s.rust))
+        });
         assert!(
-            STRUCT_BY_NODE.iter().any(|&(_, st)| st == s.rust) || in_tail,
+            STRUCT_BY_NODE
+                .iter()
+                .chain(SET_SLOT_STRUCTS)
+                .any(|&(_, st)| st == s.rust)
+                || in_tail,
             "struct table entry {} is mapped to no node",
             s.rust
         );

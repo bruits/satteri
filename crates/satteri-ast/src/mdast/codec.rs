@@ -287,14 +287,16 @@ impl MathData {
 
 /// Header for directive type_data (ContainerDirective, LeafDirective, TextDirective).
 ///
-/// Full layout (variable-length):
-///   [name: StringRef(8B)][attr_count: u32(4B)][_pad: u32(4B)] = 16-byte header
-///   then attr_count × 16 bytes each:
-///     [key: StringRef(8B)][value: StringRef(8B)]
+/// Full layout (variable-length): this 16-byte header, then `attr_count`
+/// `DirectiveAttributeEntry` items (16 bytes each) starting at 16. Pinned by
+/// the generated layout asserts so the registry's tail header offsets can't
+/// drift from the codec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct DirectiveData {
     pub name: StringRef,
+    pub attr_count: u32,
+    pub _pad: u32,
 }
 
 /// One stored directive attribute entry (the `encode_directive_data` items);
@@ -338,10 +340,10 @@ pub fn decode_directive_attr(bytes: &[u8], index: u32) -> (StringRef, StringRef)
 /// Header for MdxJsxFlowElement and MdxJsxTextElement type_data.
 /// `name.len == 0` means a fragment.
 ///
-/// Full layout (variable-length):
-///   [name: StringRef(8B)][attr_count: u32(4B)][explicit_jsx: u8(1B)][_pad: [u8;3](3B)] = 16-byte header
-///   then attr_count * 20 bytes each:
-///     [kind: u8(1B)][_pad: [u8;3](3B)][attr_name: StringRef(8B)][attr_value: StringRef(8B)]
+/// Full layout (variable-length): this 16-byte header, then `attr_count`
+/// `MdxJsxAttributeEntry` items (20 bytes each) starting at 16. Pinned by the
+/// generated layout asserts; not `mdx`-gated, the asserts reference it
+/// unconditionally.
 ///
 /// `explicit_jsx` mirrors `_mdxExplicitJsx` from `@mdx-js/mdx`. It's a fast
 /// read path for the hast→recma transform — the same bit is *also* mirrored
@@ -355,11 +357,13 @@ pub fn decode_directive_attr(bytes: &[u8], index: u32) -> (StringRef, StringRef)
 ///   1 = LiteralProp (name="literal")
 ///   2 = ExpressionProp (name={expr})
 ///   3 = Spread ({...expr})
-#[cfg(feature = "mdx")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct MdxJsxElementData {
     pub name: StringRef,
+    pub attr_count: u32,
+    pub explicit_jsx: u8,
+    pub _pad: [u8; 3],
 }
 
 /// One stored MDX JSX attribute entry (the `encode_mdx_jsx_element_data`

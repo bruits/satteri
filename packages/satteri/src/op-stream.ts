@@ -3,11 +3,9 @@
  *
  * Emits the compact OPEN/CLOSE/field/REF/KEEP_CHILDREN/PROP stream that Rust
  * replays straight into the arena (`replay_opstream` in js_commands.rs; byte
- * values in generated/wire-constants.ts). The replay drives the SAME arena
- * encoders the JSON path uses, so a compiled tree is byte-identical to its
- * JSON form — it just skips the JSON + JsNode hop. Strings ride ByteWriter's
- * zero-alloc path (inline char codes when short ASCII, `encodeInto`
- * otherwise).
+ * values in generated/wire-constants.ts) — the only structural encoding for
+ * plugin-built content. Strings ride ByteWriter's zero-alloc path (inline
+ * char codes when short ASCII, `encodeInto` otherwise).
  */
 
 import { ByteWriter } from "./byte-writer.js";
@@ -62,8 +60,30 @@ export {
 } from "./generated/wire-constants.js";
 
 export class OpWriter extends ByteWriter {
+  #encoding = false;
+
   constructor() {
     super(512);
+  }
+
+  /**
+   * Start a compile on this (shared, module-level) writer. Encoding evaluates
+   * plugin-supplied getters and `toJSON`; if one of those calls a context
+   * mutation, the nested compile would reset the stream under the outer one
+   * and corrupt it silently — throw instead. Pair with `end` in a `finally`.
+   */
+  begin(): void {
+    if (this.#encoding) {
+      throw new Error(
+        "reentrant op-stream compile: a node getter or toJSON invoked a context mutation while its node was being encoded",
+      );
+    }
+    this.#encoding = true;
+    this.reset();
+  }
+
+  end(): void {
+    this.#encoding = false;
   }
 
   open(type: number): void {
@@ -106,9 +126,16 @@ export class OpWriter extends ByteWriter {
   }
 
   data(value: unknown): void {
+    const json = JSON.stringify(value);
+    // `JSON.stringify` yields undefined for a function or a `toJSON`
+    // returning undefined; a clear error beats a TypeError deep in the
+    // string encoder.
+    if (typeof json !== "string") {
+      throw new Error("node `data` is not JSON-serializable");
+    }
     this.ensure(1);
     this.buf[this.n++] = OP_DATA;
-    this.utf8WithU32Len(JSON.stringify(value));
+    this.utf8WithU32Len(json);
   }
 
   prop(name: string, kind: number, value: string): void {

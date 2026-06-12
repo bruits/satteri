@@ -9,6 +9,18 @@
 
 use satteri_arena::StringRef;
 
+/// Stored element header (`encode_element_data`): tag name, then the property
+/// count, then `prop_count` `PropertyEntry` items (20 bytes each) starting at
+/// 16. Pinned by the generated layout asserts so the registry's tail header
+/// offsets can't drift from the codec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct ElementData {
+    pub tag_name: StringRef,
+    pub prop_count: u32,
+    pub _pad: u32,
+}
+
 /// One stored element property entry (the `encode_element_data` items);
 /// pinned by the generated layout asserts so the registry's tail offsets
 /// can't drift from the codec.

@@ -202,6 +202,49 @@ test("mdast round-trip: bare text with a value", () => {
   expectMdastRoundTrip({ type: "text", value: "plain text replacement" } satisfies MdastNode);
 });
 
+test("mdast round-trip: image (url + alt + title, multi-slot fixed layout)", () => {
+  expectMdastRoundTrip({
+    type: "paragraph",
+    children: [{ type: "image", url: "/img/banner.png", alt: "a banner", title: "Banner title" }],
+  } satisfies MdastNode);
+});
+
+test("mdast round-trip: definition (all four string slots)", () => {
+  expectMdastRoundTrip({
+    type: "definition",
+    identifier: "def-1",
+    label: "Def-1",
+    url: "https://example.com/def",
+    title: "Definition title",
+  } satisfies MdastNode);
+});
+
+test("mdast round-trip: empty strings ride OP_STR", () => {
+  expectMdastRoundTrip({
+    type: "paragraph",
+    children: [
+      { type: "text", value: "" },
+      { type: "inlineCode", value: "" },
+      // A null title is skipped on encode and reads back null, so the
+      // empty-url link round-trips exactly.
+      { type: "link", url: "", title: null, children: [{ type: "text", value: "x" }] },
+    ],
+  } satisfies MdastNode);
+});
+
+test("mdast round-trip: depth and start at their stored maxima", () => {
+  // Deliberately outside `Heading["depth"]`'s 1-6 literal union: the wire
+  // stores a u8 and the 255 boundary is exactly what's pinned here.
+  expectMdastRoundTrip({ type: "heading", depth: 255, children: [] } as MdastNode);
+  expectMdastRoundTrip({
+    type: "list",
+    ordered: true,
+    start: 4294967295,
+    spread: false,
+    children: [{ type: "listItem", checked: null, spread: false, children: [] }],
+  } satisfies MdastNode);
+});
+
 test("mdast round-trip: non-ASCII strings ride encodeInto's bulk path", () => {
   expectMdastRoundTrip({
     type: "paragraph",
@@ -263,6 +306,24 @@ test("hast round-trip: element with properties and nested children", () => {
   expect(tree.children[0]).toEqual(replacement);
 });
 
+test("hast round-trip: non-ASCII property and MDX JSX attribute values", () => {
+  const el = {
+    type: "element",
+    tagName: "div",
+    properties: { title: "日本語タイトル 🎌", id: "café" },
+    children: [],
+  } satisfies HastNode;
+  expect(roundTripHast(el)).toEqual(el);
+
+  const jsx = {
+    type: "mdxJsxFlowElement",
+    name: "Note",
+    attributes: [{ type: "mdxJsxAttribute", name: "label", value: "値 🎯 ünïcode" }],
+    children: [],
+  } satisfies HastNode;
+  expect(roundTripHast(jsx, true)).toEqual(jsx);
+});
+
 /** Replace the doc's single `p` element with `replacement` through the
  *  op-stream, then materialize and return the replaced subtree. */
 function roundTripHast(replacement: HastNode, mdx = false): HastNode {
@@ -291,9 +352,17 @@ function roundTripHast(replacement: HastNode, mdx = false): HastNode {
 
 type Check = (n: Record<string, unknown>) => void;
 
+/** Widen a node to its raw field map for the sample checks; the unions'
+ *  interfaces have no index signature, so the direct cast is rejected. */
+function fields(n: object): Record<string, unknown> {
+  return n as Record<string, unknown>;
+}
+
 const MDAST_CUSTOM_SAMPLES: Record<string, { node: MdastNode; opts: MdastCaseOpts; check: Check }> =
   {
     list: {
+      // Deliberately type-loose: text directly under listItem is not valid
+      // flow content, but the encoder must still round-trip it verbatim.
       node: {
         type: "list",
         ordered: true,
@@ -310,7 +379,7 @@ const MDAST_CUSTOM_SAMPLES: Record<string, { node: MdastNode; opts: MdastCaseOpt
         spread: true,
         checked: true,
         children: [{ type: "paragraph", children: [{ type: "text", value: "x" }] }],
-      } as MdastNode,
+      } satisfies MdastNode,
       opts: {},
       check: (n) => expect(n.checked).toBe(true),
     },
@@ -319,7 +388,7 @@ const MDAST_CUSTOM_SAMPLES: Record<string, { node: MdastNode; opts: MdastCaseOpt
         type: "table",
         align: ["center"],
         children: [{ type: "tableRow", children: [{ type: "tableCell", children: [] }] }],
-      } as MdastNode,
+      } satisfies MdastNode,
       opts: {},
       check: (n) => expect(n.align).toEqual(["center"]),
     },
@@ -344,7 +413,7 @@ const MDAST_CUSTOM_SAMPLES: Record<string, { node: MdastNode; opts: MdastCaseOpt
         name: "Foo",
         attributes: [{ type: "mdxJsxAttribute", name: "a", value: "b" }],
         children: [],
-      } as MdastNode,
+      } satisfies MdastNode,
       opts: { mdx: true },
       check: (n) => expect(n.name).toBe("Foo"),
     },
@@ -354,7 +423,7 @@ const MDAST_CUSTOM_SAMPLES: Record<string, { node: MdastNode; opts: MdastCaseOpt
         name: "Foo",
         attributes: [{ type: "mdxJsxAttribute", name: "a", value: "b" }],
         children: [],
-      } as MdastNode,
+      } satisfies MdastNode,
       opts: { mdx: true },
       check: (n) => expect(n.name).toBe("Foo"),
     },
@@ -372,7 +441,7 @@ const HAST_CUSTOM_SAMPLES: Record<string, { node: HastNode; mdx: boolean; check:
       name: "Foo",
       attributes: [{ type: "mdxJsxAttribute", name: "a", value: "b" }],
       children: [],
-    } as HastNode,
+    } satisfies HastNode,
     mdx: true,
     check: (n) => expect(n.name).toBe("Foo"),
   },
@@ -382,7 +451,7 @@ const HAST_CUSTOM_SAMPLES: Record<string, { node: HastNode; mdx: boolean; check:
       name: "Foo",
       attributes: [{ type: "mdxJsxAttribute", name: "a", value: "b" }],
       children: [],
-    } as HastNode,
+    } satisfies HastNode,
     mdx: true,
     check: (n) => expect(n.name).toBe("Foo"),
   },
@@ -392,7 +461,7 @@ test("op-stream round-trip covers every MDAST custom node type", () => {
   for (const name of MDAST_CUSTOM_TYPES) {
     const sample = MDAST_CUSTOM_SAMPLES[name];
     expect(sample, `missing round-trip sample for MDAST custom type "${name}"`).toBeDefined();
-    const result = roundTripMdast(sample!.node, sample!.opts) as Record<string, unknown>;
+    const result = fields(roundTripMdast(sample!.node, sample!.opts));
     expect(result.type).toBe(name);
     sample!.check(result);
   }
@@ -402,7 +471,7 @@ test("op-stream round-trip covers every HAST custom node type", () => {
   for (const name of HAST_CUSTOM_TYPES) {
     const sample = HAST_CUSTOM_SAMPLES[name];
     expect(sample, `missing round-trip sample for HAST custom type "${name}"`).toBeDefined();
-    const result = roundTripHast(sample!.node, sample!.mdx) as unknown as Record<string, unknown>;
+    const result = fields(roundTripHast(sample!.node, sample!.mdx));
     expect(result.type).toBe(name);
     sample!.check(result);
   }

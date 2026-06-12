@@ -739,11 +739,9 @@ pub fn node_types_ts(
         let _ = writeln!(out, "  {:?},", node.name);
     }
     out.push_str("]);\n\n");
-    out.push_str("/** Name -> tag for the types the op-stream replay rebuilds byte-identically\n");
-    out.push_str(
-        " *  to the JSON path; one lookup gates AND resolves the emit-path tag. Excluded\n",
-    );
-    out.push_str(" *  names fall back to JSON (see `*_OPSTREAM_EXCLUDED` in schema.rs). */\n");
+    out.push_str("/** Name -> tag for the types the op-stream can encode; one lookup gates AND\n");
+    out.push_str(" *  resolves the emit-path tag. Excluded names (see `*_OPSTREAM_EXCLUDED` in\n");
+    out.push_str(" *  schema.rs) have no encoding — the visitor throws for them. */\n");
     let _ = writeln!(
         out,
         "export const {prefix}_OPSTREAM_TYPES: Readonly<Record<string, number>> = {{"
@@ -909,25 +907,11 @@ interface TailDescriptor {
   readonly bytes?: { readonly attrsKey: string };
 }
 
-/** Read one walk-wire field at `pos`; returns its value and the advanced cursor. */
-function readWalkField(
-  view: DataView,
-  buf: Uint8Array,
-  pos: number,
-  f: TailField,
-): [string | number, number] {
-  if (f.kind === "u8") return [buf[pos]!, pos + 1];
-  const len = f.kind === "str32" ? ru32(view, pos) : ru16(view, pos);
-  const at = pos + (f.kind === "str32" ? 4 : 2);
-  const raw = rstr(buf, at, len);
-  return [f.phantom ? restorePhantomSpaces(raw) : raw, at + len];
-}
-
 /**
  * Decode a node's type-specific `type_data` from the walk buffer onto `node`,
  * driven by `MDAST_LAYOUTS` (fixed-field types) and `MDAST_TAILS` (counted
  * attribute lists). Returns `false` for tags in neither, so the caller falls
- * through to the remaining hand-written cases (list, table, MDX JSX).
+ * through to the remaining hand-written cases (list, listItem).
  */
 export function decodeMdastTypeData(
   view: DataView,
@@ -960,9 +944,21 @@ export function decodeMdastTypeData(
   const tail = MDAST_TAILS[nodeType];
   if (tail !== undefined) {
     let pos = start;
+    // Reads are inlined and advance `pos` in place (no per-field tuple): this
+    // runs per attribute item in the matched-node decode path, and the
+    // unoptimized tiers CodSpeed measures won't elide the allocation.
     for (const f of tail.head) {
-      const [value, next] = readWalkField(view, buf, pos, f);
-      pos = next;
+      let value: string | number;
+      if (f.kind === "u8") {
+        value = buf[pos]!;
+        pos += 1;
+      } else {
+        const len = f.kind === "str32" ? ru32(view, pos) : ru16(view, pos);
+        pos += f.kind === "str32" ? 4 : 2;
+        const raw = rstr(buf, pos, len);
+        pos += len;
+        value = f.phantom ? restorePhantomSpaces(raw) : raw;
+      }
       // MDX JSX elements carry a nullable name (empty → null); map heads keep it.
       node[f.js] = tail.jsx !== undefined && value === "" ? null : value;
     }
@@ -971,9 +967,16 @@ export function decodeMdastTypeData(
     const readItem = (): Record<string, string | number> => {
       const item: Record<string, string | number> = {};
       for (const f of tail.item) {
-        const [value, next] = readWalkField(view, buf, pos, f);
-        pos = next;
-        item[f.js] = value;
+        if (f.kind === "u8") {
+          item[f.js] = buf[pos]!;
+          pos += 1;
+        } else {
+          const len = f.kind === "str32" ? ru32(view, pos) : ru16(view, pos);
+          pos += f.kind === "str32" ? 4 : 2;
+          const raw = rstr(buf, pos, len);
+          pos += len;
+          item[f.js] = f.phantom ? restorePhantomSpaces(raw) : raw;
+        }
       }
       return item;
     };

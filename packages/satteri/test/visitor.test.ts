@@ -582,7 +582,7 @@ test("returning a replacement with _keepChildren keeps the original children", (
   expect(html).toContain("<h2>Hello</h2>");
 });
 
-test("insertAfter ignores _keepChildren, matching the JSON path", () => {
+test("insertAfter ignores _keepChildren", () => {
   const heading = { type: "heading", depth: 3, children: [] } satisfies MdastNode;
   const inserted = { ...heading, _keepChildren: true };
   const plugin = defineMdastPlugin({
@@ -604,6 +604,73 @@ test("an out-of-range list start fails loudly instead of being silently masked",
     },
   });
   expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
+});
+
+test("a list start one past the u32 boundary fails loudly", () => {
+  const plugin = defineMdastPlugin({
+    name: "list-start-past-u32",
+    list(node) {
+      return { ...node, start: 4294967296 };
+    },
+  });
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
+});
+
+test("a non-integer list start fails loudly", () => {
+  const plugin = defineMdastPlugin({
+    name: "fractional-list-start",
+    list(node) {
+      return { ...node, start: 1.5 };
+    },
+  });
+  expect(() => visitAndRender("1. one\n2. two", plugin)).toThrow(/out-of-range/);
+});
+
+test("a heading depth past the u8 boundary fails loudly", () => {
+  const plugin = defineMdastPlugin({
+    name: "bad-heading-depth",
+    heading(node) {
+      // Deliberately outside Heading["depth"]'s 1-6 union: the wire boundary
+      // (a stored u8) is what's pinned here.
+      return { ...node, depth: 256 as Heading["depth"], children: [] };
+    },
+  });
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/out-of-range/);
+});
+
+test("a bare root as replacement content fails loudly", () => {
+  const plugin = defineMdastPlugin({
+    name: "root-as-content",
+    heading() {
+      return { type: "root", children: [] } satisfies MdastNode;
+    },
+  });
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/cannot encode replacement content/);
+});
+
+test("setProperty with an out-of-range number fails at apply instead of masking bits", () => {
+  const plugin = defineMdastPlugin({
+    name: "set-depth-out-of-range",
+    heading(node, ctx) {
+      // setProperty rides CMD_SET_PROPERTY, not the op-stream; Rust enforces
+      // the slot range. 9999 is deliberately outside the depth union.
+      ctx.setProperty(node, "depth", 9999 as Heading["depth"]);
+    },
+  });
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/between 0 and 255/);
+});
+
+test("a replacement nested past the replay depth cap fails loudly", () => {
+  let node: MdastNode = { type: "paragraph", children: [{ type: "text", value: "leaf" }] };
+  for (let i = 0; i < 200; i++) node = { type: "blockquote", children: [node] };
+  const deep = node;
+  const plugin = defineMdastPlugin({
+    name: "too-deep",
+    paragraph() {
+      return deep;
+    },
+  });
+  expect(() => visitAndRender("Hello", plugin)).toThrow(/nests deeper/);
 });
 
 test("context mutations reject plugin-built nodes with no arena id", () => {
@@ -738,8 +805,9 @@ test("stub `.type` stays readable after the pass; first materialization throws",
   });
   markdownToHtml("# Hello\n\nWorld", { mdastPlugins: [plugin] });
   expect(retained).toHaveLength(1);
-  expect(retained[0]!.type).toBe("text");
-  expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
+  const stub = retained[0]!;
+  expect(stub.type).toBe("text");
+  expect(() => stub.type === "text" && stub.value).toThrow(/retained past its visitor pass/);
 });
 
 test("a stub materialized after a manual applyCommandsToMdastHandle throws the retention error", () => {
@@ -766,8 +834,9 @@ test("a stub materialized after a manual applyCommandsToMdastHandle throws the r
   // The wrapped mutator bumps the handle epoch: the rebuilt arena renumbered
   // the stub's id, so it must hit the retention error, not a RangeError.
   applyCommandsToMdastHandle(handle, result.commandBuffer);
-  expect(retained[0]!.type).toBe("text");
-  expect(() => (retained[0] as Text).value).toThrow(/retained past its visitor pass/);
+  const stub = retained[0]!;
+  expect(stub.type).toBe("text");
+  expect(() => stub.type === "text" && stub.value).toThrow(/retained past its visitor pass/);
 });
 
 test("a spread copy of a child stub is new content, not a reused ref", () => {
