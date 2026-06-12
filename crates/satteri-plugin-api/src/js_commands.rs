@@ -464,11 +464,8 @@ fn apply_hast_element_property(
         return Err(CommandError::TypeDataTooShort);
     }
     let header = data_offset;
-    let old_prop_count = u32::from_le_bytes(
-        arena.type_data[header + 8..header + 12]
-            .try_into()
-            .unwrap(),
-    ) as usize;
+    let old_prop_count =
+        u32::from_le_bytes(arena.type_data[header + 8..header + 12].try_into().unwrap()) as usize;
 
     // Phase 2: scan for an existing prop with the same name. Read-only access
     // to both type_data and source string pool.
@@ -509,19 +506,29 @@ fn apply_hast_element_property(
 
         // Header: 8 bytes (tag StringRef) + 4 bytes (prop_count) + 4 bytes (pad)
         arena.type_data.extend_from_within(header..header + 8);
-        arena.type_data.extend_from_slice(&new_prop_count.to_le_bytes());
+        arena
+            .type_data
+            .extend_from_slice(&new_prop_count.to_le_bytes());
         arena.type_data.extend_from_slice(&0u32.to_le_bytes());
         if old_prop_count > 0 {
             let props_start = header + 16;
             let props_end = props_start + old_prop_count * 20;
             arena.type_data.extend_from_within(props_start..props_end);
         }
-        arena.type_data.extend_from_slice(&name_ref.offset.to_le_bytes());
-        arena.type_data.extend_from_slice(&name_ref.len.to_le_bytes());
+        arena
+            .type_data
+            .extend_from_slice(&name_ref.offset.to_le_bytes());
+        arena
+            .type_data
+            .extend_from_slice(&name_ref.len.to_le_bytes());
         arena.type_data.push(value_type);
         arena.type_data.extend_from_slice(&[0u8; 3]);
-        arena.type_data.extend_from_slice(&val_ref.offset.to_le_bytes());
-        arena.type_data.extend_from_slice(&val_ref.len.to_le_bytes());
+        arena
+            .type_data
+            .extend_from_slice(&val_ref.offset.to_le_bytes());
+        arena
+            .type_data
+            .extend_from_slice(&val_ref.len.to_le_bytes());
 
         let new_len = (16 + new_prop_count as usize * 20) as u32;
         let node = arena.get_node_mut(node_id);

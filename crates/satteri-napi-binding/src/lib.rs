@@ -743,7 +743,8 @@ pub fn apply_mdast_commands_and_convert_and_render(
         satteri_plugin_api::apply_mdast_commands_lenient(owned, &command_buf, &parse_markdown)
             .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let frontmatter = extract_mdast_frontmatter(&mutated);
-    let hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
+    let hast_arena =
+        satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
     let html = satteri_ast::hast::hast_arena_to_html(&hast_arena);
     Ok(MarkdownHtmlOneShot {
         html,
@@ -1002,8 +1003,7 @@ pub fn markdown_to_html_fast(
     // the per-node `cursor.offset_to_line_col` calls + `LineIndex` per-line
     // ASCII scan are pure waste in this code path.
     let mdast_reuse = acquire_mdast_arena();
-    let (mdast, _) =
-        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, mdast_reuse);
+    let (mdast, _) = satteri_pulldown_cmark::parse_no_positions_into(&source, opts, mdast_reuse);
     let frontmatter = extract_mdast_frontmatter(&mdast);
     let hast_reuse = acquire_hast_arena();
     let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(&mdast, &convert_opts, hast_reuse);

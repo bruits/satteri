@@ -62,10 +62,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
 /// The `start_offset` / `end_offset` byte fields *are* still filled — the
 /// parser tracks them natively and downstream HTML rendering doesn't pay
 /// for them anyway. Only the line/column code-point conversion is suppressed.
-pub fn parse_no_positions(
-    source: &str,
-    options: Options,
-) -> (Arena<Mdast>, Vec<(usize, String)>) {
+pub fn parse_no_positions(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
     parse_inner(source, options, false, None)
 }
 
@@ -148,7 +145,14 @@ fn parse_inner(
     builder.open_node(MdastNodeType::Root as u8);
     let (end_line, end_col) = cursor.offset_to_line_col(source.len() as u32);
     let (start_line, start_col) = if track_positions { (1, 1) } else { (0, 0) };
-    builder.set_position_current(0, source.len() as u32, start_line, start_col, end_line, end_col);
+    builder.set_position_current(
+        0,
+        source.len() as u32,
+        start_line,
+        start_col,
+        end_line,
+        end_col,
+    );
 
     // Accumulation buffers for special container→leaf conversions.
     let mut html_block_buf: Option<String> = None;
