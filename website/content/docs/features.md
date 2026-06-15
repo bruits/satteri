@@ -40,6 +40,8 @@ gfm?: boolean | {
 Default: `true`. Enables tables, footnotes, strikethrough, task lists,
 and GitHub-style autolinks.
 
+Strikethrough accepts both single (`~text~`) and double (`~~text~~`) tildes. Unless [subscript](#subscript) is enabled, in which case single tildes become subscript and only double tildes strike through.
+
 ### Customizing footnotes
 
 The three strings in the footnotes section (the `<h2>` label, the
@@ -183,6 +185,8 @@ subscript?: boolean
 
 `^text^` becomes `<sup>text</sup>` and
 `~text~` becomes `<sub>text</sub>`.
+
+Subscript and GFM strikethrough share the `~` delimiter. Enabling subscript therefore disables GFM's single-tilde strikethrough (`~text~` to `<del>`), only leaving double-tilde strikethrough (`~~text~~`) available.
 
 ## Wikilinks
 
