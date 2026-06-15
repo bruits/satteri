@@ -3657,3 +3657,15 @@ fn regression_test_211() {
 
     test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
 }
+
+#[test]
+fn regression_test_212() {
+    let original = r##"(<https://www.example.com/page>)\
+next line
+"##;
+    let expected = r##"<p>(<a href="https://www.example.com/page">https://www.example.com/page</a>)<br />
+next line</p>
+"##;
+
+    test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
+}

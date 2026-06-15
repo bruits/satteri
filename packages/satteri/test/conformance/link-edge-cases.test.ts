@@ -66,6 +66,43 @@ describe("MDAST conformance: GFM autolink-literal trim-back split", () => {
   });
 });
 
+describe("HTML conformance: literal-autolink trigger inside a pointed autolink (#93)", () => {
+  // A `www.`/`http(s)://` literal-autolink trigger sitting inside a
+  // CommonMark pointed autolink `<scheme:…>` must defer to the autolink
+  // construct. Previously the literal scanner fired on the `www.` mid-URL,
+  // creating a link overlapping the resolved `<…>`, which swallowed the
+  // trailing `)` and a following backslash hard break.
+  test("`www.` mid-URL + backslash hard break: clean autolink, `)`, and `<br>`", () => {
+    assertHtmlConformance("(<https://www.example.com/page>)\\\nnext line\n");
+  });
+
+  test("control: same input without `www.` (already worked)", () => {
+    assertHtmlConformance("(<https://example.com/page>)\\\nnext line\n");
+  });
+
+  test("`www.` mid-URL + soft break", () => {
+    assertHtmlConformance("(<https://www.example.com/page>)\nnext line\n");
+  });
+
+  test("`www.` mid-URL + trailing-spaces hard break", () => {
+    assertHtmlConformance("(<https://www.example.com/page>)  \nnext line\n");
+  });
+
+  test("bare pointed autolink with `www.` host", () => {
+    assertHtmlConformance("<https://www.example.com/page>\n");
+  });
+
+  test("literal www. after the pointed autolink still autolinks", () => {
+    assertHtmlConformance("<https://www.example.com/page> and www.other.com\n");
+  });
+});
+
+describe("MDAST conformance: literal-autolink trigger inside a pointed autolink (#93)", () => {
+  test("`www.` mid-URL + backslash hard break: single link node, no overlap", () => {
+    assertMdastConformance("(<https://www.example.com/page>)\\\nnext line\n");
+  });
+});
+
 describe("HTML conformance: autolink literal rejects control characters", () => {
   test("angle-bracket autolink with embedded BEL — literal text, no link", () => {
     // regression_test_48: `<http://\x07>` — the `<...>` autolink form rejects

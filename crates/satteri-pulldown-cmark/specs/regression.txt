@@ -3116,3 +3116,18 @@ Link refdef split from paragraph with line with spaces.
 .
 <p>:</p>
 ````````````````````````````````
+
+https://github.com/bruits/satteri/issues/93
+
+A `www.` literal-autolink trigger inside a pointed autolink `<scheme:…>`
+must defer to the autolink construct, even when it is followed by a
+backslash hard break. Otherwise the hard break is consumed into a spurious
+overlapping link and the trailing `)` is lost.
+
+```````````````````````````````` example
+(<https://www.example.com/page>)\
+next line
+.
+<p>(<a href="https://www.example.com/page">https://www.example.com/page</a>)<br />
+next line</p>
+````````````````````````````````

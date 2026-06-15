@@ -2356,6 +2356,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         .map(|ix| self.tree[ix].item.start)
                         .unwrap_or(start);
                     let result = try_emit_gfm_autolink(
+                        self.text,
                         bytes,
                         ix,
                         byte,
@@ -4677,6 +4678,7 @@ fn is_email_local_char(b: u8) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 fn try_emit_gfm_autolink<'a>(
+    text: &str,
     bytes: &[u8],
     ix: usize,
     byte: u8,
@@ -4732,6 +4734,14 @@ fn try_emit_gfm_autolink<'a>(
         _ => return None,
     }
 
+    // Pointed-autolink precedence: a trigger sitting inside `<scheme:…>` /
+    // `<addr@host>` whose closer follows is owned by the CommonMark autolink
+    // construct, which the MaybeHtml second pass resolves. The narrow
+    // immediately-after-`<` check above only catches triggers flush against
+    // the `<`; this covers ones mid-URL (`<https://www.x/y>`). (issue #93)
+    if is_inside_pointed_autolink(text, ix) {
+        return None;
+    }
     // previousUnbalanced: suppress when an unclosed `[`/`![` precedes the
     // trigger in this paragraph.
     if has_unbalanced_bracket_from(bytes, paragraph_start, ix) {
@@ -4849,6 +4859,41 @@ fn try_emit_gfm_autolink<'a>(
         }
         _ => None,
     }
+}
+
+/// True when a literal-autolink trigger at `pos` sits inside a CommonMark
+/// pointed autolink `<scheme:…>` or `<addr@host>` whose closing `>` follows
+/// `pos`. The MaybeHtml second pass resolves that autolink and owns those
+/// bytes, so the literal-autolink construct must defer. Otherwise it emits
+/// a link overlapping the resolved autolink, corrupting the trailing text
+/// and stealing a following hard break (issue #93).
+fn is_inside_pointed_autolink(text: &str, pos: usize) -> bool {
+    let bytes = text.as_bytes();
+    // A pointed-autolink body holds no whitespace, `<`, or `>`. Walk back
+    // through body bytes to the opening `<`; any of those bytes means `pos`
+    // can't be inside one.
+    let mut i = pos;
+    while i > 0 {
+        match bytes[i - 1] {
+            b'<' => {
+                let lt = i - 1;
+                let lt_escaped = bytes[..lt]
+                    .iter()
+                    .rev()
+                    .take_while(|&&b| b == b'\\')
+                    .count()
+                    % 2
+                    == 1;
+                if lt_escaped {
+                    return false;
+                }
+                return matches!(scan_autolink(text, lt + 1), Some((end, _, _)) if end > pos);
+            }
+            b' ' | b'\t' | b'\r' | b'\n' | b'>' => return false,
+            _ => i -= 1,
+        }
+    }
+    false
 }
 
 /// True when `pos` sits inside an inline link destination `[label](DEST`
