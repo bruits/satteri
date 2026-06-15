@@ -584,6 +584,8 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
                         | MdastNodeType::Emphasis
                         | MdastNodeType::Strong
                         | MdastNodeType::Delete
+                        | MdastNodeType::Superscript
+                        | MdastNodeType::Subscript
                         | MdastNodeType::TableCell
                 )
             )
