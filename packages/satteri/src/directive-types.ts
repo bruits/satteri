@@ -13,7 +13,11 @@ import type {
   PhrasingContent,
 } from "mdast";
 
-export type DirectiveAttributes = Record<string, string>;
+// Even though `null` and `undefined` values are omitted in both Sätteri and mdast-util-directive,
+// they're allowed in the type definitions here to match the mdast-util-directive type.
+// https://github.com/syntax-tree/mdast-util-directive/blob/a683327fafc4e48f81caf8d09d15fef8dd42a627/lib/index.js#L212-L213
+// https://github.com/syntax-tree/mdast-util-directive/blob/main/index.d.ts#L49
+export type DirectiveAttributes = Record<string, string | null | undefined>;
 
 export interface ContainerDirective extends MdastParent {
   type: "containerDirective";

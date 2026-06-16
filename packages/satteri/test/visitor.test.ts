@@ -12,7 +12,7 @@ import {
   applyCommandsAndConvertToHastHandle,
   renderHandle,
 } from "../index.js";
-import type { MdastNode } from "../src/types.js";
+import type { DirectiveAttributes, MdastNode } from "../src/types.js";
 import type { Heading, Text } from "mdast";
 import { defineMdastPlugin } from "../src/plugin.js";
 import { markdownToHtml, applyCommandsToMdastHandle } from "../src/index.js";
@@ -488,7 +488,7 @@ function setupDirective(md: string) {
 
 test("containerDirective visitor fires and exposes name + attributes", () => {
   const { handle, source } = setupDirective(":::tip{.note #id}\nbody\n:::\n");
-  const seen: { name: string; attributes: Record<string, string> }[] = [];
+  const seen: { name: string; attributes: DirectiveAttributes }[] = [];
   const plugin = defineMdastPlugin({
     name: "collect-container-directive",
     containerDirective(node) {
@@ -521,7 +521,7 @@ test("containerDirective with [label] exposes directiveLabel marker on first chi
 
 test("leafDirective visitor fires and exposes name", () => {
   const { handle, source } = setupDirective("::break{aria-label=section}\n");
-  const seen: { name: string; attributes: Record<string, string> }[] = [];
+  const seen: { name: string; attributes: DirectiveAttributes }[] = [];
   const plugin = defineMdastPlugin({
     name: "collect-leaf-directive",
     leafDirective(node) {
