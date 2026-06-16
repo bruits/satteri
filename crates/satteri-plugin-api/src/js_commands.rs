@@ -5,30 +5,13 @@
 //!
 //! ## Wire format
 //!
-//! All multi-byte integers are **little-endian**.
-//!
-//! Commands (first byte):
-//!   0x01  REMOVE           [nodeId: u32]
-//!   0x05  INSERT_BEFORE    [nodeId: u32][payloadType: u8][payload...]
-//!   0x06  INSERT_AFTER     [nodeId: u32][payloadType: u8][payload...]
-//!   0x07  PREPEND_CHILD    [nodeId: u32][payloadType: u8][payload...]
-//!   0x08  APPEND_CHILD     [nodeId: u32][payloadType: u8][payload...]
-//!   0x09  WRAP             [nodeId: u32][payloadType: u8][payload...]
-//!   0x0B  REPLACE          [nodeId: u32][payloadType: u8][payload...]
-//!   0x0C  SET_PROPERTY     [nodeId: u32][valueType: u8][nameLen: u32][name...][valueLen: u32][value...]
-//!
-//! Value types for SET_PROPERTY:
-//!   0  STRING     : UTF-8 value
-//!   1  BOOL_TRUE  : no value bytes
-//!   2  BOOL_FALSE : no value bytes
-//!   3  SPACE_SEP  : space-separated list (UTF-8)
-//!   4  INT        : value is decimal string, parsed to i64
-//!   5  NULL       : no value bytes
-//!
-//! Payload types:
-//!   0x10  RAW_MARKDOWN     [len: u32][utf8...]
-//!   0x11  RAW_HTML         [len: u32][utf8...]
-//!   0x12  SERDE_JSON       [len: u32][utf8...]
+//! All multi-byte integers are **little-endian**. A command is one `CMD_*`
+//! byte plus `[nodeId: u32]`; structural commands then carry a
+//! `[payloadType: u8][len: u32][payload…]` sub-tree. The command, payload,
+//! op-stream, and property-kind byte values (with their operand layouts) are
+//! declared once in `satteri-layout-codegen/src/schema.rs` and generated into
+//! `generated/wire_constants.rs` here and
+//! `packages/satteri/src/generated/wire-constants.ts` on the JS side.
 //!
 //! The MDAST and HAST command paths are deliberately separate functions
 //! (`apply_mdast_commands`, `apply_hast_commands`). Numeric `node_type`
@@ -38,46 +21,19 @@
 //! signature on each entry point makes a cross-kind call a compile error.
 
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
-use satteri_ast::commands::{CommandError, JsNode};
+use satteri_ast::commands::CommandError;
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::rebuild::Patch;
+use satteri_ast::rebuild::{Patch, REF_NODE_TYPE};
+#[cfg(feature = "mdx")]
+use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
-    encode_js_jsx_attrs, PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP,
-    PROP_STRING,
+    PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP, PROP_STRING,
 };
 
-// Must match packages/satteri/src/command-buffer.ts
-const CMD_REMOVE: u8 = 0x01;
-const CMD_INSERT_BEFORE: u8 = 0x05;
-const CMD_INSERT_AFTER: u8 = 0x06;
-const CMD_PREPEND_CHILD: u8 = 0x07;
-const CMD_APPEND_CHILD: u8 = 0x08;
-const CMD_WRAP: u8 = 0x09;
-const CMD_REPLACE: u8 = 0x0B;
-const CMD_SET_PROPERTY: u8 = 0x0C;
-
-const PAYLOAD_RAW_MARKDOWN: u8 = 0x10;
-const PAYLOAD_RAW_HTML: u8 = 0x11;
-const PAYLOAD_SERDE_JSON: u8 = 0x12;
-
-// MDAST field IDs: internal to the set_string_ref / resolve_mdast_field dispatch
-const FIELD_DEPTH: u16 = 0x0001;
-const FIELD_URL: u16 = 0x0010;
-const FIELD_TITLE: u16 = 0x0011;
-const FIELD_LANG: u16 = 0x0020;
-const FIELD_META: u16 = 0x0021;
-const FIELD_VALUE: u16 = 0x0022;
-const FIELD_ALT: u16 = 0x0030;
-const FIELD_ORDERED: u16 = 0x0040;
-const FIELD_START: u16 = 0x0041;
-const FIELD_SPREAD: u16 = 0x0042;
-const FIELD_CHECKED: u16 = 0x0050;
-const FIELD_IDENTIFIER: u16 = 0x0060;
-const FIELD_LABEL: u16 = 0x0061;
-const FIELD_REFERENCE_TYPE: u16 = 0x0062;
-const FIELD_NAME: u16 = 0x0070;
+use crate::generated::prop_slots::{mdast_prop_slot, MdastPropSlot};
+use crate::generated::wire_constants::*;
 
 struct BufReader<'a> {
     data: &'a [u8],
@@ -131,15 +87,6 @@ impl<'a> BufReader<'a> {
     }
 }
 
-/// Whether a plugin-supplied `data` blob carries the `_mdxExplicitJsx: true`
-/// marker — used to set the matching fast-path bit in `MdxJsxElementData`.
-fn js_data_is_mdx_explicit(data: &Option<serde_json::Map<String, serde_json::Value>>) -> bool {
-    data.as_ref()
-        .and_then(|m| m.get("_mdxExplicitJsx"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
 /// `data` JSON blob is stored in the per-node `node_data` map; it doesn't
 /// dispatch on node-type bytes, so it's safe under any kind.
 fn apply_data_property<K: ArenaKind>(
@@ -155,33 +102,11 @@ fn apply_data_property<K: ArenaKind>(
     }
 }
 
-/// Resolve an MDAST property name to its field ID for a given node type.
-fn resolve_mdast_field(node_type: u8, name: &str) -> Option<u16> {
-    match (node_type, name) {
-        (2, "depth") => Some(FIELD_DEPTH),
-        (8, "lang") => Some(FIELD_LANG),
-        (8, "meta") => Some(FIELD_META),
-        (8, "value") => Some(FIELD_VALUE),
-        (15, "url") => Some(FIELD_URL),
-        (15, "title") => Some(FIELD_TITLE),
-        (16, "url") => Some(FIELD_URL),
-        (16, "alt") => Some(FIELD_ALT),
-        (16, "title") => Some(FIELD_TITLE),
-        (10 | 13 | 7 | 25 | 26 | 28, "value") => Some(FIELD_VALUE),
-        (27, "meta") => Some(FIELD_META),
-        (27, "value") => Some(FIELD_VALUE),
-        (102..=104, "value") => Some(FIELD_VALUE),
-        (9, "url") => Some(FIELD_URL),
-        (9, "title") => Some(FIELD_TITLE),
-        (5, "ordered") => Some(FIELD_ORDERED),
-        (5, "start") => Some(FIELD_START),
-        (5 | 6, "spread") => Some(FIELD_SPREAD),
-        (6, "checked") => Some(FIELD_CHECKED),
-        (9 | 17 | 18 | 19 | 20, "identifier") => Some(FIELD_IDENTIFIER),
-        (9 | 17 | 18 | 19 | 20, "label") => Some(FIELD_LABEL),
-        (17 | 18 | 20, "referenceType") => Some(FIELD_REFERENCE_TYPE),
-        (100 | 101, "name") => Some(FIELD_NAME),
-        _ => None,
+/// The canonical MDAST type name for a node-type byte, for error messages.
+fn mdast_type_name(node_type: u8) -> String {
+    match MdastNodeType::from_u8(node_type) {
+        Some(t) => t.name().to_string(),
+        None => format!("unknown({node_type})"),
     }
 }
 
@@ -195,170 +120,137 @@ fn apply_mdast_set_property(
     value_type: u8,
     value_str: &str,
 ) -> Result<(), CommandError> {
+    if node_id as usize >= arena.len() {
+        return Err(CommandError::InvalidNodeId(node_id));
+    }
     if prop_name == "data" {
         apply_data_property(arena, node_id, value_type, value_str);
         return Ok(());
     }
 
     let node_type = arena.get_node(node_id).node_type;
-    let field_id =
-        resolve_mdast_field(node_type, prop_name).ok_or(CommandError::UnknownField(0))?;
 
+    // The property doesn't resolve to a slot for this node type at all.
+    let slot = mdast_prop_slot(node_type, prop_name).ok_or_else(|| CommandError::UnknownField {
+        node_type: mdast_type_name(node_type),
+        name: prop_name.to_string(),
+    })?;
+
+    // The slot resolved, so a `None` from the writer means the value's type is
+    // one the slot can't hold — report that rather than "unknown".
+    let written = write_mdast_prop_slot(arena, node_id, slot, prop_name, value_type, value_str)?;
+    written.ok_or_else(|| CommandError::InvalidPropertyValue {
+        node_type: mdast_type_name(node_type),
+        name: prop_name.to_string(),
+    })
+}
+
+/// Write a resolved slot. `Ok(None)` means the slot can't hold this value
+/// type. String slots error `TypeDataTooShort` on short `type_data`; scalar
+/// slots skip the write silently instead (the historical semantics).
+fn write_mdast_prop_slot(
+    arena: &mut Arena<Mdast>,
+    node_id: u32,
+    slot: MdastPropSlot,
+    prop_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<Option<()>, CommandError> {
+    use MdastPropSlot as S;
     match value_type {
-        PROP_STRING | PROP_SPACE_SEP => {
-            let sref = arena.alloc_string(value_str);
-            set_mdast_string_ref(arena, node_id, field_id, sref)
-        }
-        PROP_BOOL_TRUE => apply_mdast_bool(arena, node_id, node_type, field_id, true),
-        PROP_BOOL_FALSE => apply_mdast_bool(arena, node_id, node_type, field_id, false),
+        PROP_STRING | PROP_SPACE_SEP => match slot {
+            S::Str { offset } => {
+                let sref = arena.alloc_string(value_str);
+                set_mdast_string_ref(arena, node_id, offset, sref)?;
+            }
+            S::Enum8 { offset, values } => {
+                let Some(v) = values.iter().position(|v| *v == value_str) else {
+                    return Ok(None);
+                };
+                set_mdast_scalar(arena, node_id, offset, &[v as u8]);
+            }
+            _ => return Ok(None),
+        },
+        PROP_BOOL_TRUE | PROP_BOOL_FALSE => match slot {
+            S::Bool { offset } => {
+                let value = value_type == PROP_BOOL_TRUE;
+                set_mdast_scalar(arena, node_id, offset, &[value as u8]);
+            }
+            _ => return Ok(None),
+        },
         PROP_INT => {
-            let value: i64 = value_str.parse().unwrap_or(0);
-            apply_mdast_int(arena, node_id, node_type, field_id, value)
+            // Accept a float spelling like "3.0", but anything outside the
+            // slot's range must error — `as u8` would silently mask the bits.
+            let parsed = value_str.parse::<i64>().ok().or_else(|| {
+                value_str
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|f| f.is_finite() && f.fract() == 0.0)
+                    .map(|f| f as i64)
+            });
+            let node_type = arena.get_node(node_id).node_type;
+            let fitted = |max: u32| -> Result<u32, CommandError> {
+                match parsed {
+                    Some(v) if (0..=max as i64).contains(&v) => Ok(v as u32),
+                    _ => Err(CommandError::PropertyValueOutOfRange {
+                        node_type: mdast_type_name(node_type),
+                        name: prop_name.to_string(),
+                        value: value_str.to_string(),
+                        max,
+                    }),
+                }
+            };
+            match slot {
+                S::U8 { offset } | S::CheckedTri { offset } => {
+                    let value = fitted(u8::MAX as u32)?;
+                    set_mdast_scalar(arena, node_id, offset, &[value as u8]);
+                }
+                S::U32 { offset } => {
+                    let value = fitted(u32::MAX)?;
+                    set_mdast_scalar(arena, node_id, offset, &value.to_le_bytes());
+                }
+                _ => return Ok(None),
+            }
         }
-        PROP_NULL => apply_mdast_null(arena, node_id, node_type, field_id),
-        _ => Err(CommandError::UnknownCommand(value_type)),
+        PROP_NULL => match slot {
+            // 2 = not a task item.
+            S::CheckedTri { offset } => set_mdast_scalar(arena, node_id, offset, &[2]),
+            S::Str { offset } => set_mdast_string_ref(arena, node_id, offset, StringRef::empty())?,
+            _ => return Ok(None),
+        },
+        _ => return Err(CommandError::InvalidPropertyValueType(value_type)),
     }
+    Ok(Some(()))
 }
 
-fn apply_mdast_int(
-    arena: &mut Arena<Mdast>,
-    node_id: u32,
-    node_type: u8,
-    field_id: u16,
-    value: i64,
-) -> Result<(), CommandError> {
-    let data_offset = arena.get_node(node_id).data_offset as usize;
-    let data_len = arena.get_node(node_id).data_len as usize;
-    match (node_type, field_id) {
-        (2, FIELD_DEPTH) => {
-            if data_len >= 1 {
-                arena.type_data[data_offset] = value as u8;
-            }
-        }
-        (5, FIELD_START) => {
-            if data_len >= 4 {
-                arena.type_data[data_offset..data_offset + 4]
-                    .copy_from_slice(&(value as u32).to_ne_bytes());
-            }
-        }
-        (6, FIELD_CHECKED) => {
-            if data_len >= 1 {
-                arena.type_data[data_offset] = value as u8;
-            }
-        }
-        _ => return Err(CommandError::UnknownField(field_id)),
-    }
-    Ok(())
-}
-
-fn apply_mdast_bool(
-    arena: &mut Arena<Mdast>,
-    node_id: u32,
-    node_type: u8,
-    field_id: u16,
-    value: bool,
-) -> Result<(), CommandError> {
-    let data_offset = arena.get_node(node_id).data_offset as usize;
-    let data_len = arena.get_node(node_id).data_len as usize;
-    match (node_type, field_id) {
-        (5, FIELD_ORDERED) => {
-            if data_len >= 5 {
-                arena.type_data[data_offset + 4] = value as u8;
-            }
-        }
-        (5, FIELD_SPREAD) => {
-            if data_len >= 6 {
-                arena.type_data[data_offset + 5] = value as u8;
-            }
-        }
-        (6, FIELD_SPREAD) => {
-            if data_len >= 2 {
-                arena.type_data[data_offset + 1] = value as u8;
-            }
-        }
-        _ => return Err(CommandError::UnknownField(field_id)),
-    }
-    Ok(())
-}
-
-fn apply_mdast_null(
-    arena: &mut Arena<Mdast>,
-    node_id: u32,
-    node_type: u8,
-    field_id: u16,
-) -> Result<(), CommandError> {
-    match (node_type, field_id) {
-        (6, FIELD_CHECKED) => {
-            let data_offset = arena.get_node(node_id).data_offset as usize;
-            let data_len = arena.get_node(node_id).data_len as usize;
-            if data_len >= 1 {
-                arena.type_data[data_offset] = 2;
-            }
-            Ok(())
-        }
-        _ => set_mdast_string_ref(arena, node_id, field_id, StringRef::empty()),
-    }
-}
-
+/// Write an 8-byte `StringRef` at `offset` into the node's `type_data`.
 fn set_mdast_string_ref(
     arena: &mut Arena<Mdast>,
     node_id: u32,
-    field_id: u16,
+    offset: usize,
     sref: StringRef,
 ) -> Result<(), CommandError> {
     let node = arena.get_node(node_id);
-    let node_type = node.node_type;
     let data_offset = node.data_offset as usize;
-
-    let ref_offset = match (node_type, field_id) {
-        // Text/InlineCode/Html/Yaml/Toml/InlineMath: StringRef at 0
-        (10 | 13 | 7 | 25 | 26 | 28, FIELD_VALUE) => 0,
-        // Link: LinkData { url: 0, title: 8 }
-        (15, FIELD_URL) => 0,
-        (15, FIELD_TITLE) => 8,
-        // Image: ImageData { url: 0, alt: 8, title: 16 }
-        (16, FIELD_URL) => 0,
-        (16, FIELD_ALT) => 8,
-        (16, FIELD_TITLE) => 16,
-        // Code: CodeData { lang: 0, meta: 8, value: 16 }
-        (8, FIELD_LANG) => 0,
-        (8, FIELD_META) => 8,
-        (8, FIELD_VALUE) => 16,
-        // Math: MathData { meta: 0, value: 8 }
-        (27, FIELD_META) => 0,
-        (27, FIELD_VALUE) => 8,
-        // Definition: DefinitionData { url: 0, title: 8, identifier: 16, label: 24 }
-        (9, FIELD_URL) => 0,
-        (9, FIELD_TITLE) => 8,
-        (9, FIELD_IDENTIFIER) => 16,
-        (9, FIELD_LABEL) => 24,
-        // LinkReference/ImageReference/FootnoteReference: ReferenceData { identifier: 0, label: 8 }
-        (17 | 18 | 20, FIELD_IDENTIFIER) => 0,
-        (17 | 18 | 20, FIELD_LABEL) => 8,
-        // FootnoteDefinition: FootnoteDefinitionData { identifier: 0, label: 8 }
-        (19, FIELD_IDENTIFIER) => 0,
-        (19, FIELD_LABEL) => 8,
-        // MdxJsxElement: MdxJsxElementData { name: 0 }
-        (100 | 101, FIELD_NAME) => 0,
-        // MdxExpression/MdxjsEsm: ExpressionData { value: 0 }
-        (102..=104, FIELD_VALUE) => 0,
-        _ => return Err(CommandError::UnknownField(field_id)),
-    };
-
-    let abs_offset = data_offset + ref_offset;
-    let bytes_offset = sref.offset.to_ne_bytes();
-    let bytes_len = sref.len.to_ne_bytes();
-    arena.type_data[abs_offset..abs_offset + 4].copy_from_slice(&bytes_offset);
-    arena.type_data[abs_offset + 4..abs_offset + 8].copy_from_slice(&bytes_len);
-
+    let data_len = node.data_len as usize;
+    if data_len < offset + 8 {
+        return Err(CommandError::TypeDataTooShort);
+    }
+    let abs_offset = data_offset + offset;
+    arena.type_data[abs_offset..abs_offset + 8].copy_from_slice(&sref.as_bytes());
     Ok(())
 }
 
-fn parse_raw_markdown(
-    markdown: &str,
-    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
-) -> Arena<Mdast> {
-    parse_markdown(markdown)
+/// Write a scalar at `offset` into the node's `type_data`; too-short data
+/// skips the write.
+fn set_mdast_scalar(arena: &mut Arena<Mdast>, node_id: u32, offset: usize, bytes: &[u8]) {
+    let node = arena.get_node(node_id);
+    let data_offset = node.data_offset as usize;
+    let data_len = node.data_len as usize;
+    if data_len >= offset + bytes.len() {
+        let abs_offset = data_offset + offset;
+        arena.type_data[abs_offset..abs_offset + bytes.len()].copy_from_slice(bytes);
+    }
 }
 
 /// Escape `{` and `}` in HTML text content so they are not interpreted as MDX
@@ -405,245 +297,29 @@ fn escape_braces_in_html_text(html: &str) -> String {
     result
 }
 
-fn js_node_to_mdast_arena(js_node: &JsNode) -> Result<(Arena<Mdast>, bool), CommandError> {
-    if js_node.is_hast {
-        return Err(CommandError::UnknownNodeType(format!(
-            "expected mdast node, got hast-flagged `{}`",
-            js_node.node_type
-        )));
-    }
-    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
-    emit_mdast_js_node(js_node, &mut builder)?;
-    Ok((builder.finish(), js_node.keep_children))
-}
-
-fn js_node_to_hast_arena(js_node: &JsNode) -> Result<(Arena<Hast>, bool), CommandError> {
-    if !js_node.is_hast {
-        return Err(CommandError::UnknownNodeType(format!(
-            "expected hast node, got mdast-flagged `{}`",
-            js_node.node_type
-        )));
-    }
-    let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    emit_hast_js_node(js_node, &mut builder)?;
-    Ok((builder.finish(), js_node.keep_children))
-}
-
-fn emit_mdast_js_node(
-    js_node: &JsNode,
-    builder: &mut ArenaBuilder<Mdast>,
-) -> Result<(), CommandError> {
-    if js_node.is_hast {
-        return Err(CommandError::UnknownNodeType(format!(
-            "expected mdast node, got hast-flagged `{}`",
-            js_node.node_type
-        )));
-    }
-
-    let node_type = name_to_node_type(&js_node.node_type)?;
-    builder.open_node(node_type as u8);
-
-    let type_data = encode_js_node_data(js_node, node_type, builder);
-    if !type_data.is_empty() {
-        builder.set_data_current(&type_data);
-    }
-
-    write_js_node_data(js_node, builder)?;
-
-    if let Some(children) = &js_node.children {
-        for child in children {
-            emit_mdast_js_node(child, builder)?;
-        }
-    }
-
+/// Emit a reference placeholder: a `REF_NODE_TYPE` node carrying the target
+/// original id (u32 LE) in its type_data. The rebuild resolves it by splicing
+/// that original subtree and applying any pending patch on it.
+fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) {
+    builder.open_node_raw(REF_NODE_TYPE);
+    builder.set_data_current(&ref_id.to_le_bytes());
     builder.close_node();
-    Ok(())
 }
 
-fn write_js_node_data<K: ArenaKind>(
-    js_node: &JsNode,
+// Generated per-type arena encoder, driven by the node registry. See
+// `crates/satteri-layout-codegen`.
+use crate::generated::encode::{
+    encode_hast_tail_from_ops, encode_mdast_tail_from_ops, encode_mdast_type_data_from_ops,
+    MAX_FIXED_TYPE_DATA,
+};
+
+pub(crate) fn alloc_opt_str<K: ArenaKind>(
     builder: &mut ArenaBuilder<K>,
-) -> Result<(), CommandError> {
-    let Some(data) = &js_node.data else {
-        return Ok(());
-    };
-    let id = builder.current_node_id();
-    let json = serde_json::to_vec(data).map_err(|e| CommandError::InvalidJson(e.to_string()))?;
-    builder.arena_mut().set_node_data(id, json);
-    Ok(())
-}
-
-fn encode_js_node_data(
-    js_node: &JsNode,
-    node_type: MdastNodeType,
-    builder: &mut ArenaBuilder<Mdast>,
-) -> Vec<u8> {
-    match node_type {
-        MdastNodeType::Heading => {
-            let depth = js_node.depth.unwrap_or(1);
-            encode_heading_data(depth)
-        }
-        MdastNodeType::Text
-        | MdastNodeType::InlineCode
-        | MdastNodeType::Html
-        | MdastNodeType::Yaml
-        | MdastNodeType::Toml
-        | MdastNodeType::InlineMath => {
-            let value = js_node.value.as_deref().unwrap_or("");
-            let sref = builder.alloc_string(value);
-            encode_string_ref_data(sref)
-        }
-        MdastNodeType::Code => {
-            let lang_ref = alloc_opt_str(builder, js_node.lang.as_deref());
-            let meta_ref = alloc_opt_str(builder, js_node.meta.as_deref());
-            let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
-            encode_code_data(lang_ref, meta_ref, value_ref, b'`')
-        }
-        MdastNodeType::Math => {
-            let meta_ref = alloc_opt_str(builder, js_node.meta.as_deref());
-            let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
-            encode_math_data(meta_ref, value_ref)
-        }
-        MdastNodeType::Link => {
-            let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
-            let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
-            encode_link_data(url_ref, title_ref)
-        }
-        MdastNodeType::Image => {
-            let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
-            let alt_ref = alloc_opt_str(builder, js_node.alt.as_deref());
-            let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
-            encode_image_data(url_ref, alt_ref, title_ref)
-        }
-        MdastNodeType::Definition => {
-            let url_ref = alloc_opt_str(builder, js_node.url.as_deref());
-            let title_ref = alloc_opt_str(builder, js_node.title.as_deref());
-            let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
-            let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
-            encode_definition_data(url_ref, title_ref, id_ref, label_ref)
-        }
-        MdastNodeType::List => {
-            let ordered = js_node.ordered.unwrap_or(false);
-            let start = js_node.start.unwrap_or(1);
-            let spread = js_node.spread.unwrap_or(false);
-            encode_list_data(ordered, start, spread)
-        }
-        MdastNodeType::ListItem => {
-            let checked = match js_node.checked {
-                Some(true) => 1u8,
-                Some(false) => 0u8,
-                None => 2u8, // not a task item
-            };
-            let spread = js_node.spread.unwrap_or(false);
-            encode_list_item_data(checked, spread)
-        }
-        MdastNodeType::LinkReference
-        | MdastNodeType::ImageReference
-        | MdastNodeType::FootnoteReference => {
-            let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
-            let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
-            let kind = match js_node.reference_type.as_deref() {
-                Some("collapsed") => 1u8,
-                Some("full") => 2u8,
-                _ => 0u8, // shortcut
-            };
-            encode_reference_data(id_ref, label_ref, kind)
-        }
-        MdastNodeType::FootnoteDefinition => {
-            let id_ref = alloc_opt_str(builder, js_node.identifier.as_deref());
-            let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
-            encode_footnote_definition_data(id_ref, label_ref)
-        }
-        MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement => {
-            let name_ref = alloc_opt_str(builder, js_node.name.as_deref());
-            let attr_tuples = encode_js_jsx_attrs(
-                builder,
-                js_node.attributes.as_ref().and_then(|a| a.as_jsx()),
-            );
-            let explicit = js_data_is_mdx_explicit(&js_node.data);
-            encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit)
-        }
-        MdastNodeType::ContainerDirective
-        | MdastNodeType::LeafDirective
-        | MdastNodeType::TextDirective => {
-            let name = js_node.name.as_deref().unwrap_or("");
-            let name_ref = builder.alloc_string(name);
-            let attr_pairs = encode_js_directive_attrs(builder, js_node.attributes.as_ref());
-            encode_directive_data(name_ref, &attr_pairs)
-        }
-        MdastNodeType::MdxFlowExpression
-        | MdastNodeType::MdxTextExpression
-        | MdastNodeType::MdxjsEsm => {
-            let value_ref = alloc_opt_str(builder, js_node.value.as_deref());
-            encode_expression_data(value_ref)
-        }
-        // Nodes with no type-specific data
-        _ => Vec::new(),
-    }
-}
-
-fn encode_js_directive_attrs(
-    builder: &mut ArenaBuilder<Mdast>,
-    attrs: Option<&satteri_ast::commands::JsNodeAttributes>,
-) -> Vec<(StringRef, StringRef)> {
-    let Some(map) = attrs.and_then(|a| a.as_directive()) else {
-        return Vec::new();
-    };
-    map.iter()
-        .filter_map(|(k, v)| {
-            let val = v.as_str()?;
-            Some((builder.alloc_string(k), builder.alloc_string(val)))
-        })
-        .collect()
-}
-
-fn alloc_opt_str<K: ArenaKind>(builder: &mut ArenaBuilder<K>, s: Option<&str>) -> StringRef {
+    s: Option<&str>,
+) -> StringRef {
     match s {
         Some(v) if !v.is_empty() => builder.alloc_string(v),
         _ => StringRef::empty(),
-    }
-}
-
-fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
-    match name {
-        "root" => Ok(MdastNodeType::Root),
-        "paragraph" => Ok(MdastNodeType::Paragraph),
-        "heading" => Ok(MdastNodeType::Heading),
-        "thematicBreak" => Ok(MdastNodeType::ThematicBreak),
-        "blockquote" => Ok(MdastNodeType::Blockquote),
-        "list" => Ok(MdastNodeType::List),
-        "listItem" => Ok(MdastNodeType::ListItem),
-        "html" => Ok(MdastNodeType::Html),
-        "code" => Ok(MdastNodeType::Code),
-        "definition" => Ok(MdastNodeType::Definition),
-        "text" => Ok(MdastNodeType::Text),
-        "emphasis" => Ok(MdastNodeType::Emphasis),
-        "strong" => Ok(MdastNodeType::Strong),
-        "inlineCode" => Ok(MdastNodeType::InlineCode),
-        "break" => Ok(MdastNodeType::Break),
-        "link" => Ok(MdastNodeType::Link),
-        "image" => Ok(MdastNodeType::Image),
-        "linkReference" => Ok(MdastNodeType::LinkReference),
-        "imageReference" => Ok(MdastNodeType::ImageReference),
-        "footnoteDefinition" => Ok(MdastNodeType::FootnoteDefinition),
-        "footnoteReference" => Ok(MdastNodeType::FootnoteReference),
-        "table" => Ok(MdastNodeType::Table),
-        "tableRow" => Ok(MdastNodeType::TableRow),
-        "tableCell" => Ok(MdastNodeType::TableCell),
-        "delete" => Ok(MdastNodeType::Delete),
-        "yaml" => Ok(MdastNodeType::Yaml),
-        "toml" => Ok(MdastNodeType::Toml),
-        "math" => Ok(MdastNodeType::Math),
-        "inlineMath" => Ok(MdastNodeType::InlineMath),
-        "containerDirective" => Ok(MdastNodeType::ContainerDirective),
-        "leafDirective" => Ok(MdastNodeType::LeafDirective),
-        "textDirective" => Ok(MdastNodeType::TextDirective),
-        "mdxJsxFlowElement" => Ok(MdastNodeType::MdxJsxFlowElement),
-        "mdxJsxTextElement" => Ok(MdastNodeType::MdxJsxTextElement),
-        "mdxFlowExpression" => Ok(MdastNodeType::MdxFlowExpression),
-        "mdxTextExpression" => Ok(MdastNodeType::MdxTextExpression),
-        "mdxjsEsm" => Ok(MdastNodeType::MdxjsEsm),
-        other => Err(CommandError::UnknownNodeType(other.to_string())),
     }
 }
 
@@ -659,13 +335,17 @@ fn apply_hast_set_property(
     value_type: u8,
     value_str: &str,
 ) -> Result<(), CommandError> {
+    if node_id as usize >= arena.len() {
+        return Err(CommandError::InvalidNodeId(node_id));
+    }
     if prop_name == "data" {
         apply_data_property(arena, node_id, value_type, value_str);
         return Ok(());
     }
 
-    let node_type = HastNodeType::from_u8(arena.get_node(node_id).node_type)
-        .ok_or(CommandError::UnknownField(0))?;
+    let raw_type = arena.get_node(node_id).node_type;
+    let node_type = HastNodeType::from_u8(raw_type)
+        .ok_or_else(|| CommandError::UnknownNodeType(format!("hast type 0x{raw_type:02x}")))?;
 
     match node_type {
         HastNodeType::Element => {
@@ -684,18 +364,80 @@ fn apply_hast_set_property(
             let data = arena.get_type_data(node_id);
             if data.len() >= 8 {
                 let data_offset = arena.get_node(node_id).data_offset as usize;
-                arena.type_data[data_offset..data_offset + 4]
-                    .copy_from_slice(&sref.offset.to_le_bytes());
-                arena.type_data[data_offset + 4..data_offset + 8]
-                    .copy_from_slice(&sref.len.to_le_bytes());
+                arena.type_data[data_offset..data_offset + 8].copy_from_slice(&sref.as_bytes());
                 Ok(())
             } else {
-                Err(CommandError::UnknownField(0))
+                Err(CommandError::TypeDataTooShort)
             }
         }
 
-        _ => Err(CommandError::UnknownField(0)),
+        #[cfg(feature = "mdx")]
+        HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => {
+            apply_hast_mdx_jsx_attribute(arena, node_id, prop_name, value_type, value_str)
+        }
+
+        _ => Err(CommandError::UnknownField {
+            node_type: node_type.name().to_string(),
+            name: prop_name.to_string(),
+        }),
     }
+}
+
+/// Upsert a single attribute on an MDX JSX flow/text element. Avoids
+/// re-serializing the whole node (and materializing its children) just to
+/// change one attribute.
+///
+/// Any existing named attribute (boolean, literal, or expression-valued) with
+/// the same name is removed and the new attribute appended at the end, so the
+/// write wins over earlier spreads — the same ordering as the JS fold path.
+/// Only spreads are never matched: they have no name.
+///
+/// Value-type mapping (matches the JS fold path this replaces):
+///   bool-true / null -> boolean attribute (no value)
+///   bool-false       -> literal `"false"`
+///   string / int / … -> literal attribute carrying the value
+#[cfg(feature = "mdx")]
+fn apply_hast_mdx_jsx_attribute(
+    arena: &mut Arena<Hast>,
+    node_id: u32,
+    attr_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    let old_data = arena.get_type_data(node_id).to_vec();
+    if old_data.len() < 16 {
+        return Err(CommandError::TypeDataTooShort);
+    }
+    let elem_name = decode_mdx_jsx_element_name(&old_data);
+    let explicit = decode_mdx_jsx_explicit(&old_data);
+    let attr_count = decode_mdx_jsx_attr_count(&old_data);
+
+    // Map the binary value-type to a JSX attribute (kind, value).
+    let (kind, val_ref) = match value_type {
+        PROP_BOOL_TRUE | PROP_NULL => (MDX_ATTR_BOOLEAN_PROP, StringRef::empty()),
+        PROP_BOOL_FALSE => (MDX_ATTR_LITERAL_PROP, arena.alloc_string("false")),
+        _ if value_str.is_empty() => (MDX_ATTR_LITERAL_PROP, StringRef::empty()),
+        _ => (MDX_ATTR_LITERAL_PROP, arena.alloc_string(value_str)),
+    };
+
+    let mut attrs: Vec<(u8, StringRef, StringRef)> = Vec::with_capacity(attr_count as usize + 1);
+    let mut name_ref: Option<StringRef> = None;
+    for i in 0..attr_count {
+        let (existing_kind, existing_name, existing_value) = decode_mdx_jsx_attr(&old_data, i);
+        if existing_kind != MDX_ATTR_SPREAD && arena.get_str(existing_name) == attr_name {
+            name_ref = Some(existing_name);
+            continue;
+        }
+        attrs.push((existing_kind, existing_name, existing_value));
+    }
+    let name_ref = name_ref.unwrap_or_else(|| arena.alloc_string(attr_name));
+    attrs.push((kind, name_ref, val_ref));
+
+    arena.set_type_data(
+        node_id,
+        &encode_mdx_jsx_element_data(elem_name, &attrs, explicit),
+    );
+    Ok(())
 }
 
 /// Set or add a single property on a HAST element node.
@@ -708,7 +450,7 @@ fn apply_hast_element_property(
 ) -> Result<(), CommandError> {
     let old_data = arena.get_type_data(node_id).to_vec();
     if old_data.len() < 16 {
-        return Err(CommandError::UnexpectedEof);
+        return Err(CommandError::TypeDataTooShort);
     }
 
     let old_prop_count = u32::from_le_bytes(old_data[8..12].try_into().unwrap()) as usize;
@@ -763,151 +505,345 @@ fn apply_hast_element_property(
     Ok(())
 }
 
-/// Emit a HAST JS node (from plugin JSON) into an ArenaBuilder.
-fn emit_hast_js_node(
-    js_node: &JsNode,
-    builder: &mut ArenaBuilder<Hast>,
-) -> Result<(), CommandError> {
-    let raw_type = name_to_hast_type(&js_node.node_type)
-        .ok_or_else(|| CommandError::UnknownNodeType(js_node.node_type.clone()))?;
-    builder.open_node_raw(raw_type as u8);
+// The JS visitors compile declarative trees to an op-stream (OPEN/CLOSE/field
+// sets/REF/KEEP_CHILDREN) that we replay directly into an ArenaBuilder — no
+// intermediate node tree, no heap allocation per node beyond the arena itself. A node's
+// fields are collected after its OPEN and flushed into its type_data the moment
+// the next op needs the node finalized (a child OPEN, a CLOSE, or a spliced
+// REF/KEEP_CHILDREN).
 
-    let type_data = encode_hast_js_node_data(js_node, raw_type, builder);
-    if !type_data.is_empty() {
-        builder.set_data_current(&type_data);
-    }
+/// Per-kind hooks for [`replay_opstream`]. `Kind` ties a collector to one
+/// arena flavor, so a cross-kind replay stays a compile error (see the module
+/// header on why MDAST/HAST must not share a dispatcher).
+trait OpCollector<'a>: Sized {
+    type Kind: ArenaKind;
+    /// Whether `OP_U8` / `OP_U32` / `OP_ALIGN` are decoded. When false those
+    /// opcodes fall through to the unknown-command error *without consuming
+    /// operands*, so the reported byte is the opcode itself.
+    const NUMERIC_OPS: bool;
 
-    write_js_node_data(js_node, builder)?;
-
-    if let Some(children) = &js_node.children {
-        for child in children {
-            emit_hast_js_node(child, builder)?;
-        }
-    }
-
-    builder.close_node();
-    Ok(())
+    fn open(node_type: u8) -> Self;
+    fn check_tag(tag: u8) -> Result<(), CommandError>;
+    fn finalize(&mut self, builder: &mut ArenaBuilder<Self::Kind>);
+    fn str_field(&mut self, field: u8, value: &'a str);
+    fn bool_field(&mut self, field: u8, value: bool);
+    fn prop(&mut self, name: &'a str, kind: u8, value: &'a str);
+    fn data(&mut self, bytes: &'a [u8]);
+    fn u8_field(&mut self, _field: u8, _value: u8) {}
+    fn u32_field(&mut self, _field: u8, _value: u32) {}
+    fn align(&mut self, _bytes: &'a [u8]) {}
 }
 
-fn name_to_hast_type(name: &str) -> Option<HastNodeType> {
-    match name {
-        "root" => Some(HastNodeType::Root),
-        "element" => Some(HastNodeType::Element),
-        "text" => Some(HastNodeType::Text),
-        "comment" => Some(HastNodeType::Comment),
-        "doctype" => Some(HastNodeType::Doctype),
-        "raw" => Some(HastNodeType::Raw),
-        "mdxJsxFlowElement" => Some(HastNodeType::MdxJsxElement),
-        "mdxJsxTextElement" => Some(HastNodeType::MdxJsxTextElement),
-        "mdxFlowExpression" => Some(HastNodeType::MdxFlowExpression),
-        "mdxTextExpression" => Some(HastNodeType::MdxTextExpression),
-        "mdxjsEsm" => Some(HastNodeType::MdxEsm),
-        _ => None,
-    }
-}
+/// Deepest `OP_OPEN` nesting the replay accepts: the rebuild splices a
+/// replayed sub-arena recursively, so its depth must stay well inside the
+/// host stack. 128 = serde_json's default recursion limit, ample for content.
+const MAX_OPSTREAM_DEPTH: usize = 128;
 
-fn encode_hast_js_node_data(
-    js_node: &JsNode,
-    node_type: HastNodeType,
-    builder: &mut ArenaBuilder<Hast>,
-) -> Vec<u8> {
-    match node_type {
-        HastNodeType::Element => {
-            let tag = js_node.tag_name.as_deref().unwrap_or("div");
-            let tag_ref = builder.alloc_string(tag);
+/// Replay an op-stream into a fresh sub-arena. `orig`/`anchor` resolve
+/// `KEEP_CHILDREN` (splice the replaced node's original children, as refs).
+fn replay_opstream<'a, C: OpCollector<'a>>(
+    ops: &'a [u8],
+    orig: &Arena<C::Kind>,
+    anchor: u32,
+) -> Result<Arena<C::Kind>, CommandError> {
+    let mut builder = ArenaBuilder::<C::Kind>::new(String::new());
+    let mut reader = BufReader::new(ops);
+    let mut stack: Vec<C> = Vec::new();
 
-            let mut props: Vec<(StringRef, u8, StringRef)> = Vec::new();
-            if let Some(properties) = &js_node.properties {
-                for (key, value) in properties {
-                    let name_ref = builder.alloc_string(key);
-                    match value {
-                        serde_json::Value::Bool(true) => {
-                            props.push((name_ref, PROP_BOOL_TRUE, StringRef::empty()));
-                        }
-                        serde_json::Value::Bool(false) => {
-                            props.push((name_ref, PROP_BOOL_FALSE, StringRef::empty()));
-                        }
-                        serde_json::Value::String(s) => {
-                            let val_ref = builder.alloc_string(s);
-                            props.push((name_ref, PROP_STRING, val_ref));
-                        }
-                        serde_json::Value::Number(n) => {
-                            let val_ref = builder.alloc_string(&n.to_string());
-                            props.push((name_ref, PROP_INT, val_ref));
-                        }
-                        serde_json::Value::Array(arr) => {
-                            let joined: String = arr
-                                .iter()
-                                .filter_map(|v| v.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            let val_ref = builder.alloc_string(&joined);
-                            props.push((name_ref, PROP_SPACE_SEP, val_ref));
-                        }
-                        _ => {}
-                    }
+    while reader.remaining() > 0 {
+        match reader.read_u8()? {
+            OP_OPEN => {
+                if let Some(c) = stack.last_mut() {
+                    c.finalize(&mut builder);
+                }
+                let node_type = reader.read_u8()?;
+                C::check_tag(node_type)?;
+                // A root is only valid as the stream's top-level wrapper
+                // (the rebuild splices its children); nested it would smuggle
+                // a node the JS visitors refuse to encode.
+                if !stack.is_empty() && node_type == <C::Kind as ArenaKind>::ROOT_TAG {
+                    return Err(CommandError::UnencodableNodeType("root"));
+                }
+                if stack.len() >= MAX_OPSTREAM_DEPTH {
+                    return Err(CommandError::OpstreamTooDeep(MAX_OPSTREAM_DEPTH));
+                }
+                builder.open_node(node_type);
+                stack.push(C::open(node_type));
+            }
+            OP_CLOSE => {
+                let Some(mut c) = stack.pop() else {
+                    return Err(CommandError::UnbalancedOpstream);
+                };
+                c.finalize(&mut builder);
+                builder.close_node();
+            }
+            OP_REF => {
+                if let Some(c) = stack.last_mut() {
+                    c.finalize(&mut builder);
+                }
+                let id = reader.read_u32()?;
+                // A stale id (e.g. a node cached across passes) would
+                // otherwise panic deep inside the rebuild's arena indexing.
+                if id as usize >= orig.len() {
+                    return Err(CommandError::InvalidNodeId(id));
+                }
+                emit_ref_node(id, &mut builder);
+            }
+            OP_KEEP_CHILDREN => {
+                if let Some(c) = stack.last_mut() {
+                    c.finalize(&mut builder);
+                }
+                if anchor as usize >= orig.len() {
+                    return Err(CommandError::InvalidNodeId(anchor));
+                }
+                for &child in orig.get_children(anchor) {
+                    emit_ref_node(child, &mut builder);
                 }
             }
-
-            let mut out = Vec::with_capacity(16 + props.len() * 20);
-            out.extend_from_slice(&tag_ref.offset.to_le_bytes());
-            out.extend_from_slice(&tag_ref.len.to_le_bytes());
-            out.extend_from_slice(&(props.len() as u32).to_le_bytes());
-            out.extend_from_slice(&0u32.to_le_bytes());
-            for (name_ref, kind, val_ref) in &props {
-                out.extend_from_slice(&name_ref.offset.to_le_bytes());
-                out.extend_from_slice(&name_ref.len.to_le_bytes());
-                out.push(*kind);
-                out.extend_from_slice(&[0u8; 3]);
-                out.extend_from_slice(&val_ref.offset.to_le_bytes());
-                out.extend_from_slice(&val_ref.len.to_le_bytes());
+            OP_STR => {
+                let field = reader.read_u8()?;
+                let len = reader.read_u32()? as usize;
+                let value = reader.read_str(len)?;
+                if let Some(c) = stack.last_mut() {
+                    c.str_field(field, value);
+                }
             }
-            out
+            OP_U8 if C::NUMERIC_OPS => {
+                let field = reader.read_u8()?;
+                let value = reader.read_u8()?;
+                if let Some(c) = stack.last_mut() {
+                    c.u8_field(field, value);
+                }
+            }
+            OP_U32 if C::NUMERIC_OPS => {
+                let field = reader.read_u8()?;
+                let value = reader.read_u32()?;
+                if let Some(c) = stack.last_mut() {
+                    c.u32_field(field, value);
+                }
+            }
+            OP_BOOL => {
+                let field = reader.read_u8()?;
+                let value = reader.read_u8()? != 0;
+                if let Some(c) = stack.last_mut() {
+                    c.bool_field(field, value);
+                }
+            }
+            OP_PROP => {
+                let name_len = reader.read_u32()? as usize;
+                let name = reader.read_str(name_len)?;
+                let kind = reader.read_u8()?;
+                let val_len = reader.read_u32()? as usize;
+                let value = reader.read_str(val_len)?;
+                if let Some(c) = stack.last_mut() {
+                    c.prop(name, kind, value);
+                }
+            }
+            OP_ALIGN if C::NUMERIC_OPS => {
+                let len = reader.read_u32()? as usize;
+                let bytes = reader.read_bytes(len)?;
+                if let Some(c) = stack.last_mut() {
+                    c.align(bytes);
+                }
+            }
+            OP_DATA => {
+                let len = reader.read_u32()? as usize;
+                let bytes = reader.read_bytes(len)?;
+                if let Some(c) = stack.last_mut() {
+                    c.data(bytes);
+                }
+            }
+            other => return Err(CommandError::UnknownCommand(other)),
         }
+    }
 
-        HastNodeType::Text | HastNodeType::Comment | HastNodeType::Raw => {
-            let value = js_node.value.as_deref().unwrap_or("");
-            let sref = builder.alloc_string(value);
-            let mut out = [0u8; 8];
-            out[0..4].copy_from_slice(&sref.offset.to_le_bytes());
-            out[4..8].copy_from_slice(&sref.len.to_le_bytes());
-            out.to_vec()
+    if !stack.is_empty() {
+        return Err(CommandError::UnbalancedOpstream);
+    }
+    Ok(builder.finish())
+}
+
+/// Intern MDX-JSX attribute strings into `(kind, name, value)` rows; spreads
+/// carry no name, boolean attrs no value.
+#[cfg(feature = "mdx")]
+pub(crate) fn intern_mdx_jsx_attrs<K: ArenaKind>(
+    props: &[(&str, u8, &str)],
+    builder: &mut ArenaBuilder<K>,
+) -> Vec<(u8, StringRef, StringRef)> {
+    let mut attrs = Vec::with_capacity(props.len());
+    for &(name, kind, value) in props {
+        let nr = if kind == MDX_ATTR_SPREAD {
+            StringRef::empty()
+        } else {
+            builder.alloc_string(name)
+        };
+        let vr = if kind == MDX_ATTR_BOOLEAN_PROP {
+            StringRef::empty()
+        } else {
+            builder.alloc_string(value)
+        };
+        attrs.push((kind, nr, vr));
+    }
+    attrs
+}
+
+/// Accumulates one node's fields between its OPEN and finalization. Strings
+/// borrow the op-stream buffer; they're interned into the arena at finalize.
+#[derive(Default)]
+pub(crate) struct FieldCollector<'a> {
+    node_type: u8,
+    finalized: bool,
+    pub(crate) strs: [Option<&'a str>; OF_FIELD_COUNT],
+    pub(crate) depth: Option<u8>,
+    checked: Option<u8>,
+    start: Option<u32>,
+    ordered: Option<bool>,
+    spread: Option<bool>,
+    /// Directive / MDX JSX attributes (`OP_PROP`): (name, kind, value).
+    pub(crate) props: Vec<(&'a str, u8, &'a str)>,
+    /// Table column-alignment bytes (`OP_ALIGN`).
+    pub(crate) align: Option<&'a [u8]>,
+    /// MDX JSX `_mdxExplicitJsx` flag (`OP_BOOL` on `OF_EXPLICIT`).
+    pub(crate) explicit: Option<bool>,
+    data: Option<&'a [u8]>,
+}
+
+/// Encode a collector's fields into the current node's type_data (and node_data).
+fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mdast>) {
+    const LIST: u8 = MdastNodeType::List as u8;
+    const LIST_ITEM: u8 = MdastNodeType::ListItem as u8;
+
+    if c.finalized {
+        return;
+    }
+    c.finalized = true;
+    let mut fixed = [0u8; MAX_FIXED_TYPE_DATA];
+    if let Some(len) = encode_mdast_type_data_from_ops(c, c.node_type, builder, &mut fixed) {
+        builder.set_data_current(&fixed[..len]);
+    } else if let Some(type_data) = encode_mdast_tail_from_ops(c, c.node_type, builder) {
+        // Generated tail encoder (directive attributes, MDX JSX); see encode.rs.
+        builder.set_data_current(&type_data);
+    } else {
+        let type_data: Vec<u8> = match c.node_type {
+            LIST => encode_list_data(
+                c.ordered.unwrap_or(false),
+                c.start.unwrap_or(1),
+                c.spread.unwrap_or(false),
+            ),
+            // checked: 2 = not a task item
+            LIST_ITEM => encode_list_item_data(c.checked.unwrap_or(2), c.spread.unwrap_or(false)),
+            // Remaining tags carry no type_data.
+            _ => Vec::new(),
+        };
+        if !type_data.is_empty() {
+            builder.set_data_current(&type_data);
         }
-
-        HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => {
-            let name = js_node
-                .name
-                .as_deref()
-                .or(js_node.tag_name.as_deref())
-                .unwrap_or("");
-            let name_ref = builder.alloc_string(name);
-            let attr_tuples = encode_js_jsx_attrs(
-                builder,
-                js_node.attributes.as_ref().and_then(|a| a.as_jsx()),
-            );
-            let explicit = js_data_is_mdx_explicit(&js_node.data);
-            encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit)
-        }
-
-        HastNodeType::MdxFlowExpression
-        | HastNodeType::MdxTextExpression
-        | HastNodeType::MdxEsm => {
-            let value = js_node.value.as_deref().unwrap_or("");
-            let sref = builder.alloc_string(value);
-            let mut out = [0u8; 8];
-            out[0..4].copy_from_slice(&sref.offset.to_le_bytes());
-            out[4..8].copy_from_slice(&sref.len.to_le_bytes());
-            out.to_vec()
-        }
-
-        _ => Vec::new(),
+    }
+    if let Some(data) = c.data {
+        let id = builder.current_node_id();
+        builder.arena_mut().set_node_data(id, data.to_vec());
     }
 }
 
-/// Returns (arena, keep_children) for an MDAST sub-tree payload.
+impl<'a> OpCollector<'a> for FieldCollector<'a> {
+    type Kind = Mdast;
+    const NUMERIC_OPS: bool = true;
+
+    fn open(node_type: u8) -> Self {
+        FieldCollector {
+            node_type,
+            ..Default::default()
+        }
+    }
+
+    /// Reject op-stream tags this build can't construct — unknown bytes
+    /// always, MDX tags without the `mdx` feature.
+    fn check_tag(tag: u8) -> Result<(), CommandError> {
+        let known = MdastNodeType::from_u8(tag).is_some();
+        #[cfg(not(feature = "mdx"))]
+        let known = known
+            && !matches!(
+                MdastNodeType::from_u8(tag),
+                Some(
+                    MdastNodeType::MdxJsxFlowElement
+                        | MdastNodeType::MdxJsxTextElement
+                        | MdastNodeType::MdxFlowExpression
+                        | MdastNodeType::MdxTextExpression
+                        | MdastNodeType::MdxjsEsm
+                )
+            );
+        if known {
+            Ok(())
+        } else {
+            Err(CommandError::UnknownNodeType(format!(
+                "op-stream tag {tag}"
+            )))
+        }
+    }
+
+    fn finalize(&mut self, builder: &mut ArenaBuilder<Mdast>) {
+        finalize_collector(self, builder);
+    }
+
+    fn str_field(&mut self, field: u8, value: &'a str) {
+        let field = field as usize;
+        if field < self.strs.len() {
+            self.strs[field] = Some(value);
+        }
+    }
+
+    fn bool_field(&mut self, field: u8, value: bool) {
+        match field {
+            OF_ORDERED => self.ordered = Some(value),
+            OF_SPREAD => self.spread = Some(value),
+            OF_EXPLICIT => self.explicit = Some(value),
+            _ => {}
+        }
+    }
+
+    fn prop(&mut self, name: &'a str, kind: u8, value: &'a str) {
+        self.props.push((name, kind, value));
+    }
+
+    fn data(&mut self, bytes: &'a [u8]) {
+        self.data = Some(bytes);
+    }
+
+    fn u8_field(&mut self, field: u8, value: u8) {
+        match field {
+            OF_DEPTH => self.depth = Some(value),
+            OF_CHECKED => self.checked = Some(value),
+            _ => {}
+        }
+    }
+
+    fn u32_field(&mut self, field: u8, value: u32) {
+        if field == OF_START {
+            self.start = Some(value);
+        }
+    }
+
+    fn align(&mut self, bytes: &'a [u8]) {
+        self.align = Some(bytes);
+    }
+}
+
+fn replay_mdast_opstream(
+    ops: &[u8],
+    orig: &Arena<Mdast>,
+    anchor: u32,
+) -> Result<Arena<Mdast>, CommandError> {
+    replay_opstream::<FieldCollector>(ops, orig, anchor)
+}
+
+/// Returns (arena, keep_children) for an MDAST sub-tree payload. `orig`/`anchor`
+/// are the arena and the command's target node, used by an op-stream's
+/// `KEEP_CHILDREN`.
 fn read_mdast_payload(
     reader: &mut BufReader<'_>,
     parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+    orig: &Arena<Mdast>,
+    anchor: u32,
 ) -> Result<(Arena<Mdast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
     let len = reader.read_u32()? as usize;
@@ -915,36 +851,162 @@ fn read_mdast_payload(
     match payload_type {
         PAYLOAD_RAW_MARKDOWN => {
             let md = reader.read_str(len)?;
-            Ok((parse_raw_markdown(md, parse_markdown), false))
+            Ok((parse_markdown(md), false))
         }
         PAYLOAD_RAW_HTML => {
             let html = reader.read_str(len)?;
             let escaped = escape_braces_in_html_text(html);
-            Ok((parse_raw_markdown(&escaped, parse_markdown), false))
+            Ok((parse_markdown(&escaped), false))
         }
-        PAYLOAD_SERDE_JSON => {
-            let json_str = reader.read_str(len)?;
-            let js_node: JsNode = serde_json::from_str(json_str)
-                .map_err(|e| CommandError::InvalidJson(e.to_string()))?;
-            js_node_to_mdast_arena(&js_node)
+        PAYLOAD_OPSTREAM => {
+            let ops = reader.read_bytes(len)?;
+            Ok((replay_mdast_opstream(ops, orig, anchor)?, false))
         }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
 }
 
+/// HAST op-stream replay (mirrors the MDAST version). Builds element type_data
+/// (tag + properties) and text/comment/raw values; `OP_PROP` carries properties,
+/// `OF_TAGNAME` the tag.
+#[derive(Default)]
+pub(crate) struct HastFieldCollector<'a> {
+    node_type: u8,
+    finalized: bool,
+    /// HAST element `tagName` or MDX JSX element `name`.
+    pub(crate) tag: Option<&'a str>,
+    value: Option<&'a str>,
+    pub(crate) props: Vec<(&'a str, u8, &'a str)>,
+    /// MDX JSX `_mdxExplicitJsx` flag (`OP_BOOL` on `OF_EXPLICIT`).
+    pub(crate) explicit: Option<bool>,
+    data: Option<&'a [u8]>,
+}
+
+fn finalize_hast_collector(c: &mut HastFieldCollector<'_>, builder: &mut ArenaBuilder<Hast>) {
+    const TEXT: u8 = HastNodeType::Text as u8;
+    const COMMENT: u8 = HastNodeType::Comment as u8;
+    const RAW: u8 = HastNodeType::Raw as u8;
+    const MDX_FLOW_EXPRESSION: u8 = HastNodeType::MdxFlowExpression as u8;
+    const MDX_ESM: u8 = HastNodeType::MdxEsm as u8;
+    const MDX_TEXT_EXPRESSION: u8 = HastNodeType::MdxTextExpression as u8;
+
+    if c.finalized {
+        return;
+    }
+    c.finalized = true;
+    if let Some(type_data) = encode_hast_tail_from_ops(c, c.node_type, builder) {
+        // Generated tail encoder (element properties, MDX JSX); see encode.rs.
+        builder.set_data_current(&type_data);
+    } else {
+        let type_data: Vec<u8> = match c.node_type {
+            TEXT | COMMENT | RAW | MDX_FLOW_EXPRESSION | MDX_ESM | MDX_TEXT_EXPRESSION => {
+                let sref = builder.alloc_string(c.value.unwrap_or(""));
+                encode_string_ref_data(sref)
+            }
+            // Remaining tags carry no type_data.
+            _ => Vec::new(),
+        };
+        if !type_data.is_empty() {
+            builder.set_data_current(&type_data);
+        }
+    }
+    if let Some(data) = c.data {
+        let id = builder.current_node_id();
+        builder.arena_mut().set_node_data(id, data.to_vec());
+    }
+}
+
+impl<'a> OpCollector<'a> for HastFieldCollector<'a> {
+    type Kind = Hast;
+    const NUMERIC_OPS: bool = false;
+
+    fn open(node_type: u8) -> Self {
+        HastFieldCollector {
+            node_type,
+            ..Default::default()
+        }
+    }
+
+    /// HAST twin of the MDAST `check_tag`.
+    fn check_tag(tag: u8) -> Result<(), CommandError> {
+        // The JS visitor refuses to encode a doctype (it's not in
+        // `HAST_OPSTREAM_TYPES`); enforce the same here so a crafted buffer
+        // can't smuggle one in.
+        if HastNodeType::from_u8(tag) == Some(HastNodeType::Doctype) {
+            return Err(CommandError::UnencodableNodeType("doctype"));
+        }
+        let known = HastNodeType::from_u8(tag).is_some();
+        #[cfg(not(feature = "mdx"))]
+        let known = known
+            && !matches!(
+                HastNodeType::from_u8(tag),
+                Some(
+                    HastNodeType::MdxJsxElement
+                        | HastNodeType::MdxJsxTextElement
+                        | HastNodeType::MdxFlowExpression
+                        | HastNodeType::MdxEsm
+                        | HastNodeType::MdxTextExpression
+                )
+            );
+        if known {
+            Ok(())
+        } else {
+            Err(CommandError::UnknownNodeType(format!(
+                "op-stream tag {tag}"
+            )))
+        }
+    }
+
+    fn finalize(&mut self, builder: &mut ArenaBuilder<Hast>) {
+        finalize_hast_collector(self, builder);
+    }
+
+    fn str_field(&mut self, field: u8, value: &'a str) {
+        match field {
+            OF_TAGNAME | OF_NAME => self.tag = Some(value),
+            OF_VALUE => self.value = Some(value),
+            _ => {}
+        }
+    }
+
+    fn bool_field(&mut self, field: u8, value: bool) {
+        if field == OF_EXPLICIT {
+            self.explicit = Some(value);
+        }
+    }
+
+    fn prop(&mut self, name: &'a str, kind: u8, value: &'a str) {
+        self.props.push((name, kind, value));
+    }
+
+    fn data(&mut self, bytes: &'a [u8]) {
+        self.data = Some(bytes);
+    }
+}
+
+fn replay_hast_opstream(
+    ops: &[u8],
+    orig: &Arena<Hast>,
+    anchor: u32,
+) -> Result<Arena<Hast>, CommandError> {
+    replay_opstream::<HastFieldCollector>(ops, orig, anchor)
+}
+
 /// Returns (arena, keep_children) for a HAST sub-tree payload. Only
-/// `PAYLOAD_SERDE_JSON` is accepted — HAST plugins emit JSON node trees,
-/// not raw markdown or raw HTML.
-fn read_hast_payload(reader: &mut BufReader<'_>) -> Result<(Arena<Hast>, bool), CommandError> {
+/// `PAYLOAD_OPSTREAM` (declarative-compiled) is accepted — HAST has no source
+/// grammar, so raw markdown / HTML are not, and there is no JSON path.
+fn read_hast_payload(
+    reader: &mut BufReader<'_>,
+    orig: &Arena<Hast>,
+    anchor: u32,
+) -> Result<(Arena<Hast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
     let len = reader.read_u32()? as usize;
 
     match payload_type {
-        PAYLOAD_SERDE_JSON => {
-            let json_str = reader.read_str(len)?;
-            let js_node: JsNode = serde_json::from_str(json_str)
-                .map_err(|e| CommandError::InvalidJson(e.to_string()))?;
-            js_node_to_hast_arena(&js_node)
+        PAYLOAD_OPSTREAM => {
+            let ops = reader.read_bytes(len)?;
+            Ok((replay_hast_opstream(ops, orig, anchor)?, false))
         }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
@@ -973,12 +1035,30 @@ fn read_hast_payload(reader: &mut BufReader<'_>) -> Result<(Arena<Hast>, bool), 
 /// let _ = apply_mdast_commands(arena, &[], &parse_markdown);
 /// ```
 pub fn apply_mdast_commands(
-    mut arena: Arena<Mdast>,
+    arena: Arena<Mdast>,
     command_buf: &[u8],
     parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
 ) -> Result<Arena<Mdast>, CommandError> {
+    let (arena, dropped) = apply_mdast_commands_lenient(arena, command_buf, parse_markdown)?;
+    if let Some(anchor) = dropped.first() {
+        return Err(CommandError::PatchOnRemovedSubtree(*anchor));
+    }
+    Ok(arena)
+}
+
+/// Like [`apply_mdast_commands`], but rather than erroring when a patch targets
+/// a node inside a removed/replaced subtree, drops it and returns the dropped
+/// anchors. Such a patch is moot — the plugin discarded that subtree. A
+/// *passed-through* child is not dropped: it rides a `_ref` placeholder that
+/// splices it back with its id intact, so a transform queued on a nested node
+/// (e.g. a `:::tip` inside a `:::note`) still applies, in the same pass.
+pub fn apply_mdast_commands_lenient(
+    mut arena: Arena<Mdast>,
+    command_buf: &[u8],
+    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+) -> Result<(Arena<Mdast>, Vec<u32>), CommandError> {
     if command_buf.is_empty() {
-        return Ok(arena);
+        return Ok((arena, Vec::new()));
     }
 
     let mut patches: Vec<Patch<Mdast>> = Vec::new();
@@ -1005,19 +1085,22 @@ pub fn apply_mdast_commands(
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
+                let (new_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
+                let (new_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
+                let (child_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1026,7 +1109,8 @@ pub fn apply_mdast_commands(
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
+                let (child_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1035,7 +1119,8 @@ pub fn apply_mdast_commands(
 
             CMD_WRAP => {
                 let node_id = reader.read_u32()?;
-                let (parent_tree, _) = read_mdast_payload(&mut reader, parse_markdown)?;
+                let (parent_tree, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -1044,11 +1129,22 @@ pub fn apply_mdast_commands(
 
             CMD_REPLACE => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, keep_children) = read_mdast_payload(&mut reader, parse_markdown)?;
+                let (new_tree, keep_children) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
                     keep_children,
+                });
+            }
+
+            CMD_SET_CHILDREN => {
+                let node_id = reader.read_u32()?;
+                let (new_children, _) =
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                patches.push(Patch::SetChildren {
+                    node_id,
+                    new_children,
                 });
             }
 
@@ -1057,17 +1153,19 @@ pub fn apply_mdast_commands(
     }
 
     if patches.is_empty() {
-        Ok(arena)
+        Ok((arena, Vec::new()))
     } else {
-        satteri_ast::rebuild::rebuild(&arena, &patches)
+        let result = satteri_ast::rebuild::rebuild_lenient(&arena, &patches)?;
+        Ok((result.arena, result.dropped))
     }
 }
 
 /// Apply a command buffer to a HAST arena. Set-property mutations are
 /// applied in-place; structural mutations are collected as `Patch<Hast>`
-/// objects and applied via `rebuild()`.
+/// objects and applied via `rebuild()`. Errors if a patch is stranded inside a
+/// removed/replaced subtree; [`apply_hast_commands_lenient`] drops it instead.
 ///
-/// HAST plugins inject sub-trees via `PAYLOAD_SERDE_JSON` only — there is
+/// HAST plugins inject sub-trees via `PAYLOAD_OPSTREAM` only — there is
 /// no `parse_markdown` callback because HAST has no source-level grammar.
 ///
 /// Passing an MDAST arena is a compile error:
@@ -1080,11 +1178,27 @@ pub fn apply_mdast_commands(
 /// let _ = apply_hast_commands(arena, &[]);
 /// ```
 pub fn apply_hast_commands(
-    mut arena: Arena<Hast>,
+    arena: Arena<Hast>,
     command_buf: &[u8],
 ) -> Result<Arena<Hast>, CommandError> {
+    let (arena, dropped) = apply_hast_commands_lenient(arena, command_buf)?;
+    if let Some(anchor) = dropped.first() {
+        return Err(CommandError::PatchOnRemovedSubtree(*anchor));
+    }
+    Ok(arena)
+}
+
+/// Like [`apply_hast_commands`], but rather than erroring when a patch targets a
+/// node inside a removed/replaced subtree, drops it and returns the dropped
+/// anchors — mirroring [`apply_mdast_commands_lenient`]. Such a patch is moot:
+/// the plugin discarded that subtree. A passed-through child keeps its identity
+/// (via `_ref`) and so is never stranded this way.
+pub fn apply_hast_commands_lenient(
+    mut arena: Arena<Hast>,
+    command_buf: &[u8],
+) -> Result<(Arena<Hast>, Vec<u32>), CommandError> {
     if command_buf.is_empty() {
-        return Ok(arena);
+        return Ok((arena, Vec::new()));
     }
 
     let mut patches: Vec<Patch<Hast>> = Vec::new();
@@ -1111,19 +1225,19 @@ pub fn apply_hast_commands(
 
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_hast_payload(&mut reader)?;
+                let (new_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_hast_payload(&mut reader)?;
+                let (new_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_hast_payload(&mut reader)?;
+                let (child_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1132,7 +1246,7 @@ pub fn apply_hast_commands(
 
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_hast_payload(&mut reader)?;
+                let (child_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1141,7 +1255,7 @@ pub fn apply_hast_commands(
 
             CMD_WRAP => {
                 let node_id = reader.read_u32()?;
-                let (parent_tree, _) = read_hast_payload(&mut reader)?;
+                let (parent_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -1150,11 +1264,20 @@ pub fn apply_hast_commands(
 
             CMD_REPLACE => {
                 let node_id = reader.read_u32()?;
-                let (new_tree, keep_children) = read_hast_payload(&mut reader)?;
+                let (new_tree, keep_children) = read_hast_payload(&mut reader, &arena, node_id)?;
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
                     keep_children,
+                });
+            }
+
+            CMD_SET_CHILDREN => {
+                let node_id = reader.read_u32()?;
+                let (new_children, _) = read_hast_payload(&mut reader, &arena, node_id)?;
+                patches.push(Patch::SetChildren {
+                    node_id,
+                    new_children,
                 });
             }
 
@@ -1163,9 +1286,10 @@ pub fn apply_hast_commands(
     }
 
     if patches.is_empty() {
-        Ok(arena)
+        Ok((arena, Vec::new()))
     } else {
-        satteri_ast::rebuild::rebuild(&arena, &patches)
+        let result = satteri_ast::rebuild::rebuild_lenient(&arena, &patches)?;
+        Ok((result.arena, result.dropped))
     }
 }
 
@@ -1173,6 +1297,296 @@ pub fn apply_hast_commands(
 mod tests {
     use super::*;
     use satteri_ast::shared::PROP_INT;
+
+    fn op_open(b: &mut Vec<u8>, t: MdastNodeType) {
+        b.push(OP_OPEN);
+        b.push(t as u8);
+    }
+    fn op_close(b: &mut Vec<u8>) {
+        b.push(OP_CLOSE);
+    }
+    fn op_str(b: &mut Vec<u8>, field: u8, s: &str) {
+        b.push(OP_STR);
+        b.push(field);
+        b.extend_from_slice(&(s.len() as u32).to_le_bytes());
+        b.extend_from_slice(s.as_bytes());
+    }
+    fn op_u8(b: &mut Vec<u8>, field: u8, v: u8) {
+        b.push(OP_U8);
+        b.push(field);
+        b.push(v);
+    }
+
+    #[test]
+    fn opstream_replay_builds_subtree() {
+        // blockquote > [ heading(3) > text("Note"), paragraph > text("Body") ]
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Blockquote);
+        op_open(&mut ops, MdastNodeType::Heading);
+        op_u8(&mut ops, OF_DEPTH, 3);
+        op_open(&mut ops, MdastNodeType::Text);
+        op_str(&mut ops, OF_VALUE, "Note");
+        op_close(&mut ops);
+        op_close(&mut ops);
+        op_open(&mut ops, MdastNodeType::Paragraph);
+        op_open(&mut ops, MdastNodeType::Text);
+        op_str(&mut ops, OF_VALUE, "Body");
+        op_close(&mut ops);
+        op_close(&mut ops);
+        op_close(&mut ops);
+
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+        let arena = replay_mdast_opstream(&ops, &empty, 0).unwrap();
+
+        // node 0 = blockquote with 2 children
+        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Blockquote as u8);
+        let top = arena.get_children(0).to_vec();
+        assert_eq!(top.len(), 2);
+        // heading depth 3, child text "Note"
+        let h = top[0];
+        assert_eq!(arena.get_node(h).node_type, MdastNodeType::Heading as u8);
+        assert_eq!(decode_heading_data(arena.get_type_data(h)).depth, 3);
+        let h_text = arena.get_children(h)[0];
+        assert_eq!(arena.get_node(h_text).node_type, MdastNodeType::Text as u8);
+        let sref = decode_string_ref_data(arena.get_type_data(h_text));
+        assert_eq!(arena.get_str(sref), "Note");
+        // paragraph > text "Body"
+        let p = top[1];
+        assert_eq!(arena.get_node(p).node_type, MdastNodeType::Paragraph as u8);
+        let p_text = arena.get_children(p)[0];
+        assert_eq!(
+            arena.get_str(decode_string_ref_data(arena.get_type_data(p_text))),
+            "Body"
+        );
+    }
+
+    #[test]
+    fn opstream_replay_rejects_unbalanced_close() {
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+        let err = replay_mdast_opstream(&[OP_CLOSE], &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnbalancedOpstream));
+
+        let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
+        let err = replay_hast_opstream(&[OP_CLOSE], &empty_hast, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnbalancedOpstream));
+
+        // A balanced prefix doesn't excuse a trailing extra close.
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Paragraph);
+        op_close(&mut ops);
+        op_close(&mut ops);
+        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnbalancedOpstream));
+    }
+
+    #[test]
+    fn opstream_replay_rejects_unclosed_node() {
+        // A truncated stream leaves its OPENed nodes on the stack; finishing
+        // would hand back nodes with empty type_data.
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Heading);
+        op_u8(&mut ops, OF_DEPTH, 2);
+
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnbalancedOpstream));
+
+        let hast_ops = vec![OP_OPEN, HastNodeType::Element as u8];
+        let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
+        let err = replay_hast_opstream(&hast_ops, &empty_hast, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnbalancedOpstream));
+    }
+
+    #[test]
+    fn opstream_keep_children_rejects_out_of_range_anchor() {
+        let orig = test_parse_markdown("Hello");
+        let bad_anchor = orig.len() as u32;
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Heading);
+        ops.push(OP_KEEP_CHILDREN);
+        op_close(&mut ops);
+
+        let err = replay_mdast_opstream(&ops, &orig, bad_anchor).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidNodeId(id) if id == bad_anchor));
+    }
+
+    #[test]
+    fn set_property_rejects_out_of_range_node_id() {
+        let arena = build_hello_world();
+        let bad_id = arena.len() as u32;
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, bad_id, PROP_INT, "depth", "3");
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidNodeId(id) if id == bad_id));
+
+        let hast = build_hast_element(&[]);
+        let bad_id = hast.len() as u32;
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, bad_id, PROP_STRING, "class", "x");
+        let err = apply_hast_commands(hast, &buf).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidNodeId(id) if id == bad_id));
+    }
+
+    #[test]
+    fn opstream_replay_rejects_unknown_tags() {
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+        let err = replay_mdast_opstream(&[OP_OPEN, 200], &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnknownNodeType(_)));
+
+        let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
+        let err = replay_hast_opstream(&[OP_OPEN, 200], &empty_hast, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnknownNodeType(_)));
+    }
+
+    #[test]
+    fn opstream_keep_children_splices_original_children() {
+        // orig: root > paragraph > text("Hello"); replace the paragraph with
+        // heading(2) keeping its children.
+        let orig = test_parse_markdown("Hello");
+        let para = orig.get_children(0)[0];
+        let orig_text = orig.get_children(para)[0];
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Heading);
+        op_u8(&mut ops, OF_DEPTH, 2);
+        ops.push(OP_KEEP_CHILDREN);
+        op_close(&mut ops);
+
+        let arena = replay_mdast_opstream(&ops, &orig, para).unwrap();
+        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Heading as u8);
+        assert_eq!(decode_heading_data(arena.get_type_data(0)).depth, 2);
+        let children = arena.get_children(0).to_vec();
+        assert_eq!(children.len(), 1);
+        assert_eq!(arena.get_node(children[0]).node_type, REF_NODE_TYPE);
+        assert_eq!(
+            u32::from_le_bytes(arena.get_type_data(children[0]).try_into().unwrap()),
+            orig_text
+        );
+    }
+
+    #[test]
+    fn opstream_ref_rejects_out_of_range_id() {
+        // A stale id (a node cached across passes) must error at decode, not
+        // panic inside the rebuild's arena indexing.
+        let orig = test_parse_markdown("Hello");
+        let bad = orig.len() as u32 + 100;
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Paragraph);
+        ops.push(OP_REF);
+        ops.extend_from_slice(&bad.to_le_bytes());
+        op_close(&mut ops);
+
+        let err = replay_mdast_opstream(&ops, &orig, 0).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidNodeId(id) if id == bad));
+    }
+
+    #[test]
+    fn opstream_rejects_nested_root() {
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+
+        // Top-level root is the set-children wrapper and must pass.
+        let mut ok = Vec::new();
+        op_open(&mut ok, MdastNodeType::Root);
+        op_close(&mut ok);
+        assert!(replay_mdast_opstream(&ok, &empty, 0).is_ok());
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Root);
+        op_open(&mut ops, MdastNodeType::Root);
+        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnencodableNodeType("root")));
+    }
+
+    #[test]
+    fn hast_opstream_rejects_doctype() {
+        let empty = ArenaBuilder::<Hast>::new(String::new()).finish();
+        let ops = vec![OP_OPEN, HastNodeType::Doctype as u8, OP_CLOSE];
+        let err = replay_hast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::UnencodableNodeType("doctype")));
+    }
+
+    #[test]
+    fn opstream_rejects_over_deep_nesting() {
+        // The rebuild splices replayed content recursively, so unbounded
+        // nesting would overflow the host stack (an abort napi can't catch).
+        let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
+        let mut ops = Vec::new();
+        for _ in 0..(MAX_OPSTREAM_DEPTH + 1) {
+            op_open(&mut ops, MdastNodeType::Blockquote);
+        }
+        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        assert!(matches!(err, CommandError::OpstreamTooDeep(_)));
+    }
+
+    #[test]
+    fn set_property_rejects_out_of_range_or_unparseable_int() {
+        // build_hello_world: root(0) > heading(1) > text(2), paragraph > text.
+        let heading_id = 1;
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_INT, "depth", "9999");
+        let err =
+            apply_mdast_commands(build_hello_world(), &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(err, CommandError::PropertyValueOutOfRange { .. }));
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_INT, "depth", "not-a-number");
+        let err =
+            apply_mdast_commands(build_hello_world(), &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(err, CommandError::PropertyValueOutOfRange { .. }));
+
+        // The boundary itself still writes.
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_INT, "depth", "255");
+        let arena = apply_mdast_commands(build_hello_world(), &buf, &test_parse_markdown).unwrap();
+        assert_eq!(
+            decode_heading_data(arena.get_type_data(heading_id)).depth,
+            255
+        );
+    }
+
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn mdx_jsx_set_property_replaces_named_attrs_and_keeps_explicit() {
+        use satteri_ast::shared::MDX_ATTR_EXPRESSION_PROP;
+
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::MdxJsxElement as u8);
+        let elem_name = b.alloc_string("Box");
+        let foo = b.alloc_string("foo");
+        let expr = b.alloc_string("1+1");
+        let rest = b.alloc_string("rest");
+        let attrs = vec![
+            (MDX_ATTR_EXPRESSION_PROP, foo, expr),
+            (MDX_ATTR_SPREAD, StringRef::empty(), rest),
+        ];
+        b.set_data_current(&encode_mdx_jsx_element_data(elem_name, &attrs, true));
+        b.close_node();
+        b.close_node();
+        let mut arena = b.finish();
+
+        // Replaces the expression-valued `foo` (no duplicate) and appends
+        // after the spread so the write wins.
+        apply_hast_mdx_jsx_attribute(&mut arena, 1, "foo", PROP_STRING, "x").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(decode_mdx_jsx_attr_count(&data), 2);
+        assert!(decode_mdx_jsx_explicit(&data));
+        let (k0, _, _) = decode_mdx_jsx_attr(&data, 0);
+        assert_eq!(k0, MDX_ATTR_SPREAD);
+        let (k1, n1, v1) = decode_mdx_jsx_attr(&data, 1);
+        assert_eq!(k1, MDX_ATTR_LITERAL_PROP);
+        assert_eq!(arena.get_str(n1), "foo");
+        assert_eq!(arena.get_str(v1), "x");
+
+        // Appending a brand-new attribute must not clear the explicit flag.
+        apply_hast_mdx_jsx_attribute(&mut arena, 1, "id", PROP_STRING, "intro").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(decode_mdx_jsx_attr_count(&data), 3);
+        assert!(decode_mdx_jsx_explicit(&data));
+    }
 
     fn test_parse_markdown(source: &str) -> Arena<Mdast> {
         let mut b = ArenaBuilder::<Mdast>::new(String::new());
@@ -1307,92 +1721,6 @@ mod tests {
     }
 
     #[test]
-    fn replace_with_serde_json() {
-        let arena = build_hello_world();
-        let heading_id = arena.get_children(0)[0];
-
-        let json =
-            r#"{"type":"heading","depth":2,"children":[{"type":"text","value":"Replaced"}]}"#;
-        let mut buf = Vec::new();
-        buf.push(CMD_REPLACE);
-        push_u32(&mut buf, heading_id);
-        buf.push(PAYLOAD_SERDE_JSON);
-        push_u32(&mut buf, json.len() as u32);
-        buf.extend_from_slice(json.as_bytes());
-
-        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
-        let root_children = result.get_children(0);
-        assert_eq!(root_children.len(), 2);
-        let new_heading = root_children[0];
-        assert_eq!(
-            result.get_node(new_heading).node_type,
-            MdastNodeType::Heading as u8
-        );
-        let heading_data = result.get_type_data(new_heading);
-        assert_eq!(decode_heading_data(heading_data).depth, 2);
-    }
-
-    #[test]
-    fn replace_with_directive_child() {
-        // Directives serialize `attributes` as a map (`{}`), not the array form
-        // used by MDX JSX. The deserializer must accept both shapes; without
-        // that, any plugin returning a tree containing a directive child fails
-        // with "invalid type: map, expected a sequence".
-        let arena = build_hello_world();
-        let heading_id = arena.get_children(0)[0];
-
-        let json = r#"{"type":"paragraph","children":[{"type":"text","value":"hi "},{"type":"textDirective","name":"inline","attributes":{},"children":[]}]}"#;
-        let mut buf = Vec::new();
-        buf.push(CMD_REPLACE);
-        push_u32(&mut buf, heading_id);
-        buf.push(PAYLOAD_SERDE_JSON);
-        push_u32(&mut buf, json.len() as u32);
-        buf.extend_from_slice(json.as_bytes());
-
-        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
-        let root_children = result.get_children(0);
-        let new_para = root_children[0];
-        assert_eq!(
-            result.get_node(new_para).node_type,
-            MdastNodeType::Paragraph as u8
-        );
-        let para_children = result.get_children(new_para);
-        assert_eq!(para_children.len(), 2);
-        let directive = para_children[1];
-        assert_eq!(
-            result.get_node(directive).node_type,
-            MdastNodeType::TextDirective as u8
-        );
-        let dir_data = result.get_type_data(directive);
-        assert_eq!(decode_directive_attr_count(dir_data), 0);
-    }
-
-    #[test]
-    fn replace_with_directive_attrs() {
-        // Same as above but with non-empty directive attrs to confirm the map
-        // shape round-trips into the arena's directive type_data.
-        let arena = build_hello_world();
-        let heading_id = arena.get_children(0)[0];
-
-        let json = r#"{"type":"containerDirective","name":"tip","attributes":{"id":"foo","class":"bar"},"children":[]}"#;
-        let mut buf = Vec::new();
-        buf.push(CMD_REPLACE);
-        push_u32(&mut buf, heading_id);
-        buf.push(PAYLOAD_SERDE_JSON);
-        push_u32(&mut buf, json.len() as u32);
-        buf.extend_from_slice(json.as_bytes());
-
-        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
-        let directive = result.get_children(0)[0];
-        assert_eq!(
-            result.get_node(directive).node_type,
-            MdastNodeType::ContainerDirective as u8
-        );
-        let dir_data = result.get_type_data(directive);
-        assert_eq!(decode_directive_attr_count(dir_data), 2);
-    }
-
-    #[test]
     fn multiple_commands() {
         let arena = build_hello_world();
         let heading_id = arena.get_children(0)[0];
@@ -1428,63 +1756,121 @@ mod tests {
     }
 
     #[test]
-    fn js_node_to_arena_basic() {
-        let js = JsNode {
-            node_type: "heading".to_string(),
-            children: Some(vec![JsNode {
-                node_type: "text".to_string(),
-                children: None,
-                value: Some("Hello".to_string()),
-                depth: None,
-                url: None,
-                title: None,
-                alt: None,
-                lang: None,
-                meta: None,
-                ordered: None,
-                start: None,
-                spread: None,
-                checked: None,
-                identifier: None,
-                label: None,
-                reference_type: None,
-                name: None,
-                attributes: None,
-                tag_name: None,
-                properties: None,
-                is_hast: false,
-                keep_children: false,
-                data: None,
-            }]),
-            depth: Some(2),
-            value: None,
-            url: None,
-            title: None,
-            alt: None,
-            lang: None,
-            meta: None,
-            ordered: None,
-            start: None,
-            spread: None,
-            checked: None,
-            identifier: None,
-            label: None,
-            reference_type: None,
-            name: None,
-            attributes: None,
-            tag_name: None,
-            properties: None,
-            is_hast: false,
-            keep_children: false,
-            data: None,
-        };
+    fn set_property_invalid_field_reports_property_and_node_type() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
 
-        let (arena, _keep) = js_node_to_mdast_arena(&js).unwrap();
-        assert_eq!(arena.len(), 2);
-        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Heading as u8);
-        assert_eq!(arena.get_children(0).len(), 1);
-        let text_id = arena.get_children(0)[0];
-        assert_eq!(arena.get_node(text_id).node_type, MdastNodeType::Text as u8);
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_STRING, "value", "x");
+
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::UnknownField { ref name, ref node_type }
+                if name == "value" && node_type == "heading"
+        ));
+        assert_eq!(
+            err.to_string(),
+            "cannot set property 'value' on a 'heading' node"
+        );
+    }
+
+    #[test]
+    fn set_property_wrong_value_type_reports_value_mismatch() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+
+        // `depth` is a valid heading field, but it holds an int, not a string.
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, heading_id, PROP_STRING, "depth", "3");
+
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::InvalidPropertyValue { ref name, ref node_type }
+                if name == "depth" && node_type == "heading"
+        ));
+        assert_eq!(
+            err.to_string(),
+            "property 'depth' on a 'heading' node cannot hold a value of this type"
+        );
+    }
+
+    /// Build root > one leaf node of `node_type` carrying `type_data`.
+    fn build_single_node(node_type: MdastNodeType, type_data: &[u8]) -> Arena<Mdast> {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(node_type as u8);
+        b.set_data_current(type_data);
+        b.close_node();
+        b.close_node();
+        b.finish()
+    }
+
+    #[test]
+    fn set_property_image_reference_alt_roundtrip() {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(MdastNodeType::ImageReference as u8);
+        let identifier = b.alloc_string("img");
+        let alt = b.alloc_string("old");
+        b.set_data_current(&encode_image_reference_data(identifier, identifier, 0, alt));
+        b.close_node();
+        b.close_node();
+        let arena = b.finish();
+        let image_ref_id = arena.get_children(0)[0];
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, image_ref_id, PROP_STRING, "alt", "new alt");
+
+        let result = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap();
+        let alt = decode_image_reference_alt(result.get_type_data(image_ref_id));
+        assert_eq!(result.get_str(alt), "new alt");
+    }
+
+    #[test]
+    fn set_property_reference_type_valid_and_invalid() {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(MdastNodeType::LinkReference as u8);
+        let identifier = b.alloc_string("ref");
+        b.set_data_current(&encode_reference_data(identifier, identifier, 0));
+        b.close_node();
+        b.close_node();
+        let arena = b.finish();
+        let link_ref_id = arena.get_children(0)[0];
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, link_ref_id, PROP_STRING, "referenceType", "full");
+        let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let reference = decode_reference_data(result.get_type_data(link_ref_id));
+        assert_eq!(reference.reference_kind, 2);
+
+        // A value outside the declared list is a value error, not a silent 0.
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, link_ref_id, PROP_STRING, "referenceType", "bogus");
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::InvalidPropertyValue { ref name, ref node_type }
+                if name == "referenceType" && node_type == "linkReference"
+        ));
+    }
+
+    #[test]
+    fn set_property_list_start_and_ordered() {
+        let arena = build_single_node(MdastNodeType::List, &encode_list_data(false, 1, false));
+        let list_id = arena.get_children(0)[0];
+
+        let mut buf = Vec::new();
+        push_set_property(&mut buf, list_id, PROP_INT, "start", "5");
+        push_set_property(&mut buf, list_id, PROP_BOOL_TRUE, "ordered", "");
+
+        let result = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap();
+        let list = decode_list_data(result.get_type_data(list_id));
+        assert_eq!(list.start, 5);
+        assert!(list.ordered);
+        assert!(!list.spread);
     }
 
     #[test]

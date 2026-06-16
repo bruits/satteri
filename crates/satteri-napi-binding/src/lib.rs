@@ -1,4 +1,8 @@
 #![deny(clippy::all)]
+// type_complexity: napi-derive generates code from the literal field types
+// to drive its TS-binding output, so the `Option<Either<String, FunctionRef<…>>>`
+// pattern can't be aliased away. Allow it crate-wide.
+#![allow(clippy::type_complexity)]
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -16,16 +20,40 @@ pub struct JsSmartPunctuationOptions {
     pub ellipses: Option<bool>,
 }
 
+/// Granular math toggles, nested under `features.math`.
+#[napi(object)]
+pub struct JsMathOptions {
+    /// Treat single-dollar runs (`$ ... $`) as inline math. Default: true.
+    /// Set `false` to keep single `$` as literal text (prose with currency)
+    /// while still parsing double-dollar (`$$ ... $$`) display math.
+    pub single_dollar_text_math: Option<bool>,
+}
+
+/// Granular GFM toggles, nested under `features.gfm`. The footnote i18n
+/// strings (label, back-content, back-label) travel separately via the
+/// `JsConvertOptions` argument on conversion entry points; the JS package
+/// extracts them from `features.gfm.footnotes` before calling in.
+#[napi(object)]
+pub struct JsGfmOptions {
+    /// Enable GFM footnotes (`[^id]`). Default: true. Set `false` to drop
+    /// footnote parsing while keeping the rest of the GFM bundle.
+    pub footnotes: Option<bool>,
+}
+
 /// Feature toggles for the Markdown/MDX parser, passed from JavaScript.
 #[napi(object)]
 pub struct JsFeatures {
     /// GFM: tables, footnotes, strikethrough, task lists. Default: true.
     pub gfm: Option<bool>,
+    /// Granular GFM control (overrides `gfm`).
+    pub gfm_options: Option<JsGfmOptions>,
     /// Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true.
     pub frontmatter: Option<bool>,
-    /// Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true.
+    /// Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: false.
     pub math: Option<bool>,
-    /// Heading attributes (`# text { #id .class }`). Default: true.
+    /// Granular math control (overrides `math`).
+    pub math_options: Option<JsMathOptions>,
+    /// Heading attributes (`# text { #id .class }`). Default: false.
     pub heading_attributes: Option<bool>,
     /// Colon-delimited container directive blocks (`:::`). Default: false.
     pub directive: Option<bool>,
@@ -46,8 +74,10 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
 
     let f = features.unwrap_or(JsFeatures {
         gfm: None,
+        gfm_options: None,
         frontmatter: None,
         math: None,
+        math_options: None,
         heading_attributes: None,
         directive: None,
         superscript: None,
@@ -59,19 +89,37 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
 
     let mut opts = Options::empty();
 
-    if f.gfm.unwrap_or(true) {
+    let (gfm_enabled, footnotes_enabled) = match &f.gfm_options {
+        Some(g) => (f.gfm.unwrap_or(true), g.footnotes.unwrap_or(true)),
+        None => (f.gfm.unwrap_or(true), true),
+    };
+    if gfm_enabled {
         opts |= Options::ENABLE_TABLES
-            | Options::ENABLE_FOOTNOTES
             | Options::ENABLE_STRIKETHROUGH
             | Options::ENABLE_TASKLISTS
             | Options::ENABLE_GFM;
+        if footnotes_enabled {
+            opts |= Options::ENABLE_FOOTNOTES;
+        }
     }
     if f.frontmatter.unwrap_or(true) {
         opts |= Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
             | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS;
     }
-    if f.math.unwrap_or(true) {
-        opts |= Options::ENABLE_MATH;
+    // Math is on when `math: true` or when a granular options object is passed
+    // (the object overrides the umbrella toggle). `single_dollar_text_math`
+    // then picks between umbrella-mode (single + multi) and multi-only: opting
+    // out of single-dollar sets the multi-dollar sub-flag directly so the
+    // parser skips lone `$` entirely.
+    if f.math_options.is_some() || f.math.unwrap_or(false) {
+        match f
+            .math_options
+            .as_ref()
+            .and_then(|m| m.single_dollar_text_math)
+        {
+            Some(false) => opts |= Options::ENABLE_MATH_MULTI_DOLLAR,
+            _ => opts |= Options::ENABLE_MATH,
+        }
     }
     if f.heading_attributes.unwrap_or(false) {
         opts |= Options::ENABLE_HEADING_ATTRIBUTES;
@@ -110,6 +158,7 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
 // MDX compilation options (JS-facing)
 
 /// Static optimization config passed from JavaScript.
+#[cfg(feature = "mdx")]
 #[napi(object)]
 pub struct JsOptimizeStaticConfig {
     /// Component/element name to wrap collapsed HTML in (e.g. "Fragment", "div").
@@ -123,6 +172,7 @@ pub struct JsOptimizeStaticConfig {
 }
 
 /// MDX compile options passed from JavaScript.
+#[cfg(feature = "mdx")]
 #[napi(object)]
 pub struct JsMdxOptions {
     /// Static subtree optimization. If provided, static subtrees are collapsed
@@ -158,6 +208,59 @@ pub struct JsMdxOptions {
     pub style_property_name_case: Option<String>,
 }
 
+/// MDAST→HAST conversion options passed from JavaScript.
+///
+/// Input-only: `object_to_js = false` because `FunctionRef` only crosses
+/// JS → Rust. A `JsConvertOptions` never gets serialized back to JS.
+#[napi(object, object_to_js = false)]
+pub struct JsConvertOptions {
+    /// `<h2>` label opening the footnotes section. Default: `"Footnotes"`.
+    pub footnote_label: Option<String>,
+    /// Backref `<a>` content. Default: `"\u{21a9}"` (↩).
+    pub footnote_back_content: Option<Either<String, FunctionRef<FnArgs<(u32, u32)>, String>>>,
+    /// Backref `aria-label`. The token `{reference}` is replaced with the
+    /// footnote number (`1`) or `number-K` (`1-2`) for repeated references.
+    /// Default: `"Back to reference {reference}"`.
+    pub footnote_back_label: Option<Either<String, FunctionRef<FnArgs<(u32, u32)>, String>>>,
+}
+
+fn js_backref_to_rust(
+    env: Env,
+    v: Either<String, FunctionRef<FnArgs<(u32, u32)>, String>>,
+) -> satteri_ast::hast::Backref {
+    match v {
+        Either::A(s) => satteri_ast::hast::Backref::Template(s),
+        Either::B(f) => satteri_ast::hast::Backref::Callback(Box::new(move |n, k| {
+            // Fail-soft: callback errors → empty string. Conversion can't
+            // return Result, and panicking would unwind across the FFI
+            // boundary into UB.
+            f.borrow_back(&env)
+                .and_then(|callable| callable.call(FnArgs::from((n as u32, k as u32))))
+                .unwrap_or_default()
+        })),
+    }
+}
+
+fn js_convert_options_to_rust(
+    env: Env,
+    opts: Option<JsConvertOptions>,
+) -> satteri_ast::hast::ConvertOptions {
+    let mut out = satteri_ast::hast::ConvertOptions::default();
+    if let Some(js) = opts {
+        if let Some(v) = js.footnote_label {
+            out.footnote_label = v;
+        }
+        if let Some(v) = js.footnote_back_content {
+            out.footnote_back_content = js_backref_to_rust(env, v);
+        }
+        if let Some(v) = js.footnote_back_label {
+            out.footnote_back_label = js_backref_to_rust(env, v);
+        }
+    }
+    out
+}
+
+#[cfg(feature = "mdx")]
 fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
     let mut options = satteri_mdxjs::Options::default();
     if let Some(js) = opts {
@@ -221,15 +324,19 @@ fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
 // MDX compilation
 
 /// Compile MDX source directly to JavaScript.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn compile_mdx(
+    env: Env,
     source: String,
     options: Option<JsMdxOptions>,
     features: Option<JsFeatures>,
+    convert_options: Option<JsConvertOptions>,
 ) -> Result<String> {
     let opts = js_options_to_rust(options);
     let parse_opts = features_to_options(features, true);
-    satteri_mdxjs::compile(&source, &opts, parse_opts)
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
+    satteri_mdxjs::compile_with_convert_options(&source, &opts, parse_opts, &convert_opts)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
@@ -237,10 +344,19 @@ pub fn compile_mdx(
 
 /// Parse Markdown source and return HTML string directly.
 #[napi]
-pub fn parse_to_html(source: String, features: Option<JsFeatures>) -> Result<String> {
+pub fn parse_to_html(
+    env: Env,
+    source: String,
+    features: Option<JsFeatures>,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<String> {
     let opts = features_to_options(features, false);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
     let (arena, _) = satteri_pulldown_cmark::parse(&source, opts);
-    Ok(satteri_ast::mdast_to_html(&arena))
+    Ok(satteri_ast::mdast_to_html_with_options(
+        &arena,
+        &convert_opts,
+    ))
 }
 
 // Handle-based API: arena stays in Rust, no buffer copies to JS.
@@ -292,6 +408,7 @@ pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Resu
 }
 
 /// Parse MDX source into an MDAST arena handle.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn create_mdx_mdast_handle(
     source: String,
@@ -432,9 +549,14 @@ pub fn walk_mdast_handle(
     )))
 }
 
-/// Apply a command buffer to an MDAST handle in-place.
+/// Apply a command buffer to an MDAST handle in-place. Returns how many patches
+/// were dropped because their target lived inside a subtree this pass removed or
+/// replaced (see the lenient note below); the JS pipeline warns when non-zero.
 #[napi]
-pub fn apply_commands_to_mdast_handle(handle: &MdastHandle, command_buf: Uint8Array) -> Result<()> {
+pub fn apply_commands_to_mdast_handle(
+    handle: &MdastHandle,
+    command_buf: Uint8Array,
+) -> Result<u32> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -443,25 +565,35 @@ pub fn apply_commands_to_mdast_handle(handle: &MdastHandle, command_buf: Uint8Ar
         &mut *arena,
         satteri_arena::Arena::<Mdast>::new(String::new()),
     );
-    let new_arena = satteri_plugin_api::apply_mdast_commands(owned, &command_buf, &parse_markdown)
-        .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    // Lenient: a patch stranded inside a subtree the same pass replaced or
+    // removed is dropped rather than fatal — the plugin discarded that subtree,
+    // so a transform queued on a node within it is moot. A passed-through child
+    // keeps its identity (via `_ref`) and so is never stranded this way.
+    let (new_arena, dropped) =
+        satteri_plugin_api::apply_mdast_commands_lenient(owned, &command_buf, &parse_markdown)
+            .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     *arena = new_arena;
-    Ok(())
+    Ok(dropped.len() as u32)
 }
 
 /// Convert an MDAST handle to a HAST handle. The MDAST handle is consumed (emptied).
 #[napi]
-pub fn convert_mdast_to_hast_handle(handle: &MdastHandle) -> Result<HastHandle> {
+pub fn convert_mdast_to_hast_handle(
+    env: Env,
+    handle: &MdastHandle,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<HastHandle> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
     let mdx = arena.mdx;
     let parse_options = arena.parse_options;
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
     let owned = std::mem::replace(
         &mut *arena,
         satteri_arena::Arena::<Mdast>::new(String::new()),
     );
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&owned);
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&owned, &convert_opts);
     hast.mdx = mdx;
     hast.parse_options = parse_options;
     Ok(External::new(Mutex::new(hast)))
@@ -471,8 +603,10 @@ pub fn convert_mdast_to_hast_handle(handle: &MdastHandle) -> Result<HastHandle> 
 /// The MDAST handle is consumed (emptied).
 #[napi]
 pub fn apply_commands_and_convert_to_hast_handle(
+    env: Env,
     handle: &MdastHandle,
     command_buf: Uint8Array,
+    convert_options: Option<JsConvertOptions>,
 ) -> Result<HastHandle> {
     let mut arena = handle
         .lock()
@@ -480,13 +614,15 @@ pub fn apply_commands_and_convert_to_hast_handle(
     let mdx = arena.mdx;
     let parse_options = arena.parse_options;
     let parse_markdown = make_parse_fn(mdx, parse_options);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
     let owned = std::mem::replace(
         &mut *arena,
         satteri_arena::Arena::<Mdast>::new(String::new()),
     );
     let mutated = satteri_plugin_api::apply_mdast_commands(owned, &command_buf, &parse_markdown)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
-    let mut hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena(&mutated);
+    let mut hast_arena =
+        satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
     hast_arena.mdx = mdx;
     hast_arena.parse_options = parse_options;
     Ok(External::new(Mutex::new(hast_arena)))
@@ -495,20 +631,33 @@ pub fn apply_commands_and_convert_to_hast_handle(
 /// Parse markdown source and convert to HAST. Returns an opaque handle.
 /// The arena stays in Rust memory, no buffer is copied to JS.
 #[napi]
-pub fn create_hast_handle(source: String, features: Option<JsFeatures>) -> Result<HastHandle> {
+pub fn create_hast_handle(
+    env: Env,
+    source: String,
+    features: Option<JsFeatures>,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<HastHandle> {
     let opts = features_to_options(features, false);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
     let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
     mdast.parse_options = opts.bits();
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mdast, &convert_opts);
     hast.mdx = false;
     hast.parse_options = opts.bits();
     Ok(External::new(Mutex::new(hast)))
 }
 
 /// Parse MDX source and convert to HAST. Returns an opaque handle.
+#[cfg(feature = "mdx")]
 #[napi]
-pub fn create_mdx_hast_handle(source: String, features: Option<JsFeatures>) -> Result<HastHandle> {
+pub fn create_mdx_hast_handle(
+    env: Env,
+    source: String,
+    features: Option<JsFeatures>,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<HastHandle> {
     let opts = features_to_options(features, true);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
     let (mut mdast, mdx_errors) = satteri_pulldown_cmark::parse(&source, opts);
     if let Some((offset, msg)) = mdx_errors.first() {
         return Err(napi::Error::from_reason(format!(
@@ -516,7 +665,7 @@ pub fn create_mdx_hast_handle(source: String, features: Option<JsFeatures>) -> R
         )));
     }
     mdast.parse_options = opts.bits();
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mdast, &convert_opts);
     hast.mdx = true;
     hast.parse_options = opts.bits();
     Ok(External::new(Mutex::new(hast)))
@@ -538,9 +687,12 @@ pub fn walk_handle(handle: &HastHandle, subscriptions: Vec<JsSubscription>) -> R
     Ok(Uint8Array::new(satteri_ast::walk::walk_hast(&arena, &subs)))
 }
 
-/// Apply a command buffer to a HAST handle's arena in-place.
+/// Apply a command buffer to a HAST handle's arena in-place. Returns how many
+/// patches were dropped because their target lived inside a subtree this pass
+/// removed or replaced (see the lenient note below); the JS pipeline warns when
+/// non-zero. Mirrors `apply_commands_to_mdast_handle`.
 #[napi]
-pub fn apply_commands_to_handle(handle: &HastHandle, command_buf: Uint8Array) -> Result<()> {
+pub fn apply_commands_to_handle(handle: &HastHandle, command_buf: Uint8Array) -> Result<u32> {
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -549,10 +701,14 @@ pub fn apply_commands_to_handle(handle: &HastHandle, command_buf: Uint8Array) ->
         &mut *arena,
         satteri_arena::Arena::<Hast>::new(String::new()),
     );
-    let new_arena = satteri_plugin_api::apply_hast_commands(owned, &command_buf)
+    // Lenient: a patch stranded inside a subtree the same pass replaced or
+    // removed is dropped rather than fatal — the plugin discarded that subtree,
+    // so a transform queued on a node within it is moot. A passed-through child
+    // keeps its identity (via `_ref`) and so is never stranded this way.
+    let (new_arena, dropped) = satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     *arena = new_arena;
-    Ok(())
+    Ok(dropped.len() as u32)
 }
 
 /// Render a HAST handle's arena to HTML. Does not consume the handle.
@@ -565,6 +721,7 @@ pub fn render_handle(handle: &HastHandle) -> Result<String> {
 }
 
 /// Compile a HAST handle's arena to MDX JavaScript. Does not consume the handle.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn compile_handle(handle: &HastHandle, options: Option<JsMdxOptions>) -> Result<String> {
     let mut arena = handle
@@ -587,12 +744,14 @@ pub fn compile_handle(handle: &HastHandle, options: Option<JsMdxOptions>) -> Res
 
 /// Parse a JavaScript expression and return its ESTree-compatible AST as a JSON string.
 /// Returns null if parsing fails. The JS layer calls JSON.parse (faster than serde_json → NAPI).
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn parse_expression(source: String) -> Option<String> {
     satteri_mdxjs::parse_expression_to_estree_json(&source)
 }
 
 /// Parse ESM (import/export statements) and return ESTree-compatible AST as JSON.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn parse_esm(source: String) -> Option<String> {
     satteri_mdxjs::parse_esm_to_estree_json(&source)

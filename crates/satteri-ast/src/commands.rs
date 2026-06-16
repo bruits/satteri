@@ -1,92 +1,6 @@
-//! Shared types for the binary command buffer system.
+//! Shared error type for the binary command buffer system.
 //!
 //! The command dispatch logic lives in `satteri_plugin_api::js_commands`.
-//! This module defines the shared error type, JS node representation,
-//! and property-type constants that are used by both MDAST and HAST
-//! command handlers.
-
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-pub struct JsNode {
-    #[serde(rename = "type")]
-    pub node_type: String,
-    #[serde(default)]
-    pub children: Option<Vec<JsNode>>,
-    pub depth: Option<u8>,
-    pub value: Option<String>,
-    pub url: Option<String>,
-    pub title: Option<String>,
-    pub alt: Option<String>,
-    pub lang: Option<String>,
-    pub meta: Option<String>,
-    pub ordered: Option<bool>,
-    pub start: Option<u32>,
-    pub spread: Option<bool>,
-    pub checked: Option<bool>,
-    pub identifier: Option<String>,
-    pub label: Option<String>,
-    #[serde(rename = "referenceType")]
-    pub reference_type: Option<String>,
-    pub name: Option<String>,
-    #[serde(default)]
-    pub attributes: Option<JsNodeAttributes>,
-    // HAST-specific fields
-    #[serde(rename = "tagName")]
-    pub tag_name: Option<String>,
-    #[serde(default)]
-    pub properties: Option<serde_json::Map<String, serde_json::Value>>,
-    /// Marker: when true, this node is a HAST node (not MDAST).
-    #[serde(rename = "_hast", default)]
-    pub is_hast: bool,
-    /// When true, keep the original node's children instead of replacing them.
-    #[serde(rename = "_keepChildren", default)]
-    pub keep_children: bool,
-    /// On a fresh node, equivalent to `ctx.setProperty(node, "data", …)`.
-    #[serde(default)]
-    pub data: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-pub enum JsNodeAttribute {
-    #[serde(rename = "mdxJsxAttribute")]
-    Attribute {
-        name: String,
-        /// null → boolean, string → literal, object with `value` → expression
-        value: Option<serde_json::Value>,
-    },
-    #[serde(rename = "mdxJsxExpressionAttribute")]
-    ExpressionAttribute { value: String },
-}
-
-/// `attributes` on a JS node has two shapes depending on the node type:
-/// MDX JSX elements use a list of `{type, name, value}` records, while
-/// directive nodes (`containerDirective` / `leafDirective` / `textDirective`)
-/// use a flat `{key: stringValue}` map. Untagged so serde tries the array
-/// shape first and falls back to the map.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum JsNodeAttributes {
-    Jsx(Vec<JsNodeAttribute>),
-    Directive(serde_json::Map<String, serde_json::Value>),
-}
-
-impl JsNodeAttributes {
-    pub fn as_jsx(&self) -> Option<&[JsNodeAttribute]> {
-        match self {
-            Self::Jsx(v) => Some(v.as_slice()),
-            Self::Directive(_) => None,
-        }
-    }
-
-    pub fn as_directive(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
-        match self {
-            Self::Directive(m) => Some(m),
-            Self::Jsx(_) => None,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub enum CommandError {
@@ -96,7 +10,32 @@ pub enum CommandError {
     InvalidUtf8,
     InvalidJson(String),
     UnknownNodeType(String),
-    UnknownField(u16),
+    UnknownField {
+        node_type: String,
+        name: String,
+    },
+    /// The property exists on the node type, but the supplied value's type is
+    /// not one the field can hold (e.g. a string for `heading.depth`).
+    InvalidPropertyValue {
+        node_type: String,
+        name: String,
+    },
+    /// A numeric property value is not an integer in the field's stored range.
+    /// Erroring beats writing `value as u8`, which would silently mask bits.
+    PropertyValueOutOfRange {
+        node_type: String,
+        name: String,
+        value: String,
+        max: u32,
+    },
+    /// A set-property value-type byte the dispatcher doesn't handle.
+    InvalidPropertyValueType(u8),
+    /// The node type exists but can never be built as plugin content (`root`
+    /// is only the stream's top-level wrapper; `doctype` carries nothing the
+    /// op-stream can express).
+    UnencodableNodeType(&'static str),
+    /// An op-stream nests OPENs deeper than the replay supports.
+    OpstreamTooDeep(usize),
     /// `wrapNode` was issued against a node that is also removed in the same
     /// command buffer. There's no defined way to "wrap then remove" or
     /// "remove then wrap" the same anchor.
@@ -107,6 +46,13 @@ pub enum CommandError {
     /// A patch's anchor lives inside a subtree whose root was removed, so
     /// the patch can never apply.
     PatchOnRemovedSubtree(u32),
+    /// An op-stream's `OP_OPEN`s and `OP_CLOSE`s did not pair up.
+    UnbalancedOpstream,
+    /// A wire-supplied node id does not exist in the target arena.
+    InvalidNodeId(u32),
+    /// A stored node's `type_data` is shorter than its declared layout, so a
+    /// field write would spill into the next node's data.
+    TypeDataTooShort,
 }
 
 impl std::fmt::Display for CommandError {
@@ -117,10 +63,46 @@ impl std::fmt::Display for CommandError {
             Self::UnknownPayloadType(p) => write!(f, "unknown payload type: 0x{p:02x}"),
             Self::InvalidUtf8 => write!(f, "invalid UTF-8 in command buffer"),
             Self::InvalidJson(e) => write!(f, "invalid JSON in command payload: {e}"),
-            Self::UnknownNodeType(t) => write!(f, "unknown node type in JSON: {t}"),
-            Self::UnknownField(f_id) => write!(f, "unknown field ID: 0x{f_id:04x}"),
+            Self::UnknownNodeType(t) => write!(f, "unknown node type: {t}"),
+            Self::UnknownField { node_type, name } => {
+                write!(f, "cannot set property '{name}' on a '{node_type}' node")
+            }
+            Self::InvalidPropertyValue { node_type, name } => write!(
+                f,
+                "property '{name}' on a '{node_type}' node cannot hold a value of this type"
+            ),
+            Self::PropertyValueOutOfRange {
+                node_type,
+                name,
+                value,
+                max,
+            } => write!(
+                f,
+                "value {value} for property '{name}' on a '{node_type}' node must be an integer between 0 and {max}"
+            ),
+            Self::InvalidPropertyValueType(t) => {
+                write!(f, "unknown set-property value type: 0x{t:02x}")
+            }
+            Self::UnencodableNodeType(t) => {
+                write!(f, "node type '{t}' cannot appear in plugin-built content")
+            }
+            Self::OpstreamTooDeep(max) => {
+                write!(f, "plugin content nests deeper than {max} levels")
+            }
             Self::WrapOnRemovedNode(id) => {
                 write!(f, "wrapNode targets node {id} which is also removed")
+            }
+            Self::UnbalancedOpstream => {
+                write!(f, "unbalanced op-stream: OPEN and CLOSE ops do not pair up")
+            }
+            Self::InvalidNodeId(id) => {
+                write!(f, "node id {id} does not exist in the target arena")
+            }
+            Self::TypeDataTooShort => {
+                write!(
+                    f,
+                    "stored node type_data is shorter than its layout requires"
+                )
             }
             Self::ChildPatchOnRemovedNode(id) => write!(
                 f,

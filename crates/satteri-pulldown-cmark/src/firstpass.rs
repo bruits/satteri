@@ -6,9 +6,10 @@ use core::{cmp::max, ops::Range};
 
 use unicase::UniCase;
 
+#[cfg(feature = "mdx")]
+use crate::mdx::*;
 use crate::{
     linklabel::{scan_link_label_rest, LinkLabel},
-    mdx::*,
     parse::{
         scan_containers, Allocations, DirectiveAttrData, FootnoteDef, HeadingAttributes, Item,
         ItemBody, LinkDef, LINK_MAX_NESTED_PARENS,
@@ -39,6 +40,7 @@ pub(crate) fn run_first_pass(
         brace_context_next: 0,
         brace_context_stack: Vec::new(),
         mdx_errors: Vec::new(),
+        #[cfg(feature = "mdx")]
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
         pending_lazy_blockquote_close: false,
         doc_start: 0,
@@ -89,6 +91,7 @@ pub(crate) struct FirstPass<'a, 'b> {
     /// Reusable bump allocator for oxc parses (expression-body validation,
     /// ESM completeness checks). Avoids `Allocator::default()` heap alloc
     /// on every expression — the allocator is `reset()` between parses.
+    #[cfg(feature = "mdx")]
     pub(crate) mdx_expr_allocator: oxc_allocator::Allocator,
     /// Byte offset where the document's parseable content begins — 3 when
     /// a UTF-8 BOM is stripped, 0 otherwise. Used to gate
@@ -345,7 +348,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.options.contains(Options::ENABLE_FOOTNOTES),
                                     self.options.contains(Options::ENABLE_DEFINITION_LIST),
                                     self.options.contains(Options::ENABLE_MDX),
-                                    self.options.contains(Options::ENABLE_MATH),
+                                    self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR),
                                     self.options.contains(Options::ENABLE_DIRECTIVE),
                                     &self.tree,
                                     self.tree.spine_len(),
@@ -363,7 +366,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.options.contains(Options::ENABLE_FOOTNOTES),
                                     self.options.contains(Options::ENABLE_DEFINITION_LIST),
                                     self.options.contains(Options::ENABLE_MDX),
-                                    self.options.contains(Options::ENABLE_MATH),
+                                    self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR),
                                     self.options.contains(Options::ENABLE_DIRECTIVE),
                                     &self.tree,
                                     self.tree.spine_len(),
@@ -518,6 +521,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         let after = &bytes[content_end..];
                         let ws = scan_whitespace_no_nl(after);
                         let line_end = content_end + ws + scan_nextline(&after[ws..]);
+                        // `[label]` offsets (0/0 when no brackets) — capture
+                        // before `dir_data` is moved into the allocator.
+                        let label_start = dir_data.label_start;
+                        let label_end = dir_data.label_end;
                         let dir_ix = self.allocs.allocate_directive(dir_data);
                         self.tree.append(Item {
                             start: container_start,
@@ -525,6 +532,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::ContainerDirective(fence_length as u8, dir_ix),
                         });
                         self.tree.push();
+                        // Emit the label as a real inline-tokenized child so the
+                        // normal inline pass resolves emphasis/strong/links/code.
+                        if label_start != 0 || label_end != 0 {
+                            self.append_container_directive_label(label_start, label_end);
+                        }
                         return line_end;
                     } else {
                         break;
@@ -543,12 +555,25 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             || bytes[line_end + ws] == b'\r';
                         if at_eol || line_end >= bytes.len() {
                             self.finish_list(start_ix);
+                            let label_start = dir_data.label_start;
+                            let label_end = dir_data.label_end;
                             let dir_ix = self.allocs.allocate_directive(dir_data);
                             self.tree.append(Item {
                                 start: container_start,
                                 end: line_end,
                                 body: ItemBody::LeafDirective(dir_ix),
                             });
+                            // The label is the directive's inline content: tokenize
+                            // it directly as children (no label paragraph).
+                            if label_start < label_end {
+                                self.tree.push();
+                                self.parse_line(
+                                    label_start,
+                                    Some(label_end),
+                                    TableParseMode::Disabled,
+                                );
+                                self.tree.pop();
+                            }
                             let next_line = line_end + scan_nextline(&bytes[line_end..]);
                             return next_line;
                         }
@@ -742,6 +767,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
 
         // MDX blocks, must be checked before HTML blocks since JSX looks like HTML.
+        #[cfg(feature = "mdx")]
         if self.options.contains(Options::ENABLE_MDX) {
             // MDX ESM: lines starting with `import` or `export`.
             // ESM is only valid at the document root — but a still-open
@@ -905,7 +931,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return self.parse_fenced_code_block(ix, indent, fence_ch, n);
         }
 
-        if self.options.contains(Options::ENABLE_MATH) {
+        if self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR) {
             if let Some(n) = scan_math_fence(&bytes[ix..]) {
                 self.finish_list(start_ix);
                 return self.parse_math_block(ix, indent, n);
@@ -1203,7 +1229,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.options.contains(Options::ENABLE_FOOTNOTES),
             self.options.contains(Options::ENABLE_DEFINITION_LIST),
             self.options.contains(Options::ENABLE_MDX),
-            self.options.contains(Options::ENABLE_MATH),
+            self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR),
             self.options.contains(Options::ENABLE_DIRECTIVE),
             &self.tree,
             tree_position,
@@ -1216,6 +1242,26 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     /// Returns offset of line start after paragraph.
+    /// Append a container directive's `[label]` as a `DirectiveLabel` child
+    /// holding inline-tokenized content. The label paragraph spans the brackets
+    /// (`[` … `]`); its children come from the normal inline pass run over the
+    /// inner content, so emphasis/strong/links/code resolve like anywhere else.
+    /// Must be called with the directive itself on the spine.
+    fn append_container_directive_label(&mut self, label_start: usize, label_end: usize) {
+        let bracket_offset = label_start.saturating_sub(1);
+        let bracket_end = label_end + 1;
+        self.tree.append(Item {
+            start: bracket_offset,
+            end: bracket_end,
+            body: ItemBody::DirectiveLabel,
+        });
+        self.tree.push();
+        if label_start < label_end {
+            self.parse_line(label_start, Some(label_end), TableParseMode::Disabled);
+        }
+        self.tree.pop();
+    }
+
     fn parse_paragraph(&mut self, start_ix: usize, tasklist_marker: Option<Item>) -> usize {
         self.list_interrupted_paragraph = false;
         let body = if let Some(ItemBody::DefinitionList(_)) =
@@ -1772,7 +1818,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         begin_text = ix + 1;
                         backslash_escaped = false;
                         LoopInstruction::ContinueAndSkip(1)
-                    } else if bytes[ix + 1] == b'$' && self.options.contains(Options::ENABLE_MATH) {
+                    } else if bytes[ix + 1] == b'$' && self.options.has_math() {
                         // In math context, \$ should still produce a MaybeMath
                         // delimiter so it can close a math span. The backslash
                         // only prevents opening.
@@ -1907,6 +1953,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     backslash_escaped = false;
                     LoopInstruction::ContinueAndSkip(0)
                 }
+                #[cfg(feature = "mdx")]
                 b'{' if self.options.contains(Options::ENABLE_MDX) => {
                     // If `{` sits inside a pair of matching backtick runs on
                     // the current line, it's part of a code span's text —
@@ -2156,6 +2203,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         }
                         self.tree.append_text(begin_text, ix, backslash_escaped);
                         backslash_escaped = false;
+                        let label_start = dir_data.label_start;
+                        let label_end = dir_data.label_end;
                         let dir_ix = self.allocs.allocate_directive(dir_data);
                         let consumed = end_pos - ix;
                         self.tree.append(Item {
@@ -2163,6 +2212,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             end: end_pos,
                             body: ItemBody::TextDirective(dir_ix),
                         });
+                        // Tokenize the label inline as the directive's children,
+                        // re-entering the inline scanner over the `[…]` span.
+                        if label_start < label_end {
+                            self.tree.push();
+                            self.parse_line(label_start, Some(label_end), TableParseMode::Disabled);
+                            self.tree.pop();
+                        }
                         begin_text = end_pos;
                         LoopInstruction::ContinueAndSkip(consumed - 1)
                     } else {
@@ -2326,6 +2382,38 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     /// tree and also keeping track of the lines of HTML within the block.
     ///
     /// The html_end_tag is the tag that must be found on a line to end the block.
+    /// True when `line_start` (already advanced past container prefixes) sits
+    /// on a *pure* closing `:::` fence for an enclosing container directive:
+    /// colons only, indented at most 3 spaces, nothing but whitespace after,
+    /// and at least as long as that directive's opening fence. HTML blocks
+    /// consult this so they stop before the fence instead of swallowing it —
+    /// remark-directive recognizes the close at the container level, before
+    /// the block's continuation rule fires.
+    fn at_closing_directive_fence(&self, line_start: &LineStart<'_>) -> bool {
+        if !self.options.contains(Options::ENABLE_DIRECTIVE) {
+            return false;
+        }
+        for &node_ix in self.tree.walk_spine().rev() {
+            match self.tree[node_ix].item.body {
+                ItemBody::ContainerDirective(length, ..) => {
+                    // Keep walking outward on a miss: a shorter fence can still
+                    // close an ancestor directive that opened with fewer colons.
+                    let mut probe = line_start.clone();
+                    let _ = probe.scan_space_upto(3);
+                    if probe.scan_closing_container_extensions_fence(length) {
+                        probe.scan_all_space();
+                        if probe.is_at_eol() {
+                            return true;
+                        }
+                    }
+                }
+                ItemBody::HtmlBlock(..) | ItemBody::List(..) | ItemBody::ListItem(..) => {}
+                _ => break,
+            }
+        }
+        false
+    }
+
     fn parse_html_block_type_1_to_5(
         &mut self,
         start_ix: usize,
@@ -2447,6 +2535,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 end_ix = next_line_ix;
                 break;
             }
+            // A closing directive fence ends the block before swallowing it.
+            if self.at_closing_directive_fence(&line_start) {
+                end_ix = ix;
+                break;
+            }
             ix = next_line_ix;
             remaining_space = line_start.remaining_space();
             indent = 0;
@@ -2505,6 +2598,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if next_line_ix == self.text.len() || scan_blank_line(&bytes[next_line_ix..]).is_some()
             {
                 end_ix = next_line_ix;
+                break;
+            }
+            // A closing directive fence ends the block before swallowing it.
+            if self.at_closing_directive_fence(&line_start) {
+                end_ix = ix;
                 break;
             }
             ix = next_line_ix;
@@ -3367,6 +3465,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // would be mis-read as a JSX close `>`. Re-check that specific case
         // with the spine's container prefix so multi-line JSX in blockquotes
         // correctly interrupts paragraphs.
+        #[cfg(feature = "mdx")]
         if self.options.contains(Options::ENABLE_MDX)
             && bytes.starts_with(b"<")
             && self
@@ -3381,7 +3480,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.options.contains(Options::ENABLE_FOOTNOTES),
             self.options.contains(Options::ENABLE_DEFINITION_LIST),
             self.options.contains(Options::ENABLE_MDX),
-            self.options.contains(Options::ENABLE_MATH),
+            self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR),
             self.options.contains(Options::ENABLE_DIRECTIVE),
             &self.tree,
             tree_position,
@@ -3562,6 +3661,20 @@ fn count_header_cols(
 ///
 /// Use `FirstPass::scan_paragraph_interrupt` in any context that allows
 /// tables to interrupt the paragraph.
+/// Whether an MDX JSX flow element or `{…}` flow expression at the line start
+/// interrupts a paragraph. In the lite (non-mdx) build this is always false —
+/// the gated `mdx::*` scanners don't exist there.
+#[cfg(feature = "mdx")]
+fn mdx_block_interrupts(bytes: &[u8], mdx: bool) -> bool {
+    (mdx && bytes.starts_with(b"<") && scan_mdx_jsx_block(bytes, None).is_some())
+        || (mdx && bytes.starts_with(b"{") && scan_mdx_expression_block(bytes, None).is_some())
+}
+
+#[cfg(not(feature = "mdx"))]
+fn mdx_block_interrupts(_bytes: &[u8], _mdx: bool) -> bool {
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn scan_paragraph_interrupt_no_table(
     bytes: &[u8],
@@ -3613,10 +3726,10 @@ fn scan_paragraph_interrupt_no_table(
             && !current_container
             && bytes.starts_with(b"<")
             && scan_html_type_7(bytes).is_some())
-        // MDX JSX flow elements also interrupt paragraphs
-        || (mdx && bytes.starts_with(b"<") && scan_mdx_jsx_block(bytes, None).is_some())
-        // MDX flow expressions (`{ ... }` spanning the full line) also interrupt
-        || (mdx && bytes.starts_with(b"{") && scan_mdx_expression_block(bytes, None).is_some())
+        // MDX JSX flow elements and `{ ... }` flow expressions also interrupt
+        // paragraphs. Behind a cfg-switched helper so the gated `mdx::*` scan
+        // functions aren't named in the lite build (where it returns false).
+        || mdx_block_interrupts(bytes, mdx)
         || definition_list
             && ((current_container
                 && tree.peek_up().is_some_and(|cur| {
@@ -3896,6 +4009,7 @@ fn scope_end_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -> 
 ///
 /// CommonMark forbids URLs from spanning a blank line, so per-line scans
 /// are sufficient in both directions.
+#[cfg(feature = "mdx")]
 fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
     // Fast reject: walkback returns false on first newline, so a `(` past
     // the current line can't reach pos. Skip the walk when this line has
@@ -3962,6 +4076,7 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
 /// check for `is_inside_link_url_parens`: a malformed tail (e.g. plain
 /// URL followed by non-title bytes) means the link won't form, so any
 /// `{` between them should be treated as an expression start.
+#[cfg(feature = "mdx")]
 fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize) -> bool {
     let mut depth: i32 = 1;
     let mut k = lparen + 1;
@@ -4149,6 +4264,7 @@ fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize) -> bool {
 /// distinguish flow-position `{` (which follows mdx-js's strict-no-lazy
 /// flow rule) from text-position `{` after the block-level pass already
 /// failed to take it as flow.
+#[cfg(feature = "mdx")]
 fn is_at_paragraph_line_start(bytes: &[u8], pos: usize) -> bool {
     let mut j = pos;
     while j > 0 && bytes[j - 1] != b'\n' && bytes[j - 1] != b'\r' {
@@ -4203,6 +4319,17 @@ fn is_at_paragraph_line_start(bytes: &[u8], pos: usize) -> bool {
 /// interrupts on the line beginning at `ix` when a multi-line JSX tag from
 /// the previous line is still open — the would-be interrupt char (e.g. the
 /// closing `>`) actually belongs to the JSX tag.
+///
+/// In the lite (non-mdx) build the body is a `false` stub so the `&&`-guard
+/// call sites compile unchanged without naming the gated `mdx::*` scanners;
+/// `ENABLE_MDX` is never set there, so the real body would have returned
+/// without effect anyway.
+#[cfg(not(feature = "mdx"))]
+fn prev_line_has_open_inline_jsx(_bytes: &[u8], _ix: usize) -> bool {
+    false
+}
+
+#[cfg(feature = "mdx")]
 fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize) -> bool {
     if ix == 0 || ix > bytes.len() {
         return false;
@@ -4254,6 +4381,14 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize) -> bool {
 /// to suppress the first-pass `MdxTextExpression` handler for `{` that
 /// actually belongs to a JSX attribute spread or attribute value — those
 /// braces will be consumed by the inline JSX scanner in the second pass.
+///
+/// Lite (non-mdx) build: `false` stub, see [`prev_line_has_open_inline_jsx`].
+#[cfg(not(feature = "mdx"))]
+fn is_inside_open_inline_jsx_tag(_bytes: &[u8], _pos: usize) -> bool {
+    false
+}
+
+#[cfg(feature = "mdx")]
 fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
     if pos == 0 || pos > bytes.len() {
         return false;
@@ -4531,7 +4666,7 @@ fn try_emit_gfm_autolink<'a>(
         return None;
     }
     // Math span precedence (only matters when math is enabled).
-    if options.contains(Options::ENABLE_MATH) && is_inside_math_span(bytes, ix) {
+    if options.has_math() && is_inside_math_span(bytes, ix) {
         return None;
     }
     // MDX JSX tag precedence (only matters when MDX is enabled).
@@ -5011,6 +5146,7 @@ fn has_earlier_backtick_run(bytes: &[u8], pos: usize, count: usize) -> bool {
     false
 }
 
+#[cfg(feature = "mdx")]
 fn contains_blank_line(bytes: &[u8]) -> bool {
     let mut i = 0;
     let mut at_line_start = true;
@@ -5491,6 +5627,14 @@ fn delim_run_can_open(
                 && (prev_char.is_whitespace() || is_punctuation(prev_char)));
     }
 
+    // Double quotes can open after a non-space word character. For example, `에"About Me"` has
+    // quoted text attached directly after Korean text.
+    if delim == b'"' {
+        return !is_punctuation(next_char)
+            || prev_char.is_whitespace()
+            || is_punctuation(prev_char);
+    }
+
     prev_char.is_whitespace()
         || is_punctuation(prev_char) && (delim != b'\'' || ![']', ')'].contains(&prev_char))
 }
@@ -5546,6 +5690,14 @@ fn delim_run_can_close(
                 && (next_char.is_whitespace() || is_punctuation(next_char)));
     }
 
+    // Double quotes can close before a non-space word character. For example, `"About Me"로` has
+    // Korean text attached directly after the quoted phrase.
+    if delim == b'"' {
+        return !is_punctuation(prev_char)
+            || next_char.is_whitespace()
+            || is_punctuation(next_char);
+    }
+
     next_char.is_whitespace() || is_punctuation(next_char)
 }
 
@@ -5583,7 +5735,7 @@ fn special_bytes(options: &Options) -> [bool; 256] {
     if options.contains(Options::ENABLE_SUPERSCRIPT) {
         bytes[b'^' as usize] = true;
     }
-    if options.contains(Options::ENABLE_MATH) {
+    if options.has_math() {
         bytes[b'$' as usize] = true;
         bytes[b'{' as usize] = true;
         bytes[b'}' as usize] = true;
@@ -6287,7 +6439,7 @@ mod simd {
         if options.contains(Options::ENABLE_SUPERSCRIPT) {
             add_lookup_byte(&mut lookup, b'^');
         }
-        if options.contains(Options::ENABLE_MATH) {
+        if options.has_math() {
             add_lookup_byte(&mut lookup, b'$');
             add_lookup_byte(&mut lookup, b'{');
             add_lookup_byte(&mut lookup, b'}');

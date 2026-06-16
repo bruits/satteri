@@ -21,6 +21,7 @@ import {
 } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
+import type { MdastNode } from "../src/types.js";
 
 const MARKDOWN = readFileSync(new URL("./fixtures/markdown.md", import.meta.url), "utf8");
 const MDX = readFileSync(new URL("./fixtures/document.mdx", import.meta.url), "utf8");
@@ -53,6 +54,50 @@ const noopMdastPlugin = defineMdastPlugin({
   heading() {},
 });
 
+// Plugins that transform the tree — the path most plugins exercise. Two
+// representative shapes: keeping children (passthrough) and building a fresh
+// subtree.
+
+// Keep children: swap every <a> for a <span> carrying the href; children pass
+// through by reference.
+const replaceLinksHast = defineHastPlugin({
+  name: "replace-links",
+  element: {
+    filter: ["a"],
+    visit(node, ctx) {
+      ctx.replaceNode(node, {
+        type: "element",
+        tagName: "span",
+        properties: { className: ["link"], "data-href": String(node.properties.href ?? "") },
+        children: node.children,
+      });
+    },
+  },
+});
+
+// MDAST mirror of the keep-children fast path: passing `node.children` through
+// compiles them to refs and skips the arena snapshot.
+const replaceLinksMdast = defineMdastPlugin({
+  name: "replace-links-mdast",
+  link(node, ctx) {
+    ctx.replaceNode(node, { type: "emphasis", children: node.children });
+  },
+});
+
+// Build a fresh subtree: replace every paragraph with a blockquote it constructs.
+const buildSubtreeMdast = defineMdastPlugin({
+  name: "build-subtree-mdast",
+  paragraph() {
+    return {
+      type: "blockquote",
+      children: [
+        { type: "heading", depth: 3, children: [{ type: "text", value: "Note" }] },
+        { type: "paragraph", children: [{ type: "text", value: "Rebuilt paragraph body." }] },
+      ],
+    } satisfies MdastNode;
+  },
+});
+
 describe("markdownToHtml", () => {
   bench("no plugins", () => {
     markdownToHtml(MARKDOWN);
@@ -79,6 +124,20 @@ describe("markdownToHtml", () => {
       mdastPlugins: [noopMdastPlugin],
       hastPlugins: [mutatingHastPlugin],
     });
+  });
+});
+
+describe("markdownToHtml (plugin transforms)", () => {
+  bench("HAST replaceNode keep-children (links)", () => {
+    markdownToHtml(MARKDOWN, { hastPlugins: [replaceLinksHast] });
+  });
+
+  bench("MDAST replaceNode keep-children (links)", () => {
+    markdownToHtml(MARKDOWN, { mdastPlugins: [replaceLinksMdast] });
+  });
+
+  bench("MDAST build-subtree (paragraphs)", () => {
+    markdownToHtml(MARKDOWN, { mdastPlugins: [buildSubtreeMdast] });
   });
 });
 

@@ -10,7 +10,7 @@ license = "MIT"
 name = "satteri-mdxjs"
 repository = "https://github.com/bruits/satteri"
 rust-version = "1.91.0"
-version = "0.2.3"
+version = "0.3.3"
 
 [dependencies]
 oxc_allocator = { workspace = true }
@@ -22,8 +22,8 @@ oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
 rustc-hash = { workspace = true }
 satteri-arena = { workspace = true }
-satteri-ast = { workspace = true }
-satteri-pulldown-cmark = { workspace = true }
+satteri-ast = { workspace = true, features = ["mdx"] }
+satteri-pulldown-cmark = { workspace = true, features = ["std", "mdx"] }
 serde = { workspace = true }
 unicode-id-start = { workspace = true }
 

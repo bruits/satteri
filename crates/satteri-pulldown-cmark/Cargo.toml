@@ -1,6 +1,6 @@
 [package]
 name = "satteri-pulldown-cmark"
-version = "0.4.1"
+version = "0.5.3"
 authors = [
   "Raph Levien <raph.levien@gmail.com>",
   "Marcus Klaas de Vries <mail@marcusklaas.nl>",
@@ -15,11 +15,11 @@ build = "build.rs"
 [dependencies]
 bitflags = "2"
 memchr = { version = "2.5", default-features = false }
-oxc_allocator = { workspace = true }
-oxc_ast = { workspace = true }
-oxc_ast_visit = { workspace = true }
-oxc_parser = { workspace = true }
-oxc_span = { workspace = true }
+oxc_allocator = { workspace = true, optional = true }
+oxc_ast = { workspace = true, optional = true }
+oxc_ast_visit = { workspace = true, optional = true }
+oxc_parser = { workspace = true, optional = true }
+oxc_span = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 satteri-arena = { workspace = true }
 satteri-ast = { workspace = true }
@@ -33,7 +33,15 @@ bincode = { version = "2.0.1", features = ["serde"] }
 serde_json = { workspace = true }
 
 [features]
-default = ["std"]
+default = ["std", "mdx"]
 gen-tests = ["std"]
+mdx = [
+  "dep:oxc_allocator",
+  "dep:oxc_ast",
+  "dep:oxc_ast_visit",
+  "dep:oxc_parser",
+  "dep:oxc_span",
+  "satteri-ast/mdx",
+]
 simd = []
 std = ["memchr/std"]

@@ -185,16 +185,28 @@ after the visit completes, so it's safe to mutate while iterating.
 
 ### Tree mutation
 
-| Method                          | Effect                                            |
-| ------------------------------- | ------------------------------------------------- |
-| `removeNode(node)`              | Drop the node from its parent                     |
-| `replaceNode(node, newNode)`    | Swap the node for a different one                 |
-| `insertBefore(node, newNode)`   | Insert a sibling before the node                  |
-| `insertAfter(node, newNode)`    | Insert a sibling after the node                   |
-| `wrapNode(node, parentNode)`    | Wrap the node in `parentNode` (becomes its child) |
-| `prependChild(node, childNode)` | Insert `childNode` as the first child of `node`   |
-| `appendChild(node, childNode)`  | Insert `childNode` as the last child of `node`    |
-| `setProperty(node, key, value)` | Replace one field on the node                     |
+| Method                                  | Effect                                                  |
+| --------------------------------------- | ------------------------------------------------------- |
+| `removeNode(node)`                      | Drop the node from its parent                           |
+| `replaceNode(node, newNode)`            | Swap the node for a different one                       |
+| `insertBefore(node, newNode)`           | Insert a sibling before the node                        |
+| `insertAfter(node, newNode)`            | Insert a sibling after the node                         |
+| `wrapNode(node, parentNode)`            | Wrap the node in `parentNode` (becomes its first child) |
+| `prependChild(node, childNode)`         | Insert `childNode` as the first child of `node`         |
+| `appendChild(node, childNode)`          | Insert `childNode` as the last child of `node`          |
+| `insertChildAt(node, index, childNode)` | Insert `childNode` as the `index`-th child of `node`    |
+| `removeChildAt(node, index)`            | Remove the `index`-th child of `node`                   |
+| `setProperty(node, key, value)`         | Replace one field on the node                           |
+
+`wrapNode` places the wrapped node as `parentNode`'s **first** child. If
+`parentNode` declares its own children, they are kept after it. Wrapping a
+heading in a `<div>` that holds an anchor link yields
+`<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position
+instead, return a replacement from the visitor.
+
+`insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and
+`insertChildAt` each accept either a single node or an array of nodes. An array
+is inserted in order at the target position.
 
 For MDAST, `key` must be a field of the node type and `value` must
 match that field's type. For HAST, `key` is a `string` and `value` is
@@ -207,10 +219,12 @@ For HAST elements, `setProperty` takes a HAST property key (e.g.
 
 ### Inspection
 
-| Method                                | Effect                                                                                                                             |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `textContent(node, options?)` (MDAST) | Concatenated text of the subtree. Options: `{ includeImageAlt?: boolean, includeHtml?: boolean }`. Mirrors `mdast-util-to-string`. |
-| `textContent(node)` (HAST)            | Concatenated text of the subtree. Mirrors DOM `textContent`.                                                                       |
+| Method                                | Effect                                                                                             |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `textContent(node, options?)` (MDAST) | Concatenated text of the subtree. Options: `{ includeImageAlt?: boolean, includeHtml?: boolean }`. |
+| `textContent(node)` (HAST)            | Concatenated text of the subtree. Mirrors DOM `textContent`.                                       |
+| `parent(node)`                        | The node's parent, or `undefined` at the root.                                                     |
+| `indexOf(node)`                       | Index of the node in its parent's children, or `undefined` at the root.                            |
 
 ### Diagnostics
 
@@ -219,19 +233,18 @@ For HAST elements, `setProperty` takes a HAST property key (e.g.
 | `report({ message, node?, severity? })` | Push a diagnostic. `severity` defaults to `"error"`; allowed values are `"error" \| "warning" \| "info"`. |
 | `getDiagnostics()`                      | Return all diagnostics collected so far.                                                                  |
 
-`report` doesn't abort the plugin; diagnostics from every plugin in
-the pipeline are collected and returned on `result.diagnostics`, each
-tagged with the `phase` (`"mdast"` or `"hast"`) that produced it.
+`report` doesn't abort the plugin; diagnostics are collected and
+returned with the compile result.
 
 ## Return value semantics
 
-| Returned                      | MDAST                            | HAST          |
-| ----------------------------- | -------------------------------- | ------------- |
-| `undefined` / `null` / `void` | Keep node, apply `ctx` mutations | Same          |
-| The same node object          | Same (no-op replace)             | Same          |
-| A different node              | Replace the visited node         | Replace       |
-| `{ raw: string }`             | Splice raw Markdown (re-parsed)  | Not supported |
-| `{ rawHtml: string }`         | Splice raw HTML (passthrough)    | Not supported |
+| Returned                      | MDAST                            | HAST    |
+| ----------------------------- | -------------------------------- | ------- |
+| `undefined` / `null` / `void` | Keep node, apply `ctx` mutations | Same    |
+| The same node object          | Same (no-op replace)             | Same    |
+| A different node              | Replace the visited node         | Replace |
+| `{ raw: string }`             | Splice raw Markdown (re-parsed)  | N/A     |
+| `{ rawHtml: string }`         | Splice raw HTML (passthrough)    | N/A     |
 
 ## Async plugins
 

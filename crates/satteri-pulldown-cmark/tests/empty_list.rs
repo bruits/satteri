@@ -1,5 +1,7 @@
 use satteri_ast::mdast::MdastNodeType;
-use satteri_pulldown_cmark::arena_build::{parse, DEFAULT_OPTIONS, MDX_OPTIONS};
+#[cfg(feature = "mdx")]
+use satteri_pulldown_cmark::arena_build::MDX_OPTIONS;
+use satteri_pulldown_cmark::arena_build::{parse, DEFAULT_OPTIONS};
 
 #[test]
 fn empty_list_item_keeps_list() {
@@ -35,6 +37,7 @@ fn empty_sublist_cant_interrupt_paragraph() {
     );
 }
 
+#[cfg(feature = "mdx")]
 #[test]
 fn mdx_expression_then_jsx_is_flow() {
     let input = "{-83} <Box/>";
@@ -61,6 +64,7 @@ fn mdx_expression_then_jsx_is_flow() {
     );
 }
 
+#[cfg(feature = "mdx")]
 #[test]
 fn mdx_fragment_with_content_is_flow() {
     let input = "<>{998}</>";

@@ -92,3 +92,39 @@ fn combined_flag_still_works() {
     assert!(!html.contains("--"), "no ASCII dashes");
     assert!(!html.contains("..."), "no ASCII dots");
 }
+
+#[test]
+fn double_quote_opens_after_ascii_letter() {
+    let html = render(r#"x"About Me""#, opts_quotes_only());
+    assert_eq!(html, "<p>x“About Me”</p>\n");
+}
+
+#[test]
+fn double_quote_opens_after_non_ascii_letter() {
+    let html = render(r#"에"About Me""#, opts_quotes_only());
+    assert_eq!(html, "<p>에“About Me”</p>\n");
+}
+
+#[test]
+fn double_quote_closes_before_ascii_letter() {
+    let html = render(r#""About Me"x"#, opts_quotes_only());
+    assert_eq!(html, "<p>“About Me”x</p>\n");
+}
+
+#[test]
+fn double_quote_closes_before_non_ascii_letter() {
+    let html = render(r#""About Me"로"#, opts_quotes_only());
+    assert_eq!(html, "<p>“About Me”로</p>\n");
+}
+
+#[test]
+fn double_quote_opens_and_closes_next_to_ascii_letters() {
+    let html = render(r#"x"About Me"y"#, opts_quotes_only());
+    assert_eq!(html, "<p>x“About Me”y</p>\n");
+}
+
+#[test]
+fn double_quote_opens_and_closes_next_to_non_ascii_letters() {
+    let html = render(r#"에"About Me"로"#, opts_quotes_only());
+    assert_eq!(html, "<p>에“About Me”로</p>\n");
+}

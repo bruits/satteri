@@ -120,6 +120,26 @@ pub fn compile(
     options: &Options,
     parse_options: satteri_pulldown_cmark::Options,
 ) -> Result<String, message::Message> {
+    compile_with_convert_options(
+        value,
+        options,
+        parse_options,
+        &satteri_ast::hast::ConvertOptions::default(),
+    )
+}
+
+/// Compile MDX source with caller-supplied mdast→hast conversion options
+/// (footnote i18n strings, etc.).
+///
+/// # Errors
+///
+/// Same conditions as [`compile`].
+pub fn compile_with_convert_options(
+    value: &str,
+    options: &Options,
+    parse_options: satteri_pulldown_cmark::Options,
+    convert_options: &satteri_ast::hast::ConvertOptions,
+) -> Result<String, message::Message> {
     let normalised;
     let value = if value.contains('\t') {
         normalised = expand_tabs(value);
@@ -137,7 +157,8 @@ pub fn compile(
             source: Box::new("mdx-jsx".into()),
         });
     }
-    let hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena(&arena);
+    let hast_arena =
+        satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&arena, convert_options);
     compile_hast_arena(&hast_arena, options)
 }
 

@@ -1,5 +1,10 @@
 import { describe, test } from "vitest";
-import { assertExtMdastConformance, assertExtHastConformance } from "./helpers.js";
+import {
+  assertExtMdastConformance,
+  assertExtHastConformance,
+  assertNoSingleDollarMathMdastConformance,
+  assertNoSingleDollarMathHastConformance,
+} from "./helpers.js";
 
 const MATH: ["math"] = ["math"];
 
@@ -294,5 +299,51 @@ describe("Math HAST conformance", () => {
       "When $a \\ne 0$, there are two solutions to $(ax^2 + bx + c = 0)$ and they are\n$$ x = {-b \\pm \\sqrt{b^2-4ac} \\over 2a} $$",
       MATH,
     );
+  });
+});
+
+// Verified against remark-math configured the same way so future drift on
+// either side surfaces here.
+describe("Math singleDollarTextMath:false conformance (vs remark-math)", () => {
+  test("currency prose keeps dollars literal", () => {
+    assertNoSingleDollarMathMdastConformance("the deficit grew from $50 to $100 billion");
+  });
+
+  test("lone $ in prose is not math", () => {
+    assertNoSingleDollarMathMdastConformance("price is $9.99 today");
+  });
+
+  test("paired single $ no longer opens math", () => {
+    assertNoSingleDollarMathMdastConformance("text $x = 1$ here");
+  });
+
+  test("double-dollar inline still parses", () => {
+    assertNoSingleDollarMathMdastConformance("text $$x^2$$ end");
+  });
+
+  test("block math fence still parses", () => {
+    assertNoSingleDollarMathMdastConformance("$$\n\\alpha\n$$");
+  });
+
+  test("mixed: paragraph with $ and $$..$$", () => {
+    assertNoSingleDollarMathMdastConformance(
+      "I owe $5 but the formula is $$E = mc^2$$ regardless.",
+    );
+  });
+
+  test("escaped dollar still literal", () => {
+    assertNoSingleDollarMathMdastConformance("Foo \\$1 bar");
+  });
+
+  test("hast: currency prose renders without math elements", () => {
+    assertNoSingleDollarMathHastConformance("the deficit grew from $50 to $100 billion");
+  });
+
+  test("hast: $$..$$ still becomes display math", () => {
+    assertNoSingleDollarMathHastConformance("intro $$\\beta$$ outro");
+  });
+
+  test("hast: block math fence", () => {
+    assertNoSingleDollarMathHastConformance("$$\n\\gamma\n$$");
   });
 });

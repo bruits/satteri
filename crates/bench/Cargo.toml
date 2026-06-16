@@ -20,8 +20,8 @@ path = "src/html_compare.rs"
 
 
 [dependencies]
-satteri-pulldown-cmark = { workspace = true }
-satteri-ast = { workspace = true }
+satteri-pulldown-cmark = { workspace = true, features = ["std", "mdx"] }
+satteri-ast = { workspace = true, features = ["mdx"] }
 
 [dev-dependencies]
 divan = { version = "4", package = "codspeed-divan-compat" }

@@ -1,0 +1,84 @@
+Run this with `cargo test --features gen-tests suite::math_multi_dollar`.
+
+# Multi-dollar math only
+
+`ENABLE_MATH_MULTI_DOLLAR` on its own keeps multi-dollar math (`$$...$$` and
+`$$` block fences) while leaving a lone `$` as literal text. This is what
+`math: { singleDollarTextMath: false }` resolves to on the npm side, and it
+mirrors remark-math's `singleDollarTextMath: false`. Its purpose is to stop
+prose that uses `$` for currency from being mis-parsed as math.
+
+## Single dollars stay literal
+
+A single-dollar span is not math, and renders verbatim:
+
+```````````````````````````````` example
+$x=y$
+.
+<p>$x=y$</p>
+````````````````````````````````
+
+Two currency amounts on one line stay literal (the motivating case):
+
+```````````````````````````````` example
+$50 to $100 billion
+.
+<p>$50 to $100 billion</p>
+````````````````````````````````
+
+A single unclosed dollar is literal:
+
+```````````````````````````````` example
+We spent $5.99 today
+.
+<p>We spent $5.99 today</p>
+````````````````````````````````
+
+Single-dollar without surrounding whitespace is still literal:
+
+```````````````````````````````` example
+foo$1+1 = 2$bar
+.
+<p>foo$1+1 = 2$bar</p>
+````````````````````````````````
+
+Repeated single-dollar spans stay literal:
+
+```````````````````````````````` example
+$a$ and $b$
+.
+<p>$a$ and $b$</p>
+````````````````````````````````
+
+## Multi-dollar math still works
+
+Double dollars inline still produce inline math:
+
+```````````````````````````````` example
+$$\alpha$$
+.
+<p><code class="language-math math-inline">\alpha</code></p>
+````````````````````````````````
+
+A `$$` block fence still produces display math:
+
+```````````````````````````````` example
+$$
+\beta+\gamma
+$$
+.
+<pre><code class="language-math math-display">\beta+\gamma</code></pre>
+````````````````````````````````
+
+Currency prose and display math coexist in one document:
+
+```````````````````````````````` example
+We raised $5 to $10 million.
+
+$$
+E = mc^2
+$$
+.
+<p>We raised $5 to $10 million.</p>
+<pre><code class="language-math math-display">E = mc^2</code></pre>
+````````````````````````````````

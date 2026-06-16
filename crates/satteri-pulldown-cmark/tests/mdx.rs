@@ -3,6 +3,9 @@
 //! Tests are organized by construct: ESM, expression flow, expression text,
 //! JSX flow, JSX text. Edge cases from markdown-rs's mdx_*.rs test files are
 //! included.
+//!
+//! The whole file is MDX-only; it compiles out of the lite (non-mdx) build.
+#![cfg(feature = "mdx")]
 
 use satteri_pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -581,9 +584,20 @@ fn jsx_flow_closing_tag() {
     );
 }
 
-// ===========================================================================
-// JSX text (inline)
-// ===========================================================================
+#[test]
+fn jsx_flow_self_referential_close_tag_in_attribute() {
+    use satteri_pulldown_cmark::{parse, MDX_OPTIONS};
+    let src = "<CodePreview\n  code={`<CodePreview lang=\"astro\">\n    body\n</CodePreview>`}\n  lang=\"astro\"\n>\n  <CodePreview lang=\"astro\">\n    body\n  </CodePreview>\n</CodePreview>\n";
+    let (_arena, errors) = parse(src, MDX_OPTIONS);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn jsx_close_tag_in_string_attribute_is_text() {
+    use satteri_pulldown_cmark::{parse, MDX_OPTIONS};
+    let (_arena, errors) = parse("<Demo code=\"</Demo>\">child</Demo>\n", MDX_OPTIONS);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
 
 #[test]
 fn jsx_text_lowercase() {

@@ -1,6 +1,6 @@
 [package]
 name = "satteri-ast"
-version = "0.2.7"
+version = "0.3.2"
 edition = "2021"
 description = "MDAST and HAST node types, codecs, tree operations, and conversion for Sätteri"
 license = "MIT"
@@ -13,4 +13,11 @@ serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 
 [dev-dependencies]
-satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark" }
+satteri-pulldown-cmark = { path = "../satteri-pulldown-cmark", features = ["std", "mdx"] }
+
+[features]
+default = ["mdx"]
+# satteri-ast has no oxc/mdxjs deps; `mdx` only toggles MDX node codecs,
+# conversion arms, and JSX attr helpers. The dev-dep parser builds with its
+# own default features (mdx on), so the parity tests keep compiling.
+mdx = []

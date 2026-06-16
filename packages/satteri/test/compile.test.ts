@@ -52,6 +52,189 @@ describe("frontmatter extraction", () => {
   });
 });
 
+describe("features.superscript / features.subscript", () => {
+  test("superscript renders <sup>", () => {
+    const result = markdownToHtml("2^10^", { features: { superscript: true } });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<p>2<sup>10</sup></p>");
+  });
+
+  test("subscript renders <sub>", () => {
+    const result = markdownToHtml("H~2~O", { features: { subscript: true } });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<p>H<sub>2</sub>O</p>");
+  });
+
+  test("both features together", () => {
+    const result = markdownToHtml("H~2~O and 2^10^.", {
+      features: { superscript: true, subscript: true },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<p>H<sub>2</sub>O and 2<sup>10</sup>.</p>");
+  });
+
+  test("disabled by default: delimiters stay literal", () => {
+    const result = markdownToHtml("H~2~O and 2^10^.");
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).not.toContain("<sub>");
+    expect(result.html).not.toContain("<sup>");
+  });
+
+  test("mdast exposes superscript / subscript node types", () => {
+    const ast = markdownToMdast("H~2~O and 2^10^.", {
+      features: { superscript: true, subscript: true },
+    });
+    expect(ast.type).toBe("root");
+    if (ast.type !== "root") return;
+    const para = ast.children[0];
+    expect(para?.type).toBe("paragraph");
+    if (para?.type !== "paragraph") return;
+    expect(para.children.map((c) => c.type)).toEqual([
+      "text",
+      "subscript",
+      "text",
+      "superscript",
+      "text",
+    ]);
+  });
+
+  test("mdast plugin visits superscript and replacement survives rebuild", () => {
+    const plugin = defineMdastPlugin({
+      name: "swap-sup-to-sub",
+      superscript() {
+        return { type: "subscript", children: [{ type: "text", value: "swapped" }] };
+      },
+    });
+    const result = markdownToHtml("a^x^b", {
+      features: { superscript: true, subscript: true },
+      mdastPlugins: [plugin],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<p>a<sub>swapped</sub>b</p>");
+  });
+});
+
+describe("features.math.singleDollarTextMath", () => {
+  test("default keeps single-$ as inline math", () => {
+    const result = markdownToHtml("inline $x$ here", { features: { math: true } });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("language-math");
+  });
+
+  test("false keeps single-$ literal but still parses $$..$$", () => {
+    const result = markdownToHtml("the deficit grew from $50 to $100 billion", {
+      features: { math: { singleDollarTextMath: false } },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("$50");
+    expect(result.html).toContain("$100");
+    expect(result.html).not.toContain("language-math");
+
+    const display = markdownToHtml("text $$x^2$$ end", {
+      features: { math: { singleDollarTextMath: false } },
+    });
+    if (display instanceof Promise) throw new Error("expected sync");
+    expect(display.html).toContain("language-math");
+  });
+});
+
+describe("features.gfm.footnotes", () => {
+  const SRC = "See[^a] and[^a] again.\n\n[^a]: Shared note.\n";
+
+  test("default emits English strings", () => {
+    const result = markdownToHtml(SRC);
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">Footnotes<");
+    expect(result.html).toContain('aria-label="Back to reference 1"');
+    expect(result.html).toContain('aria-label="Back to reference 1-2"');
+  });
+
+  test("footnotes: false drops the footnotes section entirely", () => {
+    const result = markdownToHtml(SRC, {
+      features: { gfm: { footnotes: false } },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).not.toContain(">Footnotes<");
+    // Without parsing as footnotes, the `[^a]` text should leak as-is.
+    expect(result.html).toContain("[^a]");
+  });
+
+  test("footnote options localize label / back-content / back-label", () => {
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            label: "Notas",
+            backContent: "up",
+            backLabel: "Volver a {reference}",
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">Notas<");
+    expect(result.html).not.toContain(">Footnotes<");
+    expect(result.html).toContain(">up<");
+    expect(result.html).toContain('aria-label="Volver a 1"');
+    expect(result.html).toContain('aria-label="Volver a 1-2"');
+  });
+
+  test("backLabel callback receives (referenceNumber, rerunIndex)", () => {
+    const seen: Array<[number, number]> = [];
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            backLabel: (n, k) => {
+              seen.push([n, k]);
+              return k > 1 ? `cb n=${n} k=${k}` : `cb n=${n}`;
+            },
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(seen).toEqual([
+      [1, 1],
+      [1, 2],
+    ]);
+    expect(result.html).toContain('aria-label="cb n=1"');
+    expect(result.html).toContain('aria-label="cb n=1 k=2"');
+  });
+
+  test("backContent callback returns per-backref text", () => {
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            backContent: (_n, k) => (k === 1 ? "first" : "more"),
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">first<");
+    expect(result.html).toContain(">more<");
+  });
+
+  test("can mix template label and callback backLabel", () => {
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            label: "Notas",
+            backLabel: (n, k) => `#${n}.${k}`,
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">Notas<");
+    expect(result.html).toContain('aria-label="#1.1"');
+    expect(result.html).toContain('aria-label="#1.2"');
+  });
+});
+
 // markdownToHtml - no plugins
 
 describe("markdownToHtml", () => {
@@ -116,6 +299,50 @@ describe("markdownToHtml", () => {
     });
     expect(html).toContain("REPLACED");
     expect(html).not.toContain("Original");
+  });
+
+  test("raw return from a block (paragraph) visitor does not nest a root", () => {
+    const replace = defineMdastPlugin({
+      name: "replace-para",
+      paragraph() {
+        return { raw: "Lorem **ipsum** dolor." };
+      },
+    });
+
+    const { html } = markdownToHtml("placeholder", { mdastPlugins: [replace] });
+    expect(html.trim()).toBe("<p>Lorem <strong>ipsum</strong> dolor.</p>");
+  });
+
+  test("raw return parsing to several blocks splices them as siblings", () => {
+    const replace = defineMdastPlugin({
+      name: "expand-para",
+      paragraph() {
+        return { raw: "# Title\n\nBody." };
+      },
+    });
+
+    const { html } = markdownToHtml("placeholder", { mdastPlugins: [replace] });
+    expect(html).toContain("<h1>Title</h1>");
+    expect(html).toContain("<p>Body.</p>");
+    expect(html).not.toContain("</h1>\n<root");
+  });
+
+  // Option B unwraps only the document root. A raw return into an inline slot
+  // (text visitor) still carries the parser's wrapping paragraph — raw is
+  // block-level by design — but it must not produce a nested <root>/<p><p>.
+  test("raw return from an inline (text) visitor keeps a single paragraph wrapper", () => {
+    const decorate = defineMdastPlugin({
+      name: "decorate-text",
+      text() {
+        return { raw: "Lorem **ipsum** dolor." };
+      },
+    });
+
+    const { html } = markdownToHtml("placeholder", { mdastPlugins: [decorate] });
+    // The parser's paragraph survives inside the original paragraph; what must
+    // never appear is a literal nested document root.
+    expect(html).not.toContain("<root>");
+    expect(html).toContain("<strong>ipsum</strong>");
   });
 
   // with HAST plugins only
@@ -706,7 +933,11 @@ describe("mdxToJs", () => {
       element: {
         filter: ["p"],
         visit(node, ctx) {
-          ctx.setProperty(node, "style", "background-color: red; -webkit-line-clamp: 2; --x: 1");
+          ctx.setProperty(
+            node,
+            "style",
+            "background-color: red; -webkit-line-clamp: 2; --tmLabel: blue; --x: 1",
+          );
         },
       },
     });
@@ -714,7 +945,10 @@ describe("mdxToJs", () => {
     const dom = mdxToJs("hi\n", { hastPlugins: [setStyle] }).code;
     expect(dom).toContain('backgroundColor: "red"');
     expect(dom).toContain('WebkitLineClamp: "2"');
-    // Custom properties are kept verbatim under both casings.
+    // Custom properties are kept verbatim under both casings — including their
+    // case, which is significant (`--tmLabel` ≠ `--tmlabel`). Regression test
+    // for https://github.com/withastro/astro/issues/16940.
+    expect(dom).toContain('"--tmLabel": "blue"');
     expect(dom).toContain('"--x": "1"');
 
     const css = mdxToJs("hi\n", {
@@ -723,7 +957,27 @@ describe("mdxToJs", () => {
     }).code;
     expect(css).toContain('"background-color": "red"');
     expect(css).toContain('"-webkit-line-clamp": "2"');
+    expect(css).toContain('"--tmLabel": "blue"');
     expect(css).toContain('"--x": "1"');
+  });
+
+  test("case-insensitive standard property names are lowercased", () => {
+    // CSS standard property names are case-insensitive, so satteri normalizes
+    // `COLOR` to `color`. Custom properties (`--*`) are case-sensitive and
+    // exempt (covered above).
+    const setStyle = defineHastPlugin({
+      name: "set-style",
+      element: {
+        filter: ["p"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "style", "COLOR: red");
+        },
+      },
+    });
+
+    const { code } = mdxToJs("hi\n", { hastPlugins: [setStyle] });
+    expect(code).toContain('color: "red"');
+    expect(code).not.toContain("COLOR");
   });
 
   test("style on MDX-written JSX is preserved as a string", () => {

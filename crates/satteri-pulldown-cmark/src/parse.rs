@@ -30,10 +30,11 @@ use core::{
 use rustc_hash::FxHashMap;
 use unicase::UniCase;
 
+#[cfg(feature = "mdx")]
+use crate::mdx::*;
 use crate::{
     firstpass::run_first_pass,
     linklabel::{scan_link_label_rest, FootnoteLabel, LinkLabel, ReferenceLabel},
-    mdx::*,
     scanners::*,
     strings::CowStr,
     tree::{Tree, TreeIndex},
@@ -120,6 +121,10 @@ pub(crate) enum ItemBody {
     ContainerDirective(u8, DirectiveIndex), // (fence length, directive data)
     LeafDirective(DirectiveIndex),
     TextDirective(DirectiveIndex),
+    // A container directive's `[label]`, holding inline content. Emitted as a
+    // `paragraph` with `data.directiveLabel = true`. Its children are tokenized
+    // by the normal inline pass, so emphasis/strong/links resolve naturally.
+    DirectiveLabel,
     List(bool, u8, u64),   // is_tight, list character, list start index
     ListItem(usize, bool), // indent level, spread (loose item)
     FootnoteDefinition(CowIndex),
@@ -140,10 +145,15 @@ pub(crate) enum ItemBody {
     TableCell,
 
     // MDX
+    #[cfg(feature = "mdx")]
     MdxJsxFlowElement(JsxElementIndex),
+    #[cfg(feature = "mdx")]
     MdxJsxTextElement(JsxElementIndex),
+    #[cfg(feature = "mdx")]
     MdxFlowExpression(CowIndex),
+    #[cfg(feature = "mdx")]
     MdxTextExpression(CowIndex),
+    #[cfg(feature = "mdx")]
     MdxEsm(CowIndex),
 }
 
@@ -577,6 +587,7 @@ impl<'input> ParserInner<'input> {
             match self.tree[cur_ix].item.body {
                 ItemBody::MaybeHtml => {
                     // MDX inline JSX: check before HTML
+                    #[cfg(feature = "mdx")]
                     if self.options.contains(Options::ENABLE_MDX) {
                         let start = self.tree[cur_ix].item.start;
                         let next_byte = block_text.as_bytes().get(start + 1).copied();
@@ -937,6 +948,35 @@ impl<'input> ParserInner<'input> {
                                 break;
                             }
                         }
+                    }
+
+                    // Single- and multi-dollar math can be toggled
+                    // independently (mirroring remark-math's
+                    // `singleDollarTextMath`). When this run's length isn't
+                    // an enabled delimiter, the `$` is literal text — so
+                    // prose like `$50 to $100` never becomes a math span.
+                    let count_enabled = if open_count == 1 {
+                        self.options.contains(Options::ENABLE_MATH_SINGLE_DOLLAR)
+                    } else {
+                        self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR)
+                    };
+                    if !count_enabled {
+                        let mut text_ix = cur_ix;
+                        loop {
+                            self.tree[text_ix].item.body = ItemBody::Text {
+                                backslash_escaped: false,
+                            };
+                            if text_ix == open_end {
+                                break;
+                            }
+                            match self.tree[text_ix].next {
+                                Some(next) => text_ix = next,
+                                None => break,
+                            }
+                        }
+                        prev = cur;
+                        cur = self.tree[cur_ix].next;
+                        continue;
                     }
 
                     // Scan forward for a matching run of the same count
@@ -2797,6 +2837,7 @@ pub(crate) struct AlignmentIndex(usize);
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) struct HeadingIndex(NonZeroUsize);
 
+#[cfg(feature = "mdx")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) struct JsxElementIndex(usize);
 
@@ -2804,6 +2845,7 @@ pub(crate) struct JsxElementIndex(usize);
 pub(crate) struct DirectiveIndex(usize);
 
 /// A parsed JSX attribute.
+#[cfg(feature = "mdx")]
 #[derive(Debug, Clone)]
 pub(crate) enum JsxAttr<'a> {
     Boolean(CowStr<'a>),
@@ -2812,6 +2854,7 @@ pub(crate) enum JsxAttr<'a> {
     Spread(CowStr<'a>),
 }
 
+#[cfg(feature = "mdx")]
 impl<'a> JsxAttr<'a> {
     pub fn into_static(self) -> JsxAttr<'static> {
         match self {
@@ -2824,6 +2867,7 @@ impl<'a> JsxAttr<'a> {
 }
 
 /// Pre-parsed JSX element data (name + attributes + tag classification).
+#[cfg(feature = "mdx")]
 #[derive(Debug, Clone)]
 pub(crate) struct JsxElementData<'a> {
     pub name: CowStr<'a>,
@@ -2833,6 +2877,7 @@ pub(crate) struct JsxElementData<'a> {
     pub is_self_closing: bool,
 }
 
+#[cfg(feature = "mdx")]
 impl<'a> JsxElementData<'a> {
     pub fn into_static(self) -> JsxElementData<'static> {
         JsxElementData {
@@ -2872,6 +2917,7 @@ pub(crate) struct Allocations<'a> {
     cows: Vec<CowStr<'a>>,
     alignments: Vec<Vec<Alignment>>,
     headings: Vec<HeadingAttributes<'a>>,
+    #[cfg(feature = "mdx")]
     jsx_elements: Vec<JsxElementData<'a>>,
     directives: Vec<DirectiveAttrData<'a>>,
 }
@@ -2931,6 +2977,7 @@ impl<'a> Allocations<'a> {
             cows: Vec::new(),
             alignments: Vec::new(),
             headings: Vec::new(),
+            #[cfg(feature = "mdx")]
             jsx_elements: Vec::new(),
             directives: Vec::new(),
         }
@@ -2982,6 +3029,7 @@ impl<'a> Allocations<'a> {
         core::mem::take(&mut self.alignments[ix.0])
     }
 
+    #[cfg(feature = "mdx")]
     pub fn allocate_jsx_element(&mut self, data: JsxElementData<'a>) -> JsxElementIndex {
         let ix = self.jsx_elements.len();
         self.jsx_elements.push(data);
@@ -3011,6 +3059,7 @@ impl<'a> Allocations<'a> {
         &self.directives[ix.0]
     }
 
+    #[cfg(feature = "mdx")]
     pub fn take_jsx_element(&mut self, ix: JsxElementIndex) -> JsxElementData<'a> {
         core::mem::replace(
             &mut self.jsx_elements[ix.0],
@@ -3251,7 +3300,9 @@ fn body_to_tag_end(body: &ItemBody) -> TagEnd {
         ItemBody::DefinitionList(_) => TagEnd::DefinitionList,
         ItemBody::DefinitionListTitle => TagEnd::DefinitionListTitle,
         ItemBody::DefinitionListDefinition(_) => TagEnd::DefinitionListDefinition,
+        #[cfg(feature = "mdx")]
         ItemBody::MdxJsxFlowElement(..) => TagEnd::MdxJsxFlowElement,
+        #[cfg(feature = "mdx")]
         ItemBody::MdxJsxTextElement(..) => TagEnd::MdxJsxTextElement,
         _ => panic!("unexpected item body {:?}", body),
     }
@@ -3360,20 +3411,25 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::DefinitionList(_) => Tag::DefinitionList,
         ItemBody::DefinitionListTitle => Tag::DefinitionListTitle,
         ItemBody::DefinitionListDefinition(_) => Tag::DefinitionListDefinition,
+        #[cfg(feature = "mdx")]
         ItemBody::MdxJsxFlowElement(jsx_ix) => {
             let jsx = allocs.take_jsx_element(jsx_ix);
             Tag::MdxJsxFlowElement(jsx.raw)
         }
+        #[cfg(feature = "mdx")]
         ItemBody::MdxJsxTextElement(jsx_ix) => {
             let jsx = allocs.take_jsx_element(jsx_ix);
             Tag::MdxJsxTextElement(jsx.raw)
         }
+        #[cfg(feature = "mdx")]
         ItemBody::MdxFlowExpression(cow_ix) => {
             return Event::MdxFlowExpression(allocs.take_cow(cow_ix))
         }
+        #[cfg(feature = "mdx")]
         ItemBody::MdxTextExpression(cow_ix) => {
             return Event::MdxTextExpression(allocs.take_cow(cow_ix))
         }
+        #[cfg(feature = "mdx")]
         ItemBody::MdxEsm(cow_ix) => return Event::MdxEsm(allocs.take_cow(cow_ix)),
         _ => panic!("unexpected item body {:?}", item.body),
     };
@@ -3821,10 +3877,12 @@ text
         assert_eq!(&events, &expected);
     }
 
+    #[cfg(feature = "mdx")]
     fn mdx_parser(text: &str) -> Parser<'_> {
         Parser::new_ext(text, Options::ENABLE_MDX)
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_esm_import() {
         let events: Vec<_> = mdx_parser("import {Chart} from './chart.js'\n").collect();
@@ -3832,6 +3890,7 @@ text
         assert!(matches!(&events[0], Event::MdxEsm(s) if s.contains("import")));
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_esm_export() {
         let events: Vec<_> = mdx_parser("export const meta = {}\n").collect();
@@ -3839,6 +3898,7 @@ text
         assert!(matches!(&events[0], Event::MdxEsm(s) if s.contains("export")));
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_flow_expression() {
         let events: Vec<_> = mdx_parser("{1 + 1}\n").collect();
@@ -3846,6 +3906,7 @@ text
         assert!(matches!(&events[0], Event::MdxFlowExpression(s) if s.as_ref() == "1 + 1"));
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_jsx_flow_self_closing() {
         let events: Vec<_> = mdx_parser("<Chart values={[1,2,3]} />\n").collect();
@@ -3855,6 +3916,7 @@ text
         );
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_jsx_flow_fragment() {
         let events: Vec<_> = mdx_parser("<>\n").collect();
@@ -3865,6 +3927,7 @@ text
         ));
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_inline_expression() {
         let events: Vec<_> = mdx_parser("hello {name} world\n").collect();
@@ -3878,6 +3941,7 @@ text
         );
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_inline_jsx() {
         let events: Vec<_> = mdx_parser("hello <Badge /> world\n").collect();
@@ -3887,6 +3951,7 @@ text
         assert!(has_jsx, "Expected inline MDX JSX, got: {:?}", events);
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_all_tags_are_jsx() {
         // In MDX mode, all tags (including lowercase) are JSX, not HTML.
@@ -3907,6 +3972,7 @@ text
             .any(|e| matches!(e, Event::Start(Tag::Paragraph))));
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_expression_in_heading() {
         let events: Vec<_> = mdx_parser("# {title}\n").collect();
@@ -3924,6 +3990,7 @@ text
         );
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn mdx_expression_mixed_text_in_heading() {
         let events: Vec<_> = mdx_parser("## Hello {name}\n").collect();

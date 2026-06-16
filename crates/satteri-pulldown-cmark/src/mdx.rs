@@ -2045,14 +2045,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 }
 
-/// Parse a raw JSX tag string into structured `JsxElementData`.
-///
-/// Handles opening, closing, self-closing tags, and fragments.
-/// Attributes are extracted with zero-copy `CowStr::Borrowed` where possible.
-pub(crate) fn parse_jsx_tag<'a>(raw: &'a str) -> JsxElementData<'a> {
-    parse_jsx_tag_with_column(raw, 1, 0)
-}
-
 /// Return the 1-indexed column of `bytes[pos]` by walking back to the most
 /// recent line start. Tabs in the preceding indent are expanded to 4-column
 /// tab stops, matching micromark.
@@ -2075,10 +2067,10 @@ pub(crate) fn column_at(bytes: &[u8], pos: usize) -> usize {
     col
 }
 
-/// Like `parse_jsx_tag`, but takes the 1-indexed column where the container's
-/// content begins. Multi-line JSX attribute expressions need to strip
-/// `(column - 1) + indentSize` columns from each continuation line to match
-/// remark's normalized output.
+/// Parse a raw JSX tag string into structured `JsxElementData`, given the
+/// 1-indexed column where the container's content begins. Multi-line JSX
+/// attribute expressions need to strip `(column - 1) + indentSize` columns from
+/// each continuation line to match remark's normalized output.
 pub(crate) fn parse_jsx_tag_with_column<'a>(
     raw: &'a str,
     container_content_col: usize,
@@ -2117,11 +2109,15 @@ pub(crate) fn parse_jsx_tag_with_column<'a>(
     // Extract name, skip leading '<'
     let name = extract_tag_name(&s[1..]);
 
+    // Search only the children region, past the opening tag's `>`: a `</Name>` inside an
+    // attribute value (e.g. a template-literal prop that shows the component's
+    // own usage) is text, so it must not pair with the open tag.
+    let children = &s[scan_mdx_jsx_tag_end(s.as_bytes()).unwrap_or(s.len())..];
     let is_self_contained = if !name.is_empty() {
         let close_tag = alloc::format!("</{name}>");
-        s.contains(&*close_tag)
+        children.contains(&*close_tag)
     } else {
-        s.contains("</>")
+        children.contains("</>")
     };
 
     let is_self_closing = ends_self_close || is_self_contained;

@@ -1,5 +1,6 @@
-import { describe, test } from "vitest";
+import { describe, test, expect } from "vitest";
 import { assertExtMdastConformance, assertExtMdastConformanceNoPosition } from "./helpers.js";
+import { mdxToMdast } from "../../src/index.js";
 
 const DIR: ["directive"] = ["directive"];
 
@@ -109,6 +110,34 @@ describe("Directive MDAST conformance", () => {
 
     test("multiple inline code spans in one label", () => {
       assertExtMdastConformance(":::note[Use `a` then `b` here]\nx\n:::", DIR);
+    });
+  });
+
+  describe("directive labels: emphasis, strong, links", () => {
+    // Regression (Issue 3): labels are inline-parsed in full, not just for
+    // backticks, so emphasis/strong/links resolve the way remark renders them.
+    test("strong with nested emphasis in container label", () => {
+      assertExtMdastConformance(":::note[Custom **strong with _emphasis_** Label]\nx\n:::", DIR);
+    });
+
+    test("emphasis in leaf directive label", () => {
+      assertExtMdastConformance("::video[A *great* clip]{src=x}", DIR);
+    });
+
+    test("emphasis in text directive label", () => {
+      assertExtMdastConformance("text :tip[be *careful* now] more", DIR);
+    });
+
+    test("link inside a container directive label", () => {
+      assertExtMdastConformance(":::tip[See [docs](https://example.com) now]\nx\n:::", DIR);
+    });
+
+    test("mixed inline code and emphasis in one label", () => {
+      assertExtMdastConformance(":::note[Set `x` and **really** mean it]\nx\n:::", DIR);
+    });
+
+    test("plain label stays a single text node", () => {
+      assertExtMdastConformance(":::note[Just plain words]\nx\n:::", DIR);
     });
   });
 
@@ -273,6 +302,33 @@ describe("Directive MDAST conformance", () => {
 
     test("ASCII colon + non-id punctuation (CJK full stop) leaves colon as text", () => {
       assertExtMdastConformanceNoPosition("## Punct colon:。後ろ", DIR);
+    });
+  });
+
+  // MDX: JSX inside a directive label is tokenized by the parser (no remark
+  // reference here since it lacks remark-directive), and source-parsed JSX must
+  // keep its `_mdxExplicitJsx` marking, as the deleted label pass used to set.
+  describe("MDX JSX inside directive labels", () => {
+    const labelChildren = (md: string, depth: number): any[] => {
+      let node: any = mdxToMdast(md, { features: { directive: true } });
+      for (let i = 0; i < depth; i++) node = node.children[0];
+      return node.children;
+    };
+
+    test("container directive label", () => {
+      const [, jsx] = labelChildren(":::note[The <code>x</code> prop]\nbody\n:::", 2);
+      expect(jsx.type).toBe("mdxJsxTextElement");
+      expect(jsx.name).toBe("code");
+      expect(jsx.data?._mdxExplicitJsx).toBe(true);
+    });
+
+    test("text directive label", () => {
+      // root > paragraph > [text, textDirective[text, jsx, text], text]
+      const directive = labelChildren("see :abbr[a <b>c</b> d] end", 1)[1];
+      const jsx = directive.children[1];
+      expect(directive.type).toBe("textDirective");
+      expect(jsx.type).toBe("mdxJsxTextElement");
+      expect(jsx.data?._mdxExplicitJsx).toBe(true);
     });
   });
 });

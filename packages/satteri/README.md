@@ -184,26 +184,13 @@ console.log(data?.headings); // ["A", "B"]
 
 Values must be JSON-serializable: the bag is round-tripped to Rust between plugins, so functions, class instances, or cyclic references won't survive. A fresh, empty bag is created for every compile.
 
-### Diagnostics
+### How transforms compose
 
-Visitors can emit non-fatal diagnostics through `ctx.report({ message, node?, severity? })`. `severity` defaults to `"error"`; `"warning"` and `"info"` are also allowed. All diagnostics from all plugins are returned on `result.diagnostics`, tagged with the phase (`"mdast"` or `"hast"`) they came from.
+Unlike remark and rehype, which re-walk the tree until it stops changing, each Sätteri plugin walks the tree **once**. Within that single pass:
 
-```ts
-const checkAltText = defineHastPlugin({
-  name: "check-alt-text",
-  element: {
-    filter: ["img"],
-    visit(node, ctx) {
-      if (!node.properties?.alt) {
-        ctx.report({ message: "image missing alt text", node, severity: "warning" });
-      }
-    },
-  },
-});
-
-const { html, diagnostics } = markdownToHtml(src, { hastPlugins: [checkAltText] });
-for (const d of diagnostics) console.warn(`[${d.phase}] ${d.severity}: ${d.message}`);
-```
+- **Passed-through children keep their identity.** When a visitor returns a replacement that reuses the original node's children (e.g. `{ ...node, children: [...node.children] }`), those children are spliced back unchanged — so a transform the same pass queues on a nested one still applies. This is what lets a `containerDirective` visitor turn both an outer `:::note` and a nested `:::tip` into asides in one go.
+- **A plugin's own freshly-built nodes are not re-walked by that plugin.** If a visitor returns a brand-new node (one that didn't come from the tree), the same plugin won't visit it. Produce its final shape directly, or hand it off to a later plugin — every plugin runs over the fully materialized output of the ones before it.
+- **Dropping a subtree drops transforms queued inside it.** If one visitor removes or replaces a node while another (in the same pass) had queued a transform on something inside that subtree, the orphaned transform is dropped and a warning is logged. This is usually intentional — you discarded that subtree on purpose — but the warning helps catch the cases where it isn't.
 
 ### Async plugins
 
@@ -233,19 +220,19 @@ const html = await markdownToHtml("```js\ncode\n```", {
 
 ### `markdownToHtml(source: string, options?: CompileOptions)`
 
-Parse Markdown and compile to HTML. Returns a `MarkdownToHtmlResult` synchronously when all plugins are sync, or a `Promise` of one when any plugin is async.
+Parse Markdown and compile to HTML. Returns `string` if all plugins are sync, `Promise<string>` if any are async.
 
 ```ts
-const { html, frontmatter, data, diagnostics } = markdownToHtml("# Hello\n\nWorld");
-// html === "<h1>Hello</h1>\n<p>World</p>"
+const html = markdownToHtml("# Hello\n\nWorld");
+// <h1>Hello</h1>\n<p>World</p>
 ```
 
 ### `mdxToJs(source: string, options?: MdxCompileOptions)`
 
-Parse MDX and compile to JavaScript module code. Returns an `MdxToJsResult` (`{ code, frontmatter, data, diagnostics }`) with the same sync/async return behavior.
+Parse MDX and compile to JavaScript module code. Same sync/async return behavior.
 
 ```ts
-const { code } = mdxToJs("# Hello\n\n<MyComponent />");
+const js = mdxToJs("# Hello\n\n<MyComponent />");
 ```
 
 #### Static optimization
@@ -331,7 +318,8 @@ Type-safe wrapper for HAST plugin definitions.
 interface CompileOptions {
   mdastPlugins?: MdastPluginDefinition[];
   hastPlugins?: HastPluginDefinition[];
-  filename?: string;
+  features?: Features;
+  fileURL?: URL;
 }
 
 // mdxToJs accepts MdxCompileOptions, which extends CompileOptions
@@ -339,6 +327,10 @@ interface MdxCompileOptions extends CompileOptions {
   optimizeStatic?: OptimizeStaticConfig;
 }
 ```
+
+`fileURL` is the `URL` of the document being processed, surfaced to plugins as `ctx.fileURL` (a `URL`, or `undefined` when omitted). Pass a file URL such as Astro's `fileURL`, or convert a filesystem path with Node's `pathToFileURL`; read it back with `fileURLToPath(ctx.fileURL)`.
+
+`Features` controls the Markdown extensions Sätteri's parser recognizes: `gfm`, `frontmatter`, `math`, `directive`, `smartPunctuation`, etc. `gfm`, `math`, and `smartPunctuation` also accept granular options. For example, `math: { singleDollarTextMath: false }` keeps single `$` as literal text. See the [Features reference](https://satteri.dev/docs/features/) for the full list.
 
 ## License
 

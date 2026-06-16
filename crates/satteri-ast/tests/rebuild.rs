@@ -63,6 +63,19 @@ fn single_node_arena(node_type: MdastNodeType) -> Arena<Mdast> {
     b.finish()
 }
 
+/// A `Root`-wrapped arena, mimicking what the parser produces for a raw
+/// markdown / HTML payload: `Root > [block, ...]`.
+fn root_wrapped_arena(blocks: &[MdastNodeType]) -> Arena<Mdast> {
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(MdastNodeType::Root as u8);
+    for &block in blocks {
+        b.open_node(block as u8);
+        b.close_node();
+    }
+    b.close_node();
+    b.finish()
+}
+
 /// Empty patches → same structure (all nodes preserved, just fresh IDs).
 #[test]
 fn empty_patches_preserves_all_nodes() {
@@ -1060,4 +1073,510 @@ fn hast_text_round_trip_with_source_base() {
     let text_id = first_hast_node_of(&rebuilt, HastNodeType::Text);
     let sr = decode_text_data(rebuilt.get_type_data(text_id));
     assert_eq!(rebuilt.get_str(sr), "Hello, world!");
+}
+
+#[test]
+fn hast_empty_text_child_ref_with_nonzero_offset_is_remapped() {
+    use satteri_arena::StringRef;
+    use satteri_ast::hast::codec::{
+        decode_element_tag, decode_text_data, encode_element_data, encode_text_data,
+    };
+
+    // Root > [Text "é", Element <pre>]
+    let mut b = ArenaBuilder::<Hast>::new("é".to_string());
+    b.open_node_raw(HastNodeType::Root as u8);
+
+    // Add `Text "é"` which starts at byte 0 and is 2 bytes long in UTF-8.
+    b.open_node_raw(HastNodeType::Text as u8);
+    b.set_data_current(&encode_text_data(StringRef::new(0, 2)));
+    b.close_node();
+
+    // Add `Element <pre>`.
+    b.open_node_raw(HastNodeType::Element as u8);
+    let pre = b.alloc_string("pre");
+    b.set_data_current(&encode_element_data(pre, &[]));
+    b.close_node();
+
+    b.close_node();
+    let orig = b.finish();
+    let elem_id = orig.get_children(0)[1];
+
+    // Replace `<pre></pre>` by `<a></a>` with an empty text child.
+    let mut sub = ArenaBuilder::<Hast>::new(String::new());
+    sub.open_node_raw(HastNodeType::Element as u8);
+
+    // Add `Element <a>`.
+    let tag = sub.alloc_string("a");
+    sub.set_data_current(&encode_element_data(tag, &[]));
+
+    sub.open_node_raw(HastNodeType::Text as u8);
+
+    // Add the empty text node. With the tag "a" taking up bytes 0..1 in the arena, the empty text
+    // starts at byte 1 and has a length of 0.
+    let empty = sub.alloc_string("");
+    assert_eq!(empty.offset, 1);
+    assert_eq!(empty.len, 0);
+    sub.set_data_current(&encode_text_data(empty));
+    sub.close_node();
+
+    sub.close_node();
+    let replacement = sub.finish();
+
+    let rebuilt = rebuild_hast(
+        &orig,
+        &[Patch::Replace {
+            node_id: elem_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    // Root > [Text "é", Element <a> > Text ""]
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 2);
+
+    let original_text_id = root_children[0];
+    let original_text = decode_text_data(rebuilt.get_type_data(original_text_id));
+    assert_eq!(rebuilt.get_str(original_text), "é");
+
+    let a_id = root_children[1];
+    let a_data = rebuilt.get_type_data(a_id);
+    assert_eq!(rebuilt.get_str(decode_element_tag(a_data)), "a");
+
+    let a_children = rebuilt.get_children(a_id);
+    assert_eq!(a_children.len(), 1);
+
+    let text_id = a_children[0];
+    let sr = decode_text_data(rebuilt.get_type_data(text_id));
+
+    assert_eq!(sr.len, 0);
+    // The empty text offset must be remapped from 1 (from the replacement arena) to a valid offset
+    // in the rebuilt arena, otherwise, it would point to the middle of the "é" character.
+    // In this test, this should be after `é` (2 bytes) + `pre` (3 bytes) from the source arena and
+    // `a` (1 byte) from the replacement arena, so 6 in total.
+    assert_eq!(sr.offset, 6);
+    assert_eq!(rebuilt.get_str(sr), "");
+}
+
+#[test]
+fn mdast_empty_text_child_ref_with_nonzero_offset_is_remapped() {
+    use satteri_arena::StringRef;
+    use satteri_ast::mdast::codec::{
+        decode_link_data, decode_string_ref_data, encode_link_data, encode_string_ref_data,
+    };
+
+    // Root > [Text "é", Link (url "pre")]
+    let mut b = ArenaBuilder::<Mdast>::new("é".to_string());
+    b.open_node(MdastNodeType::Root as u8);
+
+    // Add `Text "é"` which starts at byte 0 and is 2 bytes long in UTF-8.
+    b.open_node(MdastNodeType::Text as u8);
+    b.set_data_current(&encode_string_ref_data(StringRef::new(0, 2)));
+    b.close_node();
+
+    // Add `Link` with url "pre".
+    b.open_node(MdastNodeType::Link as u8);
+    let pre = b.alloc_string("pre");
+    b.set_data_current(&encode_link_data(pre, StringRef::empty()));
+    b.close_node();
+
+    b.close_node();
+    let orig = b.finish();
+    let link_id = orig.get_children(0)[1];
+
+    // Replace the link by a `Link` (url "a") with an empty text child.
+    let mut sub = ArenaBuilder::<Mdast>::new(String::new());
+    sub.open_node(MdastNodeType::Link as u8);
+
+    // Add `Link` with url "a".
+    let url = sub.alloc_string("a");
+    sub.set_data_current(&encode_link_data(url, StringRef::empty()));
+
+    sub.open_node(MdastNodeType::Text as u8);
+
+    // Add the empty text node. With the url "a" taking up bytes 0..1 in the arena, the empty text
+    // starts at byte 1 and has a length of 0.
+    let empty = sub.alloc_string("");
+    assert_eq!(empty.offset, 1);
+    assert_eq!(empty.len, 0);
+    sub.set_data_current(&encode_string_ref_data(empty));
+    sub.close_node();
+
+    sub.close_node();
+    let replacement = sub.finish();
+
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: link_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    // Root > [Text "é", Link (url "a") > Text ""]
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 2);
+
+    let original_text_id = root_children[0];
+    let original_text = decode_string_ref_data(rebuilt.get_type_data(original_text_id));
+    assert_eq!(rebuilt.get_str(original_text), "é");
+
+    let link_id = root_children[1];
+    let link_data = rebuilt.get_type_data(link_id);
+    assert_eq!(rebuilt.get_str(decode_link_data(link_data).url), "a");
+
+    let link_children = rebuilt.get_children(link_id);
+    assert_eq!(link_children.len(), 1);
+
+    let text_id = link_children[0];
+    let sr = decode_string_ref_data(rebuilt.get_type_data(text_id));
+
+    assert_eq!(sr.len, 0);
+    // The empty text offset must be remapped from 1 (from the replacement arena) to a valid offset
+    // in the rebuilt arena, otherwise, it would point to the middle of the "é" character.
+    // In this test, this should be after `é` (2 bytes) + `pre` (3 bytes) from the source arena and
+    // `a` (1 byte) from the replacement arena, so 6 in total.
+    assert_eq!(sr.offset, 6);
+    assert_eq!(rebuilt.get_str(sr), "");
+}
+
+/// Replacing a block (the paragraph) with a `Root`-wrapped tree — as a raw
+/// markdown return does — must splice the Root's child in, not the Root.
+/// Before the fix this produced `Root > Root > Paragraph`.
+#[test]
+fn replace_with_root_wrapped_tree_strips_root() {
+    let orig = build_hello_world();
+    let para_id = orig.get_children(0)[1];
+
+    let replacement = root_wrapped_arena(&[MdastNodeType::Paragraph]);
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: para_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 2, "heading + spliced paragraph");
+    for &child in root_children {
+        assert_ne!(
+            rebuilt.get_node(child).node_type,
+            MdastNodeType::Root as u8,
+            "no nested Root may be spliced into the tree"
+        );
+    }
+    assert_eq!(
+        rebuilt.get_node(root_children[1]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+}
+
+/// Replacing an inline node (the text inside the heading) with a `Root`-wrapped
+/// tree. Option B strips only the Root, so the parser's wrapping Paragraph
+/// remains — a block in an inline slot — but no nested Root survives.
+#[test]
+fn replace_inline_with_root_wrapped_tree_strips_only_root() {
+    let orig = build_hello_world();
+    let heading_id = orig.get_children(0)[0];
+    let text_id = orig.get_children(heading_id)[0];
+
+    let replacement = root_wrapped_arena(&[MdastNodeType::Paragraph]);
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: text_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    let new_heading = rebuilt.get_children(0)[0];
+    let heading_children = rebuilt.get_children(new_heading);
+    assert_eq!(heading_children.len(), 1);
+    assert_eq!(
+        rebuilt.get_node(heading_children[0]).node_type,
+        MdastNodeType::Paragraph as u8,
+        "Root stripped, parser's Paragraph remains (block-level raw, by design)"
+    );
+}
+
+/// A raw return parsing to several top-level blocks splices them all as
+/// siblings into the slot.
+#[test]
+fn replace_with_multi_block_root_splices_all_siblings() {
+    let orig = build_hello_world();
+    let para_id = orig.get_children(0)[1];
+
+    let replacement = root_wrapped_arena(&[MdastNodeType::Heading, MdastNodeType::ThematicBreak]);
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: para_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(
+        root_children.len(),
+        3,
+        "original heading + 2 spliced blocks"
+    );
+    assert_eq!(
+        rebuilt.get_node(root_children[1]).node_type,
+        MdastNodeType::Heading as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(root_children[2]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+}
+
+/// An empty raw return (`Root` with no children) removes the slot cleanly
+/// rather than leaving an empty Root behind.
+#[test]
+fn replace_with_empty_root_removes_slot() {
+    let orig = build_hello_world();
+    let para_id = orig.get_children(0)[1];
+
+    let replacement = root_wrapped_arena(&[]);
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: para_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 1, "only the heading remains");
+    assert_eq!(
+        rebuilt.get_node(root_children[0]).node_type,
+        MdastNodeType::Heading as u8
+    );
+}
+
+/// Regression: a `Replace` whose subtree references the replaced node itself
+/// must splice the original once, not recurse forever. This is the "wrap a
+/// heading in a div containing the heading" shape (Starlight autolink) that
+/// previously overflowed the stack.
+#[test]
+fn replace_with_ref_to_self_splices_once() {
+    use satteri_arena::StringRef;
+    use satteri_ast::hast::codec::encode_element_data;
+    use satteri_ast::rebuild::REF_NODE_TYPE;
+
+    // Root > Element(h2) > Text "Heading"
+    let mut b = ArenaBuilder::<Hast>::new("Heading".to_string());
+    b.open_node(HastNodeType::Root as u8);
+    b.open_node(HastNodeType::Element as u8);
+    let tag = b.alloc_string("h2");
+    b.set_data_current(&encode_element_data(tag, &[]));
+    b.open_node(HastNodeType::Text as u8);
+    b.set_data_current(&satteri_ast::hast::codec::encode_text_data(StringRef::new(
+        0, 7,
+    )));
+    b.close_node(); // text
+    b.close_node(); // element
+    b.close_node(); // root
+    let orig = b.finish();
+
+    let heading_id = orig.get_children(0)[0];
+
+    // Replacement subtree: <div>{ REF -> heading_id }</div>
+    let mut sub = ArenaBuilder::<Hast>::new(String::new());
+    sub.open_node(HastNodeType::Element as u8);
+    let div_tag = sub.alloc_string("div");
+    sub.set_data_current(&encode_element_data(div_tag, &[]));
+    sub.open_node_raw(REF_NODE_TYPE);
+    sub.set_data_current(&heading_id.to_le_bytes());
+    sub.close_node(); // ref
+    sub.close_node(); // div
+    let new_tree = sub.finish();
+
+    let rebuilt = rebuild_hast(
+        &orig,
+        &[Patch::Replace {
+            node_id: heading_id,
+            new_tree,
+            keep_children: false,
+        }],
+    );
+
+    // Expect: Root > div > h2 > text, no runaway duplication.
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 1, "root holds the single wrapper div");
+    let div = root_children[0];
+    assert_eq!(rebuilt.get_node(div).node_type, HastNodeType::Element as u8);
+
+    let div_children = rebuilt.get_children(div);
+    assert_eq!(
+        div_children.len(),
+        1,
+        "div wraps exactly the original heading"
+    );
+    let inner = div_children[0];
+    assert_eq!(
+        rebuilt.get_node(inner).node_type,
+        HastNodeType::Element as u8,
+        "the re-parented node is the original heading element"
+    );
+    assert_eq!(
+        rebuilt.get_children(inner).len(),
+        1,
+        "heading keeps its original text child"
+    );
+    assert_eq!(
+        rebuilt.get_node(rebuilt.get_children(inner)[0]).node_type,
+        HastNodeType::Text as u8
+    );
+}
+
+/// `Wrap` keeps the wrapper's own declared children, with the wrapped node
+/// emitted first: `div > [anchor]` wrapping a heading yields
+/// `div > [heading, anchor]` rather than dropping the anchor.
+#[test]
+fn wrap_keeps_wrapper_children_after_wrapped_node() {
+    use satteri_arena::StringRef;
+    use satteri_ast::hast::codec::{encode_element_data, encode_text_data};
+
+    // Root > Element(h2) > Text "Hello"
+    let mut b = ArenaBuilder::<Hast>::new("Hello".to_string());
+    b.open_node(HastNodeType::Root as u8);
+    b.open_node(HastNodeType::Element as u8);
+    let h2 = b.alloc_string("h2");
+    b.set_data_current(&encode_element_data(h2, &[]));
+    b.open_node(HastNodeType::Text as u8);
+    b.set_data_current(&encode_text_data(StringRef::new(0, 5)));
+    b.close_node(); // text
+    b.close_node(); // h2
+    b.close_node(); // root
+    let orig = b.finish();
+    let heading_id = orig.get_children(0)[0];
+
+    // Wrapper: div > a (the anchor sibling), built as a sub-arena
+    let mut w = ArenaBuilder::<Hast>::new(String::new());
+    w.open_node(HastNodeType::Element as u8);
+    let div = w.alloc_string("div");
+    w.set_data_current(&encode_element_data(div, &[]));
+    w.open_node(HastNodeType::Element as u8);
+    let a = w.alloc_string("a");
+    w.set_data_current(&encode_element_data(a, &[]));
+    w.close_node(); // a (no children)
+    w.close_node(); // div
+    let parent_tree = w.finish();
+
+    let rebuilt = rebuild_hast(
+        &orig,
+        &[Patch::Wrap {
+            node_id: heading_id,
+            parent_tree,
+        }],
+    );
+
+    // Root > div > [h2(>text), a]
+    let div_id = rebuilt.get_children(0)[0];
+    assert_eq!(
+        rebuilt.get_node(div_id).node_type,
+        HastNodeType::Element as u8
+    );
+    let kids = rebuilt.get_children(div_id);
+    assert_eq!(kids.len(), 2, "wrapped node plus the wrapper's own child");
+
+    // First child is the wrapped heading (keeps its text child).
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        HastNodeType::Element as u8
+    );
+    assert_eq!(
+        rebuilt.get_children(kids[0]).len(),
+        1,
+        "wrapped node is first and keeps its original children"
+    );
+    assert_eq!(
+        rebuilt.get_node(rebuilt.get_children(kids[0])[0]).node_type,
+        HastNodeType::Text as u8
+    );
+
+    // Second child is the wrapper's declared anchor (childless).
+    assert_eq!(
+        rebuilt.get_node(kids[1]).node_type,
+        HastNodeType::Element as u8
+    );
+    assert_eq!(
+        rebuilt.get_children(kids[1]).len(),
+        0,
+        "wrapper's declared child follows the wrapped node"
+    );
+}
+
+/// A wrapped node keeps `PrependChild`/`AppendChild` patches queued on it in
+/// the same pass: wrapping must not discard child patches on the node it wraps.
+/// Prepend lands before the node's original children, append after.
+#[test]
+fn wrap_applies_prepend_and_append_child_on_wrapped_node() {
+    use satteri_ast::hast::codec::encode_element_data;
+
+    fn single(node_type: HastNodeType) -> Arena<Hast> {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(node_type as u8);
+        b.close_node();
+        b.finish()
+    }
+
+    // Root > Element(h2) > Element(em) — original child is an element.
+    let mut b = ArenaBuilder::<Hast>::new(String::new());
+    b.open_node(HastNodeType::Root as u8);
+    b.open_node(HastNodeType::Element as u8);
+    let h2 = b.alloc_string("h2");
+    b.set_data_current(&encode_element_data(h2, &[]));
+    b.open_node(HastNodeType::Element as u8);
+    let em = b.alloc_string("em");
+    b.set_data_current(&encode_element_data(em, &[]));
+    b.close_node(); // em
+    b.close_node(); // h2
+    b.close_node(); // root
+    let orig = b.finish();
+    let heading_id = orig.get_children(0)[0];
+
+    let rebuilt = rebuild_hast(
+        &orig,
+        &[
+            Patch::Wrap {
+                node_id: heading_id,
+                parent_tree: single(HastNodeType::Element), // <div>-shaped wrapper
+            },
+            Patch::PrependChild {
+                node_id: heading_id,
+                child_tree: single(HastNodeType::Text),
+            },
+            Patch::AppendChild {
+                node_id: heading_id,
+                child_tree: single(HastNodeType::Comment),
+            },
+        ],
+    );
+
+    // Root > wrapper > h2 > [Text(prepend), Element(em), Comment(append)]
+    let wrapper = rebuilt.get_children(0)[0];
+    let h2_id = rebuilt.get_children(wrapper)[0];
+    let kids = rebuilt.get_children(h2_id);
+    assert_eq!(kids.len(), 3, "prepend + original + append, none dropped");
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        HastNodeType::Text as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(kids[1]).node_type,
+        HastNodeType::Element as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(kids[2]).node_type,
+        HastNodeType::Comment as u8
+    );
 }

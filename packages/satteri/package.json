@@ -1,6 +1,6 @@
 {
   "name": "satteri",
-  "version": "0.6.3",
+  "version": "0.8.2",
   "description": "High-performance Markdown and MDX processing",
   "repository": {
     "type": "git",
@@ -39,6 +39,8 @@
     "postbuild:binary:wasm": "node patch-binding.js",
     "build:binary:native": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --release --esm --strip",
     "postbuild:binary:native": "node patch-binding.js",
+    "build:binary:native:lite": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --release --esm --strip -- --no-default-features",
+    "postbuild:binary:native:lite": "node patch-binding.js",
     "build:binary:native:cross": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --release --esm --strip --cross-compile",
     "postbuild:binary:native:cross": "node patch-binding.js",
     "build:binary:native:debug": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --esm",

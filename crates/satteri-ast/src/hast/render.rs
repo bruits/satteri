@@ -159,6 +159,17 @@ pub fn render_node(
             }
         }
 
+        // MDX nodes have no HTML representation and are skipped. The arm is
+        // cfg-split only to keep the match exhaustive in both builds: the enum
+        // variants always exist (they carry wire-format discriminants), so the
+        // lite build still needs to name them even though MDX is compiled out.
+        #[cfg(feature = "mdx")]
+        HastNodeType::MdxJsxElement
+        | HastNodeType::MdxJsxTextElement
+        | HastNodeType::MdxFlowExpression
+        | HastNodeType::MdxTextExpression
+        | HastNodeType::MdxEsm => {}
+        #[cfg(not(feature = "mdx"))]
         HastNodeType::MdxJsxElement
         | HastNodeType::MdxJsxTextElement
         | HastNodeType::MdxFlowExpression

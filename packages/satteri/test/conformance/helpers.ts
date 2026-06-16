@@ -2,6 +2,7 @@ import { evaluate as mdxEvaluate } from "@mdx-js/mdx";
 import type { EvaluateOptions as MdxEvaluateOptions } from "@mdx-js/mdx";
 import {
   evaluate as satteriEvaluate,
+  defineHastPlugin,
   markdownToMdast,
   markdownToHast,
   markdownToHtml,
@@ -209,6 +210,114 @@ export function satteriMathHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
+// singleDollarTextMath: false on both sides, to pin satteri against
+// remark-math configured the same way.
+const mathNoSingleMdastProcessor = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkMath, { singleDollarTextMath: false });
+const mathNoSingleHastProcessor = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkMath, { singleDollarTextMath: false })
+  .use(remarkRehype, REF_REHYPE_OPTIONS);
+
+const MATH_NO_SINGLE_FEATURES: Features = {
+  math: { singleDollarTextMath: false },
+  frontmatter: false,
+};
+
+export function assertNoSingleDollarMathMdastConformance(md: string): void {
+  const expected = stripData(serialize(mathNoSingleMdastProcessor.parse(md)));
+  const actual = stripData(serialize(markdownToMdast(md, { features: MATH_NO_SINGLE_FEATURES })));
+  expect(actual).toEqual(expected);
+}
+
+export function assertNoSingleDollarMathHastConformance(md: string): void {
+  const mdast = mathNoSingleHastProcessor.parse(md);
+  const expected = normalizeAlignToStyle(
+    serialize(mathNoSingleHastProcessor.runSync(mdast) as Nodes),
+  );
+  const actual = stripHastDataLang(
+    serialize(markdownToHast(md, { features: MATH_NO_SINGLE_FEATURES })),
+  );
+  expect(actual).toEqual(expected);
+}
+
+// remark-rehype takes callbacks for back-label/back-content; satteri uses
+// templates with auto-sup. This helper translates satteri's shape into
+// matching remark-rehype callbacks.
+const BASE_FOOTNOTE_FEATURES: Features = { math: false, frontmatter: false };
+
+type FootnoteCallback = (referenceNumber: number, rerunIndex: number) => string;
+
+export interface FootnoteOptionsConformance {
+  label?: string;
+  /**
+   * Static text used for every back-content (auto-sup appended for k>1),
+   * or a callback returning the per-backref text.
+   */
+  backContent?: string | FootnoteCallback;
+  /**
+   * Template with `{reference}` placeholder (`n` for k=1, `n-K` for k>1),
+   * or a callback returning the per-backref aria-label.
+   */
+  backLabel?: string | FootnoteCallback;
+}
+
+export function assertFootnoteHastConformance(
+  md: string,
+  options: FootnoteOptionsConformance = {},
+): void {
+  const satFeatures: Features = {
+    ...BASE_FOOTNOTE_FEATURES,
+    gfm: { footnotes: options },
+  };
+  const actual = stripHastDataLang(serialize(markdownToHast(md, { features: satFeatures })));
+
+  const refOpts: Record<string, unknown> = { ...REF_REHYPE_OPTIONS };
+  if (options.label !== undefined) refOpts.footnoteLabel = options.label;
+  if (options.backLabel !== undefined) {
+    if (typeof options.backLabel === "function") {
+      const cb = options.backLabel;
+      refOpts.footnoteBackLabel = (refIdx: number, rerefIdx: number) => cb(refIdx + 1, rerefIdx);
+    } else {
+      const tpl = options.backLabel;
+      refOpts.footnoteBackLabel = (refIdx: number, rerefIdx: number) => {
+        const ref = rerefIdx > 1 ? `${refIdx + 1}-${rerefIdx}` : `${refIdx + 1}`;
+        return tpl.replace("{reference}", ref);
+      };
+    }
+  }
+  if (options.backContent !== undefined) {
+    if (typeof options.backContent === "function") {
+      const cb = options.backContent;
+      // Callback mode in satteri skips auto-sup; mirror that here.
+      refOpts.footnoteBackContent = (refIdx: number, rerefIdx: number) => [
+        { type: "text", value: cb(refIdx + 1, rerefIdx) },
+      ];
+    } else {
+      const content = options.backContent;
+      refOpts.footnoteBackContent = (_: number, rerefIdx: number) => {
+        const children: unknown[] = [{ type: "text", value: content }];
+        if (rerefIdx > 1) {
+          children.push({
+            type: "element",
+            tagName: "sup",
+            properties: {},
+            children: [{ type: "text", value: String(rerefIdx) }],
+          });
+        }
+        return children;
+      };
+    }
+  }
+  const proc = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, refOpts);
+  const mdast = proc.parse(md);
+  const expected = normalizeAlignToStyle(serialize(proc.runSync(mdast) as Nodes));
+  expect(actual).toEqual(expected);
+}
+
 const fmMdastProcessor = buildMdastProcessor(["frontmatter"]);
 const fmHastProcessor = buildHastProcessor(["frontmatter"]);
 const fmHtmlProcessor = buildHastProcessor(["frontmatter"]).use(rehypeStringify, {
@@ -360,6 +469,51 @@ export async function assertMdxConformance(
   const satHtml = renderToStaticMarkup(
     createElement(SatComponent as React.FC<Record<string, unknown>>, { components }),
   );
+
+  expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
+}
+
+// Set an inline `style` string on every `<tag>` element via a hast/rehype
+// plugin on both pipelines, evaluate, and compare the rendered HTML. This is
+// the path expressive-code (and similar hast plugins) take: satteri's HAST→JSX
+// compiler parses `style="…"` into a JSX style object, which must agree with
+// @mdx-js/mdx (hast-util-to-estree). CSS custom properties are case-sensitive,
+// so casing like `--tmLabel` must survive intact on both sides.
+export async function assertMdxInlineStyleConformance(
+  input: string,
+  tag: string,
+  style: string,
+): Promise<void> {
+  const setStyle = (node: AnyNode): void => {
+    if (node.type === "element" && node.tagName === tag) {
+      node.properties = { ...(node.properties as AnyNode), style };
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children as AnyNode[]) setStyle(child);
+    }
+  };
+  const rehypeSetStyle = () => (tree: Nodes) => setStyle(tree as unknown as AnyNode);
+  const satteriSetStyle = defineHastPlugin({
+    name: "set-inline-style",
+    element: {
+      filter: [tag],
+      visit(node, ctx) {
+        ctx.setProperty(node, "style", style);
+      },
+    },
+  });
+
+  const { default: MdxComponent } = (await mdxEvaluate(input, {
+    ...mdxRuntime,
+    rehypePlugins: [rehypeSetStyle],
+  })) as { default: Function };
+  const mdxHtml = renderToStaticMarkup(createElement(MdxComponent as React.FC));
+
+  const { default: SatComponent } = await satteriEvaluate(input, {
+    ...satteriRuntime,
+    hastPlugins: [satteriSetStyle],
+  });
+  const satHtml = renderToStaticMarkup(createElement(SatComponent as React.FC));
 
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }

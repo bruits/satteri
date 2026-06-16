@@ -1,6 +1,11 @@
 import type { Position } from "unist";
-import type { Literal as MdastLiteral, Nodes as MdastStdNodes } from "mdast";
-import type { Nodes as HastStdNodes } from "hast";
+import type {
+  Literal as MdastLiteral,
+  Nodes as MdastStdNodes,
+  Parent as MdastParent,
+  PhrasingContent,
+} from "mdast";
+import type { Literal as HastLiteral, Nodes as HastStdNodes } from "hast";
 
 // Re-export standard position types from unist.
 export type { Position, Point } from "unist";
@@ -49,6 +54,16 @@ export interface InlineMath extends MdastLiteral {
   type: "inlineMath";
 }
 
+export interface Superscript extends MdastParent {
+  type: "superscript";
+  children: PhrasingContent[];
+}
+
+export interface Subscript extends MdastParent {
+  type: "subscript";
+  children: PhrasingContent[];
+}
+
 declare module "mdast" {
   interface FrontmatterContentMap {
     toml: Toml;
@@ -57,9 +72,13 @@ declare module "mdast" {
     toml: Toml;
     math: MathNode;
     inlineMath: InlineMath;
+    superscript: Superscript;
+    subscript: Subscript;
   }
   interface PhrasingContentMap {
     inlineMath: InlineMath;
+    superscript: Superscript;
+    subscript: Subscript;
   }
   interface BlockContentMap {
     math: MathNode;
@@ -70,10 +89,8 @@ declare module "mdast" {
 // mdxJsxTextElement and mdxFlowExpression/mdxTextExpression. We only need
 // to register "raw" here since it has no standard package.
 
-export interface HastRaw {
+export interface HastRaw extends HastLiteral {
   type: "raw";
-  value: string;
-  position?: Position | undefined;
 }
 
 declare module "hast" {
@@ -103,16 +120,6 @@ export type HastNode = HastStdNodes;
 export type MdastNodeInternal = MdastStdNodes & { _nodeId: number };
 /** @internal */
 export type HastNodeInternal = HastStdNodes & { _nodeId: number };
-
-/** A diagnostic emitted by a plugin via `ctx.report(...)`. */
-export interface Diagnostic {
-  message: string;
-  severity: "error" | "warning" | "info";
-  /** Source position of the offending node, when available. */
-  position?: Position;
-  /** Pipeline phase that produced this diagnostic. */
-  phase: "mdast" | "hast";
-}
 
 export interface StringRefRaw {
   offset: number;

@@ -1,11 +1,8 @@
-import {
-  visitHastHandle,
-  resolveSubscriptions,
-  type HastHandle,
-} from "./hast/hast-visitor.js";
+import { visitHastHandle, resolveSubscriptions, type HastHandle } from "./hast/hast-visitor.js";
 import {
   visitMdastHandle,
   resolveMdastSubscriptions,
+  type MdastHandle,
   type MdastPluginInstance,
 } from "./mdast/mdast-visitor.js";
 import type {
@@ -31,16 +28,60 @@ import {
 } from "#binding";
 import { MdastReader } from "./mdast/mdast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
+import { markHandleMutated } from "./lazy-child-resolver.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
-import type { MdastNode, HastNode, Diagnostic } from "./types.js";
+import type { MdastNode, HastNode } from "./types.js";
 
-function featuresToNative(features: Features | undefined) {
-  if (!features) return undefined;
+type NativeFeaturesPair = {
+  features: Record<string, unknown> | undefined;
+  convertOptions: Record<string, unknown> | undefined;
+};
+
+/**
+ * Split the user-facing `Features` (with nested unions) into the flat napi
+ * `JsFeatures` shape plus the conversion-side `JsConvertOptions` carrying
+ * the footnote i18n strings. The public API only exposes `features`; the
+ * footnote strings are routed to napi internally.
+ */
+function featuresToNative(features: Features | undefined): NativeFeaturesPair {
+  if (!features) return { features: undefined, convertOptions: undefined };
   const result: Record<string, unknown> = {};
-  if (features.gfm !== undefined) result.gfm = features.gfm;
+  let convertOptions: Record<string, unknown> | undefined;
+
+  if (features.gfm !== undefined) {
+    if (typeof features.gfm === "object") {
+      const g = features.gfm;
+      const gfmOpts: Record<string, unknown> = {};
+      if (g.footnotes !== undefined) {
+        if (typeof g.footnotes === "object") {
+          gfmOpts.footnotes = true;
+          convertOptions = convertOptions ?? {};
+          if (g.footnotes.label !== undefined) convertOptions.footnoteLabel = g.footnotes.label;
+          if (g.footnotes.backContent !== undefined)
+            convertOptions.footnoteBackContent = g.footnotes.backContent;
+          if (g.footnotes.backLabel !== undefined)
+            convertOptions.footnoteBackLabel = g.footnotes.backLabel;
+        } else {
+          gfmOpts.footnotes = g.footnotes;
+        }
+      }
+      result.gfmOptions = gfmOpts;
+    } else {
+      result.gfm = features.gfm;
+    }
+  }
   if (features.frontmatter !== undefined) result.frontmatter = features.frontmatter;
-  if (features.math !== undefined) result.math = features.math;
+  if (features.math !== undefined) {
+    if (typeof features.math === "object") {
+      const mathOpts: Record<string, unknown> = {};
+      if (features.math.singleDollarTextMath !== undefined)
+        mathOpts.singleDollarTextMath = features.math.singleDollarTextMath;
+      result.mathOptions = mathOpts;
+    } else {
+      result.math = features.math;
+    }
+  }
   if (features.headingAttributes !== undefined)
     result.headingAttributes = features.headingAttributes;
   if (features.directive !== undefined) result.directive = features.directive;
@@ -54,68 +95,64 @@ function featuresToNative(features: Features | undefined) {
       result.smartPunctuation = features.smartPunctuation;
     }
   }
-  return result;
+  return { features: result, convertOptions };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type MdastHandle = any;
+type MdastPipelineResult = { handle: MdastHandle };
 
-type MdastPipelineResult = {
-  handle: MdastHandle;
-  pendingCommands: Uint8Array | null;
-  diagnostics: Diagnostic[];
-};
+/** Drop a handle after bumping its epoch: the arena dies with the handle, so a
+ *  child stub retained past the pipeline must hit the designed retention error,
+ *  not a cryptic RangeError from snapshotting the freed arena. */
+function disposeHandle(handle: AnyHandle): void {
+  markHandleMutated(handle);
+  dropHandle(handle);
+}
+
+function warnDroppedTransforms(
+  plugin: { name?: string },
+  dropped: number,
+  kind: "mdast" | "hast",
+): void {
+  const name = plugin.name ?? "<anonymous>";
+  const noun = dropped === 1 ? "transform" : "transforms";
+  console.warn(
+    `satteri: plugin "${name}" queued ${dropped} ${kind} ${noun} on node(s) that were removed or ` +
+      `replaced earlier in the same pass; ${dropped === 1 ? "it was" : "they were"} dropped.`,
+  );
+}
 
 function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginInput[],
-  filename: string,
+  fileURL: URL | undefined,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
-  let pendingCommands: Uint8Array | null = null;
-  const diagnostics: Diagnostic[] = [];
+  // Each plugin runs once over the tree. A transform that passes a child
+  // through (returning it inside the replacement) keeps that child's identity,
+  // so a patch the same pass queued on it still applies — nesting composes in
+  // one pass. A plugin's own freshly-built nodes are not re-walked; transform
+  // them up front, or hand off to a later plugin that sees the materialized tree.
+  const runPlugin = (plugin: MdastPluginInstance): void | Promise<void> => {
+    const subs = resolveMdastSubscriptions(plugin);
+    const result = visitMdastHandle(handle, plugin, subs, () => getHandleSource(handle), fileURL);
+    const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
+      if (!r.hasMutations) return;
+      markHandleMutated(handle);
+      const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
+      if (dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
+    };
+    return result instanceof Promise ? result.then(apply) : apply(result);
+  };
 
   let i = 0;
   const runNext = (): MdastPipelineResult | Promise<MdastPipelineResult> => {
     while (i < plugins.length) {
-      const idx = i++;
-      const raw = plugins[idx]!;
+      const raw = plugins[i++]!;
       const plugin: MdastPluginDefinition = typeof raw === "function" ? raw() : raw;
-      const subs = resolveMdastSubscriptions(plugin as MdastPluginInstance);
-      const result = visitMdastHandle(
-        handle,
-        plugin as MdastPluginInstance,
-        subs,
-        () => getHandleSource(handle),
-        filename,
-      );
-
-      if (result instanceof Promise) {
-        return result.then((r) => {
-          applyMdastResult(r, idx, plugins.length, handle);
-          return runNext();
-        });
-      }
-
-      applyMdastResult(result, idx, plugins.length, handle);
+      const r = runPlugin(plugin as MdastPluginInstance);
+      if (r instanceof Promise) return r.then(runNext);
     }
-    return { handle, pendingCommands, diagnostics };
+    return { handle };
   };
-
-  function applyMdastResult(
-    result: { commandBuffer: Uint8Array; hasMutations: boolean; diagnostics: Diagnostic[] },
-    idx: number,
-    total: number,
-    h: MdastHandle,
-  ) {
-    if (result.diagnostics.length > 0) diagnostics.push(...result.diagnostics);
-    if (result.hasMutations) {
-      if (idx === total - 1) {
-        pendingCommands = result.commandBuffer;
-      } else {
-        applyCommandsToMdastHandle(h, result.commandBuffer);
-      }
-    }
-  }
 
   return runNext();
 }
@@ -124,29 +161,30 @@ function runHastPluginsOnHandle(
   handle: HastHandle,
   plugins: HastPluginInput[],
   source: string,
-  filename: string,
-): Diagnostic[] | Promise<Diagnostic[]> {
-  if (plugins.length === 0) return [];
-  const diagnostics: Diagnostic[] = [];
+  fileURL: URL | undefined,
+): void | Promise<void> {
+  if (plugins.length === 0) return;
 
   let i = 0;
-  const runNext = (): Diagnostic[] | Promise<Diagnostic[]> => {
+  const runNext = (): void | Promise<void> => {
     while (i < plugins.length) {
       const raw = plugins[i]!;
       i++;
       const plugin: HastPluginDefinition = typeof raw === "function" ? raw() : raw;
 
       const subs = resolveSubscriptions(plugin);
-      const result = visitHastHandle(handle, plugin, subs, source, filename);
+      const result = visitHastHandle(handle, plugin, subs, source, fileURL);
+      const warnIfDropped = (dropped: number): void => {
+        if (dropped) warnDroppedTransforms(plugin, dropped, "hast");
+      };
       if (result instanceof Promise) {
-        return result.then((r) => {
-          if (r.diagnostics.length > 0) diagnostics.push(...r.diagnostics);
+        return result.then((dropped) => {
+          warnIfDropped(dropped);
           return runNext();
         });
       }
-      if (result.diagnostics.length > 0) diagnostics.push(...result.diagnostics);
+      warnIfDropped(result);
     }
-    return diagnostics;
   };
 
   return runNext();
@@ -219,15 +257,95 @@ export interface SmartPunctuationOptions {
   ellipses?: boolean;
 }
 
+/**
+ * Per-backref callback. Invoked once per anchor in the footnotes section
+ * with 1-based `referenceNumber` and `rerunIndex` (1 on the first backref
+ * to that definition, 2 on the second, and so on). Must return the final
+ * string used as the backref content or `aria-label`.
+ */
+export type FootnoteBackrefCallback = (referenceNumber: number, rerunIndex: number) => string;
+
+/**
+ * i18n strings for the GFM footnotes section. Mirrors `footnoteLabel`,
+ * `footnoteBackLabel`, and `footnoteBackContent` from remark-rehype.
+ *
+ * `backContent` and `backLabel` each accept either a template string with
+ * the `{reference}` placeholder (substituted with `1` or `1-2` to match
+ * remark-rehype's default suffix), or a callback receiving the raw
+ * `(referenceNumber, rerunIndex)` pair.
+ *
+ * Passing this object enables footnotes. To turn them off, use
+ * `gfm: { footnotes: false }`.
+ */
+export interface FootnoteOptions {
+  /** `<h2>` label opening the footnotes section. Default: `"Footnotes"`. */
+  label?: string;
+  /**
+   * Backref `<a>` content. Default: `"↩"`.
+   *
+   * Template form: the string is used as-is, and a `<sup>K</sup>` marker
+   * is auto-appended on reruns (k > 1). Callback form: returns the full
+   * content for each backref; no auto-sup is added.
+   */
+  backContent?: string | FootnoteBackrefCallback;
+  /**
+   * Backref `aria-label`. Default: `"Back to reference {reference}"`.
+   *
+   * Template form: `{reference}` becomes `n` for the first backref, `n-K`
+   * for subsequent ones. Callback form: returns the `aria-label` string
+   * for each backref.
+   */
+  backLabel?: string | FootnoteBackrefCallback;
+}
+
+/** Granular GFM toggles, nested under {@link Features.gfm}. */
+export interface GfmOptions {
+  /**
+   * Enable GFM footnotes (`[^id]`). Default: true.
+   *
+   * Pass `false` to drop footnote parsing while keeping the rest of GFM;
+   * pass an object to enable footnotes with custom i18n strings (see
+   * {@link FootnoteOptions}).
+   */
+  footnotes?: boolean | FootnoteOptions;
+}
+
+/** Granular math toggles, nested under {@link Features.math}. */
+export interface MathOptions {
+  /**
+   * Treat single-dollar runs (`$ ... $`) as inline math. Default: true.
+   *
+   * Set `false` to keep single `$` as literal text while still parsing
+   * `$$ ... $$` display math. Mirrors `singleDollarTextMath` from
+   * remark-math.
+   */
+  singleDollarTextMath?: boolean;
+}
+
 /** Parser feature toggles. All default to their documented value when omitted. */
 export interface Features {
-  /** GFM: tables, footnotes, strikethrough, task lists. Default: true. */
-  gfm?: boolean;
+  /**
+   * GFM: tables, footnotes, strikethrough, task lists. Default: true.
+   *
+   * Pass an options object for granular control:
+   * ```ts
+   * gfm: { footnotes: false }                   // skip footnotes only
+   * gfm: { footnotes: { label: "Notes" } }      // localize footnotes
+   * ```
+   */
+  gfm?: boolean | GfmOptions;
   /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
   frontmatter?: boolean;
-  /** Math blocks and inline math. Default: true. */
-  math?: boolean;
-  /** Heading attributes (`# text { #id .class }`). Default: true. */
+  /**
+   * Math blocks and inline math. Default: false.
+   *
+   * Pass an options object for granular control:
+   * ```ts
+   * math: { singleDollarTextMath: false }       // $$..$$ only, $..$ literal
+   * ```
+   */
+  math?: boolean | MathOptions;
+  /** Heading attributes (`# text { #id .class }`). Default: false. */
   headingAttributes?: boolean;
   /** Colon-delimited container directive blocks (`:::`). Default: false. */
   directive?: boolean;
@@ -252,7 +370,12 @@ export interface CompileOptions {
   mdastPlugins?: MdastPluginInput[];
   hastPlugins?: HastPluginInput[];
   features?: Features;
-  filename?: string;
+  /**
+   * The document being processed, surfaced to plugins as `ctx.fileURL`. Must
+   * be a `URL` (e.g. Astro's `fileURL`); convert a filesystem path with Node's
+   * `pathToFileURL` before passing it.
+   */
+  fileURL?: URL;
 }
 
 /**
@@ -320,8 +443,6 @@ export interface Frontmatter {
   value: string;
 }
 
-export type { Diagnostic } from "./types.js";
-
 /** Result of {@link markdownToHtml}. */
 export interface MarkdownToHtmlResult {
   /** Rendered HTML string. */
@@ -330,8 +451,6 @@ export interface MarkdownToHtmlResult {
   frontmatter: Frontmatter | null;
   /** Plugin data bag, populated via `ctx.data`. `null` if no plugin wrote to it. */
   data: Record<string, unknown> | null;
-  /** Diagnostics collected from all plugins via `ctx.report(...)`. */
-  diagnostics: Diagnostic[];
 }
 
 /** Result of {@link mdxToJs}. */
@@ -342,8 +461,6 @@ export interface MdxToJsResult {
   frontmatter: Frontmatter | null;
   /** Plugin data bag, populated via `ctx.data`. `null` if no plugin wrote to it. */
   data: Record<string, unknown> | null;
-  /** Diagnostics collected from all plugins via `ctx.report(...)`. */
-  diagnostics: Diagnostic[];
 }
 
 // Type helpers: detect whether any visitor in any plugin returns a Promise.
@@ -395,44 +512,48 @@ export function markdownToHtml(
   source: string,
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
-  const { mdastPlugins = [], hastPlugins = [], features, filename = "<unknown>" } = options;
-  const nativeFeatures = featuresToNative(features);
+  const { mdastPlugins = [], hastPlugins = [], features, fileURL } = options;
+  const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
+    featuresToNative(features);
 
-  const result = createHastHandleFromMdast(source, mdastPlugins, false, filename, nativeFeatures);
+  const result = createHastHandleFromMdast(
+    source,
+    mdastPlugins,
+    false,
+    fileURL,
+    nativeFeatures,
+    nativeConvertOptions,
+  );
 
-  const renderAndDrop = (
-    h: HastHandle,
-    frontmatter: Frontmatter | null,
-    diagnostics: Diagnostic[],
-  ): MarkdownToHtmlResult => {
+  const renderAndDrop = (h: HastHandle, frontmatter: Frontmatter | null): MarkdownToHtmlResult => {
     try {
       const html = renderHandle(h);
-      return { html, frontmatter, data: readResultData(h), diagnostics };
+      return { html, frontmatter, data: readResultData(h) };
     } finally {
-      dropHandle(h);
+      disposeHandle(h);
     }
   };
 
   const runHastThenRender = (
     r: HastWithFrontmatter,
   ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> => {
-    let hastResult: Diagnostic[] | Promise<Diagnostic[]>;
+    let hastResult: void | Promise<void>;
     try {
-      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
+      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL);
     } catch (err) {
-      dropHandle(r.hastHandle);
+      disposeHandle(r.hastHandle);
       throw err;
     }
     if (hastResult instanceof Promise) {
       return hastResult.then(
-        (hastDiags) => renderAndDrop(r.hastHandle, r.frontmatter, [...r.diagnostics, ...hastDiags]),
+        () => renderAndDrop(r.hastHandle, r.frontmatter),
         (err) => {
-          dropHandle(r.hastHandle);
+          disposeHandle(r.hastHandle);
           throw err;
         },
       );
     }
-    return renderAndDrop(r.hastHandle, r.frontmatter, [...r.diagnostics, ...hastResult]);
+    return renderAndDrop(r.hastHandle, r.frontmatter);
   };
 
   if (result instanceof Promise) return result.then(runHastThenRender);
@@ -447,50 +568,47 @@ export function mdxToJs(
   source: string,
   options: MdxCompileOptions = {},
 ): MdxToJsResult | Promise<MdxToJsResult> {
-  const {
-    mdastPlugins = [],
-    hastPlugins = [],
-    features,
-    filename = "<unknown>",
-    ...mdxFields
-  } = options;
+  const { mdastPlugins = [], hastPlugins = [], features, fileURL, ...mdxFields } = options;
   const mdxOptions = mdxOptionsToNative(mdxFields);
-  const nativeFeatures = featuresToNative(features);
+  const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
+    featuresToNative(features);
 
-  const result = createHastHandleFromMdast(source, mdastPlugins, true, filename, nativeFeatures);
+  const result = createHastHandleFromMdast(
+    source,
+    mdastPlugins,
+    true,
+    fileURL,
+    nativeFeatures,
+    nativeConvertOptions,
+  );
 
-  const compileAndDrop = (
-    h: HastHandle,
-    frontmatter: Frontmatter | null,
-    diagnostics: Diagnostic[],
-  ): MdxToJsResult => {
+  const compileAndDrop = (h: HastHandle, frontmatter: Frontmatter | null): MdxToJsResult => {
     try {
       const code = compileHandle(h, mdxOptions);
-      return { code, frontmatter, data: readResultData(h), diagnostics };
+      return { code, frontmatter, data: readResultData(h) };
     } finally {
-      dropHandle(h);
+      disposeHandle(h);
     }
   };
 
   const runHastThenCompile = (r: HastWithFrontmatter): MdxToJsResult | Promise<MdxToJsResult> => {
-    let hastResult: Diagnostic[] | Promise<Diagnostic[]>;
+    let hastResult: void | Promise<void>;
     try {
-      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, filename);
+      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL);
     } catch (err) {
-      dropHandle(r.hastHandle);
+      disposeHandle(r.hastHandle);
       throw err;
     }
     if (hastResult instanceof Promise) {
       return hastResult.then(
-        (hastDiags) =>
-          compileAndDrop(r.hastHandle, r.frontmatter, [...r.diagnostics, ...hastDiags]),
+        () => compileAndDrop(r.hastHandle, r.frontmatter),
         (err) => {
-          dropHandle(r.hastHandle);
+          disposeHandle(r.hastHandle);
           throw err;
         },
       );
     }
-    return compileAndDrop(r.hastHandle, r.frontmatter, [...r.diagnostics, ...hastResult]);
+    return compileAndDrop(r.hastHandle, r.frontmatter);
   };
 
   if (result instanceof Promise) return result.then(runHastThenCompile);
@@ -539,11 +657,7 @@ export function evaluate(
 // Pipeline: parse → mdast plugins → hast conversion → hast plugins
 // All arenas stay in Rust. No intermediate buffer copies to JS.
 
-type HastWithFrontmatter = {
-  hastHandle: HastHandle;
-  frontmatter: Frontmatter | null;
-  diagnostics: Diagnostic[];
-};
+type HastWithFrontmatter = { hastHandle: HastHandle; frontmatter: Frontmatter | null };
 
 function readFrontmatter(handle: MdastHandle): Frontmatter | null {
   const raw = getMdastFrontmatter(handle);
@@ -562,45 +676,47 @@ function createHastHandleFromMdast(
   source: string,
   mdastPlugins: MdastPluginInput[],
   mdx: boolean,
-  filename: string,
+  fileURL: URL | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nativeFeatures?: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  nativeConvertOptions?: any,
 ): HastWithFrontmatter | Promise<HastWithFrontmatter> {
   const mdastHandle = mdx
     ? createMdxMdastHandle(source, nativeFeatures)
     : createMdastHandle(source, nativeFeatures);
 
-  // finally{drop} is intentional: convertMdastToHastHandle empties the arena
+  // finally{dispose} is intentional: convertMdastToHastHandle empties the arena
   // on success, but if any step here throws the handle would otherwise leak.
   const finalize = (r: MdastPipelineResult): HastWithFrontmatter => {
     try {
-      if (r.pendingCommands) {
-        applyCommandsToMdastHandle(r.handle, r.pendingCommands);
-      }
       const frontmatter = readFrontmatter(r.handle);
-      const hastHandle = convertMdastToHastHandle(r.handle);
-      return { hastHandle, frontmatter, diagnostics: r.diagnostics };
+      // The conversion empties the mdast arena; bump the epoch so a stub
+      // retained past the mdast pass fails with the retention error.
+      markHandleMutated(r.handle);
+      const hastHandle = convertMdastToHastHandle(r.handle, nativeConvertOptions);
+      return { hastHandle, frontmatter };
     } finally {
-      dropHandle(r.handle);
+      disposeHandle(r.handle);
     }
   };
 
   try {
     if (mdastPlugins.length === 0) {
-      return finalize({ handle: mdastHandle, pendingCommands: null, diagnostics: [] });
+      return finalize({ handle: mdastHandle });
     }
 
-    const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, filename);
+    const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL);
 
     if (mdastResult instanceof Promise) {
       return mdastResult.then(finalize, (err) => {
-        dropHandle(mdastHandle);
+        disposeHandle(mdastHandle);
         throw err;
       });
     }
     return finalize(mdastResult);
   } catch (err) {
-    dropHandle(mdastHandle);
+    disposeHandle(mdastHandle);
     throw err;
   }
 }
@@ -609,40 +725,42 @@ function createHastHandleFromMdast(
 
 /** Parse Markdown source into a materialized mdast tree. */
 export function markdownToMdast(source: string, options: { features?: Features } = {}): MdastNode {
-  const handle = createMdastHandle(source, featuresToNative(options.features));
+  const handle = createMdastHandle(source, featuresToNative(options.features).features);
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
-    dropHandle(handle);
+    disposeHandle(handle);
   }
 }
 
 /** Parse MDX source into a materialized mdast tree. */
 export function mdxToMdast(source: string, options: { features?: Features } = {}): MdastNode {
-  const handle = createMdxMdastHandle(source, featuresToNative(options.features));
+  const handle = createMdxMdastHandle(source, featuresToNative(options.features).features);
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
-    dropHandle(handle);
+    disposeHandle(handle);
   }
 }
 
 /** Convert Markdown source to a materialized hast tree. */
 export function markdownToHast(source: string, options: { features?: Features } = {}): HastNode {
-  const handle = createHastHandle(source, featuresToNative(options.features));
+  const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
+  const handle = createHastHandle(source, nativeFeatures, convertOptions);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
-    dropHandle(handle);
+    disposeHandle(handle);
   }
 }
 
 /** Convert MDX source to a materialized hast tree. */
 export function mdxToHast(source: string, options: { features?: Features } = {}): HastNode {
-  const handle = createMdxHastHandle(source, featuresToNative(options.features));
+  const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
+  const handle = createMdxHastHandle(source, nativeFeatures, convertOptions);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
-    dropHandle(handle);
+    disposeHandle(handle);
   }
 }

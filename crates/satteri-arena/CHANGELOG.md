@@ -1,5 +1,11 @@
 # satteri-arena
 
+## 0.2.1 — 2026-06-02
+
+### Patch changes
+
+- [c69e907](https://github.com/bruits/satteri/commit/c69e9073f3f101faf8058f05f6e6fea4466039fe) Fixes Markdown plugins that return raw Markdown or HTML (`{ raw }` / `{ rawHtml }`) sometimes inserting unnecessary nested `root` nodes into the MDAST tree. — Thanks @Princesseuh!
+
 ## 0.2.0 — 2026-05-18
 
 ### Minor changes

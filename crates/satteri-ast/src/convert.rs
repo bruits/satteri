@@ -6,12 +6,15 @@ use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast, St
 use crate::hast::codec::encode_element_data_into;
 use crate::hast::HastNodeType;
 use crate::mdast::{
-    decode_code_data, decode_definition_data, decode_expression_data,
-    decode_footnote_definition_data, decode_heading_data, decode_image_data,
-    decode_image_reference_alt, decode_link_data, decode_list_data, decode_list_item_data,
-    decode_math_data, decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
-    decode_mdx_jsx_explicit, decode_reference_data, decode_table_alignments,
-    encode_mdx_jsx_element_data, ColumnAlign, ListItemData, MdastNodeType,
+    decode_code_data, decode_definition_data, decode_footnote_definition_data, decode_heading_data,
+    decode_image_data, decode_image_reference_alt, decode_link_data, decode_list_data,
+    decode_list_item_data, decode_math_data, decode_reference_data, decode_table_alignments,
+    ColumnAlign, ListItemData, MdastNodeType,
+};
+#[cfg(feature = "mdx")]
+use crate::mdast::{
+    decode_expression_data, decode_mdx_jsx_attr, decode_mdx_jsx_attr_count,
+    decode_mdx_jsx_element_name, decode_mdx_jsx_explicit, encode_mdx_jsx_element_data,
 };
 use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
 
@@ -335,8 +338,66 @@ fn hex_digit(n: u8) -> char {
     }
 }
 
-/// Convert an MDAST arena directly to a HAST arena.
+/// Conversion-time options that don't affect parsing
+pub struct ConvertOptions {
+    /// Visible-to-screen-readers label on the `<h2>` that opens the footnotes
+    /// section. Default: `"Footnotes"`.
+    pub footnote_label: String,
+    /// Content of each backref `<a>`. The default emits `"↩"` for every
+    /// backref; for k > 1, a `<sup>K</sup>` is appended automatically.
+    pub footnote_back_content: Backref,
+    /// `aria-label` on each backref `<a>`. The default template substitutes
+    /// `{reference}` with the footnote number (e.g. `1`) for the first
+    /// reference, or `number-K` (e.g. `1-2`) for subsequent references back
+    /// to the same definition, matching remark-rehype's default.
+    /// Default: `"Back to reference {reference}"`.
+    pub footnote_back_label: Backref,
+}
+
+/// Value for per-backref strings. Either a template with the `{reference}`
+/// placeholder, or a callback invoked with `(footnote_number, rerun_index)`
+/// (both 1-based) returning the final string.
+pub enum Backref {
+    /// String template with the `{reference}` placeholder.
+    Template(String),
+    /// Per-backref callback. `rerun_index` starts at 1.
+    Callback(Box<dyn Fn(usize, usize) -> String>),
+}
+
+impl Default for ConvertOptions {
+    fn default() -> Self {
+        Self {
+            footnote_label: "Footnotes".to_string(),
+            footnote_back_content: Backref::Template("\u{21a9}".to_string()),
+            footnote_back_label: Backref::Template("Back to reference {reference}".to_string()),
+        }
+    }
+}
+
+fn resolve_backref(backref: &Backref, number: usize, k: usize) -> String {
+    match backref {
+        Backref::Template(tpl) => {
+            let token = if k > 1 {
+                format!("{}-{}", number, k)
+            } else {
+                number.to_string()
+            };
+            tpl.replace("{reference}", &token)
+        }
+        Backref::Callback(cb) => cb(number, k),
+    }
+}
+
+/// Convert an MDAST arena directly to a HAST arena using default options.
 pub fn mdast_arena_to_hast_arena(source: &Arena<Mdast>) -> Arena<Hast> {
+    mdast_arena_to_hast_arena_with_options(source, &ConvertOptions::default())
+}
+
+/// Convert an MDAST arena to a HAST arena with the given conversion options.
+pub fn mdast_arena_to_hast_arena_with_options(
+    source: &Arena<Mdast>,
+    options: &ConvertOptions,
+) -> Arena<Hast> {
     let src = source.source();
     let mut builder: ArenaBuilder<Hast> = ArenaBuilder::new(src.to_string());
     let n = source.len();
@@ -352,6 +413,7 @@ pub fn mdast_arena_to_hast_arena(source: &Arena<Mdast>) -> Arena<Hast> {
         footnote_ref_occurrence: &refs.footnote_ref_occurrence,
         footnote_ref_totals: &refs.footnote_ref_totals,
         newline_ref,
+        options,
     };
     convert_node(0, source, &mut builder, &ctx);
     let mut hast = builder.finish();
@@ -382,6 +444,8 @@ struct ConvertCtx<'a, 'src> {
     /// Per-identifier total number of references (for the backref links in
     /// the section).
     footnote_ref_totals: &'a FxHashMap<&'src str, usize>,
+    /// Conversion-time options (currently only footnote i18n strings).
+    options: &'a ConvertOptions,
 }
 
 /// Definition data stored as StringRefs into the MDAST source, avoids cloning strings.
@@ -1264,6 +1328,24 @@ fn convert_node(
             builder.close_node();
         }
 
+        Some(MdastNodeType::Superscript) => {
+            let action = open_h_element(builder, view, node_id, "sup", &[]);
+            copy_position(node_id, view, builder);
+            if matches!(action, ChildrenAction::Recurse) {
+                convert_children(node_id, view, builder, ctx);
+            }
+            builder.close_node();
+        }
+
+        Some(MdastNodeType::Subscript) => {
+            let action = open_h_element(builder, view, node_id, "sub", &[]);
+            copy_position(node_id, view, builder);
+            if matches!(action, ChildrenAction::Recurse) {
+                convert_children(node_id, view, builder, ctx);
+            }
+            builder.close_node();
+        }
+
         Some(MdastNodeType::Table) => {
             let alignments = decode_table_alignments(view.get_type_data(node_id));
             let action = open_h_element(builder, view, node_id, "table", &[]);
@@ -1473,6 +1555,7 @@ fn convert_node(
             // `emit_gfm_footnotes_section` after the root's other children.
         }
 
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxJsxFlowElement) => {
             convert_mdx_jsx_element(
                 node_id,
@@ -1482,6 +1565,7 @@ fn convert_node(
                 HastNodeType::MdxJsxElement as u8,
             );
         }
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxJsxTextElement) => {
             convert_mdx_jsx_element(
                 node_id,
@@ -1492,6 +1576,7 @@ fn convert_node(
             );
         }
 
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxFlowExpression) => {
             let data = view.get_type_data(node_id);
             let value = if data.is_empty() {
@@ -1517,6 +1602,7 @@ fn convert_node(
             );
         }
 
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxTextExpression) => {
             let data = view.get_type_data(node_id);
             let value = if data.is_empty() {
@@ -1542,6 +1628,7 @@ fn convert_node(
             );
         }
 
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxjsEsm) => {
             let data = view.get_type_data(node_id);
             let value = if data.is_empty() {
@@ -1840,7 +1927,7 @@ fn emit_gfm_footnotes_section(
         ],
     );
     open_element_with_props(builder, "h2", &h2_props);
-    add_text_node(builder, "Footnotes");
+    add_text_node(builder, &ctx.options.footnote_label);
     builder.close_node(); // h2
 
     add_text_node_with_ref(builder, ctx.newline_ref);
@@ -1887,7 +1974,7 @@ fn emit_gfm_footnotes_section(
 
         if children.is_empty() {
             // Empty definition: emit the backref directly in the <li>.
-            emit_footnote_backrefs(builder, &safe_id, number, total_refs);
+            emit_footnote_backrefs(builder, ctx, &safe_id, number, total_refs);
         } else {
             for (i, &child_id) in children.iter().enumerate() {
                 if i > 0 {
@@ -1905,7 +1992,7 @@ fn emit_gfm_footnotes_section(
             // backref as a trailing sibling so it still reaches readers.
             if last_para_idx.is_none() {
                 add_text_node_with_ref(builder, ctx.newline_ref);
-                emit_footnote_backrefs(builder, &safe_id, number, total_refs);
+                emit_footnote_backrefs(builder, ctx, &safe_id, number, total_refs);
             }
         }
 
@@ -1961,7 +2048,7 @@ fn emit_paragraph_with_backrefs(
         }
     }
 
-    emit_footnote_backrefs(builder, identifier, number, total_refs);
+    emit_footnote_backrefs(builder, ctx, identifier, number, total_refs);
     builder.close_node(); // p
 }
 
@@ -1971,6 +2058,7 @@ fn emit_paragraph_with_backrefs(
 /// ones use `-K` suffixes matching the `id`s stamped on the reference sups.
 fn emit_footnote_backrefs(
     builder: &mut ArenaBuilder<Hast>,
+    ctx: &ConvertCtx<'_, '_>,
     identifier: &str,
     number: usize,
     total_refs: usize,
@@ -1984,11 +2072,8 @@ fn emit_footnote_backrefs(
         } else {
             format!("#user-content-fnref-{}", identifier)
         };
-        let aria = if k > 1 {
-            format!("Back to reference {}-{}", number, k)
-        } else {
-            format!("Back to reference {}", number)
-        };
+        let aria = resolve_backref(&ctx.options.footnote_back_label, number, k);
+        let back_content = resolve_backref(&ctx.options.footnote_back_content, number, k);
         let href_ref = builder.alloc_string(&href);
         let aria_ref = builder.alloc_string(&aria);
         let empty_ref = StringRef::empty();
@@ -2003,11 +2088,10 @@ fn emit_footnote_backrefs(
             ],
         );
         open_element_with_props(builder, "a", &props);
-        add_text_node(builder, "\u{21a9}");
-        if k > 1 {
-            // Reuse markers: `<sup>K</sup>` follows the arrow for every
-            // reference past the first so readers can tell which call site
-            // the link targets.
+        add_text_node(builder, &back_content);
+        // Template mode auto-appends <sup>K</sup> for k > 1; callback mode
+        // lets the callback emit the marker itself.
+        if k > 1 && matches!(ctx.options.footnote_back_content, Backref::Template(_)) {
             open_element(builder, "sup");
             add_text_node(builder, &k.to_string());
             builder.close_node();
@@ -2071,8 +2155,15 @@ fn convert_table_row(
     let all_cells = view.get_children(row_id);
     // mdast-util-to-hast truncates source cells past the header column count
     // (HAST padding fills underflow; this drops overflow). The MDAST tree
-    // keeps all source cells per `mdast-util-gfm-table`.
-    let max_cells = all_cells.len().min(alignments.len());
+    // keeps all source cells per `mdast-util-gfm-table`. With no alignment
+    // info, it falls back to the row's own cell count rather than dropping
+    // every cell.
+    let column_count = if alignments.is_empty() {
+        all_cells.len()
+    } else {
+        alignments.len()
+    };
+    let max_cells = all_cells.len().min(column_count);
     let cell_ids = &all_cells[..max_cells];
     let cell_tag = if is_header { "th" } else { "td" };
     for (col_idx, &cell_id) in cell_ids.iter().enumerate() {
@@ -2101,7 +2192,7 @@ fn convert_table_row(
     // Pad to the header width — mdast-util-to-hast emits empty `<th>`/`<td>`
     // for any missing cells so the rendered table is rectangular, even though
     // the MDAST table row only stores the source cell count.
-    for col_idx in cell_ids.len()..alignments.len() {
+    for col_idx in cell_ids.len()..column_count {
         let align = alignments
             .get(col_idx)
             .copied()
@@ -2125,6 +2216,7 @@ fn convert_table_row(
     builder.close_node(); // tr
 }
 
+#[cfg(feature = "mdx")]
 fn convert_mdx_jsx_element(
     node_id: u32,
     view: &Arena<Mdast>,
@@ -2201,6 +2293,7 @@ fn extract_text_recursive(node_id: u32, view: &Arena<Mdast>, out: &mut String) {
 mod hast_convert_tests {
     use super::*;
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn multi_jsx_unraveled() {
         let source = "<Foo bar={1}/><Bar baz={2}/>\n";
@@ -2214,6 +2307,7 @@ mod hast_convert_tests {
         );
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn jsx_flow_with_full_options() {
         use satteri_pulldown_cmark::Options;

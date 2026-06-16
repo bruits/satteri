@@ -353,428 +353,16 @@ dependencies = [
  "cc",
  "cfg-if",
  "constant_time_eq",
- "cpufeatures 0.3.0",
+ "cpufeatures",
 ]
 
 [[package]]
 name = "block-buffer"
-version = "0.10.4"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
+checksum = "cdd35008169921d80bc60d3d0ab416eecb028c4cd653352907921d95084790be"
 dependencies = [
- "generic-array",
-]
-
-[[package]]
-name = "brk_rolldown"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4752aef63de6ce65ab8f2eaad552ee44bdfe26d0dcf4c121880ca135e8cd72c"
-dependencies = [
- "anyhow",
- "append-only-vec",
- "arcstr",
- "bitflags",
- "brk_rolldown_common",
- "brk_rolldown_dev_common",
- "brk_rolldown_devtools",
- "brk_rolldown_ecmascript",
- "brk_rolldown_ecmascript_utils",
- "brk_rolldown_error",
- "brk_rolldown_fs",
- "brk_rolldown_plugin",
- "brk_rolldown_plugin_chunk_import_map",
- "brk_rolldown_plugin_copy_module",
- "brk_rolldown_plugin_data_url",
- "brk_rolldown_plugin_hmr",
- "brk_rolldown_plugin_lazy_compilation",
- "brk_rolldown_plugin_oxc_runtime",
- "brk_rolldown_resolver",
- "brk_rolldown_sourcemap",
- "brk_rolldown_std_utils",
- "brk_rolldown_tracing",
- "brk_rolldown_utils",
- "brk_string_wizard",
- "commondir",
- "dashmap 6.1.0",
- "futures",
- "indexmap",
- "itertools 0.14.0",
- "itoa",
- "json-escape-simd",
- "memchr",
- "oxc",
- "oxc_allocator",
- "oxc_ecmascript",
- "oxc_index",
- "oxc_traverse",
- "petgraph",
- "rayon",
- "rustc-hash",
- "serde",
- "serde_json",
- "sugar_path",
- "tokio",
- "tracing",
- "url",
- "xxhash-rust",
-]
-
-[[package]]
-name = "brk_rolldown_common"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a18f4832f04c25263cb21acd412309cce96fe18836e6a1ba1457d7c3c3bd550"
-dependencies = [
- "anyhow",
- "arcstr",
- "bitflags",
- "brk_rolldown_ecmascript",
- "brk_rolldown_error",
- "brk_rolldown_sourcemap",
- "brk_rolldown_std_utils",
- "brk_rolldown_utils",
- "brk_string_wizard",
- "dashmap 6.1.0",
- "derive_more",
- "fast-glob",
- "itertools 0.14.0",
- "num-bigint",
- "oxc",
- "oxc_ecmascript",
- "oxc_index",
- "oxc_resolver",
- "rustc-hash",
- "serde",
- "serde_json",
- "simdutf8",
- "sugar_path",
- "tokio",
-]
-
-[[package]]
-name = "brk_rolldown_dev_common"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6a1586919a4b6fc6f91c605b8cbe444eafc1a6ba8938823d5defdcebe7e6c28"
-dependencies = [
- "brk_rolldown_common",
- "brk_rolldown_error",
- "derive_more",
-]
-
-[[package]]
-name = "brk_rolldown_devtools"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6aee3e34c770d77e3b4b8359f7c024325616f4b91409818fc928dc224ee12d3"
-dependencies = [
- "blake3",
- "brk_rolldown_devtools_action",
- "dashmap 6.1.0",
- "rustc-hash",
- "serde",
- "serde_json",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "brk_rolldown_devtools_action"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3fbdb1c831cf9f76df16b985ce9d5ac3372f11515c15ffe7f10d6de51b37aab"
-dependencies = [
- "serde",
- "ts-rs",
-]
-
-[[package]]
-name = "brk_rolldown_ecmascript"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce13ef68806f3cc8bebcd93bed28b9d15d10a15313eccd6512e49595e53c2032"
-dependencies = [
- "arcstr",
- "brk_rolldown_error",
- "oxc",
- "oxc_sourcemap",
- "self_cell",
-]
-
-[[package]]
-name = "brk_rolldown_ecmascript_utils"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9556e74fa418bc26a11e6e7726c17ef35fe4e7416f7465b493fcc2825d58e529"
-dependencies = [
- "brk_rolldown_common",
- "brk_rolldown_utils",
- "memchr",
- "oxc",
- "smallvec",
-]
-
-[[package]]
-name = "brk_rolldown_error"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1c4216f89f8de94b46efbdb70efd25a78c279340a0e4c80ef63324e9fe7ca83"
-dependencies = [
- "anyhow",
- "arcstr",
- "bitflags",
- "derive_more",
- "heck",
- "oxc",
- "oxc_resolver",
- "rolldown-ariadne",
- "ropey",
- "rustc-hash",
- "sugar_path",
-]
-
-[[package]]
-name = "brk_rolldown_fs"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d54d15d47dba50da764d639633f22a1fa5cd1c77ca6847dfaed890a450e9111c"
-dependencies = [
- "oxc_resolver",
- "vfs",
-]
-
-[[package]]
-name = "brk_rolldown_plugin"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93afa8b4f10155fc255d88ffe1f7a24b7fdef5c40fe85bd7ffb4b171a97f9c85"
-dependencies = [
- "anyhow",
- "arcstr",
- "async-trait",
- "bitflags",
- "brk_rolldown_common",
- "brk_rolldown_devtools",
- "brk_rolldown_ecmascript",
- "brk_rolldown_error",
- "brk_rolldown_resolver",
- "brk_rolldown_sourcemap",
- "brk_rolldown_utils",
- "brk_string_wizard",
- "dashmap 6.1.0",
- "derive_more",
- "nodejs-built-in-modules",
- "oxc_index",
- "rustc-hash",
- "serde",
- "serde_json",
- "sugar_path",
- "tokio",
- "tracing",
- "typedmap",
-]
-
-[[package]]
-name = "brk_rolldown_plugin_chunk_import_map"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a095be8635ec4d1b6e17bf8c25175df2a0fc265c31c1fc9f48426ed20a5f082"
-dependencies = [
- "arcstr",
- "brk_rolldown_common",
- "brk_rolldown_plugin",
- "brk_rolldown_utils",
- "rustc-hash",
- "serde_json",
- "xxhash-rust",
-]
-
-[[package]]
-name = "brk_rolldown_plugin_copy_module"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca37b4617c29b7b44e89064e4bfeb340d07918c39bc0475be74c85f5b5437dff"
-dependencies = [
- "anyhow",
- "arcstr",
- "brk_rolldown_common",
- "brk_rolldown_plugin",
- "brk_rolldown_utils",
- "brk_string_wizard",
- "memchr",
- "rustc-hash",
- "sugar_path",
- "tokio",
-]
-
-[[package]]
-name = "brk_rolldown_plugin_data_url"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fafcea24789cc5fede02e2432e438d422776e6f239d1de91f2b115d18d796c4"
-dependencies = [
- "arcstr",
- "base64-simd 0.8.0",
- "brk_rolldown_common",
- "brk_rolldown_plugin",
- "brk_rolldown_utils",
- "simdutf8",
- "urlencoding",
-]
-
-[[package]]
-name = "brk_rolldown_plugin_hmr"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fe97a20b3fd6e0a851ea1fa7114ec659d065eceaf810da8dfe99de7ddb01111"
-dependencies = [
- "brk_rolldown_common",
- "brk_rolldown_plugin",
-]
-
-[[package]]
-name = "brk_rolldown_plugin_lazy_compilation"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6688b34ed78a95cdec2aa323c114ae98a3e0fd63c2706c6b334e3fcef1f06b13"
-dependencies = [
- "anyhow",
- "arcstr",
- "brk_rolldown_common",
- "brk_rolldown_plugin",
- "brk_rolldown_utils",
- "oxc",
-]
-
-[[package]]
-name = "brk_rolldown_plugin_oxc_runtime"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07279565604d320e0639b41f5cbd349baa7a76ac92a9d8b1fc64268ba31b32af"
-dependencies = [
- "arcstr",
- "brk_rolldown_plugin",
- "brk_rolldown_utils",
- "phf 0.13.1",
-]
-
-[[package]]
-name = "brk_rolldown_plugin_replace"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b129712c740a8313286be463d2ac1a18fcef6cd72740d0ac00bf5b255f28f25e"
-dependencies = [
- "anyhow",
- "brk_rolldown_plugin",
- "brk_string_wizard",
- "oxc",
- "regex",
- "regress",
- "rustc-hash",
-]
-
-[[package]]
-name = "brk_rolldown_resolver"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "752f0ac4f886be89786bc479ed720ee5a977429be5df63637fac3acc626f071b"
-dependencies = [
- "anyhow",
- "arcstr",
- "brk_rolldown_common",
- "brk_rolldown_fs",
- "brk_rolldown_utils",
- "dashmap 6.1.0",
- "itertools 0.14.0",
- "oxc_resolver",
- "sugar_path",
-]
-
-[[package]]
-name = "brk_rolldown_sourcemap"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c41c4bb7baef5fea43504088f221366be112fe56e421d38d965c8eb4405480df"
-dependencies = [
- "brk_rolldown_utils",
- "memchr",
- "oxc",
- "oxc_sourcemap",
- "rustc-hash",
-]
-
-[[package]]
-name = "brk_rolldown_std_utils"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a46366ba175e69b11549a97ea411828dfe86ce3610b6662d4bb9f18a82fa3c"
-dependencies = [
- "regex",
-]
-
-[[package]]
-name = "brk_rolldown_tracing"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a824cdbde0cbbbea60841106e5142b20e33b7689bffb4185e49a777bf11920ae"
-dependencies = [
- "tracing",
- "tracing-chrome",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "brk_rolldown_utils"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9b32f854b54793a2dd5a8baaf5e457c57afecd1d70d62d9c0d4bbd3b0efb870"
-dependencies = [
- "anyhow",
- "arcstr",
- "async-scoped",
- "base-encode",
- "base64-simd 0.8.0",
- "brk_rolldown_error",
- "brk_rolldown_std_utils",
- "cow-utils",
- "dashmap 6.1.0",
- "fast-glob",
- "form_urlencoded",
- "futures",
- "indexmap",
- "infer",
- "itoa",
- "memchr",
- "mime",
- "nom",
- "oxc",
- "oxc_index",
- "phf 0.13.1",
- "rayon",
- "regex",
- "regress",
- "rustc-hash",
- "serde_json",
- "simdutf8",
- "sugar_path",
- "tokio",
- "uuid",
- "xxhash-rust",
-]
-
-[[package]]
-name = "brk_string_wizard"
-version = "1.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aea880edf02d0e407868ea7e26f0c81fa89bbc6ba129a80e56be2cfb22b858c4"
-dependencies = [
- "memchr",
- "oxc_index",
- "oxc_sourcemap",
- "regex",
- "rustc-hash",
- "serde",
+ "hybrid-array",
 ]
 
 [[package]]
@@ -978,6 +566,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-oid"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
 name = "const-str"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1035,15 +629,6 @@ checksum = "417bef24afe1460300965a25ff4a24b8b45ad011948302ec221e8a0a81eb2c79"
 
 [[package]]
 name = "cpufeatures"
-version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "cpufeatures"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
@@ -1093,12 +678,11 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-common"
-version = "0.1.7"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
+checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
- "generic-array",
- "typenum",
+ "hybrid-array",
 ]
 
 [[package]]
@@ -1161,9 +745,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "6.1.0"
+version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
@@ -1228,11 +812,12 @@ checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "digest"
-version = "0.10.7"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer",
+ "const-oid",
  "crypto-common",
 ]
 
@@ -1580,16 +1165,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "generic-array"
-version = "0.14.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
-dependencies = [
- "typenum",
- "version_check",
-]
-
-[[package]]
 name = "getopts"
 version = "0.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1721,6 +1296,15 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9155a582abd142abc056962c29e3ce5ff2ad5469f4246b537ed42c5deba857da"
+dependencies = [
+ "typenum",
+]
 
 [[package]]
 name = "iana-time-zone"
@@ -2212,14 +1796,13 @@ dependencies = [
 
 [[package]]
 name = "maudit"
-version = "0.11.2"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21db8a277bd201cf4ffb6cbb6a8ba051ef89929f08505f86dd4dd4d167275e5e"
+checksum = "f1577b6665b49ebecf7e3b000a5b6ffc1f61cc5a4deb96f627a7586fd3c69bb6"
 dependencies = [
+ "aho-corasick",
  "base64",
  "bincode",
- "brk_rolldown",
- "brk_rolldown_plugin_replace",
  "chrono",
  "colored",
  "env_logger",
@@ -2230,11 +1813,15 @@ dependencies = [
  "lol_html",
  "maud",
  "maudit-macros",
+ "memchr",
  "oxipng",
  "pathdiff",
  "pulldown-cmark",
  "rapidhash",
  "rayon",
+ "rolldown",
+ "rolldown_common",
+ "rolldown_plugin_replace",
  "rustc-hash",
  "serde",
  "serde_yaml",
@@ -2468,9 +2055,9 @@ checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 
 [[package]]
 name = "oxc"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "221235543bfd609b21ec98a3bf211b3e1911961b820896e09bc7c89effbdf159"
+checksum = "3fecf76aaae6c29dd8dcde82e8a526ba8e7859ecfa98a2b8b5d54fc17965a241"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -2492,15 +2079,14 @@ dependencies = [
 
 [[package]]
 name = "oxc-browserslist"
-version = "2.3.1"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abb7a1163a5501f935f8722d839b576491b749c695e7a066aa0b8df988b806df"
+checksum = "939b33dabf9f7f1cf6c7cebd977b95fe8f6ecae0ef00cfc8f25b8da89d52983d"
 dependencies = [
  "flate2",
  "postcard",
  "rustc-hash",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -2532,12 +2118,12 @@ dependencies = [
 
 [[package]]
 name = "oxc_allocator"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e16d4295cf7888893b80ae70ff65c078ae3f9f52d5381cfc7eeffab089e07305"
+checksum = "1b44db8e77f8ead7332d0dd95850d27fb7bb09f288761447e804be05ad2f89d3"
 dependencies = [
  "allocator-api2",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "oxc_data_structures",
  "oxc_estree",
  "rustc-hash",
@@ -2546,9 +2132,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_ast"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be755331a7de00100c60e03151663f26037a0dd720be238de57c036be03b4033"
+checksum = "38b7d05623c5fb0a8e65ee6c1971811a6f5e2332711b14abbffd2d90fdb81786"
 dependencies = [
  "bitflags",
  "oxc_allocator",
@@ -2558,14 +2144,15 @@ dependencies = [
  "oxc_estree",
  "oxc_regular_expression",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
 ]
 
 [[package]]
 name = "oxc_ast_macros"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a13a58adcfaadd4710b4f7d80ad422599ed5bb4956f4747d07e821c5897b16ef"
+checksum = "f585aec92e2bdd985857d9bf58ce6896b65ad4410cc24a9533a16b864b5de8d7"
 dependencies = [
  "phf 0.13.1",
  "proc-macro2",
@@ -2575,9 +2162,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_ast_visit"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e33ffb874949ea07fce9b686c2dba7e221c849e047232c04a84b13bae4496ef"
+checksum = "c56f75c8a3204594b0f2cf3334378de270b7cec98ed336c77f83ae39db5c088b"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -2587,9 +2174,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_cfg"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5206747a0004c2892e7f57545a95d3cb724118613c7424002cb6a1e2e2967a9"
+checksum = "c4b86db2459847ed12bcd2dc5c0112b1a6403cf476e93a428ef6a4056df3eb1d"
 dependencies = [
  "bitflags",
  "itertools 0.14.0",
@@ -2601,9 +2188,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_codegen"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f81db7038dc0288704c5ad72453c96933a46e2d5139376c87b1f5730b3d9cd03"
+checksum = "f5c6d585bfae4599955634a307955afca907342694c62993a933216a9b6d170b"
 dependencies = [
  "bitflags",
  "cow-utils",
@@ -2616,15 +2203,16 @@ dependencies = [
  "oxc_semantic",
  "oxc_sourcemap",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "rustc-hash",
 ]
 
 [[package]]
 name = "oxc_compat"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96a136e3422c1b14babd3fe1103e4bc93036c10e72fe4f8634c881ec5285c2d"
+checksum = "df61ca5b1ae11fcbc50f71c221532b1d16385268c576420faabf1740f85158f9"
 dependencies = [
  "cow-utils",
  "oxc-browserslist",
@@ -2635,18 +2223,18 @@ dependencies = [
 
 [[package]]
 name = "oxc_data_structures"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd6c22a48542899e5f74162d55710ea2f95735c5d3a809196308b2dbf557f434"
+checksum = "75a67baa093fb2410302bb5bea3be60c6f4e9d9573fda9d8561691234cd6bfde"
 dependencies = [
  "ropey",
 ]
 
 [[package]]
 name = "oxc_diagnostics"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe5961a78ce2a24d288f5e7090f19ce49d062486e0d65e6140d01582198c94fd"
+checksum = "cd40c6b1e961ee7e9e00ba2c924b11259ad23aa306c349a48539344f266ef5c5"
 dependencies = [
  "cow-utils",
  "oxc-miette",
@@ -2655,9 +2243,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_ecmascript"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1fb3d121c372df31514f95d87c92693001739d2c9e56be37909499b5396faf1"
+checksum = "32dfc8b140169c70350e98cbfee928be46ae60151c3af6e477521afae8288809"
 dependencies = [
  "cow-utils",
  "num-bigint",
@@ -2671,9 +2259,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_estree"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38fc12975751e104dc53c369cba1598ff15aa8ca30aaac49e63937256316969"
+checksum = "d13f41b137ab39f80c5ab3277e777302bfd8e9b937b760159bb0996e0b2467aa"
 dependencies = [
  "dragonbox_ecma",
  "itoa",
@@ -2693,9 +2281,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_isolated_declarations"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff81d11bf1766951f0914e7a73bbd9a7cc07e0598313f8920afc1a868a5731d1"
+checksum = "a9cd8d61d9a651618aca97ca5b8b4264db6c47caffd1a427f64c416dccab5079"
 dependencies = [
  "bitflags",
  "oxc_allocator",
@@ -2704,15 +2292,16 @@ dependencies = [
  "oxc_diagnostics",
  "oxc_ecmascript",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "rustc-hash",
 ]
 
 [[package]]
 name = "oxc_mangler"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa65c9405523a75a9a45842117e36d1dda7ced992ddc6bc2bce94133d1edc812"
+checksum = "65bca092ed1567ab44a1dbcfea8fdce169ab8a8310f31ef99ca0130b3ea5b8f4"
 dependencies = [
  "itertools 0.14.0",
  "oxc_allocator",
@@ -2721,15 +2310,16 @@ dependencies = [
  "oxc_index",
  "oxc_semantic",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "rustc-hash",
 ]
 
 [[package]]
 name = "oxc_minifier"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f814ea847c1d0656724a6cd7d95b13c97178617ef9377995c581b3bb5609b7a9"
+checksum = "277491ec9648e8ffb6c8b886abe243c71e228b1e5a3d5fc544bc2fc259c60dca"
 dependencies = [
  "cow-utils",
  "itoa",
@@ -2753,9 +2343,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_parser"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "341602ba5eb6629f7f90e49c1fce06bb8eed989412a4178acd8e7f48cf2c7f9d"
+checksum = "da5b9ce5228d670de1bbc5b8c02441d01358c0a97b0037b17c6a5385c0e14442"
 dependencies = [
  "bitflags",
  "cow-utils",
@@ -2769,6 +2359,7 @@ dependencies = [
  "oxc_ecmascript",
  "oxc_regular_expression",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "rustc-hash",
  "seq-macro",
@@ -2776,15 +2367,16 @@ dependencies = [
 
 [[package]]
 name = "oxc_regular_expression"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e810182cbde172aeada70acc45dae74f6773384e0d295cc27e6e377b1fc277c"
+checksum = "064f938a25efd15884b3e44565b903add1a762398420835a591bf9de41d27ee1"
 dependencies = [
  "bitflags",
  "oxc_allocator",
  "oxc_ast_macros",
  "oxc_diagnostics",
  "oxc_span",
+ "oxc_str",
  "phf 0.13.1",
  "rustc-hash",
  "unicode-id-start",
@@ -2820,9 +2412,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_semantic"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffb04bd9f59bb6d8340bb186b0003bb6e8f1988e17048c61a5473ea216e9ed71"
+checksum = "278adff6dc2f02cf149b978ff1b326a4c22a2d26dacedb4a21310ee3af6c533d"
 dependencies = [
  "itertools 0.14.0",
  "memchr",
@@ -2830,15 +2422,14 @@ dependencies = [
  "oxc_ast",
  "oxc_ast_visit",
  "oxc_cfg",
- "oxc_data_structures",
  "oxc_diagnostics",
  "oxc_ecmascript",
  "oxc_index",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "rustc-hash",
  "self_cell",
- "smallvec",
 ]
 
 [[package]]
@@ -2856,9 +2447,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_span"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9999ef787b0b989b8c2b31669069d3bdca20d017ff34a7284ff9e983cf7b1d8"
+checksum = "8763b157864021a4a5ded33bd9e620e25d6e20552d11eefa5d3fa707663a3341"
 dependencies = [
  "compact_str",
  "oxc-miette",
@@ -2871,12 +2462,12 @@ dependencies = [
 
 [[package]]
 name = "oxc_str"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6fde66bc256ea0d09895c2a56a24f79e76abffd977f6c171516e42f1efdea51"
+checksum = "bf9548a6a9ab4a6227e1d890d7d244a9b5eb427c6b46790c770f5914b565c52b"
 dependencies = [
  "compact_str",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "oxc_allocator",
  "oxc_estree",
  "serde",
@@ -2884,9 +2475,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_syntax"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e77ea5bd4ea42ce05b2f51bcef8e46a4598cea5038ab25877a2d27601a90da83"
+checksum = "57b3eaa2b28010deb7648dbbbce940ea788164db602e6fe09d81792e97706f07"
 dependencies = [
  "bitflags",
  "cow-utils",
@@ -2897,6 +2488,7 @@ dependencies = [
  "oxc_estree",
  "oxc_index",
  "oxc_span",
+ "oxc_str",
  "phf 0.13.1",
  "serde",
  "unicode-id-start",
@@ -2904,9 +2496,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_transformer"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58dd1805067e1770a648cd53fcf6c48da4312fedda734ef556880936f975320f"
+checksum = "c4de9e697f1d7325576a62c644a3f7c4bbb26c8c93a24f80f561477a97a2c812"
 dependencies = [
  "base64",
  "compact_str",
@@ -2923,6 +2515,7 @@ dependencies = [
  "oxc_regular_expression",
  "oxc_semantic",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "oxc_traverse",
  "rustc-hash",
@@ -2933,9 +2526,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_transformer_plugins"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8eb1700c944350d9f30afe06d1ff461b6c7be7b13c97f765a2c55c675087362e"
+checksum = "152910d2c114c4e6c38ea49b77dd5a2d56b704c5fe0f81167759282dc0054e81"
 dependencies = [
  "cow-utils",
  "itoa",
@@ -2947,6 +2540,7 @@ dependencies = [
  "oxc_parser",
  "oxc_semantic",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "oxc_transformer",
  "oxc_traverse",
@@ -2955,9 +2549,9 @@ dependencies = [
 
 [[package]]
 name = "oxc_traverse"
-version = "0.115.0"
+version = "0.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aea73a8421e6a433a187fca1c5fe48237ee65eaf40e5dae158d2853f0b2d8949"
+checksum = "0c50dbc89637853b0cab15b93f19504f5d1539dc4ddbd7942f30ac7a43515ab6"
 dependencies = [
  "itoa",
  "oxc_allocator",
@@ -3666,9 +3260,9 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "regress"
-version = "0.10.5"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2057b2325e68a893284d1538021ab90279adac1139957ca2a74426c6f118fb48"
+checksum = "158a764437582235e3501f683b93a0a6f8d825d04a789dbe5ed30b8799b8908a"
 dependencies = [
  "hashbrown 0.16.1",
  "memchr",
@@ -3722,13 +3316,431 @@ dependencies = [
 ]
 
 [[package]]
-name = "rolldown-ariadne"
-version = "0.5.3"
+name = "rolldown"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77dff57c9de498bb1eb5b1ce682c2e3a0ae956b266fa0933c3e151b87b078967"
+checksum = "c84b84942e7888a4c73a69c68ede565dff30286df71fac7ced0ac51a2ea14c1c"
+dependencies = [
+ "anyhow",
+ "append-only-vec",
+ "arcstr",
+ "bitflags",
+ "commondir",
+ "dashmap 6.2.1",
+ "futures",
+ "indexmap",
+ "itertools 0.14.0",
+ "itoa",
+ "json-escape-simd",
+ "memchr",
+ "oxc",
+ "oxc_allocator",
+ "oxc_ecmascript",
+ "oxc_index",
+ "oxc_str",
+ "oxc_traverse",
+ "petgraph",
+ "rayon",
+ "rolldown_common",
+ "rolldown_dev_common",
+ "rolldown_devtools",
+ "rolldown_ecmascript",
+ "rolldown_ecmascript_utils",
+ "rolldown_error",
+ "rolldown_fs",
+ "rolldown_plugin",
+ "rolldown_plugin_asset_module",
+ "rolldown_plugin_chunk_import_map",
+ "rolldown_plugin_copy_module",
+ "rolldown_plugin_data_url",
+ "rolldown_plugin_hmr",
+ "rolldown_plugin_lazy_compilation",
+ "rolldown_plugin_oxc_runtime",
+ "rolldown_resolver",
+ "rolldown_sourcemap",
+ "rolldown_std_utils",
+ "rolldown_tracing",
+ "rolldown_utils",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "string_wizard",
+ "sugar_path",
+ "tokio",
+ "tracing",
+ "url",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "rolldown-ariadne"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee296fe9ac0007f2c0eff04d55c980de537aa3d736e873d70c9c47d4c737ea44"
 dependencies = [
  "unicode-width",
  "yansi",
+]
+
+[[package]]
+name = "rolldown_common"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52fbf77c024bae24325cf35ef8ca8c441ddbc3460190a0086e4a78e03f31dcb6"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "bitflags",
+ "dashmap 6.2.1",
+ "derive_more",
+ "fast-glob",
+ "itertools 0.14.0",
+ "num-bigint",
+ "oxc",
+ "oxc_ecmascript",
+ "oxc_index",
+ "oxc_resolver",
+ "oxc_str",
+ "rolldown_ecmascript",
+ "rolldown_error",
+ "rolldown_sourcemap",
+ "rolldown_std_utils",
+ "rolldown_utils",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "simdutf8",
+ "string_wizard",
+ "sugar_path",
+ "tokio",
+]
+
+[[package]]
+name = "rolldown_dev_common"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be5d2a377cd209079eea3e23e4b9517c829ab905d38353208a5ee23f11cfab6b"
+dependencies = [
+ "derive_more",
+ "rolldown_common",
+ "rolldown_error",
+ "rolldown_utils",
+]
+
+[[package]]
+name = "rolldown_devtools"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b8d25ffda6bf3f174132d8d3efd0db7b16f85df689e3b437270a0bcc2c6dc9f"
+dependencies = [
+ "blake3",
+ "rolldown_devtools_action",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "rolldown_devtools_action"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "269abf604de453892512691c1ee2f23cf102929f33a9ae7a9696db42e346e729"
+dependencies = [
+ "serde",
+ "ts-rs",
+]
+
+[[package]]
+name = "rolldown_ecmascript"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd170f9b9ec1a113de5507d08dd55cbe04b643514b921e0c6f57295f78a9ceb8"
+dependencies = [
+ "arcstr",
+ "oxc",
+ "oxc_sourcemap",
+ "oxc_str",
+ "rolldown_error",
+ "self_cell",
+]
+
+[[package]]
+name = "rolldown_ecmascript_utils"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f996d738c9a1d1a156d128957d435ad1189681583495ed955d96ed52a6ac1094"
+dependencies = [
+ "memchr",
+ "oxc",
+ "rolldown_common",
+ "rolldown_utils",
+]
+
+[[package]]
+name = "rolldown_error"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc8c3a72bd90fa92191681dfe04d82f0705fb438fd6b43b89bd3f6d3dad3c929"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "bitflags",
+ "derive_more",
+ "heck",
+ "oxc",
+ "oxc_resolver",
+ "rolldown-ariadne",
+ "ropey",
+ "rustc-hash",
+ "sugar_path",
+]
+
+[[package]]
+name = "rolldown_fs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fcf4713e224ffc4e6c7dd87021db39d2b90c1076506101e088436500c30d622"
+dependencies = [
+ "oxc_resolver",
+ "vfs",
+]
+
+[[package]]
+name = "rolldown_plugin"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c096f939c94d6016ec39205876b62aced5935cce07344accb413d951414baf2"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "async-trait",
+ "bitflags",
+ "dashmap 6.2.1",
+ "derive_more",
+ "nodejs-built-in-modules",
+ "oxc_index",
+ "rolldown_common",
+ "rolldown_devtools",
+ "rolldown_ecmascript",
+ "rolldown_error",
+ "rolldown_fs",
+ "rolldown_resolver",
+ "rolldown_sourcemap",
+ "rolldown_utils",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "string_wizard",
+ "sugar_path",
+ "tokio",
+ "tracing",
+ "typedmap",
+]
+
+[[package]]
+name = "rolldown_plugin_asset_module"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a0b4b7bbef279bc49e500e3e3eae2ee81b9896dfae85a2d509f9660dcf1d03e"
+dependencies = [
+ "anyhow",
+ "memchr",
+ "rolldown_common",
+ "rolldown_plugin",
+ "rolldown_utils",
+ "rustc-hash",
+ "string_wizard",
+ "sugar_path",
+ "tokio",
+]
+
+[[package]]
+name = "rolldown_plugin_chunk_import_map"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f67120dcff8a39bba9b480ada6c42be524f857fa9d4f4a773fa58db5109edd57"
+dependencies = [
+ "arcstr",
+ "rolldown_common",
+ "rolldown_plugin",
+ "rolldown_utils",
+ "rustc-hash",
+ "serde_json",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "rolldown_plugin_copy_module"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf98636ffba1943f743f1510d41fb9cb46c21ec5581438561b8543899e583716"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "memchr",
+ "rolldown_common",
+ "rolldown_plugin",
+ "rolldown_utils",
+ "rustc-hash",
+ "string_wizard",
+ "sugar_path",
+ "tokio",
+]
+
+[[package]]
+name = "rolldown_plugin_data_url"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488940b39f544f1c6524e8b92b4247d126e86143fccb2404237f3fad29187f21"
+dependencies = [
+ "arcstr",
+ "base64-simd 0.8.0",
+ "rolldown_common",
+ "rolldown_plugin",
+ "rolldown_utils",
+ "simdutf8",
+ "urlencoding",
+]
+
+[[package]]
+name = "rolldown_plugin_hmr"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf30cd389b08b265da6619a10350307f94753921ca51b297061f6b8320da404e"
+dependencies = [
+ "rolldown_common",
+ "rolldown_plugin",
+]
+
+[[package]]
+name = "rolldown_plugin_lazy_compilation"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "658e53e922c51ba64c14320b0f7a85604688ccdc74703bb23416161c62029718"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "oxc",
+ "rolldown_common",
+ "rolldown_plugin",
+ "rolldown_utils",
+ "serde_json",
+]
+
+[[package]]
+name = "rolldown_plugin_oxc_runtime"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66f3f847f7df8c1914a8a936b8097dc5a90e0fa9e221ea7ae12a6afd97b3c716"
+dependencies = [
+ "arcstr",
+ "phf 0.13.1",
+ "rolldown_plugin",
+ "rolldown_utils",
+]
+
+[[package]]
+name = "rolldown_plugin_replace"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a78a861d563fed53688b961c20d114fb7b567402d7586a8715f6bef128273bfb"
+dependencies = [
+ "anyhow",
+ "oxc",
+ "regex",
+ "regress",
+ "rolldown_plugin",
+ "rustc-hash",
+ "string_wizard",
+]
+
+[[package]]
+name = "rolldown_resolver"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56fe95d08d5ee950b800c331fabbda92e3564f10f666be8067b07413d40efde6"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "dashmap 6.2.1",
+ "itertools 0.14.0",
+ "oxc_resolver",
+ "rolldown_common",
+ "rolldown_fs",
+ "rolldown_utils",
+ "sugar_path",
+]
+
+[[package]]
+name = "rolldown_sourcemap"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aa3c5a00bedee134c96920408fe021e44178c4241dece47666914a1768e2dc4"
+dependencies = [
+ "memchr",
+ "oxc",
+ "oxc_sourcemap",
+]
+
+[[package]]
+name = "rolldown_std_utils"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de895ca9b8c0ab5654cae1c745226f460968b74a84395e377dd9f4bbb8947053"
+dependencies = [
+ "regex",
+]
+
+[[package]]
+name = "rolldown_tracing"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5a2fb5d89964a2ffdb4b65e3112e2ecc455550b60bd21ec141ee99e4c6f6316"
+dependencies = [
+ "tracing",
+ "tracing-chrome",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "rolldown_utils"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0b01b3033ad9f868455c9d1fe7e93114f65aaffd6a9dfde4004099116a0e07b"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "async-scoped",
+ "base-encode",
+ "base64-simd 0.8.0",
+ "cow-utils",
+ "dashmap 6.2.1",
+ "fast-glob",
+ "form_urlencoded",
+ "futures",
+ "indexmap",
+ "infer",
+ "itoa",
+ "memchr",
+ "mime",
+ "nom",
+ "oxc",
+ "oxc_index",
+ "oxc_str",
+ "rayon",
+ "regex",
+ "regress",
+ "rolldown_error",
+ "rolldown_std_utils",
+ "rustc-hash",
+ "serde_json",
+ "simdutf8",
+ "sugar_path",
+ "tokio",
+ "uuid",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -3936,12 +3948,12 @@ dependencies = [
 
 [[package]]
 name = "sha1"
-version = "0.10.6"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.2.17",
+ "cpufeatures",
  "digest",
 ]
 
@@ -4029,9 +4041,6 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "smawk"
@@ -4056,6 +4065,20 @@ name = "str_indices"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
+
+[[package]]
+name = "string_wizard"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "160a792d27bcee9303af70829d7b5db5a91d5e72be13ba490cd64c2c4b41ccfb"
+dependencies = [
+ "memchr",
+ "oxc_index",
+ "oxc_sourcemap",
+ "regex",
+ "rustc-hash",
+ "serde",
+]
 
 [[package]]
 name = "strsim"
@@ -4417,9 +4440,6 @@ name = "typedmap"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63278e72ed4f207eb3216c944cbafb35bdb656d2eab97ef73c0c165a1cd3e319"
-dependencies = [
- "dashmap 6.1.0",
-]
 
 [[package]]
 name = "typenum"
@@ -4553,9 +4573,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vfs"
-version = "0.12.2"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e723b9e1c02a3cf9f9d0de6a4ddb8cdc1df859078902fe0ae0589d615711ae6"
+checksum = "69d33cbe2ac48f2a446f04c33aef4906078ffd224888df5ae60b7ed401ded771"
 dependencies = [
  "filetime",
 ]
