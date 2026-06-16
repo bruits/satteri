@@ -11,13 +11,8 @@ import {
 } from "../index.js";
 import { HastReader } from "../src/hast/hast-reader.js";
 import { visitHastHandle, resolveSubscriptions } from "../src/hast/hast-visitor.js";
-import {
-  markdownToHtml,
-  defineMdastPlugin,
-  type MarkdownToHtmlResult,
-} from "../src/index.js";
+import { markdownToHtml, defineMdastPlugin } from "../src/index.js";
 import type { MdastNode } from "../src/types.js";
-import type { Heading } from "mdast";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext, HastVisitorInstance } from "../src/hast/hast-visitor.js";
 import type { MdastPluginInstance } from "../src/mdast/mdast-visitor.js";
@@ -40,7 +35,7 @@ function markdownToHtmlWithMdastPlugins(
   plugins: { instance: MdastPluginInstance; name: string }[],
 ): string {
   const mdastPlugins = plugins.map((p) => defineMdastPlugin({ name: p.name, ...p.instance }));
-  return (markdownToHtml(source, { mdastPlugins }) as unknown as MarkdownToHtmlResult).html;
+  return markdownToHtml(source, { mdastPlugins }).html;
 }
 
 // PART 1: MDAST plugins that affect the Markdown → HTML result
@@ -90,7 +85,7 @@ describe("MDAST plugins affecting HTML output", () => {
     let seenIdInPlugin2: string | null = null;
     const setId: MdastPluginInstance = {
       heading(node, ctx) {
-        ctx.setProperty(node, "data", { id: "custom-id" } as unknown as Heading["data"]);
+        ctx.setProperty(node, "data", { id: "custom-id" });
       },
     };
     const readId: MdastPluginInstance = {
@@ -110,7 +105,7 @@ describe("MDAST plugins affecting HTML output", () => {
     // Plugin 1: sets data on heading AND mutates a different node (text → bold)
     const setDataAndMutate: MdastPluginInstance = {
       heading(_node, ctx) {
-        ctx.setProperty(_node, "data", { id: "survives-rebuild" } as unknown as Heading["data"]);
+        ctx.setProperty(_node, "data", { id: "survives-rebuild" });
       },
       text(node, ctx) {
         // Mutating text forces a rebuild, node IDs change

@@ -165,7 +165,7 @@ heading(node) {
 
 ### Sharing data between plugins
 
-Each context exposes a `data` object, a document-scoped grab bag shared across every visitor in the compile. Writes from one plugin are visible to later plugins, and the bag persists across the mdast→hast boundary, so hast plugins can read what mdast plugins wrote. After compilation the final state is returned on `result.data` (or `null` if nothing was written), making it suitable for things like extracting a table of contents.
+Each context exposes a `data` object, a document-scoped grab bag shared across every visitor in the compile. Writes from one plugin are visible to later plugins, and the bag persists across the mdast→hast boundary, so hast plugins can read what mdast plugins wrote. After compilation the final state is returned on `result.data`, making it suitable for things like extracting a table of contents.
 
 ```ts
 const collectHeadings = defineMdastPlugin({
@@ -182,7 +182,21 @@ const { html, data } = markdownToHtml("# A\n\n# B", { mdastPlugins: [collectHead
 console.log(data?.headings); // ["A", "B"]
 ```
 
-Values must be JSON-serializable: the bag is round-tripped to Rust between plugins, so functions, class instances, or cyclic references won't survive. A fresh, empty bag is created for every compile.
+The bag lives entirely on the JS side, so any value is allowed, including functions, class instances, and `Map`/`Set`. References are preserved across plugins and across the mdast→hast boundary. A fresh, empty bag is created for every compile.
+
+By default keys are typed as `unknown`. To give a key a type, augment the `DataMap` interface, much like `vfile`'s `DataMap`:
+
+```ts
+declare module "satteri" {
+  interface DataMap {
+    headings: string[];
+  }
+}
+
+// now ctx.data.headings and result.data.headings are typed as string[]
+```
+
+Unregistered keys stay `unknown`, so the bag remains open-ended.
 
 ### How transforms compose
 

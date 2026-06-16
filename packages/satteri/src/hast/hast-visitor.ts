@@ -1,5 +1,5 @@
 import { materializeHastNode, type HastNode } from "./hast-materializer.js";
-import type { HastRaw, MdxJsxAttributeUnion, Position } from "../types.js";
+import type { HastRaw, MdxJsxAttributeUnion, Position, Data } from "../types.js";
 import type {
   Element,
   Text,
@@ -54,8 +54,6 @@ import {
   textContentHandle,
   parseExpression as napiParseExpression,
   parseEsm as napiParseEsm,
-  getPluginData as napiGetPluginData,
-  setPluginData as napiSetPluginData,
 } from "#binding";
 
 import {
@@ -109,12 +107,13 @@ export interface HastVisitorContext {
    */
   readonly fileURL: URL | undefined;
   /**
-   * Document-level data bag, shared across all plugins and across the
-   * mdast→hast phase boundary. Mutate keys directly (`ctx.data.foo = x`);
-   * the bag itself isn't reassignable. JSON-serializable values only, since
-   * the bag round-trips through Rust between plugin passes.
+   * Document-level data bag, shared across every plugin in the compile and
+   * across the mdast→hast phase boundary. Mutate keys directly
+   * (`ctx.data.foo = x`); the bag itself isn't reassignable. Values are kept
+   * on the JS side, so any value is allowed, including functions and class
+   * instances. Returned to the caller as `result.data`.
    */
-  readonly data: Record<string, unknown>;
+  readonly data: Data;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastContent): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -318,41 +317,26 @@ class HastVisitorContextImpl implements HastVisitorContext {
    *  Null until the first `parent()` call; most passes never make one. */
   #parentsById: Map<number, HastNode> | null = null;
   readonly fileURL: URL | undefined;
-  #data: Record<string, unknown> | undefined;
-  #dataTouched: boolean = false;
+  readonly data: Data;
 
   constructor(
     handle: HastHandle,
     getSource: () => string,
     fileURL: URL | undefined,
     resolver: LazyChildResolver<HastReader, HastNode>,
+    data: Data,
   ) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.fileURL = fileURL;
     this.#resolver = resolver;
+    this.data = data;
   }
 
   get source(): string {
     const value = this.#getSource();
     Object.defineProperty(this, "source", { value, writable: false, enumerable: true });
     return value;
-  }
-
-  get data(): Record<string, unknown> {
-    if (this.#data === undefined) {
-      const raw = napiGetPluginData(this.#handle);
-      this.#data = raw != null ? (JSON.parse(raw) as Record<string, unknown>) : {};
-    }
-    this.#dataTouched = true;
-    return this.#data;
-  }
-
-  /** Flush plugin data back to the arena if it was accessed during this pass. */
-  flushData(): void {
-    if (this.#dataTouched && this.#data !== undefined) {
-      napiSetPluginData(this.#handle, JSON.stringify(this.#data));
-    }
   }
 
   removeNode(node: HastNode): void {
@@ -1064,10 +1048,11 @@ export function visitHastHandle(
   subs: ResolvedSubscription[],
   source: string | (() => string),
   fileURL: URL | undefined,
+  data: Data = {},
 ): number | Promise<number> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new HastLazyChildResolver(handle);
-  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver);
+  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data);
   const returnBuffer = new CommandBuffer();
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
   const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
@@ -1101,7 +1086,6 @@ function applyMutations(
   ctx: HastVisitorContextImpl,
 ): number {
   const { merged, hasMutations } = mergeAndReset(returnBuffer, ctx);
-  ctx.flushData();
   if (hasMutations) {
     markHandleMutated(handle);
     return applyCommandsToHandle(handle, merged);

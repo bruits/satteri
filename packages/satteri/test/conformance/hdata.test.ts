@@ -7,11 +7,7 @@ import remarkRehype from "remark-rehype";
 import rehypeStringify from "rehype-stringify";
 import type { Root as MdastRoot, Nodes as MdastNodes } from "mdast";
 import type { ElementContent, Properties } from "hast";
-import {
-  markdownToHtml,
-  defineMdastPlugin,
-  type MarkdownToHtmlResult,
-} from "../../src/index.js";
+import { markdownToHtml, defineMdastPlugin } from "../../src/index.js";
 import type { MdastPluginInstance } from "../../src/mdast/mdast-visitor.js";
 import type { MdastNode } from "../../src/types.js";
 
@@ -53,7 +49,7 @@ function satteriHtml(md: string, plugin: MdastPluginFactory): string {
   const { html } = markdownToHtml(md, {
     features: { directive: true, gfm: true, frontmatter: false, math: false },
     mdastPlugins: [defineMdastPlugin({ name: "hdata-test", ...plugin() })],
-  }) as unknown as MarkdownToHtmlResult;
+  });
   return normalize(html);
 }
 

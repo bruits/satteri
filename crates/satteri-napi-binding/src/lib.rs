@@ -768,51 +768,6 @@ pub fn get_node_data(handle: AnyHandle, node_id: u32) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// Read the document-level plugin data bag as a JSON string.
-/// Returns null if no data has been set. Works for both MDAST and HAST handles.
-#[napi]
-pub fn get_plugin_data(handle: AnyHandle) -> Option<String> {
-    let bytes = match handle {
-        Either::A(h) => {
-            let a = h.lock().ok()?;
-            if a.plugin_data.is_empty() {
-                return None;
-            }
-            a.plugin_data.clone()
-        }
-        Either::B(h) => {
-            let a = h.lock().ok()?;
-            if a.plugin_data.is_empty() {
-                return None;
-            }
-            a.plugin_data.clone()
-        }
-    };
-    String::from_utf8(bytes).ok()
-}
-
-/// Replace the document-level plugin data bag with a JSON string.
-/// An empty string clears the bag. Works for both MDAST and HAST handles.
-#[napi]
-pub fn set_plugin_data(handle: AnyHandle, json: String) -> Result<()> {
-    let bytes = json.into_bytes();
-    match handle {
-        Either::A(h) => {
-            let mut a = h
-                .lock()
-                .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-            a.plugin_data = bytes;
-        }
-        Either::B(h) => {
-            let mut a = h
-                .lock()
-                .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-            a.plugin_data = bytes;
-        }
-    }
-    Ok(())
-}
-
 /// Collect the concatenated text content of a HAST node and all its descendants.
 /// Walks entirely in Rust, no per-child NAPI round-trips.
 #[napi]

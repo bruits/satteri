@@ -416,10 +416,7 @@ pub fn mdast_arena_to_hast_arena_with_options(
         options,
     };
     convert_node(0, source, &mut builder, &ctx);
-    let mut hast = builder.finish();
-    // Carry plugin data across the phase boundary so hast sees mdast writes.
-    hast.plugin_data = source.plugin_data.clone();
-    hast
+    builder.finish()
 }
 
 /// Shared read-only context threaded through the conversion.

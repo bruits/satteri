@@ -6,12 +6,7 @@ import remarkRehype from "remark-rehype";
 import rehypeStringify from "rehype-stringify";
 import type { Root as MdastRoot, Nodes as MdastNodes } from "mdast";
 import type { Root as HastRoot, ElementContent } from "hast";
-import {
-  markdownToHtml,
-  defineMdastPlugin,
-  defineHastPlugin,
-  type MarkdownToHtmlResult,
-} from "../../src/index.js";
+import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../../src/index.js";
 import type { MdastPluginInstance } from "../../src/mdast/mdast-visitor.js";
 import type { MdastNode, HastNode } from "../../src/types.js";
 
@@ -72,12 +67,12 @@ function satteriHtmlWithMdastPatch(
       if (patch.hProperties !== undefined) next.hProperties = patch.hProperties;
       if (patch.hChildren !== undefined) next.hChildren = patch.hChildren;
       ctx.setProperty(node, "data", next);
-    }) as NonNullable<MdastPluginInstance["paragraph"]>,
+    }) as MdastPluginInstance["paragraph"],
   });
   const { html } = markdownToHtml(md, {
     features: { gfm: true, frontmatter: false, math: false },
     mdastPlugins: [plugin],
-  }) as unknown as MarkdownToHtmlResult;
+  });
   return html.trim();
 }
 

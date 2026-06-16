@@ -181,7 +181,17 @@ after the visit completes, so it's safe to mutate while iterating.
 | ---------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `source`   | `string`                   | Original markdown source.                                                                                                                                              |
 | `filename` | `string`                   | Filename hint, used in diagnostics.                                                                                                                                    |
-| `data`     | `Record<string, unknown>`  | Document-scoped data bag shared across every plugin in the pipeline. Survives the mdast→hast boundary. Returned to the caller as `result.data`. JSON-serializable only. |
+| `data`     | `Data`                     | Document-scoped data bag shared across every plugin in the pipeline. Survives the mdast→hast boundary. Returned to the caller as `result.data`. Kept on the JS side, so any value is allowed (functions, class instances, etc.). |
+
+Keys on `data` are typed as `unknown` by default. Register a key's type by augmenting `DataMap`:
+
+```ts
+declare module "satteri" {
+  interface DataMap {
+    headings: string[];
+  }
+}
+```
 
 ### Tree mutation
 

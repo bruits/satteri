@@ -3,9 +3,30 @@ import { markdownToHtml, mdxToJs } from "../src/compile.js";
 import { defineMdastPlugin, defineHastPlugin } from "../src/plugin.js";
 
 describe("result.data", () => {
-  it("is null when no plugin writes to ctx.data", () => {
+  it("is an empty object when no plugin writes to ctx.data", () => {
     const out = markdownToHtml("# hi");
-    expect(out.data).toBeNull();
+    expect(out.data).toEqual({});
+  });
+
+  it("preserves non-serializable values (functions, class instances)", () => {
+    class Box {
+      n: number;
+      constructor(n: number) {
+        this.n = n;
+      }
+    }
+    const fn = () => 42;
+    const plugin = defineMdastPlugin({
+      name: "writer",
+      paragraph(_node, ctx) {
+        ctx.data.fn = fn;
+        ctx.data.box = new Box(7);
+      },
+    });
+    const out = markdownToHtml("text", { mdastPlugins: [plugin] });
+    expect(out.data.fn).toBe(fn);
+    expect(out.data.box).toBeInstanceOf(Box);
+    expect((out.data.box as Box).n).toBe(7);
   });
 
   it("reflects mdast plugin writes", () => {

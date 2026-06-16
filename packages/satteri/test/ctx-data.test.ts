@@ -63,6 +63,35 @@ describe("ctx.data", () => {
     expect(observed).toEqual(["Alpha", "Beta"]);
   });
 
+  it("preserves reference identity across the mdast→hast boundary", () => {
+    class Collector {
+      readonly items: string[] = [];
+    }
+    let mdastInstance: Collector | undefined;
+    let hastInstance: unknown;
+    const mdastWriter = defineMdastPlugin({
+      name: "mdast-writer",
+      heading(_node, ctx) {
+        const collector = new Collector();
+        ctx.data.collector = collector;
+        mdastInstance = collector;
+      },
+    });
+    const hastReader = defineHastPlugin({
+      name: "hast-reader",
+      element: {
+        filter: ["p"],
+        visit(_node, ctx) {
+          hastInstance = ctx.data.collector;
+        },
+      },
+    });
+
+    markdownToHtml("# A\n\ntext", { mdastPlugins: [mdastWriter], hastPlugins: [hastReader] });
+    expect(hastInstance).toBeInstanceOf(Collector);
+    expect(hastInstance).toBe(mdastInstance);
+  });
+
   it("hast plugin can write data even without an mdast pass", () => {
     let observed: unknown;
     const hastA = defineHastPlugin({
