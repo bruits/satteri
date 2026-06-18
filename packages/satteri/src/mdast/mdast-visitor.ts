@@ -30,7 +30,15 @@ import {
   PROP_STRING,
   emitMdxAttr,
 } from "../op-stream.js";
-import type { MdastNode, Toml, MathNode, InlineMath, Superscript, Subscript } from "../types.js";
+import type {
+  MdastNode,
+  Toml,
+  MathNode,
+  InlineMath,
+  Superscript,
+  Subscript,
+  Data,
+} from "../types.js";
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
 import {
   asArray,
@@ -120,17 +128,27 @@ export class MdastVisitorContext {
    * decoded filesystem path.
    */
   readonly fileURL: URL | undefined;
+  /**
+   * Document-level data bag, shared across every plugin in the compile and
+   * across the mdast→hast phase boundary. Mutate keys directly
+   * (`ctx.data.foo = x`); the bag itself isn't reassignable. Values are kept
+   * on the JS side, so any value is allowed, including functions and class
+   * instances. Returned to the caller as `result.data`.
+   */
+  readonly data: Data;
 
   constructor(
     handle: MdastHandle,
     getSource: () => string,
     fileURL: URL | undefined,
     resolver: LazyChildResolver<MdastReader, MdastNode>,
+    data: Data,
   ) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.fileURL = fileURL;
     this.#resolver = resolver;
+    this.data = data;
   }
 
   get source(): string {
@@ -750,10 +768,11 @@ export function visitMdastHandle(
   subs: MdastSubscription[],
   source: string | (() => string),
   fileURL: URL | undefined,
+  data: Data = {},
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new MdastLazyChildResolver(handle);
-  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver);
+  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver, data);
   const returnBuffer = new CommandBuffer();
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);

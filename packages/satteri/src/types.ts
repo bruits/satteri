@@ -116,6 +116,27 @@ export type MdastNode = MdastStdNodes;
  */
 export type HastNode = HastStdNodes;
 
+/**
+ * Registry for typing well-known keys on the plugin data bag. Augment it to
+ * give specific `ctx.data` / `result.data` keys a type:
+ *
+ * ```ts
+ * declare module "satteri" {
+ *   interface DataMap {
+ *     toc: TocEntry[];
+ *   }
+ * }
+ * ```
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface DataMap {}
+
+/**
+ * The document-level plugin data bag (`ctx.data` and `result.data`): any
+ * string key holding any value, plus the typed keys registered in {@link DataMap}.
+ */
+export type Data = Record<string, unknown> & Partial<DataMap>;
+
 /** @internal Node with arena tracking ID, only used inside the library. */
 export type MdastNodeInternal = MdastStdNodes & { _nodeId: number };
 /** @internal */
