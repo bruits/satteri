@@ -193,7 +193,7 @@ declare module "satteri" {
   }
 }
 
-// now ctx.data.headings and result.data.headings are typed as string[]
+// now ctx.data.headings and result.data.headings are typed as string[] | undefined
 ```
 
 Unregistered keys stay `unknown`, so the bag remains open-ended.
