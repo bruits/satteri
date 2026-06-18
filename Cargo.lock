@@ -1106,6 +1106,7 @@ version = "0.3.3"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
+ "oxc_ast_visit",
  "oxc_codegen",
  "oxc_estree",
  "oxc_parser",

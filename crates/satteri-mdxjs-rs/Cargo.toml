@@ -15,6 +15,7 @@ version = "0.3.3"
 [dependencies]
 oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true, features = ["serialize"] }
+oxc_ast_visit = { workspace = true }
 oxc_codegen = { workspace = true }
 oxc_estree = { workspace = true, features = ["serialize"] }
 oxc_parser = { workspace = true }

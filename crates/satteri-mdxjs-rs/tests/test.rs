@@ -1171,3 +1171,36 @@ fn mixed_module_scope_and_dynamic_components() -> Result<(), satteri_arena::mdx_
     );
     Ok(())
 }
+
+#[test]
+fn top_level_await_makes_content_async() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "<ShowcaseCard site={await getEntry('showcase', 'a.dev')} />\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("async function _createMdxContent(props)"),
+        "top-level `await` in content should make `_createMdxContent` async: {result}"
+    );
+    assert!(
+        !result.contains("async function MDXContent"),
+        "`MDXContent` should stay sync: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn await_inside_nested_function_stays_sync() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "<A fn={async () => await getEntry()} />\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("function _createMdxContent(props)")
+            && !result.contains("async function _createMdxContent"),
+        "`await` inside a nested async function should not make `_createMdxContent` async: {result}"
+    );
+    Ok(())
+}
