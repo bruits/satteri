@@ -103,6 +103,28 @@ describe("MDAST conformance: literal-autolink trigger inside a pointed autolink 
   });
 });
 
+describe("HTML conformance: literal-autolink trigger inside an inline HTML construct (#93)", () => {
+  // The same precedence as the pointed-autolink case: any `<…>` the second
+  // pass resolves owns a `www.` trigger inside it. An inline HTML tag/comment
+  // keeps the trigger raw, so no spurious overlapping link is created and the
+  // trailing backslash hard break survives.
+  test("`www.` in a tag attribute value + backslash hard break", () => {
+    assertHtmlConformance("text <img alt=www.foo.com>\\\nnext line\n");
+  });
+
+  test("`www.` in an open tag with attributes + backslash hard break", () => {
+    assertHtmlConformance("see <a href=www.example.com>x</a>\\\nnext line\n");
+  });
+
+  test("`www.` inside a tag-like span treated as raw HTML", () => {
+    assertHtmlConformance("<not an autolink www.x.com>\\\nnext line\n");
+  });
+
+  test("control: `www.` after a closed tag still autolinks (incl. trailing `\\`)", () => {
+    assertHtmlConformance("a < b www.foo.com\\\nnext line\n");
+  });
+});
+
 describe("HTML conformance: autolink literal rejects control characters", () => {
   test("angle-bracket autolink with embedded BEL — literal text, no link", () => {
     // regression_test_48: `<http://\x07>` — the `<...>` autolink form rejects
@@ -198,5 +220,119 @@ describe("MDAST conformance: edge-case reference parsing", () => {
 
   test("YAML frontmatter with leading blank line — one yaml node at root", () => {
     assertExtMdastConformance("---\n\ntitle: example\nanother_field: 0\n---\n", ["frontmatter"]);
+  });
+});
+
+// GFM autolink-literal conformance with remark-gfm. Each group pins a class
+// of behavior that satteri's hand-rolled scanner must match micromark's
+// tokenizer + mdast-util find-and-replace on.
+describe("HTML conformance: GFM autolink literals vs remark-gfm", () => {
+  test("`www.` needs no second dot (micromark GH#279)", () => {
+    assertHtmlConformance("www.localhost\n");
+    assertHtmlConformance("http://localhost\n");
+    assertHtmlConformance("www.localhost, then more\n");
+  });
+
+  test("scheme match is case-insensitive, original case preserved", () => {
+    assertHtmlConformance("HTTP://example.com\n");
+    assertHtmlConformance("HtTpS://Example.COM/Path\n");
+    assertHtmlConformance("WWW.Example.com\n");
+    // uppercase scheme that only the find-and-replace path accepts
+    assertHtmlConformance("HTTP://foo_bar.com.\n");
+  });
+
+  test("`&...;` entity is trimmed as a whole, not just the `;`", () => {
+    assertHtmlConformance("www.example.com&amp;\n");
+    assertHtmlConformance("www.example.com&amp;)\n");
+    assertHtmlConformance("see https://example.com&copy; ok\n");
+    assertHtmlConformance("www.example.com&notreal\n");
+  });
+
+  test("`previousWww` set: only specific chars start a www construct", () => {
+    // digit before `www.`: neither construct nor find-and-replace fires
+    assertHtmlConformance("5www.example.com/p\n");
+    // `.` before `www.`: find-and-replace path, splitUrl trims trailing `>`
+    assertHtmlConformance(".www.example.com/p>\n");
+    assertHtmlConformance("(www.example.com)\n");
+  });
+
+  test("trailing-punctuation forward scan, incl. balanced-paren trail", () => {
+    assertHtmlConformance("www.example.com/a(b)\n");
+    assertHtmlConformance("www.example.com/a(b.)\n");
+    assertHtmlConformance("www.example.com/a(b&amp;)\n");
+    assertHtmlConformance("https://example.com/foo).\n");
+    assertHtmlConformance("www.example.com/p>\n");
+  });
+
+  test("autolink trigger at inline content start (after a `>` marker)", () => {
+    assertHtmlConformance(">www.example.com/p*_~\n");
+    assertHtmlConformance(">https://example.com).\n");
+    assertHtmlConformance("> www.example.com/p*_~\n");
+  });
+
+  test("email domain: literal leading dot, double-dot stop, trailing dot", () => {
+    assertHtmlConformance("contact@example.com.\n");
+    assertHtmlConformance("a@b.com...x\n");
+    assertHtmlConformance("8z y@.bar.baz\n");
+    assertHtmlConformance("foo@sub.example.co, x\n");
+  });
+});
+
+// Regression cases discovered by the autolink fuzz harness
+// (test/conformance/fuzz/autolink.test.ts). Each pins a specific bug class.
+describe("HTML conformance: GFM autolink fuzz regressions", () => {
+  test("email domain `.` before `-`/`_` is kept by the FNR pipeline", () => {
+    // construct's `emailDomainDotTrail` stops at `.`+`_`, but FNR's
+    // `(?:\.[-\w]+)+` keeps it, so the reference links via FNR.
+    assertHtmlConformance("@0@1_-._9a}.\n");
+    assertHtmlConformance("a@b._c\n");
+  });
+
+  test("no FNR autolink inside a link label's nested emphasis", () => {
+    // `findAndReplace` ignores the whole `link` subtree, not just direct text.
+    assertHtmlConformance("[~www.foo.bar~](/x)\n");
+    assertHtmlConformance("[*www.x.com*](/x)\n");
+  });
+
+  test("code span with an unclosed `[` still suppresses the autolink", () => {
+    // The `[` must not shift code-span backtick pairing (code binds tighter).
+    assertHtmlConformance("`*www.a.com[b`\n");
+    assertHtmlConformance("`x[y www.z.com`\n");
+  });
+
+  test("www construct: bare `www` when only trail follows the dot", () => {
+    assertHtmlConformance("> *www.!\"~_\",!\n");
+    assertHtmlConformance("< WWW._*]?!\n");
+    assertHtmlConformance("- *WWW..%&\n");
+  });
+
+  test("www construct: bare `www` when nothing but the dot follows", () => {
+    // micromark's `wwwPrefix` succeeds for any non-EOF char after the dot, so
+    // `www.` + whitespace/text links bare `www` via the construct, merging the
+    // trailing `.` with the following text (mdast-visible). `www.` at true EOF
+    // falls to FNR, which also links bare `www`.
+    assertMdastConformance("www. x");
+    assertMdastConformance("www.");
+    assertMdastConformance("a www. b");
+    assertMdastConformance("www.     indented code\n\n   paragraph\n\n       more code\n");
+    // A non-www-prefixed dot run still falls to FNR and splits the trail.
+    assertMdastConformance(".www.x. rest");
+  });
+
+  test("email local part with an emphasis `_` mid-token still links", () => {
+    // Construct fires forward over the `_`; the firstpass must not let the
+    // emphasis pass claim it first.
+    assertHtmlConformance("(1a+-_@.a)\n");
+    assertHtmlConformance("a+-_@example.com\n");
+  });
+
+  test("email local part start honours the FNR lookbehind boundary", () => {
+    // `é_.a@x` links `.a@x` (start after the `_`), not `_.a@x`.
+    assertHtmlConformance("contact é_.a@9bb-010.b here\n");
+  });
+
+  test("control: emphasis still pairs normally without an email/url", () => {
+    assertHtmlConformance("a _b_ c *d* e\n");
+    assertHtmlConformance("intra_word_underscore stays text\n");
   });
 });

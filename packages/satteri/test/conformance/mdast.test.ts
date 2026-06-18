@@ -378,10 +378,7 @@ describe("MDAST conformance: edge cases", () => {
     assertMdastConformance(">n4\n>");
   });
 
-  test.skip("reference link", () => {
-    // TODO:
-    // Satteri resolves references eagerly (produces `link` node),
-    // remark keeps them as `linkReference` + `definition`. To be changed.
+  test("reference link", () => {
     assertMdastConformance("[text][ref]\n\n[ref]: https://example.com");
   });
 });
