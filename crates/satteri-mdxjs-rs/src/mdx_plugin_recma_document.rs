@@ -14,13 +14,12 @@ use std::cell::Cell;
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, AssignmentPattern, AwaitExpression, BindingPattern,
-    ConditionalExpression, Declaration,
-    ExportDefaultDeclaration, ExportDefaultDeclarationKind, Expression, FormalParameter,
-    FormalParameterKind, FormalParameters, Function, FunctionBody, FunctionType, ImportDeclaration,
-    ImportDeclarationSpecifier, ImportDefaultSpecifier, ImportOrExportKind, ImportSpecifier,
-    JSXAttributeItem, JSXChild, JSXClosingElement, JSXElement, JSXOpeningElement,
-    JSXSpreadAttribute, ModuleDeclaration, ModuleExportName, ReturnStatement, Statement,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    ConditionalExpression, Declaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind,
+    Expression, FormalParameter, FormalParameterKind, FormalParameters, Function, FunctionBody,
+    FunctionType, ImportDeclaration, ImportDeclarationSpecifier, ImportDefaultSpecifier,
+    ImportOrExportKind, ImportSpecifier, JSXAttributeItem, JSXChild, JSXClosingElement, JSXElement,
+    JSXOpeningElement, JSXSpreadAttribute, ModuleDeclaration, ModuleExportName, ReturnStatement,
+    Statement, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::Visit;
 use oxc_span::SPAN;
@@ -538,8 +537,7 @@ fn create_mdx_content<'a>(
         ));
     }
 
-    // A top-level `await` in the content (e.g. `{await getEntry(...)}`) needs
-    // `_createMdxContent` to be async so the compiled `await` is valid.
+    // A top-level `await` makes `_createMdxContent` async; otherwise the compiled `await` won't parse.
     let body = expr.unwrap_or_else(|| create_null_expression(alloc));
     let is_async = content_has_top_level_await(&body);
 
@@ -552,8 +550,6 @@ fn create_mdx_content<'a>(
     vec![create_mdx_content, mdx_content]
 }
 
-/// Whether the content uses `await` outside of any nested function, in which
-/// case the generated component must be async.
 fn content_has_top_level_await(expr: &Expression) -> bool {
     let mut finder = TopLevelAwaitFinder::default();
     finder.visit_expression(expr);
@@ -570,8 +566,7 @@ impl<'a> Visit<'a> for TopLevelAwaitFinder {
         self.found = true;
     }
 
-    // `await` inside a nested function belongs to that function's scope, so
-    // those functions are skipped rather than walked into.
+    // Skip nested functions: their `await` belongs to that scope, not the component.
     fn visit_function(&mut self, _func: &Function<'a>, _flags: ScopeFlags) {}
 
     fn visit_arrow_function_expression(&mut self, _arrow: &ArrowFunctionExpression<'a>) {}

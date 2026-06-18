@@ -228,11 +228,7 @@ export class MdastVisitorContext {
   /** `data` is an open per-node bag serialized to JSON on the wire, so it
    *  accepts any record (hName/hProperties/custom fields), not just the node's
    *  declared `data` shape. `null` clears it. */
-  setProperty(
-    node: Readonly<MdastNode>,
-    key: "data",
-    value: Record<string, unknown> | null,
-  ): void;
+  setProperty(node: Readonly<MdastNode>, key: "data", value: Record<string, unknown> | null): void;
   setProperty(node: Readonly<MdastNode>, key: string, value: unknown): void {
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
