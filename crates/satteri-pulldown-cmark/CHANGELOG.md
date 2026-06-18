@@ -1,5 +1,12 @@
 # satteri-pulldown-cmark
 
+## 0.5.4 — 2026-06-18
+
+### Patch changes
+
+- [6bcdf06](https://github.com/bruits/satteri/commit/6bcdf06a0ee267779180a2d89a27a31f2f4b5b81) `features.superscript` and `features.subscript` now render `^text^` as `<sup>text</sup>` and `~text~` as `<sub>text</sub>` as documented, instead of `<em>`. The MDAST now exposes dedicated `superscript` and `subscript` node types, which plugins can visit and construct. Plugins that previously matched these spans as `emphasis` nodes should switch to the new node types. — Thanks @morinokami for your first contribution 🎉!
+- Updated dependencies: satteri-ast (Cargo)@0.4.0
+
 ## 0.5.3 — 2026-06-11
 
 ### Patch changes
