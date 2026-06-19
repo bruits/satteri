@@ -1288,3 +1288,90 @@ fn await_inside_nested_function_stays_sync() -> Result<(), satteri_arena::mdx_ty
     );
     Ok(())
 }
+
+#[test]
+fn multiline_jsx_attribute_expression_error_is_exact() {
+    use satteri_arena::mdx_types::Place;
+
+    // The offending token (`2` — a second operand with no operator) sits on a
+    // continuation line that the expression dedent indents by two columns. The
+    // position must point at the verbatim source column (5, in `  1 2`), not at
+    // column 3 as it would if the dedented copy were validated instead.
+    let point = |src: &str| -> satteri_arena::mdx_types::Point {
+        let err = compile(src, &Options::default(), MDX_OPTS)
+            .expect_err("invalid attribute expression should fail to compile");
+        match *err.place.expect("parse error should carry a source position") {
+            Place::Point(p) => p,
+            Place::Position(p) => p.start,
+        }
+    };
+
+    let p = point("# T\n\n<Foo bar={\n  1 2\n} />\n");
+    assert_eq!(
+        (p.line, p.column),
+        (4, 5),
+        "two-space indent: error must point at the verbatim column, got {p:?}"
+    );
+
+    // Same, with a deeper six-column indent: column 9, not column 7.
+    let p = point("# T\n\n<Foo bar={\n      1 2\n} />\n");
+    assert_eq!(
+        (p.line, p.column),
+        (4, 9),
+        "six-space indent: error must point at the verbatim column, got {p:?}"
+    );
+}
+
+#[test]
+fn multiline_flow_expression_error_is_exact() {
+    use satteri_arena::mdx_types::Place;
+
+    // Block `{…}` expression spanning lines: the bad token `2` is on a
+    // continuation line indented two columns. The position must be the
+    // verbatim column 5, not the dedented column 3.
+    let err = compile("# T\n\n{\n  1 2\n}\n", &Options::default(), MDX_OPTS)
+        .expect_err("invalid flow expression should fail to compile");
+    let point = match *err.place.expect("parse error should carry a source position") {
+        Place::Point(p) => p,
+        Place::Position(p) => p.start,
+    };
+    assert_eq!(
+        (point.line, point.column),
+        (4, 5),
+        "flow expression error must point at the verbatim column, got {point:?}"
+    );
+}
+
+#[test]
+fn multiline_inline_expression_error_is_exact() {
+    use satteri_arena::mdx_types::Place;
+
+    let point = |src: &str| -> satteri_arena::mdx_types::Point {
+        let err = compile(src, &Options::default(), MDX_OPTS)
+            .expect_err("invalid inline expression should fail to compile");
+        match *err.place.expect("parse error should carry a source position") {
+            Place::Point(p) => p,
+            Place::Position(p) => p.start,
+        }
+    };
+
+    // Inline `{…}` spanning lines: the bad `2` sits on a continuation line
+    // dedented two columns. The position must be the verbatim column 5.
+    let p = point("para {\n  1 2\n} end\n");
+    assert_eq!(
+        (p.line, p.column),
+        (2, 5),
+        "inline expression error must point at the verbatim column, got {p:?}"
+    );
+
+    // Inside a blockquote: the continuation line is `>   1 2`, so the `2` is at
+    // column 7. Getting this right requires mapping through both the stripped
+    // `> ` container prefix and the dedent.
+    let p = point("> para {\n>   1 2\n> } end\n");
+    assert_eq!(
+        (p.line, p.column),
+        (2, 7),
+        "inline expression error in a blockquote must account for the container \
+         prefix, got {p:?}"
+    );
+}

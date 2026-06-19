@@ -2214,12 +2214,12 @@ fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<
                 let v = builder.alloc_string(v);
                 (MDX_ATTR_LITERAL_PROP, n, v)
             }
-            JsxAttr::Expression(n, v, _) => {
+            JsxAttr::Expression(n, v, _, _) => {
                 let n = builder.alloc_string(n);
                 let v = builder.alloc_string(v);
                 (MDX_ATTR_EXPRESSION_PROP, n, v)
             }
-            JsxAttr::Spread(v, _) => {
+            JsxAttr::Spread(v, _, _) => {
                 let v = builder.alloc_string(v);
                 (MDX_ATTR_SPREAD, StringRef::empty(), v)
             }

@@ -2005,7 +2005,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // tab-stop math sees the correct per-line
                             // starting column (lazy lines start at col 0;
                             // strict lines start at the post-prefix column).
-                            let normalized =
+                            let (normalized, offset_map) =
                                 self.inline_expression_value(ix + content_start, ix + content_end);
                             // Validate the expression body as JS via oxc.
                             // Without this, `{h<}` etc. silently produce a
@@ -2017,8 +2017,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     &mut self.mdx_expr_allocator,
                                 )
                             {
+                                // For single-line bodies the map is empty and
+                                // the normalized text is a verbatim slice, so a
+                                // direct offset is exact; multi-line bodies
+                                // resolve through the map.
+                                let source_offset =
+                                    satteri_arena::mdx_types::Location::relative_to_absolute(
+                                        &offset_map,
+                                        err_offset,
+                                    )
+                                    .unwrap_or(ix + content_start + err_offset);
                                 self.mdx_errors.push((
-                                    ix + content_start + err_offset,
+                                    source_offset,
                                     format!("Could not parse expression with oxc: {detail}"),
                                 ));
                             }
