@@ -94,9 +94,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.64"
+version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
+checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -1057,7 +1057,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "satteri"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "satteri-ast",
  "satteri-mdxjs",
@@ -1102,7 +1102,7 @@ version = "0.0.0"
 
 [[package]]
 name = "satteri-mdxjs"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-napi"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "napi",
  "napi-build",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-pulldown-cmark"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "bincode",
  "bitflags",

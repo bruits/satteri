@@ -1,5 +1,14 @@
 # satteri
 
+## 0.9.1 — 2026-06-19
+
+### Patch changes
+
+- [64877f0](https://github.com/bruits/satteri/commit/64877f0dfa46fb0f752c8b3a9affc8c8552ade67) Adds a `data` option to `markdownToHtml`, `mdxToJs`, and `CompileOptions` that seeds the document data bag before plugins run. The same object is surfaced to plugins as `ctx.data` and returned as `result.data`, so values can be passed both into and out of a compile. — Thanks @Princesseuh!
+- [855379c](https://github.com/bruits/satteri/commit/855379c7eb018e9c5acc69daa7a63f27dbb79e7f) Fix MDX `import`/`export` blocks being broken by a following whitespace-only line. A line containing only spaces or tabs now ends the ESM block exactly like an empty line, instead of being consumed as a statement continuation (which produced a `Could not parse esm with oxc` error). — Thanks @Princesseuh!
+- [855379c](https://github.com/bruits/satteri/commit/855379c7eb018e9c5acc69daa7a63f27dbb79e7f) MDX parse errors now carry a source line and column. Previously, errors in `import`/`export` blocks dropped the position entirely, and errors in `{…}` expressions and JSX attributes were reported as a bare byte offset, so downstream tooling reported an unknown location. JSX attribute and spread expression errors now point at the offending attribute rather than the element's opening `<`. — Thanks @Princesseuh!
+- [7c78426](https://github.com/bruits/satteri/commit/7c78426b0a21c8a3e41e6fed6605ceba60650826) Fixes a performance regression when not using any plugins. — Thanks @Princesseuh!
+
 ## 0.9.0 — 2026-06-18
 
 ### Minor changes
