@@ -465,7 +465,7 @@ export interface MarkdownToHtmlResult {
   html: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
   frontmatter: Frontmatter | null;
-  /** Document-level data bag */
+  /** Document-level data bag shared with plugins via `ctx.data`; the seeded `data` option if provided, else a fresh `{}`. */
   data: Data;
 }
 
@@ -475,7 +475,7 @@ export interface MdxToJsResult {
   code: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
   frontmatter: Frontmatter | null;
-  /** Document-level data bag */
+  /** Document-level data bag shared with plugins via `ctx.data`; the seeded `data` option if provided, else a fresh `{}`. */
   data: Data;
 }
 
