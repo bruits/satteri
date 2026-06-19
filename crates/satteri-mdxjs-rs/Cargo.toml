@@ -10,11 +10,12 @@ license = "MIT"
 name = "satteri-mdxjs"
 repository = "https://github.com/bruits/satteri"
 rust-version = "1.91.0"
-version = "0.3.3"
+version = "0.3.4"
 
 [dependencies]
 oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true, features = ["serialize"] }
+oxc_ast_visit = { workspace = true }
 oxc_codegen = { workspace = true }
 oxc_estree = { workspace = true, features = ["serialize"] }
 oxc_parser = { workspace = true }

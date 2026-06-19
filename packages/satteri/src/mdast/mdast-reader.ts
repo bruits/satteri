@@ -136,6 +136,12 @@ export class MdastReader {
     return this.#view.getUint8(nodesOffset + nodeId * nodeStructSize + FIELD.node_type);
   }
 
+  /** Fast path: read only the parent id for a node (0xffffffff at the root). */
+  getParentId(nodeId: number): number {
+    const { nodesOffset, nodeStructSize } = this.#header;
+    return this.#view.getUint32(nodesOffset + nodeId * nodeStructSize + FIELD.parent, true);
+  }
+
   getChildIds(nodeId: number): number[] {
     const { nodesOffset, nodeStructSize, childrenOffset } = this.#header;
     const base = nodesOffset + nodeId * nodeStructSize;

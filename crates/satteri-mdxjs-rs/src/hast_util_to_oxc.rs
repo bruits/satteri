@@ -23,7 +23,7 @@ use oxc_ast::ast::{
 use oxc_span::{Atom, SPAN, Span};
 use oxc_syntax::node::NodeId;
 use rustc_hash::{FxHashMap, FxHashSet};
-use satteri_arena::mdx_types::{self as message, Location, MdxExpressionKind};
+use satteri_arena::mdx_types::{self as message, Location, MdxExpressionKind, Stop};
 use satteri_arena::{Arena, Hast};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::hast::codec::{
@@ -46,6 +46,20 @@ fn node_span(view: &Arena<Hast>, node_id: u32) -> Span {
         SPAN
     } else {
         Span::new(node.start_offset + 1, node.end_offset + 1)
+    }
+}
+
+/// Absolute source byte offset where a node's verbatim text begins, for use as
+/// an oxc parse stop (`relative 0 -> this offset`) so parse errors over that
+/// text resolve to a source line/column. `None` for synthetic nodes that carry
+/// no real span. Only valid when the node's stored text matches the source
+/// byte-for-byte, as MDX ESM does.
+fn node_source_offset(view: &Arena<Hast>, node_id: u32) -> Option<usize> {
+    let node = view.get_node(node_id);
+    if node.start_offset == 0 && node.end_offset == 0 && node.start_line == 0 {
+        None
+    } else {
+        Some(node.start_offset as usize)
     }
 }
 
@@ -228,7 +242,15 @@ fn prepare_component_overrides<'a>(
             continue;
         }
 
-        let program = parse_esm_to_tree(value, &[], location, allocator)?;
+        let stops_buf;
+        let stops: &[Stop] = match node_source_offset(view, child_id) {
+            Some(off) => {
+                stops_buf = [(0, off)];
+                &stops_buf
+            }
+            None => &[],
+        };
+        let program = parse_esm_to_tree(value, stops, location, allocator)?;
         if !found_declaration {
             found_declaration = extract_component_override_keys(&program, &mut collected_keys);
         }
@@ -830,7 +852,15 @@ fn transform_mdxjs_esm<'a>(
         } else {
             ""
         };
-        parse_esm_to_tree(value, &[], context.location, alloc)?
+        let stops_buf;
+        let stops: &[Stop] = match node_source_offset(context.view, node_id) {
+            Some(off) => {
+                stops_buf = [(0, off)];
+                &stops_buf
+            }
+            None => &[],
+        };
+        parse_esm_to_tree(value, stops, context.location, alloc)?
     };
 
     let body = std::mem::replace(&mut program.body, OxcVec::new_in(alloc));

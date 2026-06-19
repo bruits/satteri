@@ -1,5 +1,12 @@
 # satteri-mdxjs
 
+## 0.3.4 — 2026-06-18
+
+### Patch changes
+
+- [d6e28f4](https://github.com/bruits/satteri/commit/d6e28f45623a37a74e694cb75e5a6e916c220677) Fixes a parse error when an MDX expression uses top-level `await`, such as `<Card data={await getData()} />`. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.4.0, satteri-pulldown-cmark (Cargo)@0.5.4
+
 ## 0.3.3 — 2026-06-11
 
 ### Patch changes

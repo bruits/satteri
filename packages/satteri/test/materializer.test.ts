@@ -1,7 +1,7 @@
 import { test, expect, describe } from "vitest";
 import { MdastReader } from "../src/mdast/mdast-reader.js";
 import { materializeMdastTree } from "../src/mdast/mdast-materializer.js";
-import type { MdastNodeInternal } from "../src/types.js";
+import type { MdastNode, MdastNodeInternal } from "../src/types.js";
 import { buildHelloWorldBuffer } from "./fixtures.js";
 import { createMdxMdastHandle, serializeHandle } from "../index.js";
 
@@ -109,11 +109,11 @@ function mdxSetup(source: string) {
   return { reader, tree: materializeMdastTree(reader) };
 }
 
-function findNode(node: ReturnType<typeof materializeMdastTree>, type: string): any {
+function findNode(node: MdastNode, type: string): any {
   if (node.type === type) return node;
   if ("children" in node && node.children) {
     for (const child of node.children) {
-      const found = findNode(child as ReturnType<typeof materializeMdastTree>, type);
+      const found = findNode(child, type);
       if (found) return found;
     }
   }

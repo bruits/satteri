@@ -1,5 +1,15 @@
 # satteri-plugin-api
 
+## 0.3.0 — 2026-06-18
+
+### Minor changes
+
+- [b2ae465](https://github.com/bruits/satteri/commit/b2ae465e41d87174455af65b2613c307233b8ac5) Improves performance when using plugins by using a new method of communication between Rust and JS. — Thanks @Princesseuh!
+
+### Patch changes
+
+- Updated dependencies: satteri-ast (Cargo)@0.4.0
+
 ## 0.2.2 — 2026-06-08
 
 ### Patch changes

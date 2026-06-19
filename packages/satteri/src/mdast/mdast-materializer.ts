@@ -1,3 +1,4 @@
+import type { Root } from "mdast";
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import { lazyProp, lazyGroup } from "../lazy-props.js";
@@ -132,6 +133,6 @@ export function materializeNode(reader: MdastReader, nodeId: number): MdastNode 
 }
 
 /** Materialize the full tree from root (nodeId=0). */
-export function materializeMdastTree(reader: MdastReader): MdastNode {
-  return materializeNode(reader, 0);
+export function materializeMdastTree(reader: MdastReader): Root {
+  return materializeNode(reader, 0) as Root;
 }

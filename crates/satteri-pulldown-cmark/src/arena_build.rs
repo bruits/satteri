@@ -1334,9 +1334,15 @@ fn parse_inner(
                         );
                         inner.tree.push();
                     }
-                    // Superscript/Subscript → Emphasis for now.
-                    ItemBody::Superscript | ItemBody::Subscript => {
-                        builder.open_node(MdastNodeType::Emphasis as u8);
+                    ItemBody::Superscript => {
+                        builder.open_node(MdastNodeType::Superscript as u8);
+                        builder.set_position_current(
+                            start, end, start_line, start_col, end_line, end_col,
+                        );
+                        inner.tree.push();
+                    }
+                    ItemBody::Subscript => {
+                        builder.open_node(MdastNodeType::Subscript as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
@@ -2328,12 +2334,12 @@ fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<
                 let v = builder.alloc_string(v);
                 (MDX_ATTR_LITERAL_PROP, n, v)
             }
-            JsxAttr::Expression(n, v) => {
+            JsxAttr::Expression(n, v, _, _) => {
                 let n = builder.alloc_string(n);
                 let v = builder.alloc_string(v);
                 (MDX_ATTR_EXPRESSION_PROP, n, v)
             }
-            JsxAttr::Spread(v) => {
+            JsxAttr::Spread(v, _, _) => {
                 let v = builder.alloc_string(v);
                 (MDX_ATTR_SPREAD, StringRef::empty(), v)
             }

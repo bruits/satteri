@@ -1171,3 +1171,216 @@ fn mixed_module_scope_and_dynamic_components() -> Result<(), satteri_arena::mdx_
     );
     Ok(())
 }
+
+#[test]
+fn esm_parse_error_carries_source_position() {
+    use satteri_arena::mdx_types::Place;
+
+    // Invalid ESM (`export const x = ;`) on line 3. The oxc parse error must
+    // resolve to a source point, not be dropped to `place: None`.
+    let err = compile(
+        "# Title\n\nexport const x = ;\n",
+        &Options::default(),
+        MDX_OPTS,
+    )
+    .expect_err("invalid ESM should fail to compile");
+
+    let place = err
+        .place
+        .expect("parse error should carry a source position");
+    match *place {
+        Place::Point(point) => assert_eq!(
+            point.line, 3,
+            "error should point at the ESM line, got {point:?}"
+        ),
+        Place::Position(position) => assert_eq!(
+            position.start.line, 3,
+            "error should point at the ESM line, got {position:?}"
+        ),
+    }
+}
+
+#[test]
+fn expression_parse_error_carries_source_position() {
+    use satteri_arena::mdx_types::Place;
+
+    // Invalid MDX expression (`{ 1 + }`) on line 3. Parse-time errors must
+    // carry a source point too, not just a bare byte offset.
+    let err = compile("# Title\n\n{ 1 + }\n", &Options::default(), MDX_OPTS)
+        .expect_err("invalid expression should fail to compile");
+
+    let place = err
+        .place
+        .expect("parse error should carry a source position");
+    match *place {
+        Place::Point(point) => assert_eq!(
+            point.line, 3,
+            "error should point at the expression line, got {point:?}"
+        ),
+        Place::Position(position) => assert_eq!(
+            position.start.line, 3,
+            "error should point at the expression line, got {position:?}"
+        ),
+    }
+}
+
+#[test]
+fn jsx_attribute_expression_error_points_at_attribute() {
+    use satteri_arena::mdx_types::Place;
+
+    // The error is in the *second* attribute (`bad={2 *}`) on line 3. The
+    // position must point inside that attribute, not at the element's `<`.
+    let err = compile(
+        "# T\n\n<Foo a={1} bad={2 *} />\n",
+        &Options::default(),
+        MDX_OPTS,
+    )
+    .expect_err("invalid attribute expression should fail to compile");
+
+    let place = err
+        .place
+        .expect("parse error should carry a source position");
+    let point = match *place {
+        Place::Point(p) => p,
+        Place::Position(p) => p.start,
+    };
+    assert_eq!(
+        point.line, 3,
+        "should be on the element's line, got {point:?}"
+    );
+    // `bad={…}` opens at column 16; column 1 would mean we regressed to
+    // pointing at the element's `<` instead of the offending attribute.
+    assert!(
+        point.column >= 16,
+        "should point inside the second attribute, got {point:?}"
+    );
+}
+
+#[test]
+fn top_level_await_makes_content_async() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "<ShowcaseCard site={await getEntry('showcase', 'a.dev')} />\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("async function _createMdxContent(props)"),
+        "top-level `await` in content should make `_createMdxContent` async: {result}"
+    );
+    assert!(
+        !result.contains("async function MDXContent"),
+        "`MDXContent` should stay sync: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn await_inside_nested_function_stays_sync() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "<A fn={async () => await getEntry()} />\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("function _createMdxContent(props)")
+            && !result.contains("async function _createMdxContent"),
+        "`await` inside a nested async function should not make `_createMdxContent` async: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn multiline_jsx_attribute_expression_error_is_exact() {
+    use satteri_arena::mdx_types::Place;
+
+    // The offending token (`2` — a second operand with no operator) sits on a
+    // continuation line that the expression dedent indents by two columns. The
+    // position must point at the verbatim source column (5, in `  1 2`), not at
+    // column 3 as it would if the dedented copy were validated instead.
+    let point = |src: &str| -> satteri_arena::mdx_types::Point {
+        let err = compile(src, &Options::default(), MDX_OPTS)
+            .expect_err("invalid attribute expression should fail to compile");
+        match *err
+            .place
+            .expect("parse error should carry a source position")
+        {
+            Place::Point(p) => p,
+            Place::Position(p) => p.start,
+        }
+    };
+
+    let p = point("# T\n\n<Foo bar={\n  1 2\n} />\n");
+    assert_eq!(
+        (p.line, p.column),
+        (4, 5),
+        "two-space indent: error must point at the verbatim column, got {p:?}"
+    );
+
+    // Same, with a deeper six-column indent: column 9, not column 7.
+    let p = point("# T\n\n<Foo bar={\n      1 2\n} />\n");
+    assert_eq!(
+        (p.line, p.column),
+        (4, 9),
+        "six-space indent: error must point at the verbatim column, got {p:?}"
+    );
+}
+
+#[test]
+fn multiline_flow_expression_error_is_exact() {
+    use satteri_arena::mdx_types::Place;
+
+    // Block `{…}` expression spanning lines: the bad token `2` is on a
+    // continuation line indented two columns. The position must be the
+    // verbatim column 5, not the dedented column 3.
+    let err = compile("# T\n\n{\n  1 2\n}\n", &Options::default(), MDX_OPTS)
+        .expect_err("invalid flow expression should fail to compile");
+    let point = match *err
+        .place
+        .expect("parse error should carry a source position")
+    {
+        Place::Point(p) => p,
+        Place::Position(p) => p.start,
+    };
+    assert_eq!(
+        (point.line, point.column),
+        (4, 5),
+        "flow expression error must point at the verbatim column, got {point:?}"
+    );
+}
+
+#[test]
+fn multiline_inline_expression_error_is_exact() {
+    use satteri_arena::mdx_types::Place;
+
+    let point = |src: &str| -> satteri_arena::mdx_types::Point {
+        let err = compile(src, &Options::default(), MDX_OPTS)
+            .expect_err("invalid inline expression should fail to compile");
+        match *err
+            .place
+            .expect("parse error should carry a source position")
+        {
+            Place::Point(p) => p,
+            Place::Position(p) => p.start,
+        }
+    };
+
+    // Inline `{…}` spanning lines: the bad `2` sits on a continuation line
+    // dedented two columns. The position must be the verbatim column 5.
+    let p = point("para {\n  1 2\n} end\n");
+    assert_eq!(
+        (p.line, p.column),
+        (2, 5),
+        "inline expression error must point at the verbatim column, got {p:?}"
+    );
+
+    // Inside a blockquote: the continuation line is `>   1 2`, so the `2` is at
+    // column 7. Getting this right requires mapping through both the stripped
+    // `> ` container prefix and the dedent.
+    let p = point("> para {\n>   1 2\n> } end\n");
+    assert_eq!(
+        (p.line, p.column),
+        (2, 7),
+        "inline expression error in a blockquote must account for the container \
+         prefix, got {p:?}"
+    );
+}

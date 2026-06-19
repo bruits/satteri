@@ -619,8 +619,9 @@ impl<'input> ParserInner<'input> {
                             let jsx_data = crate::mdx::parse_jsx_tag_with_column(raw, col, 0);
                             let mut allocator = oxc_allocator::Allocator::default();
                             crate::mdx::validate_jsx_expressions(
+                                raw,
                                 &jsx_data.attrs,
-                                start,
+                                |rel| start + rel,
                                 &mut allocator,
                                 &mut self.mdx_errors,
                             );
@@ -2850,8 +2851,13 @@ pub(crate) struct DirectiveIndex(usize);
 pub(crate) enum JsxAttr<'a> {
     Boolean(CowStr<'a>),
     Literal(CowStr<'a>, CowStr<'a>),
-    Expression(CowStr<'a>, CowStr<'a>),
-    Spread(CowStr<'a>),
+    /// `name={value}`. The two `usize`s are the byte range of `value` within
+    /// the opening tag, so a parse error can be validated against the verbatim
+    /// source slice and resolved to an exact source position.
+    Expression(CowStr<'a>, CowStr<'a>, usize, usize),
+    /// `{...value}`. The two `usize`s are the byte range of `value` (including
+    /// the leading `...`) within the opening tag.
+    Spread(CowStr<'a>, usize, usize),
 }
 
 #[cfg(feature = "mdx")]
@@ -2860,8 +2866,10 @@ impl<'a> JsxAttr<'a> {
         match self {
             JsxAttr::Boolean(n) => JsxAttr::Boolean(n.into_static()),
             JsxAttr::Literal(n, v) => JsxAttr::Literal(n.into_static(), v.into_static()),
-            JsxAttr::Expression(n, v) => JsxAttr::Expression(n.into_static(), v.into_static()),
-            JsxAttr::Spread(v) => JsxAttr::Spread(v.into_static()),
+            JsxAttr::Expression(n, v, start, end) => {
+                JsxAttr::Expression(n.into_static(), v.into_static(), start, end)
+            }
+            JsxAttr::Spread(v, start, end) => JsxAttr::Spread(v.into_static(), start, end),
         }
     }
 }

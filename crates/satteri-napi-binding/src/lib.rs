@@ -465,9 +465,9 @@ pub fn create_mdx_mdast_handle(
     let opts = features_to_options(features, true);
     let (mut arena, mdx_errors) = satteri_pulldown_cmark::parse(&source, opts);
     if let Some((offset, msg)) = mdx_errors.first() {
-        return Err(napi::Error::from_reason(format!(
-            "MDX parse error at byte {offset}: {msg}"
-        )));
+        return Err(napi::Error::from_reason(
+            satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
+        ));
     }
     arena.mdx = true;
     arena.parse_options = opts.bits();
@@ -830,9 +830,9 @@ pub fn create_mdx_hast_handle(
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     let (mut mdast, mdx_errors) = satteri_pulldown_cmark::parse(&source, opts);
     if let Some((offset, msg)) = mdx_errors.first() {
-        return Err(napi::Error::from_reason(format!(
-            "MDX parse error at byte {offset}: {msg}"
-        )));
+        return Err(napi::Error::from_reason(
+            satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
+        ));
     }
     mdast.parse_options = opts.bits();
     let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mdast, &convert_opts);

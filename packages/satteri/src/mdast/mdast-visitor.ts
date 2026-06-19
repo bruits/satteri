@@ -36,7 +36,15 @@ import {
   PROP_STRING,
   emitMdxAttr,
 } from "../op-stream.js";
-import type { MdastNode, Toml, MathNode, InlineMath } from "../types.js";
+import type {
+  MdastNode,
+  Toml,
+  MathNode,
+  InlineMath,
+  Superscript,
+  Subscript,
+  Data,
+} from "../types.js";
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
 import {
   asArray,
@@ -73,6 +81,8 @@ import type {
   Text,
   ThematicBreak,
   Yaml,
+  Parents as MdastParents,
+  Root as MdastRoot,
 } from "mdast";
 import type { MdxJsxFlowElement, MdxJsxTextElement } from "../mdx-types.js";
 import type { MdxFlowExpression, MdxTextExpression } from "../mdx-types.js";
@@ -114,17 +124,37 @@ export class MdastVisitorContext {
   readonly #diagnostics: MdastDiagnostic[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
+  readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
+  /** One canonical object per parent id, so visitors can dedupe by identity.
+   *  Null until the first `parent()` call; most passes never make one. */
+  #parentsById: Map<number, MdastNode> | null = null;
   /**
    * The URL of the document being processed (the compile `fileURL` option),
    * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
    * decoded filesystem path.
    */
   readonly fileURL: URL | undefined;
+  /**
+   * Document-level data bag, shared across every plugin in the compile and
+   * across the mdast→hast phase boundary. Mutate keys directly
+   * (`ctx.data.foo = x`); the bag itself isn't reassignable. Values are kept
+   * on the JS side, so any value is allowed, including functions and class
+   * instances. Returned to the caller as `result.data`.
+   */
+  readonly data: Data;
 
-  constructor(handle: MdastHandle, getSource: () => string, fileURL: URL | undefined) {
+  constructor(
+    handle: MdastHandle,
+    getSource: () => string,
+    fileURL: URL | undefined,
+    resolver: LazyChildResolver<MdastReader, MdastNode>,
+    data: Data,
+  ) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.fileURL = fileURL;
+    this.#resolver = resolver;
+    this.data = data;
   }
 
   get source(): string {
@@ -197,7 +227,15 @@ export class MdastVisitorContext {
     node: Readonly<N>,
     key: K,
     value: N[K],
-  ): void {
+  ): void;
+  /** `children` is structural and every parent accepts it, so the key also
+   *  works on node-type unions (e.g. a node returned by `parent()`). */
+  setProperty(node: Readonly<MdastNode>, key: "children", value: readonly MdastNode[]): void;
+  /** `data` is an open per-node bag serialized to JSON on the wire, so it
+   *  accepts any record (hName/hProperties/custom fields), not just the node's
+   *  declared `data` shape. `null` clears it. */
+  setProperty(node: Readonly<MdastNode>, key: "data", value: Record<string, unknown> | null): void;
+  setProperty(node: Readonly<MdastNode>, key: string, value: unknown): void {
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
@@ -229,6 +267,33 @@ export class MdastVisitorContext {
       requireNid(node as MdastNode, "textContent"),
       options,
     );
+  }
+
+  /**
+   * The parent of a node, or `undefined` at the root. Within a pass the same
+   * parent is always the same object, so visitors on sibling nodes can dedupe
+   * by identity.
+   */
+  parent<N extends Exclude<MdastNode, MdastRoot>>(node: Readonly<N>): Readonly<MdastParents>;
+  parent(node: Readonly<MdastNode>): Readonly<MdastParents> | undefined;
+  parent(node: Readonly<MdastNode>): Readonly<MdastParents> | undefined {
+    const parentId = this.#resolver.parentIdOf(requireNid(node as MdastNode, "parent"));
+    if (parentId === undefined) return undefined;
+    const byId = (this.#parentsById ??= new Map());
+    let parent = byId.get(parentId);
+    if (parent === undefined) {
+      parent = this.#resolver.materializeOne(parentId);
+      byId.set(parentId, parent);
+    }
+    return parent as MdastParents;
+  }
+
+  /**
+   * Index of `node` within its parent's children, or `undefined` at the root.
+   * Use this rather than `parent.children.indexOf(node)`, which won't find it.
+   */
+  indexOf(node: Readonly<MdastNode>): number | undefined {
+    return this.#resolver.indexInParent(requireNid(node as MdastNode, "indexOf"));
   }
 
   report({
@@ -303,6 +368,8 @@ export interface MdastPluginInstance {
   containerDirective?: MdastVisitorFn<ContainerDirective>;
   leafDirective?: MdastVisitorFn<LeafDirective>;
   textDirective?: MdastVisitorFn<TextDirective>;
+  superscript?: MdastVisitorFn<Superscript>;
+  subscript?: MdastVisitorFn<Subscript>;
   mdxJsxFlowElement?: MdastVisitorFn<MdxJsxFlowElement>;
   mdxJsxTextElement?: MdastVisitorFn<MdxJsxTextElement>;
   mdxFlowExpression?: MdastVisitorFn<MdxFlowExpression>;
@@ -375,6 +442,14 @@ class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
 
   protected override materializeNode(reader: MdastReader, nodeId: number): MdastNode {
     return materializeNode(reader, nodeId);
+  }
+
+  protected override readParentId(reader: MdastReader, nodeId: number): number {
+    return reader.getParentId(nodeId);
+  }
+
+  protected override readChildIds(reader: MdastReader, nodeId: number): number[] {
+    return reader.getChildIds(nodeId);
   }
 }
 
@@ -772,11 +847,12 @@ export function visitMdastHandle(
   subs: MdastSubscription[],
   source: string | (() => string),
   fileURL: URL | undefined,
+  data: Data = {},
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
-  const context = new MdastVisitorContext(handle, getSource, fileURL);
-  const returnBuffer = acquireCommandBuffer();
   const resolver = new MdastLazyChildResolver(handle);
+  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver, data);
+  const returnBuffer = acquireCommandBuffer();
   const rustSubs = getMdastRustSubs(plugin);
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);

@@ -7,7 +7,6 @@ import rehypeStringify from "rehype-stringify";
 import type { Root as MdastRoot, Nodes as MdastNodes } from "mdast";
 import type { Root as HastRoot, ElementContent } from "hast";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../../src/index.js";
-import type { MdastPluginInstance } from "../../src/mdast/mdast-visitor.js";
 import type { MdastNode, HastNode } from "../../src/types.js";
 
 // Compare satteri's HTML output to remark-rehype + hast-util-to-html for
@@ -58,16 +57,14 @@ function satteriHtmlWithMdastPatch(
 ): string {
   const plugin = defineMdastPlugin({
     name: "svg-test",
-    paragraph: ((node, ctx) => {
+    paragraph(node, ctx) {
       if (!predicate(node)) return;
-      const existing = ((node as unknown as { data?: Record<string, unknown> }).data ??
-        {}) as Record<string, unknown>;
-      const next: Record<string, unknown> = { ...existing };
+      const next: Record<string, unknown> = { ...node.data };
       if (patch.hName !== undefined) next.hName = patch.hName;
       if (patch.hProperties !== undefined) next.hProperties = patch.hProperties;
       if (patch.hChildren !== undefined) next.hChildren = patch.hChildren;
       ctx.setProperty(node, "data", next);
-    }) as MdastPluginInstance["paragraph"],
+    },
   });
   const { html } = markdownToHtml(md, {
     features: { gfm: true, frontmatter: false, math: false },

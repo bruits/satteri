@@ -388,6 +388,35 @@ pub(crate) fn try_parse_expression_body(
     Some((err_offset, first.message.to_string()))
 }
 
+/// Validate a JS expression body via oxc, returning the parse error's byte
+/// offset *within `body`* plus a detail message, or `None` if it parses.
+///
+/// `body` may carry [`PHANTOM_SPACE`] sentinels: they are stripped before oxc
+/// sees them (it rejects the private-use code point) and the reported offset is
+/// mapped back through them, so the result stays in `body`'s own coordinates.
+pub(crate) fn validate_expression_body(
+    body: &str,
+    allocator: &mut Allocator,
+) -> Option<(usize, alloc::string::String)> {
+    if !body.contains(PHANTOM_SPACE) {
+        return try_parse_expression_body(body, allocator);
+    }
+    let clean = body.replace(PHANTOM_SPACE, "");
+    let (clean_offset, detail) = try_parse_expression_body(&clean, allocator)?;
+    // Re-walk `body`, skipping phantoms, until the cleaned position reaches the
+    // error; that byte index is the equivalent offset in `body`.
+    let mut cleaned = 0;
+    for (idx, ch) in body.char_indices() {
+        if cleaned >= clean_offset {
+            return Some((idx, detail));
+        }
+        if ch != PHANTOM_SPACE {
+            cleaned += ch.len_utf8();
+        }
+    }
+    Some((body.len(), detail))
+}
+
 /// Walks an oxc AST looking for numeric literals whose raw text starts with
 /// a `0` followed by another digit — i.e. legacy octals (`01`, `0123`) or
 /// "non-octal decimal" literals (`08`, `09`). acorn rejects both in strict
@@ -1223,7 +1252,17 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
             .unwrap_or(bytes.len());
         ix = eol;
 
-        if ix >= bytes.len() || bytes[ix] == b'\n' || bytes[ix] == b'\r' {
+        if ix >= bytes.len() {
+            break;
+        }
+        // A line of only spaces/tabs is blank, exactly like an empty line, and
+        // ends the block. The firstpass retries across it with oxc when the
+        // block is still incomplete (e.g. an export spanning a blank line).
+        let mut next = ix;
+        while next < bytes.len() && matches!(bytes[next], b' ' | b'\t') {
+            next += 1;
+        }
+        if next >= bytes.len() || matches!(bytes[next], b'\n' | b'\r') {
             break;
         }
     }
@@ -1747,8 +1786,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     parse_jsx_tag_with_column(tag_raw, container_content_col, extra_strip_cols)
                         .into_static();
                 validate_jsx_expressions(
+                    tag_raw,
                     &jsx_data.attrs,
-                    stripped_to_orig(pos),
+                    |rel| stripped_to_orig(pos + rel),
                     &mut self.mdx_expr_allocator,
                     &mut self.mdx_errors,
                 );
@@ -1764,30 +1804,25 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // lines (e.g. `<style>{\` CSS with blank rules \`}</style>`).
                 let expr_end = scan_mdx_expression_end(remaining, false).unwrap_or(raw.len() - pos);
                 let inner_raw = &raw[pos + 1..pos + expr_end - 1];
+                // Validate the expression body as JS. mdx-js calls acorn here;
+                // we use oxc for parity. Without this, garbage like `{h<}`
+                // produces a phantom `mdxFlowExpression` that only errors at JS
+                // emit, not at mdast. Validate the verbatim slice (not the
+                // dedented `inner`) so the error offset stays in `raw`
+                // coordinates and `stripped_to_orig` maps it to the exact
+                // source position. Allocator is reused.
+                if let Some((err_offset, detail)) =
+                    validate_expression_body(inner_raw, &mut self.mdx_expr_allocator)
+                {
+                    self.mdx_errors.push((
+                        stripped_to_orig(pos + 1 + err_offset),
+                        alloc::format!("Could not parse expression with oxc: {detail}"),
+                    ));
+                }
                 let inner: CowStr<'static> = CowStr::from(
                     dedent_expression_continuation(inner_raw, self.container_content_col())
                         .into_owned(),
                 );
-                // Validate the expression body as JS. mdx-js calls acorn
-                // here; we use oxc for parity. Without this, garbage like
-                // `{h<}` produces a phantom `mdxFlowExpression` that only
-                // errors at JS emit, not at mdast. Allocator is reused.
-                // Strip phantom-space sentinels (see `PHANTOM_SPACE`) so
-                // oxc sees valid JS.
-                let inner_for_validate: alloc::borrow::Cow<'_, str> =
-                    if inner.contains(PHANTOM_SPACE) {
-                        alloc::borrow::Cow::Owned(inner.replace(PHANTOM_SPACE, ""))
-                    } else {
-                        alloc::borrow::Cow::Borrowed(inner.as_ref())
-                    };
-                if let Some((err_offset, detail)) =
-                    try_parse_expression_body(&inner_for_validate, &mut self.mdx_expr_allocator)
-                {
-                    self.mdx_errors.push((
-                        stripped_to_orig(pos + 1) + err_offset,
-                        alloc::format!("Could not parse expression with oxc: {detail}"),
-                    ));
-                }
                 let cow_ix = self.allocs.allocate_cow(inner);
                 self.tree.append(Item {
                     start: stripped_to_orig(pos),
@@ -1854,16 +1889,26 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     /// whether each line was strict (prefix matched, column = base_col - 1)
     /// or lazy (no prefix, column = 0), so strip and dedent must share
     /// one walk — separating them loses that per-line info.
+    /// Normalize an inline expression body (strip container prefixes + 2-col
+    /// dedent) and return it alongside an offset map from normalized byte
+    /// offsets to absolute source offsets.
+    ///
+    /// The map stays empty for single-line bodies (the overwhelmingly common
+    /// case), where the normalized text is a verbatim source slice and callers
+    /// can add offsets directly; `Vec::new()` does not allocate, so that path
+    /// pays nothing. It is populated only when continuation lines diverge from
+    /// the source, so a parse error there still resolves to the exact column.
     pub(crate) fn inline_expression_value(
         &self,
         start_ix: usize,
         end_ix: usize,
-    ) -> alloc::string::String {
+    ) -> (alloc::string::String, Vec<(usize, usize)>) {
         const INDENT: usize = 2;
         const TAB_SIZE: usize = 4;
         let base_col = self.container_content_col().max(1);
         let bytes = self.text.as_bytes();
         let mut out = alloc::string::String::with_capacity(end_ix - start_ix);
+        let mut offset_map: Vec<(usize, usize)> = Vec::new();
         let mut pos = start_ix;
 
         let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
@@ -1930,13 +1975,21 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
             }
 
+            // `pos` now sits at the start of this continuation line's content,
+            // which is copied verbatim. Record the map entry so an error here
+            // resolves to source; the base entry covers the first line.
+            if offset_map.is_empty() {
+                offset_map.push((0, start_ix));
+            }
+            offset_map.push((out.len(), pos));
+
             let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
                 .map(|i| pos + i)
                 .unwrap_or(end_ix);
             out.push_str(&self.text[pos..line_end]);
             pos = line_end;
         }
-        out
+        (out, offset_map)
     }
 
     /// Strip container prefixes from continuation lines in a raw text span.
@@ -2324,8 +2377,15 @@ fn parse_jsx_attrs<'a>(
                 }
                 i += 1;
             }
-            let value = tag[start..i.saturating_sub(1)].trim();
-            attrs.push(JsxAttr::Spread(value.into()));
+            let raw_value = &tag[start..i.saturating_sub(1)];
+            let lead_ws = raw_value.len() - raw_value.trim_start().len();
+            let value = raw_value.trim();
+            let val_start = start + lead_ws;
+            attrs.push(JsxAttr::Spread(
+                value.into(),
+                val_start,
+                val_start + value.len(),
+            ));
             continue;
         }
 
@@ -2398,7 +2458,8 @@ fn parse_jsx_attrs<'a>(
                     }
                     i += 1;
                 }
-                let value = &tag[val_start..i.saturating_sub(1)];
+                let val_end = i.saturating_sub(1);
+                let value = &tag[val_start..val_end];
                 let normalized = if value.contains('\n') || value.contains('\r') {
                     alloc::borrow::Cow::Owned(strip_expression_indent(
                         value,
@@ -2411,6 +2472,8 @@ fn parse_jsx_attrs<'a>(
                 attrs.push(JsxAttr::Expression(
                     name.into(),
                     normalized.into_owned().into(),
+                    val_start,
+                    val_end,
                 ));
             } else {
                 attrs.push(JsxAttr::Boolean(name.into()));
@@ -2426,36 +2489,34 @@ fn parse_jsx_attrs<'a>(
 /// Validate JSX attribute expression bodies (`x={…}`) and spread bodies
 /// (`{...x}`) via oxc, mirroring what mdx-js does with acorn at parse time.
 /// Without this, only the brace-counting scanner runs on these — garbage
-/// like `<a x={1 +}/>` survives until JS emit. Errors are recorded against
-/// `tag_offset` (the source byte where the opening `<` sits); per-attr
-/// positions aren't tracked through `parse_jsx_attrs`.
+/// like `<a x={1 +}/>` survives until JS emit.
+///
+/// Bodies are validated against their verbatim slice of `tag` (not the
+/// indent-normalized copy stored on the attribute), so an oxc error offset is
+/// already in `tag` coordinates. `resolve`, which maps any tag byte offset to
+/// the original source, then yields the exact line/column of the offending
+/// token rather than the element's opening `<`.
 pub(crate) fn validate_jsx_expressions(
+    tag: &str,
     attrs: &[JsxAttr<'_>],
-    tag_offset: usize,
+    resolve: impl Fn(usize) -> usize,
     allocator: &mut Allocator,
     mdx_errors: &mut Vec<(usize, alloc::string::String)>,
 ) {
     for attr in attrs {
-        let body: alloc::borrow::Cow<'_, str> = match attr {
-            JsxAttr::Expression(_, v) => alloc::borrow::Cow::Borrowed(v.as_ref()),
-            JsxAttr::Spread(v) => {
-                let trimmed = v.as_ref().trim_start();
-                match trimmed.strip_prefix("...") {
-                    Some(operand) => alloc::borrow::Cow::Borrowed(operand),
-                    None => continue,
-                }
-            }
+        // Byte range of the JS body within `tag`. Spreads validate only the
+        // operand, past the leading `...`.
+        let (body, body_offset) = match attr {
+            JsxAttr::Expression(_, _, start, end) => (&tag[*start..*end], *start),
+            JsxAttr::Spread(_, start, end) => match tag[*start..*end].strip_prefix("...") {
+                Some(operand) => (operand, *end - operand.len()),
+                None => continue,
+            },
             _ => continue,
         };
-        // Drop phantom-space sentinels before validation (see `PHANTOM_SPACE`).
-        let body: alloc::borrow::Cow<'_, str> = if body.contains(PHANTOM_SPACE) {
-            alloc::borrow::Cow::Owned(body.replace(PHANTOM_SPACE, ""))
-        } else {
-            body
-        };
-        if let Some((_off, detail)) = try_parse_expression_body(&body, allocator) {
+        if let Some((err_offset, detail)) = validate_expression_body(body, allocator) {
             mdx_errors.push((
-                tag_offset,
+                resolve(body_offset + err_offset),
                 alloc::format!("Could not parse expression with oxc: {detail}"),
             ));
         }

@@ -1,6 +1,13 @@
 import { materializeHastNode, type HastNode } from "./hast-materializer.js";
-import type { HastRaw, MdxJsxAttributeUnion, Position } from "../types.js";
-import type { Element, Text, Comment, Doctype } from "hast";
+import type { HastRaw, MdxJsxAttributeUnion, Position, Data } from "../types.js";
+import type {
+  Element,
+  Text,
+  Comment,
+  Doctype,
+  Parents as HastParents,
+  Root as HastRoot,
+} from "hast";
 import type { Program } from "estree-jsx";
 import type { MdxJsxFlowElementHast, MdxJsxTextElementHast } from "../mdx-types.js";
 import type { MdxFlowExpressionHast, MdxTextExpressionHast } from "../mdx-types.js";
@@ -104,6 +111,14 @@ export interface HastVisitorContext {
    * decoded filesystem path.
    */
   readonly fileURL: URL | undefined;
+  /**
+   * Document-level data bag, shared across every plugin in the compile and
+   * across the mdast→hast phase boundary. Mutate keys directly
+   * (`ctx.data.foo = x`); the bag itself isn't reassignable. Values are kept
+   * on the JS side, so any value is allowed, including functions and class
+   * instances. Returned to the caller as `result.data`.
+   */
+  readonly data: Data;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastContent): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -127,6 +142,18 @@ export interface HastVisitorContext {
   setProperty(node: Readonly<HastNode>, key: string, value: unknown): void;
   /** Collect the concatenated text of all descendant text nodes (like DOM textContent). */
   textContent(node: Readonly<HastNode>): string;
+  /**
+   * The parent of a node, or `undefined` at the root. Within a pass the same
+   * parent is always the same object, so visitors on sibling nodes can dedupe
+   * by identity.
+   */
+  parent<N extends Exclude<HastNode, HastRoot>>(node: Readonly<N>): Readonly<HastParents>;
+  parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined;
+  /**
+   * Index of `node` within its parent's children, or `undefined` at the root.
+   * Use this rather than `parent.children.indexOf(node)`, which won't find it.
+   */
+  indexOf(node: Readonly<HastNode>): number | undefined;
   report(opts: {
     message: string;
     node?: Readonly<HastNode>;
@@ -290,12 +317,25 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #pendingNodes: Map<number, HastNode> = new Map();
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
+  readonly #resolver: LazyChildResolver<HastReader, HastNode>;
+  /** One canonical object per parent id, so visitors can dedupe by identity.
+   *  Null until the first `parent()` call; most passes never make one. */
+  #parentsById: Map<number, HastNode> | null = null;
   readonly fileURL: URL | undefined;
+  readonly data: Data;
 
-  constructor(handle: HastHandle, getSource: () => string, fileURL: URL | undefined) {
+  constructor(
+    handle: HastHandle,
+    getSource: () => string,
+    fileURL: URL | undefined,
+    resolver: LazyChildResolver<HastReader, HastNode>,
+    data: Data,
+  ) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.fileURL = fileURL;
+    this.#resolver = resolver;
+    this.data = data;
   }
 
   get source(): string {
@@ -419,6 +459,24 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   textContent(node: HastNode): string {
     return textContentHandle(this.#handle, requireNid(node, "textContent"));
+  }
+
+  parent<N extends Exclude<HastNode, HastRoot>>(node: Readonly<N>): Readonly<HastParents>;
+  parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined;
+  parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined {
+    const parentId = this.#resolver.parentIdOf(requireNid(node as HastNode, "parent"));
+    if (parentId === undefined) return undefined;
+    const byId = (this.#parentsById ??= new Map());
+    let parent = byId.get(parentId);
+    if (parent === undefined) {
+      parent = this.#resolver.materializeOne(parentId);
+      byId.set(parentId, parent);
+    }
+    return parent as HastParents;
+  }
+
+  indexOf(node: Readonly<HastNode>): number | undefined {
+    return this.#resolver.indexInParent(requireNid(node as HastNode, "indexOf"));
   }
 
   report({
@@ -918,6 +976,14 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
   protected override materializeNode(reader: HastReader, nodeId: number): HastNode {
     return materializeHastNode(reader, nodeId);
   }
+
+  protected override readParentId(reader: HastReader, nodeId: number): number {
+    return reader.getParentId(nodeId);
+  }
+
+  protected override readChildIds(reader: HastReader, nodeId: number): number[] {
+    return reader.getChildIds(nodeId);
+  }
 }
 
 /** Install `children` as an own enumerable getter (spread must carry it),
@@ -1045,8 +1111,9 @@ export function visitHastHandle(
   subs: ResolvedSubscription[],
   source: string | (() => string),
   fileURL: URL | undefined,
+  data: Data = {},
 ): number | Promise<number> {
-  const result = visitHastHandleCollect(handle, plugin, subs, source, fileURL);
+  const result = visitHastHandleCollect(handle, plugin, subs, source, fileURL, data);
   if (result instanceof Promise) {
     return result.then((commands) => applyCollectedCommands(handle, commands));
   }
@@ -1073,11 +1140,12 @@ export function visitHastHandleCollect(
   subs: ResolvedSubscription[],
   source: string | (() => string),
   fileURL: URL | undefined,
+  data: Data = {},
 ): Uint8Array | Promise<Uint8Array> {
   const getSource = typeof source === "function" ? source : () => source;
-  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL);
-  const returnBuffer = acquireCommandBuffer();
   const resolver = new HastLazyChildResolver(handle);
+  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data);
+  const returnBuffer = acquireCommandBuffer();
   const rustSubs = getRustSubs(plugin);
   const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
 

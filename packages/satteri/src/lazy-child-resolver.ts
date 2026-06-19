@@ -11,6 +11,9 @@ export function markHandleMutated(handle: AnyHandle): void {
   HANDLE_EPOCHS.set(handle, (HANDLE_EPOCHS.get(handle) ?? 0) + 1);
 }
 
+/** Arena sentinel in the node struct's parent field: the node has no parent. */
+const NO_PARENT = 0xffffffff;
+
 /**
  * Lazy node materializer for the walk paths: serializes the handle's arena
  * once, on the first stub materialization, then materializes nodes from that
@@ -30,6 +33,8 @@ export abstract class LazyChildResolver<TReader, TNode> {
 
   protected abstract createReader(wire: Uint8Array): TReader;
   protected abstract materializeNode(reader: TReader, nodeId: number): TNode;
+  protected abstract readParentId(reader: TReader, nodeId: number): number;
+  protected abstract readChildIds(reader: TReader, nodeId: number): number[];
 
   /**
    * Mark the visitor pass over. Child ids were captured at match time; once
@@ -53,10 +58,9 @@ export abstract class LazyChildResolver<TReader, TNode> {
     }
   }
 
-  /** Materialize one node for a child stub's first real-field read. */
-  materializeOne(nodeId: number): TNode {
+  #ensureReader(): TReader {
     if (this.#reader === null) {
-      // A stub proves `.children` was read in-pass, so a deferred snapshot is
+      // A node id proves the tree was read in-pass, so a deferred snapshot is
       // still faithful as long as no command buffer rebuilt the arena since
       // match time (ids renumber on rebuild). An existing reader is always
       // safe: the snapshot is an immutable pre-mutation copy.
@@ -73,6 +77,40 @@ export abstract class LazyChildResolver<TReader, TNode> {
       // when a node has none).
       this.#reader = this.createReader(serializeHandle(this.#handle));
     }
-    return this.materializeNode(this.#reader, nodeId);
+    return this.#reader;
+  }
+
+  /** Materialize one node for a child stub's first real-field read. */
+  materializeOne(nodeId: number): TNode {
+    return this.materializeNode(this.#ensureReader(), nodeId);
+  }
+
+  /** Arena id of `nodeId`'s parent in the pass snapshot, or undefined at the root. */
+  parentIdOf(nodeId: number): number | undefined {
+    this.assertUnsealed();
+    const parentId = this.readParentId(this.#ensureReader(), nodeId);
+    return parentId === NO_PARENT ? undefined : parentId;
+  }
+
+  /** Per-parent child-id→index maps, built lazily: null until a plugin calls
+   *  `indexInParent` (most never do). Cache-safe because the snapshot is immutable. */
+  #childIndexByParent: Map<number, Map<number, number>> | null = null;
+
+  /** Index of `nodeId` within its parent's children in the pass snapshot,
+   *  or undefined at the root. */
+  indexInParent(nodeId: number): number | undefined {
+    this.assertUnsealed();
+    const reader = this.#ensureReader();
+    const parentId = this.readParentId(reader, nodeId);
+    if (parentId === NO_PARENT) return undefined;
+    const byParent = (this.#childIndexByParent ??= new Map());
+    let indexById = byParent.get(parentId);
+    if (indexById === undefined) {
+      const map = new Map<number, number>();
+      this.readChildIds(reader, parentId).forEach((id, i) => map.set(id, i));
+      byParent.set(parentId, map);
+      indexById = map;
+    }
+    return indexById.get(nodeId);
   }
 }

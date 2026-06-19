@@ -15,7 +15,6 @@ import { markdownToHtml, defineMdastPlugin } from "../src/index.js";
 import type { MdastNode } from "../src/types.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext, HastVisitorInstance } from "../src/hast/hast-visitor.js";
-import type { MdastPluginInstance } from "../src/mdast/mdast-visitor.js";
 
 // Helpers
 
@@ -27,15 +26,6 @@ function makeHastReader(source: string): {
   const handle = createHastHandle(source);
   const buf = serializeHandle(handle);
   return { reader: new HastReader(buf), handle };
-}
-
-/** Pipeline with MDAST plugins applied before HAST conversion */
-function markdownToHtmlWithMdastPlugins(
-  source: string,
-  plugins: { instance: MdastPluginInstance; name: string }[],
-): string {
-  const mdastPlugins = plugins.map((p) => defineMdastPlugin({ name: p.name, ...p.instance }));
-  return markdownToHtml(source, { mdastPlugins }).html;
 }
 
 // PART 1: MDAST plugins that affect the Markdown → HTML result
@@ -50,14 +40,15 @@ describe("MDAST plugins affecting HTML output", () => {
   });
 
   test("MDAST plugin that removes headings - heading disappears from HTML", () => {
-    const removeHeadings: MdastPluginInstance = {
-      heading(_node, ctx) {
-        ctx.removeNode(_node);
+    const removeHeadings = defineMdastPlugin({
+      name: "remove-headings",
+      heading(node, ctx) {
+        ctx.removeNode(node);
       },
-    };
-    const html = markdownToHtmlWithMdastPlugins("# Title\n\nKeep this paragraph", [
-      { instance: removeHeadings, name: "remove-headings" },
-    ]);
+    });
+    const { html } = markdownToHtml("# Title\n\nKeep this paragraph", {
+      mdastPlugins: [removeHeadings],
+    });
     expect(html).not.toContain("<h1>");
     expect(html).not.toContain("Title");
     expect(html).toContain("<p>");
@@ -65,16 +56,15 @@ describe("MDAST plugins affecting HTML output", () => {
   });
 
   test("MDAST plugin that replaces heading with paragraph - h1 becomes p in HTML", () => {
-    const replaceHeading: MdastPluginInstance = {
+    const replaceHeading = defineMdastPlugin({
+      name: "heading-to-paragraph",
       heading(node) {
         if (node.type === "heading") {
           return { type: "paragraph", children: node.children };
         }
       },
-    };
-    const html = markdownToHtmlWithMdastPlugins("# Hello\n\nWorld", [
-      { instance: replaceHeading, name: "heading-to-paragraph" },
-    ]);
+    });
+    const { html } = markdownToHtml("# Hello\n\nWorld", { mdastPlugins: [replaceHeading] });
     expect(html).not.toContain("<h1>");
     // "Hello" should be in a <p> now
     expect(html).toContain("<p>");
@@ -83,57 +73,56 @@ describe("MDAST plugins affecting HTML output", () => {
 
   test("MDAST plugin chain: plugin 1 sets data, plugin 2 reads it (data persists)", () => {
     let seenIdInPlugin2: string | null = null;
-    const setId: MdastPluginInstance = {
+    const setId = defineMdastPlugin({
+      name: "set-id",
       heading(node, ctx) {
         ctx.setProperty(node, "data", { id: "custom-id" });
       },
-    };
-    const readId: MdastPluginInstance = {
+    });
+    const readId = defineMdastPlugin({
+      name: "read-id",
       heading(node) {
         seenIdInPlugin2 = (node.data as { id?: string } | null)?.id ?? null;
       },
-    };
-    markdownToHtmlWithMdastPlugins("# Test\n\nBody", [
-      { instance: setId, name: "set-id" },
-      { instance: readId, name: "read-id" },
-    ]);
+    });
+    markdownToHtml("# Test\n\nBody", { mdastPlugins: [setId, readId] });
     expect(seenIdInPlugin2).toBe("custom-id");
   });
 
   test("MDAST plugin chain: data survives rebuild when another node is mutated", () => {
     let seenIdInPlugin2: string | null = null;
     // Plugin 1: sets data on heading AND mutates a different node (text → bold)
-    const setDataAndMutate: MdastPluginInstance = {
-      heading(_node, ctx) {
-        ctx.setProperty(_node, "data", { id: "survives-rebuild" });
+    const setDataAndMutate = defineMdastPlugin({
+      name: "set-and-mutate",
+      heading(node, ctx) {
+        ctx.setProperty(node, "data", { id: "survives-rebuild" });
       },
       text(node, ctx) {
         // Mutating text forces a rebuild, node IDs change
         ctx.setProperty(node, "value", "mutated");
       },
-    };
+    });
     // Plugin 2: reads the data set by plugin 1 (after rebuild)
-    const readData: MdastPluginInstance = {
+    const readData = defineMdastPlugin({
+      name: "read-data",
       heading(node) {
         seenIdInPlugin2 = (node.data as { id?: string } | null)?.id ?? null;
       },
-    };
-    markdownToHtmlWithMdastPlugins("# Title\n\nBody text", [
-      { instance: setDataAndMutate, name: "set-and-mutate" },
-      { instance: readData, name: "read-data" },
-    ]);
+    });
+    markdownToHtml("# Title\n\nBody text", { mdastPlugins: [setDataAndMutate, readData] });
     expect(seenIdInPlugin2).toBe("survives-rebuild");
   });
 
   test("MDAST plugin removing a link - anchor disappears from HTML", () => {
-    const removeLinks: MdastPluginInstance = {
-      link(_node, ctx) {
-        ctx.removeNode(_node);
+    const removeLinks = defineMdastPlugin({
+      name: "remove-links",
+      link(node, ctx) {
+        ctx.removeNode(node);
       },
-    };
-    const html = markdownToHtmlWithMdastPlugins("Visit [example](https://example.com) today", [
-      { instance: removeLinks, name: "remove-links" },
-    ]);
+    });
+    const { html } = markdownToHtml("Visit [example](https://example.com) today", {
+      mdastPlugins: [removeLinks],
+    });
     expect(html).not.toContain("<a");
     expect(html).not.toContain("href");
     expect(html).not.toContain("example.com");

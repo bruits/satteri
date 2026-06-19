@@ -169,6 +169,40 @@ mdxFlowExpression(node) {
 },
 ```
 
+## Node lifetime
+
+In order to avoid very expensive serialization costs between Rust and JS, Sätteri keeps both mdast and hast trees exclusively in Rust, exposing nodes to JavaScript plugins only as thin references when possible.
+
+This means that ergonomics are slightly different than one might expect from a plain JavaScript tree, and understanding of reference vs copy semantics is important to avoid bugs. After a visitor ends, any kept nodes may become totally invalid. Other plugins might've mutated the tree, or, once the pipeline has ended, the tree will have been discarded entirely.
+
+To keep a node's data beyond the visit, create an explicit copy of it and its subtree. For example, to collect all headings in a document:
+
+```js
+const headings = [];
+
+defineHastPlugin({
+  name: "collect-headings",
+  element: {
+    filter: ["h1", "h2"],
+    visit(node) {
+      headings.push(structuredClone(node));
+    },
+  },
+});
+```
+
+Use `structuredClone(node)` for a deep, fully independent copy of the node and its subtree, or `{ ...node }` for a cheaper shallow copy when you only need this node's own fields.
+
+To get a plain JavaScript tree of the whole document, use `markdownToMdast` or `markdownToHast`:
+
+```js
+import { markdownToMdast } from "satteri";
+
+const tree = markdownToMdast(source); // plain objects, yours to keep
+```
+
+Note that keeping nodes in Rust is one of Sätteri's main performance advantages: the more data you copy into JavaScript, the more expensive your plugin becomes.
+
 ## Mutation context
 
 MDAST and HAST contexts share the same shape (with small differences
@@ -177,10 +211,21 @@ after the visit completes, so it's safe to mutate while iterating.
 
 ### Properties
 
-| Property   | Type     | Notes                               |
-| ---------- | -------- | ----------------------------------- |
-| `source`   | `string` | Original markdown source.           |
-| `filename` | `string` | Filename hint, used in diagnostics. |
+| Property   | Type     | Notes                                                                                                                                                                                                                            |
+| ---------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`   | `string` | Original markdown source.                                                                                                                                                                                                        |
+| `filename` | `string` | Filename hint, used in diagnostics.                                                                                                                                                                                              |
+| `data`     | `Data`   | Document-scoped data bag shared across every plugin in the pipeline. Survives the mdast→hast boundary. Returned to the caller as `result.data`. Kept on the JS side, so any value is allowed (functions, class instances, etc.). |
+
+Keys on `data` are typed as `unknown` by default. Register a key's type by augmenting `DataMap`:
+
+```ts
+declare module "satteri" {
+  interface DataMap {
+    headings: string[];
+  }
+}
+```
 
 ### Tree mutation
 
@@ -218,10 +263,12 @@ For HAST elements, `setProperty` takes a HAST property key (e.g.
 
 ### Inspection
 
-| Method                                | Effect                                                                                                                             |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `textContent(node, options?)` (MDAST) | Concatenated text of the subtree. Options: `{ includeImageAlt?: boolean, includeHtml?: boolean }`. Mirrors `mdast-util-to-string`. |
-| `textContent(node)` (HAST)            | Concatenated text of the subtree. Mirrors DOM `textContent`.                                                                       |
+| Method                                | Effect                                                                                             |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `textContent(node, options?)` (MDAST) | Concatenated text of the subtree. Options: `{ includeImageAlt?: boolean, includeHtml?: boolean }`. |
+| `textContent(node)` (HAST)            | Concatenated text of the subtree. Mirrors DOM `textContent`.                                       |
+| `parent(node)`                        | The node's parent, or `undefined` at the root.                                                     |
+| `indexOf(node)`                       | Index of the node in its parent's children, or `undefined` at the root.                            |
 
 ### Diagnostics
 
@@ -235,13 +282,13 @@ returned with the compile result.
 
 ## Return value semantics
 
-| Returned                      | MDAST                            | HAST          |
-| ----------------------------- | -------------------------------- | ------------- |
-| `undefined` / `null` / `void` | Keep node, apply `ctx` mutations | Same          |
-| The same node object          | Same (no-op replace)             | Same          |
-| A different node              | Replace the visited node         | Replace       |
-| `{ raw: string }`             | Splice raw Markdown (re-parsed)  | Not supported |
-| `{ rawHtml: string }`         | Splice raw HTML (passthrough)    | Not supported |
+| Returned                      | MDAST                            | HAST    |
+| ----------------------------- | -------------------------------- | ------- |
+| `undefined` / `null` / `void` | Keep node, apply `ctx` mutations | Same    |
+| The same node object          | Same (no-op replace)             | Same    |
+| A different node              | Replace the visited node         | Replace |
+| `{ raw: string }`             | Splice raw Markdown (re-parsed)  | N/A     |
+| `{ rawHtml: string }`         | Splice raw HTML (passthrough)    | N/A     |
 
 ## Async plugins
 

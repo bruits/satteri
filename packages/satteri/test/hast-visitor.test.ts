@@ -1276,3 +1276,113 @@ test("a bare root as replacement content fails loudly", () => {
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
   ).toThrow(/cannot encode replacement content of type "root"/);
 });
+
+// ctx.parent()/indexOf(): same contract as the MDAST side (visitor.test.ts).
+
+test("parent climbs from a nested element to the root", () => {
+  const { handle, source } = setup("> quoted *text*\n");
+  const chain: string[] = [];
+  const plugin = defineHastPlugin({
+    name: "climb-ancestors",
+    element: {
+      filter: ["em"],
+      visit(node, ctx) {
+        // Climbing reassigns from a possibly-root parent, so the loop var widens.
+        let p: HastNode | undefined = ctx.parent(node);
+        while (p) {
+          chain.push(p.type === "element" ? p.tagName : p.type);
+          p = ctx.parent(p);
+        }
+      },
+    },
+  });
+  visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+  expect(chain).toEqual(["p", "blockquote", "root"]);
+});
+
+test("parent is canonical per id and usable as a structural anchor", () => {
+  const { handle, source } = setup("alpha\n\nbeta\n");
+  const parents = new Set<unknown>();
+  const plugin = defineHastPlugin({
+    name: "append-via-parent",
+    element: {
+      filter: ["p"],
+      visit(node, ctx) {
+        const parent = ctx.parent(node);
+        if (parent === undefined || parents.has(parent)) return;
+        parents.add(parent);
+        ctx.appendChild(parent, {
+          type: "element",
+          tagName: "footer",
+          properties: {},
+          children: [{ type: "text", value: "once" }],
+        });
+      },
+    },
+  });
+  visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+  const html = renderHandle(handle);
+  expect(parents.size).toBe(1);
+  expect(html.match(/<footer>once<\/footer>/g)).toHaveLength(1);
+  expect(html.indexOf("<footer>")).toBeGreaterThan(html.indexOf("beta"));
+});
+
+test("indexOf counts the whitespace text nodes between blocks", () => {
+  const { handle, source } = setup("alpha\n\nbeta\n");
+  const indexes: (number | undefined)[] = [];
+  const plugin = defineHastPlugin({
+    name: "index-of",
+    element: {
+      filter: ["p"],
+      visit(node, ctx) {
+        indexes.push(ctx.indexOf(node));
+        const root = ctx.parent(node)!;
+        indexes.push(ctx.indexOf(root));
+      },
+    },
+  });
+  visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+  // Root children are [p, "\n", p]: the second paragraph sits at index 2.
+  expect(indexes).toEqual([0, undefined, 2, undefined]);
+});
+
+test("parent and indexOf work on child stubs, not just visited nodes", () => {
+  const { handle, source } = setup("hello\n");
+  let stubParentTag: string | undefined;
+  let stubIndex: number | undefined;
+  const plugin = defineHastPlugin({
+    name: "stub-parent",
+    element: {
+      filter: ["p"],
+      visit(node, ctx) {
+        const firstChild: HastNode = node.children[0]!;
+        const parent = ctx.parent(firstChild);
+        stubParentTag = parent?.type === "element" ? parent.tagName : parent?.type;
+        stubIndex = ctx.indexOf(firstChild);
+      },
+    },
+  });
+  visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+  expect(stubParentTag).toBe("p");
+  expect(stubIndex).toBe(0);
+});
+
+test("parent throws on plugin-built nodes (no arena id)", () => {
+  const { handle, source } = setup("hello\n");
+  let error: Error | undefined;
+  const plugin = defineHastPlugin({
+    name: "parent-of-new-node",
+    element: {
+      filter: ["p"],
+      visit(_node, ctx) {
+        try {
+          ctx.parent({ type: "element", tagName: "div", properties: {}, children: [] });
+        } catch (e) {
+          error = e as Error;
+        }
+      },
+    },
+  });
+  visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+  expect(error?.message).toMatch(/no arena id/);
+});

@@ -105,7 +105,7 @@ function transformAsides(tree: MdastRoot): void {
         let title = defaultTitles[variant];
         let titleNode: PhrasingContent[] = [{ type: "text", value: title }];
         const children = [...((node.children ?? []) as P[])];
-        const firstChild = children[0] as (P & { data?: { directiveLabel?: boolean } }) | undefined;
+        const firstChild = children[0];
         if (
           firstChild?.type === "paragraph" &&
           firstChild.data?.directiveLabel &&
@@ -141,7 +141,7 @@ function asidesPluginSatteri() {
       let title = defaultTitles[variant];
       let titleNode: PhrasingContent[] = [{ type: "text", value: title }];
       const children = [...node.children] as P[];
-      const firstChild = children[0] as (P & { data?: { directiveLabel?: boolean } }) | undefined;
+      const firstChild = children[0];
       if (
         firstChild?.type === "paragraph" &&
         firstChild.data?.directiveLabel &&

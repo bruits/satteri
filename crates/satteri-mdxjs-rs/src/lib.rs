@@ -149,13 +149,7 @@ pub fn compile_with_convert_options(
     };
     let (arena, mdx_errors) = satteri_pulldown_cmark::parse(value, parse_options);
     if let Some((offset, msg)) = mdx_errors.first() {
-        let point = byte_offset_to_point(value, *offset);
-        return Err(message::Message {
-            place: Some(Box::new(message::Place::Point(point))),
-            reason: msg.clone(),
-            rule_id: Box::new("unexpected-character".into()),
-            source: Box::new("mdx-jsx".into()),
-        });
+        return Err(parse_error_to_message(value, *offset, msg));
     }
     let hast_arena =
         satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&arena, convert_options);
@@ -565,6 +559,22 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
     }
 
     Ok(())
+}
+
+/// Build a positioned [`message::Message`] from a pulldown-cmark MDX parse
+/// error (a `(byte_offset, reason)` pair). The Rust `compile` entry points and
+/// the NAPI parse functions share this so a parse error surfaces a source
+/// line/column instead of a bare byte offset.
+#[must_use]
+pub fn parse_error_to_message(source: &str, offset: usize, reason: &str) -> message::Message {
+    message::Message {
+        place: Some(Box::new(message::Place::Point(byte_offset_to_point(
+            source, offset,
+        )))),
+        reason: reason.to_string(),
+        rule_id: Box::new("unexpected-character".into()),
+        source: Box::new("mdx-jsx".into()),
+    }
 }
 
 /// Convert a byte offset in source text to a `Point` (line, column, offset).

@@ -13,6 +13,7 @@ import {
   HAST_MDX_ESM,
   type HastProperty,
 } from "./hast-reader.js";
+import type { Root } from "hast";
 import type { HastNode } from "../types.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
 import { lazyProp, lazyGroup } from "../lazy-props.js";
@@ -174,6 +175,6 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
 /**
  * Materialize the full HAST tree from root (nodeId=0).
  */
-export function materializeHastTree(reader: HastReader): HastNode {
-  return materializeHastNode(reader, 0);
+export function materializeHastTree(reader: HastReader): Root {
+  return materializeHastNode(reader, 0) as Root;
 }

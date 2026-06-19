@@ -235,7 +235,7 @@ test("mdast round-trip: empty strings ride OP_STR", () => {
 test("mdast round-trip: depth and start at their stored maxima", () => {
   // Deliberately outside `Heading["depth"]`'s 1-6 literal union: the wire
   // stores a u8 and the 255 boundary is exactly what's pinned here.
-  expectMdastRoundTrip({ type: "heading", depth: 255, children: [] } as MdastNode);
+  expectMdastRoundTrip(rawMdast({ type: "heading", depth: 255, children: [] }));
   expectMdastRoundTrip({
     type: "list",
     ordered: true,
@@ -358,18 +358,25 @@ function fields(n: object): Record<string, unknown> {
   return n as Record<string, unknown>;
 }
 
+/** Build a deliberately out-of-spec node for wire-boundary fixtures (e.g. a
+ *  depth past Heading's 1-6, or text directly under a listItem); the encoder
+ *  must round-trip the bytes verbatim regardless of mdast validity. */
+function rawMdast(node: object): MdastNode {
+  return node as MdastNode;
+}
+
 const MDAST_CUSTOM_SAMPLES: Record<string, { node: MdastNode; opts: MdastCaseOpts; check: Check }> =
   {
     list: {
       // Deliberately type-loose: text directly under listItem is not valid
       // flow content, but the encoder must still round-trip it verbatim.
-      node: {
+      node: rawMdast({
         type: "list",
         ordered: true,
         start: 2,
         spread: false,
         children: [{ type: "listItem", spread: false, children: [{ type: "text", value: "x" }] }],
-      } as MdastNode,
+      }),
       opts: {},
       check: (n) => expect(n.start).toBe(2),
     },

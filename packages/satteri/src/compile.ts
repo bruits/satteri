@@ -41,7 +41,7 @@ import { materializeMdastTree } from "./mdast/mdast-materializer.js";
 import { markHandleMutated } from "./lazy-child-resolver.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
-import type { MdastNode, HastNode } from "./types.js";
+import type { MdastNode, HastNode, Data } from "./types.js";
 
 type NativeFeaturesPair = {
   features: Record<string, unknown> | undefined;
@@ -119,11 +119,11 @@ type MdastPipelineResult = {
   lastPlugin?: { name?: string };
 };
 
-/** Drop a handle after bumping its epoch: the arena dies with the handle, so a
- *  child stub retained past the pipeline must hit the designed retention error,
- *  not a cryptic RangeError from snapshotting the freed arena. */
-function disposeHandle(handle: AnyHandle): void {
-  markHandleMutated(handle);
+/** Free a handle's arena. A plugin's visitor can hand child stubs to user code;
+ *  pass `invalidateStubs` so the epoch bump makes any stub retained past this
+ *  point hit the designed retention error instead of snapshotting the freed arena. */
+function releaseHandle(handle: AnyHandle, invalidateStubs: boolean): void {
+  if (invalidateStubs) markHandleMutated(handle);
   dropHandle(handle);
 }
 
@@ -144,6 +144,7 @@ function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginInput[],
   fileURL: URL | undefined,
+  data: Data,
   collectLast = false,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
   const out: MdastPipelineResult = { handle };
@@ -155,7 +156,14 @@ function runMdastPluginsOnHandle(
   // them up front, or hand off to a later plugin that sees the materialized tree.
   const runPlugin = (plugin: MdastPluginInstance, isLast: boolean): void | Promise<void> => {
     const subs = resolveMdastSubscriptions(plugin);
-    const result = visitMdastHandle(handle, plugin, subs, () => getHandleSource(handle), fileURL);
+    const result = visitMdastHandle(
+      handle,
+      plugin,
+      subs,
+      () => getHandleSource(handle),
+      fileURL,
+      data,
+    );
     const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
       if (!r.hasMutations) return;
       if (collectLast && isLast) {
@@ -207,6 +215,7 @@ function runHastPluginsCollectLast(
   plugins: HastPluginInput[],
   source: string,
   fileURL: URL | undefined,
+  data: Data,
 ): CollectedHastCommands | Promise<CollectedHastCommands> {
   let i = 0;
   const runNext = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
@@ -218,13 +227,13 @@ function runHastPluginsCollectLast(
       const subs = resolveSubscriptions(plugin);
 
       if (isLast) {
-        const collected = visitHastHandleCollect(handle, plugin, subs, source, fileURL);
+        const collected = visitHastHandleCollect(handle, plugin, subs, source, fileURL, data);
         return collected instanceof Promise
           ? collected.then((commands) => ({ commands, lastPlugin: plugin }))
           : { commands: collected, lastPlugin: plugin };
       }
 
-      const result = visitHastHandle(handle, plugin, subs, source, fileURL);
+      const result = visitHastHandle(handle, plugin, subs, source, fileURL, data);
       const warnIfDropped = (dropped: number): void => {
         if (dropped) warnDroppedTransforms(plugin, dropped, "hast");
       };
@@ -501,6 +510,8 @@ export interface MarkdownToHtmlResult {
   html: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
   frontmatter: Frontmatter | null;
+  /** Document-level data bag populated by plugins via `ctx.data`. Empty `{}` if untouched. */
+  data: Data;
 }
 
 /** Result of {@link mdxToJs}. */
@@ -509,6 +520,8 @@ export interface MdxToJsResult {
   code: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
   frontmatter: Frontmatter | null;
+  /** Document-level data bag populated by plugins via `ctx.data`. Empty `{}` if untouched. */
+  data: Data;
 }
 
 // Type helpers: detect whether any visitor in any plugin returns a Promise.
@@ -561,15 +574,17 @@ export function markdownToHtml(
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
   const { mdastPlugins = [], hastPlugins = [], features, fileURL } = options;
+  const hastMayHaveStubs = hastPlugins.length > 0;
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
+  const data: Data = {};
 
   // Fast path: no plugins → parse, convert, render, and frontmatter all happen
   // inside a single NAPI call. Skips 5 handle-NAPI roundtrips that the
   // plugin-capable path needs to keep the arena live across passes.
   if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
     const { html, frontmatter } = markdownToHtmlFast(source, nativeFeatures, nativeConvertOptions);
-    return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null };
+    return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
   }
 
   // Fused tail for MDAST-plugins-only (no HAST plugins): after the MDAST
@@ -579,7 +594,7 @@ export function markdownToHtml(
   if (hastPlugins.length === 0) {
     const mdastHandle = createMdastHandle(source, nativeFeatures);
     try {
-      const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL, true);
+      const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL, data, true);
       const finishMdast = (r: MdastPipelineResult): MarkdownToHtmlResult => {
         try {
           // Fused tail: apply pending commands (empty buffer is a Rust no-op),
@@ -593,20 +608,20 @@ export function markdownToHtml(
           );
           if (droppedTransforms && r.lastPlugin)
             warnDroppedTransforms(r.lastPlugin, droppedTransforms, "mdast");
-          return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null };
+          return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
         } finally {
-          disposeHandle(r.handle);
+          releaseHandle(r.handle, true);
         }
       };
       if (mdastResult instanceof Promise) {
         return mdastResult.then(finishMdast, (err) => {
-          disposeHandle(mdastHandle);
+          releaseHandle(mdastHandle, true);
           throw err;
         });
       }
       return finishMdast(mdastResult);
     } catch (err) {
-      disposeHandle(mdastHandle);
+      releaseHandle(mdastHandle, true);
       throw err;
     }
   }
@@ -618,6 +633,7 @@ export function markdownToHtml(
     fileURL,
     nativeFeatures,
     nativeConvertOptions,
+    data,
   );
 
   const runHastThenRender = (
@@ -628,16 +644,16 @@ export function markdownToHtml(
     // render + handle-drop into one NAPI call.
     let collected: CollectedHastCommands | Promise<CollectedHastCommands>;
     try {
-      collected = runHastPluginsCollectLast(r.hastHandle, hastPlugins, source, fileURL);
+      collected = runHastPluginsCollectLast(r.hastHandle, hastPlugins, source, fileURL, data);
     } catch (err) {
-      disposeHandle(r.hastHandle);
+      releaseHandle(r.hastHandle, hastMayHaveStubs);
       throw err;
     }
     if (collected instanceof Promise) {
       return collected.then(
         (c) => finishHastRender(r.hastHandle, c, r.frontmatter),
         (err) => {
-          disposeHandle(r.hastHandle);
+          releaseHandle(r.hastHandle, hastMayHaveStubs);
           throw err;
         },
       );
@@ -660,9 +676,9 @@ export function markdownToHtml(
       } else {
         html = renderHandle(h);
       }
-      return { html, frontmatter };
+      return { html, frontmatter, data };
     } finally {
-      disposeHandle(h);
+      releaseHandle(h, hastMayHaveStubs);
     }
   };
 
@@ -679,9 +695,11 @@ export function mdxToJs(
   options: MdxCompileOptions = {},
 ): MdxToJsResult | Promise<MdxToJsResult> {
   const { mdastPlugins = [], hastPlugins = [], features, fileURL, ...mdxFields } = options;
+  const hastMayHaveStubs = hastPlugins.length > 0;
   const mdxOptions = mdxOptionsToNative(mdxFields);
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
+  const data: Data = {};
 
   // Fast path: same trick as `markdownToHtml`. Parse → MDAST → HAST → JS plus
   // frontmatter extraction all happen inside a single NAPI call. Skips 5 of
@@ -693,7 +711,7 @@ export function mdxToJs(
       mdxOptions,
       nativeConvertOptions,
     );
-    return { code, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null };
+    return { code, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
   }
 
   // MDAST-plugins-only fused tail (no HAST plugins): apply + extract
@@ -701,7 +719,7 @@ export function mdxToJs(
   if (hastPlugins.length === 0) {
     const mdastHandle = createMdxMdastHandle(source, nativeFeatures);
     try {
-      const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL, true);
+      const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL, data, true);
       const finishMdast = (r: MdastPipelineResult): MdxToJsResult => {
         try {
           const commands = r.pendingCommands ?? EMPTY_COMMAND_BUFFER;
@@ -713,20 +731,20 @@ export function mdxToJs(
           );
           if (droppedTransforms && r.lastPlugin)
             warnDroppedTransforms(r.lastPlugin, droppedTransforms, "mdast");
-          return { code, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null };
+          return { code, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
         } finally {
-          disposeHandle(r.handle);
+          releaseHandle(r.handle, true);
         }
       };
       if (mdastResult instanceof Promise) {
         return mdastResult.then(finishMdast, (err) => {
-          disposeHandle(mdastHandle);
+          releaseHandle(mdastHandle, true);
           throw err;
         });
       }
       return finishMdast(mdastResult);
     } catch (err) {
-      disposeHandle(mdastHandle);
+      releaseHandle(mdastHandle, true);
       throw err;
     }
   }
@@ -738,21 +756,22 @@ export function mdxToJs(
     fileURL,
     nativeFeatures,
     nativeConvertOptions,
+    data,
   );
 
   const runHastThenCompile = (r: HastWithFrontmatter): MdxToJsResult | Promise<MdxToJsResult> => {
     let collected: CollectedHastCommands | Promise<CollectedHastCommands>;
     try {
-      collected = runHastPluginsCollectLast(r.hastHandle, hastPlugins, source, fileURL);
+      collected = runHastPluginsCollectLast(r.hastHandle, hastPlugins, source, fileURL, data);
     } catch (err) {
-      disposeHandle(r.hastHandle);
+      releaseHandle(r.hastHandle, hastMayHaveStubs);
       throw err;
     }
     if (collected instanceof Promise) {
       return collected.then(
         (c) => finishHastCompile(r.hastHandle, c, r.frontmatter),
         (err) => {
-          disposeHandle(r.hastHandle);
+          releaseHandle(r.hastHandle, hastMayHaveStubs);
           throw err;
         },
       );
@@ -775,9 +794,9 @@ export function mdxToJs(
       } else {
         code = compileHandle(h, mdxOptions);
       }
-      return { code, frontmatter };
+      return { code, frontmatter, data };
     } finally {
-      disposeHandle(h);
+      releaseHandle(h, hastMayHaveStubs);
     }
   };
 
@@ -843,26 +862,28 @@ function createHastHandleFromMdast(
   mdx: boolean,
   fileURL: URL | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  nativeFeatures?: any,
+  nativeFeatures: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  nativeConvertOptions?: any,
+  nativeConvertOptions: any,
+  data: Data,
 ): HastWithFrontmatter | Promise<HastWithFrontmatter> {
   const mdastHandle = mdx
     ? createMdxMdastHandle(source, nativeFeatures)
     : createMdastHandle(source, nativeFeatures);
 
-  // finally{dispose} is intentional: convertMdastToHastHandle empties the arena
+  const mdastMayHaveStubs = mdastPlugins.length > 0;
+
+  // finally{release} is intentional: convertMdastToHastHandle empties the arena
   // on success, but if any step here throws the handle would otherwise leak.
   const finalize = (r: MdastPipelineResult): HastWithFrontmatter => {
     try {
       const frontmatter = readFrontmatter(r.handle);
-      // The conversion empties the mdast arena; bump the epoch so a stub
-      // retained past the mdast pass fails with the retention error.
-      markHandleMutated(r.handle);
+      // convert empties the mdast arena, so invalidate any stub held past this point.
+      if (mdastMayHaveStubs) markHandleMutated(r.handle);
       const hastHandle = convertMdastToHastHandle(r.handle, nativeConvertOptions);
       return { hastHandle, frontmatter };
     } finally {
-      disposeHandle(r.handle);
+      releaseHandle(r.handle, mdastMayHaveStubs);
     }
   };
 
@@ -871,17 +892,17 @@ function createHastHandleFromMdast(
       return finalize({ handle: mdastHandle });
     }
 
-    const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL);
+    const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL, data);
 
     if (mdastResult instanceof Promise) {
       return mdastResult.then(finalize, (err) => {
-        disposeHandle(mdastHandle);
+        releaseHandle(mdastHandle, mdastMayHaveStubs);
         throw err;
       });
     }
     return finalize(mdastResult);
   } catch (err) {
-    disposeHandle(mdastHandle);
+    releaseHandle(mdastHandle, mdastMayHaveStubs);
     throw err;
   }
 }
@@ -894,7 +915,7 @@ export function markdownToMdast(source: string, options: { features?: Features }
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
-    disposeHandle(handle);
+    releaseHandle(handle, true);
   }
 }
 
@@ -904,7 +925,7 @@ export function mdxToMdast(source: string, options: { features?: Features } = {}
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
-    disposeHandle(handle);
+    releaseHandle(handle, true);
   }
 }
 
@@ -915,7 +936,7 @@ export function markdownToHast(source: string, options: { features?: Features } 
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
-    disposeHandle(handle);
+    releaseHandle(handle, true);
   }
 }
 
@@ -926,6 +947,6 @@ export function mdxToHast(source: string, options: { features?: Features } = {})
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
-    disposeHandle(handle);
+    releaseHandle(handle, true);
   }
 }

@@ -215,6 +215,41 @@ fn esm_export_spanning_blank_line() {
 }
 
 #[test]
+fn esm_whitespace_only_line_after_import() {
+    // A "blank" line containing only spaces/tabs must end the ESM block exactly
+    // like an empty line, so the following Markdown is parsed as content.
+    let ev = mdx_events("import a from 'b'\n \nHello world.");
+    assert!(
+        has(&ev, |e| matches!(e, Event::MdxEsm(s)
+            if s.contains("import") && !s.contains("Hello"))),
+        "ESM block must stop at the whitespace-only line: {:?}",
+        ev
+    );
+    assert!(
+        has(&ev, |e| matches!(e, Event::Start(Tag::Paragraph))),
+        "text after the whitespace-only line must be a paragraph: {:?}",
+        ev
+    );
+}
+
+#[test]
+fn esm_export_spanning_whitespace_only_line() {
+    // An export with a whitespace-only "blank" line in the middle should still
+    // be captured as a single ESM block, like a truly empty line.
+    let input = "export const x = {\n  a: 1,\n \n  b: 2\n};\n\n# Hello\n";
+    let ev = mdx_events(input);
+    assert!(
+        has(
+            &ev,
+            |e| matches!(e, Event::MdxEsm(s) if s.contains("b: 2") && s.contains("};"))
+        ),
+        "export spanning whitespace-only line should be a single ESM block: {:?}",
+        ev
+    );
+    assert!(has(&ev, |e| matches!(e, Event::Start(Tag::Heading { .. }))));
+}
+
+#[test]
 fn esm_not_in_paragraph() {
     // Import/export inside a paragraph (not interrupting) should not be ESM.
     let ev = mdx_events("a\nimport a from 'b'\n");

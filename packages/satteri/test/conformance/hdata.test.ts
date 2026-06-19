@@ -45,8 +45,11 @@ function referenceHtml(md: string, plugin: RemarkPluginAndSatteri["remark"]): st
   return normalize(String(processor.processSync(md)));
 }
 
-function satteriHtml(md: string, plugin: MdastPluginFactory): string {
-  const { html } = markdownToHtml(md, {
+// The plugin is built dynamically (computed visitor key), so its type is the
+// wide `MdastPluginInstance` and `markdownToHtml` can't prove the run is sync.
+// We `await` the maybe-async result rather than asserting it.
+async function satteriHtml(md: string, plugin: MdastPluginFactory): Promise<string> {
+  const { html } = await markdownToHtml(md, {
     features: { directive: true, gfm: true, frontmatter: false, math: false },
     mdastPlugins: [defineMdastPlugin({ name: "hdata-test", ...plugin() })],
   });
@@ -62,9 +65,9 @@ function normalize(html: string): string {
     .trim();
 }
 
-function assertHtmlMatches(md: string, plugin: RemarkPluginAndSatteri): void {
+async function assertHtmlMatches(md: string, plugin: RemarkPluginAndSatteri): Promise<void> {
   const ref = referenceHtml(md, plugin.remark);
-  const got = satteriHtml(md, plugin.satteri);
+  const got = await satteriHtml(md, plugin.satteri);
   expect(got).toBe(ref);
 }
 
@@ -114,21 +117,21 @@ function mutateOnSatteri(
 
 describe("data.hName / hProperties / hChildren conformance vs remark-rehype", () => {
   test("hName on paragraph swaps the tag, keeps children", () => {
-    assertHtmlMatches("Hello world", {
+    return assertHtmlMatches("Hello world", {
       remark: mutateOnRemark((n) => n.type === "paragraph", { hName: "section" }),
       satteri: mutateOnSatteri("paragraph", (n) => n.type === "paragraph", { hName: "section" }),
     });
   });
 
   test("hName on heading swaps h1 with div", () => {
-    assertHtmlMatches("# Title\n\nbody", {
+    return assertHtmlMatches("# Title\n\nbody", {
       remark: mutateOnRemark((n) => n.type === "heading", { hName: "div" }),
       satteri: mutateOnSatteri("heading", (n) => n.type === "heading", { hName: "div" }),
     });
   });
 
   test("hProperties merges onto paragraph defaults", () => {
-    assertHtmlMatches("Hi", {
+    return assertHtmlMatches("Hi", {
       remark: mutateOnRemark((n) => n.type === "paragraph", {
         hProperties: { className: ["note", "boxed"], id: "intro" },
       }),
@@ -139,7 +142,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hName + hProperties together", () => {
-    assertHtmlMatches("Body", {
+    return assertHtmlMatches("Body", {
       remark: mutateOnRemark((n) => n.type === "paragraph", {
         hName: "aside",
         hProperties: { className: ["note"] },
@@ -152,7 +155,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hChildren replaces the rendered children", () => {
-    assertHtmlMatches("original", {
+    return assertHtmlMatches("original", {
       remark: mutateOnRemark((n) => n.type === "paragraph", {
         hChildren: [{ type: "text", value: "replaced" }],
       }),
@@ -171,7 +174,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
         children: [{ type: "text", value: "Hi" }],
       },
     ];
-    assertHtmlMatches("Original body", {
+    return assertHtmlMatches("Original body", {
       remark: mutateOnRemark((n) => n.type === "paragraph", {
         hName: "aside",
         hProperties: { className: ["note"] },
@@ -186,7 +189,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hProperties on heading", () => {
-    assertHtmlMatches("# Title", {
+    return assertHtmlMatches("# Title", {
       remark: mutateOnRemark((n) => n.type === "heading", {
         hProperties: { id: "main", className: ["big"] },
       }),
@@ -197,14 +200,14 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hName on listItem keeps content", () => {
-    assertHtmlMatches("- one\n- two\n", {
+    return assertHtmlMatches("- one\n- two\n", {
       remark: mutateOnRemark((n) => n.type === "listItem", { hName: "div" }),
       satteri: mutateOnSatteri("listItem", (n) => n.type === "listItem", { hName: "div" }),
     });
   });
 
   test("hName on container directive (canonical use case)", () => {
-    assertHtmlMatches(":::note\nContent here\n:::", {
+    return assertHtmlMatches(":::note\nContent here\n:::", {
       remark: mutateOnRemark(
         (n) => n.type === "containerDirective" && (n as { name?: string }).name === "note",
         { hName: "aside", hProperties: { className: ["note"] } },
@@ -218,7 +221,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hName on leaf directive", () => {
-    assertHtmlMatches("::break", {
+    return assertHtmlMatches("::break", {
       remark: mutateOnRemark(
         (n) => n.type === "leafDirective" && (n as { name?: string }).name === "break",
         { hName: "hr" },
@@ -232,7 +235,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hName on emphasis", () => {
-    assertHtmlMatches("This is *italic* text.", {
+    return assertHtmlMatches("This is *italic* text.", {
       remark: mutateOnRemark((n) => n.type === "emphasis", {
         hName: "i",
         hProperties: { className: ["em"] },
@@ -245,7 +248,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hName on strong", () => {
-    assertHtmlMatches("**hello**", {
+    return assertHtmlMatches("**hello**", {
       remark: mutateOnRemark((n) => n.type === "strong", {
         hName: "b",
       }),
@@ -256,7 +259,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hName on link adds rel attribute", () => {
-    assertHtmlMatches("[click](https://example.com)", {
+    return assertHtmlMatches("[click](https://example.com)", {
       remark: mutateOnRemark((n) => n.type === "link", {
         hProperties: { rel: ["noopener"], target: "_blank" },
       }),
@@ -267,14 +270,14 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hName on blockquote", () => {
-    assertHtmlMatches("> quoted", {
+    return assertHtmlMatches("> quoted", {
       remark: mutateOnRemark((n) => n.type === "blockquote", { hName: "aside" }),
       satteri: mutateOnSatteri("blockquote", (n) => n.type === "blockquote", { hName: "aside" }),
     });
   });
 
   test("hName on thematicBreak (void)", () => {
-    assertHtmlMatches("---\n", {
+    return assertHtmlMatches("---\n", {
       remark: mutateOnRemark((n) => n.type === "thematicBreak", { hName: "hr" }),
       satteri: mutateOnSatteri("thematicBreak", (n) => n.type === "thematicBreak", {
         hName: "hr",
@@ -285,7 +288,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   test("hProperties null strips an existing override", () => {
     // First add then remove on a paragraph: end state should match the no-op
     // case — vanilla `<p>`.
-    assertHtmlMatches("plain", {
+    return assertHtmlMatches("plain", {
       remark: mutateOnRemark((n) => n.type === "paragraph", {
         hProperties: { className: null as unknown as string[] },
       }),
@@ -296,7 +299,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hChildren with empty array produces empty element", () => {
-    assertHtmlMatches("body", {
+    return assertHtmlMatches("body", {
       remark: mutateOnRemark((n) => n.type === "paragraph", {
         hName: "div",
         hChildren: [],
@@ -325,7 +328,7 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
         ],
       },
     ];
-    assertHtmlMatches("body", {
+    return assertHtmlMatches("body", {
       remark: mutateOnRemark((n) => n.type === "paragraph", { hChildren: tree }),
       satteri: mutateOnSatteri("paragraph", (n) => n.type === "paragraph", { hChildren: tree }),
     });
@@ -399,7 +402,7 @@ function paragraphReplacePlugin(build: (node: MdastNodes) => MdastNodes): MdastP
 describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
   test("hName on a fresh paragraph from replaceNode swaps the tag", () => {
     const build = (n: MdastNodes): MdastNodes => mkParagraph({ hName: "section" }, childrenOf(n));
-    assertHtmlMatches("Hello", {
+    return assertHtmlMatches("Hello", {
       remark: replaceOnRemark((n) => n.type === "paragraph", build),
       satteri: paragraphReplacePlugin(build),
     });
@@ -408,7 +411,7 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
   test("hName + hProperties on a fresh paragraph (asides shape)", () => {
     const build = (n: MdastNodes): MdastNodes =>
       mkParagraph({ hName: "aside", hProperties: { className: ["note"] } }, childrenOf(n));
-    assertHtmlMatches("Body text", {
+    return assertHtmlMatches("Body text", {
       remark: replaceOnRemark((n) => n.type === "paragraph", build),
       satteri: paragraphReplacePlugin(build),
     });
@@ -418,7 +421,7 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
     const hChildren: ElementContent[] = [mkHastElement("strong", {}, [mkHastText("Replaced")])];
     const build = (): MdastNodes =>
       mkParagraph({ hName: "aside", hProperties: { className: ["note"] }, hChildren }, []);
-    assertHtmlMatches("Original", {
+    return assertHtmlMatches("Original", {
       remark: replaceOnRemark((n) => n.type === "paragraph", build),
       satteri: paragraphReplacePlugin(build),
     });
@@ -426,7 +429,7 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
 
   test("hChildren alone on a fresh node replaces rendered children", () => {
     const build = (): MdastNodes => mkParagraph({ hChildren: [mkHastText("fresh")] }, []);
-    assertHtmlMatches("original body", {
+    return assertHtmlMatches("original body", {
       remark: replaceOnRemark((n) => n.type === "paragraph", build),
       satteri: paragraphReplacePlugin(build),
     });
@@ -438,7 +441,7 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
         mkParagraph({ hName: "p", hProperties: { className: ["title"] } }, [mkText("Note")]),
         mkParagraph({ hName: "div", hProperties: { className: ["body"] } }, [mkText("Note body")]),
       ]);
-    assertHtmlMatches("Note body", {
+    return assertHtmlMatches("Note body", {
       remark: replaceOnRemark((n) => n.type === "paragraph", build),
       satteri: paragraphReplacePlugin(build),
     });
@@ -446,7 +449,7 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
 
   test("hName on a fresh node inserted via prependChild", () => {
     const fresh = (): MdastNodes => mkParagraph({ hName: "header" }, [mkText("Title")]);
-    assertHtmlMatches("> existing\n", {
+    return assertHtmlMatches("> existing\n", {
       remark: (tree) => {
         visitMdast(tree, (node) => {
           if (node.type !== "blockquote") return;
@@ -465,7 +468,7 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
   test("hName on a fresh node inserted via insertBefore", () => {
     const fresh = (): MdastNodes =>
       mkParagraph({ hName: "nav", hProperties: { className: ["toc"] } }, [mkText("TOC")]);
-    assertHtmlMatches("# Heading\n\nBody\n", {
+    return assertHtmlMatches("# Heading\n\nBody\n", {
       remark: (tree) => {
         const kids = tree.children as MdastNodes[];
         for (let i = 0; i < kids.length; i++) {
@@ -486,7 +489,7 @@ describe("data hints on freshly emitted mdast nodes (fresh-node path)", () => {
   test("hProperties on a fresh paragraph (no hName) merges class + id", () => {
     const build = (n: MdastNodes): MdastNodes =>
       mkParagraph({ hProperties: { className: ["lead"], id: "intro" } }, childrenOf(n));
-    assertHtmlMatches("Hi", {
+    return assertHtmlMatches("Hi", {
       remark: replaceOnRemark((n) => n.type === "paragraph", build),
       satteri: paragraphReplacePlugin(build),
     });

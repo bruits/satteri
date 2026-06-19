@@ -78,6 +78,38 @@ is what you want for generating heading IDs.
 See the [Plugin API](/docs/plugin-api/) reference for the full list of
 `ctx` methods.
 
+## Restructuring siblings
+
+Some transforms act on a node's siblings: wrapping a heading together
+with the content that follows it, or reordering a list. The visitor
+only receives the node itself, so climb to the parent with
+`ctx.parent()` and rewrite its child list once:
+
+```js
+const sectionize = () => {
+  const done = new WeakSet();
+  return defineMdastPlugin({
+    name: "sectionize",
+    heading(node, ctx) {
+      const parent = ctx.parent(node);
+      if (!parent || !("children" in parent) || done.has(parent)) return;
+      done.add(parent);
+      ctx.setProperty(parent, "children", groupIntoSections(parent.children));
+    },
+  });
+};
+```
+
+Children you carry over into the new list stay the same nodes, so edits
+other visitors make to them still land; only the new wrapper nodes are
+created fresh. The first matching child does the work, and the `WeakSet`
+makes later matches in the same parent no-ops, since `parent()` returns
+the same object for every child of that parent.
+
+For edits relative to the visited node's position, use
+`ctx.indexOf(node)`: `ctx.insertChildAt(parent, ctx.indexOf(node) + 1, newNode)`
+inserts directly after the visited node.
+
 ## Plugin order
 
 Plugins run in array order, MDAST stage first, then HAST. Each plugin

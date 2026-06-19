@@ -159,6 +159,12 @@ export class HastReader {
     return this.#view.getUint8(nodesOffset + nodeId * nodeStructSize + FIELD.node_type);
   }
 
+  /** Get the parent id for a given node (0xffffffff at the root). */
+  getParentId(nodeId: number): number {
+    const { nodesOffset, nodeStructSize } = this.#header;
+    return this.#view.getUint32(nodesOffset + nodeId * nodeStructSize + FIELD.parent, true);
+  }
+
   /** Get child node IDs for a given node. */
   getChildIds(nodeId: number): number[] {
     const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;

@@ -13,16 +13,18 @@ use std::cell::Cell;
 
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{
-    Argument, AssignmentPattern, BindingPattern, ConditionalExpression, Declaration,
-    ExportDefaultDeclaration, ExportDefaultDeclarationKind, Expression, FormalParameter,
-    FormalParameterKind, FormalParameters, Function, FunctionBody, FunctionType, ImportDeclaration,
-    ImportDeclarationSpecifier, ImportDefaultSpecifier, ImportOrExportKind, ImportSpecifier,
-    JSXAttributeItem, JSXChild, JSXClosingElement, JSXElement, JSXOpeningElement,
-    JSXSpreadAttribute, ModuleDeclaration, ModuleExportName, ReturnStatement, Statement,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    Argument, ArrowFunctionExpression, AssignmentPattern, AwaitExpression, BindingPattern,
+    ConditionalExpression, Declaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind,
+    Expression, FormalParameter, FormalParameterKind, FormalParameters, Function, FunctionBody,
+    FunctionType, ImportDeclaration, ImportDeclarationSpecifier, ImportDefaultSpecifier,
+    ImportOrExportKind, ImportSpecifier, JSXAttributeItem, JSXChild, JSXClosingElement, JSXElement,
+    JSXOpeningElement, JSXSpreadAttribute, ModuleDeclaration, ModuleExportName, ReturnStatement,
+    Statement, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
+use oxc_ast_visit::Visit;
 use oxc_span::SPAN;
 use oxc_syntax::node::NodeId;
+use oxc_syntax::scope::ScopeFlags;
 use satteri_arena::mdx_types as message;
 use satteri_arena::mdx_types::{Location, Point, Position};
 
@@ -535,13 +537,12 @@ fn create_mdx_content<'a>(
         ));
     }
 
+    // A top-level `await` makes `_createMdxContent` async; otherwise the compiled `await` won't parse.
+    let body = expr.unwrap_or_else(|| create_null_expression(alloc));
+    let is_async = content_has_top_level_await(&body);
+
     // `function _createMdxContent(props) { return xxx }`
-    let create_mdx_content = create_fn_decl(
-        alloc,
-        "_createMdxContent",
-        &["props"],
-        expr.unwrap_or_else(|| create_null_expression(alloc)),
-    );
+    let create_mdx_content = create_fn_decl(alloc, "_createMdxContent", &["props"], body, is_async);
 
     // `function MDXContent(props = {}) { return ... }`
     let mdx_content = create_fn_decl_with_default(alloc, "MDXContent", result);
@@ -549,11 +550,34 @@ fn create_mdx_content<'a>(
     vec![create_mdx_content, mdx_content]
 }
 
+fn content_has_top_level_await(expr: &Expression) -> bool {
+    let mut finder = TopLevelAwaitFinder::default();
+    finder.visit_expression(expr);
+    finder.found
+}
+
+#[derive(Default)]
+struct TopLevelAwaitFinder {
+    found: bool,
+}
+
+impl<'a> Visit<'a> for TopLevelAwaitFinder {
+    fn visit_await_expression(&mut self, _expr: &AwaitExpression<'a>) {
+        self.found = true;
+    }
+
+    // Skip nested functions: their `await` belongs to that scope, not the component.
+    fn visit_function(&mut self, _func: &Function<'a>, _flags: ScopeFlags) {}
+
+    fn visit_arrow_function_expression(&mut self, _arrow: &ArrowFunctionExpression<'a>) {}
+}
+
 fn create_fn_decl<'a>(
     alloc: &'a Allocator,
     name: &str,
     params: &[&str],
     return_expr: Expression<'a>,
+    is_async: bool,
 ) -> Statement<'a> {
     let mut formal_params = OxcVec::with_capacity_in(params.len(), alloc);
     for p in params {
@@ -591,7 +615,7 @@ fn create_fn_decl<'a>(
             span: SPAN,
             id: Some(create_binding_ident(alloc, name)),
             generator: false,
-            r#async: false,
+            r#async: is_async,
             declare: false,
             type_parameters: None,
             this_param: None,

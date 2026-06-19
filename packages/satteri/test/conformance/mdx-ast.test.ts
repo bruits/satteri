@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { remark } from "remark";
 import remarkMdx from "remark-mdx";
 import { toHast } from "mdast-util-to-hast";
+import type { Root as MdastRoot, Nodes as MdastNodes } from "mdast";
 import { pathToFileURL } from "node:url";
 import { mdxToMdast, mdxToHast } from "../../src/index.js";
 
@@ -10,7 +11,7 @@ const { remarkMarkAndUnravel } = await import(
 );
 const mdxParser = remark().use(remarkMdx).use(remarkMarkAndUnravel);
 
-const MDX_PASS_THROUGH_NODES = [
+const MDX_PASS_THROUGH_NODES: Array<MdastNodes["type"]> = [
   "mdxJsxFlowElement",
   "mdxJsxTextElement",
   "mdxFlowExpression",
@@ -64,7 +65,9 @@ function assertMdastConformance(input: string): void {
 }
 
 function referenceHast(input: string): unknown {
-  const mdast = mdxParser.runSync(mdxParser.parse(input));
+  // unified's `runSync` is typed to return a bare `Node`; the remark MDX
+  // pipeline always yields a Root here.
+  const mdast = mdxParser.runSync(mdxParser.parse(input)) as MdastRoot;
   return stripPositionsAndEstree(toHast(mdast, REF_TO_HAST_OPTIONS));
 }
 

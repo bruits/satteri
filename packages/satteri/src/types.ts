@@ -1,6 +1,11 @@
 import type { Position } from "unist";
-import type { Literal as MdastLiteral, Nodes as MdastStdNodes } from "mdast";
-import type { Nodes as HastStdNodes } from "hast";
+import type {
+  Literal as MdastLiteral,
+  Nodes as MdastStdNodes,
+  Parent as MdastParent,
+  PhrasingContent,
+} from "mdast";
+import type { Literal as HastLiteral, Nodes as HastStdNodes } from "hast";
 
 // Re-export standard position types from unist.
 export type { Position, Point } from "unist";
@@ -49,6 +54,16 @@ export interface InlineMath extends MdastLiteral {
   type: "inlineMath";
 }
 
+export interface Superscript extends MdastParent {
+  type: "superscript";
+  children: PhrasingContent[];
+}
+
+export interface Subscript extends MdastParent {
+  type: "subscript";
+  children: PhrasingContent[];
+}
+
 declare module "mdast" {
   interface FrontmatterContentMap {
     toml: Toml;
@@ -57,9 +72,13 @@ declare module "mdast" {
     toml: Toml;
     math: MathNode;
     inlineMath: InlineMath;
+    superscript: Superscript;
+    subscript: Subscript;
   }
   interface PhrasingContentMap {
     inlineMath: InlineMath;
+    superscript: Superscript;
+    subscript: Subscript;
   }
   interface BlockContentMap {
     math: MathNode;
@@ -70,9 +89,8 @@ declare module "mdast" {
 // mdxJsxTextElement and mdxFlowExpression/mdxTextExpression. We only need
 // to register "raw" here since it has no standard package.
 
-export interface HastRaw {
+export interface HastRaw extends HastLiteral {
   type: "raw";
-  value: string;
 }
 
 declare module "hast" {
@@ -97,6 +115,27 @@ export type MdastNode = MdastStdNodes;
  * (e.g. `tagName` on `"element"`, `value` on `"text"`).
  */
 export type HastNode = HastStdNodes;
+
+/**
+ * Registry for typing well-known keys on the plugin data bag. Augment it to
+ * give specific `ctx.data` / `result.data` keys a type:
+ *
+ * ```ts
+ * declare module "satteri" {
+ *   interface DataMap {
+ *     toc: TocEntry[];
+ *   }
+ * }
+ * ```
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface DataMap {}
+
+/**
+ * The document-level plugin data bag (`ctx.data` and `result.data`): any
+ * string key holding any value, plus the typed keys registered in {@link DataMap}.
+ */
+export type Data = Record<string, unknown> & Partial<DataMap>;
 
 /** @internal Node with arena tracking ID, only used inside the library. */
 export type MdastNodeInternal = MdastStdNodes & { _nodeId: number };

@@ -43,6 +43,8 @@ export type {
 export type {
   MdastNode,
   HastNode,
+  DataMap,
+  Data,
   Position,
   Point,
   MdxJsxAttributeNode,

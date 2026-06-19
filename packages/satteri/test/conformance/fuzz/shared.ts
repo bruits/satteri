@@ -8,6 +8,7 @@ import { remark } from "remark";
 import remarkMdx from "remark-mdx";
 import remarkGfm from "remark-gfm";
 import { toHast } from "mdast-util-to-hast";
+import type { Root as MdastRoot, Nodes as MdastNodes } from "mdast";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import * as runtime from "react/jsx-runtime";
@@ -503,13 +504,13 @@ const MDX_FEATURES = {
   math: false,
   frontmatter: false,
 } as const;
-const MDX_PASS_THROUGH_NODES = [
+const MDX_PASS_THROUGH_NODES: Array<MdastNodes["type"]> = [
   "mdxJsxFlowElement",
   "mdxJsxTextElement",
   "mdxFlowExpression",
   "mdxTextExpression",
   "mdxjsEsm",
-] as any[];
+];
 
 function stripPositionsAndEstree(node: unknown): unknown {
   if (typeof node !== "object" || node === null) return node;
@@ -547,7 +548,9 @@ const REF_TO_HAST_OPTIONS = {
 };
 
 export function referenceMdxHast(input: string): unknown {
-  const mdast = mdxParser.runSync(mdxParser.parse(input));
+  // unified's `runSync` is typed to return a bare `Node`; the remark MDX
+  // pipeline always yields a Root here.
+  const mdast = mdxParser.runSync(mdxParser.parse(input)) as MdastRoot;
   return stripPositionsAndEstree(toHast(mdast, REF_TO_HAST_OPTIONS));
 }
 
@@ -1123,7 +1126,7 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
     actual === "PARSE_ERROR" &&
     expected === "PARSE_ERROR" &&
     actualError &&
-    !/^MDX parse error at byte \d+:/.test(actualError)
+    !/^\d+:\d+: /.test(actualError)
   ) {
     return {
       input,
