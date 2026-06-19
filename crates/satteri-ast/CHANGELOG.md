@@ -1,5 +1,15 @@
 # satteri-ast
 
+## 0.4.0 — 2026-06-18
+
+### Minor changes
+
+- [b2ae465](https://github.com/bruits/satteri/commit/b2ae465e41d87174455af65b2613c307233b8ac5) Improves performance when using plugins by using a new method of communication between Rust and JS. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [6bcdf06](https://github.com/bruits/satteri/commit/6bcdf06a0ee267779180a2d89a27a31f2f4b5b81) `features.superscript` and `features.subscript` now render `^text^` as `<sup>text</sup>` and `~text~` as `<sub>text</sub>` as documented, instead of `<em>`. The MDAST now exposes dedicated `superscript` and `subscript` node types, which plugins can visit and construct. Plugins that previously matched these spans as `emphasis` nodes should switch to the new node types. — Thanks @morinokami for your first contribution 🎉!
+
 ## 0.3.2 — 2026-06-08
 
 ### Patch changes
