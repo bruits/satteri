@@ -182,9 +182,25 @@ const { html, data } = markdownToHtml("# A\n\n# B", { mdastPlugins: [collectHead
 console.log(data?.headings); // ["A", "B"]
 ```
 
-The bag lives entirely on the JS side, so any value is allowed, including functions, class instances, and `Map`/`Set`. References are preserved across plugins and across the mdast→hast boundary. A fresh, empty bag is created for every compile.
+The bag lives entirely on the JS side, so any value is allowed, including functions, class instances, and `Map`/`Set`. References are preserved across plugins and across the mdast→hast boundary. A fresh, empty bag is created for every compile unless you seed one with the `data` option.
 
-By default keys are typed as `unknown`. To give a key a type, augment the `DataMap` interface, much like `vfile`'s `DataMap`:
+To seed data into the bag before plugins run, pass an object to the `data` option. The same object is available in all plugins and returned as `result.data` after compilation, so you can pre-populate it with values or methods that plugins can read and update.
+
+```ts
+const data = { title: "Hello" };
+const rewriteTitle = defineMdastPlugin({
+  name: "rewrite-title",
+  heading(_node, ctx) {
+    ctx.data.title = "Updated";
+  },
+});
+
+const result = markdownToHtml("# A", { mdastPlugins: [rewriteTitle], data });
+console.log(result.data === data); // true, the seeded object is returned
+console.log(data.title); // "Updated"
+```
+
+By default keys are typed as `unknown`. To give a key a type, augment the `DataMap` interface:
 
 ```ts
 declare module "satteri" {
@@ -334,6 +350,7 @@ interface CompileOptions {
   hastPlugins?: HastPluginDefinition[];
   features?: Features;
   fileURL?: URL;
+  data?: Data;
 }
 
 // mdxToJs accepts MdxCompileOptions, which extends CompileOptions
@@ -343,6 +360,8 @@ interface MdxCompileOptions extends CompileOptions {
 ```
 
 `fileURL` is the `URL` of the document being processed, surfaced to plugins as `ctx.fileURL` (a `URL`, or `undefined` when omitted). Pass a file URL such as Astro's `fileURL`, or convert a filesystem path with Node's `pathToFileURL`; read it back with `fileURLToPath(ctx.fileURL)`.
+
+`data` seeds the document-level data bag before plugins run, surfaced as `ctx.data` and returned as `result.data`. See [Sharing data between plugins](#sharing-data-between-plugins).
 
 `Features` controls the Markdown extensions Sätteri's parser recognizes: `gfm`, `frontmatter`, `math`, `directive`, `smartPunctuation`, etc. `gfm`, `math`, and `smartPunctuation` also accept granular options. For example, `math: { singleDollarTextMath: false }` keeps single `$` as literal text. See the [Features reference](https://satteri.dev/docs/features/) for the full list.
 

@@ -384,6 +384,14 @@ export interface CompileOptions {
    * `pathToFileURL` before passing it.
    */
   fileURL?: URL;
+  /**
+   * Initial document-level data bag, seeding `ctx.data` before any plugin runs.
+   * It is the same object plugins mutate and the caller reads back as
+   * `result.data`, so values flow both into and out of a compile. Defaults to a
+   * fresh empty object. Used by reference and mutated in place, so pass a
+   * throwaway object per compile rather than a shared one.
+   */
+  data?: Data;
 }
 
 /**
@@ -457,7 +465,7 @@ export interface MarkdownToHtmlResult {
   html: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
   frontmatter: Frontmatter | null;
-  /** Document-level data bag populated by plugins via `ctx.data`. Empty `{}` if untouched. */
+  /** Document-level data bag */
   data: Data;
 }
 
@@ -467,7 +475,7 @@ export interface MdxToJsResult {
   code: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
   frontmatter: Frontmatter | null;
-  /** Document-level data bag populated by plugins via `ctx.data`. Empty `{}` if untouched. */
+  /** Document-level data bag */
   data: Data;
 }
 
@@ -520,11 +528,10 @@ export function markdownToHtml(
   source: string,
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
-  const { mdastPlugins = [], hastPlugins = [], features, fileURL } = options;
+  const { mdastPlugins = [], hastPlugins = [], features, fileURL, data = {} } = options;
   const hastMayHaveStubs = hastPlugins.length > 0;
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
-  const data: Data = {};
 
   const result = createHastHandleFromMdast(
     source,
@@ -579,12 +586,18 @@ export function mdxToJs(
   source: string,
   options: MdxCompileOptions = {},
 ): MdxToJsResult | Promise<MdxToJsResult> {
-  const { mdastPlugins = [], hastPlugins = [], features, fileURL, ...mdxFields } = options;
+  const {
+    mdastPlugins = [],
+    hastPlugins = [],
+    features,
+    fileURL,
+    data = {},
+    ...mdxFields
+  } = options;
   const hastMayHaveStubs = hastPlugins.length > 0;
   const mdxOptions = mdxOptionsToNative(mdxFields);
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
-  const data: Data = {};
 
   const result = createHastHandleFromMdast(
     source,
