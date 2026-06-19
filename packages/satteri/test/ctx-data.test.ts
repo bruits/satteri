@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { markdownToHtml } from "../src/compile.js";
+import { markdownToHtml, mdxToJs } from "../src/compile.js";
 import { defineMdastPlugin, defineHastPlugin } from "../src/plugin.js";
 
 describe("ctx.data", () => {
@@ -140,6 +140,53 @@ describe("ctx.data", () => {
     markdownToHtml("second run", { mdastPlugins: [factory] });
     expect(first).toBe("first");
     expect(second).toBeUndefined();
+  });
+
+  it("seeds ctx.data from options.data before plugins run", () => {
+    let seen: unknown;
+    const reader = defineMdastPlugin({
+      name: "reader",
+      paragraph(_node, ctx) {
+        seen = ctx.data.seeded;
+      },
+    });
+
+    markdownToHtml("hi", { mdastPlugins: [reader], data: { seeded: "value" } });
+    expect(seen).toBe("value");
+  });
+
+  it("returns the seeded object so plugin mutations read back on result.data", () => {
+    const data: Record<string, unknown> = { astro: { frontmatter: { title: "Original" } } };
+    const mutator = defineMdastPlugin({
+      name: "mutator",
+      paragraph(_node, ctx) {
+        (ctx.data.astro as { frontmatter: Record<string, unknown> }).frontmatter.title = "Updated";
+      },
+    });
+
+    const result = markdownToHtml("body", { mdastPlugins: [mutator], data });
+    expect(result.data).toBe(data);
+    expect(data.astro).toEqual({ frontmatter: { title: "Updated" } });
+  });
+
+  it("seeds ctx.data for mdxToJs as well", () => {
+    let seen: unknown;
+    const data: Record<string, unknown> = { tag: "in" };
+    const reader = defineHastPlugin({
+      name: "reader",
+      element: {
+        filter: ["p"],
+        visit(_node, ctx) {
+          seen = ctx.data.tag;
+          ctx.data.tag = "out";
+        },
+      },
+    });
+
+    const result = mdxToJs("text", { hastPlugins: [reader], data });
+    expect(seen).toBe("in");
+    expect(result.data).toBe(data);
+    expect(data.tag).toBe("out");
   });
 
   it("supports nested objects and arrays", () => {
