@@ -9,13 +9,11 @@ order: 20
 
 {{ install pkg="satteri" /}}
 
-See [Installation](/docs/installation/) for runtime support and browser
-notes.
+See [Installation](/docs/installation/) for runtime support and browser notes.
 
 ## Compile a document
 
-Pass a Markdown string to `markdownToHtml`. You get back the rendered HTML
-and any frontmatter the document had.
+Pass a Markdown string to `markdownToHtml`. You get back the rendered HTML and any frontmatter the document had.
 
 ```js
 import { markdownToHtml } from "satteri";
@@ -41,9 +39,7 @@ const { html, frontmatter } = markdownToHtml(source, {
 
 ## Using plugins
 
-A plugin is an object with a `name` and a visitor for each node type you
-want to act on. The visitor gets a read-only view of the node and a
-`ctx` object that records mutations.
+A plugin is an object with a `name` and a visitor for each node type you want to act on. The visitor gets a read-only view of the node and a `ctx` object that records mutations.
 
 ```js
 import { markdownToHtml, defineMdastPlugin } from "satteri";
