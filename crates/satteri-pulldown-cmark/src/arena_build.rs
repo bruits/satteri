@@ -1806,25 +1806,13 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         }
     }
 
-    // Precompute per-node code-point offsets so `to_raw_buffer` skips a
-    // second `LineIndex` build + per-node `byte_to_cp_offset` lookup.
-    // ASCII sources skip — `cp == byte` and `to_raw_buffer` won't touch
-    // the cache. The cursor is already warm from the arena walk.
-    if !source.is_ascii() {
-        let mut cp_offsets = Vec::with_capacity(arena.nodes.len());
-        for node in &arena.nodes {
-            let pair = if node.start_line == 0 && node.start_offset == 0 {
-                (0u32, 0u32)
-            } else {
-                (
-                    cursor.byte_to_cp_offset(node.start_offset),
-                    cursor.byte_to_cp_offset(node.end_offset),
-                )
-            };
-            cp_offsets.push(pair);
-        }
-        arena.cp_offsets = cp_offsets;
-    }
+    // Per-node code-point offsets are read only by `to_raw_buffer` (the JS
+    // serialization path), which computes them on demand via its own
+    // fallback. The common path — `parse_to_html` / `markdown_to_html` —
+    // never serializes, so precomputing them here spent ~2.4% of pipeline
+    // instructions populating a cache that path never reads. The serialize
+    // path now rebuilds one `LineIndex` lazily instead. (Do not re-add an
+    // eager precompute without re-measuring the HTML pipeline.)
 
     (arena, mdx_errors)
 }
