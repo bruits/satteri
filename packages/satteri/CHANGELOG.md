@@ -1,5 +1,11 @@
 # satteri
 
+## 0.9.2 — 2026-06-23
+
+### Patch changes
+
+- [6128184](https://github.com/bruits/satteri/commit/61281847992173dcf37a588c5b1a49200ec28ace) Add prebuilt native bindings for more platforms: `linux-arm64-gnu`, `linux-x64-musl`, `linux-arm64-musl`, and `win32-arm64-msvc`. — Thanks @Princesseuh!
+
 ## 0.9.1 — 2026-06-19
 
 ### Patch changes
