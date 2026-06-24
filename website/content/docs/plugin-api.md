@@ -89,6 +89,8 @@ Keys without a feature note are always available. Feature-gated keys only fire w
 | `containerDirective` | `directive`   |
 | `leafDirective`      | `directive`   |
 | `textDirective`      | `directive`   |
+| `superscript`        | `superscript` |
+| `subscript`          | `subscript`   |
 | `mdxJsxFlowElement`  | MDX entry     |
 | `mdxJsxTextElement`  | MDX entry     |
 | `mdxFlowExpression`  | MDX entry     |
@@ -192,7 +194,7 @@ MDAST and HAST contexts share the same shape (with small differences in `setProp
 | Property | Type | Notes |
 | --- | --- | --- |
 | `source` | `string` | Original markdown source. |
-| `filename` | `string` | Filename hint, used in diagnostics. |
+| `fileURL` | `URL \| undefined` | URL of the document being processed, or `undefined` when none given. |
 | `data` | `Data` | Document-scoped data bag shared across every plugin in the pipeline. Survives the mdast→hast boundary. Returned to the caller as `result.data`. Kept on the JS side, so any value is allowed (functions, class instances, etc.). |
 
 Keys on `data` are typed as `unknown` by default. Register a key's type by augmenting `DataMap`:
