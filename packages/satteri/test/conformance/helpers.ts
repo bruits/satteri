@@ -473,6 +473,33 @@ export async function assertMdxConformance(
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }
 
+// Like `assertMdxConformance`, but with math enabled on both pipelines
+// (satteri `features.math`, reference `remark-math`). Exercises how MDX
+// expressions and `$...$` math interact, e.g. that braces inside a math span
+// stay math text rather than being parsed as an expression.
+export async function assertMdxMathConformance(
+  input: string,
+  components: Record<string, unknown> = {},
+): Promise<void> {
+  const { default: MdxComponent } = (await mdxEvaluate(input, {
+    ...mdxRuntime,
+    remarkPlugins: [remarkMath],
+  })) as { default: Function };
+  const mdxHtml = renderToStaticMarkup(
+    createElement(MdxComponent as React.FC<Record<string, unknown>>, { components }),
+  );
+
+  const { default: SatComponent } = await satteriEvaluate(input, {
+    ...satteriRuntime,
+    features: { math: true },
+  });
+  const satHtml = renderToStaticMarkup(
+    createElement(SatComponent as React.FC<Record<string, unknown>>, { components }),
+  );
+
+  expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
+}
+
 // Set an inline `style` string on every `<tag>` element via a hast/rehype
 // plugin on both pipelines, evaluate, and compare the rendered HTML. This is
 // the path expressive-code (and similar hast plugins) take: satteri's HAST→JSX

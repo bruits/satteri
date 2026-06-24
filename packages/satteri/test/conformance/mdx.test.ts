@@ -1,6 +1,6 @@
 import { describe, test } from "vitest";
 import { createElement } from "react";
-import { assertMdxConformance, assertBothReject } from "./helpers.js";
+import { assertMdxConformance, assertMdxMathConformance, assertBothReject } from "./helpers.js";
 
 const Foo = (props: any) => createElement("div", null, `bar=${props.bar}`);
 const Bar = (props: any) => createElement("em", null, `baz=${props.baz}`);
@@ -372,6 +372,17 @@ describe("MDX conformance: ESM", () => {
   // Block comments span blank lines too, the same way templates do (#111).
   test("blank line inside block comment in export (#111)", async () => {
     await assertMdxConformance("export const y = 1; /* note\n\nstill note */\n\n{y}");
+  });
+
+  // A backtick or quote inside a regex literal must not be read as a
+  // template/string opener and swallow the following content into the ESM
+  // block (#111).
+  test("regex with backtick in export (#111)", async () => {
+    await assertMdxConformance("export const re = /a`b/;\n\n{re.source}");
+  });
+
+  test("regex with quotes in export (#111)", async () => {
+    await assertMdxConformance("export const re = /[\"']/g;\n\n{re.source}");
   });
 
   // A JSX identifier already bound at module scope must resolve to that
@@ -902,5 +913,48 @@ describe("MDX conformance: fuzz regressions", () => {
   // rather than `container_content_col - 1`.
   test("text-position expression dedents trailing tab before close", async () => {
     await assertMdxConformance(">o{1+2\n\t}}");
+  });
+});
+
+describe("MDX conformance: math interaction", () => {
+  // Braces inside an inline `$...$` span are math text, not an MDX expression
+  // (#110). remark-math pairs the dollar runs and the braces never reach the
+  // expression tokenizer; satteri must agree.
+  test("braces inside inline math are not an expression (#110)", async () => {
+    await assertMdxMathConformance("$\\frac{-b}{2a}$ and {1 + 1}");
+  });
+
+  // Two single-dollar runs with `{x}` between them (e.g. prose about prices):
+  // remark-math pairs them into one math span, so `{x}` is math text on both
+  // sides and the undefined `x` is never evaluated. The `{` guard must mirror
+  // this rather than evaluate `{x}` as an expression.
+  test("expression between dollar amounts is math text", async () => {
+    await assertMdxMathConformance("Price is $5 and {x} costs $10 today");
+  });
+
+  // An expression genuinely outside any math span is still evaluated.
+  test("expression after a real math span is evaluated", async () => {
+    await assertMdxMathConformance("Euler $e^{i\\pi}$ then {3 * 7}");
+  });
+
+  // A `<` inside a math span is math content, not an open inline JSX tag, so a
+  // following `>` line opens a blockquote rather than being absorbed as a lazy
+  // paragraph continuation.
+  test("`<` inside math does not suppress a following blockquote", async () => {
+    await assertMdxMathConformance("$<$\n>");
+  });
+
+  // A `\$` only prevents opening a math span, not closing one, so the `{` here
+  // is inside the span (math text) and must not be parsed as an expression.
+  test("brace before a span-closing escaped dollar is math text", async () => {
+    await assertMdxMathConformance("e$}}_{\\$h");
+  });
+
+  // A `$$` display-math fence is a block boundary: an inline `$$` earlier in the
+  // paragraph must not pair across it, so `\frac{1}{2}` here is an expression
+  // (rendered `\frac12`), not math text. Reachable by omitting the blank line
+  // before a display-math block.
+  test("inline `$$` does not pair across a display-math fence", async () => {
+    await assertMdxMathConformance("See:$$\n\\frac{1}{2}\n$$");
   });
 });

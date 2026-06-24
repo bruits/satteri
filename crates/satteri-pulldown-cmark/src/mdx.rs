@@ -1234,7 +1234,10 @@ fn looks_like_spread(bytes: &[u8]) -> bool {
 /// so the scan tracks just enough JS lexer state to not end the block inside
 /// one — otherwise `export const x = ` `` `a\n\nb` `` truncates mid-template and
 /// oxc reports an unterminated string. Strings and line comments can't cross a
-/// newline in valid JS, so they need no cross-line state.
+/// newline in valid JS, so they need no cross-line state, but regex literals
+/// are still skipped whole: a backtick or quote inside one (`/[`]/`) would
+/// otherwise be mistaken for a template/string opener and swallow the block
+/// past the blank line that should end it.
 ///
 /// Returns the byte offset past the end of the block (including trailing newline).
 pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
@@ -1259,6 +1262,11 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
     // including its limitation around nested templates / strings in `${}`).
     let mut template_depth: Option<usize> = None;
     let mut in_block_comment = false;
+    // Whether the previous token produced a value, so a following `/` reads as
+    // division rather than a regex literal (same model as
+    // `scan_mdx_expression_end_inner`). Whitespace, newlines, and comments
+    // preserve the prior value.
+    let mut prev_was_value = false;
 
     while ix < len {
         if in_block_comment {
@@ -1275,6 +1283,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                 b'\\' => ix += 2,
                 b'`' if depth == 0 => {
                     template_depth = None;
+                    prev_was_value = true;
                     ix += 1;
                 }
                 b'$' if ix + 1 < len && bytes[ix + 1] == b'{' => {
@@ -1295,6 +1304,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
         }
         match bytes[ix] {
             b'`' => {
+                // `prev_was_value` is set when the template closes.
                 template_depth = Some(0);
                 ix += 1;
             }
@@ -1310,6 +1320,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                 if ix < len && bytes[ix] == quote {
                     ix += 1;
                 }
+                prev_was_value = true;
             }
             b'/' if ix + 1 < len && bytes[ix + 1] == b'/' => {
                 while ix < len && bytes[ix] != b'\n' {
@@ -1319,6 +1330,29 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
             b'/' if ix + 1 < len && bytes[ix + 1] == b'*' => {
                 in_block_comment = true;
                 ix += 2;
+            }
+            // Regex vs division: defer to the same heuristic as
+            // `scan_mdx_expression_end_inner`. `scan_regex` stops at a newline,
+            // so a misread can never cross the blank line that ends the block.
+            // The only thing that matters here is consuming a real regex whole
+            // so a backtick/quote inside it isn't read as a delimiter.
+            b'/' if {
+                let prev_is_ident_char = {
+                    let mut j = ix;
+                    while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
+                        j -= 1;
+                    }
+                    j > 0
+                        && (bytes[j - 1].is_ascii_alphanumeric()
+                            || bytes[j - 1] == b'_'
+                            || bytes[j - 1] == b'$')
+                };
+                let force_division = prev_was_value && !prev_is_ident_char;
+                !force_division && slash_is_regex(bytes, ix)
+            } =>
+            {
+                ix = scan_regex(bytes, ix);
+                prev_was_value = true;
             }
             b'\n' => {
                 ix += 1;
@@ -1337,7 +1371,19 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                     break;
                 }
             }
-            _ => ix += 1,
+            b' ' | b'\t' | b'\r' => ix += 1,
+            b')' | b']' | b'}' => {
+                prev_was_value = true;
+                ix += 1;
+            }
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' | b'0'..=b'9' => {
+                prev_was_value = true;
+                ix += 1;
+            }
+            _ => {
+                prev_was_value = false;
+                ix += 1;
+            }
         }
     }
     Some(ix)
