@@ -96,24 +96,12 @@ pub(crate) fn dedent_expression_continuation(
     alloc::borrow::Cow::Owned(out)
 }
 
-/// Sentinel: U+F002 (Private Use Area) marks a "phantom space" — a column
-/// of whitespace produced by the dedent that has no underlying source byte
-/// (typically the leftover of a partial-tab consumption). Two surfaces need
-/// to see the bytes differently and we can't tell them apart from a real
-/// space later, so we tag them at emission:
-///
-/// * `mdast-util-mdx-jsx` keeps phantoms in the mdast `value` field. Mdast/
-///   hast readers substitute the sentinel back to a regular space.
-/// * `micromark-util-events-to-acorn`'s collector drops leading virtual-space
-///   codes before feeding chunks to acorn, which matters because a phantom
-///   inside a template-literal continuation would otherwise become part of
-///   the cooked value (`text={` \n  \t1. `}` would carry the two phantom
-///   spaces into the runtime string). We strip the sentinel before handing
-///   the expression body to oxc.
-///
-/// Plain spaces don't work as the marker: the oxc path then can't tell which
-/// leading whitespace was dedent and which was authored, and the dedent
-/// bleeds into template-literal values.
+/// Sentinel marking a "phantom space": a column of dedent-produced whitespace
+/// with no underlying source byte (e.g. leftover of a partial-tab consume).
+/// A plain space can't be the marker because the oxc path then can't tell
+/// dedent whitespace from authored whitespace, and the dedent bleeds into
+/// template-literal values. Consumers substitute it back to a space or strip
+/// it (see the strip sites in `satteri-mdxjs-rs::hast_util_to_oxc`).
 pub(crate) const PHANTOM_SPACE: char = '\u{F002}';
 
 /// Mirror `mdast-util-mdx-jsx`'s attribute-expression continuation-line
@@ -563,6 +551,49 @@ fn scan_regex(bytes: &[u8], start: usize) -> usize {
     ix
 }
 
+/// Whether a `/` at `ix` opens a regex literal rather than being division,
+/// given whether the previous token produced a value. Shared by the ESM-block
+/// scan and the expression scan so the two heuristics can't drift apart.
+///
+/// `slash_is_regex` alone mis-reads `/` after a regex close (`/x/ /y/`) or after
+/// a `}` (object-literal close, `{}/_`) as a new regex. `prev_was_value` forces
+/// division there, but only when the prior non-space byte isn't an identifier
+/// char so a regex-introducing keyword (`return /re/`) still reads as a regex.
+fn slash_is_regex_after(bytes: &[u8], ix: usize, prev_was_value: bool) -> bool {
+    let prev_is_ident_char = {
+        let mut j = ix;
+        while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
+            j -= 1;
+        }
+        j > 0
+            && (bytes[j - 1].is_ascii_alphanumeric()
+                || bytes[j - 1] == b'_'
+                || bytes[j - 1] == b'$')
+    };
+    let force_division = prev_was_value && !prev_is_ident_char;
+    !force_division && slash_is_regex(bytes, ix)
+}
+
+/// Skip a `'…'` or `"…"` string whose opening quote is at `start`, returning the
+/// offset past the closing quote. A string can't span a newline in JS, so the
+/// scan stops at one; a backslash escapes the next byte. Shared by the ESM-block
+/// scan and the expression scan.
+fn skip_string(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let len = bytes.len();
+    let mut ix = start + 1;
+    while ix < len && bytes[ix] != quote && bytes[ix] != b'\n' && bytes[ix] != b'\r' {
+        if bytes[ix] == b'\\' {
+            ix += 1;
+        }
+        ix += 1;
+    }
+    if ix < len && bytes[ix] == quote {
+        ix += 1;
+    }
+    ix
+}
+
 /// Is the byte at `ix` a line ending followed by a blank line (or EOF)?
 ///
 /// Used to cut the expression scan at block boundaries, so an unclosed `{`
@@ -676,13 +707,10 @@ fn scan_mdx_expression_end_inner(
     // when `lazy_mode && !allow_lazy_body`, which is the flow-expression
     // case where body chars on a lazy line must abort the scan.
     let mut current_line_lazy = false;
-    // Tracks whether the previous semantically-relevant token produced a
-    // value: identifier, literal, regex close, `)`, `]`, `}`. When true, a
-    // following `/` is division; otherwise it's a regex literal. Whitespace
-    // and comments preserve the prior value. Without this, the existing
-    // position-based heuristic in `slash_is_regex` mis-classifies `/` after
-    // a regex close (`/x/ /y/`) and `/` after a `}` (object literal close,
-    // e.g. `{}/_`) as new regexes, eating the rest of the expression body.
+    // Whether the previous semantically-relevant token produced a value
+    // (identifier, literal, regex close, `)`, `]`, `}`); whitespace and
+    // comments preserve it. Consumed by `slash_is_regex_after` to tell
+    // division from a regex literal.
     let mut prev_was_value = false;
     macro_rules! mark_value {
         () => {
@@ -771,21 +799,7 @@ fn scan_mdx_expression_end_inner(
                     ix += 1;
                     continue;
                 }
-                let quote = bytes[ix];
-                ix += 1;
-                while ix < bytes.len()
-                    && bytes[ix] != quote
-                    && bytes[ix] != b'\n'
-                    && bytes[ix] != b'\r'
-                {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
-                    }
-                    ix += 1;
-                }
-                if ix < bytes.len() && bytes[ix] == quote {
-                    ix += 1;
-                }
+                ix = skip_string(bytes, ix);
                 mark_value!();
             }
             // Template literals with ${} nesting.
@@ -843,25 +857,7 @@ fn scan_mdx_expression_end_inner(
                     ix += 1;
                 }
             }
-            // Regex vs division: defer to `slash_is_regex` (which handles
-            // regex-introducing keywords like `return`/`yield`) when the
-            // prior byte is an identifier; otherwise trust `prev_was_value`
-            // so `}/` and `/x/ /y/` read as division.
-            b'/' if {
-                let prev_is_ident_char = {
-                    let mut j = ix;
-                    while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
-                        j -= 1;
-                    }
-                    j > 0
-                        && (bytes[j - 1].is_ascii_alphanumeric()
-                            || bytes[j - 1] == b'_'
-                            || bytes[j - 1] == b'$')
-                };
-                let force_division = prev_was_value && !prev_is_ident_char;
-                !force_division && slash_is_regex(bytes, ix)
-            } =>
-            {
+            b'/' if slash_is_regex_after(bytes, ix, prev_was_value) => {
                 reject_if_lazy!();
                 ix = scan_regex(bytes, ix);
                 mark_value!();
@@ -1262,10 +1258,8 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
     // including its limitation around nested templates / strings in `${}`).
     let mut template_depth: Option<usize> = None;
     let mut in_block_comment = false;
-    // Whether the previous token produced a value, so a following `/` reads as
-    // division rather than a regex literal (same model as
-    // `scan_mdx_expression_end_inner`). Whitespace, newlines, and comments
-    // preserve the prior value.
+    // Whether the previous token produced a value; whitespace, newlines, and
+    // comments preserve it. Consumed by `slash_is_regex_after`.
     let mut prev_was_value = false;
 
     while ix < len {
@@ -1309,17 +1303,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                 ix += 1;
             }
             b'\'' | b'"' => {
-                let quote = bytes[ix];
-                ix += 1;
-                while ix < len && bytes[ix] != quote && bytes[ix] != b'\n' && bytes[ix] != b'\r' {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
-                    }
-                    ix += 1;
-                }
-                if ix < len && bytes[ix] == quote {
-                    ix += 1;
-                }
+                ix = skip_string(bytes, ix);
                 prev_was_value = true;
             }
             b'/' if ix + 1 < len && bytes[ix + 1] == b'/' => {
@@ -1331,26 +1315,11 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                 in_block_comment = true;
                 ix += 2;
             }
-            // Regex vs division: defer to the same heuristic as
-            // `scan_mdx_expression_end_inner`. `scan_regex` stops at a newline,
-            // so a misread can never cross the blank line that ends the block.
-            // The only thing that matters here is consuming a real regex whole
-            // so a backtick/quote inside it isn't read as a delimiter.
-            b'/' if {
-                let prev_is_ident_char = {
-                    let mut j = ix;
-                    while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
-                        j -= 1;
-                    }
-                    j > 0
-                        && (bytes[j - 1].is_ascii_alphanumeric()
-                            || bytes[j - 1] == b'_'
-                            || bytes[j - 1] == b'$')
-                };
-                let force_division = prev_was_value && !prev_is_ident_char;
-                !force_division && slash_is_regex(bytes, ix)
-            } =>
-            {
+            // A real regex must be consumed whole so a backtick or quote inside
+            // it isn't read as a template/string opener. `scan_regex` stops at a
+            // newline, so even a misread can't cross the blank line that ends
+            // the block.
+            b'/' if slash_is_regex_after(bytes, ix, prev_was_value) => {
                 ix = scan_regex(bytes, ix);
                 prev_was_value = true;
             }
