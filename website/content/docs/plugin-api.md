@@ -114,7 +114,19 @@ type HastFilteredVisitor<N> = {
 };
 ```
 
-`filter` is required. The filter is matched against `element.tagName` for `element` and against `name` for MDX JSX nodes (case-sensitive). To register multiple filtered visitors for the same node type, pass an array.
+`filter` is required. The filter is matched against `element.tagName` for `element` and against `name` for MDX JSX nodes (case-sensitive). An empty filter (`filter: []`) matches every node of that type — handy for sweeping passes, but it can get expensive on large documents, so name tags when you can.
+
+To register multiple filtered visitors for the same node type, pass an array:
+
+```ts
+const plugin = defineHastPlugin({
+  name: "headings-and-links",
+  element: [
+    { filter: ["h1", "h2", "h3"], visit(node, ctx) { /* headings */ } },
+    { filter: ["a"], visit(node, ctx) { /* links */ } },
+  ],
+});
+```
 
 | Key                 | Filtered on  |
 | ------------------- | ------------ |
@@ -175,7 +187,7 @@ defineHastPlugin({
 
 Use `structuredClone(node)` for a deep, fully independent copy of the node and its subtree, or `{ ...node }` for a cheaper shallow copy when you only need this node's own fields.
 
-To get a plain JavaScript tree of the whole document, use `markdownToMdast` or `markdownToHast`:
+To get a plain JavaScript tree of the whole document, use [`markdownToMdast` or `markdownToHast`](/docs/compile/#trees-without-compiling):
 
 ```js
 import { markdownToMdast } from "satteri";
@@ -188,6 +200,15 @@ Note that keeping nodes in Rust is one of Sätteri's main performance advantages
 ## Mutation context
 
 MDAST and HAST contexts share the same shape (with small differences in `setProperty` and `textContent`). Mutations are buffered and applied after the visit completes, so it's safe to mutate while iterating.
+
+Mutate through the context, not the node. A node is a read-only view over the Rust-side tree, so a direct write like `node.depth = 2` has no effect (and is a TypeScript error). Go through the context instead:
+
+```ts
+heading(node, ctx) {
+  // node.depth = 2;                 // ignored
+  ctx.setProperty(node, "depth", 2); // do this
+}
+```
 
 ### Properties
 
@@ -262,8 +283,18 @@ For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, 
 
 Any visitor may return a `Promise`. Sync and async visitors can be mixed freely. If any visitor in the pipeline is async, `markdownToHtml` and `mdxToJs` return a `Promise`; otherwise they return synchronously.
 
+For performance, prefer sync visitors where you can: awaiting per match adds up, especially for a visitor that matches many nodes.
+
 ## Execution order
 
 Plugins run in array order. MDAST plugins run first against the parsed MDAST tree. Sätteri then converts to HAST and runs the HAST plugins. Each plugin sees the tree as left by the previous one.
 
 To share state across visits within a document, close over a variable in the surrounding scope. To reset that state between documents, pass a factory instead of a definition.
+
+## How transforms compose
+
+Each Sätteri plugin walks the tree **once** — there is no re-walking until the tree stops changing. Within that single pass:
+
+- **Passed-through children keep their identity.** When a visitor returns a replacement that reuses the original children (e.g. `{ ...node, children: [...node.children] }`), those children are spliced back unchanged, so a transform queued on a nested one in the same pass still applies. This is what lets a single `containerDirective` visitor turn both an outer `:::note` and a nested `:::tip` into asides in one go.
+- **A plugin's own freshly-built nodes are not re-walked by that plugin.** A brand-new node a visitor returns isn't visited again by the same plugin. Produce its final shape directly, or hand it to a later plugin — every plugin runs over the fully materialized output of the ones before it.
+- **Dropping a subtree drops the transforms queued inside it.** If one visitor removes or replaces a node while another queued a transform on something inside that subtree, the orphaned transform is dropped and a warning is logged. Usually that's intended; the warning catches the cases where it isn't.
