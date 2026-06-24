@@ -1373,7 +1373,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // `>`). Don't break the paragraph here — let the inline
                     // resolver pick up the JSX.
                     if !(self.options.contains(Options::ENABLE_MDX)
-                        && prev_line_has_open_inline_jsx(bytes, ix))
+                        && prev_line_has_open_inline_jsx(bytes, ix, self.options.has_math()))
                     {
                         if let Some(pos) = trailing_backslash_pos {
                             self.tree.append_text(pos, pos + 1, false);
@@ -1968,9 +1968,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // so treat the `{` as plain text and let the link
                     // resolver claim the bytes. This also avoids a hard
                     // parse error on unmatched `{` like `[a]({)`.
+                    //
+                    // Inline math `$...$` owns its content too: braces in
+                    // LaTeX (`\frac{-b}{2a}`) are math text, not expressions —
+                    // matching block `$$` and the autolink math-span check.
                     if is_inside_code_span(bytes, ix)
                         || is_inside_link_url_parens(bytes, ix)
                         || is_inside_open_inline_jsx_tag(bytes, ix)
+                        || (self.options.has_math() && is_inside_math_span(bytes, ix))
                     {
                         LoopInstruction::ContinueAndSkip(0)
                     } else {
@@ -3774,6 +3779,51 @@ fn scan_paragraph_interrupt_no_table(
 /// Same shape as `is_inside_code_span` but for math `$…$` runs. Used to
 /// keep GFM literal-autolink emission from cutting across a math span
 /// boundary (e.g. `$<https://x$` — the `$` pair owns those bytes).
+/// Narrow `[para_start, para_end)` so it doesn't span a display-math fence
+/// line (`$$` / `$$ info`). Such a line is a block boundary the parser splits
+/// on, so inline `$` runs must not pair across it. Without this, the trailing
+/// `$$` in `a$$\n\frac{1}{2}\n$$` pairs with the inline `a$$` and the `{` is
+/// misread as math text instead of an MDX expression. The fence line holding
+/// `pos` is never itself a fence (it holds the `{`), so it's left intact.
+fn clamp_scope_to_math_fences(
+    bytes: &[u8],
+    pos: usize,
+    para_start: usize,
+    para_end: usize,
+) -> (usize, usize) {
+    let mut lo = para_start;
+    let mut hi = para_end;
+    let mut line_start = para_start;
+    while line_start < para_end {
+        let mut line_end = line_start;
+        while line_end < para_end && !matches!(bytes[line_end], b'\n' | b'\r') {
+            line_end += 1;
+        }
+        let mut content = line_start;
+        while content < line_end && bytes[content] == b' ' && content - line_start < 3 {
+            content += 1;
+        }
+        let mut next_line = line_end;
+        if bytes.get(next_line) == Some(&b'\r') {
+            next_line += 1;
+        }
+        if bytes.get(next_line) == Some(&b'\n') {
+            next_line += 1;
+        }
+        if scan_math_fence(&bytes[content..line_end]).is_some() {
+            if line_start > pos {
+                hi = line_start;
+                break;
+            }
+            if line_end <= pos {
+                lo = next_line;
+            }
+        }
+        line_start = next_line;
+    }
+    (lo, hi)
+}
+
 fn is_inside_math_span(bytes: &[u8], pos: usize) -> bool {
     let (para_start, para_end) = scope_for_inline(bytes, pos);
     // Fast reject: need at least one `$` on each side of `pos` to form a
@@ -3785,19 +3835,30 @@ fn is_inside_math_span(bytes: &[u8], pos: usize) -> bool {
     {
         return false;
     }
-    let mut runs: Vec<(usize, usize)> = Vec::with_capacity(4);
+    // Only after the cheap reject: keep `$` runs from pairing across a `$$`
+    // display-math fence line (a block boundary).
+    let (para_start, para_end) = clamp_scope_to_math_fences(bytes, pos, para_start, para_end);
+    // Collect `$` runs as `(start, len, escaped)`. A run preceded by an odd
+    // number of backslashes is escaped (`\$`): matching the `MaybeMath`
+    // resolver, the backslash only prevents *opening* a span; an escaped `$`
+    // can still *close* one. So `$x\$y$` is a single span `x\` that closes at
+    // the escaped `$`, and a `{` between the dollars is math text, not an
+    // expression.
+    let mut runs: Vec<(usize, usize, bool)> = Vec::with_capacity(4);
     let mut i = para_start;
     while i < para_end {
-        if bytes[i] == b'\\' && i + 1 < para_end {
-            i += 2;
-            continue;
-        }
         if bytes[i] == b'$' {
             let start = i;
             while i < para_end && bytes[i] == b'$' {
                 i += 1;
             }
-            runs.push((start, i - start));
+            let mut backslashes = 0usize;
+            let mut k = start;
+            while k > para_start && bytes[k - 1] == b'\\' {
+                backslashes += 1;
+                k -= 1;
+            }
+            runs.push((start, i - start, backslashes % 2 == 1));
         } else {
             i += 1;
         }
@@ -3807,7 +3868,8 @@ fn is_inside_math_span(bytes: &[u8], pos: usize) -> bool {
     }
     let mut paired = vec![false; runs.len()];
     for a in 0..runs.len() {
-        if paired[a] {
+        // An escaped `$` run can't open a span (only close one).
+        if paired[a] || runs[a].2 {
             continue;
         }
         for b in (a + 1)..runs.len() {
@@ -4335,12 +4397,12 @@ fn is_at_paragraph_line_start(bytes: &[u8], pos: usize) -> bool {
 /// `ENABLE_MDX` is never set there, so the real body would have returned
 /// without effect anyway.
 #[cfg(not(feature = "mdx"))]
-fn prev_line_has_open_inline_jsx(_bytes: &[u8], _ix: usize) -> bool {
+fn prev_line_has_open_inline_jsx(_bytes: &[u8], _ix: usize, _has_math: bool) -> bool {
     false
 }
 
 #[cfg(feature = "mdx")]
-fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize) -> bool {
+fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize, has_math: bool) -> bool {
     if ix == 0 || ix > bytes.len() {
         return false;
     }
@@ -4376,6 +4438,14 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize) -> bool {
             continue;
         }
         let pos = prev_line_start + i;
+        // A `<` inside a code span or math span is literal content, not a JSX
+        // tag opener. `$<$` is math, so a following `>` line is a real
+        // blockquote, not the continuation of a phantom `<$…>` tag. Mirrors
+        // the same guards on the inline `{` handler.
+        if is_inside_code_span(bytes, pos) || (has_math && is_inside_math_span(bytes, pos)) {
+            offset = i + 1;
+            continue;
+        }
         if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..]) {
             if pos + len > ix {
                 return true;
