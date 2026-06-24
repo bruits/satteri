@@ -22,8 +22,8 @@ We're also committed to fostering a welcoming and respectful community. Any issu
 ## Before submitting Pull Requests (PRs)
 
 - **Check for duplicates.** Look through existing PRs to see if your changes have already been submitted.
-- **Check Clippy warnings.** Run `cargo clippy --all --all-targets` to ensure your code adheres to Rust's best practices.
-- **Run formatting.** Run `cargo fmt --all` and `pnpm format` to ensure your code is properly formatted.
+- **Lint.** Run `pnpm lint` to lint both the Rust (`cargo clippy`) and TypeScript (`oxlint`) code.
+- **Format.** Run `pnpm format` to format both the Rust (`cargo fmt`) and TypeScript (`oxfmt`) code.
 - **Write and run tests.** If you're adding new functionality or fixing a bug, please include tests to cover it. Run `cargo test --all` and `cd packages/satteri && pnpm test` to ensure all existing tests pass.
 - **Write a changeset.** Run `sampo add` to create a new changeset file describing your changes.
 - Prefer small, focused PRs that address a single issue or feature. Larger PRs can be harder to review, and can often be broken down into smaller, more manageable pieces.
@@ -46,10 +46,9 @@ Sätteri uses [Sampo](https://github.com/bruits/sampo) to manage changelogs and 
 
 **Structure:**
 
-1. **Breaking prefix (if applicable):** `**⚠️ breaking change:**`
-2. **Verb:** `Added`, `Removed`, `Fixed`, `Changed`, `Deprecated`, or `Improved`.
-3. **Description**.
-4. **Usage example (optional):** A minimal snippet if it clarifies the change.
+1. **Verb:** `Added`, `Removed`, `Fixed`, `Changed`, `Deprecated`, or `Improved`.
+2. **Description**.
+3. **Usage example (optional):** A minimal snippet if it clarifies the change.
 
 **Description guidelines:** concise (1-2 sentences), specific (mention the command/option/API), actionable (what changed, not why), user-facing (written for changelog readers), and in English. Don't detail internal implementation changes.
 
