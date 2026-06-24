@@ -1225,9 +1225,16 @@ fn looks_like_spread(bytes: &[u8]) -> bool {
 
 /// Scan for an MDX ESM block (`import ...` or `export ...`).
 ///
-/// Greedily consumes all non-blank continuation lines, matching the reference
-/// mdxjs behavior. The actual completeness check is done later by the firstpass
-/// using oxc when a blank line is encountered.
+/// Greedily consumes continuation lines until a blank line ends the block,
+/// matching the reference mdxjs behavior. The completeness check for blocks
+/// that span a blank line in plain code (e.g. a multi-line object literal) is
+/// done later by the firstpass using oxc.
+///
+/// Template literals and block comments can legitimately contain a blank line,
+/// so the scan tracks just enough JS lexer state to not end the block inside
+/// one — otherwise `export const x = ` `` `a\n\nb` `` truncates mid-template and
+/// oxc reports an unterminated string. Strings and line comments can't cross a
+/// newline in valid JS, so they need no cross-line state.
 ///
 /// Returns the byte offset past the end of the block (including trailing newline).
 pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
@@ -1245,25 +1252,92 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
         return None;
     }
 
+    let len = bytes.len();
     let mut ix = 0;
-    loop {
-        let eol = memchr(b'\n', &bytes[ix..])
-            .map(|i| ix + i + 1)
-            .unwrap_or(bytes.len());
-        ix = eol;
+    // `Some(depth)` while inside a template literal, where `depth` counts open
+    // `${` interpolation braces (same model as `scan_mdx_expression_end_inner`,
+    // including its limitation around nested templates / strings in `${}`).
+    let mut template_depth: Option<usize> = None;
+    let mut in_block_comment = false;
 
-        if ix >= bytes.len() {
-            break;
+    while ix < len {
+        if in_block_comment {
+            if bytes[ix] == b'*' && ix + 1 < len && bytes[ix + 1] == b'/' {
+                in_block_comment = false;
+                ix += 2;
+            } else {
+                ix += 1;
+            }
+            continue;
         }
-        // A line of only spaces/tabs is blank, exactly like an empty line, and
-        // ends the block. The firstpass retries across it with oxc when the
-        // block is still incomplete (e.g. an export spanning a blank line).
-        let mut next = ix;
-        while next < bytes.len() && matches!(bytes[next], b' ' | b'\t') {
-            next += 1;
+        if let Some(depth) = template_depth {
+            match bytes[ix] {
+                b'\\' => ix += 2,
+                b'`' if depth == 0 => {
+                    template_depth = None;
+                    ix += 1;
+                }
+                b'$' if ix + 1 < len && bytes[ix + 1] == b'{' => {
+                    template_depth = Some(depth + 1);
+                    ix += 2;
+                }
+                b'{' if depth > 0 => {
+                    template_depth = Some(depth + 1);
+                    ix += 1;
+                }
+                b'}' if depth > 0 => {
+                    template_depth = Some(depth - 1);
+                    ix += 1;
+                }
+                _ => ix += 1,
+            }
+            continue;
         }
-        if next >= bytes.len() || matches!(bytes[next], b'\n' | b'\r') {
-            break;
+        match bytes[ix] {
+            b'`' => {
+                template_depth = Some(0);
+                ix += 1;
+            }
+            b'\'' | b'"' => {
+                let quote = bytes[ix];
+                ix += 1;
+                while ix < len && bytes[ix] != quote && bytes[ix] != b'\n' && bytes[ix] != b'\r' {
+                    if bytes[ix] == b'\\' {
+                        ix += 1;
+                    }
+                    ix += 1;
+                }
+                if ix < len && bytes[ix] == quote {
+                    ix += 1;
+                }
+            }
+            b'/' if ix + 1 < len && bytes[ix + 1] == b'/' => {
+                while ix < len && bytes[ix] != b'\n' {
+                    ix += 1;
+                }
+            }
+            b'/' if ix + 1 < len && bytes[ix + 1] == b'*' => {
+                in_block_comment = true;
+                ix += 2;
+            }
+            b'\n' => {
+                ix += 1;
+                if ix >= len {
+                    break;
+                }
+                // A line of only spaces/tabs is blank, exactly like an empty
+                // line, and ends the block. The firstpass retries across it
+                // with oxc when the block is still incomplete (e.g. an export
+                // object spanning a blank line in plain code).
+                let mut next = ix;
+                while next < len && matches!(bytes[next], b' ' | b'\t') {
+                    next += 1;
+                }
+                if next >= len || matches!(bytes[next], b'\n' | b'\r') {
+                    break;
+                }
+            }
+            _ => ix += 1,
         }
     }
     Some(ix)
@@ -2244,38 +2318,35 @@ fn extract_tag_name(s: &str) -> alloc::borrow::Cow<'_, str> {
 }
 
 /// Extract the opening tag portion (up to the first unbalanced `>`).
+///
+/// Attribute expressions `{...}` are skipped whole via the JS-aware
+/// `scan_mdx_expression_end`, so quotes inside a regex (`ins={/x="y"/}`) don't
+/// desync the search for the tag's closing `>` — the bug a naive
+/// quote/brace tracker hit. Any `>` reached here is therefore outside all
+/// braces. Attribute string values (`lang="a > b"`) are HTML-like (no
+/// backslash escapes), matching `parse_jsx_attrs`.
 fn extract_opening_tag(text: &str) -> &str {
-    let mut depth = 0i32;
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut in_backtick = false;
-    let mut prev = '\0';
-
-    for (i, ch) in text.char_indices() {
-        if in_single_quote {
-            if ch == '\'' && prev != '\\' {
-                in_single_quote = false;
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        match bytes[i] {
+            b'\'' | b'"' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < len && bytes[i] != quote {
+                    i += 1;
+                }
+                if i < len {
+                    i += 1;
+                }
             }
-        } else if in_double_quote {
-            if ch == '"' && prev != '\\' {
-                in_double_quote = false;
+            b'{' => {
+                i += scan_mdx_expression_end(&bytes[i..], false).unwrap_or(1);
             }
-        } else if in_backtick {
-            if ch == '`' && prev != '\\' {
-                in_backtick = false;
-            }
-        } else {
-            match ch {
-                '\'' => in_single_quote = true,
-                '"' => in_double_quote = true,
-                '`' => in_backtick = true,
-                '{' => depth += 1,
-                '}' => depth -= 1,
-                '>' if depth == 0 => return &text[..=i],
-                _ => {}
-            }
+            b'>' => return &text[..=i],
+            _ => i += 1,
         }
-        prev = ch;
     }
     text
 }
@@ -2356,31 +2427,13 @@ fn parse_jsx_attrs<'a>(
         }
 
         if bytes[i] == b'{' {
-            i += 1;
-            let start = i;
-            let mut depth = 1i32;
-            while i < len && depth > 0 {
-                match bytes[i] {
-                    b'{' => depth += 1,
-                    b'}' => depth -= 1,
-                    b'\'' | b'"' | b'`' => {
-                        let q = bytes[i];
-                        i += 1;
-                        while i < len && bytes[i] != q {
-                            if bytes[i] == b'\\' {
-                                i += 1;
-                            }
-                            i += 1;
-                        }
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-            let raw_value = &tag[start..i.saturating_sub(1)];
+            let end = i + scan_mdx_expression_end(&bytes[i..], false).unwrap_or(len - i);
+            let start = i + 1;
+            let raw_value = &tag[start..end.saturating_sub(1)];
             let lead_ws = raw_value.len() - raw_value.trim_start().len();
             let value = raw_value.trim();
             let val_start = start + lead_ws;
+            i = end;
             attrs.push(JsxAttr::Spread(
                 value.into(),
                 val_start,
@@ -2437,28 +2490,10 @@ fn parse_jsx_attrs<'a>(
                 let decoded = decode_attr_entities(value.as_ref());
                 attrs.push(JsxAttr::Literal(name.into(), decoded.into_owned().into()));
             } else if bytes[i] == b'{' {
-                i += 1;
-                let val_start = i;
-                let mut depth = 1i32;
-                while i < len && depth > 0 {
-                    match bytes[i] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        b'\'' | b'"' | b'`' => {
-                            let q = bytes[i];
-                            i += 1;
-                            while i < len && bytes[i] != q {
-                                if bytes[i] == b'\\' {
-                                    i += 1;
-                                }
-                                i += 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                let val_end = i.saturating_sub(1);
+                let end = i + scan_mdx_expression_end(&bytes[i..], false).unwrap_or(len - i);
+                let val_start = i + 1;
+                let val_end = end.saturating_sub(1);
+                i = end;
                 let value = &tag[val_start..val_end];
                 let normalized = if value.contains('\n') || value.contains('\r') {
                     alloc::borrow::Cow::Owned(strip_expression_indent(

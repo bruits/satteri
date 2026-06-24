@@ -1968,9 +1968,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // so treat the `{` as plain text and let the link
                     // resolver claim the bytes. This also avoids a hard
                     // parse error on unmatched `{` like `[a]({)`.
+                    //
+                    // Inline math `$...$` owns its content too: braces in
+                    // LaTeX (`\frac{-b}{2a}`) are math text, not expressions —
+                    // matching block `$$` and the autolink math-span check.
                     if is_inside_code_span(bytes, ix)
                         || is_inside_link_url_parens(bytes, ix)
                         || is_inside_open_inline_jsx_tag(bytes, ix)
+                        || (self.options.has_math() && is_inside_math_span(bytes, ix))
                     {
                         LoopInstruction::ContinueAndSkip(0)
                     } else {

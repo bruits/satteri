@@ -360,6 +360,20 @@ describe("MDX conformance: ESM", () => {
     await assertMdxConformance("export function greet() { return 'hi' }\n\n{greet()}");
   });
 
+  // A blank line inside a template literal must not end the ESM block (#111).
+  test("blank line inside template literal in export (#111)", async () => {
+    await assertMdxConformance("export const code = `first line\n\nsecond line`;\n\n{code}");
+  });
+
+  test("blank line between template literals in export (#111)", async () => {
+    await assertMdxConformance("export const x = `a` +\n\n`b`;\n\n{x}");
+  });
+
+  // Block comments span blank lines too, the same way templates do (#111).
+  test("blank line inside block comment in export (#111)", async () => {
+    await assertMdxConformance("export const y = 1; /* note\n\nstill note */\n\n{y}");
+  });
+
   // A JSX identifier already bound at module scope must resolve to that
   // binding rather than being destructured out of `props.components` (which
   // would shadow it to `undefined` and throw `_missingMdxReference`).
@@ -418,6 +432,24 @@ describe("MDX conformance: attribute values", () => {
       "</CodePreview>",
     ].join("\n");
     await assertMdxConformance(src, { CodePreview });
+  });
+
+  // Quote characters inside a regex literal in an attribute expression must
+  // not be mistaken for string delimiters (#112).
+  test("regex with quotes in attribute expression (#112)", async () => {
+    const LinkedCode = (props: any) => createElement("code", null, String(props.ins[0]));
+    const src = [
+      "<LinkedCode",
+      '  lang="angular-html"',
+      `  ins={[/icon="[^"]+"/g, 'useFilledIcon="true"']}`,
+      "/>",
+    ].join("\n");
+    await assertMdxConformance(src, { LinkedCode });
+  });
+
+  test("inline regex with quotes in attribute expression (#112)", async () => {
+    const Tag = (props: any) => createElement("span", null, String(props.re));
+    await assertMdxConformance(`<Tag re={/a="b"/g} />`, { Tag });
   });
 
   test("different self-closing component inside template-literal attribute (#74)", async () => {
