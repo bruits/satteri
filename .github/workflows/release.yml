@@ -193,6 +193,7 @@ jobs:
       - uses: bruits/sampo/crates/sampo-github-action@f7241754458e1be4073902b2860596340c7d089c # sampo-v0.17.4
         with:
           command: auto
+          create-github-release: true
           cargo-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           npm-args: --access public --provenance --no-git-checks
         env:

@@ -1,6 +1,6 @@
-# satteri-plugin-api
+# satteri-ast
 
-Rust plugin trait, visitor dispatch, and runner for Sätteri, a high-performance Markdown and MDX processor.
+MDAST and HAST node types, codecs, tree operations, and conversion for Sätteri, a high-performance Markdown and MDX processor.
 
 ## Development
 
