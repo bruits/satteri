@@ -250,6 +250,70 @@ fn esm_export_spanning_whitespace_only_line() {
 }
 
 #[test]
+fn esm_export_template_spanning_blank_line() {
+    // A blank line inside a template literal must not end the ESM block (#111):
+    // the scanner stays inside the template instead of truncating it.
+    let input = "export const code = `first line\n\nsecond line`;\n\nAfter.\n";
+    let ev = mdx_events(input);
+    assert!(
+        has(&ev, |e| matches!(e, Event::MdxEsm(s)
+            if s.contains("second line") && !s.contains("After"))),
+        "template spanning a blank line should be one ESM block: {:?}",
+        ev
+    );
+    assert!(has(&ev, |e| matches!(e, Event::Start(Tag::Paragraph))));
+}
+
+#[test]
+fn esm_export_regex_with_backtick() {
+    // A backtick inside a top-level regex literal must not open a phantom
+    // template literal and swallow the following content into the ESM block.
+    let input = "export const re = /a`b/;\n\nAfter the regex.\n";
+    let ev = mdx_events(input);
+    assert!(
+        has(&ev, |e| matches!(e, Event::MdxEsm(s)
+            if s.contains("re =") && !s.contains("After"))),
+        "regex containing a backtick must not extend the ESM block: {:?}",
+        ev
+    );
+    assert!(
+        has(&ev, |e| matches!(e, Event::Start(Tag::Paragraph))),
+        "text after the regex export must be a paragraph: {:?}",
+        ev
+    );
+}
+
+#[test]
+fn esm_export_regex_with_quotes() {
+    // Quotes inside a regex character class must not be read as string
+    // delimiters either.
+    let input = "export const re = /[\"']/g;\n\nAfter the regex.\n";
+    let ev = mdx_events(input);
+    assert!(
+        has(&ev, |e| matches!(e, Event::MdxEsm(s)
+            if s.contains("re =") && !s.contains("After"))),
+        "regex containing quotes must not extend the ESM block: {:?}",
+        ev
+    );
+    assert!(has(&ev, |e| matches!(e, Event::Start(Tag::Paragraph))));
+}
+
+#[test]
+fn esm_export_division_not_regex() {
+    // A `/` that is division (after a value) must not be scanned as a regex
+    // and run on past the end of the block.
+    let input = "export const half = total / 2;\n\nAfter.\n";
+    let ev = mdx_events(input);
+    assert!(
+        has(&ev, |e| matches!(e, Event::MdxEsm(s)
+            if s.contains("half") && !s.contains("After"))),
+        "division must not extend the ESM block: {:?}",
+        ev
+    );
+    assert!(has(&ev, |e| matches!(e, Event::Start(Tag::Paragraph))));
+}
+
+#[test]
 fn esm_not_in_paragraph() {
     // Import/export inside a paragraph (not interrupting) should not be ESM.
     let ev = mdx_events("a\nimport a from 'b'\n");
@@ -1505,5 +1569,26 @@ fn inline_expression_template_literal_aborts_on_blank_line() {
         !has(&events, |e| matches!(e, Event::MdxTextExpression(_))),
         "inline expression with blank-line template must abort: {:?}",
         events
+    );
+}
+
+// A `<` that is inside a math span (`$<$`) is literal math content, not an
+// open inline JSX tag, so a following `>` line opens a blockquote rather than
+// being swallowed as a lazy paragraph continuation.
+#[test]
+fn blockquote_interrupts_after_lt_inside_math() {
+    let with_lt = mdx_events("$<$\n>");
+    assert!(
+        has(&with_lt, |e| matches!(e, Event::Start(Tag::BlockQuote(_)))),
+        "`>` after `$<$` must open a blockquote: {:?}",
+        with_lt
+    );
+    // A genuinely open inline JSX tag must still suppress the interrupt; the
+    // `>` is the tag's own close, not a blockquote.
+    let open_jsx = mdx_events("a <foo\n>");
+    assert!(
+        !has(&open_jsx, |e| matches!(e, Event::Start(Tag::BlockQuote(_)))),
+        "real open inline JSX must still suppress the interrupt: {:?}",
+        open_jsx
     );
 }

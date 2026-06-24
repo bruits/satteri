@@ -96,24 +96,12 @@ pub(crate) fn dedent_expression_continuation(
     alloc::borrow::Cow::Owned(out)
 }
 
-/// Sentinel: U+F002 (Private Use Area) marks a "phantom space" — a column
-/// of whitespace produced by the dedent that has no underlying source byte
-/// (typically the leftover of a partial-tab consumption). Two surfaces need
-/// to see the bytes differently and we can't tell them apart from a real
-/// space later, so we tag them at emission:
-///
-/// * `mdast-util-mdx-jsx` keeps phantoms in the mdast `value` field. Mdast/
-///   hast readers substitute the sentinel back to a regular space.
-/// * `micromark-util-events-to-acorn`'s collector drops leading virtual-space
-///   codes before feeding chunks to acorn, which matters because a phantom
-///   inside a template-literal continuation would otherwise become part of
-///   the cooked value (`text={` \n  \t1. `}` would carry the two phantom
-///   spaces into the runtime string). We strip the sentinel before handing
-///   the expression body to oxc.
-///
-/// Plain spaces don't work as the marker: the oxc path then can't tell which
-/// leading whitespace was dedent and which was authored, and the dedent
-/// bleeds into template-literal values.
+/// Sentinel marking a "phantom space": a column of dedent-produced whitespace
+/// with no underlying source byte (e.g. leftover of a partial-tab consume).
+/// A plain space can't be the marker because the oxc path then can't tell
+/// dedent whitespace from authored whitespace, and the dedent bleeds into
+/// template-literal values. Consumers substitute it back to a space or strip
+/// it (see the strip sites in `satteri-mdxjs-rs::hast_util_to_oxc`).
 pub(crate) const PHANTOM_SPACE: char = '\u{F002}';
 
 /// Mirror `mdast-util-mdx-jsx`'s attribute-expression continuation-line
@@ -563,6 +551,49 @@ fn scan_regex(bytes: &[u8], start: usize) -> usize {
     ix
 }
 
+/// Whether a `/` at `ix` opens a regex literal rather than being division,
+/// given whether the previous token produced a value. Shared by the ESM-block
+/// scan and the expression scan so the two heuristics can't drift apart.
+///
+/// `slash_is_regex` alone mis-reads `/` after a regex close (`/x/ /y/`) or after
+/// a `}` (object-literal close, `{}/_`) as a new regex. `prev_was_value` forces
+/// division there, but only when the prior non-space byte isn't an identifier
+/// char so a regex-introducing keyword (`return /re/`) still reads as a regex.
+fn slash_is_regex_after(bytes: &[u8], ix: usize, prev_was_value: bool) -> bool {
+    let prev_is_ident_char = {
+        let mut j = ix;
+        while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
+            j -= 1;
+        }
+        j > 0
+            && (bytes[j - 1].is_ascii_alphanumeric()
+                || bytes[j - 1] == b'_'
+                || bytes[j - 1] == b'$')
+    };
+    let force_division = prev_was_value && !prev_is_ident_char;
+    !force_division && slash_is_regex(bytes, ix)
+}
+
+/// Skip a `'…'` or `"…"` string whose opening quote is at `start`, returning the
+/// offset past the closing quote. A string can't span a newline in JS, so the
+/// scan stops at one; a backslash escapes the next byte. Shared by the ESM-block
+/// scan and the expression scan.
+fn skip_string(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let len = bytes.len();
+    let mut ix = start + 1;
+    while ix < len && bytes[ix] != quote && bytes[ix] != b'\n' && bytes[ix] != b'\r' {
+        if bytes[ix] == b'\\' {
+            ix += 1;
+        }
+        ix += 1;
+    }
+    if ix < len && bytes[ix] == quote {
+        ix += 1;
+    }
+    ix
+}
+
 /// Is the byte at `ix` a line ending followed by a blank line (or EOF)?
 ///
 /// Used to cut the expression scan at block boundaries, so an unclosed `{`
@@ -676,13 +707,10 @@ fn scan_mdx_expression_end_inner(
     // when `lazy_mode && !allow_lazy_body`, which is the flow-expression
     // case where body chars on a lazy line must abort the scan.
     let mut current_line_lazy = false;
-    // Tracks whether the previous semantically-relevant token produced a
-    // value: identifier, literal, regex close, `)`, `]`, `}`. When true, a
-    // following `/` is division; otherwise it's a regex literal. Whitespace
-    // and comments preserve the prior value. Without this, the existing
-    // position-based heuristic in `slash_is_regex` mis-classifies `/` after
-    // a regex close (`/x/ /y/`) and `/` after a `}` (object literal close,
-    // e.g. `{}/_`) as new regexes, eating the rest of the expression body.
+    // Whether the previous semantically-relevant token produced a value
+    // (identifier, literal, regex close, `)`, `]`, `}`); whitespace and
+    // comments preserve it. Consumed by `slash_is_regex_after` to tell
+    // division from a regex literal.
     let mut prev_was_value = false;
     macro_rules! mark_value {
         () => {
@@ -771,21 +799,7 @@ fn scan_mdx_expression_end_inner(
                     ix += 1;
                     continue;
                 }
-                let quote = bytes[ix];
-                ix += 1;
-                while ix < bytes.len()
-                    && bytes[ix] != quote
-                    && bytes[ix] != b'\n'
-                    && bytes[ix] != b'\r'
-                {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
-                    }
-                    ix += 1;
-                }
-                if ix < bytes.len() && bytes[ix] == quote {
-                    ix += 1;
-                }
+                ix = skip_string(bytes, ix);
                 mark_value!();
             }
             // Template literals with ${} nesting.
@@ -843,25 +857,7 @@ fn scan_mdx_expression_end_inner(
                     ix += 1;
                 }
             }
-            // Regex vs division: defer to `slash_is_regex` (which handles
-            // regex-introducing keywords like `return`/`yield`) when the
-            // prior byte is an identifier; otherwise trust `prev_was_value`
-            // so `}/` and `/x/ /y/` read as division.
-            b'/' if {
-                let prev_is_ident_char = {
-                    let mut j = ix;
-                    while j > 0 && matches!(bytes[j - 1], b' ' | b'\t') {
-                        j -= 1;
-                    }
-                    j > 0
-                        && (bytes[j - 1].is_ascii_alphanumeric()
-                            || bytes[j - 1] == b'_'
-                            || bytes[j - 1] == b'$')
-                };
-                let force_division = prev_was_value && !prev_is_ident_char;
-                !force_division && slash_is_regex(bytes, ix)
-            } =>
-            {
+            b'/' if slash_is_regex_after(bytes, ix, prev_was_value) => {
                 reject_if_lazy!();
                 ix = scan_regex(bytes, ix);
                 mark_value!();
@@ -1225,9 +1221,19 @@ fn looks_like_spread(bytes: &[u8]) -> bool {
 
 /// Scan for an MDX ESM block (`import ...` or `export ...`).
 ///
-/// Greedily consumes all non-blank continuation lines, matching the reference
-/// mdxjs behavior. The actual completeness check is done later by the firstpass
-/// using oxc when a blank line is encountered.
+/// Greedily consumes continuation lines until a blank line ends the block,
+/// matching the reference mdxjs behavior. The completeness check for blocks
+/// that span a blank line in plain code (e.g. a multi-line object literal) is
+/// done later by the firstpass using oxc.
+///
+/// Template literals and block comments can legitimately contain a blank line,
+/// so the scan tracks just enough JS lexer state to not end the block inside
+/// one — otherwise `export const x = ` `` `a\n\nb` `` truncates mid-template and
+/// oxc reports an unterminated string. Strings and line comments can't cross a
+/// newline in valid JS, so they need no cross-line state, but regex literals
+/// are still skipped whole: a backtick or quote inside one (`/[`]/`) would
+/// otherwise be mistaken for a template/string opener and swallow the block
+/// past the blank line that should end it.
 ///
 /// Returns the byte offset past the end of the block (including trailing newline).
 pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
@@ -1245,25 +1251,108 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
         return None;
     }
 
+    let len = bytes.len();
     let mut ix = 0;
-    loop {
-        let eol = memchr(b'\n', &bytes[ix..])
-            .map(|i| ix + i + 1)
-            .unwrap_or(bytes.len());
-        ix = eol;
+    // `Some(depth)` while inside a template literal, where `depth` counts open
+    // `${` interpolation braces (same model as `scan_mdx_expression_end_inner`,
+    // including its limitation around nested templates / strings in `${}`).
+    let mut template_depth: Option<usize> = None;
+    let mut in_block_comment = false;
+    // Whether the previous token produced a value; whitespace, newlines, and
+    // comments preserve it. Consumed by `slash_is_regex_after`.
+    let mut prev_was_value = false;
 
-        if ix >= bytes.len() {
-            break;
+    while ix < len {
+        if in_block_comment {
+            if bytes[ix] == b'*' && ix + 1 < len && bytes[ix + 1] == b'/' {
+                in_block_comment = false;
+                ix += 2;
+            } else {
+                ix += 1;
+            }
+            continue;
         }
-        // A line of only spaces/tabs is blank, exactly like an empty line, and
-        // ends the block. The firstpass retries across it with oxc when the
-        // block is still incomplete (e.g. an export spanning a blank line).
-        let mut next = ix;
-        while next < bytes.len() && matches!(bytes[next], b' ' | b'\t') {
-            next += 1;
+        if let Some(depth) = template_depth {
+            match bytes[ix] {
+                b'\\' => ix += 2,
+                b'`' if depth == 0 => {
+                    template_depth = None;
+                    prev_was_value = true;
+                    ix += 1;
+                }
+                b'$' if ix + 1 < len && bytes[ix + 1] == b'{' => {
+                    template_depth = Some(depth + 1);
+                    ix += 2;
+                }
+                b'{' if depth > 0 => {
+                    template_depth = Some(depth + 1);
+                    ix += 1;
+                }
+                b'}' if depth > 0 => {
+                    template_depth = Some(depth - 1);
+                    ix += 1;
+                }
+                _ => ix += 1,
+            }
+            continue;
         }
-        if next >= bytes.len() || matches!(bytes[next], b'\n' | b'\r') {
-            break;
+        match bytes[ix] {
+            b'`' => {
+                // `prev_was_value` is set when the template closes.
+                template_depth = Some(0);
+                ix += 1;
+            }
+            b'\'' | b'"' => {
+                ix = skip_string(bytes, ix);
+                prev_was_value = true;
+            }
+            b'/' if ix + 1 < len && bytes[ix + 1] == b'/' => {
+                while ix < len && bytes[ix] != b'\n' {
+                    ix += 1;
+                }
+            }
+            b'/' if ix + 1 < len && bytes[ix + 1] == b'*' => {
+                in_block_comment = true;
+                ix += 2;
+            }
+            // A real regex must be consumed whole so a backtick or quote inside
+            // it isn't read as a template/string opener. `scan_regex` stops at a
+            // newline, so even a misread can't cross the blank line that ends
+            // the block.
+            b'/' if slash_is_regex_after(bytes, ix, prev_was_value) => {
+                ix = scan_regex(bytes, ix);
+                prev_was_value = true;
+            }
+            b'\n' => {
+                ix += 1;
+                if ix >= len {
+                    break;
+                }
+                // A line of only spaces/tabs is blank, exactly like an empty
+                // line, and ends the block. The firstpass retries across it
+                // with oxc when the block is still incomplete (e.g. an export
+                // object spanning a blank line in plain code).
+                let mut next = ix;
+                while next < len && matches!(bytes[next], b' ' | b'\t') {
+                    next += 1;
+                }
+                if next >= len || matches!(bytes[next], b'\n' | b'\r') {
+                    break;
+                }
+            }
+            b' ' | b'\t' | b'\r' => ix += 1,
+            b')' | b']' | b'}' => {
+                prev_was_value = true;
+                ix += 1;
+            }
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' | b'0'..=b'9' => {
+                prev_was_value = true;
+                ix += 1;
+            }
+            _ => {
+                prev_was_value = false;
+                ix += 1;
+            }
         }
     }
     Some(ix)
@@ -2244,38 +2333,35 @@ fn extract_tag_name(s: &str) -> alloc::borrow::Cow<'_, str> {
 }
 
 /// Extract the opening tag portion (up to the first unbalanced `>`).
+///
+/// Attribute expressions `{...}` are skipped whole via the JS-aware
+/// `scan_mdx_expression_end`, so quotes inside a regex (`ins={/x="y"/}`) don't
+/// desync the search for the tag's closing `>` — the bug a naive
+/// quote/brace tracker hit. Any `>` reached here is therefore outside all
+/// braces. Attribute string values (`lang="a > b"`) are HTML-like (no
+/// backslash escapes), matching `parse_jsx_attrs`.
 fn extract_opening_tag(text: &str) -> &str {
-    let mut depth = 0i32;
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut in_backtick = false;
-    let mut prev = '\0';
-
-    for (i, ch) in text.char_indices() {
-        if in_single_quote {
-            if ch == '\'' && prev != '\\' {
-                in_single_quote = false;
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        match bytes[i] {
+            b'\'' | b'"' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < len && bytes[i] != quote {
+                    i += 1;
+                }
+                if i < len {
+                    i += 1;
+                }
             }
-        } else if in_double_quote {
-            if ch == '"' && prev != '\\' {
-                in_double_quote = false;
+            b'{' => {
+                i += scan_mdx_expression_end(&bytes[i..], false).unwrap_or(1);
             }
-        } else if in_backtick {
-            if ch == '`' && prev != '\\' {
-                in_backtick = false;
-            }
-        } else {
-            match ch {
-                '\'' => in_single_quote = true,
-                '"' => in_double_quote = true,
-                '`' => in_backtick = true,
-                '{' => depth += 1,
-                '}' => depth -= 1,
-                '>' if depth == 0 => return &text[..=i],
-                _ => {}
-            }
+            b'>' => return &text[..=i],
+            _ => i += 1,
         }
-        prev = ch;
     }
     text
 }
@@ -2356,31 +2442,13 @@ fn parse_jsx_attrs<'a>(
         }
 
         if bytes[i] == b'{' {
-            i += 1;
-            let start = i;
-            let mut depth = 1i32;
-            while i < len && depth > 0 {
-                match bytes[i] {
-                    b'{' => depth += 1,
-                    b'}' => depth -= 1,
-                    b'\'' | b'"' | b'`' => {
-                        let q = bytes[i];
-                        i += 1;
-                        while i < len && bytes[i] != q {
-                            if bytes[i] == b'\\' {
-                                i += 1;
-                            }
-                            i += 1;
-                        }
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-            let raw_value = &tag[start..i.saturating_sub(1)];
+            let end = i + scan_mdx_expression_end(&bytes[i..], false).unwrap_or(len - i);
+            let start = i + 1;
+            let raw_value = &tag[start..end.saturating_sub(1)];
             let lead_ws = raw_value.len() - raw_value.trim_start().len();
             let value = raw_value.trim();
             let val_start = start + lead_ws;
+            i = end;
             attrs.push(JsxAttr::Spread(
                 value.into(),
                 val_start,
@@ -2437,28 +2505,10 @@ fn parse_jsx_attrs<'a>(
                 let decoded = decode_attr_entities(value.as_ref());
                 attrs.push(JsxAttr::Literal(name.into(), decoded.into_owned().into()));
             } else if bytes[i] == b'{' {
-                i += 1;
-                let val_start = i;
-                let mut depth = 1i32;
-                while i < len && depth > 0 {
-                    match bytes[i] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        b'\'' | b'"' | b'`' => {
-                            let q = bytes[i];
-                            i += 1;
-                            while i < len && bytes[i] != q {
-                                if bytes[i] == b'\\' {
-                                    i += 1;
-                                }
-                                i += 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                let val_end = i.saturating_sub(1);
+                let end = i + scan_mdx_expression_end(&bytes[i..], false).unwrap_or(len - i);
+                let val_start = i + 1;
+                let val_end = end.saturating_sub(1);
+                i = end;
                 let value = &tag[val_start..val_end];
                 let normalized = if value.contains('\n') || value.contains('\r') {
                     alloc::borrow::Cow::Owned(strip_expression_indent(
