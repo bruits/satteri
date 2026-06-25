@@ -297,6 +297,25 @@ fn escape_braces_in_html_text(html: &str) -> String {
     result
 }
 
+/// Options controlling how MDAST command buffers are applied.
+#[derive(Debug, Clone, Copy)]
+pub struct MdastCommandOptions {
+    /// Escape raw HTML text braces before re-parsing it through an MDX parser.
+    ///
+    /// MDX needs this so literal `{` / `}` in HTML text are not interpreted as
+    /// expressions. Plain Markdown-to-HTML pipelines should leave raw HTML
+    /// opaque so the final HTML preserves those braces verbatim.
+    pub escape_raw_html_braces: bool,
+}
+
+impl Default for MdastCommandOptions {
+    fn default() -> Self {
+        Self {
+            escape_raw_html_braces: true,
+        }
+    }
+}
+
 /// Emit a reference placeholder: a `REF_NODE_TYPE` node carrying the target
 /// original id (u32 LE) in its type_data. The rebuild resolves it by splicing
 /// that original subtree and applying any pending patch on it.
@@ -844,6 +863,7 @@ fn read_mdast_payload(
     parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
     orig: &Arena<Mdast>,
     anchor: u32,
+    options: MdastCommandOptions,
 ) -> Result<(Arena<Mdast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
     let len = reader.read_u32()? as usize;
@@ -855,8 +875,12 @@ fn read_mdast_payload(
         }
         PAYLOAD_RAW_HTML => {
             let html = reader.read_str(len)?;
-            let escaped = escape_braces_in_html_text(html);
-            Ok((parse_markdown(&escaped), false))
+            if options.escape_raw_html_braces {
+                let escaped = escape_braces_in_html_text(html);
+                Ok((parse_markdown(&escaped), false))
+            } else {
+                Ok((parse_markdown(html), false))
+            }
         }
         PAYLOAD_OPSTREAM => {
             let ops = reader.read_bytes(len)?;
@@ -1039,7 +1063,23 @@ pub fn apply_mdast_commands(
     command_buf: &[u8],
     parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
 ) -> Result<Arena<Mdast>, CommandError> {
-    let (arena, dropped) = apply_mdast_commands_lenient(arena, command_buf, parse_markdown)?;
+    apply_mdast_commands_with_options(
+        arena,
+        command_buf,
+        parse_markdown,
+        MdastCommandOptions::default(),
+    )
+}
+
+/// Like [`apply_mdast_commands`], with explicit command application options.
+pub fn apply_mdast_commands_with_options(
+    arena: Arena<Mdast>,
+    command_buf: &[u8],
+    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+    options: MdastCommandOptions,
+) -> Result<Arena<Mdast>, CommandError> {
+    let (arena, dropped) =
+        apply_mdast_commands_lenient_with_options(arena, command_buf, parse_markdown, options)?;
     if let Some(anchor) = dropped.first() {
         return Err(CommandError::PatchOnRemovedSubtree(*anchor));
     }
@@ -1053,9 +1093,25 @@ pub fn apply_mdast_commands(
 /// splices it back with its id intact, so a transform queued on a nested node
 /// (e.g. a `:::tip` inside a `:::note`) still applies, in the same pass.
 pub fn apply_mdast_commands_lenient(
+    arena: Arena<Mdast>,
+    command_buf: &[u8],
+    parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+) -> Result<(Arena<Mdast>, Vec<u32>), CommandError> {
+    apply_mdast_commands_lenient_with_options(
+        arena,
+        command_buf,
+        parse_markdown,
+        MdastCommandOptions::default(),
+    )
+}
+
+/// Like [`apply_mdast_commands_lenient`], with explicit command application
+/// options.
+pub fn apply_mdast_commands_lenient_with_options(
     mut arena: Arena<Mdast>,
     command_buf: &[u8],
     parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
+    options: MdastCommandOptions,
 ) -> Result<(Arena<Mdast>, Vec<u32>), CommandError> {
     if command_buf.is_empty() {
         return Ok((arena, Vec::new()));
@@ -1086,21 +1142,21 @@ pub fn apply_mdast_commands_lenient(
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_u32()?;
                 let (new_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_u32()?;
                 let (new_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_u32()?;
                 let (child_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1110,7 +1166,7 @@ pub fn apply_mdast_commands_lenient(
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_u32()?;
                 let (child_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1120,7 +1176,7 @@ pub fn apply_mdast_commands_lenient(
             CMD_WRAP => {
                 let node_id = reader.read_u32()?;
                 let (parent_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -1130,7 +1186,7 @@ pub fn apply_mdast_commands_lenient(
             CMD_REPLACE => {
                 let node_id = reader.read_u32()?;
                 let (new_tree, keep_children) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -1141,7 +1197,7 @@ pub fn apply_mdast_commands_lenient(
             CMD_SET_CHILDREN => {
                 let node_id = reader.read_u32()?;
                 let (new_children, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id)?;
+                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
                 patches.push(Patch::SetChildren {
                     node_id,
                     new_children,

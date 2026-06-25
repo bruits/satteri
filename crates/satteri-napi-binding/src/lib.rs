@@ -560,7 +560,8 @@ pub fn apply_commands_to_mdast_handle(
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    let parse_markdown = make_parse_fn(arena.mdx, arena.parse_options);
+    let mdx = arena.mdx;
+    let parse_markdown = make_parse_fn(mdx, arena.parse_options);
     let owned = std::mem::replace(
         &mut *arena,
         satteri_arena::Arena::<Mdast>::new(String::new()),
@@ -569,9 +570,16 @@ pub fn apply_commands_to_mdast_handle(
     // removed is dropped rather than fatal — the plugin discarded that subtree,
     // so a transform queued on a node within it is moot. A passed-through child
     // keeps its identity (via `_ref`) and so is never stranded this way.
-    let (new_arena, dropped) =
-        satteri_plugin_api::apply_mdast_commands_lenient(owned, &command_buf, &parse_markdown)
-            .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let options = satteri_plugin_api::MdastCommandOptions {
+        escape_raw_html_braces: mdx,
+    };
+    let (new_arena, dropped) = satteri_plugin_api::apply_mdast_commands_lenient_with_options(
+        owned,
+        &command_buf,
+        &parse_markdown,
+        options,
+    )
+    .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     *arena = new_arena;
     Ok(dropped.len() as u32)
 }
@@ -619,8 +627,16 @@ pub fn apply_commands_and_convert_to_hast_handle(
         &mut *arena,
         satteri_arena::Arena::<Mdast>::new(String::new()),
     );
-    let mutated = satteri_plugin_api::apply_mdast_commands(owned, &command_buf, &parse_markdown)
-        .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let options = satteri_plugin_api::MdastCommandOptions {
+        escape_raw_html_braces: mdx,
+    };
+    let mutated = satteri_plugin_api::apply_mdast_commands_with_options(
+        owned,
+        &command_buf,
+        &parse_markdown,
+        options,
+    )
+    .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let mut hast_arena =
         satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
     hast_arena.mdx = mdx;

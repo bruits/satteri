@@ -12,7 +12,8 @@ pub use context::{Diagnostic, PluginContext, Severity};
 pub use data::{DataMap, DataValue, TypedDataMap};
 pub use js_commands::{
     apply_hast_commands, apply_hast_commands_lenient, apply_mdast_commands,
-    apply_mdast_commands_lenient,
+    apply_mdast_commands_lenient, apply_mdast_commands_lenient_with_options,
+    apply_mdast_commands_with_options, MdastCommandOptions,
 };
 pub use plugin::{NodeView, Plugin, PluginMeta, VisitResult};
 pub use runner::{PluginRunResult, PluginRunner};

@@ -270,6 +270,48 @@ describe("markdownToHtml", () => {
 
   // with MDAST plugins only
 
+  test("rawHtml preserves Mermaid curly braces in rendered HTML", () => {
+    const plugin = defineMdastPlugin({
+      name: "raw-html-mermaid-braces",
+      code(node) {
+        if (node.type === "code" && node.lang === "mermaid") {
+          return {
+            rawHtml: `<pre class="mermaid">${node.value}</pre>`,
+          };
+        }
+      },
+    });
+
+    const { html } = markdownToHtml("```mermaid\nflowchart TD\n    C{JWT valid?}\n```", {
+      features: { gfm: true },
+      mdastPlugins: [plugin],
+    });
+
+    expect(html).toContain("C{JWT valid?}");
+    expect(html).not.toContain("{'{'}");
+    expect(html).not.toContain("{'}'}");
+  });
+
+  test("rawHtml preserves Shiki-like curly braces in rendered HTML", () => {
+    const plugin = defineMdastPlugin({
+      name: "raw-html-shiki-braces",
+      code() {
+        return {
+          rawHtml: '<pre class="shiki"><code><span style="color:red">{foo: 1}</span></code></pre>',
+        };
+      },
+    });
+
+    const { html } = markdownToHtml("```js\nconst x = {foo: 1}\n```", {
+      mdastPlugins: [plugin],
+    });
+
+    expect(html).toContain("{foo: 1}");
+    expect(html).not.toContain("{'{'}");
+    expect(html).not.toContain("{'}'}");
+    expect(html).toContain("shiki");
+  });
+
   test("MDAST plugin removes headings", () => {
     const removeHeadings = defineMdastPlugin({
       name: "remove-headings",
