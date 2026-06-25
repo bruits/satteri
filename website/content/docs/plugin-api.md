@@ -289,6 +289,8 @@ For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, 
 | `{ raw: string }`             | Splice raw Markdown (re-parsed)  | N/A     |
 | `{ rawHtml: string }`         | Splice raw HTML (passthrough)    | N/A     |
 
+`rawHtml` is emitted verbatim, as such literal `{` and `}` are preserved, so HTML carrying curly brackets (e.g. a Mermaid decision node `C{JWT valid?}`) survives intact in Markdown. In MDX since the same content is reparsed as MDX, curly brackets are auto-escaped so they still render as literals.
+
 ## Async plugins
 
 Any visitor may return a `Promise`. Sync and async visitors can be mixed freely. If any visitor in the pipeline is async, `markdownToHtml` and `mdxToJs` return a `Promise`; otherwise they return synchronously.

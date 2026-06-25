@@ -694,6 +694,30 @@ describe("mdxToJs", () => {
     expect(js).toContain("Kept");
   });
 
+  test("rawHtml braces survive MDX reparse as escaped literals", () => {
+    const plugin = defineMdastPlugin({
+      name: "raw-html-mermaid-braces",
+      code(node) {
+        if (node.type === "code" && node.lang === "mermaid") {
+          return {
+            rawHtml: `<pre class="mermaid">${node.value}</pre>`,
+          };
+        }
+      },
+    });
+
+    // Unlike markdownToHtml, the MDX pipeline must escape braces so the reparse
+    // does not read `{JWT valid?}` as a (broken) expression. The escape compiles
+    // to literal `{` / `}` string children, preserving the Mermaid source.
+    const { code: js } = mdxToJs("```mermaid\nflowchart TD\n    C{JWT valid?}\n```", {
+      mdastPlugins: [plugin],
+    });
+
+    expect(js).toContain('"{"');
+    expect(js).toContain('"}"');
+    expect(js).toContain("JWT valid?");
+  });
+
   test("MDAST plugin can read JSX attributes", () => {
     const collected: unknown[] = [];
     const readAttrs = defineMdastPlugin({
