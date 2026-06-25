@@ -144,6 +144,36 @@ The id and classes appear on the rendered heading, producing the following HTML:
 <h2 id="my-id" class="my-class">My heading</h2>
 ```
 
+`#` sets the id and `.` adds a class. You can also write arbitrary attributes as `key=value`, or a bare `key` for a valueless attribute (rendered as `key=""`):
+
+```markdown
+### Note {#intro data-level=2 hidden}
+```
+
+```html
+<h3 id="intro" data-level="2" hidden="">Note</h3>
+```
+
+Wrap a value in `"` or `'` quotes when it needs to contain spaces:
+
+```markdown
+# Title {data-label="hello world"}
+```
+
+```html
+<h1 data-label="hello world">Title</h1>
+```
+
+Explicit `id=` and `class=` merge with the `#`/`.` shorthands instead of producing duplicate attributes. The last id wins whereas classes accumulate in source order:
+
+```markdown
+## Heading {.intro #x class=lead id=main}
+```
+
+```html
+<h2 id="main" class="intro lead">Heading</h2>
+```
+
 ## Directives
 
 Default: `false`.

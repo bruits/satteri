@@ -284,3 +284,51 @@ fn issue_819() {
         assert_eq!(expected, s.trim_end_matches('\n'));
     }
 }
+
+fn parse_to_html_with_heading_attrs(input: &str) -> String {
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_HEADING_ATTRIBUTES);
+    parse_to_html_ext(input, opts)
+}
+
+#[test]
+fn heading_attributes_emit_id_and_class() {
+    let original = "## Heading {#explicit .custom}";
+    let expected = "<h2 id=\"explicit\" class=\"custom\">Heading</h2>\n";
+    assert_eq!(expected, parse_to_html_with_heading_attrs(original));
+}
+
+#[test]
+fn heading_attributes_emit_multiple_classes() {
+    let original = "# Title {.a .b}";
+    let expected = "<h1 class=\"a b\">Title</h1>\n";
+    assert_eq!(expected, parse_to_html_with_heading_attrs(original));
+}
+
+#[test]
+fn heading_attributes_emit_custom_attributes() {
+    let original = "### Note {#n data-key=value flag}";
+    let expected = "<h3 id=\"n\" data-key=\"value\" flag=\"\">Note</h3>\n";
+    assert_eq!(expected, parse_to_html_with_heading_attrs(original));
+}
+
+#[test]
+fn heading_attributes_merge_shorthand_and_explicit() {
+    let original = "## Heading {.c1 #x class=c2 id=y}";
+    let expected = "<h2 id=\"y\" class=\"c1 c2\">Heading</h2>\n";
+    assert_eq!(expected, parse_to_html_with_heading_attrs(original));
+}
+
+#[test]
+fn heading_attributes_quoted_values_keep_spaces() {
+    let original = "## Heading {data-x=\"quoted value\" title='also spaced'}";
+    let expected = "<h2 data-x=\"quoted value\" title=\"also spaced\">Heading</h2>\n";
+    assert_eq!(expected, parse_to_html_with_heading_attrs(original));
+}
+
+#[test]
+fn heading_attributes_disabled_keeps_literal_text() {
+    let original = "## Heading {#explicit .custom}";
+    let expected = "<h2>Heading {#explicit .custom}</h2>\n";
+    assert_eq!(expected, parse_to_html(original));
+}

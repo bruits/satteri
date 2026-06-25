@@ -3552,26 +3552,26 @@ fn regression_test_206() {
 >	{.class}
 >	===
 "##;
-    let expected = r##"<h1>foo
+    let expected = r##"<h1 class="class">foo
 </h1>
 <blockquote>
-<h1>foo
+<h1 class="class">foo
 </h1>
 <blockquote>
-<h1>foo
+<h1 class="class">foo
 </h1>
 </blockquote>
 </blockquote>
 <ul>
 <li>
 <blockquote>
-<h1>foo
+<h1 class="class">foo
 </h1>
 </blockquote>
 </li>
 </ul>
 <blockquote>
-<h1>foo
+<h1 class="class">foo
 </h1>
 </blockquote>
 "##;
@@ -3585,7 +3585,7 @@ fn regression_test_207() {
     > {.bar}
 ===
 "##;
-    let expected = r##"<h1>the trailing space after the &gt; should be stripped
+    let expected = r##"<h1 class="bar">the trailing space after the &gt; should be stripped
 &gt;</h1>
 "##;
 
