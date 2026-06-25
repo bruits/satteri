@@ -1,6 +1,6 @@
-# satteri-plugin-api
+# satteri-arena
 
-Rust plugin trait, visitor dispatch, and runner for Sätteri, a high-performance Markdown and MDX processor.
+Arena allocator and binary buffer primitives for Sätteri, a high-performance Markdown and MDX processor.
 
 ## Development
 

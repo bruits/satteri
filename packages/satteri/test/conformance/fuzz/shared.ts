@@ -7,6 +7,7 @@ import { evaluate as mdxEvaluate } from "@mdx-js/mdx";
 import { remark } from "remark";
 import remarkMdx from "remark-mdx";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { toHast } from "mdast-util-to-hast";
 import type { Root as MdastRoot, Nodes as MdastNodes } from "mdast";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -858,6 +859,68 @@ export const mathDocument = fc.oneof(
   { weight: 2, arbitrary: mutatedMathExample },
 );
 
+// MDX x math interaction arbitraries. The other suites keep the two apart, so
+// the inline `$...$` x `{...}` surface (where the `{` math guard lives) is
+// never fuzzed. Expressions are kept self-contained so a guard failure shows as
+// an output mismatch (`{1 + 2}` text vs `3`), not a `ReferenceError`.
+const MATH_INNER = fc.string({
+  unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789".split("")),
+  minLength: 1,
+  maxLength: 8,
+});
+const mathSpanFrag = fc.oneof(
+  MATH_INNER.map((t) => `$${t}$`),
+  fc.constantFrom("$\\frac{a}{b}$", "$x^{2}$", "$e^{i\\pi}$", "$a_{i}$", "$\\sum_{i} x$"),
+);
+const selfContainedExpr = fc.oneof(
+  fc.integer({ min: 0, max: 99 }).map((n) => `{${n}}`),
+  fc.constantFrom("{1 + 2}", "{`x`}", "{true ? 'a' : 'b'}", "{String(7)}"),
+);
+const dollarAmount = fc.integer({ min: 1, max: 9999 }).map((n) => `$${n}`);
+const safeWords = fc.string({
+  unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789 ".split("")),
+  minLength: 1,
+  maxLength: 8,
+});
+
+const mathExprLine = fc
+  .array(
+    fc.oneof(
+      { weight: 3, arbitrary: safeWords },
+      { weight: 3, arbitrary: mathSpanFrag },
+      { weight: 3, arbitrary: selfContainedExpr },
+      { weight: 2, arbitrary: dollarAmount },
+    ),
+    { minLength: 1, maxLength: 8 },
+  )
+  .map((parts) => parts.join(" "));
+
+// Curated, well-formed cases: braces inside `$...$` stay math text, those
+// outside are expressions.
+const MDX_MATH_EXAMPLES: string[] = [
+  "$\\frac{-b}{2a}$ and {1 + 1}",
+  "Price is $5 and {x} costs $10",
+  "Euler $e^{i\\pi}$ then {3 * 7}",
+  "{1 + 2} then $x^2$ done",
+  "$a$ {`b`} $c$ {`d`}",
+  "value {2} and $\\sum_i x_i$ end",
+  "$5 {1} costs $10 today",
+  "<Box>before $x$ and {1 + 1} after</Box>",
+  "result {7} for $\\frac{a}{b}$",
+];
+const mdxMathExample = fc.constantFrom(...MDX_MATH_EXAMPLES);
+
+export const mdxMathDocument = fc.oneof(
+  { weight: 5, arbitrary: mathExprLine },
+  { weight: 3, arbitrary: mdxMathExample },
+  {
+    weight: 2,
+    arbitrary: fc
+      .array(fc.oneof(mathExprLine, mdxMathExample), { minLength: 1, maxLength: 4 })
+      .map((blocks) => blocks.join("\n\n")),
+  },
+);
+
 // Frontmatter arbitraries
 
 const YAML_KEY = fc.string({
@@ -1584,9 +1647,25 @@ const KNOWN_MDX_EVAL_DIVERGENCES = new Set<string>([
   "*\n\n  2. b\n\n    3. c\n",
 ]);
 
+// Feature set for an eval-fuzzer run; lets it enable math on both pipelines
+// while reusing every divergence filter below. Defaults to GFM-only.
+export interface MdxEvalOptions {
+  remarkPlugins: unknown[];
+  features: Record<string, unknown>;
+}
+const DEFAULT_MDX_EVAL_OPTIONS: MdxEvalOptions = {
+  remarkPlugins: [remarkGfm],
+  features: MDX_FEATURES,
+};
+export const MDX_MATH_EVAL_OPTIONS: MdxEvalOptions = {
+  remarkPlugins: [remarkGfm, remarkMath],
+  features: { headingAttributes: false, math: true, frontmatter: false },
+};
+
 async function compareMdxEval(
   input: string,
   source: MdxEvalIssue["source"],
+  opts: MdxEvalOptions = DEFAULT_MDX_EVAL_OPTIONS,
 ): Promise<MdxEvalIssue | null> {
   if (KNOWN_MDX_EVAL_DIVERGENCES.has(input)) return null;
   let refHtml: string | undefined;
@@ -1595,7 +1674,7 @@ async function compareMdxEval(
   try {
     const { default: RefComponent } = (await mdxEvaluate(input, {
       ...runtime,
-      remarkPlugins: [remarkGfm],
+      remarkPlugins: opts.remarkPlugins as any,
     })) as { default: Function };
     refHtml = normalizeHtml(
       renderToStaticMarkup(createElement(RefComponent as any, { components: jsxComponents })),
@@ -1611,7 +1690,7 @@ async function compareMdxEval(
   try {
     const { default: SatComponent } = await satteriEvaluate(input, {
       ...runtime,
-      features: MDX_FEATURES,
+      features: opts.features,
     } as any);
     satHtml = normalizeHtml(
       renderToStaticMarkup(createElement(SatComponent as any, { components: jsxComponents })),
@@ -1700,11 +1779,12 @@ async function compareMdxEval(
 export async function collectMdxEvalIssues(
   arbitrary: fc.Arbitrary<string>,
   source: "structured" | "chaos",
+  opts: MdxEvalOptions = DEFAULT_MDX_EVAL_OPTIONS,
 ): Promise<MdxEvalIssue[]> {
   const issues: MdxEvalIssue[] = [];
   await fc.assert(
     fc.asyncProperty(arbitrary, async (input) => {
-      const issue = await compareMdxEval(input, source);
+      const issue = await compareMdxEval(input, source, opts);
       if (issue) issues.push(issue);
       return true;
     }),

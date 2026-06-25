@@ -1,0 +1,43 @@
+name: "Bug Report"
+description: Report an issue or possible bug
+type: "Bug"
+labels: ["Needs triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to file a bug report! Please fill out this form as completely as possible. If you're not sure how to fill out a section, do your best and we'll help you along the way.
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: What's the problem?
+      description: A clear and concise description of what the problem is.
+    validations:
+      required: true
+  - type: textarea
+    id: environment-info
+    attributes:
+      label: Environment Information
+      description: |
+        Please provide the following information:
+        - Sätteri package/crate versions (e.g., satteri npm v0.x.y, satteri-ast v0.x.y)
+        - Operating System (e.g., macOS 14.0, Ubuntu 22.04, Windows 11)
+        - Rust version (run `rustc --version`)
+        - Node.js version (run `node --version`)
+    validations:
+      required: true
+  - type: textarea
+    id: bug-expectation
+    attributes:
+      label: What's the expected result?
+      description: Describe what you expect to happen.
+    validations:
+      required: true
+  - type: checkboxes
+    id: will-pr
+    attributes:
+      label: Participation
+      options:
+        - label: I am willing to submit a pull request for this issue.
+          required: false

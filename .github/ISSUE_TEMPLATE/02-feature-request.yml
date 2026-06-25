@@ -1,0 +1,31 @@
+name: "Feature Request"
+description: Suggest a new feature or improvement
+type: "Feature"
+labels: ["Needs triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for sharing an idea to improve Sätteri! Please fill out this form as completely as possible. If you're not sure how to fill out a section, do your best and we'll help you along the way.
+  - type: textarea
+    id: problem-description
+    attributes:
+      label: What's the problem?
+      description: Describe the use case or pain point. What are you trying to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What's the proposed solution?
+      description: How should Sätteri behave? A rough idea of the API, plugin, or function is enough.
+    validations:
+      required: true
+  - type: checkboxes
+    id: will-pr
+    attributes:
+      label: Participation
+      options:
+        - label: I am willing to submit a pull request for this feature.
+          required: false

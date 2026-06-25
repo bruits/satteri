@@ -1,6 +1,6 @@
-# satteri-plugin-api
+# satteri
 
-Rust plugin trait, visitor dispatch, and runner for Sätteri, a high-performance Markdown and MDX processor.
+High-level Rust API for Sätteri, a high-performance Markdown and MDX processor.
 
 ## Development
 
