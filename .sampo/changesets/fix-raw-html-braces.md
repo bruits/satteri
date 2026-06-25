@@ -1,4 +1,5 @@
 ---
+cargo/satteri-plugin-api: minor
 npm/satteri: patch
 ---
 
