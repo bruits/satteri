@@ -854,7 +854,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         // pass emits as `id`/`class`/custom attributes.
                         if let Some(heading_ix) = heading_ix {
                             if let Some(json) =
-                                encode_heading_h_properties(inner.allocs.heading_ref(heading_ix))
+                                encode_heading_h_properties(&inner.allocs[heading_ix])
                             {
                                 let heading_id = builder.current_node_id();
                                 builder.arena_mut().set_node_data(heading_id, json);

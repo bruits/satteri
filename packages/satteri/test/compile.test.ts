@@ -131,6 +131,22 @@ describe("features.headingAttributes", () => {
     expect(result.html).toContain('<h1 id="t" data-role="heading" flag="">Title</h1>');
   });
 
+  test("merges shorthand and explicit id/class", () => {
+    const result = markdownToHtml("## Heading {.c1 #x class=c2 id=y}", {
+      features: { headingAttributes: true },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain('<h2 id="y" class="c1 c2">Heading</h2>');
+  });
+
+  test("quoted values keep their spaces", () => {
+    const result = markdownToHtml('# Title {data-label="hello world"}', {
+      features: { headingAttributes: true },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain('<h1 data-label="hello world">Title</h1>');
+  });
+
   test("disabled by default: attribute block stays literal", () => {
     const result = markdownToHtml("## Heading {#explicit .custom}");
     if (result instanceof Promise) throw new Error("expected sync");

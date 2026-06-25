@@ -6442,22 +6442,53 @@ fn parse_inside_attribute_block(inside_attr_block: &str) -> Option<HeadingAttrib
     let mut classes = Vec::new();
     let mut attrs = Vec::new();
 
-    for attr in inside_attr_block.split_ascii_whitespace() {
-        // iterator returned by `str::split_ascii_whitespace` never emits empty
-        // strings, so taking first byte won't panic.
+    let bytes = inside_attr_block.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        // A value introduced by `=` may be wrapped in matching quotes, letting it
+        // contain spaces; the token then runs to the closing quote rather than the
+        // next whitespace. Backslashes can't reach this far (the block extractor
+        // excludes them), so the quoted span needs no escape handling.
+        let start = i;
+        let mut quote = None;
+        while i < len {
+            let b = bytes[i];
+            if let Some(q) = quote {
+                if b == q {
+                    quote = None;
+                }
+            } else if (b == b'"' || b == b'\'') && i > start && bytes[i - 1] == b'=' {
+                quote = Some(b);
+            } else if b.is_ascii_whitespace() {
+                break;
+            }
+            i += 1;
+        }
+
+        let attr = &inside_attr_block[start..i];
         if attr.len() > 1 {
             let first_byte = attr.as_bytes()[0];
             if first_byte == b'#' {
                 id = Some(attr[1..].into());
             } else if first_byte == b'.' {
                 classes.push(attr[1..].into());
-            } else {
-                let split = attr.split_once('=');
-                if let Some((key, value)) = split {
-                    attrs.push((key.into(), Some(value.into())));
-                } else {
-                    attrs.push((attr.into(), None));
+            } else if let Some((key, value)) = attr.split_once('=') {
+                // `id=`/`class=` fold into the `#`/`.` channels so a heading
+                // mixing shorthand and explicit forms emits a single id and
+                // one merged class list instead of duplicate attributes.
+                let value = unquote_attribute_value(value);
+                match key {
+                    "id" => id = Some(value.into()),
+                    "class" => classes.push(value.into()),
+                    _ => attrs.push((key.into(), Some(value.into()))),
                 }
+            } else {
+                attrs.push((attr.into(), None));
             }
         }
     }
@@ -6466,6 +6497,19 @@ fn parse_inside_attribute_block(inside_attr_block: &str) -> Option<HeadingAttrib
         return None;
     }
     Some(HeadingAttributes { id, classes, attrs })
+}
+
+/// Strips a matching pair of surrounding `"` or `'` from an attribute value.
+/// An unbalanced quote is kept verbatim so malformed input round-trips literally.
+fn unquote_attribute_value(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2 {
+        let quote = bytes[0];
+        if (quote == b'"' || quote == b'\'') && bytes[bytes.len() - 1] == quote {
+            return &value[1..value.len() - 1];
+        }
+    }
+    value
 }
 
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]

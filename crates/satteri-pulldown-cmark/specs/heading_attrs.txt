@@ -292,6 +292,21 @@ When both an ID and classes are specified, ID attribute is always emitted first.
 <h2 id="m" class="z a">H2</h2>
 ````````````````````````````````
 
+## Explicit `id` and `class`
+
+`id=` and `class=` fold into the `#`/`.` shorthands instead of being emitted as
+separate attributes. The last id wins; classes accumulate in source order.
+
+```````````````````````````````` example
+# H1 {#foo id=bar}
+## H2 {.c1 class=c2 .c3}
+### H3 {.c1 #x class=c2 id=y}
+.
+<h1 id="bar">H1</h1>
+<h2 class="c1 c2 c3">H2</h2>
+<h3 id="y" class="c1 c2">H3</h3>
+````````````````````````````````
+
 # Custom attributes
 
 Custom attributes can optionally have a value. If they don't have a `=` symbol,
@@ -318,6 +333,21 @@ that characters are their value.
 #### Header {#id myattr= .class1 other_attr=false}
 .
 <h4 id="id" class="class1" myattr="" other_attr="false">Header</h4>
+````````````````````````````````
+
+A value may be wrapped in matching `"` or `'` quotes, letting it contain spaces.
+The quotes are stripped; the other quote character is kept literally.
+
+```````````````````````````````` example
+# H1 {data-x="quoted value"}
+## H2 {title='it can have spaces' #id}
+### H3 {a="x" b="y z" .cls}
+#### H4 {note="it's fine" data-eq="a=b=c"}
+.
+<h1 data-x="quoted value">H1</h1>
+<h2 id="id" title="it can have spaces">H2</h2>
+<h3 class="cls" a="x" b="y z">H3</h3>
+<h4 note="it&#x27;s fine" data-eq="a=b=c">H4</h4>
 ````````````````````````````````
 
 # Forbidden characters
@@ -501,36 +531,28 @@ H2-2 {#foo**bar**baz}
 Parsing of attribute blocks takes precedence, even when unclosed inlines are
 present before the attribute blocks.
 
-````````````````````````````````.example
+```````````````````````````````` example
+# Heading with **unclosed {#myid}
+## Some *emphasis {.note}
+### Trailing `code {#ref}
+.
+<h1 id="myid">Heading with **unclosed</h1>
+<h2 class="note">Some *emphasis</h2>
+<h3 id="ref">Trailing `code</h3>
+````````````````````````````````
+
+A delimiter is left untouched even when it also appears inside the attribute
+block. The braces are an opaque boundary, so the delimiter before them stays in
+the text while the one inside them becomes part of the id or class:
+
+```````````````````````````````` example
 # H1 __{#my__id1}
 ## H2 **{#my**id2}
-### H3 `{.code` }
 #### H4 ~~{.strike~~ }
 .
 <h1 id="my__id1">H1 __</h1>
 <h2 id="my**id2">H2 **</h2>
-<h3 class="code`">H3 `</h3>
-<h4 class=".strike~~">H4 ~~</h4>
-````````````````````````````````
-
-````````````````````````````````.example
-# H1__ {#my__id1}
-## H2** {#my**id2}
-### H3` {.code` }
-#### H4~~ {.strike~~ }
-.
-<h1 id="my__id1">H1__ </h1>
-<h2 id="my**id2">H2** </h2>
-<h3 class="code`">H3` </h3>
-<h4 class=".strike~~">H4~~ </h4>
-````````````````````````````````
-
-````````````````````````````````.example
-# H1__ {.foo__bar**baz}
-qux**
-.
-<h1 class="foo__bar**baz">H1__</h1>
-<p>qux**</p>
+<h4 class="strike~~">H4 ~~</h4>
 ````````````````````````````````
 
 This behavior helps source writers and generators add attribute blocks to

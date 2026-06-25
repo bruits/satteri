@@ -313,6 +313,20 @@ fn heading_attributes_emit_custom_attributes() {
 }
 
 #[test]
+fn heading_attributes_merge_shorthand_and_explicit() {
+    let original = "## Heading {.c1 #x class=c2 id=y}";
+    let expected = "<h2 id=\"y\" class=\"c1 c2\">Heading</h2>\n";
+    assert_eq!(expected, parse_to_html_with_heading_attrs(original));
+}
+
+#[test]
+fn heading_attributes_quoted_values_keep_spaces() {
+    let original = "## Heading {data-x=\"quoted value\" title='also spaced'}";
+    let expected = "<h2 data-x=\"quoted value\" title=\"also spaced\">Heading</h2>\n";
+    assert_eq!(expected, parse_to_html_with_heading_attrs(original));
+}
+
+#[test]
 fn heading_attributes_disabled_keeps_literal_text() {
     let original = "## Heading {#explicit .custom}";
     let expected = "<h2>Heading {#explicit .custom}</h2>\n";
