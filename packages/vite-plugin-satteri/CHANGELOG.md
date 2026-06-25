@@ -1,5 +1,11 @@
 # vite-plugin-satteri
 
+## 0.2.13 — 2026-06-25
+
+### Patch changes
+
+- Updated dependencies: satteri (npm)@0.9.3
+
 ## 0.2.12 — 2026-06-23
 
 ### Patch changes

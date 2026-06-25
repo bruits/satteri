@@ -1,5 +1,11 @@
 # satteri-plugin-api
 
+## 0.4.0 — 2026-06-25
+
+### Minor changes
+
+- [66e4f07](https://github.com/bruits/satteri/commit/66e4f0755eefabef2f8b9407d7a843a81b45ab49) Fixes Markdown plugins returning `rawHtml` with literal `{` or `}` rendering those braces as MDX escape fragments in `markdownToHtml`. — Thanks @snvtac for your first contribution 🎉!
+
 ## 0.3.0 — 2026-06-18
 
 ### Minor changes

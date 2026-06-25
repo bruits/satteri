@@ -1,6 +1,6 @@
 {
   "name": "satteri",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "High-performance Markdown and MDX processing",
   "repository": {
     "type": "git",
