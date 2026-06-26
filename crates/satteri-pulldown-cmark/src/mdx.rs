@@ -862,13 +862,17 @@ fn scan_mdx_expression_end_inner(
                 ix = scan_regex(bytes, ix);
                 mark_value!();
             }
-            // JSX tags — skip `<tag ...>` and `</tag>` so their `/` and `{}`
-            // don't interfere with brace/regex tracking. When the lookahead
-            // doesn't form a valid JSX tag, treat the `<` as a less-than
-            // operator: mark_op so a following `/` is read as a regex (the
-            // acorn interpretation), not as division. Without this, an
-            // expression like `l</:/}` mis-parses the trailing `/}` as a
-            // regex literal and swallows the closing brace.
+            // JSX — skip a whole `<tag ...>...</tag>` element (or a self-closing
+            // / closing tag). Scanning the *element* (not just the tag) means
+            // its children are consumed as JSX text, where quotes and braces
+            // are literal — so an apostrophe (`Inc.'s`), a quote (`a "!?" b`),
+            // or text after a child tag (`</b>'s`) can't be mis-lexed as a JS
+            // string and swallow the closing `}`. When the lookahead doesn't
+            // form a valid JSX tag, treat the `<` as a less-than operator:
+            // mark_op so a following `/` is read as a regex (the acorn
+            // interpretation), not as division. Without this, an expression
+            // like `l</:/}` mis-parses the trailing `/}` as a regex literal and
+            // swallows the closing brace.
             b'<' if ix + 1 < bytes.len()
                 && (bytes[ix + 1].is_ascii_alphabetic()
                     || bytes[ix + 1] == b'_'
@@ -877,8 +881,7 @@ fn scan_mdx_expression_end_inner(
                     || bytes[ix + 1] == b'>') =>
             {
                 reject_if_lazy!();
-                if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[ix..], None, nesting_depth + 1)
-                {
+                if let Some(end) = scan_mdx_jsx_element_end(&bytes[ix..], nesting_depth + 1) {
                     ix += end;
                     mark_value!();
                 } else {
@@ -1217,6 +1220,67 @@ fn looks_like_spread(bytes: &[u8]) -> bool {
         i += 1;
     }
     i + 2 < bytes.len() && &bytes[i..i + 3] == b"..."
+}
+
+/// Scan a full JSX element beginning at `bytes[0] == '<'`, returning the byte
+/// offset past its matching close tag (or past `/>` for a self-closing element,
+/// or past the tag for a bare closing tag). Returns `None` if the bytes don't
+/// open a valid JSX tag.
+///
+/// Unlike [`scan_mdx_jsx_tag_end_inner`] (which scans a single tag), this also
+/// descends through the element's children: text is consumed literally — so
+/// quotes and braces in JSX text are NOT lexed as JS — while nested `{...}` are
+/// scanned as expressions and nested `<...>` as elements. That is what lets a
+/// quote in JSX text inside an attribute expression (`d={<p>Inc.'s "best"
+/// tool</p>}`, `d={<p>a<b>x</b>'s</p>}`) avoid being mistaken for a string
+/// literal that swallows the closing brace.
+fn scan_mdx_jsx_element_end(bytes: &[u8], nesting_depth: u32) -> Option<usize> {
+    if nesting_depth > MAX_MDX_NESTING {
+        return None;
+    }
+    // The opening (or closing, or fragment) tag itself.
+    let tag_end = scan_mdx_jsx_tag_end_inner(bytes, None, nesting_depth)?;
+    // A closing tag (`</x>`) or self-closing tag (`<x/>`) has no children.
+    let is_closing = bytes.len() > 1 && bytes[1] == b'/';
+    let is_self_closing = tag_end >= 2 && bytes[tag_end - 2] == b'/';
+    if is_closing || is_self_closing {
+        return Some(tag_end);
+    }
+    // Opening tag (or fragment `<>`): scan children to the matching close tag.
+    let mut ix = tag_end;
+    while ix < bytes.len() {
+        match bytes[ix] {
+            // Nested expression child — JS lexing resumes inside it.
+            b'{' => {
+                let len = scan_mdx_expression_end_inner(
+                    &bytes[ix..],
+                    false,
+                    None,
+                    false,
+                    true,
+                    nesting_depth,
+                )?;
+                ix += len;
+            }
+            // The close tag for this element.
+            b'<' if ix + 1 < bytes.len() && bytes[ix + 1] == b'/' => {
+                let len = scan_mdx_jsx_tag_end_inner(&bytes[ix..], None, nesting_depth)?;
+                return Some(ix + len);
+            }
+            // A nested element, or a literal `<` in text (`a < b`). Try to scan
+            // an element; if it isn't one, the `<` is just text.
+            b'<' => {
+                if let Some(len) = scan_mdx_jsx_element_end(&bytes[ix..], nesting_depth + 1) {
+                    ix += len;
+                } else {
+                    ix += 1;
+                }
+            }
+            // Any other byte (quotes and apostrophes included) is literal text.
+            _ => ix += 1,
+        }
+    }
+    None
 }
 
 /// Scan for an MDX ESM block (`import ...` or `export ...`).

@@ -1384,3 +1384,85 @@ fn multiline_inline_expression_error_is_exact() {
          prefix, got {p:?}"
     );
 }
+
+#[test]
+fn jsx_in_attribute_expression_is_lowered() -> Result<(), satteri_arena::mdx_types::Message> {
+    // JSX nested in an attribute expression must be transformed to `_jsx(...)`
+    // calls, exactly like JSX in children. It used to leak through un-lowered
+    // as a raw JSX element in the output (`d: <_components.p>...`), producing
+    // invalid JavaScript.
+    let element = compile(
+        "<Foo d={<p>hi there</p>} />\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        element.contains(r#"d: _jsx(_components.p, { children: "hi there" })"#),
+        "element attr should be lowered, got:\n{element}"
+    );
+
+    let fragment = compile("<Foo d={<>hi</>} />\n", &Options::default(), MDX_OPTS)?;
+    assert!(
+        fragment.contains(r#"d: _jsx(_Fragment, { children: "hi" })"#),
+        "fragment attr should be lowered, got:\n{fragment}"
+    );
+
+    let conditional = compile(
+        "<Foo d={cond ? <a>x</a> : <b>y</b>} />\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        conditional.contains("_jsx(_components.a,") && conditional.contains("_jsx(_components.b,"),
+        "JSX in a conditional attr value should be lowered, got:\n{conditional}"
+    );
+
+    // No raw JSX (`<_components.` / `<_Fragment`) may survive into the output.
+    for out in [&element, &fragment, &conditional] {
+        assert!(
+            !out.contains("<_components.") && !out.contains("<_Fragment"),
+            "raw JSX leaked into output:\n{out}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn apostrophe_in_jsx_text_after_close_tag() -> Result<(), satteri_arena::mdx_types::Message> {
+    // End-to-end guard combining both halves of the fix: the scanner must run
+    // past an apostrophe that follows a child close tag inside an attribute
+    // expression (`</b>'s`), and the resulting JSX must then be lowered.
+    let out = compile(
+        "<Foo d={<p>a<b>x</b>'s</p>} />\n",
+        &Options::default(),
+        MDX_OPTS,
+    )?;
+    assert!(
+        out.contains("_jsxs(_components.p,")
+            && out.contains(r#"_jsx(_components.b, { children: "x" })"#)
+            && out.contains(r#""'s""#),
+        "apostrophe-after-close-tag attr expr should parse and lower, got:\n{out}"
+    );
+    assert!(
+        !out.contains("<_components."),
+        "raw JSX leaked into output:\n{out}"
+    );
+
+    // Quotes elsewhere in JSX text — after a `.` (`Inc.'s`) and a paired
+    // double-quote (`"!?"`) — must likewise stay literal text, not open a JS
+    // string. (These defeat a preceding-token heuristic; the scanner consumes
+    // element children as text instead.)
+    for src in [
+        "<Foo d={<p>Stream.io, Inc.'s view</p>} />\n",
+        "<Foo d={<p>a \"!?\" icon here</p>} />\n",
+    ] {
+        let out = compile(src, &Options::default(), MDX_OPTS)?;
+        assert!(
+            out.contains("_jsx(_components.p,") && !out.contains("<_components."),
+            "quote in JSX text should parse and lower: {src:?} ->\n{out}"
+        );
+    }
+
+    Ok(())
+}
