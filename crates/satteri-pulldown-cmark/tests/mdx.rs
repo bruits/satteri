@@ -658,6 +658,33 @@ fn jsx_flow_with_expression_attr() {
 }
 
 #[test]
+fn jsx_flow_expr_attr_quote_in_jsx_text() {
+    // Quotes and apostrophes in the JSX *text* of an element inside an
+    // attribute expression are literal — the expression scan consumes the
+    // element's children as text and must run through to the real closing `}`.
+    // Before the fix the scanner lexed those children as JS, so a quote (after
+    // a close tag `</b>'s`, after a `.` in `Corp.'s`, or a paired `"..."`)
+    // opened a phantom string literal and swallowed the rest of the line.
+    for src in [
+        "<Foo d={<p>a<b>x</b>'s</p>} />\n",
+        "<Foo d={<p>Widget<Icon />'s label</p>} />\n",
+        "<Foo d={<p>Acme Corp.'s annual report</p>} />\n",
+        "<Foo d={<p>a \"!?\" badge</p>} />\n",
+        "<Foo d={<p>say <b>\"hi\"</b> ok</p>} />\n",
+        "<Foo d={<p>nested {expr} and 'text'</p>} />\n",
+    ] {
+        let ev = mdx_events(src);
+        assert!(
+            has(&ev, |e| matches!(
+                e,
+                Event::Start(Tag::MdxJsxFlowElement(s)) if s.contains("Foo")
+            )),
+            "quote in JSX text after a value token must still parse: {src:?} -> {ev:?}"
+        );
+    }
+}
+
+#[test]
 fn jsx_flow_closing_fragment() {
     let ev = mdx_events("</>\n");
     assert!(
