@@ -480,6 +480,26 @@ describe("MDX conformance: attribute values", () => {
     ].join("\n");
     await assertMdxConformance(src, { CodePreview, CodeBlock });
   });
+
+  // JSX in an attribute expression (`d={<p/>}`) must be lowered to `_jsx(...)`
+  // like JSX in children; it used to leak through raw, producing invalid JS
+  // (#119). `Slot` renders `props.d` so the comparison exercises the lowered value.
+  test("JSX element/fragment/conditional in attribute expression (#119)", async () => {
+    const Slot = (props: any) => createElement("div", null, props.d);
+    await assertMdxConformance("<Slot d={<p>hi there</p>} />", { Slot });
+    await assertMdxConformance("<Slot d={<>hi</>} />", { Slot });
+    await assertMdxConformance("<Slot d={true ? <a>x</a> : <b>y</b>} />", { Slot });
+  });
+
+  // Quotes and apostrophes in the JSX text of an element inside an attribute
+  // expression are literal, but the scanner used to lex them as JS string openers
+  // and swallow the closing `}`, failing to parse (#119).
+  test("quotes in JSX text inside attribute expression (#119)", async () => {
+    const Slot = (props: any) => createElement("div", null, props.d);
+    await assertMdxConformance("<Slot d={<p>a<b>x</b>'s</p>} />", { Slot });
+    await assertMdxConformance("<Slot d={<p>Acme Corp.'s view</p>} />", { Slot });
+    await assertMdxConformance('<Slot d={<p>a "!?" badge here</p>} />', { Slot });
+  });
 });
 
 describe("MDX conformance: markdown elements", () => {
