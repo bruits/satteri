@@ -5,7 +5,7 @@ section: "reference"
 order: 5
 ---
 
-The `features` option on `markdownToHtml`, `mdxToJs`, `markdownToHast`, and `mdxToHast` toggles which Markdown extensions the parser recognizes (see [Compiling](/docs/compile/) for those functions). By default, Sätteri enables `gfm` and `frontmatter`.
+The `features` option on `markdownToHtml`, `mdxToJs`, `markdownToHast`, and `mdxToHast` toggles which Markdown extensions the parser recognizes (see [Entry points](/docs/entry-points/) for those functions). By default, Sätteri enables `gfm` and `frontmatter`.
 
 ```js
 import { markdownToHtml } from "satteri";

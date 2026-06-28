@@ -197,7 +197,7 @@ defineHastPlugin({
 
 Use `structuredClone(node)` for a deep, fully independent copy of the node and its subtree, or `{ ...node }` for a cheaper shallow copy when you only need this node's own fields.
 
-To get a plain JavaScript tree of the whole document, use [`markdownToMdast` or `markdownToHast`](/docs/compile/#trees-without-compiling):
+To get a plain JavaScript tree of the whole document, use [`markdownToMdast` or `markdownToHast`](/docs/entry-points/#trees-without-compiling):
 
 ```js
 import { markdownToMdast } from "satteri";

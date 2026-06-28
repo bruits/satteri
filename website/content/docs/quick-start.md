@@ -57,4 +57,4 @@ const { html } = markdownToHtml("Use `let` instead of `var`.", {
 // <p>Use let instead of var.</p>
 ```
 
-For more, see the [Plugins](/docs/plugins/) guide and the [Compiling](/docs/compile/) reference for all options.
+For more, see the [Plugins](/docs/plugins/) guide, the [Entry points](/docs/entry-points/) reference, and the full list of [Options](/docs/options/).

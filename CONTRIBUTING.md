@@ -54,7 +54,7 @@ Sätteri uses [Sampo](https://github.com/bruits/sampo) to manage changelogs and 
 
 ## Getting Started
 
-Sätteri is a Rust + TypeScript monorepo. The Rust workspace lives at the repository root (`Cargo.toml`), and the npm package lives under `packages/satteri`.
+Sätteri is a Rust + TypeScript monorepo. The Rust workspace lives at the repository root (`Cargo.toml`), and the npm packages live under `packages/`.
 
 ### Prerequisites
 
@@ -100,6 +100,14 @@ High-level Rust API tying the pipeline together: parse, convert, compile.
 #### `packages/satteri` (npm)
 
 The TypeScript layer. Provides the public functions (`markdownToHtml`, `mdxToJs`, etc), and the plugin definition API (`defineMdastPlugin`, `defineHastPlugin`).
+
+#### `packages/satteri-expressive-code` (npm)
+
+HAST plugin rendering code blocks with [Expressive Code](https://expressive-code.com) (Shiki highlighting, frames, copy button); the Sätteri equivalent of `rehype-expressive-code`.
+
+#### `packages/vite-plugin-satteri` (npm)
+
+Vite plugin that imports `.md` (rendered HTML) and `.mdx` (JSX component) files through Sätteri.
 
 ---
 

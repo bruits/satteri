@@ -2,6 +2,8 @@
 
 Native-enhanced Markdown parsing and processing for JavaScript. Parse and compile in Rust, create flexible plugins in JavaScript.
 
+Check out the [documentation](https://satteri.bruits.org/docs/) for [installation instructions](https://satteri.bruits.org/docs/installation/), the [API reference](https://satteri.bruits.org/docs/entry-points/), and [usage examples](https://satteri.bruits.org/docs/quick-start/), try it online on the [playground](https://satteri.bruits.org/playground), or join us on [Discord](https://discord.com/invite/84pd4QtmzA)!
+
 ## Install
 
 ```sh
@@ -51,16 +53,6 @@ const { html } = markdownToHtml("Use `let` instead of `var`.", {
 
 If you're familiar with the unified ecosystem, mdast and hast plugins are similar to remark and rehype plugins, respectively, reusing the same AST shapes.
 
-## Documentation
+## Development
 
-This README covers the basics. The full documentation covers the complete API, the plugin system, every parser feature, and framework integration:
-
-- **[Documentation home](https://satteri.bruits.org/docs/)** — start here
-- [Quick start](https://satteri.bruits.org/docs/quick-start/)
-- [Compiling](https://satteri.bruits.org/docs/compile/) — functions, options, and MDX settings
-- [Plugins](https://satteri.bruits.org/docs/plugins/) and [Plugin API](https://satteri.bruits.org/docs/plugin-api/)
-- [Features](https://satteri.bruits.org/docs/features/) — GFM, math, directives, and more
-
-## License
-
-MIT
+Refer to [CONTRIBUTING.md](https://github.com/bruits/satteri/blob/main/CONTRIBUTING.md) for development setup and workflow details.

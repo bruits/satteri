@@ -7,27 +7,29 @@
 
 High-performance Markdown and MDX processing. Parses and compiles in Rust, runs your plugins in JavaScript.
 
-Check out the npm package's [documentation](./packages/satteri/README.md) for installation instructions, API reference, and usage examples, [try it online on the playground](https://satteri.bruits.org/playground), or join us on [Discord](https://discord.com/invite/84pd4QtmzA)!
+Check out the [documentation](https://satteri.bruits.org/docs/) for [installation instructions](https://satteri.bruits.org/docs/installation/), the [API reference](https://satteri.bruits.org/docs/entry-points/), and [usage examples](https://satteri.bruits.org/docs/quick-start/), try it online on the [playground](https://satteri.bruits.org/playground), or join us on [Discord](https://discord.com/invite/84pd4QtmzA)!
 
 ## Packages
 
 Sätteri is a Rust + TypeScript monorepo containing the following Rust crates:
 
-| Name                     | Description                                                            | README                                              | Registry                                                                                                                                                                        |
-| ------------------------ | ---------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `satteri`                | High-level Rust API for the pipeline: parse, convert, compile          | [README](./crates/satteri/README.md)                | <a href="https://crates.io/crates/satteri"><img alt="Satteri Crates.io Version" src="https://img.shields.io/crates/v/satteri"></a>                                              |
-| `satteri-arena`          | Arena allocator and binary buffer primitives                           | [README](./crates/satteri-arena/README.md)          | <a href="https://crates.io/crates/satteri-arena"><img alt="Satteri Arena Crates.io Version" src="https://img.shields.io/crates/v/satteri-arena"></a>                            |
-| `satteri-ast`            | MDAST and HAST node types, codecs, tree operations, and conversion     | [README](./crates/satteri-ast/README.md)            | <a href="https://crates.io/crates/satteri-ast"><img alt="Satteri AST Crates.io Version" src="https://img.shields.io/crates/v/satteri-ast"></a>                                  |
-| `satteri-plugin-api`     | Rust `Plugin` trait for Rust plugins, typed visitors, and runner       | [README](./crates/satteri-plugin-api/README.md)     | <a href="https://crates.io/crates/satteri-plugin-api"><img alt="Satteri Plugin API Crates.io Version" src="https://img.shields.io/crates/v/satteri-plugin-api"></a>             |
-| `satteri-napi-binding`   | NAPI bindings exposing the Rust pipeline to JavaScript                 | [README](./crates/satteri-napi-binding/README.md)   | —                                                                                                                                                                               |
-| `satteri-mdxjs-rs`       | MDX-to-JavaScript compiler, fork of [mdxjs-rs] adapted for OXC         | [README](./crates/satteri-mdxjs-rs/readme.md)       | <a href="https://crates.io/crates/satteri-mdxjs"><img alt="Satteri MDXJS Crates.io Version" src="https://img.shields.io/crates/v/satteri-mdxjs"></a>                            |
-| `satteri-pulldown-cmark` | CommonMark parser with MDX extension support, fork of [pulldown-cmark] | [README](./crates/satteri-pulldown-cmark/README.md) | <a href="https://crates.io/crates/satteri-pulldown-cmark"><img alt="Satteri pulldown-cmark Crates.io Version" src="https://img.shields.io/crates/v/satteri-pulldown-cmark"></a> |
+| Name                     | Description                                                            | Registry                                                                                                                                                                        | README                                              |
+| ------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `satteri`                | High-level Rust API for the pipeline: parse, convert, compile          | <a href="https://crates.io/crates/satteri"><img alt="Satteri Crates.io Version" src="https://img.shields.io/crates/v/satteri"></a>                                              | [README](./crates/satteri/README.md)                |
+| `satteri-arena`          | Arena allocator and binary buffer primitives                           | <a href="https://crates.io/crates/satteri-arena"><img alt="Satteri Arena Crates.io Version" src="https://img.shields.io/crates/v/satteri-arena"></a>                            | [README](./crates/satteri-arena/README.md)          |
+| `satteri-ast`            | MDAST and HAST node types, codecs, tree operations, and conversion     | <a href="https://crates.io/crates/satteri-ast"><img alt="Satteri AST Crates.io Version" src="https://img.shields.io/crates/v/satteri-ast"></a>                                  | [README](./crates/satteri-ast/README.md)            |
+| `satteri-plugin-api`     | Rust `Plugin` trait for Rust plugins, typed visitors, and runner       | <a href="https://crates.io/crates/satteri-plugin-api"><img alt="Satteri Plugin API Crates.io Version" src="https://img.shields.io/crates/v/satteri-plugin-api"></a>             | [README](./crates/satteri-plugin-api/README.md)     |
+| `satteri-napi-binding`   | NAPI bindings exposing the Rust pipeline to JavaScript                 | —                                                                                                                                                                               | [README](./crates/satteri-napi-binding/README.md)   |
+| `satteri-mdxjs-rs`       | MDX-to-JavaScript compiler, fork of [mdxjs-rs] adapted for OXC         | <a href="https://crates.io/crates/satteri-mdxjs"><img alt="Satteri MDXJS Crates.io Version" src="https://img.shields.io/crates/v/satteri-mdxjs"></a>                            | [README](./crates/satteri-mdxjs-rs/readme.md)       |
+| `satteri-pulldown-cmark` | CommonMark parser with MDX extension support, fork of [pulldown-cmark] | <a href="https://crates.io/crates/satteri-pulldown-cmark"><img alt="Satteri pulldown-cmark Crates.io Version" src="https://img.shields.io/crates/v/satteri-pulldown-cmark"></a> | [README](./crates/satteri-pulldown-cmark/README.md) |
 
-And the following npm package:
+And the following npm packages:
 
-| Name             | Description                                          | README                                 | Registry                                                                                                                       |
-| ---------------- | ---------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| [`satteri`][npm] | TypeScript layer: plugin API and top-level functions | [README](./packages/satteri/README.md) | <a href="https://www.npmjs.com/package/satteri"><img alt="Satteri npm Version" src="https://img.shields.io/npm/v/satteri"></a> |
+| Name                                             | Description                                          | Registry                                                                                                                                                                       | README                                                 |
+| ------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| [`satteri`][npm]                                 | TypeScript layer: plugin API and top-level functions | <a href="https://www.npmjs.com/package/satteri"><img alt="Satteri npm Version" src="https://img.shields.io/npm/v/satteri"></a>                                                 | [README](./packages/satteri/README.md)                 |
+| [`satteri-expressive-code`][npm-expressive-code] | HAST plugin: render code blocks with Expressive Code | <a href="https://www.npmjs.com/package/satteri-expressive-code"><img alt="Satteri Expressive Code npm Version" src="https://img.shields.io/npm/v/satteri-expressive-code"></a> | [README](./packages/satteri-expressive-code/README.md) |
+| [`vite-plugin-satteri`][npm-vite-plugin]         | Vite plugin: import `.md` and `.mdx` files           | <a href="https://www.npmjs.com/package/vite-plugin-satteri"><img alt="vite-plugin-satteri npm Version" src="https://img.shields.io/npm/v/vite-plugin-satteri"></a>             | [README](./packages/vite-plugin-satteri/README.md)     |
 
 ## Acknowledgements
 
@@ -50,3 +52,5 @@ Sätteri is an open-source project born from [Bruits](https://bruits.org/), a Ru
 [Lightning CSS]: https://lightningcss.dev
 [mdxjs-rs]: https://github.com/wooorm/mdxjs-rs
 [npm]: https://www.npmjs.com/package/satteri
+[npm-expressive-code]: https://www.npmjs.com/package/satteri-expressive-code
+[npm-vite-plugin]: https://www.npmjs.com/package/vite-plugin-satteri

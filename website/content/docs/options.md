@@ -1,70 +1,13 @@
 ---
-title: "Compiling"
-description: "The compile entry points, their options, and the result shape."
+title: "Options"
+description: "The CompileOptions shared by the entry points, plus the MDX-only options and JSX output settings."
 section: "reference"
-order: 3
+order: 4
 ---
 
-Sätteri's entry points parse a source string and return a result object. They run synchronously unless a plugin has an async visitor, in which case they return a `Promise` of the same result (see [Async plugins](/docs/plugin-api/#async-plugins)).
+Options for Sätteri's [entry points](/docs/entry-points/). `CompileOptions` is shared by `markdownToHtml` and `mdxToJs`, which additionally accepts the [MDX options](#mdx-options) below.
 
-## markdownToHtml
-
-```ts
-markdownToHtml(source: string, options?: CompileOptions): MarkdownToHtmlResult;
-```
-
-Parse Markdown and render HTML.
-
-```js
-import { markdownToHtml } from "satteri";
-
-const { html, frontmatter, data } = markdownToHtml("# Hello, *world*");
-// html === "<h1>Hello, <em>world</em></h1>"
-```
-
-## mdxToJs
-
-```ts
-mdxToJs(source: string, options?: MdxCompileOptions): MdxToJsResult;
-```
-
-Parse MDX and compile it to JavaScript module source. The compiled code is on `code` (not `html`).
-
-```js
-import { mdxToJs } from "satteri";
-
-const { code } = mdxToJs("# Hello\n\n<MyComponent />");
-```
-
-## Result shape
-
-Both functions return an object, never a bare string:
-
-```ts
-interface MarkdownToHtmlResult {
-  html: string; // rendered HTML
-  frontmatter: Frontmatter | null;
-  data: Data; // the document data bag
-}
-
-interface MdxToJsResult {
-  code: string; // compiled JS module source
-  frontmatter: Frontmatter | null;
-  data: Data;
-}
-```
-
-`frontmatter` is the parsed block at the top of the document, or `null` if there is none — see [Frontmatter](/docs/features/#frontmatter) for its shape. `data` is the [document data bag](#data).
-
-When any plugin visitor is async, the result is wrapped in a `Promise`:
-
-```js
-const { html } = await markdownToHtml(source, { mdastPlugins: [asyncPlugin] });
-```
-
-## Options
-
-`CompileOptions` is shared by `markdownToHtml` and `mdxToJs` (which also takes the [MDX options](#mdx-options) below).
+## CompileOptions
 
 | Option         | Type                 | Notes                                                                       |
 | -------------- | -------------------- | --------------------------------------------------------------------------- |
@@ -147,41 +90,3 @@ The remaining MDX options control the generated JavaScript and are named after t
 | `outputFormat`             | `"program" \| "function-body"` | `"program"`             | `program` emits an ES module; `function-body` emits a body for `new Function()` / `evaluate`. |
 | `elementAttributeNameCase` | `"react" \| "html"`            | `"react"`               | Casing for attributes on rehype-produced elements.                                            |
 | `stylePropertyNameCase`    | `"dom" \| "css"`               | `"dom"`                 | Casing for keys in parsed `style` objects.                                                    |
-
-## Trees without compiling
-
-To get a plain JavaScript AST without running plugins or rendering, use the tree functions. Each parses the source and returns a materialized tree directly (not a result object), and accepts only a `features` option.
-
-```ts
-markdownToMdast(source: string, options?: { features?: Features }): MdastNode;
-mdxToMdast(source: string, options?: { features?: Features }): MdastNode;
-markdownToHast(source: string, options?: { features?: Features }): HastNode;
-mdxToHast(source: string, options?: { features?: Features }): HastNode;
-```
-
-```js
-import { markdownToMdast } from "satteri";
-
-const tree = markdownToMdast("# Hello");
-tree.children[0].type; // "heading"
-tree.children[0].depth; // 1
-```
-
-This is useful when you want Sätteri's fast native parsing but another pipeline (e.g. remark plugins and `remark-stringify`) for the rest. The returned tree is plain objects, yours to keep — see [Node lifetime](/docs/plugin-api/#node-lifetime) for why that matters.
-
-## evaluate
-
-Compile and run MDX in one step, returning the module's exports (including `default`, the component). Pass a JSX runtime:
-
-```js
-import { evaluate } from "satteri";
-import * as runtime from "react/jsx-runtime";
-
-const { default: Content } = evaluate("# Hello\n\n<Sparkle />", { ...runtime });
-```
-
-Like the others, it returns a `Promise` when async plugins are used.
-
-## Security
-
-MDX is a programming language — `mdxToJs` turns it into JavaScript, and `evaluate` runs that JavaScript. Treat MDX like any code you execute: don't compile or evaluate MDX from authors you don't trust.

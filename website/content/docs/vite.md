@@ -87,7 +87,7 @@ By default, the plugin compiles MDX with `development: true` in `serve` so React
 | `hastPlugins`  | `HastPluginInput[]`     | —       | HAST-stage plugins, shared across `.md` and `.mdx`.            |
 | `features`     | `Features`              | —       | Parser toggles. See [Features](/docs/features/).               |
 
-`MdxOptions` mirrors Sätteri's MDX options minus `outputFormat`, `elementAttributeNameCase`, and `stylePropertyNameCase`. The plugin always emits an ES module so Vite can import it.
+`MdxOptions` mirrors Sätteri's MDX options minus `outputFormat`. The plugin always emits an ES module so Vite can import it.
 
 Plugins given here apply to every Markdown and MDX file. See the [Plugins](/docs/plugins/) guide for how to write them.
 
