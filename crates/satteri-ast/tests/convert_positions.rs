@@ -262,15 +262,7 @@ fn math_block_position_preserved() {
     let mdast = parse("$$\nx = 1\n$$");
     let hast = mdast_arena_to_hast_arena(&mdast);
     let m_id = find_mdast(&mdast, MdastNodeType::Math);
-    let h_id = find_hast_element_where(&hast, "pre", |arena, id| {
-        arena.get_children(id).first().is_some_and(|&child_id| {
-            is_element_with_tag(arena, child_id, "code")
-                && matches!(
-                    element_prop(arena, child_id, "className"),
-                    Some(c) if c.contains("math-display")
-                )
-        })
-    });
+    let h_id = find_hast_by_type(&hast, HastNodeType::Raw);
     assert_position_matches(&hast, h_id, &mdast, m_id, "math block");
 }
 
@@ -281,12 +273,7 @@ fn inline_math_position_preserved() {
     let mdast = parse("an $x$ sym");
     let hast = mdast_arena_to_hast_arena(&mdast);
     let m_id = find_mdast(&mdast, MdastNodeType::InlineMath);
-    let h_id = find_hast_element_where(&hast, "code", |arena, id| {
-        matches!(
-            element_prop(arena, id, "className"),
-            Some(c) if c.contains("math-inline")
-        )
-    });
+    let h_id = find_hast_by_type(&hast, HastNodeType::Raw);
     assert_position_matches(&hast, h_id, &mdast, m_id, "inline math");
 }
 
