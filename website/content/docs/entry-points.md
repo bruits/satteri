@@ -24,7 +24,7 @@ const { html, frontmatter, data } = markdownToHtml("# Hello, *world*");
 
 ## mdxToJs
 
-**MDX is a programming language: `mdxToJs` compiles it to JavaScript and `evaluate` runs that JavaScript. Treat MDX like code you execute — never compile or evaluate MDX from authors you don't trust.**
+MDX is a programming language: `mdxToJs` compiles it to JavaScript and `evaluate` runs that JavaScript. Treat MDX like code you execute — never compile or evaluate MDX from authors you don't trust.
 
 ```ts
 mdxToJs(source: string, options?: MdxCompileOptions): MdxToJsResult;

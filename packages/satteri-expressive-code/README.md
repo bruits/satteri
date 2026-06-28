@@ -25,7 +25,6 @@ const { html } = await markdownToHtml(source, {
 });
 ```
 
-The plugin's visitor is async, so `markdownToHtml` returns a `Promise`.
 
 ## Development
 
