@@ -1,5 +1,12 @@
 # satteri-pulldown-cmark
 
+## 0.5.7 — 2026-06-29
+
+### Patch changes
+
+- [07ee532](https://github.com/bruits/satteri/commit/07ee53293af76d0dcddbac961ad35337c5500e74) Fixes JSX nested in an MDX attribute expression (e.g. `prop={<p>hi</p>}` or `title={<>x</>}`) being emitted as raw, un-lowered JSX, which produced invalid JavaScript. Also fixes quotes and apostrophes in such JSX text (e.g. `prop={<p>Acme Corp.'s "best" tool</p>}`) being mis-scanned as JS string literals and causing a parse error — the expression scanner now consumes a JSX element's children as text. — Thanks @vaneenige for your first contribution 🎉!
+- Updated dependencies: satteri-arena (Cargo)@0.2.2, satteri-ast (Cargo)@0.4.1
+
 ## 0.5.6 — 2026-06-25
 
 ### Patch changes

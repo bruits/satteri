@@ -1,5 +1,12 @@
 # satteri-napi
 
+## 0.4.6 — 2026-06-29
+
+### Patch changes
+
+- [c6a9088](https://github.com/bruits/satteri/commit/c6a908875ae5161c86c592388a55f9caca9ed35b) Fixes plugin `ctx.source` being polluted with duplicated, concatenated content appended after the original document. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.2.2, satteri-ast (Cargo)@0.4.1, satteri-mdxjs (Cargo)@0.3.7, satteri-plugin-api (Cargo)@0.4.1, satteri-pulldown-cmark (Cargo)@0.5.7
+
 ## 0.4.5 — 2026-06-25
 
 ### Patch changes

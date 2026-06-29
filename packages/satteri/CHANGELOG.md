@@ -1,5 +1,14 @@
 # satteri
 
+## 0.9.4 — 2026-06-29
+
+### Patch changes
+
+- [c6a9088](https://github.com/bruits/satteri/commit/c6a908875ae5161c86c592388a55f9caca9ed35b) Fixes plugin `ctx.source` being polluted with duplicated, concatenated content appended after the original document. — Thanks @Princesseuh!
+- [65e0758](https://github.com/bruits/satteri/commit/65e0758e293b2c3bcfe3767770fad3daaf5fdb69) Exposes the `MdastVisitorContext` type from the `satteri` package. — Thanks @HiDeoo!
+- [07ee532](https://github.com/bruits/satteri/commit/07ee53293af76d0dcddbac961ad35337c5500e74) Fixes JSX nested in an MDX attribute expression (e.g. `prop={<p>hi</p>}` or `title={<>x</>}`) being emitted as raw, un-lowered JSX, which produced invalid JavaScript. Also fixes quotes and apostrophes in such JSX text (e.g. `prop={<p>Acme Corp.'s "best" tool</p>}`) being mis-scanned as JS string literals and causing a parse error — the expression scanner now consumes a JSX element's children as text. — Thanks @vaneenige for your first contribution 🎉!
+- [2be5f6b](https://github.com/bruits/satteri/commit/2be5f6bdd43ee2d66381b12920cf3ee2c45a3905) Updated `binding.browser.ts` to export functions from `browser.js` — Thanks @noClaps for your first contribution 🎉!
+
 ## 0.9.3 — 2026-06-25
 
 ### Patch changes
