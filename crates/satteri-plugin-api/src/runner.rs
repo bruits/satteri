@@ -124,12 +124,13 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
     commands
         .into_iter()
         .filter_map(|cmd| match cmd {
-            Command::Replace { node_id, new_node } => built_node_to_arena(new_node, arena.string_pool())
-                .map(|sub| Patch::Replace {
+            Command::Replace { node_id, new_node } => {
+                built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::Replace {
                     node_id: *node_id,
                     new_tree: sub,
                     keep_children: false,
-                }),
+                })
+            }
             Command::Remove { node_id } => Some(Patch::Remove { node_id: *node_id }),
             Command::InsertBefore { node_id, new_node } => {
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::InsertBefore {
@@ -153,17 +154,21 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             Command::PrependChild {
                 node_id,
                 child_node,
-            } => built_node_to_arena(child_node, arena.string_pool()).map(|sub| Patch::PrependChild {
-                node_id: *node_id,
-                child_tree: sub,
+            } => built_node_to_arena(child_node, arena.string_pool()).map(|sub| {
+                Patch::PrependChild {
+                    node_id: *node_id,
+                    child_tree: sub,
+                }
             }),
             Command::AppendChild {
                 node_id,
                 child_node,
-            } => built_node_to_arena(child_node, arena.string_pool()).map(|sub| Patch::AppendChild {
-                node_id: *node_id,
-                child_tree: sub,
-            }),
+            } => {
+                built_node_to_arena(child_node, arena.string_pool()).map(|sub| Patch::AppendChild {
+                    node_id: *node_id,
+                    child_tree: sub,
+                })
+            }
             Command::SetData { .. } => {
                 // Already applied via DataMap in PluginContext, no arena rebuild needed
                 None

@@ -25,7 +25,6 @@ const { html } = await markdownToHtml(source, {
 });
 ```
 
-
 ## Development
 
 Refer to [CONTRIBUTING.md](https://github.com/bruits/satteri/blob/main/CONTRIBUTING.md) for development setup and workflow details.
