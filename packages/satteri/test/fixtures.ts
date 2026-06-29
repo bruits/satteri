@@ -59,7 +59,7 @@ export function buildTestBuffer({
   children: number[];
   typeData: Uint8Array;
 }): ArrayBuffer {
-  const sourceBytes = new TextEncoder().encode(source);
+  const stringPoolBytes = new TextEncoder().encode(source);
 
   const nodesBytes = nodes.length * NODE_STRUCT_SIZE;
   const childrenBytes = children.length * 4;
@@ -67,8 +67,8 @@ export function buildTestBuffer({
   const nodesOffset = HEADER_SIZE;
   const childrenOffset = nodesOffset + nodesBytes;
   const typeDataOffset = childrenOffset + childrenBytes;
-  const sourceOffset = typeDataOffset + typeData.length;
-  const totalSize = sourceOffset + sourceBytes.length;
+  const stringPoolOffset = typeDataOffset + typeData.length;
+  const totalSize = stringPoolOffset + stringPoolBytes.length;
 
   const buf = new ArrayBuffer(totalSize);
   const view = new DataView(buf);
@@ -83,8 +83,8 @@ export function buildTestBuffer({
   view.setUint32(24, childrenOffset, true);
   view.setUint32(28, typeData.length, true);
   view.setUint32(32, typeDataOffset, true);
-  view.setUint32(36, sourceBytes.length, true);
-  view.setUint32(40, sourceOffset, true);
+  view.setUint32(36, stringPoolBytes.length, true);
+  view.setUint32(40, stringPoolOffset, true);
 
   // Nodes
   for (let i = 0; i < nodes.length; i++) {
@@ -113,8 +113,8 @@ export function buildTestBuffer({
   // Type data
   u8.set(typeData, typeDataOffset);
 
-  // Source
-  u8.set(sourceBytes, sourceOffset);
+  // String pool
+  u8.set(stringPoolBytes, stringPoolOffset);
 
   return buf;
 }

@@ -753,6 +753,45 @@ test("a retained node throws on `.children` after an async pass settles", async 
   expect(() => retained!.children).toThrow(/retained past its visitor pass/);
 });
 
+test("ctx.source returns the verbatim input, not the string-interning heap", () => {
+  const md = [
+    "Access it using `/mdx`.",
+    "",
+    "![an image](https://placehold.co/600x400)",
+    "",
+    "```js",
+    "const a = 2;",
+    "```",
+    "",
+  ].join("\n");
+  const handle = createMdastHandle(md);
+  expect(getHandleSource(handle)).toBe(md);
+});
+
+test("ctx.source is not polluted by smart-punctuation decoding", () => {
+  const md = "page d'accueil\n";
+  const handle = createMdastHandle(md, { smartPunctuation: true });
+  expect(getHandleSource(handle)).toBe(md);
+});
+
+test("ctx.source stays verbatim after a mutating plugin rebuilds the tree", () => {
+  const md = "# Title with `code`\n\n![alt](https://example.com/x.png)\n";
+  const handle = createMdastHandle(md);
+  const plugin = defineMdastPlugin({
+    name: "heading-to-paragraph",
+    heading: () => ({ type: "paragraph", children: [{ type: "text", value: "x" }] }),
+  });
+  const result = visitMdastHandle(
+    handle,
+    plugin,
+    resolveMdastSubscriptions(plugin),
+    () => getHandleSource(handle),
+    undefined,
+  ) as { commandBuffer: Uint8Array };
+  applyCommandsToMdastHandle(handle, result.commandBuffer);
+  expect(getHandleSource(handle)).toBe(md);
+});
+
 test("handles are kind-branded: cross-kind use is a compile error", () => {
   const { handle, source } = setup();
   const intoMdast = (h: MdastHandle): MdastHandle => h;

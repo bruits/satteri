@@ -22,7 +22,15 @@ pub struct Arena<K: ArenaKind> {
     pub children: Vec<u32>,
     /// Variable-length type-specific data, packed.
     pub type_data: Vec<u8>,
-    pub source: String,
+    /// The original input followed by a string-interning heap: `alloc_string`
+    /// appends computed strings (decoded entities, image alt/url, code values)
+    /// past the input so every `StringRef` is a uniform offset+len.
+    /// `source_len` marks the boundary; for the input as written use `source()`.
+    pub string_pool: String,
+    /// Byte length of the original-input prefix of `string_pool`. Set at
+    /// construction; preserved across rebuild and mdast→hast conversion, which
+    /// copy the full pool to keep `StringRef` offsets valid.
+    pub source_len: u32,
     /// Per-node `data` blobs (JSON bytes), set by JS plugins.
     pub node_data: FxHashMap<u32, Vec<u8>>,
     /// Whether this arena was parsed in MDX mode.
@@ -46,7 +54,8 @@ impl<K: ArenaKind> Clone for Arena<K> {
             nodes: self.nodes.clone(),
             children: self.children.clone(),
             type_data: self.type_data.clone(),
-            source: self.source.clone(),
+            string_pool: self.string_pool.clone(),
+            source_len: self.source_len,
             node_data: self.node_data.clone(),
             mdx: self.mdx,
             parse_options: self.parse_options,
@@ -61,11 +70,13 @@ impl<K: ArenaKind> Arena<K> {
     /// the kind explicitly, e.g. `Arena::<Mdast>::new(source)` or via a
     /// type-annotated binding `let a: Arena<Hast> = Arena::new(source);`.
     pub fn new(source: String) -> Self {
+        let source_len = source.len() as u32;
         Arena {
             nodes: Vec::new(),
             children: Vec::new(),
             type_data: Vec::new(),
-            source,
+            string_pool: source,
+            source_len,
             node_data: FxHashMap::default(),
             mdx: false,
             parse_options: 0,
@@ -82,11 +93,13 @@ impl<K: ArenaKind> Arena<K> {
         children_count: usize,
         type_data_len: usize,
     ) -> Self {
+        let source_len = source.len() as u32;
         Arena {
             nodes: Vec::with_capacity(node_count),
             children: Vec::with_capacity(children_count),
             type_data: Vec::with_capacity(type_data_len),
-            source,
+            string_pool: source,
+            source_len,
             node_data: FxHashMap::default(),
             mdx: false,
             parse_options: 0,
@@ -195,7 +208,7 @@ impl<K: ArenaKind> Arena<K> {
     pub fn get_str(&self, string_ref: StringRef) -> &str {
         let start = string_ref.offset as usize;
         let end = start + string_ref.len as usize;
-        &self.source[start..end]
+        &self.string_pool[start..end]
     }
 
     pub fn get_node_data(&self, node_id: u32) -> Option<&[u8]> {
@@ -210,8 +223,16 @@ impl<K: ArenaKind> Arena<K> {
         }
     }
 
+    /// The full pool (input + `alloc_string` heap), the buffer `StringRef`s
+    /// index into. Most callers want `get_str`; for the input as written,
+    /// use `source()`.
+    pub fn string_pool(&self) -> &str {
+        &self.string_pool
+    }
+
+    /// The original input as written, without the `alloc_string` heap.
     pub fn source(&self) -> &str {
-        &self.source
+        &self.string_pool[..self.source_len as usize]
     }
 
     pub fn len(&self) -> usize {
@@ -225,9 +246,9 @@ impl<K: ArenaKind> Arena<K> {
     /// For computed strings not present verbatim in the source (e.g. decoded
     /// character references, normalised identifiers, synthesised alt text).
     pub fn alloc_string(&mut self, s: &str) -> StringRef {
-        let offset = self.source.len() as u32;
+        let offset = self.string_pool.len() as u32;
         let len = s.len() as u32;
-        self.source.push_str(s);
+        self.string_pool.push_str(s);
         StringRef::new(offset, len)
     }
 
@@ -290,6 +311,15 @@ mod tests {
         let arena: Arena<Mdast> = Arena::new(source);
         let sr = StringRef::new(7, 5);
         assert_eq!(arena.get_str(sr), "world");
+    }
+
+    #[test]
+    fn alloc_string_does_not_leak_into_source() {
+        let mut arena: Arena<Mdast> = Arena::new("# Hello".to_string());
+        let sr = arena.alloc_string("synthesised");
+        assert_eq!(arena.get_str(sr), "synthesised");
+        assert_eq!(arena.string_pool(), "# Hellosynthesised");
+        assert_eq!(arena.source(), "# Hello");
     }
 
     #[test]

@@ -18,8 +18,8 @@ pub(crate) mod header {
     pub(crate) const CHILDREN_OFFSET: usize = 24;
     pub(crate) const TYPE_DATA_LEN: usize = 28;
     pub(crate) const TYPE_DATA_OFFSET: usize = 32;
-    pub(crate) const SOURCE_LEN: usize = 36;
-    pub(crate) const SOURCE_OFFSET: usize = 40;
+    pub(crate) const STRING_POOL_LEN: usize = 36;
+    pub(crate) const STRING_POOL_OFFSET: usize = 40;
     pub(crate) const NODE_DATA_COUNT: usize = 44;
     pub(crate) const NODE_DATA_OFFSET: usize = 48;
     pub(crate) const SIZE: usize = 52;

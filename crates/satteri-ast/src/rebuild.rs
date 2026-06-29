@@ -149,8 +149,12 @@ pub fn rebuild_lenient<K: ArenaKind>(
         }
     }
 
-    let new_source = arena.source().to_string();
-    let mut builder: ArenaBuilder<K> = ArenaBuilder::new(new_source);
+    // The full pool carries over so copied StringRefs stay valid; the
+    // original-input prefix is unchanged, so preserve the boundary that `new`
+    // would otherwise reset to the whole pool.
+    let new_pool = arena.string_pool().to_string();
+    let mut builder: ArenaBuilder<K> = ArenaBuilder::new(new_pool);
+    builder.arena_mut().source_len = arena.source_len;
 
     let mut visited: FxHashSet<u32> = FxHashSet::default();
     let mut active: FxHashSet<u32> = FxHashSet::default();
@@ -384,11 +388,11 @@ fn emit_subtree<K: ArenaKind>(
     if sub_arena.is_empty() {
         return;
     }
-    let sub_source = sub_arena.source();
-    let source_base = if sub_source.is_empty() {
+    let sub_pool = sub_arena.string_pool();
+    let source_base = if sub_pool.is_empty() {
         0u32
     } else {
-        let sref = builder.alloc_string(sub_source);
+        let sref = builder.alloc_string(sub_pool);
         sref.offset
     };
 
@@ -515,11 +519,11 @@ fn emit_subtree_with_original_children<K: ArenaKind>(
         return;
     }
 
-    let sub_source = sub_arena.source();
-    let source_base = if sub_source.is_empty() {
+    let sub_pool = sub_arena.string_pool();
+    let source_base = if sub_pool.is_empty() {
         0u32
     } else {
-        let sref = builder.alloc_string(sub_source);
+        let sref = builder.alloc_string(sub_pool);
         sref.offset
     };
 
@@ -715,11 +719,11 @@ fn emit_wrap_node<K: ArenaKind>(
     }
 
     // Remap string refs from the wrapper arena into the builder's merged source
-    let sub_source = parent_tree.source();
-    let source_base = if sub_source.is_empty() {
+    let sub_pool = parent_tree.string_pool();
+    let source_base = if sub_pool.is_empty() {
         0u32
     } else {
-        let sref = builder.alloc_string(sub_source);
+        let sref = builder.alloc_string(sub_pool);
         sref.offset
     };
 
@@ -982,7 +986,7 @@ mod tests {
         let text_id = orig.get_children(heading_id)[0];
 
         // Build a replacement: a ThematicBreak (no children, no data)
-        let mut replacement_builder = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut replacement_builder = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         replacement_builder.open_node(MdastNodeType::ThematicBreak as u8);
         replacement_builder.close_node();
         let replacement = replacement_builder.finish();
@@ -1011,7 +1015,7 @@ mod tests {
         let heading_id = orig.get_children(0)[0];
 
         // Replace Heading with a Paragraph
-        let mut replacement_builder = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut replacement_builder = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         replacement_builder.open_node(MdastNodeType::Paragraph as u8);
         replacement_builder.close_node();
         let replacement = replacement_builder.finish();
@@ -1043,7 +1047,7 @@ mod tests {
         let para_id = orig.get_children(0)[1]; // Paragraph node
 
         // Insert a ThematicBreak before the Paragraph
-        let mut new_tree_builder = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut new_tree_builder = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         new_tree_builder.open_node(MdastNodeType::ThematicBreak as u8);
         new_tree_builder.close_node();
         let new_tree = new_tree_builder.finish();
@@ -1076,7 +1080,7 @@ mod tests {
         let orig = build_hello_world();
         let heading_id = orig.get_children(0)[0]; // Heading node
 
-        let mut new_tree_builder = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut new_tree_builder = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         new_tree_builder.open_node(MdastNodeType::ThematicBreak as u8);
         new_tree_builder.close_node();
         let new_tree = new_tree_builder.finish();
@@ -1109,7 +1113,7 @@ mod tests {
         let orig = build_hello_world();
         let heading_id = orig.get_children(0)[0];
 
-        let mut child_builder = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut child_builder = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         child_builder.open_node(MdastNodeType::Break as u8);
         child_builder.close_node();
         let child_tree = child_builder.finish();
@@ -1139,7 +1143,7 @@ mod tests {
         let orig = build_hello_world();
         let heading_id = orig.get_children(0)[0];
 
-        let mut child_builder = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut child_builder = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         child_builder.open_node(MdastNodeType::Break as u8);
         child_builder.close_node();
         let child_tree = child_builder.finish();
@@ -1212,7 +1216,7 @@ mod tests {
         let para_id = orig.get_children(0)[1];
 
         // Remove the heading AND insert a ThematicBreak after paragraph
-        let mut new_tree_builder = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut new_tree_builder = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         new_tree_builder.open_node(MdastNodeType::ThematicBreak as u8);
         new_tree_builder.close_node();
         let new_tree = new_tree_builder.finish();
@@ -1445,7 +1449,7 @@ mod tests {
         let orig = build_hello_world();
         let heading_id = orig.get_children(0)[0];
 
-        let mut replacement = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut replacement = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         replacement.open_node(MdastNodeType::Paragraph as u8);
         replacement.close_node();
         let replacement = replacement.finish();
@@ -1494,12 +1498,12 @@ mod tests {
         let orig = build_hello_world();
         let heading_id = orig.get_children(0)[0];
 
-        let mut first = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut first = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         first.open_node(MdastNodeType::ThematicBreak as u8);
         first.close_node();
         let first = first.finish();
 
-        let mut second = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut second = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         second.open_node(MdastNodeType::Break as u8);
         second.close_node();
         let second = second.finish();
@@ -1673,7 +1677,7 @@ mod tests {
 
         // Replace the heading (dropping its subtree), and also replace the text
         // inside it — the kind of pair a nested-directive transform produces.
-        let mut replacement = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut replacement = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         replacement.open_node(MdastNodeType::Paragraph as u8);
         replacement.close_node();
         let replacement = replacement.finish();
@@ -1818,7 +1822,7 @@ mod tests {
         let heading_id = orig.get_children(0)[0];
         let text_in_heading = orig.get_children(heading_id)[0];
 
-        let mut replacement = ArenaBuilder::<Mdast>::new(orig.source().to_string());
+        let mut replacement = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         replacement.open_node(MdastNodeType::Paragraph as u8);
         replacement.close_node();
         let replacement = replacement.finish();

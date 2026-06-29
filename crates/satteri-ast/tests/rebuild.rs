@@ -486,7 +486,7 @@ fn list_start_survives_source_base_remap() {
     assert_eq!(
         start, 1,
         "ordered list start must round-trip as 1, not be polluted by source_base ({} bytes appended)",
-        rebuilt.source().len()
+        rebuilt.string_pool().len()
     );
     assert!(ordered, "ordered flag must survive remap");
 }

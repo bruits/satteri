@@ -167,8 +167,8 @@ export interface BufferHeader {
   childrenOffset: number;
   typeDataLen: number;
   typeDataOffset: number;
-  sourceLen: number;
-  sourceOffset: number;
+  stringPoolLen: number;
+  stringPoolOffset: number;
   /** Number of nodes that carry an extra JSON `data` blob. */
   nodeDataCount: number;
   /** Offset of the node-data section: `[id u32][len u32][bytes...]` repeated. */

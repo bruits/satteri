@@ -39,7 +39,7 @@ fn collect<K: ArenaKind>(
                 u32::from_le_bytes(td[offset..offset + 4].try_into().unwrap()) as usize;
             let str_len =
                 u32::from_le_bytes(td[offset + 4..offset + 8].try_into().unwrap()) as usize;
-            out.push_str(&arena.source()[str_offset..str_offset + str_len]);
+            out.push_str(&arena.string_pool()[str_offset..str_offset + str_len]);
         }
         return;
     }
