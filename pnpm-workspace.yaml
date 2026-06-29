@@ -7,3 +7,8 @@ packages:
 onlyBuiltDependencies:
   - "@parcel/watcher"
   - "esbuild"
+
+supportedArchitectures:
+  cpu:
+    - current
+    - wasm32
