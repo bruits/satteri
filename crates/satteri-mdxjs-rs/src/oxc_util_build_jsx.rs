@@ -2573,15 +2573,12 @@ fn jsx_text_to_value(value: &str) -> String {
     }
 
     if start != bytes.len() {
-        if result.is_empty() {
-            index = 0;
-            while index < bytes.len() && bytes[index] == b' ' {
-                index += 1;
-            }
-            if index == bytes.len() {
-                return result;
-            }
-        } else {
+        // A trailing segment that follows a newline-collapsed run gets a single
+        // separating space. A segment with no preceding newline (`result` is
+        // still empty) is kept verbatim, including a run that is only spaces,
+        // e.g. the significant whitespace in `<em> </em>` or between two
+        // elements on one line (`<a/> <b/>`), which JSX preserves as `" "`.
+        if !result.is_empty() {
             result.push(' ');
         }
         result.push_str(str::from_utf8(&bytes[start..]).unwrap());
