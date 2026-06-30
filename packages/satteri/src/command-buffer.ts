@@ -49,6 +49,29 @@ export function classifyReturn(value: unknown): ReturnClass {
 
 const INITIAL_SIZE = 4096;
 
+/** Module-level free list for `CommandBuffer` instances.
+ *
+ *  Each plugin pass allocates *two* CommandBuffers — one for the visitor
+ *  context's mutation commands and one for the return-value replacements.
+ *  Plugin-heavy workloads burn GC time on what is structurally a reusable
+ *  buffer, so the freelist recycles instances (and their grown backings)
+ *  between visits. Retaining the backing across reuse is safe because no
+ *  `getBuffer()` view outlives a pass: `mergeAndReset` copies both buffers
+ *  into a fresh array before they are released. Cap keeps the pool bounded
+ *  for long-lived processes that briefly burst high. */
+const COMMAND_BUFFER_POOL_MAX = 8;
+const commandBufferPool: CommandBuffer[] = [];
+
+export function acquireCommandBuffer(): CommandBuffer {
+  return commandBufferPool.pop() ?? new CommandBuffer();
+}
+
+export function releaseCommandBuffer(buf: CommandBuffer): void {
+  if (commandBufferPool.length >= COMMAND_BUFFER_POOL_MAX) return;
+  buf.reset();
+  commandBufferPool.push(buf);
+}
+
 /** Structural commands that carry a subtree payload. Each has an `${op}Opstream`
  *  twin (declarative content) and a raw twin (`{raw}`/`{rawHtml}` escape hatch). */
 export type StructuralOp =
@@ -70,7 +93,14 @@ export class CommandBuffer extends ByteWriter {
     this.writeU32(nodeId);
   }
 
-  /** Unified set-property for both MDAST and HAST nodes. */
+  /** Unified set-property for both MDAST and HAST nodes.
+   *
+   *  Hot path: profiles show plugins that touch every node spend ~38% of
+   *  total time inside `TextEncoder.encode` — almost entirely on short
+   *  property keys/values. `encodeInto` writes UTF-8 straight into the
+   *  command buffer, no per-call `Uint8Array` allocation. We reserve the
+   *  worst-case UTF-8 length (`str.length * 3`) up front and backfill the
+   *  length prefix once the actual byte count is known. */
   setProperty(nodeId: number, key: string, value: unknown): void {
     let valueType: number;
     let str: string;
@@ -179,12 +209,6 @@ export class CommandBuffer extends ByteWriter {
   /** Return a Uint8Array view of the written bytes (no copy). */
   getBuffer(): Uint8Array {
     return this.take();
-  }
-
-  /** Reset for reuse, releasing the old buffer (handed-out views stay intact). */
-  override reset(): void {
-    if (this.n === 0) return;
-    this.release();
   }
 
   /** Raw structural content (`{raw}`/`{rawHtml}` escape hatches). Declarative

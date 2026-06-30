@@ -108,9 +108,13 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
   },
 })
 module.exports = __napiModule.exports
+module.exports.applyCommandsAndCompileHandle = __napiModule.exports.applyCommandsAndCompileHandle
 module.exports.applyCommandsAndConvertToHastHandle = __napiModule.exports.applyCommandsAndConvertToHastHandle
+module.exports.applyCommandsAndRenderHandle = __napiModule.exports.applyCommandsAndRenderHandle
 module.exports.applyCommandsToHandle = __napiModule.exports.applyCommandsToHandle
 module.exports.applyCommandsToMdastHandle = __napiModule.exports.applyCommandsToMdastHandle
+module.exports.applyMdastCommandsAndConvertAndCompile = __napiModule.exports.applyMdastCommandsAndConvertAndCompile
+module.exports.applyMdastCommandsAndConvertAndRender = __napiModule.exports.applyMdastCommandsAndConvertAndRender
 module.exports.compileHandle = __napiModule.exports.compileHandle
 module.exports.compileMdx = __napiModule.exports.compileMdx
 module.exports.convertMdastToHastHandle = __napiModule.exports.convertMdastToHastHandle
@@ -122,7 +126,9 @@ module.exports.dropHandle = __napiModule.exports.dropHandle
 module.exports.getHandleSource = __napiModule.exports.getHandleSource
 module.exports.getMdastFrontmatter = __napiModule.exports.getMdastFrontmatter
 module.exports.getNodeData = __napiModule.exports.getNodeData
+module.exports.markdownToHtmlFast = __napiModule.exports.markdownToHtmlFast
 module.exports.mdastTextContentHandle = __napiModule.exports.mdastTextContentHandle
+module.exports.mdxToJsFast = __napiModule.exports.mdxToJsFast
 module.exports.parseEsm = __napiModule.exports.parseEsm
 module.exports.parseExpression = __napiModule.exports.parseExpression
 module.exports.parseToHtml = __napiModule.exports.parseToHtml

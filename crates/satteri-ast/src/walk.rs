@@ -111,8 +111,15 @@ fn walk_and_collect_inner<K: ArenaKind>(
 
     // Build fast lookup: node_type → list of (subscription_index, tag_filter)
     let mut type_subs: [Vec<(u8, &[String])>; 256] = std::array::from_fn(|_| Vec::new());
+    // Per-node-type flag: at least one subscription has a non-empty tag filter.
+    // When false for a named node type, we can skip the StringRef → &str resolve
+    // entirely (every subscription matches unconditionally).
+    let mut type_needs_name: [bool; 256] = [false; 256];
     for (i, sub) in subscriptions.iter().enumerate() {
         type_subs[sub.node_type as usize].push((i as u8, &sub.tag_filter));
+        if !sub.tag_filter.is_empty() {
+            type_needs_name[sub.node_type as usize] = true;
+        }
     }
 
     // First pass: collect matches (node_id, sub_index) and serialize data
@@ -131,8 +138,13 @@ fn walk_and_collect_inner<K: ArenaKind>(
             let type_data = arena.get_type_data(node_id);
 
             // For named nodes (HAST elements + MDX JSX flow/text), resolve the
-            // name once so tag_filter comparisons can short-circuit.
-            let tag_name = if has_name(node_type) && type_data.len() >= 8 {
+            // name once so tag_filter comparisons can short-circuit. Skip the
+            // resolve when no subscription on this node type uses a filter —
+            // every comparison would unconditionally match.
+            let tag_name = if type_needs_name[node_type as usize]
+                && has_name(node_type)
+                && type_data.len() >= 8
+            {
                 let tag_ref = read_string_ref(type_data, 0);
                 Some(arena.get_str(tag_ref))
             } else {

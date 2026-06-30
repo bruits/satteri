@@ -6544,46 +6544,19 @@ mod simd {
     /// that can be indexed by a four bit row index (the lower nibble)
     /// and a three bit column index (upper nibble).
     pub(super) fn compute_lookup(options: &Options) -> [u8; 16] {
+        // Derive the SIMD nibble table from the scalar `special_bytes` set so the
+        // two classifiers can never drift (an earlier hand-maintained copy here
+        // missed the MDX `{`/`}`, directive `:`, and GFM autolink `h/w/@` bytes,
+        // making the SIMD scan skip them). Every special byte is ASCII (< 0x80),
+        // so `byte >> 4` is in 0..8 and the shift fits in a `u8`.
         let mut lookup = [0u8; 16];
-        let standard_bytes = [
-            b'\n', b'\r', b'*', b'_', b'&', b'\\', b'[', b']', b'<', b'!', b'`',
-        ];
-
-        for &byte in &standard_bytes {
-            add_lookup_byte(&mut lookup, byte);
+        for (byte, &is_special) in super::special_bytes(options).iter().enumerate() {
+            if is_special {
+                let byte = byte as u8;
+                lookup[(byte & 0x0f) as usize] |= 1 << (byte >> 4);
+            }
         }
-        if options.contains(Options::ENABLE_TABLES) {
-            add_lookup_byte(&mut lookup, b'|');
-        }
-        if options.contains(Options::ENABLE_STRIKETHROUGH)
-            || options.contains(Options::ENABLE_SUBSCRIPT)
-        {
-            add_lookup_byte(&mut lookup, b'~');
-        }
-        if options.contains(Options::ENABLE_SUPERSCRIPT) {
-            add_lookup_byte(&mut lookup, b'^');
-        }
-        if options.has_math() {
-            add_lookup_byte(&mut lookup, b'$');
-            add_lookup_byte(&mut lookup, b'{');
-            add_lookup_byte(&mut lookup, b'}');
-        }
-        if options.has_smart_ellipses() {
-            add_lookup_byte(&mut lookup, b'.');
-        }
-        if options.has_smart_dashes() {
-            add_lookup_byte(&mut lookup, b'-');
-        }
-        if options.has_smart_quotes() {
-            add_lookup_byte(&mut lookup, b'"');
-            add_lookup_byte(&mut lookup, b'\'');
-        }
-
         lookup
-    }
-
-    fn add_lookup_byte(lookup: &mut [u8; 16], byte: u8) {
-        lookup[(byte & 0x0f) as usize] |= 1 << (byte >> 4);
     }
 
     /// Computes a bit mask for the given byteslice starting from the given index,

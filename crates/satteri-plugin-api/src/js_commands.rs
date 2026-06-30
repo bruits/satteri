@@ -460,6 +460,14 @@ fn apply_hast_mdx_jsx_attribute(
 }
 
 /// Set or add a single property on a HAST element node.
+///
+/// Phases the borrow so we can read existing props, then mutate the arena's
+/// string pool, then write back — no `to_vec()` clone of `type_data`, no
+/// intermediate `Vec` for the rewritten layout. For an "update existing prop"
+/// the 20-byte entry is overwritten in place; for "append new prop" we extend
+/// `type_data` directly via `extend_from_within` + `extend_from_slice` and
+/// repoint the node, leaving the old region as a tombstone (cheap; arena is
+/// short-lived per plugin pass).
 fn apply_hast_element_property(
     arena: &mut Arena<Hast>,
     node_id: u32,
@@ -467,18 +475,24 @@ fn apply_hast_element_property(
     value_type: u8,
     value_str: &str,
 ) -> Result<(), CommandError> {
-    let old_data = arena.get_type_data(node_id).to_vec();
-    if old_data.len() < 16 {
+    // Phase 1: capture node layout as Copy u32s so we can drop the &arena borrow.
+    let node = arena.get_node(node_id);
+    let data_offset = node.data_offset as usize;
+    let data_len = node.data_len as usize;
+    if data_len < 16 {
         return Err(CommandError::TypeDataTooShort);
     }
+    let header = data_offset;
+    let old_prop_count =
+        u32::from_le_bytes(arena.type_data[header + 8..header + 12].try_into().unwrap()) as usize;
 
-    let old_prop_count = u32::from_le_bytes(old_data[8..12].try_into().unwrap()) as usize;
-
+    // Phase 2: scan for an existing prop with the same name. Read-only access
+    // to both type_data and source string pool.
     let mut found_index: Option<usize> = None;
     for i in 0..old_prop_count {
-        let base = 16 + i * 20;
-        let name_off = u32::from_le_bytes(old_data[base..base + 4].try_into().unwrap());
-        let name_len = u32::from_le_bytes(old_data[base + 4..base + 8].try_into().unwrap());
+        let base = header + 16 + i * 20;
+        let name_off = u32::from_le_bytes(arena.type_data[base..base + 4].try_into().unwrap());
+        let name_len = u32::from_le_bytes(arena.type_data[base + 4..base + 8].try_into().unwrap());
         let existing_name = arena.get_str(StringRef::new(name_off, name_len));
         if existing_name == prop_name {
             found_index = Some(i);
@@ -486,39 +500,59 @@ fn apply_hast_element_property(
         }
     }
 
-    let name_ref = arena.alloc_string(prop_name);
+    // Phase 3: allocate the value string (now mutates arena.source, but
+    // type_data ranges captured above remain valid — appending to source
+    // doesn't move type_data bytes).
     let val_ref = if value_str.is_empty() {
         StringRef::empty()
     } else {
         arena.alloc_string(value_str)
     };
 
+    // Phase 4: write back.
     if let Some(idx) = found_index {
-        let mut new_data = old_data;
-        let base = 16 + idx * 20;
-        new_data[base..base + 4].copy_from_slice(&name_ref.offset.to_le_bytes());
-        new_data[base + 4..base + 8].copy_from_slice(&name_ref.len.to_le_bytes());
-        new_data[base + 8] = value_type;
-        new_data[base + 9..base + 12].copy_from_slice(&[0u8; 3]);
-        new_data[base + 12..base + 16].copy_from_slice(&val_ref.offset.to_le_bytes());
-        new_data[base + 16..base + 20].copy_from_slice(&val_ref.len.to_le_bytes());
-        arena.set_type_data(node_id, &new_data);
+        // Overwrite the entry's value in place; the name bytes already match
+        // and node.data_offset / data_len are unchanged.
+        let base = header + 16 + idx * 20;
+        arena.type_data[base + 8] = value_type;
+        arena.type_data[base + 9..base + 12].copy_from_slice(&[0u8; 3]);
+        arena.type_data[base + 12..base + 16].copy_from_slice(&val_ref.offset.to_le_bytes());
+        arena.type_data[base + 16..base + 20].copy_from_slice(&val_ref.len.to_le_bytes());
     } else {
+        let name_ref = arena.alloc_string(prop_name);
+        let new_offset = arena.type_data.len() as u32;
         let new_prop_count = (old_prop_count + 1) as u32;
-        let mut new_data = Vec::with_capacity(16 + new_prop_count as usize * 20);
-        new_data.extend_from_slice(&old_data[0..8]);
-        new_data.extend_from_slice(&new_prop_count.to_le_bytes());
-        new_data.extend_from_slice(&0u32.to_le_bytes());
+
+        // Header: 8 bytes (tag StringRef) + 4 bytes (prop_count) + 4 bytes (pad)
+        arena.type_data.extend_from_within(header..header + 8);
+        arena
+            .type_data
+            .extend_from_slice(&new_prop_count.to_le_bytes());
+        arena.type_data.extend_from_slice(&0u32.to_le_bytes());
         if old_prop_count > 0 {
-            new_data.extend_from_slice(&old_data[16..16 + old_prop_count * 20]);
+            let props_start = header + 16;
+            let props_end = props_start + old_prop_count * 20;
+            arena.type_data.extend_from_within(props_start..props_end);
         }
-        new_data.extend_from_slice(&name_ref.offset.to_le_bytes());
-        new_data.extend_from_slice(&name_ref.len.to_le_bytes());
-        new_data.push(value_type);
-        new_data.extend_from_slice(&[0u8; 3]);
-        new_data.extend_from_slice(&val_ref.offset.to_le_bytes());
-        new_data.extend_from_slice(&val_ref.len.to_le_bytes());
-        arena.set_type_data(node_id, &new_data);
+        arena
+            .type_data
+            .extend_from_slice(&name_ref.offset.to_le_bytes());
+        arena
+            .type_data
+            .extend_from_slice(&name_ref.len.to_le_bytes());
+        arena.type_data.push(value_type);
+        arena.type_data.extend_from_slice(&[0u8; 3]);
+        arena
+            .type_data
+            .extend_from_slice(&val_ref.offset.to_le_bytes());
+        arena
+            .type_data
+            .extend_from_slice(&val_ref.len.to_le_bytes());
+
+        let new_len = (16 + new_prop_count as usize * 20) as u32;
+        let node = arena.get_node_mut(node_id);
+        node.data_offset = new_offset;
+        node.data_len = new_len;
     }
 
     Ok(())

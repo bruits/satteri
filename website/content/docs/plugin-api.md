@@ -36,6 +36,22 @@ type HastPluginInput = HastPluginDefinition | (() => HastPluginDefinition);
 
 Factories are called once per invocation, so closures reset between documents.
 
+### Source positions
+
+Visitors read `node.position` (the `{ start, end }` source range) only when the plugin opts in with `options: { position: true }`. Tracking positions adds a measurable parsing cost (~15% of parse), so it is off by default — `node.position` is `undefined` unless some plugin in the pipeline requests it.
+
+```js
+const plugin = defineMdastPlugin({
+  name: "needs-source-range",
+  options: { position: true },
+  heading(node) {
+    console.log(node.position); // { start, end } instead of undefined
+  },
+});
+```
+
+A single opted-in plugin enables positions for the whole pipeline, so a later plugin sees them too.
+
 ## MDAST visitors
 
 An MDAST plugin maps node types to visitor functions. Each visitor receives the node (as `Readonly`) and a `ctx` object.

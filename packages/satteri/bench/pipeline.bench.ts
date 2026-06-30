@@ -49,9 +49,53 @@ const mutatingHastPlugin = defineHastPlugin({
   },
 });
 
+const touchAllElementsOnly = () => {
+  let count = 0;
+  return defineHastPlugin({
+    name: "hast-elements-only",
+    element: {
+      filter: [],
+      visit(node, ctx) {
+        ctx.setProperty(node, "data-count", String(++count));
+      },
+    },
+  });
+};
+
+const touchAllTextOnly = defineHastPlugin({
+  name: "hast-text-only",
+  text(node) {
+    return { type: "text", value: node.value.toUpperCase() };
+  },
+});
+
+const touchAllTextNoop = defineHastPlugin({
+  name: "hast-text-noop",
+  text() {},
+});
+
 const noopMdastPlugin = defineMdastPlugin({
   name: "noop-mdast",
   heading() {},
+});
+
+const mutatingMdastPlugin = defineMdastPlugin({
+  name: "mdast-mutating",
+  heading(node, ctx) {
+    ctx.setProperty(node, "depth", 2);
+  },
+});
+
+const touchAllMdastTextOnly = defineMdastPlugin({
+  name: "mdast-text-only",
+  text(node) {
+    return { type: "text", value: node.value.toUpperCase() };
+  },
+});
+
+const touchAllMdastTextNoop = defineMdastPlugin({
+  name: "mdast-text-noop",
+  text() {},
 });
 
 // Plugins that transform the tree — the path most plugins exercise. Two
@@ -115,8 +159,32 @@ describe("markdownToHtml", () => {
     markdownToHtml(MARKDOWN, { hastPlugins: [mutatingHastPlugin] });
   });
 
+  bench("hast-elements-only (setProperty per element)", () => {
+    markdownToHtml(MARKDOWN, { hastPlugins: [touchAllElementsOnly] });
+  });
+
+  bench("hast-text-only (text replace per text node)", () => {
+    markdownToHtml(MARKDOWN, { hastPlugins: [touchAllTextOnly] });
+  });
+
+  bench("hast-text-noop (visit text nodes, no return)", () => {
+    markdownToHtml(MARKDOWN, { hastPlugins: [touchAllTextNoop] });
+  });
+
   bench("noop MDAST plugin", () => {
     markdownToHtml(MARKDOWN, { mdastPlugins: [noopMdastPlugin] });
+  });
+
+  bench("mutating MDAST plugin (set depth on headings)", () => {
+    markdownToHtml(MARKDOWN, { mdastPlugins: [mutatingMdastPlugin] });
+  });
+
+  bench("mdast-text-only (text replace per text node)", () => {
+    markdownToHtml(MARKDOWN, { mdastPlugins: [touchAllMdastTextOnly] });
+  });
+
+  bench("mdast-text-noop (visit text nodes, no return)", () => {
+    markdownToHtml(MARKDOWN, { mdastPlugins: [touchAllMdastTextNoop] });
   });
 
   bench("MDAST + HAST plugins", () => {

@@ -1357,10 +1357,15 @@ fn scan_attribute_value(
 // Remove backslash escapes and resolve entities
 pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> CowStr<'a> {
     let input = input.into();
+    let bytes = input.as_bytes();
+    // Only `\`, `&` and `\r` can trigger a rewrite. Skip straight to the first
+    // one; if there is none the input is returned untouched without allocating.
+    let Some(first) = memchr::memchr3(b'\\', b'&', b'\r', bytes) else {
+        return input;
+    };
     let mut result = String::new();
     let mut mark = 0;
-    let mut i = 0;
-    let bytes = input.as_bytes();
+    let mut i = first;
     while i < bytes.len() {
         match bytes[i..] {
             // Tables are special, because they're parsed as-if the tables
@@ -1385,14 +1390,17 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
                     i += n;
                     mark = i;
                 }
-                _ => i += 1,
+                _ => i = next_unescape_candidate(bytes, i + 1),
             },
             [b'\r', ..] => {
                 result.push_str(&input[mark..i]);
                 i += 1;
                 mark = i;
             }
-            _ => i += 1,
+            // This byte isn't an escape (a candidate that didn't pan out, or a
+            // plain byte landed on after a rewrite). Jump to the next candidate
+            // rather than walking one byte at a time.
+            _ => i = next_unescape_candidate(bytes, i + 1),
         }
     }
     if mark == 0 {
@@ -1400,6 +1408,16 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
     } else {
         result.push_str(&input[mark..]);
         result.into()
+    }
+}
+
+/// Index of the next `\`, `&` or `\r` at or after `from`, or `bytes.len()`
+/// when there is none (which ends `unescape`'s scan loop).
+#[inline]
+fn next_unescape_candidate(bytes: &[u8], from: usize) -> usize {
+    match memchr::memchr3(b'\\', b'&', b'\r', &bytes[from..]) {
+        Some(rel) => from + rel,
+        None => bytes.len(),
     }
 }
 

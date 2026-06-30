@@ -1924,7 +1924,7 @@ fn jsx_to_call<'a>(
     span: Span,
     name: Expression<'a>,
     attributes: Option<Vec<JSXAttributeItem<'a>>>,
-    mut children: Vec<Expression<'a>>,
+    mut children: OxcVec<'a, Expression<'a>>,
     alloc: &'a Allocator,
     automatic: bool,
     development: bool,
@@ -2122,11 +2122,14 @@ fn jsx_children_to_expressions<'a>(
     import_jsx: &mut bool,
     import_jsxs: &mut bool,
     import_jsx_dev: &mut bool,
-) -> Result<Vec<Expression<'a>>, Message> {
-    let mut result = vec![];
-    let children_vec: Vec<_> = children.drain(..).collect();
+) -> Result<OxcVec<'a, Expression<'a>>, Message> {
+    // Build straight into the OXC bump arena: these expressions are handed to
+    // `jsx_to_call` and end up in the arena anyway, so a std `Vec` here is just
+    // a throwaway heap allocation per element. At most one output expression
+    // per child, so size once instead of growing on each push.
+    let mut result = OxcVec::with_capacity_in(children.len(), alloc);
 
-    for child in children_vec {
+    for child in children.drain(..) {
         match child {
             JSXChild::Spread(spread) => {
                 let lo = spread.span.start;
@@ -2229,7 +2232,7 @@ fn jsx_expression_to_expression(jsx_expr: JSXExpression<'_>) -> Option<Expressio
 fn jsx_attributes_to_props<'a>(
     alloc: &'a Allocator,
     attributes: Option<Vec<JSXAttributeItem<'a>>>,
-    children: Option<&mut Vec<Expression<'a>>>,
+    children: Option<&mut OxcVec<'a, Expression<'a>>>,
     location: Option<&Location>,
     automatic: bool,
     development: bool,
@@ -2241,8 +2244,13 @@ fn jsx_attributes_to_props<'a>(
     import_jsxs: &mut bool,
     import_jsx_dev: &mut bool,
 ) -> Result<(Option<Expression<'a>>, Option<Expression<'a>>), Message> {
-    let mut objects: Vec<Expression<'a>> = vec![];
-    let mut fields: Vec<ObjectPropertyKind<'a>> = vec![];
+    // Accumulate directly in the OXC bump arena rather than in throwaway std
+    // `Vec`s. One field accumulates per attribute (plus the synthetic `children`
+    // prop), so reserve that up front.
+    let attr_count = attributes.as_ref().map_or(0, Vec::len);
+    let mut objects: OxcVec<'a, Expression<'a>> = OxcVec::new_in(alloc);
+    let mut fields: OxcVec<'a, ObjectPropertyKind<'a>> =
+        OxcVec::with_capacity_in(attr_count + 1, alloc);
     let mut spread = false;
     let mut key = None;
 
@@ -2378,8 +2386,7 @@ fn jsx_attributes_to_props<'a>(
 
     // Add remaining fields.
     if !fields.is_empty() {
-        let props_vec = OxcVec::from_iter_in(fields, alloc);
-        objects.push(create_object_expression(alloc, props_vec));
+        objects.push(create_object_expression(alloc, fields));
     }
 
     let props = if objects.is_empty() {
