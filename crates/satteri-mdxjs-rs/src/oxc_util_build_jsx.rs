@@ -2573,11 +2573,7 @@ fn jsx_text_to_value(value: &str) -> String {
     }
 
     if start != bytes.len() {
-        // A trailing segment that follows a newline-collapsed run gets a single
-        // separating space. A segment with no preceding newline (`result` is
-        // still empty) is kept verbatim, including a run that is only spaces,
-        // e.g. the significant whitespace in `<em> </em>` or between two
-        // elements on one line (`<a/> <b/>`), which JSX preserves as `" "`.
+        // An all-spaces run with no newline is significant in JSX, so keep it rather than drop it.
         if !result.is_empty() {
             result.push(' ');
         }

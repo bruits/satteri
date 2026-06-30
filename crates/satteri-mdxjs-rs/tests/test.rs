@@ -840,11 +840,7 @@ fn children_arrow_returning_jsx() -> Result<(), satteri_arena::mdx_types::Messag
 #[test]
 fn jsx_in_expression_preserves_significant_whitespace()
 -> Result<(), satteri_arena::mdx_types::Message> {
-    // Whitespace between two elements on a single line is significant in JSX and
-    // must survive as a `" "` child (e.g. `<a/> <b/>`). The same applies to a
-    // whitespace-only element used as a spacer (`<em> </em>`). This only affects
-    // JSX parsed inside expressions (here, an attribute expression); a run that
-    // contains a newline still collapses.
+    // JSX keeps a no-newline whitespace run as a significant `" "`, even via the expression path.
     let result = compile(
         "<C d={<><x>a</x> <y>b</y><em> </em></>} />\n",
         &Options::default(),

@@ -501,10 +501,7 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance('<Slot d={<p>a "!?" badge here</p>} />', { Slot });
   });
 
-  // Significant whitespace between adjacent elements was dropped inside an
-  // attribute expression, rendering them directly adjacent (`ab` not `a b`) (#129).
-  // `Pass` renders the inner elements transparently so the `" "` lands between
-  // text; `normalizeHtml` collapses whitespace between tags and would mask it.
+  // `Pass` renders inner elements transparently so the `" "` lands between text; `normalizeHtml` collapses whitespace between tags and would mask the difference.
   test("significant whitespace between JSX elements in attribute expression (#129)", async () => {
     const Slot = (props: any) => createElement("div", null, props.d);
     const Pass = (props: any) => props.children;
