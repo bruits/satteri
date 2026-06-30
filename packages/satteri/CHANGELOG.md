@@ -1,5 +1,39 @@
 # satteri
 
+## 0.9.4 — 2026-06-29
+
+### Patch changes
+
+- [c6a9088](https://github.com/bruits/satteri/commit/c6a908875ae5161c86c592388a55f9caca9ed35b) Fixes plugin `ctx.source` being polluted with duplicated, concatenated content appended after the original document. — Thanks @Princesseuh!
+- [65e0758](https://github.com/bruits/satteri/commit/65e0758e293b2c3bcfe3767770fad3daaf5fdb69) Exposes the `MdastVisitorContext` type from the `satteri` package. — Thanks @HiDeoo!
+- [07ee532](https://github.com/bruits/satteri/commit/07ee53293af76d0dcddbac961ad35337c5500e74) Fixes JSX nested in an MDX attribute expression (e.g. `prop={<p>hi</p>}` or `title={<>x</>}`) being emitted as raw, un-lowered JSX, which produced invalid JavaScript. Also fixes quotes and apostrophes in such JSX text (e.g. `prop={<p>Acme Corp.'s "best" tool</p>}`) being mis-scanned as JS string literals and causing a parse error — the expression scanner now consumes a JSX element's children as text. — Thanks @vaneenige for your first contribution 🎉!
+- [2be5f6b](https://github.com/bruits/satteri/commit/2be5f6bdd43ee2d66381b12920cf3ee2c45a3905) Updated `binding.browser.ts` to export functions from `browser.js` — Thanks @noClaps for your first contribution 🎉!
+
+## 0.9.3 — 2026-06-25
+
+### Patch changes
+
+- [fab4a2d](https://github.com/bruits/satteri/commit/fab4a2dbfe534d45fb7b3602d709418dcc2caf86) Fixes a blank line inside a template literal or block comment in an MDX `import`/`export` causing an `Unterminated string` error. The blank line no longer ends the statement early. — Thanks @Princesseuh!
+- [fab4a2d](https://github.com/bruits/satteri/commit/fab4a2dbfe534d45fb7b3602d709418dcc2caf86) Fixes inline math like `$\frac{-b}{2a}$` failing to compile in MDX. Braces inside `$...$` are now treated as math text, not a JSX expression. — Thanks @Princesseuh!
+- [66e4f07](https://github.com/bruits/satteri/commit/66e4f0755eefabef2f8b9407d7a843a81b45ab49) Fixes Markdown plugins returning `rawHtml` with literal `{` or `}` rendering those braces as MDX escape fragments in `markdownToHtml`. — Thanks @snvtac for your first contribution 🎉!
+- [fab4a2d](https://github.com/bruits/satteri/commit/fab4a2dbfe534d45fb7b3602d709418dcc2caf86) Fixes quotes inside a regex in an MDX JSX attribute (e.g. `ins={[/icon="[^"]+"/g]}`) causing a parse error. — Thanks @Princesseuh!
+- [27c9023](https://github.com/bruits/satteri/commit/27c90239935f218103995a4d82a6473dc1d728f8) Fixes `headingAttributes` silently dropping parsed attributes. — Thanks @Princesseuh!
+
+## 0.9.2 — 2026-06-23
+
+### Patch changes
+
+- [6128184](https://github.com/bruits/satteri/commit/61281847992173dcf37a588c5b1a49200ec28ace) Add prebuilt native bindings for more platforms: `linux-arm64-gnu`, `linux-x64-musl`, `linux-arm64-musl`, and `win32-arm64-msvc`. — Thanks @Princesseuh!
+
+## 0.9.1 — 2026-06-19
+
+### Patch changes
+
+- [64877f0](https://github.com/bruits/satteri/commit/64877f0dfa46fb0f752c8b3a9affc8c8552ade67) Adds a `data` option to `markdownToHtml`, `mdxToJs`, and `CompileOptions` that seeds the document data bag before plugins run. The same object is surfaced to plugins as `ctx.data` and returned as `result.data`, so values can be passed both into and out of a compile. — Thanks @Princesseuh!
+- [855379c](https://github.com/bruits/satteri/commit/855379c7eb018e9c5acc69daa7a63f27dbb79e7f) Fix MDX `import`/`export` blocks being broken by a following whitespace-only line. A line containing only spaces or tabs now ends the ESM block exactly like an empty line, instead of being consumed as a statement continuation (which produced a `Could not parse esm with oxc` error). — Thanks @Princesseuh!
+- [855379c](https://github.com/bruits/satteri/commit/855379c7eb018e9c5acc69daa7a63f27dbb79e7f) MDX parse errors now carry a source line and column. Previously, errors in `import`/`export` blocks dropped the position entirely, and errors in `{…}` expressions and JSX attributes were reported as a bare byte offset, so downstream tooling reported an unknown location. JSX attribute and spread expression errors now point at the offending attribute rather than the element's opening `<`. — Thanks @Princesseuh!
+- [7c78426](https://github.com/bruits/satteri/commit/7c78426b0a21c8a3e41e6fed6605ceba60650826) Fixes a performance regression when not using any plugins. — Thanks @Princesseuh!
+
 ## 0.9.0 — 2026-06-18
 
 ### Minor changes

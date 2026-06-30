@@ -5,8 +5,7 @@ section: "reference"
 order: 5
 ---
 
-The `features` option on `markdownToHtml`, `mdxToJs`, `markdownToHast`,
-and `mdxToHast` toggles which Markdown extensions the parser recognizes. By default, Sätteri enables `gfm` and `frontmatter`.
+The `features` option on `markdownToHtml`, `mdxToJs`, `markdownToHast`, and `mdxToHast` toggles which Markdown extensions the parser recognizes (see [Entry points](/docs/entry-points/) for those functions). By default, Sätteri enables `gfm` and `frontmatter`.
 
 ```js
 import { markdownToHtml } from "satteri";
@@ -26,8 +25,7 @@ markdownToHtml(source, {
 });
 ```
 
-`gfm`, `math`, and `smartPunctuation` each accept a boolean or a granular
-options object. Passing the object turns the feature on.
+`gfm`, `math`, and `smartPunctuation` each accept a boolean or a granular options object. Passing the object turns the feature on.
 
 ## GFM
 
@@ -37,16 +35,13 @@ gfm?: boolean | {
 }
 ```
 
-Default: `true`. Enables tables, footnotes, strikethrough, task lists,
-and GitHub-style autolinks.
+Default: `true`. Enables tables, footnotes, strikethrough, task lists, and GitHub-style autolinks.
 
 Strikethrough accepts both single (`~text~`) and double (`~~text~~`) tildes. Unless [subscript](#subscript) is enabled, in which case single tildes become subscript and only double tildes strike through.
 
 ### Customizing footnotes
 
-The three strings in the footnotes section (the `<h2>` label, the
-backref `aria-label`, and the backref text) are configurable without a
-post-processing plugin:
+The three strings in the footnotes section (the `<h2>` label, the backref `aria-label`, and the backref text) are configurable without a post-processing plugin:
 
 ```js
 markdownToHtml(source, {
@@ -62,12 +57,9 @@ markdownToHtml(source, {
 });
 ```
 
-`backLabel` and `backContent` each accept either a string template or a
-callback.
+`backLabel` and `backContent` each accept either a string template or a callback.
 
-In a string template, the `{reference}` token expands to the footnote
-number on the first backref (e.g. `1`) and to `number-K` on repeated
-backrefs (e.g. `1-2`). Template mode also appends a `<sup>K</sup>` marker after `backContent` on reruns.
+In a string template, the `{reference}` token expands to the footnote number on the first backref (e.g. `1`) and to `number-K` on repeated backrefs (e.g. `1-2`). Template mode also appends a `<sup>K</sup>` marker after `backContent` on reruns.
 
 For full control, you can pass a callback to these options:
 
@@ -88,11 +80,7 @@ markdownToHtml(source, {
 });
 ```
 
-Both arguments are 1-based. `referenceNumber` is the footnote number a
-reader sees; `rerunIndex` is `1` for the first backref to a given
-definition, `2` for the second, and so on. Callback mode skips the
-auto-`<sup>K</sup>`: the callback returns the final content for each
-backref.
+Both arguments are 1-based. `referenceNumber` is the footnote number a reader sees; `rerunIndex` is `1` for the first backref to a given definition, `2` for the second, and so on. Callback mode skips the auto-`<sup>K</sup>`: the callback returns the final content for each backref.
 
 ## Math
 
@@ -104,12 +92,9 @@ math?: boolean | {
 }
 ```
 
-Parses `$$ ... $$` display math and `$ ... $` inline
-math.
+Parses `$$ ... $$` display math and `$ ... $` inline math.
 
-Set `singleDollarTextMath: false` to keep `$$ ... $$` working while
-treating single dollars as literal text. Useful for prose with currency
-like "from $50 to $100":
+Set `singleDollarTextMath: false` to keep `$$ ... $$` working while treating single dollars as literal text. Useful for prose with currency like "from $50 to $100":
 
 ```js
 markdownToHtml(source, {
@@ -125,8 +110,7 @@ Default: `true`.
 frontmatter?: boolean
 ```
 
-Recognizes YAML (`--- ... ---`) and TOML (`+++ ... +++`)
-blocks at the top of a document.
+Recognizes YAML (`--- ... ---`) and TOML (`+++ ... +++`) blocks at the top of a document.
 
 The parsed block is returned alongside the rendered output:
 
@@ -160,6 +144,36 @@ The id and classes appear on the rendered heading, producing the following HTML:
 <h2 id="my-id" class="my-class">My heading</h2>
 ```
 
+`#` sets the id and `.` adds a class. You can also write arbitrary attributes as `key=value`, or a bare `key` for a valueless attribute (rendered as `key=""`):
+
+```markdown
+### Note {#intro data-level=2 hidden}
+```
+
+```html
+<h3 id="intro" data-level="2" hidden="">Note</h3>
+```
+
+Wrap a value in `"` or `'` quotes when it needs to contain spaces:
+
+```markdown
+# Title {data-label="hello world"}
+```
+
+```html
+<h1 data-label="hello world">Title</h1>
+```
+
+Explicit `id=` and `class=` merge with the `#`/`.` shorthands instead of producing duplicate attributes. The last id wins whereas classes accumulate in source order:
+
+```markdown
+## Heading {.intro #x class=lead id=main}
+```
+
+```html
+<h2 id="main" class="intro lead">Heading</h2>
+```
+
 ## Directives
 
 Default: `false`.
@@ -168,11 +182,7 @@ Default: `false`.
 directive?: boolean
 ```
 
-Enables container (`:::name`), leaf (`::name`), and
-text (`:name`) directives as defined by
-[remark-directive](https://github.com/remarkjs/remark-directive). The
-parser produces directive nodes. Rendering them is up to a plugin; the
-default mdast→hast conversion drops them.
+Enables container (`:::name`), leaf (`::name`), and text (`:name`) directives as defined by [remark-directive](https://github.com/remarkjs/remark-directive). The parser produces directive nodes. Rendering them is up to a plugin; the default mdast→hast conversion drops them.
 
 ## Superscript / subscript
 
@@ -183,8 +193,7 @@ superscript?: boolean
 subscript?: boolean
 ```
 
-`^text^` becomes `<sup>text</sup>` and
-`~text~` becomes `<sub>text</sub>`.
+`^text^` becomes `<sup>text</sup>` and `~text~` becomes `<sub>text</sub>`.
 
 Subscript and GFM strikethrough share the `~` delimiter. Enabling subscript therefore disables GFM's single-tilde strikethrough (`~text~` to `<del>`), only leaving double-tilde strikethrough (`~~text~~`) available.
 
@@ -196,8 +205,7 @@ Default: `false`.
 wikilinks?: boolean
 ```
 
-Recognizes `[[Target]]` and `[[Target|Label]]` as
-links.
+Recognizes `[[Target]]` and `[[Target|Label]]` as links.
 
 ## Smart punctuation
 
@@ -211,8 +219,7 @@ smartPunctuation?: boolean | {
 }
 ```
 
-Pass `true` to enable all three categories at once, or
-an options object to turn on just the parts you want:
+Pass `true` to enable all three categories at once, or an options object to turn on just the parts you want:
 
 ```js
 // Curly quotes only; leave -- and ... alone.
@@ -221,5 +228,4 @@ markdownToHtml(source, {
 });
 ```
 
-Omitted keys in the options object default to `true`, so
-`{ dashes: false }` enables quotes and ellipses but disables dashes.
+Omitted keys in the options object default to `true`, so `{ dashes: false }` enables quotes and ellipses but disables dashes.

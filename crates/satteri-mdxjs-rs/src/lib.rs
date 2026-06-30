@@ -167,7 +167,7 @@ pub fn compile_hast_arena(
     arena: &satteri_arena::Arena<satteri_arena::Hast>,
     options: &Options,
 ) -> Result<String, message::Message> {
-    let source_bytes = arena.source().as_bytes();
+    let source_bytes = arena.string_pool().as_bytes();
     let allocator = Allocator::default();
     let location = Location::new(source_bytes);
     let mut explicit_jsxs = FxHashSet::default();

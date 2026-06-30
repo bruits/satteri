@@ -31,11 +31,25 @@ jobs:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
             build: pnpm run build:binary:native --target x86_64-pc-windows-msvc
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
+            build: pnpm run build:binary:native --target aarch64-pc-windows-msvc
 
-          # -- Linux GNU --
+          # -- Linux GNU: --use-napi-cross builds against old glibc (2.17) so it runs on old distros --
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            build: pnpm run build:binary:native --target x86_64-unknown-linux-gnu
+            build: pnpm run build:binary:native --target x86_64-unknown-linux-gnu --use-napi-cross
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            build: pnpm run build:binary:native --target aarch64-unknown-linux-gnu --use-napi-cross
+
+          # -- Linux musl (Alpine) --
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            build: pnpm run build:binary:native:cross --target x86_64-unknown-linux-musl
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            build: pnpm run build:binary:native:cross --target aarch64-unknown-linux-musl
 
           # -- WASM --
           - host: ubuntu-latest
@@ -74,6 +88,19 @@ jobs:
           cache-extra-identifier: ${{ matrix.settings.target }}-${{ matrix.settings.host }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # musl is cross-compiled with cargo-zigbuild, which needs zig as its C toolchain
+      - name: Setup Zig
+        if: contains(matrix.settings.target, 'musl')
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install cargo-zigbuild
+        if: contains(matrix.settings.target, 'musl')
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
 
       - name: Install dependencies
         run: pnpm install
@@ -166,6 +193,7 @@ jobs:
       - uses: bruits/sampo/crates/sampo-github-action@f7241754458e1be4073902b2860596340c7d089c # sampo-v0.17.4
         with:
           command: auto
+          create-github-release: true
           cargo-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           npm-args: --access public --provenance --no-git-checks
         env:

@@ -39,8 +39,8 @@ export const HEADER = {
   children_offset: 24,
   type_data_len: 28,
   type_data_offset: 32,
-  source_len: 36,
-  source_offset: 40,
+  string_pool_len: 36,
+  string_pool_offset: 40,
   node_data_count: 44,
   node_data_offset: 48,
 } as const;

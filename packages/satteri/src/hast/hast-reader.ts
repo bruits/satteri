@@ -36,7 +36,7 @@ export class HastReader {
   readonly #view: DataView;
   readonly #header: BufferHeader;
   readonly #textDecoder: TextDecoder;
-  #sourceCache: string | null = null;
+  #stringPoolCache: string | null = null;
 
   constructor(buffer: ArrayBuffer | Uint8Array) {
     if (buffer instanceof Uint8Array) {
@@ -69,8 +69,8 @@ export class HastReader {
       childrenOffset: v.getUint32(HEADER.children_offset, true),
       typeDataLen: v.getUint32(HEADER.type_data_len, true),
       typeDataOffset: v.getUint32(HEADER.type_data_offset, true),
-      sourceLen: v.getUint32(HEADER.source_len, true),
-      sourceOffset: v.getUint32(HEADER.source_offset, true),
+      stringPoolLen: v.getUint32(HEADER.string_pool_len, true),
+      stringPoolOffset: v.getUint32(HEADER.string_pool_offset, true),
       nodeDataCount: v.getUint32(HEADER.node_data_count, true),
       nodeDataOffset: v.getUint32(HEADER.node_data_offset, true),
     };
@@ -110,27 +110,28 @@ export class HastReader {
     return { ...this.#header };
   }
 
-  /** Get the full source string (string pool). */
-  getSource(): string {
-    if (this.#sourceCache === null) {
-      const { sourceOffset, sourceLen } = this.#header;
+  /** The full string pool (original input + interning heap). Not the document
+   * source as written; for that, read `ctx.source` from a plugin. */
+  getStringPool(): string {
+    if (this.#stringPoolCache === null) {
+      const { stringPoolOffset, stringPoolLen } = this.#header;
       const bytes = new Uint8Array(
         this.#view.buffer,
-        this.#view.byteOffset + sourceOffset,
-        sourceLen,
+        this.#view.byteOffset + stringPoolOffset,
+        stringPoolLen,
       );
-      this.#sourceCache = this.#textDecoder.decode(bytes);
+      this.#stringPoolCache = this.#textDecoder.decode(bytes);
     }
-    return this.#sourceCache;
+    return this.#stringPoolCache;
   }
 
   /** Read a substring from the string pool by byte offset and length. */
   getString(offset: number, len: number): string {
     if (len === 0) return "";
-    const { sourceOffset } = this.#header;
+    const { stringPoolOffset } = this.#header;
     const bytes = new Uint8Array(
       this.#view.buffer,
-      this.#view.byteOffset + sourceOffset + offset,
+      this.#view.byteOffset + stringPoolOffset + offset,
       len,
     );
     return this.#textDecoder.decode(bytes);

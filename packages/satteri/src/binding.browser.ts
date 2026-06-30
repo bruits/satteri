@@ -30,4 +30,4 @@ export {
   textContentHandle,
   walkHandle,
   walkMdastHandle,
-} from "../satteri_napi.wasi-browser.js";
+} from "../browser.js";

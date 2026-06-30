@@ -13,7 +13,7 @@ use crate::shared::{
 
 /// Render HTML from an arena.
 pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
-    let mut out = String::with_capacity(arena.source().len());
+    let mut out = String::with_capacity(arena.string_pool().len());
     render_node(0, arena, &mut out, false, false);
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');

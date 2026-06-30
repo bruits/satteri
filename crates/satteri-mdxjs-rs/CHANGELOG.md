@@ -1,5 +1,25 @@
 # satteri-mdxjs
 
+## 0.3.7 — 2026-06-29
+
+### Patch changes
+
+- [07ee532](https://github.com/bruits/satteri/commit/07ee53293af76d0dcddbac961ad35337c5500e74) Fixes JSX nested in an MDX attribute expression (e.g. `prop={<p>hi</p>}` or `title={<>x</>}`) being emitted as raw, un-lowered JSX, which produced invalid JavaScript. Also fixes quotes and apostrophes in such JSX text (e.g. `prop={<p>Acme Corp.'s "best" tool</p>}`) being mis-scanned as JS string literals and causing a parse error — the expression scanner now consumes a JSX element's children as text. — Thanks @vaneenige for your first contribution 🎉!
+- Updated dependencies: satteri-arena (Cargo)@0.2.2, satteri-ast (Cargo)@0.4.1, satteri-pulldown-cmark (Cargo)@0.5.7
+
+## 0.3.6 — 2026-06-25
+
+### Patch changes
+
+- Updated dependencies: satteri-pulldown-cmark (Cargo)@0.5.6
+
+## 0.3.5 — 2026-06-19
+
+### Patch changes
+
+- [855379c](https://github.com/bruits/satteri/commit/855379c7eb018e9c5acc69daa7a63f27dbb79e7f) MDX parse errors now carry a source line and column. Previously, errors in `import`/`export` blocks dropped the position entirely, and errors in `{…}` expressions and JSX attributes were reported as a bare byte offset, so downstream tooling reported an unknown location. JSX attribute and spread expression errors now point at the offending attribute rather than the element's opening `<`. — Thanks @Princesseuh!
+- Updated dependencies: satteri-pulldown-cmark (Cargo)@0.5.5
+
 ## 0.3.4 — 2026-06-18
 
 ### Patch changes

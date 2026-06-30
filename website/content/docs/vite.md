@@ -4,10 +4,7 @@ section: "guides"
 order: 20
 ---
 
-`vite-plugin-satteri` lets you `import` Markdown and MDX files
-directly in a Vite project. `.md` imports give you the rendered HTML;
-`.mdx` imports give you a JSX component. YAML or TOML frontmatter
-comes through parsed as a named export either way.
+`vite-plugin-satteri` lets you `import` Markdown and MDX files directly in a Vite project. `.md` imports give you the rendered HTML; `.mdx` imports give you a JSX component. YAML or TOML frontmatter comes through parsed as a named export either way.
 
 ## Install
 
@@ -35,13 +32,11 @@ export default defineConfig({
 });
 ```
 
-That's the whole setup. Any `.md` or `.mdx` file in your project is
-now importable.
+That's the whole setup. Any `.md` or `.mdx` file in your project is now importable.
 
 ## Importing Markdown
 
-A `.md` import gives you the rendered HTML as a string plus any parsed
-frontmatter (YAML between `---` fences, or TOML between `+++` fences):
+A `.md` import gives you the rendered HTML as a string plus any parsed frontmatter (YAML between `---` fences, or TOML between `+++` fences):
 
 ```js
 import postHtml, { frontmatter } from "./post.md";
@@ -50,13 +45,11 @@ document.getElementById("post").innerHTML = postHtml;
 console.log(frontmatter.title);
 ```
 
-The default export and the named `html` export point at the same
-string, so pick whichever reads better at the call site.
+The default export and the named `html` export point at the same string, so pick whichever reads better at the call site.
 
 ## Importing MDX
 
-An `.mdx` import is an ES module that exports a component. The JSX runtime
-follows whatever you configure in `mdx.jsxImportSource`:
+An `.mdx` import is an ES module that exports a component. The JSX runtime follows whatever you configure in `mdx.jsxImportSource`:
 
 ```js
 import { defineConfig } from "vite";
@@ -82,10 +75,7 @@ import Intro, { frontmatter } from "./intro.mdx";
 render(<Intro />, document.getElementById("root"));
 ```
 
-By default, the plugin compiles MDX with `development: true` in
-`serve` so React gives you useful component stacks, and switches to
-the production runtime in `build`. Override with
-`mdx: { development: false }`.
+By default, the plugin compiles MDX with `development: true` in `serve` so React gives you useful component stacks, and switches to the production runtime in `build`. Override with `mdx: { development: false }`.
 
 ## Options
 
@@ -97,11 +87,9 @@ the production runtime in `build`. Override with
 | `hastPlugins`  | `HastPluginInput[]`     | —       | HAST-stage plugins, shared across `.md` and `.mdx`.            |
 | `features`     | `Features`              | —       | Parser toggles. See [Features](/docs/features/).               |
 
-`MdxOptions` mirrors Sätteri's MDX options minus `outputFormat`. The
-plugin always emits an ES module so Vite can import it.
+`MdxOptions` mirrors Sätteri's MDX options minus `outputFormat`. The plugin always emits an ES module so Vite can import it.
 
-Plugins given here apply to every Markdown and MDX file. See the
-[Plugins](/docs/plugins/) guide for how to write them.
+Plugins given here apply to every Markdown and MDX file. See the [Plugins](/docs/plugins/) guide for how to write them.
 
 ## TypeScript
 

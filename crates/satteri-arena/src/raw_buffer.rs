@@ -1,6 +1,6 @@
 //! Raw buffer export for zero-copy transfer.
 //!
-//! Wire format: `[Header][nodes...][children u32s][type_data bytes][source UTF-8][node_data entries]`
+//! Wire format: `[Header][nodes...][children u32s][type_data bytes][string_pool UTF-8][node_data entries]`
 //!
 //! The header carries a `kind` u32 right after `magic` so JS readers can
 //! assert the buffer matches the kind they expect (`MdastReader` vs
@@ -31,7 +31,7 @@ impl<K: ArenaKind> Arena<K> {
         let nodes_bytes = self.nodes.len() * NODE_STRUCT_SIZE;
         let children_bytes = self.children.len() * 4;
         let type_data_bytes = self.type_data.len();
-        let source_bytes = self.source.len();
+        let string_pool_bytes = self.string_pool.len();
 
         // Sort node_data entries by node_id for deterministic output.
         let mut node_data_entries: Vec<(u32, &Vec<u8>)> =
@@ -46,8 +46,8 @@ impl<K: ArenaKind> Arena<K> {
         let nodes_offset = header::SIZE as u32;
         let children_offset = nodes_offset + nodes_bytes as u32;
         let type_data_offset = children_offset + children_bytes as u32;
-        let source_offset = type_data_offset + type_data_bytes as u32;
-        let node_data_offset = source_offset + source_bytes as u32;
+        let string_pool_offset = type_data_offset + type_data_bytes as u32;
+        let node_data_offset = string_pool_offset + string_pool_bytes as u32;
 
         let total = node_data_offset as usize + node_data_section_bytes;
         let mut buf = Vec::with_capacity(total);
@@ -65,8 +65,8 @@ impl<K: ArenaKind> Arena<K> {
         put(header::CHILDREN_OFFSET, children_offset);
         put(header::TYPE_DATA_LEN, self.type_data.len() as u32);
         put(header::TYPE_DATA_OFFSET, type_data_offset);
-        put(header::SOURCE_LEN, self.source.len() as u32);
-        put(header::SOURCE_OFFSET, source_offset);
+        put(header::STRING_POOL_LEN, self.string_pool.len() as u32);
+        put(header::STRING_POOL_OFFSET, string_pool_offset);
         put(header::NODE_DATA_COUNT, node_data_count);
         put(header::NODE_DATA_OFFSET, node_data_offset);
         buf.extend_from_slice(&hdr);
@@ -81,7 +81,7 @@ impl<K: ArenaKind> Arena<K> {
             unsafe { std::slice::from_raw_parts(self.nodes.as_ptr() as *const u8, nodes_bytes) };
         let nodes_buf_start = buf.len();
         buf.extend_from_slice(nodes_slice);
-        if !self.source.is_ascii() {
+        if !self.string_pool.is_ascii() {
             const START_OFF_FIELD: usize = offset_of!(ArenaNode, start_offset);
             const END_OFF_FIELD: usize = offset_of!(ArenaNode, end_offset);
             let cached = self.cp_offsets.len() == self.nodes.len();
@@ -104,7 +104,7 @@ impl<K: ArenaKind> Arena<K> {
                 // Fallback: no precomputed cache (e.g. arena assembled
                 // outside `arena_build`, or after plugin mutation). Build
                 // a one-shot LineIndex and convert per node.
-                let line_index = LineIndex::from_source(&self.source);
+                let line_index = LineIndex::from_source(&self.string_pool);
                 let mut cursor = line_index.cursor();
                 for (i, node) in self.nodes.iter().enumerate() {
                     // A zero start line marks a synthesized node with no source
@@ -135,7 +135,7 @@ impl<K: ArenaKind> Arena<K> {
         buf.extend_from_slice(children_slice);
 
         buf.extend_from_slice(&self.type_data);
-        buf.extend_from_slice(self.source.as_bytes());
+        buf.extend_from_slice(self.string_pool.as_bytes());
 
         // node_data entries: [id:u32][len:u32][bytes...]
         for (id, data) in node_data_entries {

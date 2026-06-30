@@ -1295,8 +1295,8 @@ pub const ARENA_HEADER_FIELDS: &[&str] = &[
     "children_offset",
     "type_data_len",
     "type_data_offset",
-    "source_len",
-    "source_offset",
+    "string_pool_len",
+    "string_pool_offset",
     "node_data_count",
     "node_data_offset",
 ];

@@ -12,7 +12,7 @@
     "codegen:check": "pnpm codegen && git diff --exit-code -- ':(glob)**/generated/*' && test -z \"$(git status --porcelain -- ':(glob)**/generated/*')\""
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.6.0",
+    "@napi-rs/cli": "^3.7.2",
     "knip": "^6.3.0",
     "oxfmt": "^0.43.0",
     "oxlint": "^1.58.0",

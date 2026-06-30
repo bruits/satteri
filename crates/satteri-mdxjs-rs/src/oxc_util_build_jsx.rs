@@ -1931,16 +1931,29 @@ fn jsx_to_call<'a>(
     filepath: Option<&String>,
     location: Option<&Location>,
     create_element_name: &str,
-    _fragment_name: &str,
-    _import_fragment: &mut bool,
+    fragment_name: &str,
+    import_fragment: &mut bool,
     import_jsx: &mut bool,
     import_jsxs: &mut bool,
     import_jsx_dev: &mut bool,
 ) -> Result<Expression<'a>, Message> {
     let (callee, parameters) = if automatic {
         let is_static_children = children.len() > 1;
-        let (props, key) =
-            jsx_attributes_to_props(alloc, attributes, Some(&mut children), location)?;
+        let (props, key) = jsx_attributes_to_props(
+            alloc,
+            attributes,
+            Some(&mut children),
+            location,
+            automatic,
+            development,
+            filepath,
+            create_element_name,
+            fragment_name,
+            import_fragment,
+            import_jsx,
+            import_jsxs,
+            import_jsx_dev,
+        )?;
 
         let mut parameters = OxcVec::with_capacity_in(6, alloc);
         parameters.push(Argument::from(name));
@@ -2044,7 +2057,21 @@ fn jsx_to_call<'a>(
         (create_ident_expression(alloc, callee_name), parameters)
     } else {
         // Classic runtime
-        let (props, _key) = jsx_attributes_to_props(alloc, attributes, None, location)?;
+        let (props, _key) = jsx_attributes_to_props(
+            alloc,
+            attributes,
+            None,
+            location,
+            automatic,
+            development,
+            filepath,
+            create_element_name,
+            fragment_name,
+            import_fragment,
+            import_jsx,
+            import_jsxs,
+            import_jsx_dev,
+        )?;
 
         let mut parameters = OxcVec::with_capacity_in(4, alloc);
         parameters.push(Argument::from(name));
@@ -2198,11 +2225,21 @@ fn jsx_expression_to_expression(jsx_expr: JSXExpression<'_>) -> Option<Expressio
 }
 
 /// Convert JSX attributes to props expression and optional key.
+#[allow(clippy::too_many_arguments)]
 fn jsx_attributes_to_props<'a>(
     alloc: &'a Allocator,
     attributes: Option<Vec<JSXAttributeItem<'a>>>,
     children: Option<&mut Vec<Expression<'a>>>,
     location: Option<&Location>,
+    automatic: bool,
+    development: bool,
+    filepath: Option<&String>,
+    create_element_name: &str,
+    fragment_name: &str,
+    import_fragment: &mut bool,
+    import_jsx: &mut bool,
+    import_jsxs: &mut bool,
+    import_jsx_dev: &mut bool,
 ) -> Result<(Option<Expression<'a>>, Option<Expression<'a>>), Message> {
     let mut objects: Vec<Expression<'a>> = vec![];
     let mut fields: Vec<ObjectPropertyKind<'a>> = vec![];
@@ -2213,11 +2250,26 @@ fn jsx_attributes_to_props<'a>(
         for attribute in attributes {
             match attribute {
                 JSXAttributeItem::SpreadAttribute(spread_attr) => {
-                    let spread_attr = spread_attr.unbox();
+                    let mut spread_attr = spread_attr.unbox();
                     if !fields.is_empty() {
                         let props_vec = OxcVec::from_iter_in(fields.drain(..), alloc);
                         objects.push(create_object_expression(alloc, props_vec));
                     }
+                    // Lower any JSX inside the spread argument (e.g. `{...{x: <p/>}}`).
+                    process_expression_jsx(
+                        &mut spread_attr.argument,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
                     objects.push(spread_attr.argument);
                     spread = true;
                 }
@@ -2229,7 +2281,26 @@ fn jsx_attributes_to_props<'a>(
                         false
                     };
 
-                    let value = jsx_attr_value_to_expression(alloc, jsx_attr.value);
+                    let mut value = jsx_attr_value_to_expression(alloc, jsx_attr.value);
+                    // Lower any JSX nested in the attribute value (e.g.
+                    // `d={<p>x</p>}`, `d={<>x</>}`, `d={cond ? <a/> : <b/>}`).
+                    // Children are recursed into separately (in
+                    // `jsx_element_to_call`); attribute values were not, so
+                    // their JSX leaked through un-lowered as raw `<...>`.
+                    process_expression_jsx(
+                        &mut value,
+                        alloc,
+                        automatic,
+                        development,
+                        filepath,
+                        location,
+                        create_element_name,
+                        fragment_name,
+                        import_fragment,
+                        import_jsx,
+                        import_jsxs,
+                        import_jsx_dev,
+                    )?;
 
                     if is_key && children.is_some() {
                         // automatic runtime: extract key
@@ -2502,15 +2573,8 @@ fn jsx_text_to_value(value: &str) -> String {
     }
 
     if start != bytes.len() {
-        if result.is_empty() {
-            index = 0;
-            while index < bytes.len() && bytes[index] == b' ' {
-                index += 1;
-            }
-            if index == bytes.len() {
-                return result;
-            }
-        } else {
+        // An all-spaces run with no newline is significant in JSX, so keep it rather than drop it.
+        if !result.is_empty() {
             result.push(' ');
         }
         result.push_str(str::from_utf8(&bytes[start..]).unwrap());

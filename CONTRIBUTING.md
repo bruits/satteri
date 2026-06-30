@@ -1,6 +1,6 @@
 # Contributing Guidelines
 
-Thanks for wanting to contribute to Sätteri!
+First, a huge **thank you** for dedicating your time to helping us improve Sätteri ❤️
 
 > [!Tip]
 > **New to open source?** Check out [https://github.com/firstcontributions/first-contributions](https://github.com/firstcontributions/first-contributions) for helpful information on contributing
@@ -9,35 +9,52 @@ Thanks for wanting to contribute to Sätteri!
 
 Sätteri is a fast, correct, and extensible Markdown/MDX processing pipeline. Performance is the core focus, but not at the cost of correctness or maintainability.
 
-Any issue, PR, or discussion that violates our [code of conduct](./CODE_OF_CONDUCT.md) will be deleted and the authors banned.
+We're also committed to fostering a welcoming and respectful community. Any issue, PR, or discussion that violates our [code of conduct](./CODE_OF_CONDUCT.md) will be deleted, and the authors will be **banned**.
 
 ## Before Opening Issues
 
-- Questions about using Sätteri belong in [GitHub Discussions (Q&A)](https://github.com/bruits/satteri/discussions/categories/q-a), not issues.
-- Ideas and suggestions belong in [GitHub Discussions (Ideas)](https://github.com/bruits/satteri/discussions/categories/ideas), not issues.
-- Check for duplicates before opening anything.
-- Provide as much detail as you can. It doesn't need to be perfect.
+- **Do not report security vulnerabilities publicly** (e.g., in issues), please refer to our [security policy](./SECURITY.md).
+- **Do not create issues for questions about using Sätteri.** Instead, ask on our [Discord](https://discord.com/invite/84pd4QtmzA).
+- **For ideas or feature suggestions**, open a [feature request issue](https://github.com/bruits/satteri/issues/new?template=02-feature-request.yml) or chat about it first on [Discord](https://discord.com/invite/84pd4QtmzA).
+- **Check for duplicates.** Look through existing issues to see if your topic has already been addressed.
+- In general, provide as much detail as possible. No worries if it's not perfect, we'll figure it out together.
 
-## Before Submitting Pull Requests
+## Before submitting Pull Requests (PRs)
 
-- Check for duplicate PRs.
-- Run `cargo clippy --all --all-targets` and fix any warnings.
-- Run `cargo fmt --all` and `pnpm format`.
-- If you're adding functionality or fixing a bug, include tests. Run `cargo test --all` and `cd packages/satteri && pnpm test`.
-- Prefer small, focused PRs. Large ones can often be split up.
-- PRs don't need to be perfect. Submit your best effort and we'll help polish it.
+- **Check for duplicates.** Look through existing PRs to see if your changes have already been submitted.
+- **Lint.** Run `pnpm lint` to lint both the Rust (`cargo clippy`) and TypeScript (`oxlint`) code.
+- **Format.** Run `pnpm format` to format both the Rust (`cargo fmt`) and TypeScript (`oxfmt`) code.
+- **Write and run tests.** If you're adding new functionality or fixing a bug, please include tests to cover it. Run `cargo test --all` and `cd packages/satteri && pnpm test` to ensure all existing tests pass.
+- **Write a changeset.** Run `sampo add` to create a new changeset file describing your changes.
+- Prefer small, focused PRs that address a single issue or feature. Larger PRs can be harder to review, and can often be broken down into smaller, more manageable pieces.
+- PRs don't need to be perfect. Submit your best effort, and we will gladly assist in polishing the work.
 
 ## Quality Guidelines
 
-- Self-documenting code first. Expressive names, straightforward logic. Comments should explain _why_, not _how_. No separator comments or visual noise.
-- Tests should assert observable behavior (inputs/outputs), not implementation details. Keep them deterministic.
-- Rust: typed error enums (with `thiserror` where applicable), `?` propagation, `.expect()`/`.unwrap()` only for programmer bugs. Explicit `use` imports for standard library types.
+- Prefer self-documenting code first, with expressive names and straightforward logic. Comments should explain _why_ (intent, invariants, trade-offs), not _how_. Variable and function names should be clear and descriptive, not cryptic abbreviations. Avoid hidden state and side effects.
+- Tests should assert observable behavior (inputs/outputs, effects), not internal implementation details. Keep tests deterministic and independent of global state.
+- For errors, use typed error enums in library crates (derived with `thiserror`). Per-crate `pub type Result<T>` aliases for ergonomic signatures. Add context at the boundary (NAPI binding) rather than deep in core, keep library error messages concise.
+- Prefer `?` propagation when possible, and reserve `.expect()`/`.unwrap()` for cases where failure is a programmer bug (e.g. hardcoded regex literals, test helpers).
 - TypeScript: strict types, no `any`, code style enforced by oxlint.
-- Clarity over cleverness. Small focused functions. Avoid duplication.
+- Document any new public APIs, configuration options, or user-facing changes in the relevant README files. If you're unsure where or how to document something, just ask and we'll help you out.
+- We deeply value idiomatic, easy-to-maintain Rust code. Avoid code duplication when possible. And prefer clarity over cleverness, and small focused functions over dark magic.
+- Explicit `use` imports for standard library types (e.g. `use std::collections::HashMap;`).
+
+## Writing Changesets
+
+Sätteri uses [Sampo](https://github.com/bruits/sampo) to manage changelogs and versioning. Every user-facing change should ship with a changeset that lands in the changelog of the next release. Run `sampo add` to create one.
+
+**Structure:**
+
+1. **Verb:** `Added`, `Removed`, `Fixed`, `Changed`, `Deprecated`, or `Improved`.
+2. **Description**.
+3. **Usage example (optional):** A minimal snippet if it clarifies the change.
+
+**Description guidelines:** concise (1-2 sentences), specific (mention the command/option/API), actionable (what changed, not why), user-facing (written for changelog readers), and in English. Don't detail internal implementation changes.
 
 ## Getting Started
 
-Sätteri is a Rust + TypeScript monorepo. The Rust workspace lives at the repository root (`Cargo.toml`), and the npm package lives under `packages/satteri`.
+Sätteri is a Rust + TypeScript monorepo. The Rust workspace lives at the repository root (`Cargo.toml`), and the npm packages live under `packages/`.
 
 ### Prerequisites
 
@@ -83,3 +100,15 @@ High-level Rust API tying the pipeline together: parse, convert, compile.
 #### `packages/satteri` (npm)
 
 The TypeScript layer. Provides the public functions (`markdownToHtml`, `mdxToJs`, etc), and the plugin definition API (`defineMdastPlugin`, `defineHastPlugin`).
+
+#### `packages/satteri-expressive-code` (npm)
+
+HAST plugin rendering code blocks with [Expressive Code](https://expressive-code.com) (Shiki highlighting, frames, copy button); the Sätteri equivalent of `rehype-expressive-code`.
+
+#### `packages/vite-plugin-satteri` (npm)
+
+Vite plugin that imports `.md` (rendered HTML) and `.mdx` (JSX component) files through Sätteri.
+
+---
+
+Thank you once again for contributing, we deeply appreciate all contributions, no matter how small or big.

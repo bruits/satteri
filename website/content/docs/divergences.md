@@ -46,8 +46,7 @@ Both still emit `class="language-rust"` on the `<code>` element, so syntax-highl
 
 ### Unknown directives in HAST
 
-Sätteri drops `containerDirective`, `leafDirective`, and `textDirective` nodes when converting mdast to hast unless the node has `data.hName` set by a plugin.
-`mdast-util-to-hast`'s `defaultUnknownHandler` instead wraps unknown nodes in a `<div>` and recurses into their children.
+Sätteri drops `containerDirective`, `leafDirective`, and `textDirective` nodes when converting mdast to hast unless the node has `data.hName` set by a plugin. `mdast-util-to-hast`'s `defaultUnknownHandler` instead wraps unknown nodes in a `<div>` and recurses into their children.
 
 ```markdown
 :::tip[Title] content :::

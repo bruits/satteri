@@ -2,6 +2,6 @@
 
 Benchmarks for Sätteri, a high-performance Markdown and MDX processor.
 
-> [!NOTE]
-> **Work in progress** — this crate is under active development.
-> See the [Contributing Guide](../../CONTRIBUTING.md) if you want to get involved!
+## Development
+
+Refer to [CONTRIBUTING.md](https://github.com/bruits/satteri/blob/main/CONTRIBUTING.md) for development setup and workflow details.

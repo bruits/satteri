@@ -32,10 +32,10 @@ with a custom attribute {myattr=myvalue}
 multiple! {.myclass1 myattr #myh3 otherattr=value .myclass2}
 --
 .
-<h1>with the ID</h1>
-<h2>with a class</h2>
-<h1>with a custom attribute</h1>
-<h2>multiple!</h2>
+<h1 id="myh1">with the ID</h1>
+<h2 class="myclass">with a class</h2>
+<h1 myattr="myvalue">with a custom attribute</h1>
+<h2 id="myh3" class="myclass1 myclass2" myattr="" otherattr="value">multiple!</h2>
 ````````````````````````````````
 
 Basic usage with ATX headings:
@@ -46,10 +46,10 @@ Basic usage with ATX headings:
 #### with a custom attribute {myattr=myvalue}
 ### multiple! {.myclass1 myattr #myh3 otherattr=value .myclass2}
 .
-<h1>with the ID</h1>
-<h2>with a class</h2>
-<h4>with a custom attribute</h4>
-<h3>multiple!</h3>
+<h1 id="myh1">with the ID</h1>
+<h2 class="myclass">with a class</h2>
+<h4 myattr="myvalue">with a custom attribute</h4>
+<h3 id="myh3" class="myclass1 myclass2" myattr="" otherattr="value">multiple!</h3>
 ````````````````````````````````
 
 If an ATX heading has closing `#`s, the attribute block should be placed after them.
@@ -61,9 +61,9 @@ If an ATX heading has closing `#`s, the attribute block should be placed after t
 
 #### non-attribute-block {#id4} ####
 .
-<h1>H1</h1>
-<h2>H2 ## with ## multiple ## hashes</h2>
-<h3>with trailing hash #</h3>
+<h1 id="id1">H1</h1>
+<h2 id="id2">H2 ## with ## multiple ## hashes</h2>
+<h3 id="id3">with trailing hash #</h3>
 <h4>non-attribute-block {#id4}</h4>
 ````````````````````````````````
 
@@ -73,8 +73,8 @@ Trailing ASCII spaces are allowed.
 # spaces {#myid1}    
 ## tabs {#myid2}		
 .
-<h1>spaces</h1>
-<h2>tabs</h2>
+<h1 id="myid1">spaces</h1>
+<h2 id="myid2">tabs</h2>
 ````````````````````````````````
 
 ATX heading cannot have multiple lines.
@@ -122,7 +122,7 @@ cont
 {#myid}
 ==
 .
-<h1>H1
+<h1 id="myid">H1
 cont
 </h1>
 ````````````````````````````````
@@ -164,8 +164,8 @@ Put spaces before attribute blocks for more compatibility.
 # without space, not recommended{#id1}
 ## recommended style with spaces {#id2}
 .
-<h1>without space, not recommended</h1>
-<h2>recommended style with spaces</h2>
+<h1 id="id1">without space, not recommended</h1>
+<h2 id="id2">recommended style with spaces</h2>
 ````````````````````````````````
 
 ## Spaces inside braces
@@ -178,9 +178,9 @@ in the same way as a single whitespace.
 ## H2 {.myclass      #id2 }
 ### H3 {     .myclass}
 .
-<h1>H1</h1>
-<h2>H2</h2>
-<h3>H3</h3>
+<h1 id="id1">H1</h1>
+<h2 id="id2" class="myclass">H2</h2>
+<h3 class="myclass">H3</h3>
 ````````````````````````````````
 
 ## Separators
@@ -191,8 +191,8 @@ Separators are mandatory. There are no automagical separation.
 # H1 {#id1.class1.class2 .class3}
 ## H2 {.class1#id2.class2}
 .
-<h1>H1</h1>
-<h2>H2</h2>
+<h1 id="id1.class1.class2" class="class3">H1</h1>
+<h2 class="class1#id2.class2">H2</h2>
 ````````````````````````````````
 
 ## Unclosed braces
@@ -241,11 +241,11 @@ Inlines can be used in headings.
 #### ~~H4~~ {#id4}
 ##### [text](uri) {#id5}
 .
-<h1><em>H1</em></h1>
-<h2><strong>H2</strong></h2>
-<h3><em>H3</em></h3>
-<h4>~~H4~~</h4>
-<h5><a href="uri">text</a></h5>
+<h1 id="id1"><em>H1</em></h1>
+<h2 id="id2"><strong>H2</strong></h2>
+<h3 id="id3"><em>H3</em></h3>
+<h4 id="id4">~~H4~~</h4>
+<h5 id="id5"><a href="uri">text</a></h5>
 ````````````````````````````````
 
 # Ordering and deduplication of attributes
@@ -259,7 +259,7 @@ When a heading have multiple IDs, the last one wins.
 ```````````````````````````````` example
 # H1 {#first #second #last}
 .
-<h1>H1</h1>
+<h1 id="last">H1</h1>
 ````````````````````````````````
 
 ## Classes
@@ -269,7 +269,7 @@ There are no reordering of classes.
 ```````````````````````````````` example
 # H1 {.z .a .zz}
 .
-<h1>H1</h1>
+<h1 class="z a zz">H1</h1>
 ````````````````````````````````
 
 There are no deduplication of classes.
@@ -277,7 +277,7 @@ There are no deduplication of classes.
 ```````````````````````````````` example
 # H1 {.a .a .a}
 .
-<h1>H1</h1>
+<h1 class="a a a">H1</h1>
 ````````````````````````````````
 
 ## Combined
@@ -288,8 +288,23 @@ When both an ID and classes are specified, ID attribute is always emitted first.
 # H1 {.myclass #myid}
 ## H2 {.z #m .a}
 .
-<h1>H1</h1>
-<h2>H2</h2>
+<h1 id="myid" class="myclass">H1</h1>
+<h2 id="m" class="z a">H2</h2>
+````````````````````````````````
+
+## Explicit `id` and `class`
+
+`id=` and `class=` fold into the `#`/`.` shorthands instead of being emitted as
+separate attributes. The last id wins; classes accumulate in source order.
+
+```````````````````````````````` example
+# H1 {#foo id=bar}
+## H2 {.c1 class=c2 .c3}
+### H3 {.c1 #x class=c2 id=y}
+.
+<h1 id="bar">H1</h1>
+<h2 class="c1 c2 c3">H2</h2>
+<h3 id="y" class="c1 c2">H3</h3>
 ````````````````````````````````
 
 # Custom attributes
@@ -304,20 +319,35 @@ that characters are their value.
 # H1 {foo}
 ## H2 {#myid unknown this#is.ignored attr=value .myclass}
 .
-<h1>H1</h1>
-<h2>H2</h2>
+<h1 foo="">H1</h1>
+<h2 id="myid" class="myclass" unknown="" this#is.ignored="" attr="value">H2</h2>
 ````````````````````````````````
 
 ```````````````````````````````` example
 # Header # {myattr=value other_attr}
 .
-<h1>Header</h1>
+<h1 myattr="value" other_attr="">Header</h1>
 ````````````````````````````````
 
 ```````````````````````````````` example
 #### Header {#id myattr= .class1 other_attr=false}
 .
-<h4>Header</h4>
+<h4 id="id" class="class1" myattr="" other_attr="false">Header</h4>
+````````````````````````````````
+
+A value may be wrapped in matching `"` or `'` quotes, letting it contain spaces.
+The quotes are stripped; the other quote character is kept literally.
+
+```````````````````````````````` example
+# H1 {data-x="quoted value"}
+## H2 {title='it can have spaces' #id}
+### H3 {a="x" b="y z" .cls}
+#### H4 {note="it's fine" data-eq="a=b=c"}
+.
+<h1 data-x="quoted value">H1</h1>
+<h2 id="id" title="it can have spaces">H2</h2>
+<h3 class="cls" a="x" b="y z">H3</h3>
+<h4 note="it&#x27;s fine" data-eq="a=b=c">H4</h4>
 ````````````````````````````````
 
 # Forbidden characters
@@ -338,8 +368,8 @@ Left curly brace (note that `{unknown}` and `{.bar}` are treated as attribute bl
 # H1 {.foo{unknown}
 ## H2 {.foo{.bar}
 .
-<h1>H1 {.foo</h1>
-<h2>H2 {.foo</h2>
+<h1 unknown="">H1 {.foo</h1>
+<h2 class="bar">H2 {.foo</h2>
 ````````````````````````````````
 
 Right curly brace:
@@ -428,8 +458,8 @@ Forbidden characters between braces are important.
 ## H2 \\{.bar}
 ### stray backslash at the end is preserved \
 .
-<h1>H1 \</h1>
-<h2>H2 \</h2>
+<h1 class="foo">H1 \</h1>
+<h2 class="bar">H2 \</h2>
 <h3>stray backslash at the end is preserved \</h3>
 ````````````````````````````````
 
@@ -463,8 +493,8 @@ H2 \\{.bar}
 stray backslash at the end is preserved \
 --
 .
-<h1>H1 \</h1>
-<h2>H2 \</h2>
+<h1 class="foo">H1 \</h1>
+<h2 class="bar">H2 \</h2>
 <h2>stray backslash at the end is preserved \</h2>
 ````````````````````````````````
 
@@ -478,9 +508,9 @@ as a plain character inside attribute blocks.
 ## H2 {#foo__bar__baz}
 ### H3 {#foo**bar**baz}
 .
-<h1>H1</h1>
-<h2>H2</h2>
-<h3>H3</h3>
+<h1 id="&#x60;code&#x60;">H1</h1>
+<h2 id="foo__bar__baz">H2</h2>
+<h3 id="foo**bar**baz">H3</h3>
 ````````````````````````````````
 
 ```````````````````````````````` example
@@ -493,44 +523,36 @@ H2-1 {#foo__bar__baz}
 H2-2 {#foo**bar**baz}
 --
 .
-<h1>H1</h1>
-<h2>H2-1</h2>
-<h2>H2-2</h2>
+<h1 id="&#x60;code&#x60;">H1</h1>
+<h2 id="foo__bar__baz">H2-1</h2>
+<h2 id="foo**bar**baz">H2-2</h2>
 ````````````````````````````````
 
 Parsing of attribute blocks takes precedence, even when unclosed inlines are
 present before the attribute blocks.
 
-````````````````````````````````.example
+```````````````````````````````` example
+# Heading with **unclosed {#myid}
+## Some *emphasis {.note}
+### Trailing `code {#ref}
+.
+<h1 id="myid">Heading with **unclosed</h1>
+<h2 class="note">Some *emphasis</h2>
+<h3 id="ref">Trailing `code</h3>
+````````````````````````````````
+
+A delimiter is left untouched even when it also appears inside the attribute
+block. The braces are an opaque boundary, so the delimiter before them stays in
+the text while the one inside them becomes part of the id or class:
+
+```````````````````````````````` example
 # H1 __{#my__id1}
 ## H2 **{#my**id2}
-### H3 `{.code` }
 #### H4 ~~{.strike~~ }
 .
 <h1 id="my__id1">H1 __</h1>
 <h2 id="my**id2">H2 **</h2>
-<h3 class="code`">H3 `</h3>
-<h4 class=".strike~~">H4 ~~</h4>
-````````````````````````````````
-
-````````````````````````````````.example
-# H1__ {#my__id1}
-## H2** {#my**id2}
-### H3` {.code` }
-#### H4~~ {.strike~~ }
-.
-<h1 id="my__id1">H1__ </h1>
-<h2 id="my**id2">H2** </h2>
-<h3 class="code`">H3` </h3>
-<h4 class=".strike~~">H4~~ </h4>
-````````````````````````````````
-
-````````````````````````````````.example
-# H1__ {.foo__bar**baz}
-qux**
-.
-<h1 class="foo__bar**baz">H1__</h1>
-<p>qux**</p>
+<h4 class="strike~~">H4 ~~</h4>
 ````````````````````````````````
 
 This behavior helps source writers and generators add attribute blocks to
@@ -551,9 +573,9 @@ to wrap attributes and it is safe to put single quotes inside them.
 ## H2 {#foo.bar}
 ### H3 {.a"b'c&d}
 .
-<h1>H1</h1>
-<h2>H2</h2>
-<h3>H3</h3>
+<h1 class="foo#bar">H1</h1>
+<h2 id="foo.bar">H2</h2>
+<h3 class="a&quot;b&#x27;c&amp;d">H3</h3>
 ````````````````````````````````
 
 # Edge cases
@@ -582,8 +604,8 @@ If IDs and classes are specified with empty name, they are simply ignored.
 # H1 {#foo #}
 # H1 {.foo . . .bar}
 .
-<h1>H1</h1>
-<h1>H1</h1>
+<h1 id="foo">H1</h1>
+<h1 class="foo bar">H1</h1>
 ````````````````````````````````
 
 ## Empty headers
@@ -642,11 +664,11 @@ attribute block follows.
 ### vertical tab{#vt}
 .
 <h1>horizontal tab</h1>
-<h1>horizontal tab</h1>
+<h1 id="ht">horizontal tab</h1>
 <h2>form feed</h2>
-<h2>form feed</h2>
+<h2 id="ff">form feed</h2>
 <h3>vertical tab</h3>
-<h3>vertical tab</h3>
+<h3 id="vt">vertical tab</h3>
 ````````````````````````````````
 
 ### Attributes separators
@@ -666,9 +688,9 @@ Note that U+000B VERTICAL TAB is not considered as a non-newline whitespace.
 
 # vertical tab (U+000B) {#vt.myclass}
 .
-<h1>horizontal tab (U+000A)</h1>
-<h2>form feed (U+000C)</h2>
-<h1>vertical tab (U+000B)</h1>
+<h1 id="ht" class="myclass">horizontal tab (U+000A)</h1>
+<h2 id="ff" class="myclass">form feed (U+000C)</h2>
+<h1 id="vt.myclass">vertical tab (U+000B)</h1>
 ````````````````````````````````
 
 Non-ASCII whitespaces don't work as separators.
@@ -677,6 +699,6 @@ Non-ASCII whitespaces don't work as separators.
 # EN SPACE (U+2002) {#en-space .myclass}
 ## IDEOGRAPHIC SPACE (U+3000) {#ideographic-space　.myclass}
 .
-<h1>EN SPACE (U+2002)</h1>
-<h2>IDEOGRAPHIC SPACE (U+3000)</h2>
+<h1 id="en-space .myclass">EN SPACE (U+2002)</h1>
+<h2 id="ideographic-space　.myclass">IDEOGRAPHIC SPACE (U+3000)</h2>
 ````````````````````````````````

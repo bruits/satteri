@@ -107,10 +107,10 @@ test("MdastReader.walk skip children", () => {
   expect(visited).toContain(4);
 });
 
-test("MdastReader getSource", () => {
+test("MdastReader getStringPool", () => {
   const buf = buildHelloWorldBuffer();
   const reader = new MdastReader(buf);
-  expect(reader.getSource()).toBe("# Hello\n\nWorld");
+  expect(reader.getStringPool()).toBe("# Hello\n\nWorld");
 });
 
 test("MdastReader accepts Uint8Array", () => {

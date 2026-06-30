@@ -124,21 +124,22 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
     commands
         .into_iter()
         .filter_map(|cmd| match cmd {
-            Command::Replace { node_id, new_node } => built_node_to_arena(new_node, arena.source())
-                .map(|sub| Patch::Replace {
+            Command::Replace { node_id, new_node } => {
+                built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::Replace {
                     node_id: *node_id,
                     new_tree: sub,
                     keep_children: false,
-                }),
+                })
+            }
             Command::Remove { node_id } => Some(Patch::Remove { node_id: *node_id }),
             Command::InsertBefore { node_id, new_node } => {
-                built_node_to_arena(new_node, arena.source()).map(|sub| Patch::InsertBefore {
+                built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::InsertBefore {
                     node_id: *node_id,
                     new_tree: sub,
                 })
             }
             Command::InsertAfter { node_id, new_node } => {
-                built_node_to_arena(new_node, arena.source()).map(|sub| Patch::InsertAfter {
+                built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::InsertAfter {
                     node_id: *node_id,
                     new_tree: sub,
                 })
@@ -146,24 +147,28 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             Command::Wrap {
                 node_id,
                 parent_node,
-            } => built_node_to_arena(parent_node, arena.source()).map(|sub| Patch::Wrap {
+            } => built_node_to_arena(parent_node, arena.string_pool()).map(|sub| Patch::Wrap {
                 node_id: *node_id,
                 parent_tree: sub,
             }),
             Command::PrependChild {
                 node_id,
                 child_node,
-            } => built_node_to_arena(child_node, arena.source()).map(|sub| Patch::PrependChild {
-                node_id: *node_id,
-                child_tree: sub,
+            } => built_node_to_arena(child_node, arena.string_pool()).map(|sub| {
+                Patch::PrependChild {
+                    node_id: *node_id,
+                    child_tree: sub,
+                }
             }),
             Command::AppendChild {
                 node_id,
                 child_node,
-            } => built_node_to_arena(child_node, arena.source()).map(|sub| Patch::AppendChild {
-                node_id: *node_id,
-                child_tree: sub,
-            }),
+            } => {
+                built_node_to_arena(child_node, arena.string_pool()).map(|sub| Patch::AppendChild {
+                    node_id: *node_id,
+                    child_tree: sub,
+                })
+            }
             Command::SetData { .. } => {
                 // Already applied via DataMap in PluginContext, no arena rebuild needed
                 None
@@ -174,11 +179,11 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
 
 /// Convert a NewNode into a mini Arena for use as a patch sub-tree.
 /// Returns None for Raw nodes (parser integration is Phase 8).
-fn built_node_to_arena(new_node: &NewNode, source: &str) -> Option<Arena<Mdast>> {
+fn built_node_to_arena(new_node: &NewNode, string_pool: &str) -> Option<Arena<Mdast>> {
     match new_node {
         NewNode::Raw(_) => None, // Phase 8
         NewNode::Built(built) => {
-            let mut builder = ArenaBuilder::<Mdast>::new(source.to_string());
+            let mut builder = ArenaBuilder::<Mdast>::new(string_pool.to_string());
             emit_built_node(built, &mut builder);
             Some(builder.finish())
         }

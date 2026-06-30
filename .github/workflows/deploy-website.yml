@@ -40,15 +40,10 @@ jobs:
 
       - uses: moonrepo/setup-rust@v1
         with:
-          targets: wasm32-wasip1-threads
           cache-target: release
           target-dirs: target, website/target
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build TypeScript and WASM binding
-        run: pnpm build:wasm
-        working-directory: packages/satteri
 
       - name: Build Website
         run: cargo run --release

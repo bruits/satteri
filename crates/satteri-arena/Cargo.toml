@@ -1,6 +1,6 @@
 [package]
 name = "satteri-arena"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Arena allocator and binary buffer primitives for Sätteri"
 license = "MIT"

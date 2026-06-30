@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions, support, or chat?
+    url: https://discord.com/invite/84pd4QtmzA
+    about: Join the Bruits Discord to ask questions and chat with the community.
+  - name: Using Sätteri through Astro?
+    url: https://github.com/withastro/astro/issues
+    about: Report Astro integration issues on the Astro repository for a faster answer.

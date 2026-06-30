@@ -4,6 +4,8 @@
     "target",
     "dist",
     "crates/**/*",
+    "!crates/*/README.md",
+    "!crates/*/readme.md",
     "node_modules",
     "satteri_napi.*",
     "packages/satteri/index.d.ts",
@@ -12,5 +14,11 @@
     "packages/satteri/browser.d.ts",
     "wasi-worker.mjs",
     "wasi-worker-browser.mjs"
+  ],
+  "overrides": [
+    {
+      "files": ["website/content/docs/**/*.md"],
+      "options": { "proseWrap": "never", "printWidth": 200 }
+    }
   ]
 }

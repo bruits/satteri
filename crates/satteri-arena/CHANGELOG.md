@@ -1,5 +1,11 @@
 # satteri-arena
 
+## 0.2.2 — 2026-06-29
+
+### Patch changes
+
+- [c6a9088](https://github.com/bruits/satteri/commit/c6a908875ae5161c86c592388a55f9caca9ed35b) Fixes plugin `ctx.source` being polluted with duplicated, concatenated content appended after the original document. — Thanks @Princesseuh!
+
 ## 0.2.1 — 2026-06-02
 
 ### Patch changes

@@ -1,6 +1,6 @@
 {
   "name": "satteri",
-  "version": "0.9.0",
+  "version": "0.9.4",
   "description": "High-performance Markdown and MDX processing",
   "repository": {
     "type": "git",
@@ -62,10 +62,10 @@
   },
   "devDependencies": {
     "@codspeed/vitest-plugin": "^5.4.0",
-    "@emnapi/core": "^1.9.1",
-    "@emnapi/runtime": "^1.9.1",
+    "@emnapi/core": "^1.11.1",
+    "@emnapi/runtime": "^1.11.1",
     "@mdx-js/mdx": "^3.1.1",
-    "@napi-rs/wasm-runtime": "^1.1.2",
+    "@napi-rs/wasm-runtime": "^1.1.5",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -93,9 +93,13 @@
     "packageName": "@bruits/satteri",
     "targets": [
       "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
       "x86_64-apple-darwin",
       "aarch64-apple-darwin",
       "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
       "wasm32-wasip1-threads"
     ]
   }

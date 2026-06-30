@@ -417,12 +417,12 @@ fn mdast_arena_to_hast_arena_impl(
     options: &ConvertOptions,
     reuse: Option<Arena<Hast>>,
 ) -> Arena<Hast> {
-    let src = source.source();
+    let src = source.string_pool();
     let n = source.len();
-    let hast_arena = if let Some(mut a) = reuse {
+    let mut hast_arena = if let Some(mut a) = reuse {
         a.reset();
-        a.source.reserve(src.len());
-        a.source.push_str(src);
+        a.string_pool.reserve(src.len());
+        a.string_pool.push_str(src);
         a.nodes.reserve(n);
         a.children.reserve(n);
         a.type_data.reserve(n * 20);
@@ -430,6 +430,9 @@ fn mdast_arena_to_hast_arena_impl(
     } else {
         Arena::<Hast>::with_capacity(src.to_string(), n, n, n * 20)
     };
+    // Reuses the MDAST pool (heap included) so StringRefs stay valid; the
+    // original-input prefix is identical, so carry the boundary over.
+    hast_arena.source_len = source.source_len;
     let mut builder: ArenaBuilder<Hast> = ArenaBuilder::from_arena(hast_arena);
     let newline_ref = builder.alloc_string("\n");
     let refs = collect_refs(source);
@@ -1767,7 +1770,7 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     let sref = StringRef::from_bytes(&arena.type_data[data_off..data_off + 8]);
     let s_off = sref.offset as usize;
     let s_len = sref.len as usize;
-    let source_bytes = arena.source.as_bytes();
+    let source_bytes = arena.string_pool.as_bytes();
     if s_off + s_len > source_bytes.len() {
         return;
     }
