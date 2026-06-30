@@ -23,7 +23,20 @@ Anything else (Linux arm64 or musl, browsers, edge runtimes) falls back to a WAS
 
 ## Browser usage
 
-In a browser bundle, the WASI build replaces the native binding automatically. The WASI runtime needs `SharedArrayBuffer`, so the page must be cross-origin isolated using the following headers:
+In a browser bundle, the WASI build replaces the native binding. It ships as a separate optional package, `@bruits/satteri-wasm32-wasi`, marked `cpu: wasm32` so native installs stay lean. Package managers skip mismatched architectures by default, so you have to opt in.
+
+With pnpm, add the `wasm32` architecture in `pnpm-workspace.yaml`:
+
+```yaml
+supportedArchitectures:
+  cpu:
+    - current
+    - wasm32
+```
+
+Yarn exposes the same `supportedArchitectures` setting in `.yarnrc.yml`. For other package managers, see [napi-rs's WebAssembly guide](https://napi.rs/docs/concepts/webassembly).
+
+The WASI runtime also needs `SharedArrayBuffer`, so the page must be cross-origin isolated, using the following headers:
 
 ```
 Cross-Origin-Opener-Policy: same-origin
