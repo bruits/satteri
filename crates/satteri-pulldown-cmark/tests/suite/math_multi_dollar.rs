@@ -57,7 +57,7 @@ fn math_multi_dollar_test_5() {
 fn math_multi_dollar_test_6() {
     let original = r##"$$\alpha$$
 "##;
-    let expected = r##"<p><code class="language-math math-inline">\alpha</code></p>
+    let expected = r##"<p><math><mi>α</mi></math></p>
 "##;
 
     test_markdown_html(original, expected, 8388608, false, false, false, false, false, false);
@@ -69,7 +69,7 @@ fn math_multi_dollar_test_7() {
 \beta+\gamma
 $$
 "##;
-    let expected = r##"<pre><code class="language-math math-display">\beta+\gamma</code></pre>
+    let expected = r##"<math display="block"><mi>β</mi><mo>+</mo><mi>γ</mi></math>
 "##;
 
     test_markdown_html(original, expected, 8388608, false, false, false, false, false, false);
@@ -84,7 +84,7 @@ E = mc^2
 $$
 "##;
     let expected = r##"<p>We raised $5 to $10 million.</p>
-<pre><code class="language-math math-display">E = mc^2</code></pre>
+<math display="block"><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math>
 "##;
 
     test_markdown_html(original, expected, 8388608, false, false, false, false, false, false);
