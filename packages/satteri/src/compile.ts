@@ -25,6 +25,7 @@ import {
   compileHandle,
   convertMdastToHastHandle,
   createHastHandle,
+  createHastHandleFromHtml,
   createMdastHandle,
   createMdxHastHandle,
   createMdxMdastHandle,
@@ -1057,6 +1058,23 @@ export function markdownToHast(source: string, options: { features?: Features } 
 export function mdxToHast(source: string, options: { features?: Features } = {}): HastNode {
   const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
   const handle = createMdxHastHandle(source, nativeFeatures, convertOptions);
+  try {
+    return materializeHastTree(new HastReader(serializeHandle(handle)));
+  } finally {
+    releaseHandle(handle, true);
+  }
+}
+
+/**
+ * Parse an HTML string into a materialized hast tree.
+ *
+ * Mirrors `hast-util-from-html` in document mode: the result is a `root`
+ * whose children are the parsed document (the doctype, if any, and the
+ * implied `<html>` subtree). Backed by html5ever's spec-compliant tree
+ * builder; only available in builds that include the `from-html` feature.
+ */
+export function htmlToHast(html: string): HastNode {
+  const handle = createHastHandleFromHtml(html);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {

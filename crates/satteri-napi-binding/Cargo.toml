@@ -19,13 +19,16 @@ satteri-plugin-api = { workspace = true }
 satteri-pulldown-cmark = { workspace = true, features = ["std"] }
 
 [features]
-default = ["mdx"]
+default = ["mdx", "from-html"]
 mdx = [
   "dep:satteri-mdxjs",
   "satteri-pulldown-cmark/mdx",
   "satteri-ast/mdx",
   "satteri-plugin-api/mdx",
 ]
+# HTML -> HAST parsing via html5ever. Included in the full (default) build like
+# `mdx`; dropped from `--no-default-features` (lite) builds to keep them small.
+from-html = ["satteri-ast/from-html"]
 
 [build-dependencies]
 napi-build = "2"

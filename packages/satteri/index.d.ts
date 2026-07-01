@@ -84,6 +84,13 @@ export declare function createHastHandle(source: string, features?: JsFeatures |
 export declare function createHastHandleWithFrontmatter(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
 
 /**
+ * Parse an HTML string into structured HAST (elements, text, comments) using
+ * html5ever's tree builder. Mirrors `hast-util-from-html` in document mode.
+ * Returns an opaque handle; the arena stays in Rust memory.
+ */
+export declare function createHastHandleFromHtml(html: string): HastHandle
+
+/**
  * Parse markdown source into an MDAST arena handle.
  *
  * `track_positions` (default `true`) controls whether `position` is recorded
