@@ -11,10 +11,6 @@
     "browser.js",
     "index.js",
     "index.d.ts",
-    "satteri_napi.wasi.cjs",
-    "satteri_napi.wasi-browser.js",
-    "wasi-worker.mjs",
-    "wasi-worker-browser.mjs",
     "webcontainer-fallback.cjs"
   ],
   "type": "module",
@@ -60,14 +56,12 @@
     "@types/mdast": "^4.0.4",
     "@types/unist": "^3.0.3"
   },
-  "optionalDependencies": {
-    "@emnapi/core": "^1.11.1",
-    "@emnapi/runtime": "^1.11.1",
-    "@napi-rs/wasm-runtime": "^1.1.5"
-  },
   "devDependencies": {
     "@codspeed/vitest-plugin": "^5.4.0",
+    "@emnapi/core": "^1.11.1",
+    "@emnapi/runtime": "^1.11.1",
     "@mdx-js/mdx": "^3.1.1",
+    "@napi-rs/wasm-runtime": "^1.1.5",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
