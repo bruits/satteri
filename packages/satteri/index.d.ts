@@ -36,6 +36,13 @@ export declare function convertMdastToHastHandle(handle: MdastHandle, convertOpt
  */
 export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
+/**
+ * Parse an HTML string into structured HAST (elements, text, comments) using
+ * html5ever's tree builder. Mirrors `hast-util-from-html` in document mode.
+ * Returns an opaque handle; the arena stays in Rust memory.
+ */
+export declare function createHastHandleFromHtml(html: string): HastHandle
+
 /** Parse markdown source into an MDAST arena handle. */
 export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null): MdastHandle
 

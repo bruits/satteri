@@ -663,6 +663,18 @@ pub fn create_hast_handle(
     Ok(External::new(Mutex::new(hast)))
 }
 
+/// Parse an HTML string into structured HAST (elements, text, comments) using
+/// html5ever's tree builder. Mirrors `hast-util-from-html` in document mode.
+/// Returns an opaque handle; the arena stays in Rust memory.
+#[cfg(feature = "from-html")]
+#[napi]
+pub fn create_hast_handle_from_html(html: String) -> Result<HastHandle> {
+    let mut hast = satteri_ast::hast::html_to_hast_arena(&html);
+    hast.mdx = false;
+    hast.parse_options = 0;
+    Ok(External::new(Mutex::new(hast)))
+}
+
 /// Parse MDX source and convert to HAST. Returns an opaque handle.
 #[cfg(feature = "mdx")]
 #[napi]
