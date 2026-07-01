@@ -1,5 +1,5 @@
 import { materializeHastNode, type HastNode } from "./hast-materializer.js";
-import type { HastRaw, MdxJsxAttributeUnion, Position, Data } from "../types.js";
+import type { HastRaw, MdxJsxAttributeUnion, Position, Data, SourceFormat } from "../types.js";
 import type {
   Element,
   Text,
@@ -114,6 +114,12 @@ export interface HastVisitorContext {
    * instances. Returned to the caller as `result.data`.
    */
   readonly data: Data;
+  /**
+   * The source format this compile is processing: `"markdown"` for a plain
+   * Markdown compile, `"mdx"` for an MDX one. Lets a plugin shared between both
+   * pipelines branch on which it is handling.
+   */
+  readonly sourceFormat: SourceFormat;
   removeNode(node: Readonly<HastNode>): void;
   replaceNode(node: Readonly<HastNode>, newNode: HastContent): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -318,6 +324,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   #parentsById: Map<number, HastNode> | null = null;
   readonly fileURL: URL | undefined;
   readonly data: Data;
+  readonly sourceFormat: SourceFormat;
 
   constructor(
     handle: HastHandle,
@@ -325,12 +332,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
     fileURL: URL | undefined,
     resolver: LazyChildResolver<HastReader, HastNode>,
     data: Data,
+    sourceFormat: SourceFormat,
   ) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.data = data;
+    this.sourceFormat = sourceFormat;
   }
 
   get source(): string {
@@ -1049,10 +1058,11 @@ export function visitHastHandle(
   source: string | (() => string),
   fileURL: URL | undefined,
   data: Data = {},
+  sourceFormat: SourceFormat = "markdown",
 ): number | Promise<number> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new HastLazyChildResolver(handle);
-  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data);
+  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data, sourceFormat);
   const returnBuffer = new CommandBuffer();
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
   const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
