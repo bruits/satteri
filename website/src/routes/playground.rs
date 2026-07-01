@@ -203,6 +203,7 @@ fn editor_panel() -> Markup {
                 button.pg-tab.active data-input-tab="source" { "Source" }
                 button.pg-tab data-input-tab="mdast-plugin" { "mdast plugin" }
                 button.pg-tab data-input-tab="hast-plugin" { "hast plugin" }
+                button #pg-share.pg-tab.ml-auto type="button" title="Copy a shareable link with the current playground state" { "Share" }
             }
             div #input-content .relative.flex-1.min-h-0.overflow-hidden {
                 div.input-pane.active data-input-pane="source" {

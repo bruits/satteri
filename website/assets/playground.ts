@@ -59,6 +59,7 @@ const osIgnoreElements = $<HTMLInputElement>("#os-ignore-elements");
 const outputTabButton = $<HTMLButtonElement>('[data-tab="output"]');
 const renderedTabButton = $<HTMLButtonElement>('[data-tab="rendered"]');
 const statusBar = $<HTMLElement>("#status-bar");
+const shareButton = $<HTMLButtonElement>("#pg-share");
 const mdastPluginTab = $<HTMLButtonElement>('[data-input-tab="mdast-plugin"]');
 const hastPluginTab = $<HTMLButtonElement>('[data-input-tab="hast-plugin"]');
 const mdxOptionsFieldset = $<HTMLElement>("#mdx-options-fieldset");
@@ -214,6 +215,210 @@ function getOptimizeStatic(): MdxCompileOptions["optimizeStatic"] | undefined {
     ...(ignoreRaw && { ignoreElements: ignoreRaw.split(",").map((s) => s.trim()) }),
   };
 }
+
+// --- Shareable links -------------------------------------------------------
+// The full editor state is deflate-compressed and base64url-encoded into the
+// URL hash, so a link is self-contained and never touches the static server.
+
+type FeatureKey =
+  | "gfm"
+  | "frontmatter"
+  | "math"
+  | "headingAttributes"
+  | "directive"
+  | "superscript"
+  | "subscript"
+  | "wikilinks"
+  | "smartPunctuation"
+  | "smartQuotes"
+  | "smartDashes"
+  | "smartEllipses";
+
+interface MdxState {
+  jsxImportSource: string;
+  jsxRuntime: string;
+  jsx: boolean;
+  development: boolean;
+  providerImportSource: string;
+  outputFormat: string;
+}
+
+interface OptimizeStaticState {
+  enabled: boolean;
+  component: string;
+  prop: string;
+  wrapPropValue: boolean;
+  ignoreElements: string;
+}
+
+interface PlaygroundState {
+  mode?: Mode;
+  source?: string;
+  mdastPlugin?: string;
+  hastPlugin?: string;
+  features?: Partial<Record<FeatureKey, boolean>>;
+  mdx?: Partial<MdxState>;
+  optimizeStatic?: Partial<OptimizeStaticState>;
+}
+
+function getState(): PlaygroundState {
+  return {
+    mode: getMode(),
+    source: input.value,
+    mdastPlugin: inputMdastPlugin.value,
+    hastPlugin: inputHastPlugin.value,
+    features: {
+      gfm: featGfm.checked,
+      frontmatter: featFrontmatter.checked,
+      math: featMath.checked,
+      headingAttributes: featHeadingAttributes.checked,
+      directive: featDirective.checked,
+      superscript: featSuperscript.checked,
+      subscript: featSubscript.checked,
+      wikilinks: featWikilinks.checked,
+      smartPunctuation: featSmartPunctuation.checked,
+      smartQuotes: featSmartQuotes.checked,
+      smartDashes: featSmartDashes.checked,
+      smartEllipses: featSmartEllipses.checked,
+    },
+    mdx: {
+      jsxImportSource: mdxJsxImportSource.value,
+      jsxRuntime: mdxJsxRuntime.value,
+      jsx: mdxJsx.checked,
+      development: mdxDevelopment.checked,
+      providerImportSource: mdxProviderImportSource.value,
+      outputFormat: mdxOutputFormat.value,
+    },
+    optimizeStatic: {
+      enabled: optimizeToggle.checked,
+      component: osComponent.value,
+      prop: osProp.value,
+      wrapPropValue: osWrapPropValue.checked,
+      ignoreElements: osIgnoreElements.value,
+    },
+  };
+}
+
+function applyState(state: PlaygroundState) {
+  const mode: Mode = state.mode === "mdx" ? "mdx" : "markdown";
+  $<HTMLInputElement>(`input[name="mode"][value="${mode}"]`).checked = true;
+  input.value = state.source ?? "";
+  inputMdastPlugin.value = state.mdastPlugin ?? "";
+  inputHastPlugin.value = state.hastPlugin ?? "";
+
+  const features = state.features ?? {};
+  featGfm.checked = !!features.gfm;
+  featFrontmatter.checked = !!features.frontmatter;
+  featMath.checked = !!features.math;
+  featHeadingAttributes.checked = !!features.headingAttributes;
+  featDirective.checked = !!features.directive;
+  featSuperscript.checked = !!features.superscript;
+  featSubscript.checked = !!features.subscript;
+  featWikilinks.checked = !!features.wikilinks;
+  featSmartPunctuation.checked = !!features.smartPunctuation;
+  featSmartQuotes.checked = !!features.smartQuotes;
+  featSmartDashes.checked = !!features.smartDashes;
+  featSmartEllipses.checked = !!features.smartEllipses;
+  smartPunctOptions.classList.toggle("hidden", !featSmartPunctuation.checked);
+
+  const mdx = state.mdx ?? {};
+  mdxJsxImportSource.value = mdx.jsxImportSource ?? "";
+  mdxJsxRuntime.value = mdx.jsxRuntime ?? "automatic";
+  mdxJsx.checked = !!mdx.jsx;
+  mdxDevelopment.checked = !!mdx.development;
+  mdxProviderImportSource.value = mdx.providerImportSource ?? "";
+  mdxOutputFormat.value = mdx.outputFormat ?? "program";
+
+  const os = state.optimizeStatic ?? {};
+  optimizeToggle.checked = !!os.enabled;
+  osComponent.value = os.component ?? "Fragment";
+  osProp.value = os.prop ?? "set:html";
+  osWrapPropValue.checked = !!os.wrapPropValue;
+  osIgnoreElements.value = os.ignoreElements ?? "";
+  optimizeFields.classList.toggle("hidden", !optimizeToggle.checked);
+
+  updateModeUI();
+}
+
+async function compress(text: string): Promise<Uint8Array> {
+  const stream = new CompressionStream("deflate-raw");
+  // Drain the readable side first so a large payload can't deadlock on backpressure.
+  const read = new Response(stream.readable).arrayBuffer();
+  const writer = stream.writable.getWriter();
+  await writer.write(new TextEncoder().encode(text));
+  await writer.close();
+  return new Uint8Array(await read);
+}
+
+async function decompress(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const stream = new DecompressionStream("deflate-raw");
+  const read = new Response(stream.readable).arrayBuffer();
+  const writer = stream.writable.getWriter();
+  await writer.write(bytes);
+  await writer.close();
+  return new TextDecoder().decode(await read);
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+const SHARE_HASH_PREFIX = "#s=";
+
+async function buildShareUrl(): Promise<string> {
+  const payload = bytesToBase64Url(await compress(JSON.stringify(getState())));
+  return `${location.origin}${location.pathname}${SHARE_HASH_PREFIX}${payload}`;
+}
+
+async function loadSharedState(): Promise<PlaygroundState | null> {
+  if (!location.hash.startsWith(SHARE_HASH_PREFIX)) return null;
+  try {
+    const json = await decompress(base64UrlToBytes(location.hash.slice(SHARE_HASH_PREFIX.length)));
+    return JSON.parse(json) as PlaygroundState;
+  } catch {
+    return null;
+  }
+}
+
+let shareResetTimer: ReturnType<typeof setTimeout> | null = null;
+function flashShareLabel(label: string) {
+  shareButton.textContent = label;
+  if (shareResetTimer !== null) clearTimeout(shareResetTimer);
+  shareResetTimer = setTimeout(() => {
+    shareButton.textContent = "Share";
+    shareResetTimer = null;
+  }, 1500);
+}
+
+async function shareCurrentState() {
+  let url: string;
+  try {
+    url = await buildShareUrl();
+  } catch {
+    flashShareLabel("Error");
+    return;
+  }
+  // Reflect the state in the address bar so a plain refresh keeps it too.
+  history.replaceState(null, "", url);
+  try {
+    await navigator.clipboard.writeText(url);
+    flashShareLabel("Copied!");
+  } catch {
+    flashShareLabel("URL updated");
+  }
+}
+
+shareButton.addEventListener("click", () => void shareCurrentState());
 
 function updateModeUI() {
   currentMode = getMode();
@@ -646,5 +851,9 @@ pgSidebarToggle?.addEventListener("click", () => {
 // The WASM module loads asynchronously (top-level await in wasi-browser.js).
 // Reaching this line means the import chain resolved; hide the overlay.
 loadingOverlay.classList.add("hidden");
-highlightAllInputs();
-compile();
+
+void loadSharedState().then((shared) => {
+  if (shared) applyState(shared);
+  highlightAllInputs();
+  compile();
+});
