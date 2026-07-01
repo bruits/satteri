@@ -1,5 +1,6 @@
 //! Convert an MDAST arena to a HAST arena.
 
+use math_core::{LatexToMathML, MathDisplay};
 use rustc_hash::FxHashMap;
 use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast, StringRef};
 
@@ -1396,39 +1397,55 @@ fn convert_node(
             let data = view.get_type_data(node_id);
             let math_data = decode_math_data(data);
             let value = view.get_str(math_data.value);
-            // hName/hProperties on math affect the outer <pre>; the inner
-            // <code> is left as-is. hChildren replaces all children.
-            let action = open_h_element(builder, view, node_id, "pre", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Replaced) {
-                builder.close_node();
+
+            let math_converter = LatexToMathML::default();
+            let Ok(mathml) = math_converter.convert_with_local_counter(value, MathDisplay::Block)
+            else {
+                // hName/hProperties on math affect the outer <pre>; the inner
+                // <code> is left as-is. hChildren replaces all children.
+                let action = open_h_element(builder, view, node_id, "pre", &[]);
+                copy_position(node_id, view, builder);
+                if matches!(action, ChildrenAction::Replaced) {
+                    builder.close_node();
+                    return;
+                }
+                let class_ref = builder.alloc_string("language-math math-display");
+                let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
+                open_element_with_props(builder, "code", &props);
+                add_text_node(builder, value);
+                builder.close_node(); // code
+                builder.close_node(); // pre
                 return;
-            }
-            let class_ref = builder.alloc_string("language-math math-display");
-            let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
-            open_element_with_props(builder, "code", &props);
-            add_text_node(builder, value);
-            builder.close_node(); // code
-            builder.close_node(); // pre
+            };
+            let id = add_raw_node(builder, &mathml);
+            copy_position_to(id, node_id, view, builder);
         }
 
         Some(MdastNodeType::InlineMath) => {
             let data = view.get_type_data(node_id);
             let math_data = decode_math_data(data);
             let value = view.get_str(math_data.value);
-            let class_ref = builder.alloc_string("language-math math-inline");
-            let action = open_h_element(
-                builder,
-                view,
-                node_id,
-                "code",
-                &[("className", PROP_SPACE_SEP, class_ref)],
-            );
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                add_text_node(builder, value);
-            }
-            builder.close_node();
+
+            let math_converter = LatexToMathML::default();
+            let Ok(mathml) = math_converter.convert_with_local_counter(value, MathDisplay::Inline)
+            else {
+                let class_ref = builder.alloc_string("language-math math-inline");
+                let action = open_h_element(
+                    builder,
+                    view,
+                    node_id,
+                    "code",
+                    &[("className", PROP_SPACE_SEP, class_ref)],
+                );
+                copy_position(node_id, view, builder);
+                if matches!(action, ChildrenAction::Recurse) {
+                    add_text_node(builder, value);
+                }
+                builder.close_node();
+                return;
+            };
+            let id = add_raw_node(builder, &mathml);
+            copy_position_to(id, node_id, view, builder);
         }
 
         Some(MdastNodeType::Definition) | Some(MdastNodeType::Yaml) | Some(MdastNodeType::Toml) => {

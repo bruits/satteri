@@ -30,14 +30,11 @@ fn umbrella_flag_matches_combined_individual_flags() {
 #[test]
 fn single_only_keeps_inline_dollar_but_not_blocks() {
     let html = render("$x=y$", opts_single_only());
-    assert!(
-        html.contains("math-inline"),
-        "single $ should be inline math"
-    );
+    assert!(html.contains("<math>"), "single $ should be inline math");
 
     let block = render("$$\n\\alpha\n$$", opts_single_only());
     assert!(
-        !block.contains("math-display"),
+        !block.contains("<math display=\"block\">"),
         "block fences need multi-dollar; single-only must not parse them"
     );
 }
@@ -45,14 +42,17 @@ fn single_only_keeps_inline_dollar_but_not_blocks() {
 #[test]
 fn multi_only_keeps_double_and_blocks_but_not_single() {
     let single = render("$x=y$", opts_multi_only());
-    assert!(!single.contains("math-inline"), "lone $ stays literal");
+    assert!(!single.contains("<math>"), "lone $ stays literal");
     assert!(single.contains("$x=y$"), "lone $ renders verbatim");
 
     let double = render("$$\\alpha$$", opts_multi_only());
-    assert!(double.contains("math-inline"), "$$..$$ inline is math");
+    assert!(double.contains("<math>"), "$$..$$ inline is math");
 
     let block = render("$$\n\\alpha\n$$", opts_multi_only());
-    assert!(block.contains("math-display"), "$$ fence is display math");
+    assert!(
+        block.contains("<math display=\"block\">"),
+        "$$ fence is display math"
+    );
 }
 
 #[test]

@@ -6,6 +6,7 @@ description = "MDAST and HAST node types, codecs, tree operations, and conversio
 license = "MIT"
 
 [dependencies]
+math-core = "0.6.4"
 pulldown-cmark-escape = "0.11"
 rustc-hash = { workspace = true }
 satteri-arena = { workspace = true }
