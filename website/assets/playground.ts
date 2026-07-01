@@ -29,6 +29,9 @@ import langHtml from "shiki/langs/html.mjs";
 import langJavascript from "shiki/langs/javascript.mjs";
 import themeVitesseLight from "shiki/themes/vitesse-light.mjs";
 import themeVitesseDark from "shiki/themes/vitesse-dark.mjs";
+import satteriPkg from "../../packages/satteri/package.json" with { type: "json" };
+
+const SATTERI_VERSION = satteriPkg.version;
 
 type Mode = "markdown" | "mdx";
 type Tab = "mdast" | "hast" | "output" | "rendered";
@@ -257,6 +260,7 @@ interface OptimizeStaticState {
 }
 
 interface PlaygroundState {
+  version: string;
   mode?: Mode;
   source?: string;
   mdastPlugin?: string;
@@ -268,6 +272,7 @@ interface PlaygroundState {
 
 function getState(): PlaygroundState {
   return {
+    version: SATTERI_VERSION,
     mode: getMode(),
     source: input.value,
     mdastPlugin: inputMdastPlugin.value,
@@ -402,6 +407,7 @@ async function loadSharedState(): Promise<PlaygroundState | null> {
 const defaultMdastPluginSource = inputMdastPlugin.value;
 const defaultHastPluginSource = inputHastPlugin.value;
 let hasPendingScripts = false;
+let pendingVersionWarning: string | undefined;
 
 function sharedStateHasUnsafePlugins(state: PlaygroundState): boolean {
   const mdastPlugin = state.mdastPlugin ?? "";
@@ -424,6 +430,8 @@ async function applySharedState(): Promise<boolean> {
 
   if (!shared) return false;
 
+  pendingVersionWarning = shared.version !== SATTERI_VERSION ? shared.version : undefined;
+
   hasPendingScripts = sharedStateHasUnsafePlugins(shared);
   if (hasPendingScripts) compileGeneration++;
 
@@ -433,7 +441,7 @@ async function applySharedState(): Promise<boolean> {
   if (hasPendingScripts) {
     showUnsafePluginAlert();
   } else {
-    dismissAlert();
+    showVersionWarning();
     compile();
   }
 
@@ -442,7 +450,7 @@ async function applySharedState(): Promise<boolean> {
 
 function runPendingPlugins() {
   hasPendingScripts = false;
-  dismissAlert();
+  showVersionWarning();
   compile();
 }
 
@@ -455,6 +463,7 @@ function resetPendingPlugins() {
   highlightInput(inputMdastPlugin, highlightMdastPlugin, "typescript");
   highlightInput(inputHastPlugin, highlightHastPlugin, "typescript");
 
+  showVersionWarning();
   compile();
 }
 
@@ -519,6 +528,21 @@ function showUnsafePluginAlert() {
   alertBarRunScripts.hidden = false;
   alertBarResetScripts.hidden = false;
   alertBar.hidden = false;
+}
+
+function showVersionWarning() {
+  if (!pendingVersionWarning) {
+    dismissAlert();
+    return;
+  }
+
+  showAlert(
+    `This shared playground link was created with Sätteri ${pendingVersionWarning}, but this playground uses
+ Sätteri ${SATTERI_VERSION}. Some options and behavior may differ.`,
+    { dismissible: true },
+  );
+
+  pendingVersionWarning = undefined;
 }
 
 function dismissAlert() {
