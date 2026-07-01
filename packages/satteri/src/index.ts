@@ -7,6 +7,7 @@ export {
   mdxToMdast,
   markdownToHast,
   mdxToHast,
+  htmlToHast,
 } from "./compile.js";
 export type {
   CompileOptions,

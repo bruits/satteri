@@ -78,6 +78,7 @@ markdownToMdast(source: string, options?: { features?: Features }): MdastNode;
 mdxToMdast(source: string, options?: { features?: Features }): MdastNode;
 markdownToHast(source: string, options?: { features?: Features }): HastNode;
 mdxToHast(source: string, options?: { features?: Features }): HastNode;
+htmlToHast(html: string): HastNode;
 ```
 
 ```js
@@ -89,3 +90,12 @@ tree.children[0].depth; // 1
 ```
 
 This is useful when you want Sätteri's fast native parsing but another pipeline (e.g. remark plugins and `remark-stringify`) for the rest. The returned tree is plain objects, yours to keep — see [Node lifetime](/docs/plugin-api/#node-lifetime) for why that matters.
+
+`htmlToHast` is the exception: it parses an HTML string (not Markdown or MDX) into HAST using html5ever's spec-compliant tree builder, the equivalent of `hast-util-from-html` in document mode. Use it to bring existing HTML into a HAST plugin pipeline.
+
+```js
+import { htmlToHast } from "satteri";
+
+const tree = htmlToHast("<p>hi</p>");
+tree.type; // "root"
+```

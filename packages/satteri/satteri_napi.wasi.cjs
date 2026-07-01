@@ -115,6 +115,7 @@ module.exports.compileHandle = __napiModule.exports.compileHandle
 module.exports.compileMdx = __napiModule.exports.compileMdx
 module.exports.convertMdastToHastHandle = __napiModule.exports.convertMdastToHastHandle
 module.exports.createHastHandle = __napiModule.exports.createHastHandle
+module.exports.createHastHandleFromHtml = __napiModule.exports.createHastHandleFromHtml
 module.exports.createMdastHandle = __napiModule.exports.createMdastHandle
 module.exports.createMdxHastHandle = __napiModule.exports.createMdxHastHandle
 module.exports.createMdxMdastHandle = __napiModule.exports.createMdxMdastHandle

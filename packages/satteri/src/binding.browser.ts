@@ -7,6 +7,7 @@ export {
   compileMdx,
   convertMdastToHastHandle,
   createHastHandle,
+  createHastHandleFromHtml,
   createMdastHandle,
   createMdxHastHandle,
   createMdxMdastHandle,
