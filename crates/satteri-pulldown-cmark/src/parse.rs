@@ -483,21 +483,20 @@ impl<'input> ParserInner<'input> {
     /// Note: there's some potential for optimization here, but that's future work.
     pub(crate) fn handle_inline(&mut self, callbacks: &mut dyn ParserCallbacks<'input>) {
         self.handle_inline_pass1(callbacks);
-        // Resolve attention (emphasis/strong) and strikethrough/sub/sup.
-        // micromark runs each construct's `resolveAll` in the order each
-        // construct first fires; whichever marker appears first in the
-        // block decides whether emphasis or strikethrough resolves
-        // first. This matters when their would-be spans cross:
-        //   * `*~bar~*`  – first marker `*` → emphasis first, then
-        //     strikethrough inside the emphasis.
-        //   * `~_~:_<`   – first marker `~` → strikethrough first,
-        //     capturing `_` as content; `_` at offset 4 is then alone.
-        //   * `_/~z)*~*nf` – first marker `_`, no `_` closer → emphasis
-        //     first (pairs `*..*`); `~..~` would cross the emphasis so
-        //     it can't form in the second pass.
-        // Each pass is recursive: after pairing at root, it descends
-        // into already-formed spans so that inner markers (e.g.
-        // `~_a_~` → `_a_` inside the strikethrough) still resolve.
+        // Resolve attention (emphasis/strong) and strikethrough/sub/sup. Two
+        // delimiter families that can cross, so the resolve order matters,
+        // mirroring micromark:
+        //   * At the top level, the family whose marker is *tokenized first*
+        //     resolves first (`resolveAllConstructs` registration order):
+        //     `*~bar~*` → emphasis first; `~_~:_<` → strikethrough first.
+        //     An inert leading marker still counts (it still tokenizes), so
+        //     `_ ~a*b~*` resolves emphasis first even though `_` can't pair.
+        //   * Inside any already-formed span (a link/image label, or the
+        //     content between matched delimiters), micromark uses a fixed
+        //     `insideSpan.null = [strikethrough, attention]`, i.e. *always
+        //     strikethrough first*, independent of the top-level order. So
+        //     `[_~a*b~*](/x)` resolves strikethrough first in the label even
+        //     though `_ ~a*b~*` resolves emphasis first at the top level.
         let st_enabled = self.options.contains(Options::ENABLE_STRIKETHROUGH)
             || self.options.contains(Options::ENABLE_SUBSCRIPT)
             || self.options.contains(Options::ENABLE_SUPERSCRIPT);
@@ -505,29 +504,100 @@ impl<'input> ParserInner<'input> {
             self.handle_emphasis_pass();
             return;
         }
+        // The top-level order decision must see the whole inline scope from its
+        // first child (which includes leading inert markers), not from `cur()`:
+        // pass1 leaves `cur` at the first unresolved marker, past leading text
+        // an inert marker might hide behind.
+        let scope_first = self
+            .tree
+            .peek_up()
+            .and_then(|p| self.tree[p].child)
+            .or_else(|| self.tree.cur());
         let strikethrough_first = matches!(
-            self.first_inline_marker_char(self.tree.cur()),
+            self.first_inline_marker_char(scope_first),
             Some(b'~') | Some(b'^')
         );
+        self.resolve_inline_scope(self.tree.cur(), strikethrough_first);
+    }
+
+    /// Resolve emphasis and strikethrough/sub/sup at this scope in the given
+    /// order, then descend into each formed span. Nested content is always
+    /// resolved strikethrough-first (micromark's `insideSpan.null`).
+    fn resolve_inline_scope(&mut self, start: Option<TreeIndex>, strikethrough_first: bool) {
         if strikethrough_first {
-            self.handle_tildes_carets_pass();
-            self.handle_emphasis_pass();
+            self.resolve_tildes_carets_in_scope(start, false);
+            self.resolve_emphasis_at_scope(start);
         } else {
-            self.handle_emphasis_pass();
-            self.handle_tildes_carets_pass();
+            self.resolve_emphasis_at_scope(start);
+            self.resolve_tildes_carets_in_scope(start, false);
+        }
+        let mut cur = start;
+        while let Some(cur_ix) = cur {
+            let next = self.tree[cur_ix].next;
+            if matches!(
+                self.tree[cur_ix].item.body,
+                ItemBody::Emphasis
+                    | ItemBody::Strong
+                    | ItemBody::Strikethrough
+                    | ItemBody::Subscript
+                    | ItemBody::Superscript
+                    | ItemBody::Link(_)
+                    | ItemBody::Image(_)
+            ) {
+                let child = self.tree[cur_ix].child;
+                self.resolve_inline_scope(child, true);
+            }
+            cur = next;
         }
     }
 
-    /// Find the first MaybeEmphasis token in `start..` whose character
-    /// is one of `*` `_` `~` `^`. Used to pick the resolve order.
+    /// Resolve `*`/`_` at this scope only (no descent), with a fresh
+    /// `inline_stack`.
+    fn resolve_emphasis_at_scope(&mut self, start: Option<TreeIndex>) {
+        let saved = core::mem::take(&mut self.inline_stack);
+        self.handle_emphasis_in_scope(start);
+        self.inline_stack = saved;
+    }
+
+    /// Find the first emphasis/strikethrough marker (`*` `_` `~` `^`) in
+    /// `start..`, in source order. Used to pick the resolve order between the
+    /// two families: micromark registers a family's `resolveAll` when its
+    /// marker is *tokenized*, so an inert marker (one that can neither open
+    /// nor close, e.g. `_` before a space) still counts even though satteri
+    /// leaves it as plain text rather than a `MaybeEmphasis`. Scan text nodes
+    /// too, not just `MaybeEmphasis`, or `_ ~a*b~*` would wrongly resolve the
+    /// `~` first (the inert leading `_` is the real first marker).
     fn first_inline_marker_char(&self, start: Option<TreeIndex>) -> Option<u8> {
+        // Only count markers for *enabled* families, matching which delimiters
+        // the reference actually tokenizes. `~` counts only with strikethrough
+        // or subscript on; `^` only with superscript on. Otherwise a literal
+        // `^` (or `~`) would wrongly skew the emphasis-vs-strikethrough order.
+        let tilde = self.options.contains(Options::ENABLE_STRIKETHROUGH)
+            || self.options.contains(Options::ENABLE_SUBSCRIPT);
+        let caret = self.options.contains(Options::ENABLE_SUPERSCRIPT);
+        let is_marker = |c: u8| {
+            matches!(c, b'*' | b'_') || (c == b'~' && tilde) || (c == b'^' && caret)
+        };
+        let bytes = self.text.as_bytes();
         let mut cur = start;
         while let Some(cur_ix) = cur {
-            if let ItemBody::MaybeEmphasis(_, _, _) = self.tree[cur_ix].item.body {
-                let c = self.text.as_bytes()[self.tree[cur_ix].item.start];
-                if matches!(c, b'*' | b'_' | b'~' | b'^') {
-                    return Some(c);
+            match self.tree[cur_ix].item.body {
+                ItemBody::MaybeEmphasis(..) => {
+                    let c = bytes[self.tree[cur_ix].item.start];
+                    if is_marker(c) {
+                        return Some(c);
+                    }
                 }
+                ItemBody::Text { backslash_escaped } => {
+                    let item = &self.tree[cur_ix].item;
+                    // A backslash-escaped leading byte (the `\` was stripped)
+                    // is not a marker micromark would tokenize.
+                    let from = item.start + usize::from(backslash_escaped);
+                    if let Some(off) = bytes[from..item.end].iter().position(|&c| is_marker(c)) {
+                        return Some(bytes[from + off]);
+                    }
+                }
+                _ => {}
             }
             cur = self.tree[cur_ix].next;
         }
@@ -1708,11 +1778,10 @@ impl<'input> ParserInner<'input> {
     /// ends lie within the same enclosing scope (root, emphasis, link,
     /// etc.). Multi-char `~~` strikethrough was already resolved in
     /// the main pass.
-    fn handle_tildes_carets_pass(&mut self) {
-        let start = self.tree.cur();
-        self.resolve_tildes_carets_in_scope(start);
-    }
-    fn resolve_tildes_carets_in_scope(&mut self, start: Option<TreeIndex>) {
+    /// Resolve `~`/`^` runs at this scope. With `descend`, also recurse into
+    /// already-formed spans; the per-scope driver passes `false` and handles
+    /// descent itself so it can flip the resolve order for nested content.
+    fn resolve_tildes_carets_in_scope(&mut self, start: Option<TreeIndex>, descend: bool) {
         let mut stack: Vec<InlineEl> = Vec::new();
         let mut cur = start;
         let mut prev: Option<TreeIndex> = None;
@@ -1847,9 +1916,11 @@ impl<'input> ParserInner<'input> {
                 | ItemBody::Subscript
                 | ItemBody::Superscript
                 | ItemBody::Link(_)
-                | ItemBody::Image(_) => {
+                | ItemBody::Image(_)
+                    if descend =>
+                {
                     let child = self.tree[cur_ix].child;
-                    self.resolve_tildes_carets_in_scope(child);
+                    self.resolve_tildes_carets_in_scope(child, true);
                 }
                 _ => {}
             }
