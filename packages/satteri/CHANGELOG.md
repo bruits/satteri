@@ -1,5 +1,12 @@
 # satteri
 
+## 0.9.5 — 2026-07-01
+
+### Patch changes
+
+- [ef3974e](https://github.com/bruits/satteri/commit/ef3974e86b080c1e88f0e92122ffd28f08e0ad37) Exposes a `ctx.sourceFormat` property on both mdast and hast plugin contexts. It is `"markdown"` when the plugin runs during a Markdown compile (`markdownToHtml`) and `"mdx"` during an MDX compile (`mdxToJs`), letting a plugin shared between both pipelines branch on which format it is handling. — Thanks @Princesseuh!
+- [92c006a](https://github.com/bruits/satteri/commit/92c006afd60904122bbc55f524f36901fa05c517) Fixed `satteri` failing to bundle due to wasm dependencies — Thanks @The-LukeZ for your first contribution 🎉!
+
 ## 0.9.4 — 2026-06-29
 
 ### Patch changes

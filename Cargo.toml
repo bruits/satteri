@@ -30,7 +30,7 @@ satteri-arena = { path = "crates/satteri-arena", version = "0.2.2" }
 # also declared in this table — so it must live here. Each consumer re-enables
 # `mdx`/`std` through its own feature graph.
 satteri-ast = { path = "crates/satteri-ast", version = "0.4.1", default-features = false }
-satteri-mdxjs = { path = "crates/satteri-mdxjs-rs", version = "0.3.7" }
+satteri-mdxjs = { path = "crates/satteri-mdxjs-rs", version = "0.3.8" }
 satteri-plugin-api = { path = "crates/satteri-plugin-api", version = "0.4.1", default-features = false }
 satteri-pulldown-cmark = { path = "crates/satteri-pulldown-cmark", version = "0.5.7", default-features = false }
 serde = { version = "1", features = ["derive"] }

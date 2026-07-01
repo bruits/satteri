@@ -1,5 +1,15 @@
 # satteri-mdxjs
 
+## 0.3.8 — 2026-07-01
+
+### Patch changes
+
+- [44e3082](https://github.com/bruits/satteri/commit/44e30827c2ec9d70f26a92e139686b16dce8afde) Preserve significant whitespace between adjacent JSX elements (and inside
+  whitespace-only elements like `<em> </em>`) when JSX is parsed inside an
+  expression, such as an attribute expression. Previously a space-only text node
+  with no newline was dropped, so `<C d={<><a/> <b/></>} />` lost the `" "` and
+  rendered the two elements directly adjacent. — Thanks @vaneenige!
+
 ## 0.3.7 — 2026-06-29
 
 ### Patch changes
