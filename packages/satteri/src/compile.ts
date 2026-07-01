@@ -30,7 +30,7 @@ import { materializeMdastTree } from "./mdast/mdast-materializer.js";
 import { markHandleMutated } from "./lazy-child-resolver.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
-import type { MdastNode, HastNode, Data } from "./types.js";
+import type { MdastNode, HastNode, Data, SourceFormat } from "./types.js";
 
 type NativeFeaturesPair = {
   features: Record<string, unknown> | undefined;
@@ -125,6 +125,7 @@ function runMdastPluginsOnHandle(
   plugins: MdastPluginInput[],
   fileURL: URL | undefined,
   data: Data,
+  sourceFormat: SourceFormat,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
   // Each plugin runs once over the tree. A transform that passes a child
   // through (returning it inside the replacement) keeps that child's identity,
@@ -140,6 +141,7 @@ function runMdastPluginsOnHandle(
       () => getHandleSource(handle),
       fileURL,
       data,
+      sourceFormat,
     );
     const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
       if (!r.hasMutations) return;
@@ -170,6 +172,7 @@ function runHastPluginsOnHandle(
   source: string,
   fileURL: URL | undefined,
   data: Data,
+  sourceFormat: SourceFormat,
 ): void | Promise<void> {
   if (plugins.length === 0) return;
 
@@ -181,7 +184,7 @@ function runHastPluginsOnHandle(
       const plugin: HastPluginDefinition = typeof raw === "function" ? raw() : raw;
 
       const subs = resolveSubscriptions(plugin);
-      const result = visitHastHandle(handle, plugin, subs, source, fileURL, data);
+      const result = visitHastHandle(handle, plugin, subs, source, fileURL, data, sourceFormat);
       const warnIfDropped = (dropped: number): void => {
         if (dropped) warnDroppedTransforms(plugin, dropped, "hast");
       };
@@ -557,7 +560,14 @@ export function markdownToHtml(
   ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> => {
     let hastResult: void | Promise<void>;
     try {
-      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL, data);
+      hastResult = runHastPluginsOnHandle(
+        r.hastHandle,
+        hastPlugins,
+        source,
+        fileURL,
+        data,
+        "markdown",
+      );
     } catch (err) {
       releaseHandle(r.hastHandle, hastMayHaveStubs);
       throw err;
@@ -621,7 +631,7 @@ export function mdxToJs(
   const runHastThenCompile = (r: HastWithFrontmatter): MdxToJsResult | Promise<MdxToJsResult> => {
     let hastResult: void | Promise<void>;
     try {
-      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL, data);
+      hastResult = runHastPluginsOnHandle(r.hastHandle, hastPlugins, source, fileURL, data, "mdx");
     } catch (err) {
       releaseHandle(r.hastHandle, hastMayHaveStubs);
       throw err;
@@ -708,6 +718,7 @@ function createHastHandleFromMdast(
   const mdastHandle = mdx
     ? createMdxMdastHandle(source, nativeFeatures)
     : createMdastHandle(source, nativeFeatures);
+  const sourceFormat: SourceFormat = mdx ? "mdx" : "markdown";
 
   const mdastMayHaveStubs = mdastPlugins.length > 0;
 
@@ -730,7 +741,13 @@ function createHastHandleFromMdast(
       return finalize({ handle: mdastHandle });
     }
 
-    const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, fileURL, data);
+    const mdastResult = runMdastPluginsOnHandle(
+      mdastHandle,
+      mdastPlugins,
+      fileURL,
+      data,
+      sourceFormat,
+    );
 
     if (mdastResult instanceof Promise) {
       return mdastResult.then(finalize, (err) => {

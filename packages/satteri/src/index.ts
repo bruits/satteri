@@ -45,6 +45,7 @@ export type {
   HastNode,
   DataMap,
   Data,
+  SourceFormat,
   Position,
   Point,
   MdxJsxAttributeNode,

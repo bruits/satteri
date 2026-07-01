@@ -137,6 +137,13 @@ export interface DataMap {}
  */
 export type Data = Record<string, unknown> & Partial<DataMap>;
 
+/**
+ * The source format a plugin is running against, surfaced as `ctx.sourceFormat`:
+ * `"markdown"` for a plain Markdown compile, `"mdx"` for an MDX one. Lets a
+ * plugin shared between both pipelines branch on which it is handling.
+ */
+export type SourceFormat = "markdown" | "mdx";
+
 /** @internal Node with arena tracking ID, only used inside the library. */
 export type MdastNodeInternal = MdastStdNodes & { _nodeId: number };
 /** @internal */

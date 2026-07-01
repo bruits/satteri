@@ -38,6 +38,7 @@ import type {
   Superscript,
   Subscript,
   Data,
+  SourceFormat,
 } from "../types.js";
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
 import {
@@ -136,6 +137,12 @@ export class MdastVisitorContext {
    * instances. Returned to the caller as `result.data`.
    */
   readonly data: Data;
+  /**
+   * The source format this compile is processing: `"markdown"` for a plain
+   * Markdown compile, `"mdx"` for an MDX one. Lets a plugin shared between both
+   * pipelines branch on which it is handling.
+   */
+  readonly sourceFormat: SourceFormat;
 
   constructor(
     handle: MdastHandle,
@@ -143,12 +150,14 @@ export class MdastVisitorContext {
     fileURL: URL | undefined,
     resolver: LazyChildResolver<MdastReader, MdastNode>,
     data: Data,
+    sourceFormat: SourceFormat,
   ) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.data = data;
+    this.sourceFormat = sourceFormat;
   }
 
   get source(): string {
@@ -773,10 +782,11 @@ export function visitMdastHandle(
   source: string | (() => string),
   fileURL: URL | undefined,
   data: Data = {},
+  sourceFormat: SourceFormat = "markdown",
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new MdastLazyChildResolver(handle);
-  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver, data);
+  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver, data, sourceFormat);
   const returnBuffer = new CommandBuffer();
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);
