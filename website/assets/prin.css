@@ -45,8 +45,8 @@
     --color-secondary: #5c5446;
     --color-body: #2a2620;
     --color-ink: #14110c;
-    --color-error: #b53737;
-    --color-error-bg: color-mix(in srgb, var(--color-paper) 96%, var(--color-error));
+    --color-error: #a83f3f;
+    --color-error-bg: color-mix(in srgb, var(--color-paper) 90%, var(--color-error));
     --color-success: #6f8358;
 
     color-scheme: light;
@@ -60,8 +60,8 @@
     --color-secondary: #b5ab95;
     --color-body: #d8d0be;
     --color-ink: #f2ead3;
-    --color-error: #e66a6a;
-    --color-error-bg: color-mix(in srgb, var(--color-paper) 88%, var(--color-error));
+    --color-error: #d87a72;
+    --color-error-bg: color-mix(in srgb, var(--color-paper) 86%, var(--color-error));
     --color-success: #8fae91;
 
     color-scheme: dark;
@@ -302,7 +302,7 @@ pre#demo-highlight code {
 .pg-alert-bar {
   align-items: start;
   background-color: var(--color-error-bg);
-  border-bottom: 1px solid color-mix(in srgb, var(--color-paper) 65%, var(--color-error));
+  border-bottom: 1px solid color-mix(in srgb, var(--color-paper) 55%, var(--color-error));
   color: var(--color-error);
   display: grid;
   font-family: var(--font-mono);
@@ -312,13 +312,12 @@ pre#demo-highlight code {
   grid-auto-flow: column;
   grid-auto-columns: max-content;
   line-height: 1.5;
-  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 4);
 }
 
 .pg-alert-message {
-  align-items: center;
-  display: flex;
-  min-block-size: 2.5em;
+  align-self: center;
+  line-height: 1.65;
   min-width: 0;
 }
 
@@ -332,15 +331,37 @@ pre#demo-highlight code {
 }
 
 .pg-alert-action {
-  border: 1px solid currentColor;
-  border-radius: 0.25rem;
+  background: color-mix(in srgb, var(--color-paper) 94%, var(--color-error));
+  border: 1px solid color-mix(in srgb, var(--color-paper) 72%, var(--color-error));
+  border-radius: 3px;
+  color: color-mix(in srgb, var(--color-error) 58%, var(--color-body));
   font-weight: var(--font-weight-bold);
   padding-inline: calc(var(--spacing) * 4);
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.pg-alert-action:hover {
+  background: color-mix(in srgb, var(--color-paper) 88%, var(--color-error));
+  border-color: color-mix(in srgb, var(--color-paper) 45%, var(--color-error));
+}
+
+.pg-alert-action.primary {
+  background: color-mix(in srgb, var(--color-paper) 78%, var(--color-error));
+  border-color: color-mix(in srgb, var(--color-paper) 32%, var(--color-error));
+}
+
+.pg-alert-action.primary:hover {
+  background: color-mix(in srgb, var(--color-paper) 74%, var(--color-error));
+  border-color: color-mix(in srgb, var(--color-paper) 24%, var(--color-error));
 }
 
 @media (max-width: 40rem) {
   .pg-alert-bar {
     grid-template-columns: 1fr auto;
+    padding-block-end: calc(var(--spacing) * 3);
   }
 
   .pg-alert-message {
@@ -355,6 +376,11 @@ pre#demo-highlight code {
   .pg-alert-action {
     grid-column: 1 / -1;
   }
+}
+
+.pg-alert-dismiss {
+  color: color-mix(in srgb, var(--color-error) 82%, var(--color-body));
+  opacity: 0.9;
 }
 
 .pg-alert-dismiss svg {

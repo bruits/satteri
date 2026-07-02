@@ -64,7 +64,7 @@ fn playground_body() -> Markup {
                 button #alert-bar-reset-scripts.pg-alert-action type="button" hidden {
                     "Reset scripts"
                 }
-                button #alert-bar-run-scripts.pg-alert-action type="button" hidden {
+                button #alert-bar-run-scripts.pg-alert-action.primary type="button" hidden {
                     "Run playground"
                 }
                 button #alert-bar-dismiss.pg-alert-dismiss type="button" aria-label="Dismiss alert" hidden {
