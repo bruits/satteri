@@ -390,6 +390,15 @@ const MDAST_CUSTOM_SAMPLES: Record<string, { node: MdastNode; opts: MdastCaseOpt
       opts: {},
       check: (n) => expect(n.checked).toBe(true),
     },
+    descriptionDetails: {
+      node: {
+        type: "descriptionDetails",
+        spread: true,
+        children: [{ type: "paragraph", children: [{ type: "text", value: "x" }] }],
+      } satisfies MdastNode,
+      opts: {},
+      check: (n) => expect(n.spread).toBe(true),
+    },
     table: {
       node: {
         type: "table",

@@ -301,6 +301,8 @@ const LIST_ITEM_SLOTS: &[SetSlot] = &[
     sl("checked", 0, Slot::CheckedTri),
     sl("spread", 1, Slot::Bool),
 ];
+/// `DescriptionDetailsData`: spread @0 (per-definition tight vs loose).
+const DESCRIPTION_DETAILS_SLOTS: &[SetSlot] = &[sl("spread", 0, Slot::Bool)];
 /// `MdxJsxElementData`: name `StringRef` @0.
 const MDX_JSX_SLOTS: &[SetSlot] = &[sl("name", 0, Slot::Str)];
 /// `ReferenceData.reference_kind` stays settable on footnoteReference even
@@ -599,6 +601,15 @@ pub const MDAST_NODES: &[Node] = &[
     xt(Mdast, 32, "TextDirective", "textDirective", DIRECTIVE_TAIL),
     c(Mdast, 33, "Superscript", "superscript"),
     c(Mdast, 34, "Subscript", "subscript"),
+    c(Mdast, 35, "DescriptionList", "descriptionList"),
+    c(Mdast, 36, "DescriptionTerm", "descriptionTerm"),
+    xs(
+        Mdast,
+        37,
+        "DescriptionDetails",
+        "descriptionDetails",
+        DESCRIPTION_DETAILS_SLOTS,
+    ),
     xts(
         Mdast,
         100,
@@ -756,6 +767,11 @@ pub const MDAST_STRUCTS: &[ArenaStruct] = &[
         offsets: &[("checked", 0), ("spread", 1)],
     },
     ArenaStruct {
+        rust: "DescriptionDetailsData",
+        size: 1,
+        offsets: &[("spread", 0)],
+    },
+    ArenaStruct {
         rust: "CodeData",
         size: 28,
         offsets: &[("lang", 0), ("meta", 8), ("value", 16), ("fence_char", 24)],
@@ -846,7 +862,11 @@ const STRUCT_BY_NODE: &[(&str, &str)] = &[
 /// Which struct backs the set-property slots of `custom` nodes whose stored
 /// layout has no `fields` and no tail head (list / listItem). Other slotted
 /// nodes resolve through [`STRUCT_BY_NODE`] or their tail's `head_struct`.
-const SET_SLOT_STRUCTS: &[(&str, &str)] = &[("list", "ListData"), ("listItem", "ListItemData")];
+const SET_SLOT_STRUCTS: &[(&str, &str)] = &[
+    ("list", "ListData"),
+    ("listItem", "ListItemData"),
+    ("descriptionDetails", "DescriptionDetailsData"),
+];
 
 /// Stored byte width of one settable slot.
 fn slot_width(kind: Slot) -> usize {

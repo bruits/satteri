@@ -110,6 +110,8 @@ export interface JsFeatures {
   subscript?: boolean
   /** Obsidian-style wikilinks (`[[link]]`). Default: false. */
   wikilinks?: boolean
+  /** Definition lists (`Term` then `: definition`). Default: false. */
+  definitionList?: boolean
   /** Smart punctuation: all categories on. Default: false. */
   smartPunctuation?: boolean
   /** Granular smart-punctuation control (overrides `smart_punctuation`). */

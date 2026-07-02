@@ -40,6 +40,10 @@ function addTypeProperties(
       lazyGroup(node, ["spread", "checked"], () => reader.getListItemData(nodeId));
       break;
 
+    case 37: // descriptionDetails
+      lazyGroup(node, ["spread"], () => reader.getDescriptionDetailsData(nodeId));
+      break;
+
     case 21: // table
       Object.defineProperties(node, {
         align: lazyProp("align", () => reader.getTableAlign(nodeId)),

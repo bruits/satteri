@@ -4,6 +4,7 @@ import type {
   Nodes as MdastStdNodes,
   Parent as MdastParent,
   PhrasingContent,
+  BlockContent,
 } from "mdast";
 import type { Literal as HastLiteral, Nodes as HastStdNodes } from "hast";
 
@@ -64,6 +65,23 @@ export interface Subscript extends MdastParent {
   children: PhrasingContent[];
 }
 
+export interface DescriptionList extends MdastParent {
+  type: "descriptionList";
+  children: (DescriptionTerm | DescriptionDetails)[];
+}
+
+export interface DescriptionTerm extends MdastParent {
+  type: "descriptionTerm";
+  children: PhrasingContent[];
+}
+
+export interface DescriptionDetails extends MdastParent {
+  type: "descriptionDetails";
+  children: BlockContent[];
+  /** Loose definitions wrap their content in a `<p>`; tight ones don't. */
+  spread?: boolean;
+}
+
 declare module "mdast" {
   interface FrontmatterContentMap {
     toml: Toml;
@@ -74,6 +92,9 @@ declare module "mdast" {
     inlineMath: InlineMath;
     superscript: Superscript;
     subscript: Subscript;
+    descriptionList: DescriptionList;
+    descriptionTerm: DescriptionTerm;
+    descriptionDetails: DescriptionDetails;
   }
   interface PhrasingContentMap {
     inlineMath: InlineMath;

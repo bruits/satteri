@@ -1,0 +1,90 @@
+# Definition lists
+
+A term followed by a colon-marked definition becomes a `<dl>` with `<dt>` and
+`<dd>` children. The `_deflists` suffix enables `Options::ENABLE_DEFINITION_LIST`.
+
+A tight definition (no blank line before the `:`) puts the content directly in
+the `<dd>`:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+</dl>
+````````````````````````````````
+
+A loose definition (a blank line between term and definition) wraps the `<dd>`
+content in a `<p>`:
+
+```````````````````````````````` example_deflists
+Apple
+
+:   Red.
+.
+<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+</dd>
+</dl>
+````````````````````````````````
+
+One term can have several definitions:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+:   Green.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dd>Green.</dd>
+</dl>
+````````````````````````````````
+
+Several term lines share one definition:
+
+```````````````````````````````` example_deflists
+Term 1
+Term 2
+:   Shared definition.
+.
+<dl>
+<dt>Term 1
+Term 2</dt>
+<dd>Shared definition.</dd>
+</dl>
+````````````````````````````````
+
+Inline markup is parsed in both the term and the definition:
+
+```````````````````````````````` example_deflists
+*Apple*
+:   A **fruit**.
+.
+<dl>
+<dt><em>Apple</em></dt>
+<dd>A <strong>fruit</strong>.</dd>
+</dl>
+````````````````````````````````
+
+Blank lines between whole entries keep the list tight:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+
+Orange
+:   Orange.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dt>Orange</dt>
+<dd>Orange.</dd>
+</dl>
+````````````````````````````````

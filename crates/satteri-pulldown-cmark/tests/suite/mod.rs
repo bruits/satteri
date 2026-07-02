@@ -4,6 +4,7 @@
 pub use super::test_markdown_html;
 
 mod container_extensions;
+mod definition_list;
 mod footnotes;
 mod gfm_strikethrough;
 mod gfm_table;

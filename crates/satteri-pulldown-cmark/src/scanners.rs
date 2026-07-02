@@ -303,6 +303,14 @@ impl<'a> LineStart<'a> {
     ) -> Option<usize> {
         let save = self.clone();
         if self.scan_ch(b':') {
+            // A run of colons (`::`, `:::`) is a directive fence, not a
+            // definition marker. Only a lone colon opens a definition, so the
+            // directive extension keeps its `::`/`:::` fences when both the
+            // definition-list and directive extensions are enabled.
+            if self.bytes.get(self.ix) == Some(&b':') {
+                *self = save;
+                return None;
+            }
             let save = self.clone();
             if self.scan_space(5) {
                 *self = save;

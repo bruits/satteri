@@ -20,6 +20,7 @@ markdownToHtml(source, {
     superscript: false,
     subscript: false,
     wikilinks: false,
+    definitionList: false,
     smartPunctuation: false,
   },
 });
@@ -206,6 +207,26 @@ wikilinks?: boolean
 ```
 
 Recognizes `[[Target]]` and `[[Target|Label]]` as links.
+
+## Definition lists
+
+Default: `false`.
+
+```ts
+definitionList?: boolean
+```
+
+A term line followed by one or more colon-marked definitions becomes a definition list, following the [pandoc / PHP Markdown Extra](https://pandoc.org/MANUAL.html#definition-lists) syntax:
+
+```text
+Apple
+:   Pomaceous fruit.
+:   A tech company.
+```
+
+A tight definition puts its content directly in the `<dd>`; a loose one — separated from its term by a blank line — wraps it in a `<p>`. The parser produces `descriptionList`, `descriptionTerm`, and `descriptionDetails` mdast nodes, each available to plugins.
+
+When `definitionList` and `directive` are enabled together, a `:::` (or `::`) fence is still parsed as a directive — the definition marker only claims a lone colon.
 
 ## Smart punctuation
 
