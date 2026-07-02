@@ -218,9 +218,11 @@ fn share_button() -> Markup {
         button #pg-share
             type="button"
             title="Copy a shareable link to your clipboard with the current playground content"
+            aria-label="Copy share link"
             class="pg-input pg-input-button pt-3.5 pb-2.5" {
             "Share"
         }
+        span #pg-share-status .sr-only role="status" {}
     }
 }
 

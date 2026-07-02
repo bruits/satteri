@@ -68,6 +68,7 @@ const alertBarResetScripts = $<HTMLButtonElement>("#alert-bar-reset-scripts");
 const alertBarDismiss = $<HTMLButtonElement>("#alert-bar-dismiss");
 const statusBar = $<HTMLElement>("#status-bar");
 const shareButton = $<HTMLButtonElement>("#pg-share");
+const shareButtonStatus = $<HTMLElement>("#pg-share-status");
 const mdastPluginTab = $<HTMLButtonElement>('[data-input-tab="mdast-plugin"]');
 const hastPluginTab = $<HTMLButtonElement>('[data-input-tab="hast-plugin"]');
 const mdxOptionsFieldset = $<HTMLElement>("#mdx-options-fieldset");
@@ -524,6 +525,13 @@ function flashShareLabel(label: string) {
   }, 1500);
 }
 
+function announceShareStatus(message: string) {
+  shareButtonStatus.textContent = "";
+  requestAnimationFrame(() => {
+    shareButtonStatus.textContent = message;
+  });
+}
+
 async function shareCurrentState() {
   if (!hasPendingScripts) dismissAlert();
   let url: string;
@@ -540,6 +548,7 @@ async function shareCurrentState() {
   try {
     await navigator.clipboard.writeText(url);
     flashShareLabel("Copied!");
+    announceShareStatus("Share link copied to clipboard.");
   } catch {
     showAlert(
       `Could not copy the <a href="${escapeHtml(url)}" rel="noopener noreferrer">share link</a> to the clipboard. You can still copy it manually.`,
