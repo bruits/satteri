@@ -513,14 +513,14 @@ function resetPendingPlugins() {
   compile();
 }
 
-// TODO(HiDeoo) still needed
-// TODO(HiDeoo) better flash
 let shareResetTimer: ReturnType<typeof setTimeout> | null = null;
 function flashShareLabel(label: string) {
   shareButton.textContent = label;
+  shareButton.classList.add("copied");
   if (shareResetTimer !== null) clearTimeout(shareResetTimer);
   shareResetTimer = setTimeout(() => {
     shareButton.textContent = "Share";
+    shareButton.classList.remove("copied");
     shareResetTimer = null;
   }, 1500);
 }
