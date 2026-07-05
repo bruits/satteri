@@ -29,6 +29,9 @@ import langHtml from "shiki/langs/html.mjs";
 import langJavascript from "shiki/langs/javascript.mjs";
 import themeVitesseLight from "shiki/themes/vitesse-light.mjs";
 import themeVitesseDark from "shiki/themes/vitesse-dark.mjs";
+import satteriPkg from "../../packages/satteri/package.json" with { type: "json" };
+
+const SATTERI_VERSION = satteriPkg.version;
 
 type Mode = "markdown" | "mdx";
 type Tab = "mdast" | "hast" | "output" | "rendered";
@@ -58,7 +61,14 @@ const osWrapPropValue = $<HTMLInputElement>("#os-wrap-prop-value");
 const osIgnoreElements = $<HTMLInputElement>("#os-ignore-elements");
 const outputTabButton = $<HTMLButtonElement>('[data-tab="output"]');
 const renderedTabButton = $<HTMLButtonElement>('[data-tab="rendered"]');
+const alertBar = $<HTMLElement>("#alert-bar");
+const alertBarMessage = $<HTMLElement>("#alert-bar-message");
+const alertBarRunScripts = $<HTMLButtonElement>("#alert-bar-run-scripts");
+const alertBarResetScripts = $<HTMLButtonElement>("#alert-bar-reset-scripts");
+const alertBarDismiss = $<HTMLButtonElement>("#alert-bar-dismiss");
 const statusBar = $<HTMLElement>("#status-bar");
+const shareButton = $<HTMLButtonElement>("#pg-share");
+const shareButtonStatus = $<HTMLElement>("#pg-share-status");
 const mdastPluginTab = $<HTMLButtonElement>('[data-input-tab="mdast-plugin"]');
 const hastPluginTab = $<HTMLButtonElement>('[data-input-tab="hast-plugin"]');
 const mdxOptionsFieldset = $<HTMLElement>("#mdx-options-fieldset");
@@ -215,6 +225,392 @@ function getOptimizeStatic(): MdxCompileOptions["optimizeStatic"] | undefined {
   };
 }
 
+// --- Shareable links -------------------------------------------------------
+// The full editor state is deflate-compressed and base64url-encoded into the
+// URL hash, so a link is self-contained and never touches the static server.
+
+type FeatureKey =
+  | "gfm"
+  | "frontmatter"
+  | "math"
+  | "headingAttributes"
+  | "directive"
+  | "superscript"
+  | "subscript"
+  | "wikilinks"
+  | "smartPunctuation"
+  | "smartQuotes"
+  | "smartDashes"
+  | "smartEllipses";
+
+interface MdxState {
+  jsxImportSource: string;
+  jsxRuntime: string;
+  jsx: boolean;
+  development: boolean;
+  providerImportSource: string;
+  outputFormat: string;
+}
+
+interface OptimizeStaticState {
+  enabled: boolean;
+  component: string;
+  prop: string;
+  wrapPropValue: boolean;
+  ignoreElements: string;
+}
+
+interface PlaygroundState {
+  version: string;
+  mode?: Mode;
+  source?: string;
+  mdastPlugin?: string;
+  hastPlugin?: string;
+  features?: Partial<Record<FeatureKey, boolean>>;
+  mdx?: Partial<MdxState>;
+  optimizeStatic?: Partial<OptimizeStaticState>;
+}
+
+function getState(): PlaygroundState {
+  return {
+    version: SATTERI_VERSION,
+    mode: getMode(),
+    source: input.value,
+    mdastPlugin: inputMdastPlugin.value,
+    hastPlugin: inputHastPlugin.value,
+    features: {
+      gfm: featGfm.checked,
+      frontmatter: featFrontmatter.checked,
+      math: featMath.checked,
+      headingAttributes: featHeadingAttributes.checked,
+      directive: featDirective.checked,
+      superscript: featSuperscript.checked,
+      subscript: featSubscript.checked,
+      wikilinks: featWikilinks.checked,
+      smartPunctuation: featSmartPunctuation.checked,
+      smartQuotes: featSmartQuotes.checked,
+      smartDashes: featSmartDashes.checked,
+      smartEllipses: featSmartEllipses.checked,
+    },
+    mdx: {
+      jsxImportSource: mdxJsxImportSource.value,
+      jsxRuntime: mdxJsxRuntime.value,
+      jsx: mdxJsx.checked,
+      development: mdxDevelopment.checked,
+      providerImportSource: mdxProviderImportSource.value,
+      outputFormat: mdxOutputFormat.value,
+    },
+    optimizeStatic: {
+      enabled: optimizeToggle.checked,
+      component: osComponent.value,
+      prop: osProp.value,
+      wrapPropValue: osWrapPropValue.checked,
+      ignoreElements: osIgnoreElements.value,
+    },
+  };
+}
+
+function applyState(state: PlaygroundState) {
+  const mode: Mode = state.mode === "mdx" ? "mdx" : "markdown";
+  $<HTMLInputElement>(`input[name="mode"][value="${mode}"]`).checked = true;
+  input.value = state.source ?? "";
+  inputMdastPlugin.value = state.mdastPlugin ?? "";
+  inputHastPlugin.value = state.hastPlugin ?? "";
+
+  const features = state.features ?? {};
+  featGfm.checked = !!features.gfm;
+  featFrontmatter.checked = !!features.frontmatter;
+  featMath.checked = !!features.math;
+  featHeadingAttributes.checked = !!features.headingAttributes;
+  featDirective.checked = !!features.directive;
+  featSuperscript.checked = !!features.superscript;
+  featSubscript.checked = !!features.subscript;
+  featWikilinks.checked = !!features.wikilinks;
+  featSmartPunctuation.checked = !!features.smartPunctuation;
+  featSmartQuotes.checked = !!features.smartQuotes;
+  featSmartDashes.checked = !!features.smartDashes;
+  featSmartEllipses.checked = !!features.smartEllipses;
+  smartPunctOptions.classList.toggle("hidden", !featSmartPunctuation.checked);
+
+  const mdx = state.mdx ?? {};
+  mdxJsxImportSource.value = mdx.jsxImportSource ?? "";
+  mdxJsxRuntime.value = mdx.jsxRuntime ?? "automatic";
+  mdxJsx.checked = !!mdx.jsx;
+  mdxDevelopment.checked = !!mdx.development;
+  mdxProviderImportSource.value = mdx.providerImportSource ?? "";
+  mdxOutputFormat.value = mdx.outputFormat ?? "program";
+
+  const os = state.optimizeStatic ?? {};
+  optimizeToggle.checked = !!os.enabled;
+  osComponent.value = os.component ?? "Fragment";
+  osProp.value = os.prop ?? "set:html";
+  osWrapPropValue.checked = !!os.wrapPropValue;
+  osIgnoreElements.value = os.ignoreElements ?? "";
+  optimizeFields.classList.toggle("hidden", !optimizeToggle.checked);
+
+  updateModeUI();
+}
+
+async function compress(text: string): Promise<Uint8Array> {
+  const stream = new CompressionStream("deflate-raw");
+  // Drain the readable side first so a large payload can't deadlock on backpressure.
+  const read = new Response(stream.readable).arrayBuffer();
+  const writer = stream.writable.getWriter();
+  await writer.write(new TextEncoder().encode(text));
+  await writer.close();
+  return new Uint8Array(await read);
+}
+
+async function decompress(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const stream = new DecompressionStream("deflate-raw");
+  const reader = stream.readable.getReader();
+  const writer = stream.writable.getWriter();
+  const decoder = new TextDecoder();
+
+  let result = "";
+  let size = 0;
+
+  const read = async () => {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      size += value.byteLength;
+      if (size > MAX_SHARE_STATE_BYTES) {
+        await reader.cancel();
+        throw new ShareStateTooLargeError();
+      }
+
+      result += decoder.decode(value, { stream: true });
+    }
+
+    result += decoder.decode();
+  };
+
+  const write = async () => {
+    await writer.write(bytes);
+    await writer.close();
+  };
+
+  const [readResult, writeResult] = await Promise.allSettled([read(), write()]);
+
+  if (readResult.status === "rejected") throw readResult.reason;
+  if (writeResult.status === "rejected") throw writeResult.reason;
+
+  return result;
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+const SHARE_HASH_PREFIX = "#s=";
+// Keep share links far below browser URL length limits but still in a reasonable range.
+// https://source.chromium.org/chromium/chromium/src/+/main:url/mojom/url.mojom;l=14?q=url%2Fmojom%2Furl.mojom&ss=chromium%2Fchromium%2Fsrc
+const MAX_SHARE_URL_LENGTH = 64 * 1024;
+// Limit decompressed state size to a 4:1 ratio of the URL length limit.
+const MAX_SHARE_STATE_BYTES = 256 * 1024;
+
+class ShareUrlTooLongError extends Error {}
+class ShareStateTooLargeError extends Error {}
+
+async function buildShareUrl(): Promise<string> {
+  const payload = bytesToBase64Url(await compress(JSON.stringify(getState())));
+  const url = `${location.origin}${location.pathname}${SHARE_HASH_PREFIX}${payload}`;
+  if (url.length > MAX_SHARE_URL_LENGTH) throw new ShareUrlTooLongError();
+  return url;
+}
+
+async function loadSharedState(): Promise<PlaygroundState | null> {
+  if (!location.hash.startsWith(SHARE_HASH_PREFIX)) return null;
+  try {
+    if (location.href.length > MAX_SHARE_URL_LENGTH) throw new ShareStateTooLargeError();
+    const json = await decompress(base64UrlToBytes(location.hash.slice(SHARE_HASH_PREFIX.length)));
+    return JSON.parse(json) as PlaygroundState;
+  } catch (error) {
+    showAlert(
+      `${
+        error instanceof ShareStateTooLargeError
+          ? "This shared playground link is too large to restore."
+          : "Could not restore the shared playground state."
+      } Using the default playground instead.`,
+      { dismissible: true },
+    );
+    return null;
+  }
+}
+
+const defaultMdastPluginSource = inputMdastPlugin.value;
+const defaultHastPluginSource = inputHastPlugin.value;
+let hasPendingScripts = false;
+let pendingVersionWarning: string | undefined;
+
+function sharedStateHasUnsafePlugins(state: PlaygroundState): boolean {
+  const mdastPlugin = state.mdastPlugin ?? "";
+  const hastPlugin = state.hastPlugin ?? "";
+
+  return (
+    (mdastPlugin.trim() !== "" && mdastPlugin !== defaultMdastPluginSource) ||
+    (hastPlugin.trim() !== "" && hastPlugin !== defaultHastPluginSource)
+  );
+}
+
+async function applySharedState(): Promise<boolean> {
+  if (!location.hash.startsWith(SHARE_HASH_PREFIX)) return false;
+
+  const shared = await loadSharedState();
+
+  const url = new URL(location.href);
+  url.hash = "";
+  history.replaceState(null, "", url);
+
+  if (!shared) return false;
+
+  pendingVersionWarning = shared.version !== SATTERI_VERSION ? shared.version : undefined;
+
+  hasPendingScripts = sharedStateHasUnsafePlugins(shared);
+  if (hasPendingScripts) compileGeneration++;
+
+  applyState(shared);
+  highlightAllInputs();
+
+  if (hasPendingScripts) {
+    showUnsafePluginAlert();
+  } else {
+    showVersionWarning();
+    compile();
+  }
+
+  return true;
+}
+
+function runPendingPlugins() {
+  hasPendingScripts = false;
+  showVersionWarning();
+  compile();
+}
+
+function resetPendingPlugins() {
+  hasPendingScripts = false;
+  dismissAlert();
+
+  inputMdastPlugin.value = defaultMdastPluginSource;
+  inputHastPlugin.value = defaultHastPluginSource;
+  highlightInput(inputMdastPlugin, highlightMdastPlugin, "typescript");
+  highlightInput(inputHastPlugin, highlightHastPlugin, "typescript");
+
+  showVersionWarning();
+  compile();
+}
+
+let shareResetTimer: ReturnType<typeof setTimeout> | null = null;
+function flashShareLabel(label: string) {
+  shareButton.textContent = label;
+  shareButton.classList.add("copied");
+  if (shareResetTimer !== null) clearTimeout(shareResetTimer);
+  shareResetTimer = setTimeout(() => {
+    shareButton.textContent = "Share";
+    shareButton.classList.remove("copied");
+    shareResetTimer = null;
+  }, 1500);
+}
+
+function announceShareStatus(message: string) {
+  shareButtonStatus.textContent = "";
+  requestAnimationFrame(() => {
+    shareButtonStatus.textContent = message;
+  });
+}
+
+async function shareCurrentState() {
+  if (!hasPendingScripts) dismissAlert();
+  let url: string;
+  try {
+    url = await buildShareUrl();
+  } catch (error) {
+    showAlert(
+      error instanceof ShareUrlTooLongError
+        ? "This playground state is too large to share as a link."
+        : "Could not create a share link with the current playground state.",
+    );
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    flashShareLabel("Copied!");
+    announceShareStatus("Share link copied to clipboard.");
+  } catch {
+    showAlert(
+      `Could not copy the <a href="${escapeHtml(url)}" rel="noopener noreferrer">share link</a> to the clipboard. You can still copy it manually.`,
+      { html: true },
+    );
+  }
+}
+
+shareButton.addEventListener("click", () => void shareCurrentState());
+alertBarRunScripts.addEventListener("click", runPendingPlugins);
+alertBarResetScripts.addEventListener("click", resetPendingPlugins);
+alertBarDismiss.addEventListener("click", dismissAlert);
+
+function showAlert(message: string, opts?: { html?: boolean; dismissible?: boolean }) {
+  if (hasPendingScripts) return;
+
+  if (opts?.html) {
+    alertBarMessage.innerHTML = message;
+  } else {
+    alertBarMessage.textContent = message;
+  }
+  alertBarRunScripts.hidden = true;
+  alertBarResetScripts.hidden = true;
+  alertBarDismiss.hidden = opts?.dismissible !== true;
+  alertBar.hidden = false;
+}
+
+function showUnsafePluginAlert() {
+  statusBar.innerHTML = `<span class="error">Review plugin scripts before running the playground.</span>`;
+
+  alertBarMessage.textContent =
+    "The shared playground link includes plugin scripts. Please review them before running the playground.";
+
+  alertBarDismiss.hidden = true;
+  alertBarRunScripts.hidden = false;
+  alertBarResetScripts.hidden = false;
+  alertBar.hidden = false;
+}
+
+function showVersionWarning() {
+  if (!pendingVersionWarning) {
+    dismissAlert();
+    return;
+  }
+
+  showAlert(
+    `This shared playground link was created with Sätteri ${pendingVersionWarning}, but this playground uses
+ Sätteri ${SATTERI_VERSION}. Some options and behavior may differ.`,
+    { dismissible: true },
+  );
+
+  pendingVersionWarning = undefined;
+}
+
+function dismissAlert() {
+  alertBar.hidden = true;
+  alertBarMessage.textContent = "";
+  alertBarRunScripts.hidden = true;
+  alertBarResetScripts.hidden = true;
+  alertBarDismiss.hidden = true;
+}
+
 function updateModeUI() {
   currentMode = getMode();
   const isMdx = currentMode === "mdx";
@@ -299,6 +695,11 @@ async function getHastPlugins(): Promise<HastPluginDefinition[]> {
 }
 
 async function compile() {
+  if (hasPendingScripts) {
+    compileGeneration++;
+    return;
+  }
+
   const gen = ++compileGeneration;
   const source = input.value;
   const isMdx = currentMode === "mdx";
@@ -313,6 +714,9 @@ async function compile() {
     statusBar.innerHTML = `<span class="error">mdast plugin: ${escapeHtml(String(e))}</span>`;
     return;
   }
+
+  if (gen !== compileGeneration || hasPendingScripts) return;
+
   try {
     hastPlugins = await getHastPlugins();
   } catch (e) {
@@ -320,7 +724,7 @@ async function compile() {
     return;
   }
 
-  if (gen !== compileGeneration) return;
+  if (gen !== compileGeneration || hasPendingScripts) return;
 
   const activeMdastCount = mdastPlugins.filter(
     (p) => resolveMdastSubscriptions(p).length > 0,
@@ -346,7 +750,7 @@ async function compile() {
           plugin,
           subs,
           handleSource,
-          "<playground>",
+          undefined,
         );
         if (gen !== compileGeneration) return;
         if (result.hasMutations) {
@@ -378,7 +782,7 @@ async function compile() {
       const pluginStart = performance.now();
       for (const plugin of hastPlugins) {
         const subs = resolveHastSubscriptions(plugin);
-        await visitHastHandle(hastHandle, plugin, subs, source, "<playground>");
+        await visitHastHandle(hastHandle, plugin, subs, source, undefined);
         if (gen !== compileGeneration) return;
       }
       timings.push(`hast plugins <span>${fmt(performance.now() - pluginStart)}</span>`);
@@ -455,7 +859,12 @@ function updatePluginBadges(mdastCount: number, hastCount: number) {
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function scheduleCompile() {
@@ -646,5 +1055,14 @@ pgSidebarToggle?.addEventListener("click", () => {
 // The WASM module loads asynchronously (top-level await in wasi-browser.js).
 // Reaching this line means the import chain resolved; hide the overlay.
 loadingOverlay.classList.add("hidden");
-highlightAllInputs();
-compile();
+
+window.addEventListener("hashchange", () => {
+  void applySharedState();
+});
+
+void applySharedState().then((applied) => {
+  if (!applied) {
+    highlightAllInputs();
+    compile();
+  }
+});
