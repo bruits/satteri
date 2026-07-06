@@ -6,6 +6,7 @@
     "type": "git",
     "url": "git+https://github.com/bruits/satteri.git"
   },
+  "license": "MIT",
   "files": [
     "dist",
     "browser.js",
