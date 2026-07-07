@@ -745,13 +745,7 @@ async function compile() {
       const handleSource = getHandleSource(mdastHandle);
       for (const plugin of mdastPlugins) {
         const subs = resolveMdastSubscriptions(plugin);
-        const result = await visitMdastHandle(
-          mdastHandle,
-          plugin,
-          subs,
-          handleSource,
-          undefined,
-        );
+        const result = await visitMdastHandle(mdastHandle, plugin, subs, handleSource, undefined);
         if (gen !== compileGeneration) return;
         if (result.hasMutations) {
           applyCommandsToMdastHandle(mdastHandle, result.commandBuffer);
