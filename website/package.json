@@ -4,9 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "maudit dev",
-    "build": "maudit build && pagefind --site dist",
-    "preview": "maudit preview",
-    "prepare": "command -v maudit > /dev/null && pnpm build || echo ''"
+    "build": "maudit build",
+    "preview": "maudit preview"
   },
   "dependencies": {
     "@pagefind/component-ui": "^1.5.2",
@@ -16,7 +15,6 @@
     "tailwindcss": "^4.1.18"
   },
   "devDependencies": {
-    "pagefind": "^1.5.2",
     "wrangler": "^4.90.0"
   }
 }
