@@ -111,7 +111,7 @@ fn header() -> Markup {
                 a.no-underline.text-ink.font-logo.text-3xl.leading-none.transition-opacity."hover:opacity-70"."mr-[12px]"."md:mr-0" href="/" {
                     "Sätteri"
                 }
-                pagefind-modal-trigger."w-full!"."md:max-w-3xs!" {}
+                pagefind-modal-trigger."max-md:ml-auto!" {}
                 nav.hidden."md:flex".items-center.gap-6.text-base.text-secondary.relative."top-px".ml-auto aria-label="Main" {
                     @for (href, label) in NAV_LINKS {
                         a.no-underline.transition-colors.hover:text-ink.hover:underline.decoration-current.underline-offset-4 href=(href) { (label) }
@@ -119,6 +119,7 @@ fn header() -> Markup {
                     (theme_toggle())
                 }
                 div."md:hidden".flex.items-center.gap-3 {
+                    (theme_toggle())
                     (mobile_menu_button())
                 }
             }
@@ -157,10 +158,6 @@ fn mobile_menu_panel() -> Markup {
             nav.flex.flex-col {
                 @for (href, label) in NAV_LINKS {
                     a class="no-underline text-ink text-xl px-6 py-4 border-b border-border last:border-b-0 hover:bg-surface" href=(href) { (label) }
-                }
-
-                div.px-4.py-1.flex.items-center {
-                    (theme_toggle())
                 }
             }
         }

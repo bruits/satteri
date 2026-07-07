@@ -134,9 +134,43 @@ pagefind-modal-trigger {
   }
 }
 
+@layer components {
+  @variant max-sm {
+    pagefind-modal-trigger {
+      :is(.pf-trigger-text, .pf-trigger-shortcut) {
+        display: none !important;
+      }
+
+      .pf-trigger-icon {
+        background-color: var(--color-secondary) !important;
+        width: 18px !important;
+        height: 18px !important;
+        @apply transition-colors!;
+      }
+
+      > button {
+        border: 0 !important;
+        width: --spacing(11) !important;
+        height: --spacing(11) !important;
+        border-radius: var(--radius-sm) !important;
+        @apply transition-colors!;
+
+        &:hover {
+          background-color: var(--color-surface) !important;
+        }
+      }
+
+      button:hover .pf-trigger-icon,
+      .pf-trigger-icon:hover {
+        background-color: var(--color-ink) !important;
+      }
+    }
+  }
+}
+
 /* Shared box-model so the highlighted <pre> overlay aligns 1:1 with the
    transparent textarea sitting on top of it. Padding, font, line-height, tab
-   stops, and wrap behaviour all have to match or the syntax colors drift
+   stops, and wrap behaviour all have to match or the syntax colors! drift
    away from the characters. */
 .demo-editor-layer {
   padding: 1rem;
