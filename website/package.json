@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "maudit dev",
     "build": "maudit build",
-    "preview": "maudit preview"
+    "preview": "maudit preview",
+    "lint": "cargo clippy && cargo fmt --check",
+    "lint:fix": "cargo clippy --fix --allow-dirty && cargo fmt"
   },
   "dependencies": {
     "@tailwindcss/cli": "^4.1.18",

@@ -5,10 +5,9 @@
   "author": "Bruits",
   "type": "module",
   "scripts": {
-    "lint": "oxlint && cargo clippy && knip",
-    "lint:fix": "oxlint --fix && cargo clippy --fix --allow-dirty",
-    "format": "oxfmt && cargo fmt",
-    "codegen": "cargo run -p satteri-layout-codegen && pnpm format",
+    "lint": "oxlint && oxfmt --check && cargo clippy && cargo fmt --check && pnpm -r lint && knip",
+    "lint:fix": "oxlint --fix && oxfmt && cargo clippy --fix --allow-dirty && cargo fmt && pnpm -r lint:fix",
+    "codegen": "cargo run -p satteri-layout-codegen && pnpm lint:fix",
     "codegen:check": "pnpm codegen && git diff --exit-code -- ':(glob)**/generated/*' && test -z \"$(git status --porcelain -- ':(glob)**/generated/*')\""
   },
   "devDependencies": {
