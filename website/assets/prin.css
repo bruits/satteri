@@ -1,3 +1,4 @@
+@import "@pagefind/component-ui/css";
 @import "tailwindcss";
 
 @font-face {
@@ -105,6 +106,31 @@
   ::selection {
     background-color: var(--color-border);
     color: var(--color-ink);
+  }
+}
+
+:root {
+  --pf-font: var(--font-serif);
+  --pf-text: var(--color-ink);
+  --pf-text-secondary: var(--color-secondary);
+  --pf-text-muted: var(--color-tertiary);
+  --pf-background: var(--color-paper);
+  --pf-border: var(--color-border);
+  --pf-border-focus: var(--color-secondary);
+  --pf-skeleton: var(--color-surface);
+  --pf-skeleton-shine: var(--color-border);
+  /*--pf-hover: color-mix(in srgb, var(--color-surface) 60%, var(--color-paper));*/
+  --pf-mark: var(--color-success);
+  --pf-outline-focus: var(--color-secondary);
+  --pf-error-bg: var(--color-error-bg);
+  --pf-error-border: var(--color-error);
+  --pf-error-text: var(--color-error);
+  --pf-error-text-secondary: color-mix(in srgb, var(--color-error) 70%, var(--color-ink));
+}
+
+pagefind-modal-trigger {
+  .pf-trigger-text {
+    font-family: var(--font-serif) !important;
   }
 }
 

@@ -9,7 +9,7 @@ const FLOURISH: &str = include_str!("../assets/flourish.svg");
 /// Inline boot script: runs before any CSS resolves so the document is already
 /// in the right colour scheme on first paint and we never get a light flash on
 /// dark refresh. Reads localStorage first, falls back to the OS preference.
-const THEME_INIT: &str = r#"(()=>{try{var s=localStorage.getItem('theme');var d=s?s==='dark':matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.dataset.theme=d?'dark':'light';}catch(e){}})();"#;
+const THEME_INIT: &str = r#"(()=>{try{var s=localStorage.getItem('theme');var d=s?s==='dark':matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.dataset.theme=d?'dark':'light';document.documentElement.dataset.pfTheme=d?'dark':'light';}catch(e){}})();"#;
 
 pub struct SeoMeta {
     pub title: String,
@@ -69,6 +69,7 @@ pub fn layout_with_options(
 
     ctx.assets.include_script("assets/theme.ts")?;
     ctx.assets.include_script("assets/mobile-menu.ts")?;
+    ctx.assets.include_script("assets/pagefind.ts")?;
 
     Ok(html! {
         (DOCTYPE)
@@ -106,23 +107,24 @@ const NAV_LINKS: &[(&str, &str)] = &[
 fn header() -> Markup {
     html! {
         header.border-b.border-border.bg-paper.relative.z-40 {
-            div.max-w-5xl.mx-auto.px-6.py-5.flex.items-center.justify-between {
-                a.no-underline.text-ink.font-logo.text-3xl.leading-none.transition-opacity.hover:opacity-70 href="/" {
+            div.max-w-5xl.mx-auto.px-6.py-5.flex.gap-3.items-center."md:gap-6" {
+                a.no-underline.text-ink.font-logo.text-3xl.leading-none.transition-opacity."hover:opacity-70"."mr-[12px]"."md:mr-0" href="/" {
                     "Sätteri"
                 }
-                nav.hidden."md:flex".items-center.gap-6.text-base.text-secondary.relative."top-px" aria-label="Main" {
+                pagefind-modal-trigger."w-full!"."md:max-w-3xs!" {}
+                nav.hidden."md:flex".items-center.gap-6.text-base.text-secondary.relative."top-px".ml-auto aria-label="Main" {
                     @for (href, label) in NAV_LINKS {
                         a.no-underline.transition-colors.hover:text-ink.hover:underline.decoration-current.underline-offset-4 href=(href) { (label) }
                     }
                     (theme_toggle())
                 }
                 div."md:hidden".flex.items-center.gap-3 {
-                    (theme_toggle())
                     (mobile_menu_button())
                 }
             }
             (mobile_menu_panel())
         }
+        pagefind-modal {}
     }
 }
 
@@ -133,7 +135,7 @@ fn mobile_menu_button() -> Markup {
             aria-label="Toggle menu"
             aria-controls="mobile-menu-panel"
             aria-expanded="false"
-            class="grid place-items-center w-11 h-11 rounded-sm text-secondary hover:text-ink hover:bg-surface transition-colors cursor-pointer -translate-y-1" {
+            class="grid place-items-center w-11 h-11 rounded-sm text-secondary hover:text-ink hover:bg-surface transition-colors cursor-pointer" {
             span #mobile-menu-icon-open {
                 svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" {
                     path d="M4 7h16M4 12h16M4 17h16" {}
@@ -151,10 +153,14 @@ fn mobile_menu_button() -> Markup {
 fn mobile_menu_panel() -> Markup {
     html! {
         div #mobile-menu-panel
-            class="md:hidden absolute top-full left-0 right-0 bg-paper border-b border-border opacity-0 -translate-y-2 pointer-events-none transition-all" {
+            class="md:hidden absolute top-full left-0 right-0 bg-paper border-b border-border opacity-0 pointer-events-none transition-all" {
             nav.flex.flex-col {
                 @for (href, label) in NAV_LINKS {
                     a class="no-underline text-ink text-xl px-6 py-4 border-b border-border last:border-b-0 hover:bg-surface" href=(href) { (label) }
+                }
+
+                div.px-4.py-1.flex.items-center {
+                    (theme_toggle())
                 }
             }
         }
@@ -167,7 +173,7 @@ fn theme_toggle() -> Markup {
             type="button"
             aria-label="Toggle theme"
             title="Toggle theme"
-            class="theme-toggle relative -my-2 ml-1 grid place-items-center w-11 h-11 rounded-sm text-secondary hover:text-ink hover:bg-surface transition-colors cursor-pointer -translate-y-1" {
+            class="theme-toggle relative grid place-items-center w-11 h-11 rounded-sm text-secondary hover:text-ink hover:bg-surface transition-colors cursor-pointer" {
             // Sun (shown in dark mode → click to go light)
             svg.theme-icon-sun width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
                 circle cx="12" cy="12" r="4" {}
