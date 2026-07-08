@@ -4040,7 +4040,23 @@ fn leading_container_prefix(line: &[u8]) -> usize {
     depth
 }
 
+/// True when the line at `line_start` opens a list item (bullet or ordered
+/// marker after ≤3 spaces of indent). Such a line begins a new leaf paragraph,
+/// so it bounds an inline scope: `is_inside_code_span` / math must not scan
+/// across it into a sibling item. Without this a tight list of N items
+/// collapses into one scope and each per-item scan runs over the whole list.
+fn line_opens_list_item(bytes: &[u8], line_start: usize) -> bool {
+    let mut i = line_start;
+    while i < bytes.len() && bytes[i] == b' ' && i - line_start < 3 {
+        i += 1;
+    }
+    scan_listitem(&bytes[i..]).is_some()
+}
+
 fn scope_start_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -> usize {
+    if line_opens_list_item(bytes, cur_line_start) {
+        return cur_line_start;
+    }
     let mut line_start = cur_line_start;
     while line_start > 0 {
         let mut prev_end = line_start - 1;
@@ -4059,6 +4075,10 @@ fn scope_start_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -
             return line_start;
         }
         line_start = prev_start;
+        // The item's first line is the paragraph start: include it, stop here.
+        if line_opens_list_item(bytes, line_start) {
+            return line_start;
+        }
     }
     line_start
 }
@@ -4083,6 +4103,10 @@ fn scope_end_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -> 
             return i;
         }
         if leading_container_prefix(next_line) != prefix {
+            return i;
+        }
+        // A line opening a new list item starts a new paragraph: stop before it.
+        if line_opens_list_item(bytes, after_eol) {
             return i;
         }
         i = next_eol;
@@ -4893,6 +4917,13 @@ fn is_inside_angle_construct(text: &str, pos: usize) -> bool {
         .iter()
         .rposition(|&b| b == b'\n' || b == b'\r')
         .map_or(0, |nl| nl + 1);
+    // Fast reject: a single-line `<…>` construct spanning `pos` must open at a
+    // `<` at or before `pos` on this line. With none, there's nothing to defer
+    // to. memchr is much cheaper than the construct-resolving walk below, and
+    // this is the common case for an autolink trigger (cf. `is_inside_code_span`).
+    if memchr::memchr(b'<', &bytes[line_start..=pos]).is_none() {
+        return false;
+    }
 
     let mut j = line_start;
     while j <= pos {
