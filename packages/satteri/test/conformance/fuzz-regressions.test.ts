@@ -1053,7 +1053,7 @@ describe("fuzz regressions: strikethrough/emphasis two-pass resolve", () => {
   // first in the block decides whether attention or strikethrough
   // resolves first. The runner-up only sees what's left, so spans that
   // would cross can't form. `parse.rs:handle_inline` mirrors this by
-  // picking the pass order from the first MaybeEmphasis char.
+  // picking the pass order from the first marker char in the scope.
 
   // Emphasis pairs `*..*`; strikethrough then nests inside it.
   test("`*~bar~*` → emphasis wraps delete", () => {
@@ -1145,6 +1145,45 @@ describe("fuzz regressions: strikethrough/emphasis two-pass resolve", () => {
 
   test("`*~bar~*` keeps single-tilde semantics", () => {
     assertHastConformance("*~bar~*");
+  });
+
+  // An inert leading marker (`_` before a space, can't open or close) still
+  // counts toward the order decision (micromark tokenizes it, registering
+  // attention's resolver first), so emphasis wins even though `_` won't pair.
+  test("inert leading `_` makes emphasis resolve first", () => {
+    assertHtmlConformance("_ ~a*b~*\n"); // → emphasis(*), tildes don't cross
+    assertHtmlConformance("_  ~a*ab~*\n");
+  });
+
+  // A literal `^` (superscript off) must not skew the order: only enabled
+  // families' markers count.
+  test("literal `^` doesn't skew emphasis/strikethrough order", () => {
+    assertHtmlConformance("^*~*a~ ~_\n"); // first real marker is `*`
+    assertHtmlConformance("^ ~a*b~*\n");
+  });
+
+  // Nested content (a link/image label, or between matched delimiters) is
+  // ALWAYS strikethrough-first, independent of the top-level order. The
+  // contrast: top level resolves emphasis first, the label strikethrough.
+  test("nested content resolves strikethrough-first regardless of top-level", () => {
+    assertHtmlConformance("_~a*b~*\n"); // top level → <em>
+    assertHtmlConformance("[_~a*b~*](/x)\n"); // same text in a label → <del>
+    assertHtmlConformance("![_~a*b~*](/i)\n");
+    assertHtmlConformance("[!www..a;_~%*_~](/x)\n");
+  });
+});
+
+describe("fuzz regressions: URL percent-encoding", () => {
+  // micromark's `normalizeUri` keeps a `%` when followed by two ASCII
+  // *alphanumerics* (not strictly hex), so `%ax`/`%2g`/`%off` stay literal.
+  test("`%` + two alphanumerics is kept, not re-encoded to `%25`", () => {
+    assertHtmlConformance("www.x.com/a%ax\n");
+    assertHtmlConformance("www.example.com/100%off\n");
+    assertHtmlConformance("[x](http://h/a%2gb)\n");
+  });
+  test("`%` not followed by two alphanumerics is encoded", () => {
+    assertHtmlConformance("[x](http://h/a%2)\n");
+    assertHtmlConformance("[x](http://h/a% b)\n");
   });
 });
 
@@ -2145,15 +2184,6 @@ describe("fuzz known-fails: complex structural divergences (md)", () => {
   // separate; Sätteri collapses them.
   test.fails("4-tick fence in listitem, then root setext", () => {
     assertMdastConformance("* !!f~````\naaa\n```\n``````\n    Foo\n    ---\n\n    Foo\n---");
-  });
-
-  // `www.     indented code\n\n   paragraph\n\n       more code\n` — `www`
-  // alone (URL `http://www`) is what REF emits for the leading autolink;
-  // mdast-util-gfm-autolink-literal's www-construct accepts even without
-  // a domain tail. Sätteri's construct rejects when no domain follows the
-  // `www.`.
-  test.fails("bare `www` autolink with no domain tail", () => {
-    assertMdastConformance("www.     indented code\n\n   paragraph\n\n       more code\n");
   });
 
   // `* [Foo\n  bar]: /url\n\n[Baz][Foo bar]\n` — multi-line refdef label

@@ -283,11 +283,13 @@ fn emit_h_child(builder: &mut ArenaBuilder<Hast>, child: &serde_json::Value) {
 
 fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
     let bytes = url.as_bytes();
-    // A `%` is only "safe" when it's the start of a valid percent-encoding
-    // (followed by two hex digits). An invalid `%2X` (X not hex) means the
-    // `%` itself should be encoded as `%25` — matches remark's behavior.
+    // micromark's `normalizeUri` keeps a `%` as-is when it is followed by two
+    // ASCII *alphanumerics* (not strictly hex digits, so `%ax` and `%2g` are
+    // kept); otherwise the `%` itself is percent-encoded as `%25`.
     let pct_safe = |i: usize| -> bool {
-        i + 2 < bytes.len() && is_hex_digit(bytes[i + 1]) && is_hex_digit(bytes[i + 2])
+        i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_alphanumeric()
+            && bytes[i + 2].is_ascii_alphanumeric()
     };
     let needs_encode = bytes.iter().enumerate().any(|(i, &b)| {
         if b == b'%' {
@@ -315,10 +317,6 @@ fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
         }
     }
     builder.alloc_string(&encoded)
-}
-
-fn is_hex_digit(b: u8) -> bool {
-    b.is_ascii_hexdigit()
 }
 
 fn is_url_safe(b: u8) -> bool {
