@@ -111,9 +111,8 @@ fn heading_block_and_directive_block_coexist() {
     );
 }
 
-// Setext headings strip the block by truncating the tree, so a block sitting
-// before a trailing directive is the tricky case: the directive must survive
-// the truncation with its own attributes intact.
+// The tricky setext case: a block sitting *before* a trailing directive, which
+// the directive must survive with its own attributes intact.
 #[test]
 fn setext_heading_attribute_is_recognized_around_a_trailing_directive() {
     let before = "Heading with a badge {#custom} :badge[Custom]\n===\n";

@@ -1501,10 +1501,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // of the parent) instead.
             let header_end = self.tree[cur_ix].item.end;
 
-            // Setext strips the block by truncating the tree to the block's
-            // opening `{`. A trailing run of text directives is dropped along
-            // with the block, then reparsed below as its own span so it keeps
-            // its `{...}` attributes (matching the ATX path).
+            // Truncating to the block's `{` (below) drops any trailing directive
+            // run with it, so reparse that run to keep its own `{...}` attributes.
             let (content_end, attrs_, tail_start) =
                 match self.extract_and_parse_heading_attribute_block(header_start, header_end) {
                     Some(block) => (block.block_open, Some(block.attrs), block.tail_start),
