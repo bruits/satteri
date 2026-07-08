@@ -1501,9 +1501,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // of the parent) instead.
             let header_end = self.tree[cur_ix].item.end;
 
-            // extract the trailing attribute block
-            let (content_end, attrs_) =
-                self.extract_and_parse_heading_attribute_block(header_start, header_end);
+            // Truncating to the block's `{` (below) drops any trailing directive
+            // run with it, so reparse that run to keep its own `{...}` attributes.
+            let (content_end, attrs_, tail_start) =
+                match self.extract_and_parse_heading_attribute_block(header_start, header_end) {
+                    Some(block) => (block.block_open, Some(block.attrs), block.tail_start),
+                    None => (header_end, None, None),
+                };
             attrs = attrs_;
 
             // strip trailing whitespace
@@ -1541,6 +1545,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
             if let Some(cur_ix) = self.tree.cur() {
                 self.tree[cur_ix].item.end = new_end;
+            }
+
+            if let Some(tail_start) = tail_start {
+                self.parse_line(tail_start, Some(header_end), TableParseMode::Disabled);
             }
         }
 
@@ -3115,10 +3123,25 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // the start of the next line is the end of the header since the
             // header cannot have line breaks
             let header_end = header_start + scan_nextline(&bytes[header_start..]);
-            let (content_end, attrs) =
-                self.extract_and_parse_heading_attribute_block(header_start, header_end);
-            self.parse_line(ix, Some(content_end), TableParseMode::Disabled);
-            (header_end, content_end, attrs)
+            match self.extract_and_parse_heading_attribute_block(header_start, header_end) {
+                Some(block) => {
+                    self.parse_line(ix, Some(block.block_open), TableParseMode::Disabled);
+                    // Parse the trailing directive run as a second span so the
+                    // directive keeps its own `{...}` attributes.
+                    let content_end = match block.tail_start {
+                        Some(tail_start) => {
+                            self.parse_line(tail_start, Some(header_end), TableParseMode::Disabled);
+                            header_end
+                        }
+                        None => block.block_open,
+                    };
+                    (header_end, content_end, Some(block.attrs))
+                }
+                None => {
+                    self.parse_line(ix, Some(header_end), TableParseMode::Disabled);
+                    (header_end, header_end, None)
+                }
+            }
         } else {
             // ATX headings can't span lines. In MDX mode bound the inline
             // scan to the current line so an unclosed expression body like
@@ -3600,38 +3623,82 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         alignment.len() == header_count
     }
 
-    /// Extracts and parses a heading attribute block if exists.
-    ///
-    /// Returns `(end_offset_of_heading_content, (id, classes))`.
-    ///
-    /// If `header_end` is less than or equal to `header_start`, the given
-    /// input is considered as empty.
+    /// Extracts and parses a heading's trailing attribute block, with its span.
     fn extract_and_parse_heading_attribute_block(
-        &mut self,
+        &self,
         header_start: usize,
         header_end: usize,
-    ) -> (usize, Option<HeadingAttributes<'a>>) {
+    ) -> Option<HeadingAttrBlock<'a>> {
         if !self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES)
             || self.options.contains(Options::ENABLE_MDX)
         {
-            return (header_end, None);
+            return None;
         }
 
-        // extract the trailing attribute block
-        let header_bytes = &self.text.as_bytes()[header_start..header_end];
-        let (content_len, attr_block_range_rel) =
-            extract_attribute_block_content_from_header_text(header_bytes);
-        let attrs = attr_block_range_rel.and_then(|r| {
-            parse_inside_attribute_block(
-                &self.text[(header_start + r.start)..(header_start + r.end)],
-            )
-        });
-        let content_end = if attrs.is_some() {
-            header_start + content_len
+        let bytes = self.text.as_bytes();
+        let search_end = if self.options.contains(Options::ENABLE_DIRECTIVE) {
+            self.heading_attr_block_search_end(header_start, header_end)
         } else {
             header_end
         };
-        (content_end, attrs)
+
+        let header_bytes = &bytes[header_start..search_end];
+        let (content_len, attr_block_range_rel) =
+            extract_attribute_block_content_from_header_text(header_bytes);
+        let range = attr_block_range_rel?;
+        let attrs = parse_inside_attribute_block(
+            &self.text[(header_start + range.start)..(header_start + range.end)],
+        )?;
+
+        let block_open = header_start + content_len;
+        let block_close = header_start + range.end + 1;
+        let tail_has_content = bytes[block_close..header_end]
+            .iter()
+            .any(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
+        Some(HeadingAttrBlock {
+            attrs,
+            block_open,
+            tail_start: if tail_has_content {
+                Some(block_close)
+            } else {
+                None
+            },
+        })
+    }
+
+    /// The offset up to which a heading's trailing attribute block is searched.
+    /// A trailing run of text directives (each `:name[label]{attrs}`, separated
+    /// only by whitespace) is heading content and owns any `{...}` it contains,
+    /// so the search stops before that run.
+    fn heading_attr_block_search_end(&self, header_start: usize, header_end: usize) -> usize {
+        let bytes = self.text.as_bytes();
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        let mut i = header_start;
+        while i < header_end {
+            if bytes[i] == b':' {
+                if let Some(end) = scan_heading_text_directive(self.text, bytes, i, header_end) {
+                    spans.push((i, end));
+                    i = end;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+
+        let mut pos = header_end;
+        pos -= scan_rev_while(&bytes[header_start..pos], |b| {
+            matches!(b, b' ' | b'\t' | b'\n' | b'\r')
+        });
+        for &(start, end) in spans.iter().rev() {
+            if end != pos {
+                break;
+            }
+            pos = start;
+            pos -= scan_rev_while(&bytes[header_start..pos], |b| {
+                matches!(b, b' ' | b'\t' | b'\n' | b'\r')
+            });
+        }
+        pos
     }
 }
 
@@ -5267,6 +5334,39 @@ fn is_directive_name_start_ascii(c: u8) -> bool {
 
 fn is_directive_name_char_ascii(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'-' || c == b'_'
+}
+
+/// A heading's trailing attribute block, with where it sits in the line.
+struct HeadingAttrBlock<'a> {
+    attrs: HeadingAttributes<'a>,
+    /// Absolute offset of the opening `{`.
+    block_open: usize,
+    /// Absolute offset just past the closing `}`, set only when a trailing run
+    /// of text directives follows the block and must be parsed as content.
+    tail_start: Option<usize>,
+}
+
+/// Extent of a text directive starting at `colon` (`bytes[colon] == b':'`), or
+/// `None`. Mirrors the inline text-directive scanner's guards so a heading's
+/// trailing directive run is recognized the same way it will later be parsed.
+fn scan_heading_text_directive(
+    text: &str,
+    bytes: &[u8],
+    colon: usize,
+    limit: usize,
+) -> Option<usize> {
+    if colon > 0 && bytes[colon - 1] == b':' {
+        return None;
+    }
+    let (dir, end_pos) = parse_directive_after_colons(text, bytes, colon + 1)?;
+    if end_pos > limit {
+        return None;
+    }
+    // `:name:` (bare name closed by a colon) is an emoji, not a directive.
+    if end_pos < limit && bytes[end_pos] == b':' && colon + 1 + dir.name.len() == end_pos {
+        return None;
+    }
+    Some(end_pos)
 }
 
 /// True when the char at `ix` is a valid directive-name character.
