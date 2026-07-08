@@ -1,5 +1,16 @@
 # satteri-pulldown-cmark
 
+## 0.5.8 — 2026-07-08
+
+### Patch changes
+
+- [d2c33ca](https://github.com/bruits/satteri/commit/d2c33ca65721a45b2899a5265d54a226a3843a91) Fixed emphasis, strikethrough, and subscript/superscript sometimes nesting in the wrong order. — Thanks @Princesseuh!
+- [d2c33ca](https://github.com/bruits/satteri/commit/d2c33ca65721a45b2899a5265d54a226a3843a91) Fixed URLs inside angle brackets like `<https://www.example.com>` mangling the punctuation and line break that immediately followed them. — Thanks @Princesseuh!
+- [24a4689](https://github.com/bruits/satteri/commit/24a4689c670d7752cd6fc1ecc0f866d57f034924) Fixed heading attribute blocks conflicting with text directives when both features are enabled. — Thanks @Princesseuh!
+- [d2c33ca](https://github.com/bruits/satteri/commit/d2c33ca65721a45b2899a5265d54a226a3843a91) Improved automatic linking of bare URLs and emails to match GitHub more closely, including uppercase schemes like `HTTP://` and `WWW.`, `www` hosts without a second dot, trailing punctuation, and not linking inside existing link text. — Thanks @Princesseuh!
+- [d2c33ca](https://github.com/bruits/satteri/commit/d2c33ca65721a45b2899a5265d54a226a3843a91) Fixed a performance issue when parsing documents with many links in certain contexts — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.4.2
+
 ## 0.5.7 — 2026-06-29
 
 ### Patch changes
