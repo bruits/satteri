@@ -1501,15 +1501,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // of the parent) instead.
             let header_end = self.tree[cur_ix].item.end;
 
-            // Setext strips the block by truncating the tree, which drops only a
-            // suffix, so a block trailed by directives is left as-is rather than
-            // cut along with it.
-            let (content_end, attrs_) =
+            // Setext strips the block by truncating the tree to the block's
+            // opening `{`. A trailing run of text directives is dropped along
+            // with the block, then reparsed below as its own span so it keeps
+            // its `{...}` attributes (matching the ATX path).
+            let (content_end, attrs_, tail_start) =
                 match self.extract_and_parse_heading_attribute_block(header_start, header_end) {
-                    Some(block) if block.tail_start.is_none() => {
-                        (block.block_open, Some(block.attrs))
-                    }
-                    _ => (header_end, None),
+                    Some(block) => (block.block_open, Some(block.attrs), block.tail_start),
+                    None => (header_end, None, None),
                 };
             attrs = attrs_;
 
@@ -1548,6 +1547,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
             if let Some(cur_ix) = self.tree.cur() {
                 self.tree[cur_ix].item.end = new_end;
+            }
+
+            if let Some(tail_start) = tail_start {
+                self.parse_line(tail_start, Some(header_end), TableParseMode::Disabled);
             }
         }
 

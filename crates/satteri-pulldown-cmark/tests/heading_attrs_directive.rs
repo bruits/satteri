@@ -110,3 +110,40 @@ fn heading_block_and_directive_block_coexist() {
         vec![("variant".to_string(), "caution".to_string())]
     );
 }
+
+// Setext headings strip the block by truncating the tree, so a block sitting
+// before a trailing directive is the tricky case: the directive must survive
+// the truncation with its own attributes intact.
+#[test]
+fn setext_heading_attribute_is_recognized_around_a_trailing_directive() {
+    let before = "Heading with a badge {#custom} :badge[Custom]\n===\n";
+    let after = "Heading with a badge :badge[Custom] {#custom}\n===\n";
+    for input in [before, after] {
+        let (arena, _) = parse(input, options());
+        let h = heading(&arena);
+        assert!(
+            heading_data(&arena, h).contains(r#""id":"custom""#),
+            "expected id=custom for input {input:?}, got {:?}",
+            heading_data(&arena, h)
+        );
+        assert_eq!(directive_name(&arena, find_directive(&arena, h)), "badge");
+    }
+}
+
+// Setext counterpart of `heading_block_and_directive_block_coexist`: the block
+// before the directive must not swallow the directive's own `{variant=...}`.
+#[test]
+fn setext_heading_block_and_directive_block_coexist() {
+    let (arena, _) = parse(
+        "Heading {#custom} :badge[New]{variant=caution}\n===\n",
+        options(),
+    );
+    let h = heading(&arena);
+    assert!(heading_data(&arena, h).contains(r#""id":"custom""#));
+
+    let dir = find_directive(&arena, h);
+    assert_eq!(
+        directive_attrs(&arena, dir),
+        vec![("variant".to_string(), "caution".to_string())]
+    );
+}
