@@ -2,11 +2,11 @@
   "name": "satteri",
   "version": "0.9.4",
   "description": "High-performance Markdown and MDX processing",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bruits/satteri.git"
   },
-  "license": "MIT",
   "files": [
     "dist",
     "browser.js",

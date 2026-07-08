@@ -575,9 +575,8 @@ impl<'input> ParserInner<'input> {
         let tilde = self.options.contains(Options::ENABLE_STRIKETHROUGH)
             || self.options.contains(Options::ENABLE_SUBSCRIPT);
         let caret = self.options.contains(Options::ENABLE_SUPERSCRIPT);
-        let is_marker = |c: u8| {
-            matches!(c, b'*' | b'_') || (c == b'~' && tilde) || (c == b'^' && caret)
-        };
+        let is_marker =
+            |c: u8| matches!(c, b'*' | b'_') || (c == b'~' && tilde) || (c == b'^' && caret);
         let bytes = self.text.as_bytes();
         let mut cur = start;
         while let Some(cur_ix) = cur {

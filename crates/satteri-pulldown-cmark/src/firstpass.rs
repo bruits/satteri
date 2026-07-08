@@ -4840,7 +4840,8 @@ fn try_emit_gfm_autolink<'a>(
             // back over an already-emitted Maybe* item, defer to the
             // post-pass (which sees the resolved/flat text and runs
             // find-and-replace if the construct rejected it).
-            let (email_start, email_end, full_url, retry_needed) = scan_email_autolink(bytes, ix, true)?;
+            let (email_start, email_end, full_url, retry_needed) =
+                scan_email_autolink(bytes, ix, true)?;
             if retry_needed {
                 return None;
             }

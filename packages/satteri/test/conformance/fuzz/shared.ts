@@ -515,11 +515,7 @@ const AL_SCHEME = fc.constantFrom(
   "",
 );
 const AL_DOMAIN_UNIT = fc.constantFrom(...[..."abXYZ019"], "-", "_", ".", "點", "é");
-const AL_PATH_UNIT = fc.constantFrom(
-  ...[..."ab019"],
-  ..."/()?#&=-_.[]~*!,:;'\"+%".split(""),
-  "點",
-);
+const AL_PATH_UNIT = fc.constantFrom(...[..."ab019"], ..."/()?#&=-_.[]~*!,:;'\"+%".split(""), "點");
 const AL_TRAIL = fc.constantFrom(
   "",
   ".",
@@ -549,9 +545,33 @@ const AL_TRAIL = fc.constantFrom(
   "(a)",
 );
 const AL_PREV = fc.constantFrom(
-  ...["", "", " ", "(", "[", "*", "_", "~", "a", "5", ".", "/", "@", "é", "點", ")", ">", "x", ":", "<", "!"],
+  ...[
+    "",
+    "",
+    " ",
+    "(",
+    "[",
+    "*",
+    "_",
+    "~",
+    "a",
+    "5",
+    ".",
+    "/",
+    "@",
+    "é",
+    "點",
+    ")",
+    ">",
+    "x",
+    ":",
+    "<",
+    "!",
+  ],
 );
-const AL_POST = fc.constantFrom(...["", "", " ", "\n", ")", "]", ".", "x", " end\n", ">", "\t", "!"]);
+const AL_POST = fc.constantFrom(
+  ...["", "", " ", "\n", ")", "]", ".", "x", " end\n", ">", "\t", "!"],
+);
 
 const autolinkUrl = fc
   .tuple(
@@ -578,7 +598,18 @@ const autolinkLine = fc
 export const autolinkDocument = fc
   .tuple(
     autolinkLine,
-    fc.constantFrom("plain", "plain", "bq", "bq0", "list", "label", "angle", "code", "para2", "img"),
+    fc.constantFrom(
+      "plain",
+      "plain",
+      "bq",
+      "bq0",
+      "list",
+      "label",
+      "angle",
+      "code",
+      "para2",
+      "img",
+    ),
   )
   .map(([line, ctx]) => {
     switch (ctx) {

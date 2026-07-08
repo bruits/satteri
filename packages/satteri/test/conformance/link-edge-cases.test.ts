@@ -301,7 +301,7 @@ describe("HTML conformance: GFM autolink fuzz regressions", () => {
   });
 
   test("www construct: bare `www` when only trail follows the dot", () => {
-    assertHtmlConformance("> *www.!\"~_\",!\n");
+    assertHtmlConformance('> *www.!"~_",!\n');
     assertHtmlConformance("< WWW._*]?!\n");
     assertHtmlConformance("- *WWW..%&\n");
   });
