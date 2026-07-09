@@ -438,6 +438,33 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain(`<h1 id="title">Hi</h1>`);
   });
 
+  test("a child getter throwing during 'children' encoding leaves the buffer usable", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "throwing-children-encode",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          expect(() =>
+            ctx.setProperty(node, "children", [
+              {
+                get type(): "text" {
+                  throw new Error("boom");
+                },
+                value: "x",
+              },
+            ]),
+          ).toThrow("boom");
+          ctx.setProperty(node, "children", [{ type: "text", value: "Recovered" }]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Recovered</h1>");
+  });
+
   test("context.setProperty(node, 'children', ...) preserves the element's properties", () => {
     const { handle, source } = setup("[x](https://example.com)");
     const plugin = defineHastPlugin({

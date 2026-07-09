@@ -346,6 +346,25 @@ test("context.setProperty(node, 'children', ...) keeps reused children", () => {
   expect(html).toMatch(/<h1>&gt; Hello<\/h1>/);
 });
 
+test("a child getter throwing during 'children' encoding leaves the buffer usable", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      expect(() =>
+        ctx.setProperty(node, "children", [
+          {
+            get type(): "text" {
+              throw new Error("boom");
+            },
+            value: "x",
+          },
+        ]),
+      ).toThrow("boom");
+      ctx.setProperty(node, "children", [{ type: "text", value: "Recovered" }]);
+    },
+  });
+  expect(html).toMatch(/<h1>Recovered<\/h1>/);
+});
+
 test("context.insertChildAt() prepends at index 0", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node, ctx) {

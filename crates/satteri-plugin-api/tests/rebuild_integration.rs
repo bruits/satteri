@@ -1,5 +1,4 @@
-//! Integration tests verifying that PluginRunner actually applies arena rebuild
-//! when structural commands are issued.
+//! Integration tests verifying that PluginRunner actually applies structural commands.
 
 use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
 use satteri_ast::mdast::{codec::*, MdastNodeType};
@@ -259,33 +258,61 @@ fn explicit_remove_command_rebuilds_arena() {
     assert_eq!(reachable.len(), 3);
 }
 
-/// Plugin 1 removes the heading. Plugin 2 counts nodes.
-struct CounterPlugin {
-    count: usize,
+/// Plugin 1 removes the heading. Plugin 2 records every node it is dispatched.
+struct RecordVisits {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<(u8, u32)>>>,
 }
 
-impl Plugin for CounterPlugin {
+impl RecordVisits {
+    fn record(&self, node_type: MdastNodeType, id: u32) {
+        self.seen.lock().unwrap().push((node_type as u8, id));
+    }
+}
+
+impl Plugin for RecordVisits {
     fn meta(&self) -> PluginMeta {
-        PluginMeta::new("counter")
+        PluginMeta::new("record-visits")
     }
 
-    fn before(&mut self, arena: &Arena<Mdast>, _ctx: &mut PluginContext) {
-        self.count = arena.len();
+    fn visit_heading(&mut self, node: &Heading, _ctx: &mut PluginContext) -> VisitResult {
+        self.record(MdastNodeType::Heading, node.id());
+        VisitResult::NoChange
+    }
+
+    fn visit_paragraph(&mut self, node: &Paragraph, _ctx: &mut PluginContext) -> VisitResult {
+        self.record(MdastNodeType::Paragraph, node.id());
+        VisitResult::NoChange
+    }
+
+    fn visit_text(&mut self, node: &Text, _ctx: &mut PluginContext) -> VisitResult {
+        self.record(MdastNodeType::Text, node.id());
+        VisitResult::NoChange
     }
 }
 
 #[test]
-fn second_plugin_sees_rebuilt_arena() {
+fn second_plugin_visits_only_reachable_nodes() {
     let arena = build_test_arena();
-    // Original: 5 nodes. After removing heading + text = 3 nodes.
-    let counter = CounterPlugin { count: 0 };
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = RecordVisits { seen: seen.clone() };
 
-    let mut runner = PluginRunner::new(vec![Box::new(RemoveHeadingExplicit), Box::new(counter)]);
+    let mut runner = PluginRunner::new(vec![Box::new(RemoveHeadingExplicit), Box::new(recorder)]);
     let mut data_map = DataMap::new();
     let mut typed_data = TypedDataMap::new();
-    runner.run(arena, &mut data_map, &mut typed_data);
+    let result = runner.run(arena, &mut data_map, &mut typed_data);
 
-    // We can't easily get the counter value back, but we can verify final arena size
-    // The test above already covers the arena contents.
-    // This test just ensures the runner doesn't panic when chaining.
+    let seen = seen.lock().unwrap();
+    assert!(
+        !seen.iter().any(|&(t, _)| t == MdastNodeType::Heading as u8),
+        "second plugin must not visit the removed heading: {seen:?}"
+    );
+    let text_visits = seen
+        .iter()
+        .filter(|&&(t, _)| t == MdastNodeType::Text as u8)
+        .count();
+    assert_eq!(
+        text_visits, 1,
+        "only the paragraph's text is reachable: {seen:?}"
+    );
+    assert_eq!(reachable_ids(&result.arena).len(), 3);
 }

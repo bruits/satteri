@@ -627,33 +627,27 @@ function reusedId(node: unknown): number | undefined {
   return typeof id === "number" ? id : undefined;
 }
 
-// Reused across every replacement in a pass: compile is synchronous and its
-// result is copied into the command buffer before the next call, so a single
-// writer is safe and avoids a 512-byte allocation per built node.
-
-/**
- * Compile a declarative MDAST replacement tree to the op-stream — the only
- * structural encoding. Reused nodes (those still carrying an arena id) become
- * `ref`s so the rebuild splices the original back in place. Returns null when
- * the replay can't reproduce the tree identically (unsupported node type or
- * out-of-range numeric field); the caller turns that into a hard error.
- */
 /** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
 function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown): boolean {
   if (!Array.isArray(children)) return false;
   const start = buffer.length;
   const lenPos = buffer.beginOpstream(CMD_SET_CHILDREN, id);
-  let ok = true;
+  // ok starts false so a throwing child getter still hits the abort in finally
+  let ok = false;
   try {
     buffer.open(NAME_TO_TYPE.root!);
+    let encoded = true;
     for (const c of children) {
       if (!emitMdastOp(buffer, c, false, false)) {
-        ok = false;
+        encoded = false;
         break;
       }
     }
-    if (ok) buffer.close();
+    if (encoded) {
+      buffer.close();
+      ok = true;
+    }
   } finally {
     if (!ok) buffer.abortOpstream(start);
   }

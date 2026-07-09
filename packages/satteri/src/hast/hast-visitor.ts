@@ -210,16 +210,21 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
   if (!Array.isArray(children)) return false;
   const start = buffer.length;
   const lenPos = buffer.beginOpstream(CMD_SET_CHILDREN, id);
-  let ok = true;
+  // ok starts false so a throwing child getter still hits the abort in finally
+  let ok = false;
   try {
     buffer.open(NAME_TO_TYPE.root!);
+    let encoded = true;
     for (const c of children) {
       if (!emitHastOp(buffer, c, false)) {
-        ok = false;
+        encoded = false;
         break;
       }
     }
-    if (ok) buffer.close();
+    if (encoded) {
+      buffer.close();
+      ok = true;
+    }
   } finally {
     if (!ok) buffer.abortOpstream(start);
   }

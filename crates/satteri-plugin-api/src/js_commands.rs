@@ -72,6 +72,15 @@ impl<'a> BufReader<'a> {
         Ok(v)
     }
 
+    /// Anchors must predate the decode's orphan grafts; a stale id would panic inside the apply.
+    fn read_anchor(&mut self, original_len: u32) -> Result<u32, CommandError> {
+        let node_id = self.read_u32()?;
+        if node_id >= original_len {
+            return Err(CommandError::InvalidNodeId(node_id));
+        }
+        Ok(node_id)
+    }
+
     fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], CommandError> {
         if self.remaining() < len {
             return Err(CommandError::UnexpectedEof);
@@ -1183,12 +1192,12 @@ pub fn apply_mdast_commands_lenient_with_options(
 
         match cmd {
             CMD_REMOVE => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 patches.push(Patch::Remove { node_id });
             }
 
             CMD_SET_PROPERTY => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
@@ -1198,7 +1207,7 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_INSERT_BEFORE => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
@@ -1211,7 +1220,7 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_INSERT_AFTER => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
@@ -1224,7 +1233,7 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_PREPEND_CHILD => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (child_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
@@ -1240,7 +1249,7 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_APPEND_CHILD => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (child_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
@@ -1256,7 +1265,7 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_WRAP => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (parent_tree, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
@@ -1272,7 +1281,7 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_REPLACE => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, keep_children) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
@@ -1289,7 +1298,7 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_SET_CHILDREN => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (new_children, _) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
@@ -1371,12 +1380,12 @@ pub fn apply_hast_commands_lenient(
 
         match cmd {
             CMD_REMOVE => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 patches.push(Patch::Remove { node_id });
             }
 
             CMD_SET_PROPERTY => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
@@ -1386,21 +1395,21 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_INSERT_BEFORE => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (child_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::PrependChild {
@@ -1410,7 +1419,7 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_APPEND_CHILD => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (child_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::AppendChild {
@@ -1420,7 +1429,7 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_WRAP => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (parent_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::Wrap {
@@ -1430,7 +1439,7 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_REPLACE => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, keep_children) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::Replace {
@@ -1441,7 +1450,7 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_SET_CHILDREN => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let (new_children, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::SetChildren {
@@ -1920,6 +1929,29 @@ mod tests {
         let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let root_children = result.get_children(0);
         assert!(root_children.len() >= 2);
+    }
+
+    #[test]
+    fn stale_anchor_in_grafted_orphan_range_errors() {
+        let arena = build_hello_world();
+        let original_len = arena.len() as u32;
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Paragraph);
+        op_close(&mut ops);
+
+        // the append grafts orphans at ids >= original_len; anchoring one must error, not panic
+        let mut buf = Vec::new();
+        buf.push(CMD_APPEND_CHILD);
+        push_u32(&mut buf, 0);
+        buf.push(PAYLOAD_OPSTREAM);
+        push_u32(&mut buf, ops.len() as u32);
+        buf.extend_from_slice(&ops);
+        buf.push(CMD_REMOVE);
+        push_u32(&mut buf, original_len);
+
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidNodeId(id) if id == original_len));
     }
 
     #[test]
