@@ -57,35 +57,12 @@ fn parse_mdx(bencher: divan::Bencher) {
     bencher.bench(|| satteri_pulldown_cmark::parse(MDX, opts));
 }
 
-// pulldown-cmark comparison (parse to events — for digging into parser regressions)
-
-/// pulldown-cmark: parse Markdown to events with the default extension set.
+/// Parse Markdown without position tracking. Used by `markdown_to_html_fast`
+/// and `mdx_to_js_fast` where downstream output doesn't carry positions.
 #[divan::bench]
-fn pulldown_parse_events(bencher: divan::Bencher) {
-    use satteri_pulldown_cmark::Parser;
-
+fn parse_no_positions(bencher: divan::Bencher) {
     let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
-    bencher.bench(|| {
-        let parser = Parser::new_ext(MARKDOWN, opts);
-        for event in parser {
-            std::hint::black_box(&event);
-        }
-    });
-}
-
-/// pulldown-cmark: same extensions as `pulldown_parse_events`, plus MDX
-/// (`MDX_OPTIONS` is exactly `DEFAULT_OPTIONS | ENABLE_MDX`).
-#[divan::bench]
-fn pulldown_parse_events_mdx(bencher: divan::Bencher) {
-    use satteri_pulldown_cmark::Parser;
-
-    let opts = satteri_pulldown_cmark::MDX_OPTIONS;
-    bencher.bench(|| {
-        let parser = Parser::new_ext(MARKDOWN, opts);
-        for event in parser {
-            std::hint::black_box(&event);
-        }
-    });
+    bencher.bench(|| satteri_pulldown_cmark::parse_no_positions(MARKDOWN, opts));
 }
 
 /// Full pipeline: Markdown source → Arena → HTML string.

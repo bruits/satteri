@@ -579,6 +579,19 @@ fn collect_jsx_refs_in_expr(
     }
 }
 
+/// Only allocates a key the first time a tag is seen; repeats (common: many
+/// `<p>`/`<li>`/`<h2>` from Markdown) update in place. Once any non-explicit
+/// use is seen the tag is marked for rewriting.
+fn record_literal_tag(literal_tags: &mut FxHashMap<String, bool>, name: &str, is_explicit: bool) {
+    if let Some(all_explicit) = literal_tags.get_mut(name) {
+        if !is_explicit {
+            *all_explicit = false;
+        }
+    } else {
+        literal_tags.insert(name.to_string(), is_explicit);
+    }
+}
+
 /// Collect JSX refs from a JSX element.
 fn collect_jsx_refs_in_element(
     elem: &JSXElement,
@@ -592,26 +605,14 @@ fn collect_jsx_refs_in_element(
             // Lowercase identifier like `h1`, `p`, `div`, it's a literal tag.
             let name = ident.name.as_str();
             if is_literal_name(name) {
-                let entry = info
-                    .literal_tags
-                    .entry(name.to_string())
-                    .or_insert(is_explicit);
-                if !is_explicit {
-                    *entry = false;
-                }
+                record_literal_tag(&mut info.literal_tags, name, is_explicit);
             }
         }
         JSXElementName::IdentifierReference(ident) => {
             let name = ident.name.as_str();
             if is_literal_name(name) {
                 // Literal tag referenced through IdentifierReference
-                let entry = info
-                    .literal_tags
-                    .entry(name.to_string())
-                    .or_insert(is_explicit);
-                if !is_explicit {
-                    *entry = false;
-                }
+                record_literal_tag(&mut info.literal_tags, name, is_explicit);
             } else {
                 // Component (uppercase) like `Foo`
                 if !info.components.iter().any(|(n, _)| n == name) {
@@ -624,7 +625,7 @@ fn collect_jsx_refs_in_element(
             let parts = jsx_member_to_parts(member_expr);
             if let Some(root) = parts.first()
                 && *root != "this"
-                && !info.objects.contains(&root.to_string())
+                && !info.objects.iter().any(|o| o == *root)
             {
                 info.objects.push(root.to_string());
             }

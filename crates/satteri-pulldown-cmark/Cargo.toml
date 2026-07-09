@@ -43,5 +43,4 @@ mdx = [
   "dep:oxc_span",
   "satteri-ast/mdx",
 ]
-simd = []
 std = ["memchr/std"]

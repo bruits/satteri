@@ -1,6 +1,8 @@
 //! Direct arena builder: walks the pulldown-cmark internal tree and builds
 //! a `satteri_arena::Arena` without going through the Event iterator.
 
+use alloc::borrow::Cow;
+
 use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
 use satteri_ast::mdast::{
     encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
@@ -14,9 +16,10 @@ use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
 };
 
+use crate::linklabel::LinkLabel;
 #[cfg(feature = "mdx")]
 use crate::parse::JsxAttr;
-use crate::parse::{DefaultParserCallbacks, HeadingAttributes, ItemBody, ParserInner};
+use crate::parse::{DefaultParserCallbacks, HeadingAttributes, ItemBody, LinkDef, ParserInner};
 use crate::{Alignment, HeadingLevel, LinkType, Options};
 
 #[cfg(feature = "mdx")]
@@ -47,6 +50,34 @@ pub const MDX_OPTIONS: Options =
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
 pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
+    parse_inner(source, options, true, None)
+}
+
+/// Skip-positions variant: leaves per-node line/column fields at the zero
+/// sentinel, skipping the `LineIndex` build, the per-node cursor lookups, and
+/// the cp-offset post-pass. Byte offsets are still filled. Use when the
+/// consumer (HTML/JS codegen) never reads positions.
+pub fn parse_no_positions(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
+    parse_inner(source, options, false, None)
+}
+
+/// Same as `parse_no_positions` but recycles a caller-pooled arena (via
+/// `reset()`), reusing its `Vec` / `String` capacity to save the per-compile
+/// mallocs that dominate tiny inputs.
+pub fn parse_no_positions_into(
+    source: &str,
+    options: Options,
+    reuse: Arena<Mdast>,
+) -> (Arena<Mdast>, Vec<(usize, String)>) {
+    parse_inner(source, options, false, Some(reuse))
+}
+
+fn parse_inner(
+    source: &str,
+    options: Options,
+    track_positions: bool,
+    reuse: Option<Arena<Mdast>>,
+) -> (Arena<Mdast>, Vec<(usize, String)>) {
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
     // feature set. Expand it into the granular flags the parser checks so
     // callers don't have to remember which sub-flags GFM implies.
@@ -64,30 +95,59 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         options
     };
 
-    let line_index = LineIndex::from_source(source);
+    let line_index = if track_positions {
+        LineIndex::from_source(source)
+    } else {
+        LineIndex::disabled_for(source)
+    };
     let mut cursor = line_index.cursor();
 
     // Pre-allocate based on source size heuristics.
     let estimated_nodes = source.len() / 18 + 16;
     let source_extra = source.len() / 2;
-    let mut source_buf = String::with_capacity(source.len() + source_extra);
-    source_buf.push_str(source);
-    let arena = Arena::<Mdast>::with_capacity(
-        source_buf,
-        estimated_nodes,
-        estimated_nodes,
-        estimated_nodes * 9,
-    );
+    let arena = if let Some(mut a) = reuse {
+        // Recycle: clear all per-document state but keep the already-grown
+        // `Vec` / `String` allocations. For tiny inputs the saved `malloc`s
+        // are the dominant cost, since the actual parse and convert work is
+        // already sub-microsecond.
+        a.reset();
+        a.string_pool.reserve(source.len() + source_extra);
+        a.string_pool.push_str(source);
+        a.source_len = source.len() as u32;
+        a.nodes.reserve(estimated_nodes);
+        a.children.reserve(estimated_nodes);
+        a.type_data.reserve(estimated_nodes * 9);
+        a
+    } else {
+        let mut source_buf = String::with_capacity(source.len() + source_extra);
+        source_buf.push_str(source);
+        Arena::<Mdast>::with_capacity(
+            source_buf,
+            estimated_nodes,
+            estimated_nodes,
+            estimated_nodes * 9,
+        )
+    };
     let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::from_arena(arena);
 
     // Build the pulldown-cmark parser (runs first pass).
     let mut inner = ParserInner::new(source, options);
     let mut callbacks = DefaultParserCallbacks;
 
-    // Open root node.
+    // Open root node. In skip-positions mode the cursor returns the zero
+    // sentinel; mirror it in the root's hardcoded 1:1 start so every node
+    // carries a consistent "no position" marker (byte offsets stay filled).
     builder.open_node(MdastNodeType::Root as u8);
     let (end_line, end_col) = cursor.offset_to_line_col(source.len() as u32);
-    builder.set_position_current(0, source.len() as u32, 1, 1, end_line, end_col);
+    let (start_line, start_col) = if track_positions { (1, 1) } else { (0, 0) };
+    builder.set_position_current(
+        0,
+        source.len() as u32,
+        start_line,
+        start_col,
+        end_line,
+        end_col,
+    );
 
     // Accumulation buffers for special container→leaf conversions.
     let mut html_block_buf: Option<String> = None;
@@ -112,21 +172,17 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     let mut container_jsx_snapshot: Vec<(MdastNodeType, usize)> = Vec::new();
 
     // Refdefs in source order. Each container close pass claims the defs whose
-    // source range lies inside it; the rest get emitted at root. `emitted`
-    // tracks which ones have already been placed.
-    let mut refdefs_pending: Vec<PendingRefdef> = inner
-        .allocs
-        .refdefs_all
-        .iter()
-        .map(|(label, def)| PendingRefdef {
-            label: label.as_ref().to_string(),
-            dest: def.dest.to_string(),
-            title: def.title.as_ref().map(|t| t.to_string()),
-            span: def.span.clone(),
-        })
-        .collect();
-    refdefs_pending.sort_by_key(|r| r.span.start);
-    let mut refdef_emitted: Vec<bool> = vec![false; refdefs_pending.len()];
+    // source range lies inside it; the rest get emitted at root.
+    //
+    // We take ownership of `refdefs_all` instead of cloning each field; the
+    // parser doesn't read it again after this point. Indexes (`refdef_order`)
+    // give source-order traversal without rebuilding string fields. Saves up
+    // to 3 heap allocs per refdef on the parse hot path.
+    let refdefs_owned: Vec<(LinkLabel<'_>, LinkDef<'_>)> =
+        core::mem::take(&mut inner.allocs.refdefs_all);
+    let mut refdef_order: Vec<u32> = (0..refdefs_owned.len() as u32).collect();
+    refdef_order.sort_by_key(|&i| refdefs_owned[i as usize].1.span.start);
+    let mut refdef_emitted: Vec<bool> = vec![false; refdefs_owned.len()];
 
     // Walk the tree iteratively.
     loop {
@@ -413,7 +469,8 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             &mut builder,
                             &mut cursor,
                             source,
-                            &refdefs_pending,
+                            &refdefs_owned,
+                            &refdef_order,
                             &mut refdef_emitted,
                             orig_start_offset as usize,
                             item.end,
@@ -421,17 +478,28 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             builder.sort_current_pending_children_by_source_order();
                         }
                         let is_spread = *item_spread || {
+                            // Loose-list detection: a blank line between
+                            // consecutive children means two newlines in the
+                            // source gap. Counted on byte offsets, not lines, because
+                            // skip-positions mode leaves `start_line` zero but
+                            // offsets are always recorded.
+                            let source_bytes = source.as_bytes();
                             let mut found = false;
-                            let mut prev_end_line: Option<u32> = None;
+                            let mut prev_end_offset: Option<u32> = None;
                             for &child_id in builder.current_pending_children() {
                                 let child_node = builder.arena_ref().get_node(child_id);
-                                if let Some(pel) = prev_end_line {
-                                    if child_node.start_line > pel + 1 {
-                                        found = true;
-                                        break;
+                                if let Some(peo) = prev_end_offset {
+                                    let start = peo as usize;
+                                    let end = child_node.start_offset as usize;
+                                    if start <= end && end <= source_bytes.len() {
+                                        let gap = &source_bytes[start..end];
+                                        if memchr::memchr_iter(b'\n', gap).take(2).count() >= 2 {
+                                            found = true;
+                                            break;
+                                        }
                                     }
                                 }
-                                prev_end_line = Some(child_node.end_line);
+                                prev_end_offset = Some(child_node.end_offset);
                             }
                             found
                         };
@@ -523,17 +591,26 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         builder.close_node();
                         let children = builder.arena_ref().get_children(id).to_vec();
                         let has_blank_between_items = {
+                            // Same byte-offset-based blank-line detection as
+                            // the inner ListItem case above. Independent of
+                            // line tracking.
+                            let source_bytes = source.as_bytes();
                             let mut found = false;
-                            let mut prev_end_line: Option<u32> = None;
+                            let mut prev_end_offset: Option<u32> = None;
                             for &child_id in &children {
                                 let child_node = builder.arena_ref().get_node(child_id);
-                                if let Some(pel) = prev_end_line {
-                                    if child_node.start_line > pel + 1 {
-                                        found = true;
-                                        break;
+                                if let Some(peo) = prev_end_offset {
+                                    let start = peo as usize;
+                                    let end = child_node.start_offset as usize;
+                                    if start <= end && end <= source_bytes.len() {
+                                        let gap = &source_bytes[start..end];
+                                        if memchr::memchr_iter(b'\n', gap).take(2).count() >= 2 {
+                                            found = true;
+                                            break;
+                                        }
                                     }
                                 }
-                                prev_end_line = Some(child_node.end_line);
+                                prev_end_offset = Some(child_node.end_offset);
                             }
                             found
                         };
@@ -628,7 +705,8 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                             &mut builder,
                             &mut cursor,
                             source,
-                            &refdefs_pending,
+                            &refdefs_owned,
+                            &refdef_order,
                             &mut refdef_emitted,
                             orig_start as usize,
                             item.end,
@@ -1786,11 +1864,13 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     // Root-level refdefs: anything not already emitted inside a container.
     // Interleaved with the other root children in source order.
     let mut emitted_any_at_root = false;
-    for (i, rd) in refdefs_pending.iter().enumerate() {
+    for &i in &refdef_order {
+        let i = i as usize;
         if refdef_emitted[i] {
             continue;
         }
-        emit_pending_refdef(&mut builder, &mut cursor, source, rd);
+        let (label, def) = &refdefs_owned[i];
+        emit_pending_refdef(&mut builder, &mut cursor, source, label, def);
         emitted_any_at_root = true;
     }
     if emitted_any_at_root {
@@ -1842,7 +1922,8 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     // second `LineIndex` build + per-node `byte_to_cp_offset` lookup.
     // ASCII sources skip — `cp == byte` and `to_raw_buffer` won't touch
     // the cache. The cursor is already warm from the arena walk.
-    if !source.is_ascii() {
+    // Skip-positions mode skips too: downstream paths don't read cp_offsets.
+    if track_positions && !source.is_ascii() {
         let mut cp_offsets = Vec::with_capacity(arena.nodes.len());
         for node in &arena.nodes {
             let pair = if node.start_line == 0 && node.start_offset == 0 {
@@ -1860,29 +1941,24 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
 
     (arena, mdx_errors)
 }
-struct PendingRefdef {
-    label: String,
-    dest: String,
-    title: Option<String>,
-    span: core::ops::Range<usize>,
-}
-
 fn emit_pending_refdef(
     builder: &mut ArenaBuilder<Mdast>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
-    rd: &PendingRefdef,
+    label: &LinkLabel<'_>,
+    def: &LinkDef<'_>,
 ) {
-    let start = rd.span.start as u32;
-    let end = rd.span.end as u32;
+    let start = def.span.start as u32;
+    let end = def.span.end as u32;
     let (sl, sc) = cursor.offset_to_line_col(start);
     let (el, ec) = cursor.offset_to_line_col(end);
-    let url_ref = builder.alloc_string(&rd.dest);
-    let title_ref = match &rd.title {
-        Some(t) => builder.alloc_string(t),
+    let url_ref = builder.alloc_string(def.dest.as_ref());
+    let title_ref = match &def.title {
+        Some(t) => builder.alloc_string(t.as_ref()),
         None => StringRef::empty(),
     };
-    let raw_label = extract_definition_label(source, start).unwrap_or(rd.label.as_str());
+    let label_str: &str = label.as_ref();
+    let raw_label = extract_definition_label(source, start).unwrap_or(label_str);
     // remark decodes HTML entities AND backslash escapes in the refdef label.
     // `&amp;` → `&`, `&AElig;` → `Æ`, etc. Invalid entities pass through.
     let unescaped = crate::scanners::unescape(raw_label, false);
@@ -1891,7 +1967,7 @@ fn emit_pending_refdef(
     } else {
         builder.alloc_string(&unescaped)
     };
-    let identifier_ref = builder.alloc_string(&normalize_identifier(&rd.label));
+    let identifier_ref = builder.alloc_string(&normalize_identifier(label_str));
     let data = DefinitionData {
         url: url_ref,
         title: title_ref,
@@ -1915,22 +1991,26 @@ fn emit_pending_refdef(
 /// container span `[container_start, container_end)`. Returns true if at
 /// least one was emitted, so the caller knows it should re-sort the
 /// container's pending children to keep source order.
+#[allow(clippy::too_many_arguments)]
 fn emit_refdefs_in_container(
     builder: &mut ArenaBuilder<Mdast>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
-    pending: &[PendingRefdef],
+    refdefs: &[(LinkLabel<'_>, LinkDef<'_>)],
+    order: &[u32],
     emitted: &mut [bool],
     container_start: usize,
     container_end: usize,
 ) -> bool {
     let mut any = false;
-    for (i, rd) in pending.iter().enumerate() {
+    for &i in order {
+        let i = i as usize;
         if emitted[i] {
             continue;
         }
-        if rd.span.start >= container_start && rd.span.start < container_end {
-            emit_pending_refdef(builder, cursor, source, rd);
+        let (label, def) = &refdefs[i];
+        if def.span.start >= container_start && def.span.start < container_end {
+            emit_pending_refdef(builder, cursor, source, label, def);
             emitted[i] = true;
             any = true;
         }
@@ -2134,13 +2214,44 @@ fn reference_kind(link_type: LinkType) -> Option<u8> {
 /// `mdast-util-from-markdown` then lowercases. The triple-case dance
 /// matters for chars like `ẞ` → `ss`, where a single lowercase would give
 /// `ß` and break cross-references to a `[SS]` definition.
-fn normalize_identifier(s: &str) -> String {
+fn normalize_identifier(s: &str) -> Cow<'_, str> {
     if s.is_ascii() {
+        // Fast path: most refdef/footnote labels are already lowercase, no
+        // tabs/newlines, no leading/trailing/consecutive whitespace. Pre-scan
+        // for any of those and skip the per-char rebuild entirely.
+        let bytes = s.as_bytes();
+        let mut needs_work = false;
+        let mut last_was_space = true; // treat string start as "after ws" to detect leading ws
+        for &b in bytes {
+            if matches!(b, b'\t' | b'\n' | b'\r') {
+                needs_work = true;
+                break;
+            }
+            if b == b' ' {
+                if last_was_space {
+                    needs_work = true;
+                    break;
+                }
+                last_was_space = true;
+            } else {
+                if b.is_ascii_uppercase() {
+                    needs_work = true;
+                    break;
+                }
+                last_was_space = false;
+            }
+        }
+        if !needs_work && last_was_space && !bytes.is_empty() {
+            needs_work = true;
+        }
+        if !needs_work {
+            return Cow::Borrowed(s);
+        }
         // ASCII case folding is round-trip stable, so the
         // lower→upper→lower dance collapses to a single in-place lowercase.
         let mut out = String::with_capacity(s.len());
         let mut last_was_ws = false;
-        for &b in s.as_bytes() {
+        for &b in bytes {
             if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
                 if !last_was_ws && !out.is_empty() {
                     out.push(' ');
@@ -2154,7 +2265,7 @@ fn normalize_identifier(s: &str) -> String {
         if out.ends_with(' ') {
             out.pop();
         }
-        return out;
+        return Cow::Owned(out);
     }
     let mut collapsed = String::with_capacity(s.len());
     let mut last_was_ws = false;
@@ -2169,11 +2280,13 @@ fn normalize_identifier(s: &str) -> String {
             last_was_ws = false;
         }
     }
-    collapsed
-        .trim()
-        .to_lowercase()
-        .to_uppercase()
-        .to_lowercase()
+    Cow::Owned(
+        collapsed
+            .trim()
+            .to_lowercase()
+            .to_uppercase()
+            .to_lowercase(),
+    )
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {

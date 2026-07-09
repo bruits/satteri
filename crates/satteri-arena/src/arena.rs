@@ -108,6 +108,20 @@ impl<K: ArenaKind> Arena<K> {
         }
     }
 
+    /// Clear all state but keep allocated capacity, for arena pooling. The
+    /// caller must repopulate `source` and reset `mdx` / `parse_options` for
+    /// the next document.
+    pub fn reset(&mut self) {
+        self.nodes.clear();
+        self.children.clear();
+        self.type_data.clear();
+        self.string_pool.clear();
+        self.node_data.clear();
+        self.cp_offsets.clear();
+        self.mdx = false;
+        self.parse_options = 0;
+    }
+
     /// Allocate a new node. The returned ID equals the node's index in `self.nodes`.
     pub fn alloc_node(&mut self, node_type: u8) -> u32 {
         let id = self.nodes.len() as u32;

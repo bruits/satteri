@@ -16,6 +16,14 @@ use std::borrow::Cow;
 /// mirroring `property-information` / `hast-util-to-html`. `in_svg` selects
 /// the SVG schema; otherwise HTML.
 pub fn property_to_attribute(name: &str, in_svg: bool) -> Cow<'_, str> {
+    // Every rewrite below is keyed on an uppercase letter (namespace prefixes
+    // and every known property name are camelCase), so outside SVG a name with
+    // no uppercase passes through unchanged. Skips the ladder for the common
+    // HTML case (`href`, `src`, `id`, ...).
+    if !in_svg && !name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return Cow::Borrowed(name);
+    }
+
     if name == "xmlnsXLink" {
         return Cow::Borrowed("xmlns:xlink");
     }

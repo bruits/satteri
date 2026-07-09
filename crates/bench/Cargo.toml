@@ -22,9 +22,9 @@ path = "src/html_compare.rs"
 [dependencies]
 satteri-pulldown-cmark = { workspace = true, features = ["std", "mdx"] }
 satteri-ast = { workspace = true, features = ["mdx"] }
+satteri-mdxjs = { workspace = true }
 
 [dev-dependencies]
 divan = { version = "4", package = "codspeed-divan-compat" }
-satteri-mdxjs = { path = "../satteri-mdxjs-rs" }
 oxc_allocator = { workspace = true }
 rustc-hash = { workspace = true }

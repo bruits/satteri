@@ -285,6 +285,32 @@ describe("features.gfm.footnotes", () => {
     expect(result.html).toContain('aria-label="#1.1"');
     expect(result.html).toContain('aria-label="#1.2"');
   });
+
+  // The compile pipeline picks a different NAPI shape per plugin mix (no-plugin
+  // fast path, MDAST-only fused tail, HAST collect-last). Footnote options must
+  // reach the MDAST→HAST conversion on every one of them.
+
+  test("footnote options apply on the MDAST-plugins-only path", () => {
+    const noop = defineMdastPlugin({ name: "noop", heading() {} });
+    const result = markdownToHtml(SRC, {
+      mdastPlugins: [noop],
+      features: { gfm: { footnotes: { label: "Notas" } } },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">Notas<");
+    expect(result.html).not.toContain(">Footnotes<");
+  });
+
+  test("footnote options apply on the HAST-plugins path", () => {
+    const noop = defineHastPlugin({ name: "noop", text() {} });
+    const result = markdownToHtml(SRC, {
+      hastPlugins: [noop],
+      features: { gfm: { footnotes: { label: "Notas" } } },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain(">Notas<");
+    expect(result.html).not.toContain(">Footnotes<");
+  });
 });
 
 // markdownToHtml - no plugins
@@ -1679,5 +1705,147 @@ describe("smartPunctuation options", () => {
     });
     expect(js).toContain("\u201c");
     expect(js).toContain("\u201d");
+  });
+});
+
+describe("per-plugin position opt-in", () => {
+  const SOURCE = "# Hello\n\nWorld";
+
+  test("node.position is undefined when no plugin opts in", () => {
+    let seen: unknown = "unset";
+    markdownToHtml(SOURCE, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "reader",
+          heading(node) {
+            seen = node.position;
+          },
+        }),
+      ],
+    });
+    expect(seen).toBeUndefined();
+  });
+
+  test("node.position is populated when a plugin sets options.position", () => {
+    let seen: { start: { line: number } } | undefined;
+    markdownToHtml(SOURCE, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "reader",
+          options: { position: true },
+          heading(node) {
+            seen = node.position;
+          },
+        }),
+      ],
+    });
+    expect(seen?.start.line).toBe(1);
+  });
+
+  test("one opted-in plugin enables positions for the whole pipeline", () => {
+    let mdastSeen: unknown = "unset";
+    let hastSeen: { start: { line: number } } | undefined;
+    markdownToHtml(SOURCE, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "no-opt",
+          heading(node) {
+            mdastSeen = node.position;
+          },
+        }),
+      ],
+      hastPlugins: [
+        defineHastPlugin({
+          name: "opt-in",
+          options: { position: true },
+          element: {
+            filter: ["h1"],
+            visit(node) {
+              hastSeen = node.position;
+            },
+          },
+        }),
+      ],
+    });
+    // A hast plugin opting in flips mdast tracking on too, so the earlier
+    // mdast plugin observes positions even though it didn't ask.
+    expect(mdastSeen).toBeDefined();
+    expect(hastSeen?.start.line).toBe(1);
+  });
+});
+
+// A visitor returning a same-type `{ type, value }` node is routed through
+// setProperty("value") instead of a structural replace. `text` is covered by
+// nested-transforms; these exercise the other value-only types so a bad prop
+// slot on one of them can't slip through as a silent no-op.
+describe("value-only node swap fast path", () => {
+  test("mdast inlineCode swap updates the rendered code", () => {
+    const result = markdownToHtml("`abc`", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "shout-code",
+          inlineCode(node) {
+            return { type: "inlineCode", value: node.value.toUpperCase() };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<code>ABC</code>");
+  });
+
+  test("mdast yaml swap is observed in post-mutation frontmatter", () => {
+    const result = markdownToHtml("---\ntitle: Old\n---\n\n# H", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "rewrite-yaml",
+          yaml() {
+            return { type: "yaml", value: "title: New" };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.frontmatter).toEqual({ kind: "yaml", value: "title: New" });
+  });
+
+  test("hast text swap updates the rendered text", () => {
+    const result = markdownToHtml("hello", {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "shout-text",
+          text(node) {
+            return { type: "text", value: node.value.toUpperCase() };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("HELLO");
+  });
+});
+
+// Guards the default no-plugin path: skip-positions mode must still flow byte
+// offsets to HAST so MDX codegen resolves positions lazily.
+describe("MDX source positions without a position opt-in", () => {
+  test("dev __source keeps lineNumber/columnNumber on the fast path", () => {
+    const src = "# Title\n\n<Foo>bar</Foo>\n";
+    const result = mdxToJs(src, { development: true });
+    if (result instanceof Promise) throw new Error("expected sync");
+    // The authored `<Foo>` is on line 3, column 1.
+    expect(result.code).toContain("lineNumber: 3");
+    expect(result.code).toContain("columnNumber: 1");
+  });
+
+  test("MDX parse errors report line:col (not a byte offset) on the fast path", () => {
+    const src = "# Title\n\nSome text.\n\n{invalid ++ ++ syntax}\n";
+    let message = "";
+    try {
+      mdxToJs(src);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/^5:\d+:/);
+    expect(message).not.toMatch(/byte \d+/);
   });
 });

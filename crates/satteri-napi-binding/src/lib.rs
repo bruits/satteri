@@ -372,6 +372,7 @@ pub fn parse_to_html(
 // across kinds.
 
 use napi::bindgen_prelude::Either;
+use std::cell::RefCell;
 use std::sync::Mutex;
 
 use satteri_arena::{Hast, Mdast};
@@ -379,6 +380,49 @@ use satteri_arena::{Hast, Mdast};
 type MdastHandle = External<Mutex<satteri_arena::Arena<Mdast>>>;
 type HastHandle = External<Mutex<satteri_arena::Arena<Hast>>>;
 type AnyHandle<'a> = Either<&'a MdastHandle, &'a HastHandle>;
+
+// Thread-local arena pool for the no-plugin fast paths: reusing already-grown
+// arenas eliminates the per-compile mallocs that dominate small inputs. Each
+// entry retains its high-water-mark capacity, so the cap stays small to bound
+// a long-lived process that briefly bursts high.
+const ARENA_POOL_MAX: usize = 4;
+
+thread_local! {
+    static MDAST_ARENA_POOL: RefCell<Vec<satteri_arena::Arena<Mdast>>>
+        = const { RefCell::new(Vec::new()) };
+    static HAST_ARENA_POOL: RefCell<Vec<satteri_arena::Arena<Hast>>>
+        = const { RefCell::new(Vec::new()) };
+}
+
+fn acquire_mdast_arena() -> satteri_arena::Arena<Mdast> {
+    MDAST_ARENA_POOL
+        .with(|p| p.borrow_mut().pop())
+        .unwrap_or_else(|| satteri_arena::Arena::<Mdast>::new(String::new()))
+}
+
+fn release_mdast_arena(arena: satteri_arena::Arena<Mdast>) {
+    MDAST_ARENA_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        if pool.len() < ARENA_POOL_MAX {
+            pool.push(arena);
+        }
+    });
+}
+
+fn acquire_hast_arena() -> satteri_arena::Arena<Hast> {
+    HAST_ARENA_POOL
+        .with(|p| p.borrow_mut().pop())
+        .unwrap_or_else(|| satteri_arena::Arena::<Hast>::new(String::new()))
+}
+
+fn release_hast_arena(arena: satteri_arena::Arena<Hast>) {
+    HAST_ARENA_POOL.with(|p| {
+        let mut pool = p.borrow_mut();
+        if pool.len() < ARENA_POOL_MAX {
+            pool.push(arena);
+        }
+    });
+}
 
 fn make_parse_fn(mdx: bool, parse_options: u32) -> impl Fn(&str) -> satteri_arena::Arena<Mdast> {
     move |source: &str| -> satteri_arena::Arena<Mdast> {
@@ -398,10 +442,22 @@ pub struct JsSubscription {
 }
 
 /// Parse markdown source into an MDAST arena handle.
+///
+/// `track_positions` (default `true`) controls whether `position` is recorded
+/// on nodes. The plugin pipeline passes `false` when no plugin reads positions,
+/// skipping the `LineIndex` build + per-node line/column lookups (~15% of parse).
 #[napi]
-pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Result<MdastHandle> {
+pub fn create_mdast_handle(
+    source: String,
+    features: Option<JsFeatures>,
+    track_positions: Option<bool>,
+) -> Result<MdastHandle> {
     let opts = features_to_options(features, false);
-    let (mut arena, _) = satteri_pulldown_cmark::parse(&source, opts);
+    let (mut arena, _) = if track_positions.unwrap_or(true) {
+        satteri_pulldown_cmark::parse(&source, opts)
+    } else {
+        satteri_pulldown_cmark::parse_no_positions(&source, opts)
+    };
     arena.mdx = false;
     arena.parse_options = opts.bits();
     Ok(External::new(Mutex::new(arena)))
@@ -413,9 +469,14 @@ pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Resu
 pub fn create_mdx_mdast_handle(
     source: String,
     features: Option<JsFeatures>,
+    track_positions: Option<bool>,
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, true);
-    let (mut arena, mdx_errors) = satteri_pulldown_cmark::parse(&source, opts);
+    let (mut arena, mdx_errors) = if track_positions.unwrap_or(true) {
+        satteri_pulldown_cmark::parse(&source, opts)
+    } else {
+        satteri_pulldown_cmark::parse_no_positions(&source, opts)
+    };
     if let Some((offset, msg)) = mdx_errors.first() {
         return Err(napi::Error::from_reason(
             satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
@@ -644,6 +705,140 @@ pub fn apply_commands_and_convert_to_hast_handle(
     Ok(External::new(Mutex::new(hast_arena)))
 }
 
+/// Extract frontmatter from an MDAST arena's root direct children, or `None`
+/// when there's no yaml/toml block at root. The `&Arena` counterpart to
+/// `get_mdast_frontmatter`, shared by the fast path and the fused tails.
+fn extract_mdast_frontmatter(
+    mdast: &satteri_arena::Arena<satteri_arena::Mdast>,
+) -> Option<JsFrontmatter> {
+    use satteri_arena::StringRef;
+    use satteri_ast::mdast::node::MdastNodeType;
+
+    if mdast.is_empty() {
+        return None;
+    }
+    let root = mdast.get_node(0);
+    let children_start = root.children_start as usize;
+    let children_end = children_start + root.children_count as usize;
+    for i in children_start..children_end {
+        let child_id = mdast.children[i];
+        let node = mdast.get_node(child_id);
+        let kind = match MdastNodeType::from_u8(node.node_type) {
+            Some(MdastNodeType::Yaml) => "yaml",
+            Some(MdastNodeType::Toml) => "toml",
+            _ => continue,
+        };
+        let type_data = mdast.get_type_data(child_id);
+        if type_data.len() < 8 {
+            continue;
+        }
+        let sr = StringRef::from_bytes(&type_data[0..8]);
+        let value = mdast.get_str(sr).to_string();
+        return Some(JsFrontmatter {
+            kind: kind.to_string(),
+            value,
+        });
+    }
+    None
+}
+
+/// Fused tail for `markdownToHtml` when there's an MDAST plugin but no HAST
+/// plugin: apply the MDAST commands, extract frontmatter from the (now
+/// possibly-mutated) MDAST, convert MDAST → HAST, render to HTML. All in one
+/// NAPI roundtrip. Saves the convert + render + drop + frontmatter crossings
+/// the old path made separately, and reads frontmatter *after* mutations so a
+/// plugin that rewrites yaml/toml is observed correctly.
+#[napi]
+pub fn apply_mdast_commands_and_convert_and_render(
+    env: Env,
+    handle: &MdastHandle,
+    command_buf: Uint8Array,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<MarkdownHtmlOneShot> {
+    let mut arena = handle
+        .lock()
+        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
+    let mdx = arena.mdx;
+    let parse_options = arena.parse_options;
+    let parse_markdown = make_parse_fn(mdx, parse_options);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
+    let owned = std::mem::replace(
+        &mut *arena,
+        satteri_arena::Arena::<Mdast>::new(String::new()),
+    );
+    let cmd_options = satteri_plugin_api::MdastCommandOptions {
+        escape_raw_html_braces: mdx,
+    };
+    let (mutated, dropped) = satteri_plugin_api::apply_mdast_commands_lenient_with_options(
+        owned,
+        &command_buf,
+        &parse_markdown,
+        cmd_options,
+    )
+    .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let frontmatter = extract_mdast_frontmatter(&mutated);
+    let hast_arena =
+        satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
+    let html = satteri_ast::hast::hast_arena_to_html(&hast_arena);
+    Ok(MarkdownHtmlOneShot {
+        html,
+        frontmatter,
+        dropped_transforms: dropped.len() as u32,
+    })
+}
+
+/// Fused tail for `mdxToJs` when there's an MDAST plugin but no HAST plugin.
+/// Apply → extract frontmatter → convert → simplify → compile, all in one
+/// NAPI roundtrip.
+#[cfg(feature = "mdx")]
+#[napi]
+pub fn apply_mdast_commands_and_convert_and_compile(
+    env: Env,
+    handle: &MdastHandle,
+    command_buf: Uint8Array,
+    options: Option<JsMdxOptions>,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<MdxJsOneShot> {
+    let mut arena = handle
+        .lock()
+        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
+    let mdx = arena.mdx;
+    let parse_options = arena.parse_options;
+    let parse_markdown = make_parse_fn(mdx, parse_options);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
+    let owned = std::mem::replace(
+        &mut *arena,
+        satteri_arena::Arena::<Mdast>::new(String::new()),
+    );
+    let cmd_options = satteri_plugin_api::MdastCommandOptions {
+        escape_raw_html_braces: mdx,
+    };
+    let (mutated, dropped) = satteri_plugin_api::apply_mdast_commands_lenient_with_options(
+        owned,
+        &command_buf,
+        &parse_markdown,
+        cmd_options,
+    )
+    .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let frontmatter = extract_mdast_frontmatter(&mutated);
+    let mut hast_arena =
+        satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
+    let mdx_opts = js_options_to_rust(options);
+    let ignore = mdx_opts
+        .optimize_static
+        .as_ref()
+        .map(|c| c.ignore_elements.clone())
+        .unwrap_or_default();
+    satteri_mdxjs::simplify_plain_mdx_nodes(&mut hast_arena, &ignore);
+    let code = satteri_mdxjs::compile_hast_arena(&hast_arena, &mdx_opts)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(MdxJsOneShot {
+        code,
+        frontmatter,
+        dropped_transforms: dropped.len() as u32,
+    })
+}
+
 /// Parse markdown source and convert to HAST. Returns an opaque handle.
 /// The arena stays in Rust memory, no buffer is copied to JS.
 #[napi]
@@ -734,6 +929,194 @@ pub fn render_handle(handle: &HastHandle) -> Result<String> {
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
     Ok(satteri_ast::hast::hast_arena_to_html(&arena))
+}
+
+/// Result of the fused apply + render tail. `dropped_transforms` mirrors the
+/// count `apply_commands_to_handle` returns: patches dropped because their
+/// target lived inside a removed/replaced subtree; the JS pipeline warns when
+/// non-zero.
+#[napi(object)]
+pub struct RenderHtmlOneShot {
+    pub html: String,
+    pub dropped_transforms: u32,
+}
+
+/// Fused tail step for `markdownToHtml` with a HAST plugin: apply the plugin's
+/// command buffer, render the resulting HAST to HTML, and leave the handle
+/// drained, all in one NAPI roundtrip. Saves the `apply` + `render` + `drop`
+/// crossings the old path made separately.
+///
+/// The handle keeps existing (callers can still `dropHandle` it on the JS
+/// side if they want explicit cleanup), but the arena inside is left empty so
+/// the next access sees no state and the underlying allocations are freed.
+#[napi]
+pub fn apply_commands_and_render_handle(
+    handle: &HastHandle,
+    command_buf: Uint8Array,
+) -> Result<RenderHtmlOneShot> {
+    let mut arena = handle
+        .lock()
+        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
+    let owned = std::mem::replace(
+        &mut *arena,
+        satteri_arena::Arena::<Hast>::new(String::new()),
+    );
+    let (new_arena, dropped) = satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
+        .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let html = satteri_ast::hast::hast_arena_to_html(&new_arena);
+    // `*arena` is already the empty replacement we put there above; the
+    // mutated arena gets dropped at the end of this function, freeing all the
+    // node/children/source/type_data allocations on the Rust heap without a
+    // separate `dropHandle` NAPI crossing.
+    Ok(RenderHtmlOneShot {
+        html,
+        dropped_transforms: dropped.len() as u32,
+    })
+}
+
+/// Result of the fused apply + compile tail; see [`RenderHtmlOneShot`].
+#[cfg(feature = "mdx")]
+#[napi(object)]
+pub struct CompileJsOneShot {
+    pub code: String,
+    pub dropped_transforms: u32,
+}
+
+/// Same as `apply_commands_and_render_handle` but for the MDX → JS path.
+/// Fuses apply + simplify + compile + drop.
+#[cfg(feature = "mdx")]
+#[napi]
+pub fn apply_commands_and_compile_handle(
+    handle: &HastHandle,
+    command_buf: Uint8Array,
+    options: Option<JsMdxOptions>,
+) -> Result<CompileJsOneShot> {
+    let mut arena = handle
+        .lock()
+        .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
+    let owned = std::mem::replace(
+        &mut *arena,
+        satteri_arena::Arena::<Hast>::new(String::new()),
+    );
+    let (mut new_arena, dropped) =
+        satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
+            .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let mdx_opts = js_options_to_rust(options);
+    let ignore = mdx_opts
+        .optimize_static
+        .as_ref()
+        .map(|c| c.ignore_elements.clone())
+        .unwrap_or_default();
+    satteri_mdxjs::simplify_plain_mdx_nodes(&mut new_arena, &ignore);
+    let code = satteri_mdxjs::compile_hast_arena(&new_arena, &mdx_opts)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(CompileJsOneShot {
+        code,
+        dropped_transforms: dropped.len() as u32,
+    })
+}
+
+/// One-shot result returned by the no-plugin fast path and the MDAST-plugin
+/// fused tail. `dropped_transforms` is only ever non-zero on the fused-tail
+/// path (the fast path applies no commands).
+#[napi(object)]
+pub struct MarkdownHtmlOneShot {
+    pub html: String,
+    pub frontmatter: Option<JsFrontmatter>,
+    pub dropped_transforms: u32,
+}
+
+/// Fast path: parse markdown → MDAST → HAST → HTML, plus extract frontmatter,
+/// in a single NAPI roundtrip. Used by `markdownToHtml` when the caller didn't
+/// configure any plugins. Skips 5 of the 6 NAPI crossings the handle-based
+/// path makes (createMdast, getFrontmatter, convertToHast, dropMdast, render,
+/// dropHast → just one call).
+#[napi]
+pub fn markdown_to_html_fast(
+    env: Env,
+    source: String,
+    features: Option<JsFeatures>,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<MarkdownHtmlOneShot> {
+    let opts = features_to_options(features, false);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
+    // Skip position tracking entirely: HTML output never reads positions, so
+    // the per-node `cursor.offset_to_line_col` calls + `LineIndex` per-line
+    // ASCII scan are pure waste in this code path.
+    let mdast_reuse = acquire_mdast_arena();
+    let (mdast, _) = satteri_pulldown_cmark::parse_no_positions_into(&source, opts, mdast_reuse);
+    let frontmatter = extract_mdast_frontmatter(&mdast);
+    let hast_reuse = acquire_hast_arena();
+    let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(&mdast, &convert_opts, hast_reuse);
+    let html = satteri_ast::hast::hast_arena_to_html(&hast);
+    release_hast_arena(hast);
+    release_mdast_arena(mdast);
+    Ok(MarkdownHtmlOneShot {
+        html,
+        frontmatter,
+        dropped_transforms: 0,
+    })
+}
+
+/// One-shot result returned by the no-plugin `mdxToJs` fast path and the
+/// MDAST-plugin fused tail; see [`MarkdownHtmlOneShot`].
+#[cfg(feature = "mdx")]
+#[napi(object)]
+pub struct MdxJsOneShot {
+    pub code: String,
+    pub frontmatter: Option<JsFrontmatter>,
+    pub dropped_transforms: u32,
+}
+
+/// Fast path: parse MDX → MDAST → HAST → JS, plus extract frontmatter, in a
+/// single NAPI roundtrip. Used by `mdxToJs` when the caller didn't configure
+/// any plugins. Skips 5 of the 6 NAPI crossings the handle-based path makes.
+#[cfg(feature = "mdx")]
+#[napi]
+pub fn mdx_to_js_fast(
+    env: Env,
+    source: String,
+    features: Option<JsFeatures>,
+    options: Option<JsMdxOptions>,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<MdxJsOneShot> {
+    let opts = features_to_options(features, true);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
+    // Skip the LineIndex + per-node line/col work; byte offsets still flow to
+    // the HAST arena, so codegen resolves dev `__source` / error line:col via
+    // `Location`.
+    let mdast_reuse = acquire_mdast_arena();
+    let (mdast, mdx_errors) =
+        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, mdast_reuse);
+    if let Some((offset, msg)) = mdx_errors.first() {
+        // Best-effort: drop the arena rather than poisoning the pool with a
+        // half-built error state.
+        return Err(napi::Error::from_reason(
+            satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
+        ));
+    }
+    let frontmatter = extract_mdast_frontmatter(&mdast);
+    let hast_reuse = acquire_hast_arena();
+    let mut hast =
+        satteri_ast::hast::mdast_arena_to_hast_arena_into(&mdast, &convert_opts, hast_reuse);
+    let mdx_opts = js_options_to_rust(options);
+
+    let ignore = mdx_opts
+        .optimize_static
+        .as_ref()
+        .map(|c| c.ignore_elements.clone())
+        .unwrap_or_default();
+    satteri_mdxjs::simplify_plain_mdx_nodes(&mut hast, &ignore);
+
+    let code = satteri_mdxjs::compile_hast_arena(&hast, &mdx_opts)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    release_hast_arena(hast);
+    release_mdast_arena(mdast);
+    Ok(MdxJsOneShot {
+        code,
+        frontmatter,
+        dropped_transforms: 0,
+    })
 }
 
 /// Compile a HAST handle's arena to MDX JavaScript. Does not consume the handle.

@@ -1,8 +1,12 @@
 // @ts-nocheck — WASM browser binding has no type declarations
 export {
+  applyCommandsAndCompileHandle,
   applyCommandsAndConvertToHastHandle,
+  applyCommandsAndRenderHandle,
   applyCommandsToHandle,
   applyCommandsToMdastHandle,
+  applyMdastCommandsAndConvertAndCompile,
+  applyMdastCommandsAndConvertAndRender,
   compileHandle,
   compileMdx,
   convertMdastToHastHandle,
@@ -14,7 +18,9 @@ export {
   getHandleSource,
   getMdastFrontmatter,
   getNodeData,
+  markdownToHtmlFast,
   mdastTextContentHandle,
+  mdxToJsFast,
   parseEsm,
   parseExpression,
   parseToHtml,

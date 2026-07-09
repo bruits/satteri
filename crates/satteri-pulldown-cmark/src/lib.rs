@@ -65,8 +65,7 @@
     clippy::std_instead_of_alloc,
     clippy::std_instead_of_core
 )]
-// Forbid unsafe code unless the SIMD feature is enabled.
-#![cfg_attr(not(feature = "simd"), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -104,7 +103,7 @@ use core::fmt::Display;
 #[cfg(feature = "mdx")]
 pub use crate::arena_build::MDX_OPTIONS;
 pub use crate::{
-    arena_build::{parse, DEFAULT_OPTIONS},
+    arena_build::{parse, parse_no_positions, parse_no_positions_into, DEFAULT_OPTIONS},
     parse::{
         BrokenLink, BrokenLinkCallback, DefaultParserCallbacks, OffsetIter, Parser,
         ParserCallbacks, RefDefs,
