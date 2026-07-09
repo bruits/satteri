@@ -37,10 +37,10 @@ fn main() {}
 ```
 ````
 
-| Parser        | HAST `data`                              |
-| ------------- | ---------------------------------------- |
-| remark-rehype | `{ meta: "title=foo.rs" }`               |
-| Sätteri       | `{ lang: "rust", meta: "title=foo.rs" }` |
+| Parser          | HAST `data`                              |
+| --------------- | ---------------------------------------- |
+| `remark-rehype` | `{ meta: "title=foo.rs" }`               |
+| Sätteri         | `{ lang: "rust", meta: "title=foo.rs" }` |
 
 Both still emit `class="language-rust"` on the `<code>` element, so syntax-highlighting plugins that read `properties.className` are unaffected. Plugins that want the raw language without parsing it back out of the class name can read `data.lang` directly.
 
@@ -69,10 +69,10 @@ GFM tables with column alignment produce different HAST properties.
 |     1 |
 ```
 
-| Parser        | HAST output                                |
-| ------------- | ------------------------------------------ |
-| Sätteri       | `<th style="text-align: right">right</th>` |
-| remark-rehype | `<th align="right">right</th>`             |
+| Parser          | HAST output                                |
+| --------------- | ------------------------------------------ |
+| `remark-rehype` | `<th align="right">right</th>`             |
+| Sätteri         | `<th style="text-align: right">right</th>` |
 
 The HTML renders identically. `align` is deprecated in HTML5 and `style` is the modern equivalent, so Sätteri emits `style`. A HAST plugin that reads `properties.align` won't find anything; read `properties.style` or normalize at the boundary.
 

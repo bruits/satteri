@@ -1,7 +1,8 @@
 {
   "name": "satteri",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "High-performance Markdown and MDX processing",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bruits/satteri.git"
@@ -11,10 +12,6 @@
     "browser.js",
     "index.js",
     "index.d.ts",
-    "satteri_napi.wasi.cjs",
-    "satteri_napi.wasi-browser.js",
-    "wasi-worker.mjs",
-    "wasi-worker-browser.mjs",
     "webcontainer-fallback.cjs"
   ],
   "type": "module",

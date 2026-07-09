@@ -109,21 +109,104 @@ fn split_url_trim_end(bytes: &[u8], min_end: usize, raw_end: usize) -> usize {
     url_end
 }
 
+/// Match an autolink-literal scheme at `ix`, returning `(proto_len, is_www)`.
+/// Case-insensitive: micromark's `protocolPrefixInside` lowercases the
+/// scheme before comparing, and its `wwwPrefix` accepts `W` as well as `w`.
+/// remark-gfm handles `http(s)` and `www.`, but not `ftp`.
+pub(crate) fn match_autolink_scheme(bytes: &[u8], ix: usize) -> Option<(usize, bool)> {
+    let rest = &bytes[ix..];
+    let ci = |prefix: &[u8]| {
+        rest.len() >= prefix.len() && rest[..prefix.len()].eq_ignore_ascii_case(prefix)
+    };
+    if ci(b"https://") {
+        Some((8, false))
+    } else if ci(b"http://") {
+        Some((7, false))
+    } else if ci(b"www.") {
+        Some((4, true))
+    } else {
+        None
+    }
+}
+
+/// True when `bytes[i..end]` is entirely "trail" per micromark's
+/// `tokenizeTrail`: regular punctuation (`!"'*,.:;?_~`), `]`, `)`, or whole
+/// `&[a-zA-Z]+;` entities. Such a run is not part of the link, so when it
+/// reaches the body boundary (`end`, always whitespace/`<`/EOF) the link
+/// ends where the run starts.
+fn trail_is_all(bytes: &[u8], mut i: usize, end: usize) -> bool {
+    while i < end {
+        match bytes[i] {
+            b'!' | b'"' | b'\'' | b')' | b'*' | b',' | b'.' | b':' | b';' | b'?' | b']' | b'_'
+            | b'~' => i += 1,
+            // `&[a-zA-Z]+;` (micromark's `trailCharacterReference`).
+            b'&' => {
+                let mut j = i + 1;
+                while j < end && bytes[j].is_ascii_alphabetic() {
+                    j += 1;
+                }
+                if j > i + 1 && j < end && bytes[j] == b';' {
+                    i = j + 1;
+                } else {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Find where a `http(s)`/`www` URL body ends, replicating micromark's
+/// `path`/`domain` + `trail` tokenizers. Walks forward from `start` tracking
+/// parenthesis balance: a `)` that closes an earlier `(` stays in the link,
+/// but any trailing-punctuation marker (including a now-unbalanced `)`)
+/// followed only by trail ends the link. This forward scan (rather than a
+/// right-to-left trim) is what gets `(b.)` right: once a trail starts at the
+/// `.`, the balanced `)` is part of the trail and trimmed too.
+fn construct_url_end(bytes: &[u8], start: usize, raw_end: usize) -> usize {
+    let (mut size_open, mut size_close) = (0usize, 0usize);
+    let mut i = start;
+    while i < raw_end {
+        let b = bytes[i];
+        if b == b'(' {
+            size_open += 1;
+        } else if b == b')' && size_close < size_open {
+            size_close += 1;
+        } else if matches!(
+            b,
+            b'!' | b'"'
+                | b'&'
+                | b'\''
+                | b')'
+                | b'*'
+                | b','
+                | b'.'
+                | b':'
+                | b';'
+                | b'?'
+                | b']'
+                | b'_'
+                | b'~'
+        ) {
+            if trail_is_all(bytes, i, raw_end) {
+                return i;
+            }
+            if b == b')' {
+                size_close += 1;
+            }
+        }
+        i += 1;
+    }
+    raw_end
+}
+
 pub(crate) fn scan_autolink_literal(
     bytes: &[u8],
     ix: usize,
+    prev_is_content_start: bool,
 ) -> Option<(usize, usize, usize, String, bool)> {
-    // Scheme. remark-gfm's autolink-literal extension handles http(s) and
-    // `www.`, but not ftp — so we match that set exactly.
-    let (proto_len, is_www) = if bytes[ix..].starts_with(b"http://") {
-        (7, false)
-    } else if bytes[ix..].starts_with(b"https://") {
-        (8, false)
-    } else if bytes[ix..].starts_with(b"www.") {
-        (4, true)
-    } else {
-        return None;
-    };
+    let (proto_len, is_www) = match_autolink_scheme(bytes, ix)?;
 
     // Two preceding-character rules apply, depending on which path of
     // remark-gfm's autolink-literal pipeline ends up firing:
@@ -138,12 +221,24 @@ pub(crate) fn scan_autolink_literal(
     // We accept the loose check here so we don't miss `0https://…`. The
     // strict version is enforced later when we know whether the
     // micromark path was actually viable (see `prev_loose_only` below).
-    let prev_loose_only = if ix > 0 {
+    // When the trigger sits at the start of the inline content (right after a
+    // container marker like `>`/`-`, which the inline stream doesn't see),
+    // micromark's `self.previous` is a line ending, so both preceding-char
+    // rules pass, exactly as at the start of the document.
+    let prev_loose_only = if ix > 0 && !prev_is_content_start {
         let prev = bytes[ix - 1];
-        // micromark's `previousProtocol` rejects only ASCII alphabetic; any
-        // non-ASCII byte (including Cyrillic letters etc.) passes the loose
-        // check, so the construct can fire after `п` in `_oпhttps://...`.
-        let prev_loose_ok = if prev < 0x80 {
+        // The construct's preceding-char rule differs by scheme:
+        //   * www: `previousWww`, a fixed set (`(`, `*`, `_`, `[`, `]`, `~`,
+        //     line ending or space). Nothing else, so `5www.x` doesn't fire.
+        //   * http(s): `previousProtocol` rejects only ASCII alphabetic;
+        //     digits, punctuation, and any non-ASCII byte (Cyrillic etc.)
+        //     pass, so the construct can fire after `п` in `_oпhttps://...`.
+        let prev_loose_ok = if is_www {
+            matches!(
+                prev,
+                b'(' | b'*' | b'_' | b'[' | b']' | b'~' | b' ' | b'\t' | b'\r' | b'\n'
+            )
+        } else if prev < 0x80 {
             !prev.is_ascii_alphabetic()
         } else {
             true
@@ -220,98 +315,42 @@ pub(crate) fn scan_autolink_literal(
         end += 1;
     }
 
-    // Must have at least one char past the scheme.
-    if end == ix + proto_len {
+    // Need at least one byte past the scheme — except a bare `www.` followed
+    // by a non-EOF byte, which links just `www`: micromark's `wwwPrefix`
+    // succeeds for any non-EOF char after the dot, the `www` letters are the
+    // domain, and the `.` is trail. So `www. rest` links `www` (construct
+    // path, trail merged with ` rest`), but `www.` at true EOF falls to FNR.
+    if end == ix + proto_len && !(is_www && ix + proto_len < bytes.len()) {
         return None;
-    }
-
-    // The GFM spec allows `.`, but a `www.` match must have a valid domain
-    // (one more `.`-separated segment beyond `www.`). Reject `www.` alone.
-    if is_www {
-        let rest = &bytes[ix + proto_len..end];
-        if rest.is_empty() {
-            return None;
-        }
     }
 
     let raw_end = end;
 
-    // Trim trailing punctuation. Set mirrors micromark-gfm-autolink-literal's
-    // trail tokenizer: `!"'*,.:;<?]_~` plus unbalanced `)` plus `&;`-
-    // terminated entities. Interleaved so that e.g. trailing `")` is fully
-    // stripped (`)` via balance, then `"` via the punctuation set).
-    loop {
-        if end <= ix + proto_len {
-            break;
-        }
-        let last = bytes[end - 1];
-        if matches!(
-            last,
-            b'!' | b'"'
-                | b'\''
-                | b'*'
-                | b','
-                | b'.'
-                | b':'
-                | b';'
-                | b'<'
-                | b'?'
-                | b']'
-                | b'_'
-                | b'~'
-        ) {
-            end -= 1;
-            continue;
-        }
-        if last == b')' {
-            let segment = &bytes[ix..end];
-            let opens = segment.iter().filter(|&&b| b == b'(').count();
-            let closes = segment.iter().filter(|&&b| b == b')').count();
-            if closes > opens {
-                end -= 1;
-                continue;
-            }
-        }
-        break;
-    }
+    // Trim trailing punctuation via micromark's forward `path`/`trail` scan.
+    // For `www`, start the scan at the `.` (one byte into the prefix) so a
+    // trailing dot can itself be trimmed (`www.!"~` links bare `www`), since
+    // the `www` letters are the domain and everything after `.` is trail.
+    let scan_start = if is_www { ix + 3 } else { ix + proto_len };
+    end = construct_url_end(bytes, scan_start, raw_end);
 
-    // Trim a trailing `;` only when it closes an HTML entity (`&...;`).
-    if end > ix + proto_len && bytes[end - 1] == b';' {
-        // Walk back looking for `&` before whitespace. If we find `&`, trim the entity.
-        let mut j = end - 2;
-        while j > ix {
-            let c = bytes[j];
-            if c == b'&' {
-                end = j;
-                break;
-            }
-            if !(c.is_ascii_alphanumeric() || c == b'#') {
-                break;
-            }
-            j -= 1;
-        }
-    }
-
-    if end <= ix + proto_len {
+    // The kept URL must be non-empty past the scheme: for http(s) that's a
+    // byte after `://`; for `www` the `www` letters always remain.
+    if end <= if is_www { ix } else { ix + proto_len } {
         return None;
     }
 
-    // The domain (up to first `/`, `?`, `#`, or end) must contain a `.`
-    // so that `https://localhost` or `www.` alone don't match — matching
-    // remark-gfm's behavior (they DO match http/https/ftp without `.`,
-    // but remark-gfm requires a `.` for the literal extension). To align
-    // with the reference, allow http/https/ftp without `.` (remark accepts
-    // them) but require a `.` for `www.`.
-    let body = &bytes[ix + proto_len..end];
-    if is_www {
-        let domain_end = body
-            .iter()
-            .position(|&b| matches!(b, b'/' | b'?' | b'#'))
-            .unwrap_or(body.len());
-        if !body[..domain_end].contains(&b'.') {
-            return None;
-        }
-    }
+    // micromark's `tokenizeDomain`/`domainAfter` requires only a non-empty
+    // domain (`seen`) with no trailing `_`; a dot is *not* required. So
+    // `www.localhost` and `http://localhost` both autolink. (See the GH
+    // #279 note in micromark's `domainAfter`.) For `www`, that tokenizer
+    // consumes the `www.` prefix as part of the domain, so its `w`s satisfy
+    // `seen` even when nothing alphanumeric follows (`www..%&`); include the
+    // prefix here. http(s) domains start after `://`.
+    let body = if is_www {
+        &bytes[ix..end]
+    } else {
+        &bytes[ix + proto_len..end]
+    };
 
     // Two paths produce autolinks: micromark's `protocolAutolink` token
     // construct, and `mdast-util-gfm-autolink-literal`'s find-and-replace
@@ -418,9 +457,15 @@ fn is_email_local_char(b: u8) -> bool {
 /// from raw source — micromark would consume the `\X` as an escape token,
 /// resetting `self.previous` to `X` (gfmAtext) and rejecting the email
 /// construct from firing afterward).
+/// `dot_needs_alnum` selects the domain rule, which differs between the two
+/// pipelines: the construct's `emailDomainDotTrail` keeps a `.` only when an
+/// *alphanumeric* follows (so `a@b._c` stops at `b`), while the FNR regex's
+/// `(?:\.[-\w]+)+` also accepts `-`/`_` after the dot (so `a@b._c` keeps
+/// `b._c`). Construct callers pass `true`, the FNR caller `false`.
 pub(crate) fn scan_email_autolink(
     bytes: &[u8],
     at_ix: usize,
+    dot_needs_alnum: bool,
 ) -> Option<(usize, usize, String, bool)> {
     if at_ix >= bytes.len() || bytes[at_ix] != b'@' {
         return None;
@@ -489,23 +534,27 @@ pub(crate) fn scan_email_autolink(
     if at_ix + 1 >= bytes.len() {
         return None;
     }
+    // Domain per micromark's `emailDomain`: labels of alphanumeric, `-`, `_`,
+    // joined by a `.` that is kept only when *followed by an alphanumeric*
+    // (`emailDomainDotTrail`). So a `..`, a trailing `.`, or a `.` before
+    // `-`/`_` ends the domain (`a@b.com...x` links only `a@b.com`), while a
+    // literal leading `.` is allowed (`y@.bar.baz`). The FNR pipeline's
+    // stricter "first domain char must be `[-\w]`" rule lives in
+    // `fnr_find_email`, since this scanner also feeds the construct path.
     let mut end = at_ix + 1;
     while end < bytes.len() {
         let b = bytes[end];
-        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_') {
+        let is_label = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_');
+        // A `.` is kept only when the next byte continues a label: an
+        // alphanumeric for the construct, or any `[-\w]` for FNR.
+        let after_dot_ok = bytes.get(end + 1).is_some_and(|&n| {
+            n.is_ascii_alphanumeric() || (!dot_needs_alnum && matches!(n, b'-' | b'_'))
+        });
+        if is_label || (b == b'.' && after_dot_ok) {
             end += 1;
         } else {
             break;
         }
-    }
-    if end == at_ix + 1 {
-        return None;
-    }
-    // Trim trailing `.` per remark — the find-and-replace regex's
-    // `(?:\.[-\w]+)+` segments don't capture a final lone `.` (no `[-\w]+`
-    // follows), so the dot stays as text after the email.
-    while end > at_ix + 1 && bytes[end - 1] == b'.' {
-        end -= 1;
     }
     if end == at_ix + 1 {
         return None;
@@ -746,30 +795,39 @@ pub(crate) fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>, source_bytes: 
         if node.node_type != text_ty {
             continue;
         }
-        let parent_id = node.parent;
-        if parent_id == u32::MAX || parent_id >= len {
+        if node.parent == u32::MAX || node.parent >= len {
             continue;
         }
-        let parent_type = MdastNodeType::from_u8(arena.get_node(parent_id).node_type);
-        // Mirrors `findAndReplace`'s `{ignore: ['link', 'linkReference']}`,
-        // plus image alt-text (don't nest links there) and code/expression
-        // /frontmatter nodes where literal autolinks shouldn't fire.
-        if matches!(
-            parent_type,
-            Some(
-                MdastNodeType::Link
-                    | MdastNodeType::LinkReference
-                    | MdastNodeType::Image
-                    | MdastNodeType::ImageReference
-                    | MdastNodeType::InlineCode
-                    | MdastNodeType::Code
-                    | MdastNodeType::MdxjsEsm
-                    | MdastNodeType::MdxFlowExpression
-                    | MdastNodeType::MdxTextExpression
-                    | MdastNodeType::Yaml
-                    | MdastNodeType::Toml
-            )
-        ) {
+        // `findAndReplace`'s `{ignore: ['link', 'linkReference']}` skips a
+        // node *and its whole subtree*, so walk the ancestor chain: a `www.`
+        // inside `[<del>www</del>](/x)` (parent `delete`, grandparent `link`)
+        // must be skipped too. Image alt-text and code/expression/frontmatter
+        // subtrees likewise never autolink.
+        let mut ancestor = node.parent;
+        let mut inside_ignored = false;
+        while ancestor != u32::MAX && ancestor < len {
+            if matches!(
+                MdastNodeType::from_u8(arena.get_node(ancestor).node_type),
+                Some(
+                    MdastNodeType::Link
+                        | MdastNodeType::LinkReference
+                        | MdastNodeType::Image
+                        | MdastNodeType::ImageReference
+                        | MdastNodeType::InlineCode
+                        | MdastNodeType::Code
+                        | MdastNodeType::MdxjsEsm
+                        | MdastNodeType::MdxFlowExpression
+                        | MdastNodeType::MdxTextExpression
+                        | MdastNodeType::Yaml
+                        | MdastNodeType::Toml
+                )
+            ) {
+                inside_ignored = true;
+                break;
+            }
+            ancestor = arena.get_node(ancestor).parent;
+        }
+        if inside_ignored {
             continue;
         }
         let data = arena.get_type_data(id);
@@ -779,7 +837,12 @@ pub(crate) fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>, source_bytes: 
         let sr = StringRef::from_bytes(data);
         let text = arena.get_str(sr);
         let bytes = text.as_bytes();
-        if memchr::memchr3(b'h', b'w', b'@', bytes).is_some() {
+        // Triggers are case-insensitive (`HTTP://`, `WWW.`), so scan for the
+        // uppercase variants too.
+        if bytes
+            .iter()
+            .any(|&b| matches!(b, b'h' | b'H' | b'w' | b'W' | b'@'))
+        {
             candidates.push(id);
         }
     }
@@ -819,23 +882,17 @@ fn fnr_prev_ok(bytes: &[u8], ix: usize) -> bool {
 /// Returns `(start, url_end, full_url, raw_end)` where `url_end..raw_end`
 /// is the splitUrl trail (kept as its own text node by `findAndReplace`).
 fn fnr_find_url(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)> {
-    let (proto_len, is_www) = if bytes[ix..].starts_with(b"http://") {
-        (7, false)
-    } else if bytes[ix..].starts_with(b"https://") {
-        (8, false)
-    } else if bytes[ix..].starts_with(b"www.") {
-        // The www. branch has `(?=\.)` lookahead in the regex — already
-        // satisfied by `starts_with(b"www.")`.
-        (4, true)
-    } else {
-        return None;
-    };
+    let (proto_len, is_www) = match_autolink_scheme(bytes, ix)?;
     let s = ix;
     if !fnr_prev_ok(bytes, s) {
         return None;
     }
-    // Domain class `[-.\w]+` (alphanumeric, `.`, `_`, `-`).
-    let domain_start = s + proto_len;
+    // Regex group 2, the domain, is `[-.\w]+` (alphanumeric, `.`, `_`, `-`).
+    // For `www` the capture group starts at the `.` (group 1 is just `www`,
+    // the dot is lookahead), so the scan begins one byte earlier than the
+    // scheme length: a non-ASCII domain like `www.點看.com` leaves the dot in
+    // group 2 and the rest in group 3 (the path), matching the regex.
+    let domain_start = if is_www { s + 3 } else { s + proto_len };
     let mut p = domain_start;
     while p < bytes.len() {
         let b = bytes[p];
@@ -858,15 +915,23 @@ fn fnr_find_url(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)
     }
     let raw_end = p;
     // `isCorrectDomain`: ≥2 dot parts, no `_` in last/penult, alphanumeric
-    // in non-empty parts.
-    if !is_correct_domain_for_fnr(&bytes[domain_start..domain_end]) {
+    // in non-empty parts. For `www.`, findUrl folds the `www` prefix into
+    // the domain (`domain = protocol + domain`), so check from `s`; else
+    // `www.localhost` would split to the single part `localhost` and fail.
+    let domain_check_start = if is_www { s } else { domain_start };
+    if !is_correct_domain_for_fnr(&bytes[domain_check_start..domain_end]) {
         return None;
     }
     // `splitUrl` trim — wider than the construct's trim set; includes
     // `>`, `}`, `&` (which the construct keeps) and excludes `*`, `_`,
     // `~` (which the construct trims).
     let url_end = split_url_trim_end(bytes, domain_start, raw_end);
-    if url_end <= domain_start {
+    // mdast rejects when `splitUrl`'s kept part is empty. For http(s) that
+    // part is the domain after `://`; for www it also includes the `www`
+    // scheme letters (never trail), so `www.` alone still links as
+    // `http://www`. Guard against the empty case per scheme.
+    let min_nonempty = if is_www { s } else { domain_start };
+    if url_end <= min_nonempty {
         return None;
     }
     let url_str = core::str::from_utf8(&bytes[s..url_end]).ok()?;
@@ -887,21 +952,28 @@ fn fnr_find_url(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)
 /// (which retries from a shorter start when the max walkback's prev is
 /// `/` or alphanumeric, matching FNR's `previous(_, true)` semantics).
 fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)> {
-    let (s, e, url, _retry) = scan_email_autolink(bytes, ix)?;
+    let (mut s, e, _url, _retry) = scan_email_autolink(bytes, ix, false)?;
     // The regex's domain class is `[-\w]+(?:\.[-\w]+)+`. The first domain
     // char must be `[-\w]` (alphanumeric, `-`, `_`); `.` is rejected.
     let first_domain = *bytes.get(ix + 1)?;
     if !(first_domain.is_ascii_alphanumeric() || first_domain == b'-' || first_domain == b'_') {
         return None;
     }
-    // FNR lookbehind: whitespace/punctuation/start (Unicode-aware).
-    // `scan_email_autolink`'s walkback rejects ASCII alphanumeric and `/`
-    // but accepts non-ASCII letters (e.g. Cyrillic `п`) as "not atext".
-    // FNR's regex rejects those via the `\p{P}|\p{S}` lookbehind class.
-    if !fnr_prev_ok(bytes, s) {
+    // FNR lookbehind `(?<=^|\s|\p{P}|\p{S})` (Unicode-aware): the regex anchors
+    // the local part at the *first* boundary, but `scan_email_autolink`'s
+    // walkback maximises it. When the maximal start is preceded by a letter
+    // (ASCII or non-ASCII, e.g. `é`), advance to the next boundary: `é_.a@x`
+    // links `.a@x`, not `_.a@x`. If no boundary precedes the `@`, there's no
+    // match (this is also what keeps `пo\+@…`, whose `+` came from a source
+    // escape that blocks the construct, from linking).
+    while s < ix && !fnr_prev_ok(bytes, s) {
+        s += 1;
+    }
+    if s >= ix {
         return None;
     }
-    Some((s, e, url, e))
+    let addr = core::str::from_utf8(&bytes[s..e]).ok()?;
+    Some((s, e, format!("mailto:{addr}"), e))
 }
 
 /// FNR-style scan over a Text node's bytes. Emits position-less Links for
@@ -920,13 +992,13 @@ fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_
 
     let mut matches: Vec<(usize, usize, usize, String)> = Vec::new();
     let mut i = 0;
-    while let Some(rel) = memchr::memchr3(b'h', b'w', b'@', &bytes[i..]) {
-        i += rel;
+    while i < bytes.len() {
+        // Triggers are case-insensitive (`HTTP://`, `WWW.`).
         let b = bytes[i];
-        let hit = if b == b'h' || b == b'w' {
-            fnr_find_url(bytes, i)
-        } else {
-            fnr_find_email(bytes, i)
+        let hit = match b {
+            b'h' | b'H' | b'w' | b'W' => fnr_find_url(bytes, i),
+            b'@' => fnr_find_email(bytes, i),
+            _ => None,
         };
         if let Some((s, url_end, url, raw_end)) = hit {
             let last_end = matches.last().map_or(0, |m| m.2);
@@ -982,8 +1054,11 @@ fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_
         }
         arena.set_children(link_id, &[link_text_id]);
         new_children.push(link_id);
-        // `findUrl` emits the trail as a separate text node. `findEmail`
-        // has no trail (raw_end == end).
+        // `findUrl` emits the `splitUrl` trail as its *own* text node, kept
+        // separate from the text that follows (matching `findAndReplace`):
+        // `.www.x. y` → `text("."), link, text("."), text(" y")`. (The
+        // construct path instead leaves its trail merged with the following
+        // text, but that's emitted in the firstpass, not here.)
         if raw_end > url_end {
             let trail_chunk = &text[url_end..raw_end];
             let trail_id = arena.alloc_node(MdastNodeType::Text as u8);

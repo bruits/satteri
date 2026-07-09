@@ -1909,7 +1909,11 @@ fn parse_inner(
         {
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
-        if memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some() {
+        // Triggers are case-insensitive (`HTTP://`, `WWW.`), so check the
+        // uppercase variants too.
+        if memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
+            || memchr::memchr2(b'H', b'W', source_bytes).is_some()
+        {
             crate::post_passes::gfm_autolink_literal_pass(&mut arena, source_bytes);
         }
     }

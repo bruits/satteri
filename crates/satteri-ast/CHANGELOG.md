@@ -1,5 +1,11 @@
 # satteri-ast
 
+## 0.4.2 — 2026-07-08
+
+### Patch changes
+
+- [d2c33ca](https://github.com/bruits/satteri/commit/d2c33ca65721a45b2899a5265d54a226a3843a91) Fixed `%` being over-escaped in URLs such as `www.example.com/100%off`. — Thanks @Princesseuh!
+
 ## 0.4.1 — 2026-06-29
 
 ### Patch changes

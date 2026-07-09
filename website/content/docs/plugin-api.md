@@ -243,6 +243,7 @@ heading(node, ctx) {
 | `source` | `string` | Original markdown source. |
 | `fileURL` | `URL \| undefined` | URL of the document being processed, or `undefined` when none given. |
 | `data` | `Data` | Document-scoped data bag shared across every plugin in the pipeline. Survives the mdast→hast boundary. Returned to the caller as `result.data`. Kept on the JS side, so any value is allowed (functions, class instances, etc.). |
+| `sourceFormat` | `"markdown" \| "mdx"` | Which kind of file the plugin is currently running on. |
 
 Keys on `data` are typed as `unknown` by default. Register a key's type by augmenting `DataMap`:
 
