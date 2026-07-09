@@ -987,8 +987,8 @@ fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_
         return;
     }
     let sr = StringRef::from_bytes(data);
-    let text = arena.get_str(sr).to_string();
-    let bytes = text.as_bytes();
+    let borrowed_text = arena.get_str(sr);
+    let bytes = borrowed_text.as_bytes();
 
     let mut matches: Vec<(usize, usize, usize, String)> = Vec::new();
     let mut i = 0;
@@ -1014,6 +1014,9 @@ fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_
     if matches.is_empty() {
         return;
     }
+    // Copy only once a rewrite is certain; the arena is mutated below.
+    let text = borrowed_text.to_string();
+    let bytes = text.as_bytes();
 
     // Per `mdast-util-gfm-autolink-literal`'s `findAndReplace`, links
     // emitted here are intentionally position-less — even though they

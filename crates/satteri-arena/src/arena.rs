@@ -266,6 +266,22 @@ impl<K: ArenaKind> Arena<K> {
         StringRef::new(offset, len)
     }
 
+    /// Concatenate `prev` + `extra` in the pool without a temporary buffer;
+    /// grows `prev` in place when it is the pool's tail.
+    pub fn append_string(&mut self, prev: StringRef, extra: &str) -> StringRef {
+        let pool_len = self.string_pool.len() as u32;
+        if prev.offset + prev.len == pool_len {
+            self.string_pool.push_str(extra);
+            return StringRef::new(prev.offset, prev.len + extra.len() as u32);
+        }
+        let range = prev.offset as usize..(prev.offset + prev.len) as usize;
+        self.string_pool.reserve(prev.len as usize + extra.len());
+        // Copying a whole previously-pooled string keeps UTF-8 boundaries intact.
+        unsafe { self.string_pool.as_mut_vec().extend_from_within(range) };
+        self.string_pool.push_str(extra);
+        StringRef::new(pool_len, prev.len + extra.len() as u32)
+    }
+
     pub fn get_type_data(&self, node_id: u32) -> &[u8] {
         let node = &self.nodes[node_id as usize];
         let start = node.data_offset as usize;

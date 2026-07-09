@@ -1,4 +1,9 @@
-import { flatByTag, stubDescriptors } from "../child-stub.js";
+import {
+  flatByTag,
+  installStubDescriptors,
+  stubDescriptors,
+  type StubDescriptorEntry,
+} from "../child-stub.js";
 import type { LazyChildResolver } from "../lazy-child-resolver.js";
 import type { HastNode } from "../types.js";
 import type { HastReader } from "./hast-reader.js";
@@ -25,7 +30,7 @@ const HAST_STUB_FIELDS: Readonly<Record<number, readonly string[]>> = {
 
 const TYPE_NAME_BY_TAG = flatByTag(TYPE_NAMES);
 
-const HAST_STUB_DESCRIPTORS: (PropertyDescriptorMap | undefined)[] = [];
+const HAST_STUB_DESCRIPTORS: (readonly StubDescriptorEntry[] | undefined)[] = [];
 for (const tag of Object.keys(HAST_STUB_FIELDS)) {
   const nodeType = Number(tag);
   HAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(HAST_STUB_FIELDS[nodeType]!);
@@ -50,6 +55,6 @@ export class HastChildStub {
     this._resolver = resolver;
     this._id = id;
     this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
-    Object.defineProperties(this, HAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
+    installStubDescriptors(this, HAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
   }
 }

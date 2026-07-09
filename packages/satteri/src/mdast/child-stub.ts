@@ -1,4 +1,9 @@
-import { flatByTag, stubDescriptors } from "../child-stub.js";
+import {
+  flatByTag,
+  installStubDescriptors,
+  stubDescriptors,
+  type StubDescriptorEntry,
+} from "../child-stub.js";
 import type { LazyChildResolver } from "../lazy-child-resolver.js";
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
@@ -25,7 +30,7 @@ const HAND_WRITTEN_FIELDS: Readonly<Record<number, readonly string[]>> = {
 
 const TYPE_NAME_BY_TAG = flatByTag(TYPE_NAMES);
 
-const MDAST_STUB_DESCRIPTORS: (PropertyDescriptorMap | undefined)[] = [];
+const MDAST_STUB_DESCRIPTORS: (readonly StubDescriptorEntry[] | undefined)[] = [];
 for (const tag of Object.keys(TYPE_NAMES)) {
   const nodeType = Number(tag);
   const fields = [...(MDAST_LAYOUT_KEYS[nodeType] ?? HAND_WRITTEN_FIELDS[nodeType] ?? [])];
@@ -52,6 +57,6 @@ export class MdastChildStub {
     this._resolver = resolver;
     this._id = id;
     this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
-    Object.defineProperties(this, MDAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
+    installStubDescriptors(this, MDAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
   }
 }

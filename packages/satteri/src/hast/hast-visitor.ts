@@ -663,10 +663,18 @@ function readChildStubs(
 
 type HastProperties = Record<string, string | number | boolean | string[]>;
 
+/** Per-walk wire state; one reference per element keeps constructor stores minimal. */
+interface WalkWire {
+  view: DataView;
+  buf: Uint8Array;
+  resolver: HastLazyChildResolver;
+}
+
 // Shared own-getter descriptors for WalkElement's lazy fields, populated in
 // its static block so the getters can read the private wire fields.
 let WALK_PROPS_DESC!: PropertyDescriptor;
 let WALK_CHILDREN_DESC!: PropertyDescriptor;
+let WALK_BOTH_DESC!: PropertyDescriptorMap;
 
 /**
  * Walk-path element. Spread-correctness requires `properties`/`children` as
@@ -686,35 +694,29 @@ class WalkElement {
   declare children?: HastNode[];
 
   readonly #nodeId: number;
-  #view: DataView;
-  #buf: Uint8Array;
+  #wire: WalkWire;
   #propsPos: number;
   #childIdsPos: number;
   #childTypesPos: number;
   #childCount: number;
-  #resolver: HastLazyChildResolver;
 
   constructor(
     tagName: string,
     nodeId: number,
-    view: DataView,
-    buf: Uint8Array,
+    wire: WalkWire,
     propsPos: number,
     propCount: number,
     childIdsPos: number,
     childTypesPos: number,
     childCount: number,
-    resolver: HastLazyChildResolver,
   ) {
     this.tagName = tagName;
     this.#nodeId = nodeId;
-    this.#view = view;
-    this.#buf = buf;
+    this.#wire = wire;
     this.#propsPos = propsPos;
     this.#childIdsPos = childIdsPos;
     this.#childTypesPos = childTypesPos;
     this.#childCount = childCount;
-    this.#resolver = resolver;
     if (propCount === 0) {
       this.properties = {};
     } else {
@@ -737,7 +739,8 @@ class WalkElement {
       enumerable: true,
       configurable: true,
       get(this: WalkElement): HastProperties {
-        const val = decodeProperties(this.#view, this.#buf, this.#propsPos);
+        const w = this.#wire;
+        const val = decodeProperties(w.view, w.buf, this.#propsPos);
         Object.defineProperty(this, "properties", {
           value: val,
           writable: true,
@@ -751,13 +754,14 @@ class WalkElement {
       enumerable: true,
       configurable: true,
       get(this: WalkElement): HastNode[] {
+        const w = this.#wire;
         const val = readChildStubs(
-          this.#view,
-          this.#buf,
+          w.view,
+          w.buf,
           this.#childIdsPos,
           this.#childTypesPos,
           this.#childCount,
-          this.#resolver,
+          w.resolver,
         );
         Object.defineProperty(this, "children", {
           value: val,
@@ -768,17 +772,16 @@ class WalkElement {
         return val;
       },
     };
+    WALK_BOTH_DESC = { properties: WALK_PROPS_DESC, children: WALK_CHILDREN_DESC };
   }
 }
 
 /** Read the tail of a matched element node (tag + properties).
  *  Common prelude (data/position/children) is already consumed by `readMatchedNode`. */
 function readElementFromBinary(
-  view: DataView,
-  buf: Uint8Array,
+  wire: WalkWire,
   offset: number,
   nodeId: number,
-  resolver: HastLazyChildResolver,
   position: Position | undefined,
   childIdsPos: number,
   childTypesPos: number,
@@ -788,23 +791,21 @@ function readElementFromBinary(
   let pos = offset;
 
   // Eager: tagName (almost always accessed by visitors)
-  const tagLen = view.getUint16(pos, true);
+  const tagLen = wire.view.getUint16(pos, true);
   pos += 2;
-  const tagName = rstr(buf, pos, tagLen);
+  const tagName = rstr(wire.buf, pos, tagLen);
   pos += tagLen;
 
-  const propCount = view.getUint16(pos, true);
+  const propCount = wire.view.getUint16(pos, true);
   const node = new WalkElement(
     tagName,
     nodeId,
-    view,
-    buf,
+    wire,
     pos,
     propCount,
     childIdsPos,
     childTypesPos,
     childCount,
-    resolver,
   );
   if (position !== undefined) node.position = position;
   if (data !== null) node.data = data;
@@ -896,13 +897,12 @@ function readMdxJsxFromBinary(
 }
 
 function readMatchedNode(
-  view: DataView,
-  buf: Uint8Array,
+  wire: WalkWire,
   offset: number,
   nodeId: number,
   nodeType: number,
-  resolver: HastLazyChildResolver,
 ): HastNode {
+  const { view, buf, resolver } = wire;
   let pos = offset;
 
   // Shared prelude (matches serialize_hast_node_inline / serialize_mdast_node_inline):
@@ -936,11 +936,9 @@ function readMatchedNode(
   // Dispatch to type-specific tail (pos now sits at the type-specific section)
   if (nodeType === HAST_ELEMENT) {
     return readElementFromBinary(
-      view,
-      buf,
+      wire,
       pos,
       nodeId,
-      resolver,
       position,
       childIdsPos,
       childTypesPos,
@@ -1087,6 +1085,7 @@ function dispatchMatches(
 ): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
+  const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
   let deferred:
     | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
     | null = null;
@@ -1098,7 +1097,7 @@ function dispatchMatches(
     const dataOffset = matchView.getUint32(indexBase + 6, true);
 
     const sub = subs[subIndex]!;
-    const node = readMatchedNode(matchView, matchBuf, dataOffset, nodeId, sub.nodeType, resolver);
+    const node = readMatchedNode(wire, dataOffset, nodeId, sub.nodeType);
     const result = sub.visitFn(node, ctx);
     deferred = handleVisitResult(result, nodeId, returnBuffer, deferred, node);
   }
