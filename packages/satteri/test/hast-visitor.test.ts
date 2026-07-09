@@ -384,6 +384,103 @@ describe("visitHastHandle - mutations", () => {
     expect(html).not.toContain("<h1>");
   });
 
+  test("context.replaceNode() swaps a node for an array, in order", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "explode-heading",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "h2", properties: {}, children: [] },
+            { type: "comment", value: "mid" },
+            { type: "element", tagName: "hr", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    const html = renderHandle(handle);
+    expect(html.trim()).toBe("<h2></h2><!--mid--><hr>");
+  });
+
+  test("an array replacement passes the target's children through as refs", () => {
+    const { handle, source } = setup("[hello **bold**](/x)");
+    const plugin = defineHastPlugin({
+      name: "unwrap-link",
+      element: {
+        filter: ["a"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "span", properties: {}, children: node.children },
+            { type: "text", value: "!" },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle)).toContain("<span>hello <strong>bold</strong></span>!");
+  });
+
+  test("an array replacement may splice the target back in as a nested ref", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "wrap-and-rule",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "div", properties: {}, children: [node] },
+            { type: "element", tagName: "hr", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle).trim()).toBe("<div><h1>Hello</h1></div><hr>");
+  });
+
+  test("an array replacement lands between sibling inserts on the same node", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "surround-and-replace",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertAfter(node, { type: "comment", value: "after" });
+          ctx.insertBefore(node, { type: "comment", value: "before" });
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "h2", properties: {}, children: [] },
+            { type: "element", tagName: "h3", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle).trim()).toBe("<!--before--><h2></h2><h3></h3><!--after-->");
+  });
+
+  test("context.replaceNode() throws on an empty array", () => {
+    const { handle, source } = setup("# Hello");
+    let error: Error | undefined;
+    const plugin = defineHastPlugin({
+      name: "replace-with-nothing",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          try {
+            ctx.replaceNode(node, []);
+          } catch (e) {
+            error = e as Error;
+          }
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(error?.message).toMatch(/empty array.*removeNode/);
+    expect(renderHandle(handle)).toContain("<h1>Hello</h1>");
+  });
+
   test("mutations work on child nodes accessed via node.children", () => {
     const { handle, source } = setup("# Hello");
     const plugin = {

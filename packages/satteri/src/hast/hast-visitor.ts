@@ -63,6 +63,7 @@ import {
 
 import {
   asArray,
+  emptyReplacementError,
   makeRequireNid,
   mergeAndReset,
   type PluginOptions,
@@ -127,7 +128,11 @@ export interface HastVisitorContext {
    */
   readonly sourceFormat: SourceFormat;
   removeNode(node: Readonly<HastNode>): void;
-  replaceNode(node: Readonly<HastNode>, newNode: HastContent): void;
+  /**
+   * Swap `node` for one node, or for an array of nodes placed in order at its
+   * position. An empty array throws; use `removeNode` to drop a node.
+   */
+  replaceNode(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   insertAfter(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   /**
@@ -358,8 +363,21 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#commandBuffer.removeNode(requireNid(node, "removeNode"));
   }
 
-  replaceNode(node: HastNode, newNode: HastContent): void {
+  replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "replaceNode");
+    if (Array.isArray(newNode)) {
+      // The last node carries the `replace` so refs back to the target still splice.
+      let previous: HastContent | undefined;
+      for (const n of newNode) {
+        if (previous !== undefined) emitHastTree(this.#commandBuffer, "insertBefore", id, previous);
+        previous = n;
+      }
+      if (previous === undefined) throw emptyReplacementError();
+      emitHastTree(this.#commandBuffer, "replace", id, previous);
+      // A stale queued replacement would win: setProperty folds into it, landing last.
+      this.#pendingNodes.delete(id);
+      return;
+    }
     emitHastTree(this.#commandBuffer, "replace", id, newNode);
     // Track the replacement so a later mdxJsx setProperty can fold into it.
     this.#pendingNodes.set(id, newNode);

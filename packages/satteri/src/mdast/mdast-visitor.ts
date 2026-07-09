@@ -49,6 +49,7 @@ import type {
 import { walkMdastHandle, mdastTextContentHandle } from "#binding";
 import {
   asArray,
+  emptyReplacementError,
   makeRequireNid,
   mergeAndReset,
   type PluginOptions,
@@ -228,8 +229,25 @@ export class MdastVisitorContext {
     if (child) this.removeNode(child);
   }
 
-  replaceNode(node: Readonly<MdastNode>, newNode: MdastContent): void {
+  /**
+   * Swap `node` for one node, or for an array of nodes placed in order at its
+   * position. An empty array throws; use `removeNode` to drop a node.
+   */
+  replaceNode(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode");
+    if (Array.isArray(newNode)) {
+      // The last node carries the `replace` so refs back to the target still splice.
+      let previous: MdastContent | undefined;
+      for (const n of newNode) {
+        if (previous !== undefined) {
+          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous);
+        }
+        previous = n;
+      }
+      if (previous === undefined) throw emptyReplacementError();
+      emitMdastTree(this.#commandBuffer, "replace", id, previous, true);
+      return;
+    }
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true);
   }
 

@@ -317,6 +317,61 @@ test("context.replaceNode() replaces a node via context method", () => {
   expect(html).toContain("Replaced");
 });
 
+test("context.replaceNode() swaps a node for an array, in order", () => {
+  const plugin = defineMdastPlugin({
+    name: "explode-heading",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [
+        { type: "paragraph", children: [{ type: "text", value: "one" }] },
+        { type: "thematicBreak" },
+        { type: "paragraph", children: [{ type: "text", value: "two" }] },
+      ]);
+    },
+  });
+  const html = visitAndRender("# Hello", plugin);
+  expect(html.trim()).toBe("<p>one</p>\n<hr>\n<p>two</p>");
+});
+
+test("an array replacement accepts the raw escape hatches alongside nodes", () => {
+  const plugin = defineMdastPlugin({
+    name: "raw-in-list",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [
+        { rawHtml: "<hr>" },
+        { type: "paragraph", children: [{ type: "text", value: "tail" }] },
+      ]);
+    },
+  });
+  const html = visitAndRender("# Hello", plugin);
+  expect(html).toContain("<hr>");
+  expect(html).toContain("<p>tail</p>");
+  expect(html).not.toContain("<h1>");
+});
+
+test("an array replacement passes the target's children through as refs", () => {
+  const plugin = defineMdastPlugin({
+    name: "unwrap-heading",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [
+        { type: "paragraph", children: node.children },
+        { type: "thematicBreak" },
+      ]);
+    },
+  });
+  const html = visitAndRender("# Hello *there*", plugin);
+  expect(html.trim()).toBe("<p>Hello <em>there</em></p>\n<hr>");
+});
+
+test("context.replaceNode() throws on an empty array", () => {
+  const plugin = defineMdastPlugin({
+    name: "replace-with-nothing",
+    heading(node, ctx) {
+      ctx.replaceNode(node, []);
+    },
+  });
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/empty array.*removeNode/);
+});
+
 test("context.setProperty(node, 'children', ...) replaces a node's children", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node, ctx) {
