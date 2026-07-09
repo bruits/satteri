@@ -7,6 +7,4 @@ cargo/satteri-plugin-api: patch
 npm/satteri: patch
 ---
 
-Improves performance across the pipeline: faster Markdown parsing and
-source-position tracking, faster HTML attribute rendering, and fewer
-allocations when compiling MDX to JavaScript.
+Improves performance all across the project in pretty much all cases
