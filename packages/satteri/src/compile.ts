@@ -645,7 +645,11 @@ export function markdownToHtml(
           );
           if (droppedTransforms && r.lastPlugin)
             warnDroppedTransforms(r.lastPlugin, droppedTransforms, "mdast");
-          return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
+          return {
+            html,
+            frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null,
+            data,
+          };
         } finally {
           releaseHandle(r.handle, true);
         }
@@ -682,7 +686,14 @@ export function markdownToHtml(
     // render + handle-drop into one NAPI call.
     let collected: CollectedHastCommands | Promise<CollectedHastCommands>;
     try {
-      collected = runHastPluginsCollectLast(r.hastHandle, hastPlugins, source, fileURL, data, "markdown");
+      collected = runHastPluginsCollectLast(
+        r.hastHandle,
+        hastPlugins,
+        source,
+        fileURL,
+        data,
+        "markdown",
+      );
     } catch (err) {
       releaseHandle(r.hastHandle, hastMayHaveStubs);
       throw err;
@@ -792,7 +803,11 @@ export function mdxToJs(
           );
           if (droppedTransforms && r.lastPlugin)
             warnDroppedTransforms(r.lastPlugin, droppedTransforms, "mdast");
-          return { code, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
+          return {
+            code,
+            frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null,
+            data,
+          };
         } finally {
           releaseHandle(r.handle, true);
         }
@@ -824,7 +839,14 @@ export function mdxToJs(
   const runHastThenCompile = (r: HastWithFrontmatter): MdxToJsResult | Promise<MdxToJsResult> => {
     let collected: CollectedHastCommands | Promise<CollectedHastCommands>;
     try {
-      collected = runHastPluginsCollectLast(r.hastHandle, hastPlugins, source, fileURL, data, "mdx");
+      collected = runHastPluginsCollectLast(
+        r.hastHandle,
+        hastPlugins,
+        source,
+        fileURL,
+        data,
+        "mdx",
+      );
     } catch (err) {
       releaseHandle(r.hastHandle, hastMayHaveStubs);
       throw err;
