@@ -16,7 +16,6 @@ import {
 import type { Root } from "hast";
 import type { HastNode } from "../types.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
-import { lazyProp, lazyGroup } from "../lazy-props.js";
 import { restorePhantomSpaces } from "../phantom.js";
 
 export type { HastNode };
@@ -31,22 +30,41 @@ function propsToRecord(
   return result;
 }
 
-/**
- * Materialize a single HAST node from a binary buffer as a lazy JS object.
- */
+/** Lazy own children getter, shared per reader via `_nodeId`: O(1) in subtree size, no per-node closure. */
+let lastReader: HastReader | undefined;
+let lastChildrenDescriptor: PropertyDescriptor | undefined;
+
+function childrenDescriptor(reader: HastReader): PropertyDescriptor {
+  if (reader === lastReader) return lastChildrenDescriptor as PropertyDescriptor;
+  const descriptor: PropertyDescriptor = {
+    get(this: HastNode) {
+      const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+      const children = reader.getChildIds(nodeId).map((id) => materializeHastNode(reader, id));
+      Object.defineProperty(this, "children", {
+        value: children,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+      return children;
+    },
+    configurable: true,
+    enumerable: true,
+  };
+  lastReader = reader;
+  lastChildrenDescriptor = descriptor;
+  return descriptor;
+}
+
+/** Materialize a single HAST node from a binary buffer; scalars eager, `children` lazy. */
 export function materializeHastNode(reader: HastReader, nodeId: number): HastNode {
   const nodeType = reader.getNodeType(nodeId);
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
   const node = { type: typeName } as HastNode;
-  // Position decodes to three objects; defer it — passthrough children (e.g.
-  // replaceNode keeping `node.children`) never read it.
-  if (reader.hasPosition(nodeId)) {
-    Object.defineProperty(
-      node,
-      "position",
-      lazyProp("position", () => reader.getPosition(nodeId)),
-    );
+  const position = reader.getPosition(nodeId);
+  if (position !== undefined) {
+    node.position = position;
   }
 
   // _nodeId: non-enumerable internal reference
@@ -59,55 +77,21 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
 
   switch (nodeType) {
     case HAST_ROOT:
-      // children: lazy getter
-      Object.defineProperty(node, "children", {
-        get(this: HastNode) {
-          const childIds = reader.getChildIds(nodeId);
-          const children = childIds.map((id) => materializeHastNode(reader, id));
-          Object.defineProperty(this, "children", {
-            value: children,
-            writable: true,
-            configurable: true,
-            enumerable: true,
-          });
-          return children;
-        },
-        configurable: true,
-        enumerable: true,
-      });
+      Object.defineProperty(node, "children", childrenDescriptor(reader));
       break;
 
     case HAST_ELEMENT: {
-      // tagName and properties: lazy, resolved together from one reader call
-      lazyGroup(node, ["tagName", "properties"], () => {
-        const { tagName, properties } = reader.getElementData(nodeId);
-        return { tagName, properties: propsToRecord(properties) };
-      });
-      // children: lazy
-      Object.defineProperty(node, "children", {
-        get(this: HastNode) {
-          const childIds = reader.getChildIds(nodeId);
-          const children = childIds.map((id) => materializeHastNode(reader, id));
-          Object.defineProperty(this, "children", {
-            value: children,
-            writable: true,
-            configurable: true,
-            enumerable: true,
-          });
-          return children;
-        },
-        configurable: true,
-        enumerable: true,
-      });
+      const { tagName, properties } = reader.getElementData(nodeId);
+      (node as { tagName: string }).tagName = tagName;
+      (node as { properties: unknown }).properties = propsToRecord(properties);
+      Object.defineProperty(node, "children", childrenDescriptor(reader));
       break;
     }
 
     case HAST_TEXT:
     case HAST_COMMENT:
     case HAST_RAW:
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => reader.getTextValue(nodeId)),
-      });
+      (node as { value: string }).value = reader.getTextValue(nodeId);
       break;
 
     case HAST_DOCTYPE:
@@ -115,36 +99,21 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
       break;
 
     case HAST_MDX_JSX_ELEMENT:
-    case HAST_MDX_JSX_TEXT_ELEMENT:
-      lazyGroup(node, ["name", "attributes"], () => reader.getMdxJsxElementData(nodeId));
-      Object.defineProperty(node, "children", {
-        get(this: HastNode) {
-          const childIds = reader.getChildIds(nodeId);
-          const children = childIds.map((id) => materializeHastNode(reader, id));
-          Object.defineProperty(this, "children", {
-            value: children,
-            writable: true,
-            configurable: true,
-            enumerable: true,
-          });
-          return children;
-        },
-        configurable: true,
-        enumerable: true,
-      });
+    case HAST_MDX_JSX_TEXT_ELEMENT: {
+      const { name, attributes } = reader.getMdxJsxElementData(nodeId);
+      (node as { name: string | null }).name = name;
+      (node as { attributes: unknown }).attributes = attributes;
+      Object.defineProperty(node, "children", childrenDescriptor(reader));
       break;
+    }
 
     case HAST_MDX_FLOW_EXPRESSION:
     case HAST_MDX_TEXT_EXPRESSION:
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => restorePhantomSpaces(reader.getTextValue(nodeId))),
-      });
+      (node as { value: string }).value = restorePhantomSpaces(reader.getTextValue(nodeId));
       break;
 
     case HAST_MDX_ESM:
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => reader.getTextValue(nodeId)),
-      });
+      (node as { value: string }).value = reader.getTextValue(nodeId);
       break;
   }
 

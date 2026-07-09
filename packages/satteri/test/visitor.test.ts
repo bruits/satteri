@@ -13,7 +13,7 @@ import {
   renderHandle,
 } from "../index.js";
 import type { DirectiveAttributes, MdastNode } from "../src/types.js";
-import type { Heading, Text } from "mdast";
+import type { Heading, Paragraph, Text } from "mdast";
 import { defineMdastPlugin } from "../src/plugin.js";
 import { markdownToHtml, applyCommandsToMdastHandle } from "../src/index.js";
 
@@ -725,7 +725,7 @@ test("async visitor reads `.children` in a deferred callback", async () => {
   expect(firstChild).toMatchObject({ type: "text", value: "Hello" });
 });
 
-test("a node retained past its visitor pass throws on its first `.children` read", () => {
+test("a node retained past a non-mutating pass keeps pass-time children readable", () => {
   const { handle, source } = setup();
   let retained: Readonly<Heading> | undefined;
   const plugin = defineMdastPlugin({
@@ -736,10 +736,10 @@ test("a node retained past its visitor pass throws on its first `.children` read
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
   expect(retained).toBeDefined();
-  expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+  expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
 });
 
-test("a retained node throws on `.children` after an async pass settles", async () => {
+test("a retained node keeps `.children` readable after an async pass settles", async () => {
   const { handle, source } = setup();
   let retained: Readonly<Heading> | undefined;
   const plugin = defineMdastPlugin({
@@ -750,7 +750,38 @@ test("a retained node throws on `.children` after an async pass settles", async 
     },
   });
   await visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
-  expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+  expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
+});
+
+test("an in-pass deep read pins the snapshot: retained nodes survive a later mutating pass", () => {
+  const { handle, source } = setup("# Hello\n\nWorld");
+  let retainedP: Readonly<Paragraph> | undefined;
+  const pinAndRetain = defineMdastPlugin({
+    name: "pin-and-retain",
+    heading(node) {
+      const first = node.children[0]!;
+      void (first.type === "text" && first.value);
+    },
+    paragraph(node) {
+      retainedP = node;
+    },
+  });
+  visitMdastHandle(
+    handle,
+    pinAndRetain,
+    resolveMdastSubscriptions(pinAndRetain),
+    source,
+    undefined,
+  );
+  const mutator = defineMdastPlugin({
+    name: "mutate-heading",
+    heading(node, ctx) {
+      ctx.replaceNode(node, { type: "heading", depth: 2, children: node.children });
+    },
+  });
+  visitMdastHandle(handle, mutator, resolveMdastSubscriptions(mutator), source, undefined);
+  // Unread in-pass, so this is a fresh post-mutation resolve, not a cached value.
+  expect(retainedP!.children[0]).toMatchObject({ type: "text", value: "World" });
 });
 
 test("ctx.source returns the verbatim input, not the string-interning heap", () => {
@@ -993,7 +1024,7 @@ test("parent throws on plugin-built nodes (no arena id)", () => {
   expect(error?.message).toMatch(/no arena id/);
 });
 
-test("parent called after the pass throws the retention error", () => {
+test("parent called after a non-mutating pass resolves from the pass snapshot", () => {
   const { handle, source } = setup();
   let retained: Readonly<Heading> | undefined;
   let retainedCtx: MdastVisitorContext | undefined;
@@ -1005,7 +1036,7 @@ test("parent called after the pass throws the retention error", () => {
     },
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
-  expect(() => retainedCtx!.parent(retained!)).toThrow(/retained past its visitor pass/);
+  expect(retainedCtx!.parent(retained!)).toMatchObject({ type: "root" });
 });
 
 test("a parent is a valid anchor for structural mutations", () => {

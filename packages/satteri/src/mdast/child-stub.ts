@@ -44,9 +44,8 @@ const FALLBACK_DESCRIPTORS = stubDescriptors([]);
 /**
  * Walk-path child stub: arena id + `type` eagerly, every other field a lazy
  * forward to the materialized node (first read snapshots the arena via
- * `materializeOne`, which enforces the handle epoch — the pass seal is checked
- * where the stubs are built). Spread/identity rules are enforced by `nid()`
- * (authoritative doc in hast-visitor.ts).
+ * `materializeOne`, which enforces the handle epoch). Spread/identity rules
+ * are enforced by `nid()` (authoritative doc in hast-visitor.ts).
  */
 export class MdastChildStub {
   _resolver: MdastResolver;

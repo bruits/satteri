@@ -1,7 +1,6 @@
 import type { Root } from "mdast";
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
-import { lazyProp, lazyGroup } from "../lazy-props.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
 import { materializeMdastFields } from "./generated/layout.js";
 
@@ -13,7 +12,7 @@ export const LEAF_TYPES: ReadonlySet<number> = new Set([
 ]);
 
 /**
- * Add type-specific lazy properties to a node object.
+ * Add type-specific properties to a node object as eager plain stores.
  */
 function addTypeProperties(
   node: MdastNode,
@@ -28,34 +27,47 @@ function addTypeProperties(
   switch (nodeType) {
     case 5: {
       // list
-      const resolveList = () => {
-        const d = reader.getListData(nodeId);
-        return { ordered: d.ordered, start: d.ordered ? d.start : null, spread: d.spread };
-      };
-      lazyGroup(node, ["ordered", "start", "spread"], resolveList);
+      const d = reader.getListData(nodeId);
+      const n = node as { ordered: boolean; start: number | null; spread: boolean };
+      n.ordered = d.ordered;
+      n.start = d.ordered ? d.start : null;
+      n.spread = d.spread;
       break;
     }
 
-    case 6: // listItem
-      lazyGroup(node, ["spread", "checked"], () => reader.getListItemData(nodeId));
+    case 6: {
+      // listItem
+      const d = reader.getListItemData(nodeId);
+      const n = node as { spread: boolean; checked: boolean | null };
+      n.spread = d.spread;
+      n.checked = d.checked;
       break;
+    }
 
     case 21: // table
-      Object.defineProperties(node, {
-        align: lazyProp("align", () => reader.getTableAlign(nodeId)),
-      });
+      (node as { align: unknown }).align = reader.getTableAlign(nodeId);
       break;
 
     case 30: // containerDirective
     case 31: // leafDirective
-    case 32: // textDirective
-      lazyGroup(node, ["name", "attributes"], () => reader.getDirectiveData(nodeId));
+    case 32: {
+      // textDirective
+      const d = reader.getDirectiveData(nodeId);
+      const n = node as { name: string; attributes: unknown };
+      n.name = d.name;
+      n.attributes = d.attributes;
       break;
+    }
 
     case 100: // mdxJsxFlowElement
-    case 101: // mdxJsxTextElement
-      lazyGroup(node, ["name", "attributes"], () => reader.getMdxJsxElementData(nodeId));
+    case 101: {
+      // mdxJsxTextElement
+      const d = reader.getMdxJsxElementData(nodeId);
+      const n = node as { name: string | null; attributes: unknown };
+      n.name = d.name;
+      n.attributes = d.attributes;
       break;
+    }
 
     // Nodes with no type-specific props:
     // root(0), paragraph(1), thematicBreak(3), blockquote(4),
@@ -65,17 +77,41 @@ function addTypeProperties(
   }
 }
 
-/**
- * Materialize a single MDAST node from a binary buffer as a lazy JS object.
- */
+/** Lazy own children getter, shared per reader via `_nodeId`: O(1) in subtree size, no per-node closure. */
+let lastReader: MdastReader | undefined;
+let lastChildrenDescriptor: PropertyDescriptor | undefined;
+
+function childrenDescriptor(reader: MdastReader): PropertyDescriptor {
+  if (reader === lastReader) return lastChildrenDescriptor as PropertyDescriptor;
+  const descriptor: PropertyDescriptor = {
+    get(this: MdastNode) {
+      const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+      const children = reader.getChildIds(nodeId).map((id) => materializeNode(reader, id));
+      Object.defineProperty(this, "children", {
+        value: children,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+      return children;
+    },
+    configurable: true,
+    enumerable: true,
+  };
+  lastReader = reader;
+  lastChildrenDescriptor = descriptor;
+  return descriptor;
+}
+
+/** Materialize a single MDAST node from a binary buffer; scalars eager, `children` lazy. */
 export function materializeNode(reader: MdastReader, nodeId: number): MdastNode {
-  const rawNode = reader.getNode(nodeId);
-  const nodeType = rawNode.type;
+  const nodeType = reader.getNodeType(nodeId);
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
   const node = { type: typeName } as MdastNode;
-  if (rawNode.position !== undefined) {
-    (node as { position: typeof rawNode.position }).position = rawNode.position;
+  const position = reader.getPosition(nodeId);
+  if (position !== undefined) {
+    (node as { position: typeof position }).position = position;
   }
 
   // _nodeId: non-enumerable internal reference
@@ -112,21 +148,7 @@ export function materializeNode(reader: MdastReader, nodeId: number): MdastNode 
 
   // children: lazy getter (only for non-leaf nodes)
   if (!LEAF_TYPES.has(nodeType)) {
-    Object.defineProperty(node, "children", {
-      get(this: MdastNode) {
-        const childIds = reader.getChildIds(nodeId);
-        const children = childIds.map((id) => materializeNode(reader, id));
-        Object.defineProperty(this, "children", {
-          value: children,
-          writable: true,
-          configurable: true,
-          enumerable: true,
-        });
-        return children;
-      },
-      configurable: true,
-      enumerable: true,
-    });
+    Object.defineProperty(node, "children", childrenDescriptor(reader));
   }
 
   return node;

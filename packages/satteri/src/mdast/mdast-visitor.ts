@@ -56,7 +56,7 @@ import {
   type PluginOptions,
   unencodableContentError,
 } from "../visitor-shared.js";
-import { LazyChildResolver } from "../lazy-child-resolver.js";
+import { LazyChildResolver, type EpochCache } from "../lazy-child-resolver.js";
 import { MdastChildStub } from "./child-stub.js";
 import type { MdastHandle } from "../handles.js";
 import type {
@@ -449,7 +449,13 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
   return { subs, rustSubs };
 }
 
+const MDAST_EPOCH_CACHE = new WeakMap<MdastHandle, EpochCache<MdastReader, MdastNode>>();
+
 class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
+  protected override cacheSlot() {
+    return MDAST_EPOCH_CACHE;
+  }
+
   protected override createReader(wire: Uint8Array): MdastReader {
     return new MdastReader(wire);
   }
@@ -468,9 +474,9 @@ class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
 }
 
 /** Build the child-stub list for a matched node from the wire's `[child_ids]
- *  [child_types]` blocks — no arena snapshot. The seal check still applies:
- *  post-pass ids are stale, and a stub built from them could later splice the
- *  wrong node as a ref. */
+ *  [child_types]` blocks — no arena snapshot. Stale ids are caught at
+ *  materialization: the resolver's epoch check refuses a snapshot once the
+ *  arena has mutated or been dropped. */
 function readMdastChildStubs(
   view: DataView,
   buf: Uint8Array,
@@ -479,7 +485,14 @@ function readMdastChildStubs(
   count: number,
   resolver: MdastLazyChildResolver,
 ): MdastNode[] {
-  resolver.assertUnsealed();
+  // With a hot snapshot a stub's deferral buys nothing; real nodes skip its per-field getters.
+  if (resolver.hasHotSnapshot()) {
+    const nodes: MdastNode[] = new Array(count);
+    for (let i = 0; i < count; i++) {
+      nodes[i] = resolver.materializeOne(ru32(view, idsPos + i * 4));
+    }
+    return nodes;
+  }
   const stubs: MdastNode[] = new Array(count);
   for (let i = 0; i < count; i++) {
     stubs[i] = new MdastChildStub(
@@ -898,15 +911,10 @@ export function visitMdastHandle(
       for (const { nodeId, result, originalNode } of results) {
         applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
       }
-      // End of the pass — the caller applies the returned command buffer next,
-      // renumbering the arena, so later snapshots would resolve match-time
-      // child ids against wrong nodes. This is the last point we control.
-      resolver.seal();
       return finalizeMdastVisit(handle, context, returnBuffer);
     });
   }
 
-  resolver.seal();
   return finalizeMdastVisit(handle, context, returnBuffer);
 }
 

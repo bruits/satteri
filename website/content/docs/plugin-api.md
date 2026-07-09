@@ -193,9 +193,11 @@ mdxFlowExpression(node) {
 
 In order to avoid very expensive serialization costs between Rust and JS, Sätteri keeps both mdast and hast trees exclusively in Rust, exposing nodes to JavaScript plugins only as thin references when possible.
 
-This means that ergonomics are slightly different than one might expect from a plain JavaScript tree, and understanding of reference vs copy semantics is important to avoid bugs. After a visitor ends, any kept nodes may become totally invalid. Other plugins might've mutated the tree, or, once the pipeline has ended, the tree will have been discarded entirely.
+This means that ergonomics are slightly different than one might expect from a plain JavaScript tree, and understanding of reference vs copy semantics is important to avoid bugs.
 
-To keep a node's data beyond the visit, create an explicit copy of it and its subtree. For example, to collect all headings in a document:
+A node kept past its visitor pass reads as the tree looked _during that pass_: later plugins' mutations are never reflected in it. Reads on a retained node keep working as long as its pass's snapshot is recoverable, which is the case when any node content was read during the pass (this pins the pass snapshot for every node handed out in it), or when nothing has mutated or freed the tree yet by the time of the first read. The one unrecoverable case throws: a node whose fields were never touched in-pass, first read after the tree has changed or the pipeline has ended. The error says exactly that; reading any field of the node inside `visit()` is enough to avoid it.
+
+Retaining a node keeps its whole pass snapshot alive in memory until the node is garbage collected. To keep just a node's data beyond the visit, prefer an explicit copy of it and its subtree. For example, to collect all headings in a document:
 
 ```js
 const headings = [];

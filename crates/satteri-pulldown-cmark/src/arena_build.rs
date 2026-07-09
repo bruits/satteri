@@ -72,6 +72,15 @@ pub fn parse_no_positions_into(
     parse_inner(source, options, false, Some(reuse))
 }
 
+/// Same as [`parse`] but recycles a caller-pooled arena; see [`parse_no_positions_into`].
+pub fn parse_into(
+    source: &str,
+    options: Options,
+    reuse: Arena<Mdast>,
+) -> (Arena<Mdast>, Vec<(usize, String)>) {
+    parse_inner(source, options, true, Some(reuse))
+}
+
 fn parse_inner(
     source: &str,
     options: Options,

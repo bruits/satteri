@@ -1024,7 +1024,7 @@ describe("visitHastHandle - lazy children lifecycle", () => {
     expect(firstChild).toMatchObject({ type: "text", value: "Hello" });
   });
 
-  test("a node retained past its visitor pass throws on its first `.children` read", () => {
+  test("a node retained past a non-mutating pass keeps pass-time children readable", () => {
     const { handle, source } = setup();
     let retained: Readonly<Element> | undefined;
     const plugin = defineHastPlugin({
@@ -1038,10 +1038,10 @@ describe("visitHastHandle - lazy children lifecycle", () => {
     });
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     expect(retained).toBeDefined();
-    expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+    expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
   });
 
-  test("a retained node throws on `.children` after an async pass settles", async () => {
+  test("a retained node keeps `.children` readable after an async pass settles", async () => {
     const { handle, source } = setup();
     let retained: Readonly<Element> | undefined;
     const plugin = defineHastPlugin({
@@ -1055,7 +1055,39 @@ describe("visitHastHandle - lazy children lifecycle", () => {
       },
     });
     await visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
-    expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+    expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
+  });
+
+  test("an in-pass deep read pins the snapshot: retained nodes survive a later mutating pass", () => {
+    const { handle, source } = setup("# Hello\n\nWorld");
+    let retainedP: Readonly<Element> | undefined;
+    const pinAndRetain = defineHastPlugin({
+      name: "pin-and-retain",
+      element: {
+        filter: ["h1", "p"],
+        visit(node) {
+          if (node.tagName === "p") {
+            retainedP = node;
+            return;
+          }
+          const first = node.children[0]!;
+          void (first.type === "text" && first.value);
+        },
+      },
+    });
+    visitHastHandle(handle, pinAndRetain, resolveSubscriptions(pinAndRetain), source, undefined);
+    const mutator = defineHastPlugin({
+      name: "mutate-h1",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "id", "x");
+        },
+      },
+    });
+    visitHastHandle(handle, mutator, resolveSubscriptions(mutator), source, undefined);
+    // Unread in-pass, so this is a fresh post-mutation resolve, not a cached value.
+    expect(retainedP!.children[0]).toMatchObject({ type: "text", value: "World" });
   });
 
   test("children materialized in-pass stay usable after the pass", () => {

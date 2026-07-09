@@ -70,7 +70,7 @@ import {
   type PluginOptions,
   unencodableContentError,
 } from "../visitor-shared.js";
-import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js";
+import { LazyChildResolver, markHandleMutated, type EpochCache } from "../lazy-child-resolver.js";
 import { HastChildStub } from "./child-stub.js";
 import type { HastHandle } from "../handles.js";
 
@@ -620,9 +620,9 @@ function decodeProperties(
 }
 
 /** Build the child-stub list for a matched node from the wire's `[child_ids]
- *  [child_types]` blocks — no arena snapshot. The seal check still applies:
- *  post-pass ids are stale, and a stub built from them could later splice the
- *  wrong node as a ref. */
+ *  [child_types]` blocks — no arena snapshot. Stale ids are caught at
+ *  materialization: the resolver's epoch check refuses a snapshot once the
+ *  arena has mutated or been dropped. */
 function readChildStubs(
   view: DataView,
   buf: Uint8Array,
@@ -631,7 +631,14 @@ function readChildStubs(
   count: number,
   resolver: HastLazyChildResolver,
 ): HastNode[] {
-  resolver.assertUnsealed();
+  // With a hot snapshot a stub's deferral buys nothing; real nodes skip its per-field getters.
+  if (resolver.hasHotSnapshot()) {
+    const nodes: HastNode[] = new Array(count);
+    for (let i = 0; i < count; i++) {
+      nodes[i] = resolver.materializeOne(view.getUint32(idsPos + i * 4, true));
+    }
+    return nodes;
+  }
   const stubs: HastNode[] = new Array(count);
   for (let i = 0; i < count; i++) {
     stubs[i] = new HastChildStub(
@@ -960,7 +967,13 @@ function readMatchedNode(
   return node;
 }
 
+const HAST_EPOCH_CACHE = new WeakMap<HastHandle, EpochCache<HastReader, HastNode>>();
+
 class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
+  protected override cacheSlot() {
+    return HAST_EPOCH_CACHE;
+  }
+
   protected override createReader(wire: Uint8Array): HastReader {
     return new HastReader(wire);
   }
@@ -1152,14 +1165,10 @@ export function visitHastHandleCollect(
           emitHastTree(returnBuffer, "replace", nodeId, result);
         }
       }
-      // Mutations land next, renumbering the arena: snapshots taken after
-      // this point would resolve match-time child ids against wrong nodes.
-      resolver.seal();
       return collectCommands(returnBuffer, ctx);
     });
   }
 
-  resolver.seal();
   return collectCommands(returnBuffer, ctx);
 }
 

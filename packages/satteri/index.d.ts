@@ -102,8 +102,8 @@ export declare function createMdxHastHandleWithFrontmatter(source: string, featu
 export declare function createMdxMdastHandle(source: string, features?: JsFeatures | undefined | null, trackPositions?: boolean | undefined | null): MdastHandle
 
 /**
- * Release a handle's arena memory. The handle becomes empty but remains
- * valid (subsequent calls are no-ops or return empty results).
+ * Empty a handle's arena into the thread-local pool; the handle stays valid
+ * (subsequent calls are no-ops or return empty results).
  */
 export declare function dropHandle(handle: AnyHandle): void
 

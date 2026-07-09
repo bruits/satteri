@@ -66,7 +66,10 @@ export function stubDescriptors(fields: readonly string[]): readonly StubDescrip
   return entries;
 }
 
-export function installStubDescriptors(host: object, entries: readonly StubDescriptorEntry[]): void {
+export function installStubDescriptors(
+  host: object,
+  entries: readonly StubDescriptorEntry[],
+): void {
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i]!;
     Object.defineProperty(host, e[0], e[1]);

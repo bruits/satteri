@@ -103,7 +103,9 @@ use core::fmt::Display;
 #[cfg(feature = "mdx")]
 pub use crate::arena_build::MDX_OPTIONS;
 pub use crate::{
-    arena_build::{parse, parse_no_positions, parse_no_positions_into, DEFAULT_OPTIONS},
+    arena_build::{
+        parse, parse_into, parse_no_positions, parse_no_positions_into, DEFAULT_OPTIONS,
+    },
     parse::{
         BrokenLink, BrokenLinkCallback, DefaultParserCallbacks, OffsetIter, Parser,
         ParserCallbacks, RefDefs,

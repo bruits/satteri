@@ -387,11 +387,21 @@ type AnyHandle<'a> = Either<&'a MdastHandle, &'a HastHandle>;
 // a long-lived process that briefly bursts high.
 const ARENA_POOL_MAX: usize = 4;
 
+// Oversized bursts go back to the allocator instead of pinning the pool.
+const ARENA_POOL_MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
+
 thread_local! {
     static MDAST_ARENA_POOL: RefCell<Vec<satteri_arena::Arena<Mdast>>>
         = const { RefCell::new(Vec::new()) };
     static HAST_ARENA_POOL: RefCell<Vec<satteri_arena::Arena<Hast>>>
         = const { RefCell::new(Vec::new()) };
+}
+
+fn arena_retained_bytes<K: satteri_arena::ArenaKind>(arena: &satteri_arena::Arena<K>) -> usize {
+    arena.nodes.capacity() * std::mem::size_of::<satteri_arena::ArenaNode>()
+        + arena.children.capacity() * std::mem::size_of::<u32>()
+        + arena.type_data.capacity()
+        + arena.string_pool.capacity()
 }
 
 fn acquire_mdast_arena() -> satteri_arena::Arena<Mdast> {
@@ -401,6 +411,9 @@ fn acquire_mdast_arena() -> satteri_arena::Arena<Mdast> {
 }
 
 fn release_mdast_arena(arena: satteri_arena::Arena<Mdast>) {
+    if arena_retained_bytes(&arena) > ARENA_POOL_MAX_RETAINED_BYTES {
+        return;
+    }
     MDAST_ARENA_POOL.with(|p| {
         let mut pool = p.borrow_mut();
         if pool.len() < ARENA_POOL_MAX {
@@ -416,6 +429,9 @@ fn acquire_hast_arena() -> satteri_arena::Arena<Hast> {
 }
 
 fn release_hast_arena(arena: satteri_arena::Arena<Hast>) {
+    if arena_retained_bytes(&arena) > ARENA_POOL_MAX_RETAINED_BYTES {
+        return;
+    }
     HAST_ARENA_POOL.with(|p| {
         let mut pool = p.borrow_mut();
         if pool.len() < ARENA_POOL_MAX {
@@ -453,10 +469,11 @@ pub fn create_mdast_handle(
     track_positions: Option<bool>,
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, false);
+    let reuse = acquire_mdast_arena();
     let (mut arena, _) = if track_positions.unwrap_or(true) {
-        satteri_pulldown_cmark::parse(&source, opts)
+        satteri_pulldown_cmark::parse_into(&source, opts, reuse)
     } else {
-        satteri_pulldown_cmark::parse_no_positions(&source, opts)
+        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, reuse)
     };
     arena.mdx = false;
     arena.parse_options = opts.bits();
@@ -472,10 +489,11 @@ pub fn create_mdx_mdast_handle(
     track_positions: Option<bool>,
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, true);
+    let reuse = acquire_mdast_arena();
     let (mut arena, mdx_errors) = if track_positions.unwrap_or(true) {
-        satteri_pulldown_cmark::parse(&source, opts)
+        satteri_pulldown_cmark::parse_into(&source, opts, reuse)
     } else {
-        satteri_pulldown_cmark::parse_no_positions(&source, opts)
+        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, reuse)
     };
     if let Some((offset, msg)) = mdx_errors.first() {
         return Err(napi::Error::from_reason(
@@ -662,7 +680,12 @@ pub fn convert_mdast_to_hast_handle(
         &mut *arena,
         satteri_arena::Arena::<Mdast>::new(String::new()),
     );
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&owned, &convert_opts);
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &owned,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(owned);
     hast.mdx = mdx;
     hast.parse_options = parse_options;
     Ok(External::new(Mutex::new(hast)))
@@ -698,8 +721,12 @@ pub fn apply_commands_and_convert_to_hast_handle(
         options,
     )
     .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
-    let mut hast_arena =
-        satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
+    let mut hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mutated,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mutated);
     hast_arena.mdx = mdx;
     hast_arena.parse_options = parse_options;
     Ok(External::new(Mutex::new(hast_arena)))
@@ -777,9 +804,14 @@ pub fn apply_mdast_commands_and_convert_and_render(
     )
     .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let frontmatter = extract_mdast_frontmatter(&mutated);
-    let hast_arena =
-        satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
+    let hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mutated,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mutated);
     let html = satteri_ast::hast::hast_arena_to_html(&hast_arena);
+    release_hast_arena(hast_arena);
     Ok(MarkdownHtmlOneShot {
         html,
         frontmatter,
@@ -821,8 +853,12 @@ pub fn apply_mdast_commands_and_convert_and_compile(
     )
     .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let frontmatter = extract_mdast_frontmatter(&mutated);
-    let mut hast_arena =
-        satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mutated, &convert_opts);
+    let mut hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mutated,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mutated);
     let mdx_opts = js_options_to_rust(options);
     let ignore = mdx_opts
         .optimize_static
@@ -832,6 +868,7 @@ pub fn apply_mdast_commands_and_convert_and_compile(
     satteri_mdxjs::simplify_plain_mdx_nodes(&mut hast_arena, &ignore);
     let code = satteri_mdxjs::compile_hast_arena(&hast_arena, &mdx_opts)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    release_hast_arena(hast_arena);
     Ok(MdxJsOneShot {
         code,
         frontmatter,
@@ -850,9 +887,14 @@ pub fn create_hast_handle(
 ) -> Result<HastHandle> {
     let opts = features_to_options(features, false);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
-    let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
+    let (mut mdast, _) = satteri_pulldown_cmark::parse_into(&source, opts, acquire_mdast_arena());
     mdast.parse_options = opts.bits();
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mdast, &convert_opts);
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
     hast.mdx = false;
     hast.parse_options = opts.bits();
     Ok(External::new(Mutex::new(hast)))
@@ -869,14 +911,20 @@ pub fn create_mdx_hast_handle(
 ) -> Result<HastHandle> {
     let opts = features_to_options(features, true);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
-    let (mut mdast, mdx_errors) = satteri_pulldown_cmark::parse(&source, opts);
+    let (mut mdast, mdx_errors) =
+        satteri_pulldown_cmark::parse_into(&source, opts, acquire_mdast_arena());
     if let Some((offset, msg)) = mdx_errors.first() {
         return Err(napi::Error::from_reason(
             satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
         ));
     }
     mdast.parse_options = opts.bits();
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mdast, &convert_opts);
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
     hast.mdx = true;
     hast.parse_options = opts.bits();
     Ok(External::new(Mutex::new(hast)))
@@ -894,14 +942,20 @@ pub fn create_hast_handle_with_frontmatter(
 ) -> Result<(HastHandle, Option<JsFrontmatter>)> {
     let opts = features_to_options(features, false);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
+    let reuse = acquire_mdast_arena();
     let (mut mdast, _) = if track_positions.unwrap_or(true) {
-        satteri_pulldown_cmark::parse(&source, opts)
+        satteri_pulldown_cmark::parse_into(&source, opts, reuse)
     } else {
-        satteri_pulldown_cmark::parse_no_positions(&source, opts)
+        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, reuse)
     };
     mdast.parse_options = opts.bits();
     let frontmatter = extract_mdast_frontmatter(&mdast);
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mdast, &convert_opts);
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
     hast.mdx = false;
     hast.parse_options = opts.bits();
     Ok((External::new(Mutex::new(hast)), frontmatter))
@@ -919,10 +973,11 @@ pub fn create_mdx_hast_handle_with_frontmatter(
 ) -> Result<(HastHandle, Option<JsFrontmatter>)> {
     let opts = features_to_options(features, true);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
+    let reuse = acquire_mdast_arena();
     let (mut mdast, mdx_errors) = if track_positions.unwrap_or(true) {
-        satteri_pulldown_cmark::parse(&source, opts)
+        satteri_pulldown_cmark::parse_into(&source, opts, reuse)
     } else {
-        satteri_pulldown_cmark::parse_no_positions(&source, opts)
+        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, reuse)
     };
     if let Some((offset, msg)) = mdx_errors.first() {
         return Err(napi::Error::from_reason(
@@ -931,7 +986,12 @@ pub fn create_mdx_hast_handle_with_frontmatter(
     }
     mdast.parse_options = opts.bits();
     let frontmatter = extract_mdast_frontmatter(&mdast);
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&mdast, &convert_opts);
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
     hast.mdx = true;
     hast.parse_options = opts.bits();
     Ok((External::new(Mutex::new(hast)), frontmatter))
@@ -1019,10 +1079,8 @@ pub fn apply_commands_and_render_handle(
     let (new_arena, dropped) = satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let html = satteri_ast::hast::hast_arena_to_html(&new_arena);
-    // `*arena` is already the empty replacement we put there above; the
-    // mutated arena gets dropped at the end of this function, freeing all the
-    // node/children/source/type_data allocations on the Rust heap without a
-    // separate `dropHandle` NAPI crossing.
+    // The handle keeps the empty replacement; reclaiming here saves a `dropHandle` crossing.
+    release_hast_arena(new_arena);
     Ok(RenderHtmlOneShot {
         html,
         dropped_transforms: dropped.len() as u32,
@@ -1065,6 +1123,7 @@ pub fn apply_commands_and_compile_handle(
     satteri_mdxjs::simplify_plain_mdx_nodes(&mut new_arena, &ignore);
     let code = satteri_mdxjs::compile_hast_arena(&new_arena, &mdx_opts)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    release_hast_arena(new_arena);
     Ok(CompileJsOneShot {
         code,
         dropped_transforms: dropped.len() as u32,
@@ -1267,8 +1326,8 @@ pub fn mdast_text_content_handle(
     ))
 }
 
-/// Release a handle's arena memory. The handle becomes empty but remains
-/// valid (subsequent calls are no-ops or return empty results).
+/// Empty a handle's arena into the thread-local pool; the handle stays valid
+/// (subsequent calls are no-ops or return empty results).
 #[napi]
 pub fn drop_handle(handle: AnyHandle) -> Result<()> {
     match handle {
@@ -1276,13 +1335,23 @@ pub fn drop_handle(handle: AnyHandle) -> Result<()> {
             let mut arena = h
                 .lock()
                 .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-            *arena = satteri_arena::Arena::<Mdast>::new(String::new());
+            let owned = std::mem::replace(
+                &mut *arena,
+                satteri_arena::Arena::<Mdast>::new(String::new()),
+            );
+            drop(arena);
+            release_mdast_arena(owned);
         }
         Either::B(h) => {
             let mut arena = h
                 .lock()
                 .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-            *arena = satteri_arena::Arena::<Hast>::new(String::new());
+            let owned = std::mem::replace(
+                &mut *arena,
+                satteri_arena::Arena::<Hast>::new(String::new()),
+            );
+            drop(arena);
+            release_hast_arena(owned);
         }
     }
     Ok(())
