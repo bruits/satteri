@@ -1082,17 +1082,18 @@ pub fn mdx_to_js_fast(
 ) -> Result<MdxJsOneShot> {
     let opts = features_to_options(features, true);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
-    // Skip position tracking: generated JS never references source positions
-    // (codegen handles its own JSX positions independently of MDAST line/col).
+    // Skip the LineIndex + per-node line/col work; byte offsets still flow to
+    // the HAST arena, so codegen resolves dev `__source` / error line:col via
+    // `Location`.
     let mdast_reuse = acquire_mdast_arena();
     let (mdast, mdx_errors) =
         satteri_pulldown_cmark::parse_no_positions_into(&source, opts, mdast_reuse);
     if let Some((offset, msg)) = mdx_errors.first() {
         // Best-effort: drop the arena rather than poisoning the pool with a
         // half-built error state.
-        return Err(napi::Error::from_reason(format!(
-            "MDX parse error at byte {offset}: {msg}"
-        )));
+        return Err(napi::Error::from_reason(
+            satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
+        ));
     }
     let frontmatter = extract_mdast_frontmatter(&mdast);
     let hast_reuse = acquire_hast_arena();

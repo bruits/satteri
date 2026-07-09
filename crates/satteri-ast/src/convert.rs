@@ -963,7 +963,8 @@ fn copy_position_to(
     builder: &mut ArenaBuilder<Hast>,
 ) {
     let node = view.get_node(src_node_id);
-    if node.start_line > 0 {
+    // See `copy_position`: offsets flow through even in skip-positions mode.
+    if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
         builder.arena_mut().set_position(
             target_id,
             node.start_offset,
@@ -1025,10 +1026,11 @@ fn encode_code_node_data(lang: &str, meta: &str) -> Vec<u8> {
 
 fn copy_position(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>) {
     let node = view.get_node(node_id);
-    // `start_line` is 1-based; `0` is the skip-positions sentinel. Check the
-    // line only; `start_offset` may still carry a byte offset, which the
-    // parser records even in skip-positions mode.
-    if node.start_line > 0 {
+    // Skip-positions mode leaves line/col 0 but the parser still records byte
+    // offsets; copy them so MDX codegen resolves line:col on demand via
+    // `Location`. `readPosition` gates plugin `node.position` on the line, so a
+    // non-opted-in plugin still sees `undefined`.
+    if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
         builder.set_position_current(
             node.start_offset,
             node.end_offset,

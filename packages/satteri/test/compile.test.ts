@@ -1824,3 +1824,28 @@ describe("value-only node swap fast path", () => {
     expect(result.html).toContain("HELLO");
   });
 });
+
+// Guards the default no-plugin path: skip-positions mode must still flow byte
+// offsets to HAST so MDX codegen resolves positions lazily.
+describe("MDX source positions without a position opt-in", () => {
+  test("dev __source keeps lineNumber/columnNumber on the fast path", () => {
+    const src = "# Title\n\n<Foo>bar</Foo>\n";
+    const result = mdxToJs(src, { development: true });
+    if (result instanceof Promise) throw new Error("expected sync");
+    // The authored `<Foo>` is on line 3, column 1.
+    expect(result.code).toContain("lineNumber: 3");
+    expect(result.code).toContain("columnNumber: 1");
+  });
+
+  test("MDX parse errors report line:col (not a byte offset) on the fast path", () => {
+    const src = "# Title\n\nSome text.\n\n{invalid ++ ++ syntax}\n";
+    let message = "";
+    try {
+      mdxToJs(src);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/^5:\d+:/);
+    expect(message).not.toMatch(/byte \d+/);
+  });
+});
