@@ -4,8 +4,9 @@ use crate::data::{DataMap, TypedDataMap};
 use crate::plugin::{NodeView, Plugin, VisitResult};
 use crate::typed_nodes::*;
 use satteri_arena::{Arena, ArenaBuilder, Mdast};
+use satteri_ast::commands::CommandError;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::rebuild::{rebuild, Patch};
+use satteri_ast::rebuild::{apply_patches_in_place, Patch, PatchContent};
 
 /// Result of running plugins against an arena.
 pub struct PluginRunResult {
@@ -86,8 +87,13 @@ impl PluginRunner {
                 // Convert commands to patches and rebuild the arena
                 let patches = commands_to_patches(commands.iter().collect(), &current_arena);
                 if !patches.is_empty() {
-                    match rebuild(&current_arena, &patches) {
-                        Ok(rebuilt) => current_arena = rebuilt,
+                    match apply_patches_in_place(current_arena.clone(), &patches).and_then(
+                        |result| match result.dropped.first() {
+                            Some(&anchor) => Err(CommandError::PatchOnRemovedSubtree(anchor)),
+                            None => Ok(result.arena),
+                        },
+                    ) {
+                        Ok(applied) => current_arena = applied,
                         Err(err) => {
                             // Drop the rebuild for this plugin's pass and surface
                             // the bad combination so the plugin author can fix it.
@@ -127,7 +133,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             Command::Replace { node_id, new_node } => {
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::Replace {
                     node_id: *node_id,
-                    new_tree: sub,
+                    new_tree: PatchContent::Tree(sub),
                     keep_children: false,
                 })
             }
@@ -135,13 +141,13 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             Command::InsertBefore { node_id, new_node } => {
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::InsertBefore {
                     node_id: *node_id,
-                    new_tree: sub,
+                    new_tree: PatchContent::Tree(sub),
                 })
             }
             Command::InsertAfter { node_id, new_node } => {
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::InsertAfter {
                     node_id: *node_id,
-                    new_tree: sub,
+                    new_tree: PatchContent::Tree(sub),
                 })
             }
             Command::Wrap {
@@ -149,7 +155,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
                 parent_node,
             } => built_node_to_arena(parent_node, arena.string_pool()).map(|sub| Patch::Wrap {
                 node_id: *node_id,
-                parent_tree: sub,
+                parent_tree: PatchContent::Tree(sub),
             }),
             Command::PrependChild {
                 node_id,
@@ -157,7 +163,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             } => built_node_to_arena(child_node, arena.string_pool()).map(|sub| {
                 Patch::PrependChild {
                     node_id: *node_id,
-                    child_tree: sub,
+                    child_tree: PatchContent::Tree(sub),
                 }
             }),
             Command::AppendChild {
@@ -166,7 +172,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             } => {
                 built_node_to_arena(child_node, arena.string_pool()).map(|sub| Patch::AppendChild {
                     node_id: *node_id,
-                    child_tree: sub,
+                    child_tree: PatchContent::Tree(sub),
                 })
             }
             Command::SetData { .. } => {

@@ -53,12 +53,18 @@ pub enum CommandError {
     /// A stored node's `type_data` is shorter than its declared layout, so a
     /// field write would spill into the next node's data.
     TypeDataTooShort,
+    /// A structurally valid but re-entrant patch shape (e.g. a payload ref
+    /// naming its own anchor's ancestor) that in-place application rejects.
+    UnsupportedPatchShape(&'static str),
 }
 
 impl std::fmt::Display for CommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnexpectedEof => write!(f, "unexpected end of command buffer"),
+            Self::UnsupportedPatchShape(reason) => {
+                write!(f, "unsupported patch shape: {reason}")
+            }
             Self::UnknownCommand(c) => write!(f, "unknown command byte: 0x{c:02x}"),
             Self::UnknownPayloadType(p) => write!(f, "unknown payload type: 0x{p:02x}"),
             Self::InvalidUtf8 => write!(f, "invalid UTF-8 in command buffer"),

@@ -44,6 +44,40 @@ fn main() {
                 satteri_mdxjs::compile(src, &opts, satteri_pulldown_cmark::MDX_OPTIONS).unwrap();
             std::hint::black_box(out);
         }),
+        "apply" => (md_src, |src, opts| {
+            use satteri_arena::{ArenaBuilder, Hast, StringRef};
+            use satteri_ast::hast::codec::encode_element_data;
+            use satteri_ast::rebuild::PatchContent;
+            let (mdast, _) = satteri_pulldown_cmark::parse(src, opts);
+            let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
+            let mut patches = Vec::new();
+            for id in 0..hast.len() as u32 {
+                let node = hast.get_node(id);
+                if node.node_type != satteri_ast::hast::HastNodeType::Element as u8 {
+                    continue;
+                }
+                let td = hast.get_type_data(id);
+                if td.len() < 8 || hast.get_str(StringRef::from_bytes(&td[0..8])) != "a" {
+                    continue;
+                }
+                let mut b = ArenaBuilder::<Hast>::new(String::new());
+                let tag = b.alloc_string("span");
+                let name = b.alloc_string("className");
+                let val = b.alloc_string("link");
+                b.open_node(satteri_ast::hast::HastNodeType::Element as u8);
+                b.set_data_current(&encode_element_data(tag, &[(name, 0, val)]));
+                b.close_node();
+                patches.push(satteri_ast::rebuild::Patch::Replace {
+                    node_id: id,
+                    new_tree: PatchContent::Tree(b.finish()),
+                    keep_children: true,
+                });
+            }
+            let applied = satteri_ast::rebuild::apply_patches_in_place(hast, &patches)
+                .unwrap()
+                .arena;
+            std::hint::black_box(applied);
+        }),
         other => panic!("unknown workload: {other}"),
     };
     let opts = if workload.starts_with("mdx") {

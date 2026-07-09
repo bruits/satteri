@@ -34,8 +34,10 @@ import {
   acquireCommandBuffer,
   releaseCommandBuffer,
   CommandBuffer,
+  STRUCTURAL_CMD,
   type StructuralOp,
 } from "../command-buffer.js";
+import { CMD_SET_CHILDREN } from "../generated/wire-constants.js";
 import {
   OpWriter,
   OF_VALUE,
@@ -202,64 +204,44 @@ function hastReusedId(node: unknown): number | undefined {
   return typeof id === "number" ? id : undefined;
 }
 
-// Reused across replacements in a pass — see the note on `mdastWriter`.
-const hastWriter = new OpWriter();
-
-/** Compile a set-children payload: a root-wrapped child list, the shape
+/** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function compileHastChildrenToOpstream(children: unknown): Uint8Array | null {
-  if (!Array.isArray(children)) return null;
-  hastWriter.begin();
+function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown): boolean {
+  if (!Array.isArray(children)) return false;
+  const start = buffer.length;
+  const lenPos = buffer.beginOpstream(CMD_SET_CHILDREN, id);
+  let ok = true;
   try {
-    hastWriter.open(NAME_TO_TYPE.root!);
+    buffer.open(NAME_TO_TYPE.root!);
     for (const c of children) {
-      if (!emitHastOp(hastWriter, c, false)) return null;
+      if (!emitHastOp(buffer, c, false)) {
+        ok = false;
+        break;
+      }
     }
-    hastWriter.close();
-    return hastWriter.take();
+    if (ok) buffer.close();
   } finally {
-    hastWriter.end();
+    if (!ok) buffer.abortOpstream(start);
   }
+  if (ok) buffer.endOpstream(lenPos);
+  return ok;
 }
 
-/** Encode `node` as the `op` structural command. HAST content is always a
- *  declarative node (no raw escape hatch), so it compiles to the op-stream or
- *  it's a hard error — the op-stream is the only structural encoding. The
- *  switch stays inline so the buffer calls are monomorphic (computed method
- *  names defeat inline caches on this warm path). */
+/** Encode `node` as the `op` structural command, emitting the op-stream
+ *  payload directly into the command buffer (no intermediate copy). HAST
+ *  content is always a declarative node (no raw escape hatch), so it
+ *  compiles or it's a hard error. */
 function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
-  const ops = compileHastToOpstream(node);
-  if (ops === null) throw unencodableContentError(node);
-  switch (op) {
-    case "replace":
-      return buffer.replaceOpstream(id, ops);
-    case "insertBefore":
-      return buffer.insertBeforeOpstream(id, ops);
-    case "insertAfter":
-      return buffer.insertAfterOpstream(id, ops);
-    case "prependChild":
-      return buffer.prependChildOpstream(id, ops);
-    case "appendChild":
-      return buffer.appendChildOpstream(id, ops);
-    case "wrapNode":
-      return buffer.wrapNodeOpstream(id, ops);
-  }
-}
-
-/**
- * Compile a declarative HAST replacement tree to the op-stream — the only
- * structural encoding. Reused nodes become `ref`s (transparent passthrough).
- * Returns null when the tree holds a type the replay can't reproduce
- * identically; the caller throws.
- */
-function compileHastToOpstream(root: unknown): Uint8Array | null {
-  hastWriter.begin();
+  const start = buffer.length;
+  const lenPos = buffer.beginOpstream(STRUCTURAL_CMD[op], id);
+  let ok = false;
   try {
-    if (!emitHastOp(hastWriter, root, true)) return null;
-    return hastWriter.take();
+    ok = emitHastOp(buffer, node, true);
   } finally {
-    hastWriter.end();
+    if (!ok) buffer.abortOpstream(start);
   }
+  if (!ok) throw unencodableContentError(node);
+  buffer.endOpstream(lenPos);
 }
 
 function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
@@ -411,9 +393,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
-      const ops = compileHastChildrenToOpstream(value);
-      if (!ops) throw unencodableContentError(value);
-      this.#commandBuffer.setChildrenOpstream(id, ops);
+      if (!emitHastChildrenCommand(this.#commandBuffer, id, value)) {
+        throw unencodableContentError(value);
+      }
       return;
     }
     if (key === "data") {

@@ -11,7 +11,7 @@
  * avoid byte-swapping on the Rust side.
  */
 
-import { ByteWriter } from "./byte-writer.js";
+import { OpWriter } from "./op-stream.js";
 import type { MdastNode } from "./types.js";
 import {
   PROP_STRING,
@@ -76,12 +76,70 @@ export type StructuralOp =
   | "appendChild"
   | "wrapNode";
 
-export class CommandBuffer extends ByteWriter {
+export const STRUCTURAL_CMD: Record<StructuralOp, number> = {
+  replace: CMD_REPLACE,
+  insertBefore: CMD_INSERT_BEFORE,
+  insertAfter: CMD_INSERT_AFTER,
+  prependChild: CMD_PREPEND_CHILD,
+  appendChild: CMD_APPEND_CHILD,
+  wrapNode: CMD_WRAP,
+};
+
+export class CommandBuffer extends OpWriter {
+  /** Set while a structural payload is being emitted in place; command
+   *  methods must not interleave bytes into it. */
+  #inOpstream = false;
+
   constructor() {
     super(INITIAL_SIZE);
   }
 
+  override reset(): void {
+    this.#inOpstream = false;
+    super.reset();
+  }
+
+  #assertNotEncoding(): void {
+    if (this.#inOpstream) {
+      throw new Error(
+        "reentrant command emission: a node getter or toJSON invoked a context mutation while a structural payload was being encoded",
+      );
+    }
+  }
+
+  /** Open a structural command whose opstream payload is emitted in place via
+   *  the inherited op methods; returns the backpatch position for
+   *  `endOpstream`. Pair with `abortOpstream` on failure. */
+  beginOpstream(cmd: number, nodeId: number): number {
+    this.#assertNotEncoding();
+    this.#inOpstream = true;
+    this.ensure(10);
+    this.buf[this.n++] = cmd;
+    this.writeU32(nodeId);
+    this.buf[this.n++] = PAYLOAD_OPSTREAM;
+    const lenPos = this.n;
+    this.n += 4;
+    return lenPos;
+  }
+
+  endOpstream(lenPos: number): void {
+    this.#inOpstream = false;
+    const written = this.n - (lenPos + 4);
+    const buf = this.buf;
+    buf[lenPos] = written & 255;
+    buf[lenPos + 1] = (written >> 8) & 255;
+    buf[lenPos + 2] = (written >> 16) & 255;
+    buf[lenPos + 3] = (written >>> 24) & 255;
+  }
+
+  /** Roll back an in-progress opstream command (unencodable content). */
+  abortOpstream(commandStart: number): void {
+    this.#inOpstream = false;
+    this.n = commandStart;
+  }
+
   removeNode(nodeId: number): void {
+    this.#assertNotEncoding();
     this.ensure(5);
     this.buf[this.n++] = CMD_REMOVE;
     this.writeU32(nodeId);
@@ -93,6 +151,7 @@ export class CommandBuffer extends ByteWriter {
    *  per-call `Uint8Array`), reserving the worst-case length up front and
    *  backfilling the length prefix once the byte count is known. */
   setProperty(nodeId: number, key: string, value: unknown): void {
+    this.#assertNotEncoding();
     let valueType: number;
     let str: string;
 
@@ -151,50 +210,12 @@ export class CommandBuffer extends ByteWriter {
 
   /** Header (cmd + nodeId + payloadType) followed by a length-prefixed string payload. */
   private writePayloadCommand(cmd: number, nodeId: number, payloadType: number, s: string): void {
+    this.#assertNotEncoding();
     this.ensure(6);
     this.buf[this.n++] = cmd;
     this.writeU32(nodeId);
     this.buf[this.n++] = payloadType;
     this.utf8WithU32Len(s);
-  }
-
-  replaceOpstream(nodeId: number, ops: Uint8Array): void {
-    this.writeOpstreamCommand(CMD_REPLACE, nodeId, ops);
-  }
-
-  /** Replace a node's child list (root-wrapped `ops`) while keeping the node. */
-  setChildrenOpstream(nodeId: number, ops: Uint8Array): void {
-    this.writeOpstreamCommand(CMD_SET_CHILDREN, nodeId, ops);
-  }
-
-  insertBeforeOpstream(nodeId: number, ops: Uint8Array): void {
-    this.writeOpstreamCommand(CMD_INSERT_BEFORE, nodeId, ops);
-  }
-
-  insertAfterOpstream(nodeId: number, ops: Uint8Array): void {
-    this.writeOpstreamCommand(CMD_INSERT_AFTER, nodeId, ops);
-  }
-
-  prependChildOpstream(nodeId: number, ops: Uint8Array): void {
-    this.writeOpstreamCommand(CMD_PREPEND_CHILD, nodeId, ops);
-  }
-
-  appendChildOpstream(nodeId: number, ops: Uint8Array): void {
-    this.writeOpstreamCommand(CMD_APPEND_CHILD, nodeId, ops);
-  }
-
-  wrapNodeOpstream(nodeId: number, ops: Uint8Array): void {
-    this.writeOpstreamCommand(CMD_WRAP, nodeId, ops);
-  }
-
-  private writeOpstreamCommand(cmd: number, nodeId: number, ops: Uint8Array): void {
-    this.ensure(10 + ops.length);
-    this.buf[this.n++] = cmd;
-    this.writeU32(nodeId);
-    this.buf[this.n++] = PAYLOAD_OPSTREAM;
-    this.writeU32(ops.length);
-    this.buf.set(ops, this.n);
-    this.n += ops.length;
   }
 
   /** Return a Uint8Array view of the written bytes (no copy). */

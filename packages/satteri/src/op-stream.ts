@@ -5,7 +5,9 @@
  * replays straight into the arena (`replay_opstream` in js_commands.rs; byte
  * values in generated/wire-constants.ts) — the only structural encoding for
  * plugin-built content. Strings ride ByteWriter's zero-alloc path (inline
- * char codes when short ASCII, `encodeInto` otherwise).
+ * char codes when short ASCII, `encodeInto` otherwise). `CommandBuffer`
+ * extends this class so payloads are emitted directly into the command
+ * bytes, with no intermediate opstream buffer or copy.
  */
 
 import { ByteWriter } from "./byte-writer.js";
@@ -60,30 +62,8 @@ export {
 } from "./generated/wire-constants.js";
 
 export class OpWriter extends ByteWriter {
-  #encoding = false;
-
-  constructor() {
-    super(512);
-  }
-
-  /**
-   * Start a compile on this (shared, module-level) writer. Encoding evaluates
-   * plugin-supplied getters and `toJSON`; if one of those calls a context
-   * mutation, the nested compile would reset the stream under the outer one
-   * and corrupt it silently — throw instead. Pair with `end` in a `finally`.
-   */
-  begin(): void {
-    if (this.#encoding) {
-      throw new Error(
-        "reentrant op-stream compile: a node getter or toJSON invoked a context mutation while its node was being encoded",
-      );
-    }
-    this.#encoding = true;
-    this.reset();
-  }
-
-  end(): void {
-    this.#encoding = false;
+  constructor(initialSize = 512) {
+    super(initialSize);
   }
 
   open(type: number): void {

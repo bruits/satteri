@@ -5,8 +5,10 @@ import {
   releaseCommandBuffer,
   classifyReturn,
   CommandBuffer,
+  STRUCTURAL_CMD,
   type StructuralOp,
 } from "../command-buffer.js";
+import { CMD_SET_CHILDREN } from "../generated/wire-constants.js";
 import { ru32, rstr, readPosition } from "../wire-read.js";
 import { decodeMdastTypeData } from "./generated/layout.js";
 import {
@@ -250,9 +252,9 @@ export class MdastVisitorContext {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
       const id = requireNid(node as MdastNode, "setProperty");
-      const ops = compileMdastChildrenToOpstream(value);
-      if (!ops) throw unencodableContentError(value);
-      this.#commandBuffer.setChildrenOpstream(id, ops);
+      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value)) {
+        throw unencodableContentError(value);
+      }
       return;
     }
     if (key === "data") {
@@ -615,7 +617,6 @@ function reusedId(node: unknown): number | undefined {
 // Reused across every replacement in a pass: compile is synchronous and its
 // result is copied into the command buffer before the next call, so a single
 // writer is safe and avoids a 512-byte allocation per built node.
-const mdastWriter = new OpWriter();
 
 /**
  * Compile a declarative MDAST replacement tree to the op-stream — the only
@@ -624,31 +625,27 @@ const mdastWriter = new OpWriter();
  * the replay can't reproduce the tree identically (unsupported node type or
  * out-of-range numeric field); the caller turns that into a hard error.
  */
-function compileMdastToOpstream(root: unknown, forReplace = false): Uint8Array | null {
-  mdastWriter.begin();
-  try {
-    if (!emitMdastOp(mdastWriter, root, true, forReplace)) return null;
-    return mdastWriter.take();
-  } finally {
-    mdastWriter.end();
-  }
-}
-
-/** Compile a set-children payload: a root-wrapped child list, the shape
+/** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function compileMdastChildrenToOpstream(children: unknown): Uint8Array | null {
-  if (!Array.isArray(children)) return null;
-  mdastWriter.begin();
+function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown): boolean {
+  if (!Array.isArray(children)) return false;
+  const start = buffer.length;
+  const lenPos = buffer.beginOpstream(CMD_SET_CHILDREN, id);
+  let ok = true;
   try {
-    mdastWriter.open(NAME_TO_TYPE.root!);
+    buffer.open(NAME_TO_TYPE.root!);
     for (const c of children) {
-      if (!emitMdastOp(mdastWriter, c, false, false)) return null;
+      if (!emitMdastOp(buffer, c, false, false)) {
+        ok = false;
+        break;
+      }
     }
-    mdastWriter.close();
-    return mdastWriter.take();
+    if (ok) buffer.close();
   } finally {
-    mdastWriter.end();
+    if (!ok) buffer.abortOpstream(start);
   }
+  if (ok) buffer.endOpstream(lenPos);
+  return ok;
 }
 
 function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean): boolean {
@@ -763,22 +760,16 @@ function emitMdastTree(
         return buffer.wrapNode(id, content);
     }
   }
-  const ops = compileMdastToOpstream(content, forReplace);
-  if (ops === null) throw unencodableContentError(content);
-  switch (op) {
-    case "replace":
-      return buffer.replaceOpstream(id, ops);
-    case "insertBefore":
-      return buffer.insertBeforeOpstream(id, ops);
-    case "insertAfter":
-      return buffer.insertAfterOpstream(id, ops);
-    case "prependChild":
-      return buffer.prependChildOpstream(id, ops);
-    case "appendChild":
-      return buffer.appendChildOpstream(id, ops);
-    case "wrapNode":
-      return buffer.wrapNodeOpstream(id, ops);
+  const start = buffer.length;
+  const lenPos = buffer.beginOpstream(STRUCTURAL_CMD[op], id);
+  let ok = false;
+  try {
+    ok = emitMdastOp(buffer, content, true, forReplace);
+  } finally {
+    if (!ok) buffer.abortOpstream(start);
   }
+  if (!ok) throw unencodableContentError(content);
+  buffer.endOpstream(lenPos);
 }
 
 /** MDAST node types whose `value` Rust can set in place via setProperty. A

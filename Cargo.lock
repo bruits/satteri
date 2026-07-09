@@ -1091,6 +1091,7 @@ dependencies = [
  "codspeed-divan-compat",
  "oxc_allocator",
  "rustc-hash",
+ "satteri-arena",
  "satteri-ast",
  "satteri-mdxjs",
  "satteri-pulldown-cmark",

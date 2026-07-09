@@ -5,6 +5,18 @@ use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
 use satteri_ast::mdast::{codec::*, MdastNodeType};
 use satteri_plugin_api::*;
 
+/// In-place apply leaves detached garbage; assertions must only consider
+/// nodes reachable from the root.
+fn reachable_ids(arena: &Arena<Mdast>) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut stack = vec![0u32];
+    while let Some(id) = stack.pop() {
+        out.push(id);
+        stack.extend_from_slice(arena.get_children(id));
+    }
+    out
+}
+
 fn build_test_arena() -> Arena<Mdast> {
     let source = "# Hello\n\nWorld".to_string();
     let mut b = ArenaBuilder::<Mdast>::new(source);
@@ -64,15 +76,14 @@ fn remove_text_via_visit_result_removes_from_arena() {
     assert!(result.has_mutations, "should have mutations after remove");
 
     // Original had 2 Text nodes. They should be gone.
+    let reachable = reachable_ids(&result.arena).len();
     assert!(
-        result.arena.len() < original_count,
-        "arena should have fewer nodes: got {}, was {}",
-        result.arena.len(),
-        original_count
+        reachable < original_count,
+        "arena should have fewer nodes: got {reachable}, was {original_count}"
     );
 
-    // No Text nodes should remain
-    for id in 0..result.arena.len() as u32 {
+    // No Text nodes should remain reachable
+    for id in reachable_ids(&result.arena) {
         let node_type = result.arena.get_node(id).node_type;
         assert_ne!(
             node_type,
@@ -107,9 +118,10 @@ fn replace_heading_via_visit_result_updates_arena() {
 
     assert!(result.has_mutations);
 
-    // No Heading should remain in the rebuilt arena
-    let has_heading = (0..result.arena.len() as u32)
-        .any(|id| result.arena.get_node(id).node_type == MdastNodeType::Heading as u8);
+    // No Heading should remain reachable
+    let has_heading = reachable_ids(&result.arena)
+        .iter()
+        .any(|&id| result.arena.get_node(id).node_type == MdastNodeType::Heading as u8);
     assert!(!has_heading, "no headings should remain after replacement");
 
     // Root should still have children
@@ -237,12 +249,14 @@ fn explicit_remove_command_rebuilds_arena() {
     assert!(result.has_mutations);
 
     // Heading (and its Text child) should be gone
-    let has_heading = (0..result.arena.len() as u32)
-        .any(|id| result.arena.get_node(id).node_type == MdastNodeType::Heading as u8);
+    let reachable = reachable_ids(&result.arena);
+    let has_heading = reachable
+        .iter()
+        .any(|&id| result.arena.get_node(id).node_type == MdastNodeType::Heading as u8);
     assert!(!has_heading, "heading should be removed from arena");
 
     // Should have 3 nodes: Root + Paragraph + Text(World)
-    assert_eq!(result.arena.len(), 3);
+    assert_eq!(reachable.len(), 3);
 }
 
 /// Plugin 1 removes the heading. Plugin 2 counts nodes.
