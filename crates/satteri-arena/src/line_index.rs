@@ -1,15 +1,6 @@
-/// Maps byte offsets in the source to 1-based (line, column) pairs and
-/// 0-based code-point offsets.
-///
-/// Built once from the source text; lookups are O(log n) via binary search.
-/// Columns and offsets are counted as Unicode code points (matching the
-/// CommonMark `position` convention used by remark/micromark), not bytes —
-/// necessary for multi-byte chars to land at the positions the reference
-/// parsers report.
-/// Per-line metadata for non-ASCII sources, indexed in parallel with
-/// `line_offsets`. The code-point offset and ASCII flag are folded into one
-/// record so a lookup reads both with a single bounds-checked access landing
-/// on one cache line, instead of indexing two parallel arrays.
+/// Per-line code-point offset and ASCII flag for non-ASCII sources, indexed
+/// like `line_offsets`. Folded into one record so a lookup reads both from a
+/// single cache line rather than two parallel arrays.
 #[derive(Clone, Copy)]
 struct LineMeta {
     /// Code-point offset where the line starts (the code-point analogue of
@@ -21,6 +12,10 @@ struct LineMeta {
     is_ascii: bool,
 }
 
+/// Maps byte offsets to 1-based (line, column) pairs and 0-based code-point
+/// offsets. Built once; lookups are O(log n). Columns and offsets count Unicode
+/// code points (the CommonMark/remark convention), not bytes, so multi-byte
+/// chars land where the reference parsers report.
 pub struct LineIndex<'a> {
     source: &'a [u8],
     /// `line_offsets[i]` is the byte offset where line `i+1` starts.
@@ -33,14 +28,9 @@ pub struct LineIndex<'a> {
     /// True when the entire source is ASCII — every lookup short-circuits
     /// without consulting `line_meta`.
     all_ascii: bool,
-    /// "Skip positions" mode: every lookup returns the all-zero sentinel so
-    /// downstream code records no useful position. Used by HTML/JS output
-    /// paths where the consumer never reads positions; skips the per-line
-    /// `memchr` scan at construction and ~5 cursor lookups per MDAST node.
-    /// `cursor()` on a disabled index produces a cursor whose `offset_to_line_col`
-    /// and `byte_to_cp_offset` return `(0,0)` / `0` without consulting any
-    /// state, and downstream `convert.rs::copy_position` already short-circuits
-    /// on the zero sentinel — so HAST node positions stay unset for free.
+    /// "Skip positions" mode: every lookup returns the all-zero sentinel and
+    /// the per-line scan at construction is skipped. Used by HTML/JS output
+    /// paths that never read positions.
     disabled: bool,
 }
 

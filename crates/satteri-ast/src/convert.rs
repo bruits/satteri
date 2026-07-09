@@ -1028,7 +1028,7 @@ fn encode_code_node_data(lang: &str, meta: &str) -> Vec<u8> {
 fn copy_position(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>) {
     let node = view.get_node(node_id);
     // `start_line` is 1-based; `0` is the skip-positions sentinel. Check the
-    // line only — `start_offset` may still carry a byte offset, which the
+    // line only; `start_offset` may still carry a byte offset, which the
     // parser records even in skip-positions mode.
     if node.start_line > 0 {
         builder.set_position_current(

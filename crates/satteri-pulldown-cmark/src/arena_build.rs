@@ -53,25 +53,17 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     parse_inner(source, options, true, None)
 }
 
-/// Skip-positions variant: emits MDAST without filling per-node `start_line` /
-/// `start_column` / `end_line` / `end_column`. Saves the per-line ASCII scan
-/// at `LineIndex::from_source`, the ~5 cursor lookups per node during the
-/// build, and the cp-offset post-pass for non-ASCII sources. Use when the
-/// downstream consumer (HTML/JS code generation) never reads positions —
-/// `convert.rs::copy_position` already short-circuits on the zero sentinel
-/// so HAST nodes stay positionless for free.
-///
-/// The `start_offset` / `end_offset` byte fields *are* still filled — the
-/// parser tracks them natively and downstream HTML rendering doesn't pay
-/// for them anyway. Only the line/column code-point conversion is suppressed.
+/// Skip-positions variant: leaves per-node line/column fields at the zero
+/// sentinel, skipping the `LineIndex` build, the per-node cursor lookups, and
+/// the cp-offset post-pass. Byte offsets are still filled. Use when the
+/// consumer (HTML/JS codegen) never reads positions.
 pub fn parse_no_positions(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
     parse_inner(source, options, false, None)
 }
 
-/// Same as `parse_no_positions` but reuses an arena that the caller has
-/// pooled. The arena is `reset()` and its existing `Vec` / `String`
-/// capacities are recycled — saves several `malloc`s on every compile,
-/// which dominates the per-iteration cost for tiny inputs.
+/// Same as `parse_no_positions` but recycles a caller-pooled arena (via
+/// `reset()`), reusing its `Vec` / `String` capacity to save the per-compile
+/// mallocs that dominate tiny inputs.
 pub fn parse_no_positions_into(
     source: &str,
     options: Options,
@@ -182,7 +174,7 @@ fn parse_inner(
     // Refdefs in source order. Each container close pass claims the defs whose
     // source range lies inside it; the rest get emitted at root.
     //
-    // We take ownership of `refdefs_all` instead of cloning each field — the
+    // We take ownership of `refdefs_all` instead of cloning each field; the
     // parser doesn't read it again after this point. Indexes (`refdef_order`)
     // give source-order traversal without rebuilding string fields. Saves up
     // to 3 heap allocs per refdef on the parse hot path.
@@ -488,7 +480,7 @@ fn parse_inner(
                         let is_spread = *item_spread || {
                             // Loose-list detection: a blank line between
                             // consecutive children means two newlines in the
-                            // source gap. Counted on byte offsets, not lines —
+                            // source gap. Counted on byte offsets, not lines, because
                             // skip-positions mode leaves `start_line` zero but
                             // offsets are always recorded.
                             let source_bytes = source.as_bytes();

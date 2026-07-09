@@ -772,10 +772,9 @@ function emitMdastTree(
   }
 }
 
-/** MDAST node types whose `value` field can be set in place by Rust via
- *  CMD_SET_PROPERTY (see `resolve_mdast_field` for `FIELD_VALUE`). When the
- *  visitor returns one of these as `{type, value}` with no other fields,
- *  routing through setProperty skips a full arena rebuild. */
+/** MDAST node types whose `value` Rust can set in place via setProperty. A
+ *  visitor returning one of these as `{type, value}` with no other fields
+ *  skips a full arena rebuild. */
 const MDAST_VALUE_ONLY_TYPES = new Set<string>([
   "text",
   "html",
@@ -785,10 +784,9 @@ const MDAST_VALUE_ONLY_TYPES = new Set<string>([
   "inlineMath",
 ]);
 
-/** True when the visitor returned a same-type text-like MDAST node carrying
- *  only `type` + `value` — i.e. the user just rewrote the text body. Other
- *  fields (children, position, data) being present means we can't safely
- *  drop them via setProperty and must take the full replace path. */
+/** True when the visitor returned a same-type MDAST node carrying only `type`
+ *  + `value`. Any other field present (children, position, data, lang, meta)
+ *  falls back to the full replace path so nothing is silently dropped. */
 function isMdastTextValueSwap(
   result: MdastNode,
   original: MdastNode | undefined,
@@ -917,7 +915,7 @@ function finalizeMdastVisit(
   returnBuffer: CommandBuffer,
 ): MdastVisitResult {
   const { merged, hasMutations } = mergeAndReset(returnBuffer, context);
-  // Return both buffers to the pool — bytes were copied into `merged` above.
+  // Return both buffers to the pool. Bytes were copied into `merged` above.
   releaseCommandBuffer(returnBuffer);
   releaseCommandBuffer(context.getCommandBuffer());
   return { commandBuffer: merged, diagnostics: context.getDiagnostics(), hasMutations };

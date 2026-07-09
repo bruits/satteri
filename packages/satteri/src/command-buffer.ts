@@ -49,16 +49,10 @@ export function classifyReturn(value: unknown): ReturnClass {
 
 const INITIAL_SIZE = 4096;
 
-/** Module-level free list for `CommandBuffer` instances.
- *
- *  Each plugin pass allocates *two* CommandBuffers — one for the visitor
- *  context's mutation commands and one for the return-value replacements.
- *  Plugin-heavy workloads burn GC time on what is structurally a reusable
- *  buffer, so the freelist recycles instances (and their grown backings)
- *  between visits. Retaining the backing across reuse is safe because no
- *  `getBuffer()` view outlives a pass: `mergeAndReset` copies both buffers
- *  into a fresh array before they are released. Cap keeps the pool bounded
- *  for long-lived processes that briefly burst high. */
+/** Free list recycling `CommandBuffer` instances (and their grown backings)
+ *  across plugin passes. Safe to retain the backing because `mergeAndReset`
+ *  copies the bytes out before a buffer is released, so no view outlives a
+ *  pass. Cap bounds the pool for processes that briefly burst high. */
 const COMMAND_BUFFER_POOL_MAX = 8;
 const commandBufferPool: CommandBuffer[] = [];
 
@@ -95,12 +89,9 @@ export class CommandBuffer extends ByteWriter {
 
   /** Unified set-property for both MDAST and HAST nodes.
    *
-   *  Hot path: profiles show plugins that touch every node spend ~38% of
-   *  total time inside `TextEncoder.encode` — almost entirely on short
-   *  property keys/values. `encodeInto` writes UTF-8 straight into the
-   *  command buffer, no per-call `Uint8Array` allocation. We reserve the
-   *  worst-case UTF-8 length (`str.length * 3`) up front and backfill the
-   *  length prefix once the actual byte count is known. */
+   *  Hot path: uses `encodeInto` to write UTF-8 straight into the buffer (no
+   *  per-call `Uint8Array`), reserving the worst-case length up front and
+   *  backfilling the length prefix once the byte count is known. */
   setProperty(nodeId: number, key: string, value: unknown): void {
     let valueType: number;
     let str: string;

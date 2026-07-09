@@ -65,8 +65,7 @@
     clippy::std_instead_of_alloc,
     clippy::std_instead_of_core
 )]
-// Forbid unsafe code unless the SIMD feature is enabled.
-#![cfg_attr(not(feature = "simd"), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 #![cfg_attr(not(feature = "std"), no_std)]
 

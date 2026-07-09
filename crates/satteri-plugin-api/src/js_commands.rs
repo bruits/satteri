@@ -461,13 +461,9 @@ fn apply_hast_mdx_jsx_attribute(
 
 /// Set or add a single property on a HAST element node.
 ///
-/// Phases the borrow so we can read existing props, then mutate the arena's
-/// string pool, then write back — no `to_vec()` clone of `type_data`, no
-/// intermediate `Vec` for the rewritten layout. For an "update existing prop"
-/// the 20-byte entry is overwritten in place; for "append new prop" we extend
-/// `type_data` directly via `extend_from_within` + `extend_from_slice` and
-/// repoint the node, leaving the old region as a tombstone (cheap; arena is
-/// short-lived per plugin pass).
+/// Phased to avoid cloning `type_data`: read existing props, allocate the value
+/// into the string pool, then write back (in place for an existing prop, or by
+/// appending a new entry and repointing the node).
 fn apply_hast_element_property(
     arena: &mut Arena<Hast>,
     node_id: u32,
@@ -501,7 +497,7 @@ fn apply_hast_element_property(
     }
 
     // Phase 3: allocate the value string (now mutates arena.source, but
-    // type_data ranges captured above remain valid — appending to source
+    // type_data ranges captured above remain valid, since appending to source
     // doesn't move type_data bytes).
     let val_ref = if value_str.is_empty() {
         StringRef::empty()

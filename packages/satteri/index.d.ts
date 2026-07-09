@@ -15,7 +15,7 @@ export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle,
 /**
  * Fused tail step for `markdownToHtml` with a HAST plugin: apply the plugin's
  * command buffer, render the resulting HAST to HTML, and leave the handle
- * drained — all in one NAPI roundtrip. Saves the `apply` + `render` + `drop`
+ * drained, all in one NAPI roundtrip. Saves the `apply` + `render` + `drop`
  * crossings the old path made separately.
  *
  * The handle keeps existing (callers can still `dropHandle` it on the JS
@@ -290,7 +290,7 @@ export interface MarkdownHtmlOneShot {
 /**
  * Fast path: parse markdown → MDAST → HAST → HTML, plus extract frontmatter,
  * in a single NAPI roundtrip. Used by `markdownToHtml` when the caller didn't
- * configure any plugins — skips 5 of the 6 NAPI crossings the handle-based
+ * configure any plugins. Skips 5 of the 6 NAPI crossings the handle-based
  * path makes (createMdast, getFrontmatter, convertToHast, dropMdast, render,
  * dropHast → just one call).
  */
@@ -315,7 +315,7 @@ export interface MdxJsOneShot {
 /**
  * Fast path: parse MDX → MDAST → HAST → JS, plus extract frontmatter, in a
  * single NAPI roundtrip. Used by `mdxToJs` when the caller didn't configure
- * any plugins — skips 5 of the 6 NAPI crossings the handle-based path makes.
+ * any plugins. Skips 5 of the 6 NAPI crossings the handle-based path makes.
  */
 export declare function mdxToJsFast(source: string, features?: JsFeatures | undefined | null, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
 
@@ -336,7 +336,7 @@ export declare function renderHandle(handle: HastHandle): string
 
 /**
  * Result of the fused apply + render tail. `dropped_transforms` mirrors the
- * count `apply_commands_to_handle` returns — patches dropped because their
+ * count `apply_commands_to_handle` returns: patches dropped because their
  * target lived inside a removed/replaced subtree; the JS pipeline warns when
  * non-zero.
  */

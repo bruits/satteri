@@ -108,11 +108,9 @@ impl<K: ArenaKind> Arena<K> {
         }
     }
 
-    /// Clear all state but keep allocated capacity. Intended for arena pooling
-    /// — letting a thread-local free list reuse the already-grown `Vec`s and
-    /// `String` across compiles instead of paying the allocator each time.
-    /// The caller is responsible for repopulating `source` and resetting
-    /// `mdx` / `parse_options` for the next document.
+    /// Clear all state but keep allocated capacity, for arena pooling. The
+    /// caller must repopulate `source` and reset `mdx` / `parse_options` for
+    /// the next document.
     pub fn reset(&mut self) {
         self.nodes.clear();
         self.children.clear();

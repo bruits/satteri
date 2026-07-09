@@ -38,7 +38,7 @@ Factories are called once per invocation, so closures reset between documents.
 
 ### Source positions
 
-Visitors read `node.position` (the `{ start, end }` source range) only when the plugin opts in with `options: { position: true }`. Tracking positions adds a measurable parsing cost (~15% of parse), so it is off by default — `node.position` is `undefined` unless some plugin in the pipeline requests it.
+Visitors read `node.position` (the `{ start, end }` source range) only when the plugin opts in with `options: { position: true }`. Tracking positions adds a measurable parsing cost (~15% of parse), so it is off by default. `node.position` is `undefined` unless some plugin in the pipeline requests it.
 
 ```js
 const plugin = defineMdastPlugin({

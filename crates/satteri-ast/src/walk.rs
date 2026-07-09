@@ -139,7 +139,7 @@ fn walk_and_collect_inner<K: ArenaKind>(
 
             // For named nodes (HAST elements + MDX JSX flow/text), resolve the
             // name once so tag_filter comparisons can short-circuit. Skip the
-            // resolve when no subscription on this node type uses a filter —
+            // resolve when no subscription on this node type uses a filter;
             // every comparison would unconditionally match.
             let tag_name = if type_needs_name[node_type as usize]
                 && has_name(node_type)

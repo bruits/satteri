@@ -1773,3 +1773,54 @@ describe("per-plugin position opt-in", () => {
     expect(hastSeen?.start.line).toBe(1);
   });
 });
+
+// A visitor returning a same-type `{ type, value }` node is routed through
+// setProperty("value") instead of a structural replace. `text` is covered by
+// nested-transforms; these exercise the other value-only types so a bad prop
+// slot on one of them can't slip through as a silent no-op.
+describe("value-only node swap fast path", () => {
+  test("mdast inlineCode swap updates the rendered code", () => {
+    const result = markdownToHtml("`abc`", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "shout-code",
+          inlineCode(node) {
+            return { type: "inlineCode", value: node.value.toUpperCase() };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("<code>ABC</code>");
+  });
+
+  test("mdast yaml swap is observed in post-mutation frontmatter", () => {
+    const result = markdownToHtml("---\ntitle: Old\n---\n\n# H", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "rewrite-yaml",
+          yaml() {
+            return { type: "yaml", value: "title: New" };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.frontmatter).toEqual({ kind: "yaml", value: "title: New" });
+  });
+
+  test("hast text swap updates the rendered text", () => {
+    const result = markdownToHtml("hello", {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "shout-text",
+          text(node) {
+            return { type: "text", value: node.value.toUpperCase() };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("HELLO");
+  });
+});

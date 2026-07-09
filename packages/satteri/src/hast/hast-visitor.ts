@@ -563,8 +563,8 @@ export function resolveSubscriptions(plugin: HastVisitorInstance): ResolvedSubsc
   return built.subs;
 }
 
-/** Get the (cached) Rust-side projection of `subs` — strips visitFn so it can
- *  cross NAPI. Computed once per plugin object alongside `subs`. */
+/** Get the (cached) Rust-side projection of `subs` that strips visitFn so it
+ *  can cross NAPI. Computed once per plugin object alongside `subs`. */
 function getRustSubs(plugin: HastVisitorInstance): { nodeType: number; tagFilter: string[] }[] {
   const cached = subscriptionCache.get(plugin);
   if (cached !== undefined) return cached.rustSubs;
@@ -1021,11 +1021,9 @@ function makeLazyChildren(
 /** A result that is the same object as the input node is a no-op, so context
  *  mutations (e.g. setProperty) are not clobbered.
  *
- *  Fast path for the common `text(node) { return { type, value: ... } }`
- *  pattern: when the returned node is a text-like node of the same type
- *  carrying only a new `value`, encode a CMD_SET_PROPERTY("value") instead of
- *  a structural replace — a Patch::Replace would force `apply_hast_commands`
- *  into its full rebuild branch even though no shape actually changed. */
+ *  A same-type text-like node carrying only a new `value` becomes a
+ *  setProperty("value") rather than a structural replace, which would force
+ *  the arena into a full rebuild for a shape that didn't change. */
 function handleVisitResult(
   result: HastNode | void | Promise<HastNode | void>,
   nodeId: number,
@@ -1048,10 +1046,9 @@ function handleVisitResult(
   return deferred;
 }
 
-/** True when `result` is a text-like node carrying only `type` + `value` and
- *  matching the original's type — i.e., the user just rewrote the text. The
- *  explicit `=== undefined` checks beat `Object.keys().length` here (no array
- *  alloc) for what is otherwise a per-text-node hot path. */
+/** True when `result` is a same-type text-like node carrying only `type` +
+ *  `value`. The explicit `=== undefined` checks avoid the array alloc of
+ *  `Object.keys().length` on this per-text-node hot path. */
 function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   if (result.type !== original.type) return false;
   if (result.type !== "text" && result.type !== "comment" && result.type !== "raw") return false;
@@ -1132,7 +1129,7 @@ function applyCollectedCommands(handle: HastHandle, commands: Uint8Array): numbe
 }
 
 /** Run a HAST visitor, build the command buffer, but do NOT apply it. Returns
- *  the merged commands so the caller can choose how to dispatch — either via
+ *  the merged commands so the caller can choose how to dispatch: either via
  *  `applyCommandsToHandle` (intermediate plugins in a chain) or via a fused
  *  NAPI call like `applyCommandsAndRenderHandle` (final plugin, saves one
  *  apply + one render + one drop crossing). Empty result means no mutations.
@@ -1176,7 +1173,7 @@ export function visitHastHandleCollect(
 
 function collectCommands(returnBuffer: CommandBuffer, ctx: HastVisitorContextImpl): Uint8Array {
   const { merged } = mergeAndReset(returnBuffer, ctx);
-  // Return the buffers to the pool — the merged Uint8Array above already
+  // Return the buffers to the pool. The merged Uint8Array above already
   // copied the bytes out, so the underlying ArrayBuffers can be reused.
   releaseCommandBuffer(returnBuffer);
   releaseCommandBuffer(ctx.getCommandBuffer());

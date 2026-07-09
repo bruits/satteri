@@ -114,7 +114,7 @@ type MdastPipelineResult = {
    *  and that plugin queued mutations; the caller fuses the apply with the
    *  downstream NAPI step. */
   pendingCommands?: Uint8Array;
-  /** The plugin whose commands were deferred — for dropped-transform warning
+  /** The plugin whose commands were deferred, for dropped-transform warning
    *  attribution after the fused apply. */
   lastPlugin?: { name?: string };
 };
@@ -196,7 +196,7 @@ const EMPTY_COMMAND_BUFFER = new Uint8Array(0);
 
 type CollectedHastCommands = {
   commands: Uint8Array;
-  /** The plugin whose commands were collected — for dropped-transform warning
+  /** The plugin whose commands were collected, for dropped-transform warning
    *  attribution after the fused apply. */
   lastPlugin: { name?: string } | null;
 };
@@ -596,7 +596,7 @@ export function markdownToHtml(
     return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
   }
 
-  // Resolve plugin factories once — an instance is itself a valid plugin input,
+  // Resolve plugin factories once. An instance is itself a valid plugin input,
   // so the run helpers below consume the resolved arrays unchanged. Track source
   // positions only when some plugin opts in with `position: true`; otherwise the
   // parse skips the LineIndex build and per-node line/column lookups.
@@ -617,7 +617,7 @@ export function markdownToHtml(
       const finishMdast = (r: MdastPipelineResult): MarkdownToHtmlResult => {
         try {
           // Fused tail: apply pending commands (empty buffer is a Rust no-op),
-          // extract frontmatter post-mutation, convert, render — all in one
+          // extract frontmatter post-mutation, convert, render, all in one
           // NAPI roundtrip.
           const commands = r.pendingCommands ?? EMPTY_COMMAND_BUFFER;
           const { html, frontmatter, droppedTransforms } = applyMdastCommandsAndConvertAndRender(

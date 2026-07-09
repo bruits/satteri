@@ -381,14 +381,10 @@ type MdastHandle = External<Mutex<satteri_arena::Arena<Mdast>>>;
 type HastHandle = External<Mutex<satteri_arena::Arena<Hast>>>;
 type AnyHandle<'a> = Either<&'a MdastHandle, &'a HastHandle>;
 
-// Thread-local arena pool — reused across the no-plugin fast paths
-// (`markdown_to_html_fast`, `mdx_to_js_fast`). On a 200-byte fixture the
-// per-compile cost is dominated by the handful of `malloc`s in the parse +
-// convert setup; reusing already-grown arenas across calls eliminates them.
-// Cap is small because each entry holds the high-water-mark capacity of an
-// MDAST/HAST arena — a few KB of node/children/type_data Vec plus the source
-// String — and a long-lived process bursting high shouldn't hold MB of pool
-// indefinitely.
+// Thread-local arena pool for the no-plugin fast paths: reusing already-grown
+// arenas eliminates the per-compile mallocs that dominate small inputs. Each
+// entry retains its high-water-mark capacity, so the cap stays small to bound
+// a long-lived process that briefly bursts high.
 const ARENA_POOL_MAX: usize = 4;
 
 thread_local! {
@@ -709,11 +705,9 @@ pub fn apply_commands_and_convert_to_hast_handle(
     Ok(External::new(Mutex::new(hast_arena)))
 }
 
-/// Extract frontmatter from an MDAST arena's root direct children. Returns
-/// `None` when the document has no yaml/toml block at root. Pulled out so the
-/// no-plugin fast path and the MDAST-plugin fused tails share one scan; doing
-/// it Rust-side also lets the fused tails save a separate
-/// `get_mdast_frontmatter` NAPI crossing.
+/// Extract frontmatter from an MDAST arena's root direct children, or `None`
+/// when there's no yaml/toml block at root. The `&Arena` counterpart to
+/// `get_mdast_frontmatter`, shared by the fast path and the fused tails.
 fn extract_mdast_frontmatter(
     mdast: &satteri_arena::Arena<satteri_arena::Mdast>,
 ) -> Option<JsFrontmatter> {
@@ -938,7 +932,7 @@ pub fn render_handle(handle: &HastHandle) -> Result<String> {
 }
 
 /// Result of the fused apply + render tail. `dropped_transforms` mirrors the
-/// count `apply_commands_to_handle` returns — patches dropped because their
+/// count `apply_commands_to_handle` returns: patches dropped because their
 /// target lived inside a removed/replaced subtree; the JS pipeline warns when
 /// non-zero.
 #[napi(object)]
@@ -949,7 +943,7 @@ pub struct RenderHtmlOneShot {
 
 /// Fused tail step for `markdownToHtml` with a HAST plugin: apply the plugin's
 /// command buffer, render the resulting HAST to HTML, and leave the handle
-/// drained — all in one NAPI roundtrip. Saves the `apply` + `render` + `drop`
+/// drained, all in one NAPI roundtrip. Saves the `apply` + `render` + `drop`
 /// crossings the old path made separately.
 ///
 /// The handle keeps existing (callers can still `dropHandle` it on the JS
@@ -970,7 +964,7 @@ pub fn apply_commands_and_render_handle(
     let (new_arena, dropped) = satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let html = satteri_ast::hast::hast_arena_to_html(&new_arena);
-    // `*arena` is already the empty replacement we put there above — the
+    // `*arena` is already the empty replacement we put there above; the
     // mutated arena gets dropped at the end of this function, freeing all the
     // node/children/source/type_data allocations on the Rust heap without a
     // separate `dropHandle` NAPI crossing.
@@ -1034,7 +1028,7 @@ pub struct MarkdownHtmlOneShot {
 
 /// Fast path: parse markdown → MDAST → HAST → HTML, plus extract frontmatter,
 /// in a single NAPI roundtrip. Used by `markdownToHtml` when the caller didn't
-/// configure any plugins — skips 5 of the 6 NAPI crossings the handle-based
+/// configure any plugins. Skips 5 of the 6 NAPI crossings the handle-based
 /// path makes (createMdast, getFrontmatter, convertToHast, dropMdast, render,
 /// dropHast → just one call).
 #[napi]
@@ -1046,7 +1040,7 @@ pub fn markdown_to_html_fast(
 ) -> Result<MarkdownHtmlOneShot> {
     let opts = features_to_options(features, false);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
-    // Skip position tracking entirely — HTML output never reads positions, so
+    // Skip position tracking entirely: HTML output never reads positions, so
     // the per-node `cursor.offset_to_line_col` calls + `LineIndex` per-line
     // ASCII scan are pure waste in this code path.
     let mdast_reuse = acquire_mdast_arena();
@@ -1076,7 +1070,7 @@ pub struct MdxJsOneShot {
 
 /// Fast path: parse MDX → MDAST → HAST → JS, plus extract frontmatter, in a
 /// single NAPI roundtrip. Used by `mdxToJs` when the caller didn't configure
-/// any plugins — skips 5 of the 6 NAPI crossings the handle-based path makes.
+/// any plugins. Skips 5 of the 6 NAPI crossings the handle-based path makes.
 #[cfg(feature = "mdx")]
 #[napi]
 pub fn mdx_to_js_fast(
@@ -1088,7 +1082,7 @@ pub fn mdx_to_js_fast(
 ) -> Result<MdxJsOneShot> {
     let opts = features_to_options(features, true);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
-    // Skip position tracking — generated JS never references source positions
+    // Skip position tracking: generated JS never references source positions
     // (codegen handles its own JSX positions independently of MDAST line/col).
     let mdast_reuse = acquire_mdast_arena();
     let (mdast, mdx_errors) =
