@@ -46,7 +46,7 @@ fn main() {
 /// HAST arena plus per-`<a>` keep-children Replace patches (link-transform shape).
 fn hast_with_link_replaces() -> (
     satteri_arena::Arena<satteri_arena::Hast>,
-    Vec<satteri_ast::rebuild::Patch<satteri_arena::Hast>>,
+    Vec<satteri_ast::patch::Patch<satteri_arena::Hast>>,
 ) {
     let (mdast, _) =
         satteri_pulldown_cmark::parse(MARKDOWN, satteri_pulldown_cmark::DEFAULT_OPTIONS);
@@ -61,7 +61,7 @@ fn hast_with_link_replaces() -> (
 fn apply_link_replaces(bencher: divan::Bencher) {
     let (hast, patches) = hast_with_link_replaces();
     bencher.with_inputs(|| hast.clone()).bench_values(|arena| {
-        satteri_ast::rebuild::apply_patches_in_place(arena, divan::black_box(&patches))
+        satteri_ast::patch::apply_patches_in_place(arena, divan::black_box(&patches))
             .unwrap()
             .arena
     });

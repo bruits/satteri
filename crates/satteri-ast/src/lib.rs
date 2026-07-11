@@ -5,7 +5,7 @@ pub mod convert;
 mod generated;
 pub mod hast;
 pub mod mdast;
-pub mod rebuild;
+pub mod patch;
 pub mod shared;
 pub mod text_content;
 pub mod walk;

@@ -28,7 +28,7 @@ pub struct Arena<K: ArenaKind> {
     /// `source_len` marks the boundary; for the input as written use `source()`.
     pub string_pool: String,
     /// Byte length of the original-input prefix of `string_pool`. Set at
-    /// construction; preserved across rebuild and mdast→hast conversion, which
+    /// construction; preserved across patch application and mdast→hast conversion, which
     /// copy the full pool to keep `StringRef` offsets valid.
     pub source_len: u32,
     /// Per-node `data` blobs (JSON bytes), set by JS plugins.

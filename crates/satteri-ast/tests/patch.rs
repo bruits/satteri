@@ -5,7 +5,7 @@
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::rebuild::{apply_patches_in_place, Patch, PatchContent};
+use satteri_ast::patch::{apply_patches_in_place, Patch, PatchContent};
 
 /// Compare the reachable trees of two arenas: shapes, positions, node_data.
 fn assert_skeleton_eq<K: ArenaKind>(a: &Arena<K>, b: &Arena<K>, ida: u32, idb: u32, path: &str) {
@@ -1433,7 +1433,7 @@ fn replace_with_empty_root_removes_slot() {
 fn replace_with_ref_to_self_splices_once() {
     use satteri_arena::StringRef;
     use satteri_ast::hast::codec::encode_element_data;
-    use satteri_ast::rebuild::REF_NODE_TYPE;
+    use satteri_ast::patch::REF_NODE_TYPE;
 
     // Root > Element(h2) > Text "Heading"
     let mut b = ArenaBuilder::<Hast>::new("Heading".to_string());
@@ -1648,7 +1648,7 @@ fn wrap_applies_prepend_and_append_child_on_wrapped_node() {
 // In-place coverage for shapes the original rebuild tests don't exercise.
 
 fn ref_payload_mdast(target: u32) -> Arena<Mdast> {
-    use satteri_ast::rebuild::REF_NODE_TYPE;
+    use satteri_ast::patch::REF_NODE_TYPE;
     let mut b = ArenaBuilder::<Mdast>::new(String::new());
     b.open_node_raw(REF_NODE_TYPE);
     b.set_data_current(&target.to_le_bytes());
@@ -1741,7 +1741,7 @@ fn ref_to_linked_target_copies() {
 
 #[test]
 fn ref_used_twice_duplicates_target() {
-    use satteri_ast::rebuild::REF_NODE_TYPE;
+    use satteri_ast::patch::REF_NODE_TYPE;
     let orig = build_hello_world();
     let heading = orig.get_children(0)[0];
     let text_in_heading = orig.get_children(heading)[0];
@@ -2108,7 +2108,7 @@ fn property_fuzz_in_place_apply() {
 /// opstream decode produces: strings land in the main pool (refs remapped by
 /// pool base), REF placeholder nodes copied verbatim.
 fn graft_tree_for_test(arena: &mut Arena<Mdast>, payload: &Arena<Mdast>) -> Vec<u32> {
-    use satteri_ast::rebuild::REF_NODE_TYPE;
+    use satteri_ast::patch::REF_NODE_TYPE;
     if payload.is_empty() {
         return Vec::new();
     }
@@ -2118,18 +2118,14 @@ fn graft_tree_for_test(arena: &mut Arena<Mdast>, payload: &Arena<Mdast>) -> Vec<
         arena.alloc_string(payload.string_pool()).offset
     };
     fn copy(arena: &mut Arena<Mdast>, payload: &Arena<Mdast>, id: u32, base: u32) -> u32 {
-        use satteri_ast::rebuild::REF_NODE_TYPE;
+        use satteri_ast::patch::REF_NODE_TYPE;
         let node = *payload.get_node(id);
         let new_id = arena.alloc_node(node.node_type);
         let td = payload.get_type_data(id);
         if !td.is_empty() {
             if base != 0 && node.node_type != REF_NODE_TYPE {
                 let mut remapped = td.to_vec();
-                satteri_ast::rebuild::remap_mdast_refs_for_test(
-                    &mut remapped,
-                    node.node_type,
-                    base,
-                );
+                satteri_ast::patch::remap_mdast_refs_for_test(&mut remapped, node.node_type, base);
                 arena.set_type_data(new_id, &remapped);
             } else {
                 arena.set_type_data(new_id, td);

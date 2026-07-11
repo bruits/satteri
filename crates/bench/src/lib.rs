@@ -1,7 +1,7 @@
 use satteri_arena::{Arena, ArenaBuilder, Hast, StringRef};
 use satteri_ast::hast::codec::encode_element_data;
 use satteri_ast::hast::HastNodeType;
-use satteri_ast::rebuild::{Patch, PatchContent};
+use satteri_ast::patch::{Patch, PatchContent};
 
 /// One keep-children `<span class="link">` Replace per `<a>` element (the link-transform shape).
 pub fn link_replace_patches(hast: &Arena<Hast>) -> Vec<Patch<Hast>> {

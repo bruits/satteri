@@ -6,7 +6,7 @@ use crate::typed_nodes::*;
 use satteri_arena::{Arena, ArenaBuilder, Mdast};
 use satteri_ast::commands::CommandError;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::rebuild::{apply_patches_in_place, Patch, PatchContent};
+use satteri_ast::patch::{apply_patches_in_place, Patch, PatchContent};
 
 /// Result of running plugins against an arena.
 pub struct PluginRunResult {
@@ -182,7 +182,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
                 })
             }
             Command::SetData { .. } => {
-                // Already applied via DataMap in PluginContext, no arena rebuild needed
+                // Already applied via DataMap in PluginContext, no arena mutation needed
                 None
             }
         })

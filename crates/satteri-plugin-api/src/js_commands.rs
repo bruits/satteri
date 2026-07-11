@@ -25,7 +25,7 @@ use satteri_ast::commands::CommandError;
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::rebuild::{Patch, PatchContent, REF_NODE_TYPE};
+use satteri_ast::patch::{Patch, PatchContent, REF_NODE_TYPE};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
@@ -326,7 +326,7 @@ impl Default for MdastCommandOptions {
 }
 
 /// Emit a reference placeholder: a `REF_NODE_TYPE` node carrying the target
-/// original id (u32 LE) in its type_data. The rebuild resolves it by splicing
+/// original id (u32 LE) in its type_data. The apply resolves it by splicing
 /// that original subtree and applying any pending patch on it.
 fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
     let id = builder.open_node_raw(REF_NODE_TYPE);
@@ -593,7 +593,7 @@ trait OpCollector<'a>: Sized {
     fn align(&mut self, _bytes: &'a [u8]) {}
 }
 
-/// Deepest `OP_OPEN` nesting the replay accepts: the rebuild splices a
+/// Deepest `OP_OPEN` nesting the replay accepts: the apply splices a
 /// replayed sub-arena recursively, so its depth must stay well inside the
 /// host stack. 128 = serde_json's default recursion limit, ample for content.
 const MAX_OPSTREAM_DEPTH: usize = 128;
@@ -619,7 +619,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 let node_type = reader.read_u8()?;
                 C::check_tag(node_type)?;
                 // A root is only valid as the stream's top-level wrapper
-                // (the rebuild splices its children); nested it would smuggle
+                // (the apply splices its children); nested it would smuggle
                 // a node the JS visitors refuse to encode.
                 if !stack.is_empty() && node_type == <C::Kind as ArenaKind>::ROOT_TAG {
                     return Err(CommandError::UnencodableNodeType("root"));
@@ -1321,7 +1321,7 @@ pub fn apply_mdast_commands_lenient_with_options(
     if patches.is_empty() {
         Ok((arena, Vec::new()))
     } else {
-        let result = satteri_ast::rebuild::apply_patches_in_place(arena, &patches)?;
+        let result = satteri_ast::patch::apply_patches_in_place(arena, &patches)?;
         Ok((result.arena, result.dropped))
     }
 }
@@ -1467,7 +1467,7 @@ pub fn apply_hast_commands_lenient(
     if patches.is_empty() {
         Ok((arena, Vec::new()))
     } else {
-        let result = satteri_ast::rebuild::apply_patches_in_place(arena, &patches)?;
+        let result = satteri_ast::patch::apply_patches_in_place(arena, &patches)?;
         Ok((result.arena, result.dropped))
     }
 }
@@ -1679,7 +1679,7 @@ mod tests {
     #[test]
     fn opstream_ref_rejects_out_of_range_id() {
         // A stale id (a node cached across passes) must error at decode, not
-        // panic inside the rebuild's arena indexing.
+        // panic inside the apply's arena indexing.
         let orig = test_parse_markdown("Hello");
         let bad = orig.len() as u32 + 100;
 
@@ -1720,7 +1720,7 @@ mod tests {
 
     #[test]
     fn opstream_rejects_over_deep_nesting() {
-        // The rebuild splices replayed content recursively, so unbounded
+        // The apply splices replayed content recursively, so unbounded
         // nesting would overflow the host stack (an abort napi can't catch).
         let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
         let mut ops = Vec::new();

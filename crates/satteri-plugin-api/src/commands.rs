@@ -26,9 +26,8 @@ pub enum Command {
     },
 }
 
-/// A new node to be inserted into the arena.
-/// In Phase 5, this is a simple enum. The builder in PluginContext
-/// creates these to queue for arena rebuild.
+/// A new node to be inserted into the arena. The builder in PluginContext
+/// creates these to queue as patches applied in place.
 #[derive(Debug, Clone)]
 pub enum NewNode {
     /// A raw Markdown string that Rust parses (the `raw` escape hatch)

@@ -89,7 +89,7 @@ impl<K: ArenaKind> Arena<K> {
                 for (i, &(cp_start, cp_end)) in self.cp_offsets.iter().enumerate() {
                     let node = &self.nodes[i];
                     // A zero start line marks a synthesized node with no source
-                    // range (lines are 1-based), even when the rebuild left it a
+                    // range (lines are 1-based), even when a patch splice left it a
                     // non-zero spliced offset — nothing to convert.
                     if node.start_line == 0 {
                         continue;
@@ -108,7 +108,7 @@ impl<K: ArenaKind> Arena<K> {
                 let mut cursor = line_index.cursor();
                 for (i, node) in self.nodes.iter().enumerate() {
                     // A zero start line marks a synthesized node with no source
-                    // range (lines are 1-based), even when the rebuild left it a
+                    // range (lines are 1-based), even when a patch splice left it a
                     // non-zero spliced offset — nothing to convert.
                     if node.start_line == 0 {
                         continue;

@@ -148,7 +148,7 @@ impl Plugin for ReadOnlyPlugin {
 }
 
 #[test]
-fn read_only_plugin_does_not_rebuild_arena() {
+fn read_only_plugin_does_not_mutate_arena() {
     let arena = build_test_arena();
     let original_count = arena.len();
 
@@ -157,7 +157,7 @@ fn read_only_plugin_does_not_rebuild_arena() {
     let mut typed_data = TypedDataMap::new();
     let result = runner.run(arena, &mut data_map, &mut typed_data);
 
-    // Skip optimization: no rebuild, no mutations
+    // Skip optimization: no mutations, arena untouched
     assert!(
         !result.has_mutations,
         "read-only plugin should not cause mutations"
@@ -197,7 +197,7 @@ impl Plugin for AddHeadingIds {
 }
 
 #[test]
-fn data_only_plugin_does_not_trigger_rebuild() {
+fn data_only_plugin_does_not_trigger_mutation() {
     let arena = build_test_arena();
     let original_count = arena.len();
 
@@ -237,7 +237,7 @@ impl Plugin for RemoveHeadingExplicit {
 }
 
 #[test]
-fn explicit_remove_command_rebuilds_arena() {
+fn explicit_remove_command_mutates_arena() {
     let arena = build_test_arena();
 
     let mut runner = PluginRunner::new(vec![Box::new(RemoveHeadingExplicit)]);
