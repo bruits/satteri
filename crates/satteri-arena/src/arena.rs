@@ -311,6 +311,49 @@ mod tests {
         assert_eq!(node.node_type, 0);
     }
 
+    /// The exhaustive destructure makes adding an `Arena` field without deciding its reset behavior a compile error.
+    #[test]
+    fn reset_clears_every_per_document_field() {
+        let mut arena: Arena<Mdast> = Arena::new("junk source".to_string());
+        let parent = arena.alloc_node(1);
+        let child = arena.alloc_node(2);
+        arena.set_children(parent, &[child]);
+        arena.set_type_data(parent, &[9, 9, 9, 9]);
+        arena.alloc_string("interned junk");
+        arena.set_node_data(child, vec![1, 2, 3]);
+        arena.cp_offsets.push((7, 9));
+        arena.mdx = true;
+        arena.parse_options = 0xDEAD_BEEF;
+        arena.source_len = 77;
+
+        arena.reset();
+
+        let Arena {
+            nodes,
+            children,
+            type_data,
+            string_pool,
+            source_len,
+            node_data,
+            mdx,
+            parse_options,
+            cp_offsets,
+            _kind: _,
+        } = &arena;
+        assert!(nodes.is_empty());
+        assert!(children.is_empty());
+        assert!(type_data.is_empty());
+        assert!(string_pool.is_empty());
+        assert!(node_data.is_empty());
+        assert!(cp_offsets.is_empty());
+        assert!(!mdx);
+        assert_eq!(*parse_options, 0);
+        // source_len is the reuse sites' responsibility (set after reset)
+        assert_eq!(*source_len, 77);
+        assert!(arena.nodes.capacity() >= 2, "reset must keep capacity");
+        assert!(arena.string_pool.capacity() >= "junk source".len());
+    }
+
     #[test]
     fn set_position_roundtrip() {
         let mut arena: Arena<Mdast> = Arena::new(String::new());

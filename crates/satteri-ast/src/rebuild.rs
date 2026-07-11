@@ -10,7 +10,10 @@ use satteri_arena::{Arena, ArenaKind, Hast, Mdast};
 /// type_data (u32 LE) here." Higher than any real MDAST (≤104) or HAST (≤14)
 /// type. Resolving it copies the original subtree *and applies any pending
 /// patch on it*, so a nested transform queued on a passed-through child still
-/// lands — no stranding, no re-visit.
+/// lands — no stranding, no re-visit. One exception: a discarding self-ref
+/// whose subtree contains other patched anchors errors with
+/// [`CommandError::UnsupportedPatchShape`] instead of re-entering (see
+/// [`apply_patches_in_place`]).
 pub const REF_NODE_TYPE: u8 = 0xFF;
 
 #[derive(Debug, Clone)]
@@ -471,6 +474,10 @@ pub fn apply_patches_in_place<K: ArenaKind>(
         if anchor >= arena_len {
             return Err(unsupported("anchor out of bounds"));
         }
+        // A never-attached node's u32::MAX parent would send the ancestor walks out of bounds
+        if anchor != 0 && arena.get_node(anchor).parent == u32::MAX {
+            return Err(unsupported("detached anchor"));
+        }
         if anchor == 0
             && matches!(
                 patch,
@@ -575,9 +582,11 @@ pub fn apply_patches_in_place<K: ArenaKind>(
             {
                 match content {
                     PatchContent::Tree(sub) => {
-                        if !sub.is_empty()
-                            && (sub.get_node(0).node_type == REF_NODE_TYPE
-                                || sub.get_node(0).node_type == K::ROOT_TAG)
+                        if sub.is_empty() {
+                            return Err(unsupported("empty keep_children payload"));
+                        }
+                        if sub.get_node(0).node_type == REF_NODE_TYPE
+                            || sub.get_node(0).node_type == K::ROOT_TAG
                         {
                             return Err(unsupported("keep_children payload with ROOT/REF root"));
                         }
@@ -606,6 +615,9 @@ pub fn apply_patches_in_place<K: ArenaKind>(
                         if target >= arena_len {
                             return Err(unsupported("ref target out of bounds"));
                         }
+                        if target != 0 && arena.get_node(target).parent == u32::MAX {
+                            return Err(unsupported("detached ref target"));
+                        }
                         ref_uses.push((anchor, target));
                         ref_positions
                             .entry(p as *const _)
@@ -632,6 +644,9 @@ pub fn apply_patches_in_place<K: ArenaKind>(
                             let target = u32::from_le_bytes([td[0], td[1], td[2], td[3]]);
                             if target >= arena_len {
                                 return Err(unsupported("ref target out of bounds"));
+                            }
+                            if target != 0 && arena.get_node(target).parent == u32::MAX {
+                                return Err(unsupported("detached ref target"));
                             }
                             ref_uses.push((anchor, target));
                             ref_placeholders
@@ -2221,6 +2236,53 @@ mod tests {
         match rebuild(&orig, &patches) {
             Err(CommandError::UnsupportedPatchShape(_)) => {}
             other => panic!("expected UnsupportedPatchShape, got {other:?}"),
+        }
+    }
+
+    /// A never-attached anchor (parent == u32::MAX) must error, not panic the ancestor walks.
+    #[test]
+    fn detached_anchor_errors_cleanly() {
+        let mut orig = build_hello_world();
+        let orphan = orig.alloc_node(MdastNodeType::Paragraph as u8);
+
+        let patches = vec![Patch::Remove { node_id: orphan }];
+        match rebuild(&orig, &patches) {
+            Err(CommandError::UnsupportedPatchShape("detached anchor")) => {}
+            other => panic!("expected detached-anchor error, got {other:?}"),
+        }
+    }
+
+    /// A payload ref naming a never-attached node must error, not panic the deciders walk.
+    #[test]
+    fn detached_ref_target_errors_cleanly() {
+        let mut orig = build_hello_world();
+        let orphan = orig.alloc_node(MdastNodeType::Paragraph as u8);
+        let para_id = orig.get_children(0)[1];
+
+        let patches = vec![Patch::InsertAfter {
+            node_id: para_id,
+            new_tree: PatchContent::Tree(ref_arena(orphan, None)),
+        }];
+        match rebuild(&orig, &patches) {
+            Err(CommandError::UnsupportedPatchShape("detached ref target")) => {}
+            other => panic!("expected detached-ref-target error, got {other:?}"),
+        }
+    }
+
+    /// An empty keep_children payload must error, not panic on `get_node(0)`.
+    #[test]
+    fn empty_keep_children_payload_errors() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+
+        let patches = vec![Patch::Replace {
+            node_id: heading_id,
+            new_tree: PatchContent::Tree(ArenaBuilder::<Mdast>::new(String::new()).finish()),
+            keep_children: true,
+        }];
+        match rebuild(&orig, &patches) {
+            Err(CommandError::UnsupportedPatchShape("empty keep_children payload")) => {}
+            other => panic!("expected empty-payload error, got {other:?}"),
         }
     }
 }

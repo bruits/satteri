@@ -50,6 +50,35 @@ describe("frontmatter extraction", () => {
     expect(result.frontmatter).toEqual({ kind: "yaml", value: "title: MDX Hi" });
     expect(result.code).toContain("MDXContent");
   });
+
+  // hastPlugins-only takes a separate fused native call (createHastHandleWithFrontmatter)
+  test("yaml/toml/null frontmatter flow through the hast-plugins-only path", () => {
+    const noop = defineHastPlugin({ name: "noop", element: { filter: [], visit() {} } });
+
+    const yaml = markdownToHtml(`---\ntitle: Hi\n---\n# Body`, { hastPlugins: [noop] });
+    if (yaml instanceof Promise) throw new Error("expected sync");
+    expect(yaml.frontmatter).toEqual({ kind: "yaml", value: "title: Hi" });
+
+    const toml = markdownToHtml(`+++\ntitle = "Hi"\n+++\n# Body`, { hastPlugins: [noop] });
+    if (toml instanceof Promise) throw new Error("expected sync");
+    expect(toml.frontmatter).toEqual({ kind: "toml", value: 'title = "Hi"' });
+
+    const none = markdownToHtml("# Body", { hastPlugins: [noop] });
+    if (none instanceof Promise) throw new Error("expected sync");
+    expect(none.frontmatter).toBeNull();
+  });
+
+  test("frontmatter flows through the MDX hast-plugins-only path", () => {
+    const noop = defineHastPlugin({ name: "noop", element: { filter: [], visit() {} } });
+
+    const yaml = mdxToJs(`---\ntitle: MDX Hi\n---\n# Body`, { hastPlugins: [noop] });
+    if (yaml instanceof Promise) throw new Error("expected sync");
+    expect(yaml.frontmatter).toEqual({ kind: "yaml", value: "title: MDX Hi" });
+
+    const none = mdxToJs("# Body", { hastPlugins: [noop] });
+    if (none instanceof Promise) throw new Error("expected sync");
+    expect(none.frontmatter).toBeNull();
+  });
 });
 
 describe("features.superscript / features.subscript", () => {
@@ -1823,6 +1852,47 @@ describe("value-only node swap fast path", () => {
     if (result instanceof Promise) throw new Error("expected sync");
     expect(result.html).toContain("HELLO");
   });
+
+  test("removing a definition node stops its references from resolving", () => {
+    const src = "See [the docs][d].\n\n[d]: https://example.com/secret\n";
+    const result = markdownToHtml(src, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "remove-def",
+          definition(node, ctx) {
+            ctx.removeNode(node);
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    // Unresolved references render their children as-is (the convert fallback)
+    expect(result.html).not.toContain("example.com/secret");
+    expect(result.html).not.toContain("<a");
+    expect(result.html).toContain("See the docs.");
+  });
+
+  test("replacing a footnoteDefinition renders the replacement body", () => {
+    const src = "Read this[^n].\n\n[^n]: original body\n";
+    const result = markdownToHtml(src, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "redact-footnote",
+          footnoteDefinition(node) {
+            return {
+              type: "footnoteDefinition",
+              identifier: node.identifier,
+              label: node.label,
+              children: [{ type: "paragraph", children: [{ type: "text", value: "REDACTED" }] }],
+            };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain("REDACTED");
+    expect(result.html).not.toContain("original body");
+  });
 });
 
 // Guards the default no-plugin path: skip-positions mode must still flow byte
@@ -1833,6 +1903,17 @@ describe("MDX source positions without a position opt-in", () => {
     const result = mdxToJs(src, { development: true });
     if (result instanceof Promise) throw new Error("expected sync");
     // The authored `<Foo>` is on line 3, column 1.
+    expect(result.code).toContain("lineNumber: 3");
+    expect(result.code).toContain("columnNumber: 1");
+  });
+
+  test("dev __source survives a plugin pipeline with no position opt-in", () => {
+    const src = "# Title\n\n<Foo>bar</Foo>\n";
+    const result = mdxToJs(src, {
+      development: true,
+      hastPlugins: [defineHastPlugin({ name: "noop", element: { filter: [], visit() {} } })],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
     expect(result.code).toContain("lineNumber: 3");
     expect(result.code).toContain("columnNumber: 1");
   });

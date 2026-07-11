@@ -402,6 +402,15 @@ fn arena_retained_bytes<K: satteri_arena::ArenaKind>(arena: &satteri_arena::Aren
         + arena.children.capacity() * std::mem::size_of::<u32>()
         + arena.type_data.capacity()
         + arena.string_pool.capacity()
+        + arena.node_data.capacity() * std::mem::size_of::<(u32, Vec<u8>)>()
+        + arena.node_data.values().map(Vec::capacity).sum::<usize>()
+        + arena.cp_offsets.capacity() * std::mem::size_of::<(u32, u32)>()
+}
+
+/// A pooled zero-capacity placeholder would shadow the real grown arena below it in the LIFO pool.
+fn poolable<K: satteri_arena::ArenaKind>(arena: &satteri_arena::Arena<K>) -> bool {
+    let retained = arena_retained_bytes(arena);
+    retained > 0 && retained <= ARENA_POOL_MAX_RETAINED_BYTES
 }
 
 fn acquire_mdast_arena() -> satteri_arena::Arena<Mdast> {
@@ -411,7 +420,7 @@ fn acquire_mdast_arena() -> satteri_arena::Arena<Mdast> {
 }
 
 fn release_mdast_arena(arena: satteri_arena::Arena<Mdast>) {
-    if arena_retained_bytes(&arena) > ARENA_POOL_MAX_RETAINED_BYTES {
+    if !poolable(&arena) {
         return;
     }
     MDAST_ARENA_POOL.with(|p| {
@@ -429,7 +438,7 @@ fn acquire_hast_arena() -> satteri_arena::Arena<Hast> {
 }
 
 fn release_hast_arena(arena: satteri_arena::Arena<Hast>) {
-    if arena_retained_bytes(&arena) > ARENA_POOL_MAX_RETAINED_BYTES {
+    if !poolable(&arena) {
         return;
     }
     HAST_ARENA_POOL.with(|p| {
@@ -1355,4 +1364,30 @@ pub fn drop_handle(handle: AnyHandle) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+
+    #[test]
+    fn zero_capacity_arenas_are_not_pooled() {
+        release_mdast_arena(satteri_arena::Arena::<Mdast>::new(String::new()));
+        assert_eq!(MDAST_ARENA_POOL.with(|p| p.borrow().len()), 0);
+
+        let mut grown = satteri_arena::Arena::<Mdast>::new(String::new());
+        grown.nodes.reserve(64);
+        release_mdast_arena(grown);
+        assert_eq!(MDAST_ARENA_POOL.with(|p| p.borrow().len()), 1);
+        assert!(acquire_mdast_arena().nodes.capacity() >= 64);
+    }
+
+    #[test]
+    fn retained_bytes_counts_node_data_and_cp_offsets() {
+        let mut arena = satteri_arena::Arena::<Mdast>::new(String::new());
+        let base = arena_retained_bytes(&arena);
+        arena.node_data.insert(0, vec![0u8; 4096]);
+        arena.cp_offsets.reserve(512);
+        assert!(arena_retained_bytes(&arena) >= base + 4096 + 512 * 8);
+    }
 }

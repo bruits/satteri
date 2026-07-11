@@ -32,10 +32,9 @@ function visitAndRender(
   return renderHandle(hastHandle);
 }
 
-function setup() {
-  const handle = createMdastHandle("# Hello\n\nWorld");
-  const source = getHandleSource(handle);
-  return { handle, source };
+function setup(source = "# Hello\n\nWorld") {
+  const handle = createMdastHandle(source);
+  return { handle, source: getHandleSource(handle) };
 }
 
 test("visitor with no subscriptions produces no mutations, no diagnostics", () => {
@@ -792,14 +791,35 @@ test("an in-pass deep read pins the snapshot: retained nodes survive a later mut
     source,
     undefined,
   );
+  // Rewriting the retained paragraph itself makes the assertion discriminating: live re-read = "Changed"
   const mutator = defineMdastPlugin({
-    name: "mutate-heading",
-    heading(node, ctx) {
-      ctx.replaceNode(node, { type: "heading", depth: 2, children: node.children });
+    name: "rewrite-paragraph",
+    paragraph() {
+      return {
+        type: "paragraph",
+        children: [{ type: "text", value: "Changed" }],
+      } satisfies MdastNode;
     },
   });
-  visitMdastHandle(handle, mutator, resolveMdastSubscriptions(mutator), source, undefined);
-  // Unread in-pass, so this is a fresh post-mutation resolve, not a cached value.
+  const mutation = visitMdastHandle(
+    handle,
+    mutator,
+    resolveMdastSubscriptions(mutator),
+    source,
+    undefined,
+  ) as { commandBuffer: Uint8Array };
+  applyCommandsToMdastHandle(handle, mutation.commandBuffer);
+
+  let liveValue: string | undefined;
+  const readBack = defineMdastPlugin({
+    name: "read-live-paragraph",
+    paragraph(node) {
+      const first = node.children[0]!;
+      if (first.type === "text") liveValue = first.value;
+    },
+  });
+  visitMdastHandle(handle, readBack, resolveMdastSubscriptions(readBack), source, undefined);
+  expect(liveValue).toBe("Changed");
   expect(retainedP!.children[0]).toMatchObject({ type: "text", value: "World" });
 });
 
@@ -1056,6 +1076,24 @@ test("parent called after a non-mutating pass resolves from the pass snapshot", 
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
   expect(retainedCtx!.parent(retained!)).toMatchObject({ type: "root" });
+});
+
+test("materialized nodes share identity across access paths", () => {
+  const { handle, source } = setup();
+  let same: boolean | undefined;
+  const plugin = defineMdastPlugin({
+    name: "identity-check",
+    heading(node, ctx) {
+      // parent() first so the snapshot is hot and node.children materializes real nodes
+      const root = ctx.parent(node);
+      const viaMatchedList = node.children[0];
+      const rootChild = root?.type === "root" ? root.children[0] : undefined;
+      const viaReaderList = rootChild?.type === "heading" ? rootChild.children[0] : undefined;
+      same = viaMatchedList !== undefined && viaMatchedList === viaReaderList;
+    },
+  });
+  visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
+  expect(same).toBe(true);
 });
 
 test("a parent is a valid anchor for structural mutations", () => {

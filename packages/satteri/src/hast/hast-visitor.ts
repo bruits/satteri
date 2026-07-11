@@ -14,6 +14,7 @@ import type { MdxFlowExpressionHast, MdxTextExpressionHast } from "../mdx-types.
 import type { MdxjsEsmHast } from "../mdx-types.js";
 import {
   HastReader,
+  HAST_ROOT,
   HAST_ELEMENT,
   HAST_TEXT,
   HAST_COMMENT,
@@ -70,9 +71,14 @@ import {
   type PluginOptions,
   unencodableContentError,
 } from "../visitor-shared.js";
-import { LazyChildResolver, markHandleMutated, type EpochCache } from "../lazy-child-resolver.js";
+import {
+  LazyChildResolver,
+  markHandleMutated,
+  registerEpochCacheSlot,
+  type EpochCache,
+} from "../lazy-child-resolver.js";
 import { HastChildStub } from "./child-stub.js";
-import type { HastHandle } from "../handles.js";
+import type { AnyHandle, HastHandle } from "../handles.js";
 
 export type { HastHandle };
 
@@ -213,7 +219,7 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
   // ok starts false so a throwing child getter still hits the abort in finally
   let ok = false;
   try {
-    buffer.open(NAME_TO_TYPE.root!);
+    buffer.open(HAST_ROOT);
     let encoded = true;
     for (const c of children) {
       if (!emitHastOp(buffer, c, false)) {
@@ -625,7 +631,7 @@ function decodeProperties(
 }
 
 /** Build the child-stub list for a matched node from the wire's `[child_ids]
- *  [child_types]` blocks — no arena snapshot. Stale ids are caught at
+ *  [child_types]` blocks, no arena snapshot. Stale ids are caught at
  *  materialization: the resolver's epoch check refuses a snapshot once the
  *  arena has mutated or been dropped. */
 function readChildStubs(
@@ -668,7 +674,6 @@ interface WalkWire {
 // its static block so the getters can read the private wire fields.
 let WALK_PROPS_DESC!: PropertyDescriptor;
 let WALK_CHILDREN_DESC!: PropertyDescriptor;
-let WALK_BOTH_DESC!: PropertyDescriptorMap;
 
 /**
  * Walk-path element. Spread-correctness requires `properties`/`children` as
@@ -766,7 +771,6 @@ class WalkElement {
         return val;
       },
     };
-    WALK_BOTH_DESC = { properties: WALK_PROPS_DESC, children: WALK_CHILDREN_DESC };
   }
 }
 
@@ -972,7 +976,7 @@ function readMatchedNode(
   return node;
 }
 
-const HAST_EPOCH_CACHE = new WeakMap<HastHandle, EpochCache<HastReader, HastNode>>();
+const HAST_EPOCH_CACHE = registerEpochCacheSlot(new WeakMap<AnyHandle, EpochCache<HastReader>>());
 
 class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
   protected override cacheSlot() {

@@ -77,34 +77,50 @@ function addTypeProperties(
   }
 }
 
-/** Lazy own children getter, shared per reader via `_nodeId`: O(1) in subtree size, no per-node closure. */
-let lastReader: MdastReader | undefined;
-let lastChildrenDescriptor: PropertyDescriptor | undefined;
-
-function childrenDescriptor(reader: MdastReader): PropertyDescriptor {
-  if (reader === lastReader) return lastChildrenDescriptor as PropertyDescriptor;
-  const descriptor: PropertyDescriptor = {
-    get(this: MdastNode) {
-      const nodeId = (this as unknown as { _nodeId: number })._nodeId;
-      const children = reader.getChildIds(nodeId).map((id) => materializeNode(reader, id));
-      Object.defineProperty(this, "children", {
-        value: children,
-        writable: true,
-        configurable: true,
-        enumerable: true,
-      });
-      return children;
-    },
-    configurable: true,
-    enumerable: true,
-  };
-  lastReader = reader;
-  lastChildrenDescriptor = descriptor;
-  return descriptor;
+/** Node memo + shared lazy `children` descriptor; the memo keeps one object per `(reader, id)` so identity-based plugin dedup works across access paths. */
+interface ReaderCache {
+  nodes: Map<number, MdastNode>;
+  children: PropertyDescriptor;
 }
 
-/** Materialize a single MDAST node from a binary buffer; scalars eager, `children` lazy. */
+const READER_CACHES = new WeakMap<MdastReader, ReaderCache>();
+
+function readerCache(reader: MdastReader): ReaderCache {
+  let cache = READER_CACHES.get(reader);
+  if (cache === undefined) {
+    const children: PropertyDescriptor = {
+      get(this: MdastNode) {
+        const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+        const value = reader.getChildIds(nodeId).map((id) => materializeNode(reader, id));
+        Object.defineProperty(this, "children", {
+          value,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+        return value;
+      },
+      configurable: true,
+      enumerable: true,
+    };
+    cache = { nodes: new Map(), children };
+    READER_CACHES.set(reader, cache);
+  }
+  return cache;
+}
+
+/** Materialize a single MDAST node; scalars eager, `children` lazy, memoized per `(reader, id)`. */
 export function materializeNode(reader: MdastReader, nodeId: number): MdastNode {
+  const cache = readerCache(reader);
+  let node = cache.nodes.get(nodeId);
+  if (node === undefined) {
+    node = buildMdastNode(reader, cache, nodeId);
+    cache.nodes.set(nodeId, node);
+  }
+  return node;
+}
+
+function buildMdastNode(reader: MdastReader, cache: ReaderCache, nodeId: number): MdastNode {
   const nodeType = reader.getNodeType(nodeId);
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
@@ -148,7 +164,7 @@ export function materializeNode(reader: MdastReader, nodeId: number): MdastNode 
 
   // children: lazy getter (only for non-leaf nodes)
   if (!LEAF_TYPES.has(nodeType)) {
-    Object.defineProperty(node, "children", childrenDescriptor(reader));
+    Object.defineProperty(node, "children", cache.children);
   }
 
   return node;

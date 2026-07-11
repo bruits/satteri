@@ -71,7 +71,8 @@ export function installStubDescriptors(
   entries: readonly StubDescriptorEntry[],
 ): void {
   for (let i = 0; i < entries.length; i++) {
-    const e = entries[i]!;
+    const e = entries[i];
+    if (e === undefined) continue;
     Object.defineProperty(host, e[0], e[1]);
   }
 }

@@ -30,34 +30,50 @@ function propsToRecord(
   return result;
 }
 
-/** Lazy own children getter, shared per reader via `_nodeId`: O(1) in subtree size, no per-node closure. */
-let lastReader: HastReader | undefined;
-let lastChildrenDescriptor: PropertyDescriptor | undefined;
-
-function childrenDescriptor(reader: HastReader): PropertyDescriptor {
-  if (reader === lastReader) return lastChildrenDescriptor as PropertyDescriptor;
-  const descriptor: PropertyDescriptor = {
-    get(this: HastNode) {
-      const nodeId = (this as unknown as { _nodeId: number })._nodeId;
-      const children = reader.getChildIds(nodeId).map((id) => materializeHastNode(reader, id));
-      Object.defineProperty(this, "children", {
-        value: children,
-        writable: true,
-        configurable: true,
-        enumerable: true,
-      });
-      return children;
-    },
-    configurable: true,
-    enumerable: true,
-  };
-  lastReader = reader;
-  lastChildrenDescriptor = descriptor;
-  return descriptor;
+/** Node memo + shared lazy `children` descriptor; the memo keeps one object per `(reader, id)` so identity-based plugin dedup works across access paths. */
+interface ReaderCache {
+  nodes: Map<number, HastNode>;
+  children: PropertyDescriptor;
 }
 
-/** Materialize a single HAST node from a binary buffer; scalars eager, `children` lazy. */
+const READER_CACHES = new WeakMap<HastReader, ReaderCache>();
+
+function readerCache(reader: HastReader): ReaderCache {
+  let cache = READER_CACHES.get(reader);
+  if (cache === undefined) {
+    const children: PropertyDescriptor = {
+      get(this: HastNode) {
+        const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+        const value = reader.getChildIds(nodeId).map((id) => materializeHastNode(reader, id));
+        Object.defineProperty(this, "children", {
+          value,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+        return value;
+      },
+      configurable: true,
+      enumerable: true,
+    };
+    cache = { nodes: new Map(), children };
+    READER_CACHES.set(reader, cache);
+  }
+  return cache;
+}
+
+/** Materialize a single HAST node; scalars eager, `children` lazy, memoized per `(reader, id)`. */
 export function materializeHastNode(reader: HastReader, nodeId: number): HastNode {
+  const cache = readerCache(reader);
+  let node = cache.nodes.get(nodeId);
+  if (node === undefined) {
+    node = buildHastNode(reader, cache, nodeId);
+    cache.nodes.set(nodeId, node);
+  }
+  return node;
+}
+
+function buildHastNode(reader: HastReader, cache: ReaderCache, nodeId: number): HastNode {
   const nodeType = reader.getNodeType(nodeId);
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
@@ -77,14 +93,14 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
 
   switch (nodeType) {
     case HAST_ROOT:
-      Object.defineProperty(node, "children", childrenDescriptor(reader));
+      Object.defineProperty(node, "children", cache.children);
       break;
 
     case HAST_ELEMENT: {
       const { tagName, properties } = reader.getElementData(nodeId);
       (node as { tagName: string }).tagName = tagName;
       (node as { properties: unknown }).properties = propsToRecord(properties);
-      Object.defineProperty(node, "children", childrenDescriptor(reader));
+      Object.defineProperty(node, "children", cache.children);
       break;
     }
 
@@ -103,7 +119,7 @@ export function materializeHastNode(reader: HastReader, nodeId: number): HastNod
       const { name, attributes } = reader.getMdxJsxElementData(nodeId);
       (node as { name: string | null }).name = name;
       (node as { attributes: unknown }).attributes = attributes;
-      Object.defineProperty(node, "children", childrenDescriptor(reader));
+      Object.defineProperty(node, "children", cache.children);
       break;
     }
 

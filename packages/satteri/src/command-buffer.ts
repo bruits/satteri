@@ -66,8 +66,7 @@ export function releaseCommandBuffer(buf: CommandBuffer): void {
   commandBufferPool.push(buf);
 }
 
-/** Structural commands that carry a subtree payload. Each has an `${op}Opstream`
- *  twin (declarative content) and a raw twin (`{raw}`/`{rawHtml}` escape hatch). */
+/** Structural commands that carry a subtree payload emitted in place via `beginOpstream`/`endOpstream`. */
 export type StructuralOp =
   | "replace"
   | "insertBefore"

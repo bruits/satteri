@@ -56,9 +56,13 @@ import {
   type PluginOptions,
   unencodableContentError,
 } from "../visitor-shared.js";
-import { LazyChildResolver, type EpochCache } from "../lazy-child-resolver.js";
+import {
+  LazyChildResolver,
+  registerEpochCacheSlot,
+  type EpochCache,
+} from "../lazy-child-resolver.js";
 import { MdastChildStub } from "./child-stub.js";
-import type { MdastHandle } from "../handles.js";
+import type { AnyHandle, MdastHandle } from "../handles.js";
 import type {
   Blockquote,
   Break,
@@ -449,7 +453,7 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
   return { subs, rustSubs };
 }
 
-const MDAST_EPOCH_CACHE = new WeakMap<MdastHandle, EpochCache<MdastReader, MdastNode>>();
+const MDAST_EPOCH_CACHE = registerEpochCacheSlot(new WeakMap<AnyHandle, EpochCache<MdastReader>>());
 
 class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
   protected override cacheSlot() {
@@ -474,7 +478,7 @@ class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
 }
 
 /** Build the child-stub list for a matched node from the wire's `[child_ids]
- *  [child_types]` blocks — no arena snapshot. Stale ids are caught at
+ *  [child_types]` blocks, no arena snapshot. Stale ids are caught at
  *  materialization: the resolver's epoch check refuses a snapshot once the
  *  arena has mutated or been dropped. */
 function readMdastChildStubs(
@@ -619,6 +623,8 @@ function readMdastMatchedNode(
   return node as unknown as MdastNode;
 }
 
+const MDAST_ROOT = NAME_TO_TYPE.root!;
+
 /** The arena id of a node if it is an existing (materialized) node, else
  *  undefined for a freshly-built one. */
 function reusedId(node: unknown): number | undefined {
@@ -636,7 +642,7 @@ function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: u
   // ok starts false so a throwing child getter still hits the abort in finally
   let ok = false;
   try {
-    buffer.open(NAME_TO_TYPE.root!);
+    buffer.open(MDAST_ROOT);
     let encoded = true;
     for (const c of children) {
       if (!emitMdastOp(buffer, c, false, false)) {

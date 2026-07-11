@@ -1103,17 +1103,36 @@ describe("visitHastHandle - lazy children lifecycle", () => {
       },
     });
     visitHastHandle(handle, pinAndRetain, resolveSubscriptions(pinAndRetain), source, undefined);
+    // Rewriting the retained paragraph itself makes the assertion discriminating: live re-read = "Changed"
     const mutator = defineHastPlugin({
-      name: "mutate-h1",
+      name: "rewrite-p",
       element: {
-        filter: ["h1"],
-        visit(node, ctx) {
-          ctx.setProperty(node, "id", "x");
+        filter: ["p"],
+        visit() {
+          return {
+            type: "element",
+            tagName: "p",
+            properties: {},
+            children: [{ type: "text", value: "Changed" }],
+          };
         },
       },
     });
     visitHastHandle(handle, mutator, resolveSubscriptions(mutator), source, undefined);
-    // Unread in-pass, so this is a fresh post-mutation resolve, not a cached value.
+
+    let liveValue: string | undefined;
+    const readBack = defineHastPlugin({
+      name: "read-live-p",
+      element: {
+        filter: ["p"],
+        visit(node) {
+          const first = node.children[0]!;
+          if (first.type === "text") liveValue = first.value;
+        },
+      },
+    });
+    visitHastHandle(handle, readBack, resolveSubscriptions(readBack), source, undefined);
+    expect(liveValue).toBe("Changed");
     expect(retainedP!.children[0]).toMatchObject({ type: "text", value: "World" });
   });
 

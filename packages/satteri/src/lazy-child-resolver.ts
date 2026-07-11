@@ -5,14 +5,37 @@ import type { AnyHandle } from "./handles.js";
  *  renumbers the arena, invalidating ids captured before it. */
 const HANDLE_EPOCHS = new WeakMap<AnyHandle, number>();
 
+/** Per-flavor `(handle → cache)` slots, registered so a mutation can evict a snapshot the handle would otherwise pin. */
+const EPOCH_CACHE_SLOTS: WeakMap<AnyHandle, object>[] = [];
+
+export function registerEpochCacheSlot<T extends object>(
+  slot: WeakMap<AnyHandle, T>,
+): WeakMap<AnyHandle, T> {
+  EPOCH_CACHE_SLOTS.push(slot);
+  return slot;
+}
+
 /** Record that `handle`'s arena was rebuilt. Resolvers created before the bump
  *  refuse to take a fresh snapshot afterwards (their ids are stale). */
 export function markHandleMutated(handle: AnyHandle): void {
   HANDLE_EPOCHS.set(handle, (HANDLE_EPOCHS.get(handle) ?? 0) + 1);
+  // Safe to evict: a stale-epoch entry can never be adopted, only pinned by existing resolvers
+  for (const slot of EPOCH_CACHE_SLOTS) {
+    slot.delete(handle);
+  }
 }
 
 /** Arena sentinel in the node struct's parent field: the node has no parent. */
 const NO_PARENT = 0xffffffff;
+
+/** Snapshot for one `(handle, epoch)`. Immutable once built, so it is shared
+ *  by every resolver of the same pass chain: nested matched containers dedup
+ *  by id, and later read-only passes reuse the whole cache instead of
+ *  re-serializing and re-materializing. */
+export interface EpochCache<TReader> {
+  epoch: number;
+  reader: TReader;
+}
 
 /**
  * Lazy node materializer for the walk paths: serializes the handle's arena
@@ -20,21 +43,11 @@ const NO_PARENT = 0xffffffff;
  * snapshot. Subclasses supply reader construction and per-node materialization
  * so the hot path stays free of per-node closures.
  */
-/** Snapshot + materialized nodes for one `(handle, epoch)`. Immutable once
- *  built, so it is shared by every resolver of the same pass chain: nested
- *  matched containers dedup by id, and later read-only passes reuse the
- *  whole cache instead of re-serializing and re-materializing. */
-export interface EpochCache<TReader, TNode> {
-  epoch: number;
-  reader: TReader;
-  nodes: Map<number, TNode>;
-}
-
 export abstract class LazyChildResolver<TReader, TNode> {
   #handle: AnyHandle;
   #epoch: number;
   /** Strong pin: retained nodes keep their pass snapshot alive after later epochs evict the slot. */
-  #cache: EpochCache<TReader, TNode> | undefined;
+  #cache: EpochCache<TReader> | undefined;
 
   constructor(handle: AnyHandle) {
     this.#handle = handle;
@@ -47,9 +60,9 @@ export abstract class LazyChildResolver<TReader, TNode> {
   protected abstract readChildIds(reader: TReader, nodeId: number): number[];
   /** Kind-specific `(handle → cache)` slot, supplied as a module-level WeakMap
    *  by each subclass so MDAST and HAST snapshots never collide. */
-  protected abstract cacheSlot(): WeakMap<AnyHandle, EpochCache<TReader, TNode>>;
+  protected abstract cacheSlot(): WeakMap<AnyHandle, EpochCache<TReader>>;
 
-  #ensureCache(): EpochCache<TReader, TNode> {
+  #ensureCache(): EpochCache<TReader> {
     let cache = this.#cache;
     if (cache !== undefined) return cache;
     const slot = this.cacheSlot();
@@ -65,19 +78,19 @@ export abstract class LazyChildResolver<TReader, TNode> {
     if ((HANDLE_EPOCHS.get(this.#handle) ?? 0) !== this.#epoch) {
       throw new Error(
         "Cannot read node content: this node was retained past its visitor pass " +
-          "and the tree has changed since. Read any field of the node during its " +
-          "pass to pin the pass snapshot, or copy the data you need.",
+          "and the tree has changed since. Reading a child node's field (or calling " +
+          "ctx.parent()) during the pass pins the pass snapshot; eager fields like " +
+          "tagName or properties do not. Or copy the data you need before the pass ends.",
       );
     }
     // The serialized buffer already carries each node's `data` blob (read
-    // eagerly by the materializer), and the arena isn't mutated mid-visit —
+    // eagerly by the materializer), and the arena isn't mutated mid-visit,
     // so no separate lazy NAPI fetch is needed. This also keeps walk-path
     // children consistent with the fully materialized tree (no `data` key
     // when a node has none).
     cache = {
       epoch: this.#epoch,
       reader: this.createReader(serializeHandle(this.#handle)),
-      nodes: new Map(),
     };
     this.#cache = cache;
     slot.set(this.#handle, cache);
@@ -95,17 +108,11 @@ export abstract class LazyChildResolver<TReader, TNode> {
     return cache !== undefined && cache.epoch === this.#epoch;
   }
 
-  /** Materialize one node for a child stub's first real-field read, memoized
-   *  per `(handle, epoch, id)` so overlapping subtrees and later passes share
-   *  the same materialized objects. */
+  /** Materialize one node for a child stub's first real-field read. The
+   *  materializers memoize per `(reader, id)`, so overlapping subtrees and
+   *  later passes share the same materialized objects. */
   materializeOne(nodeId: number): TNode {
-    const cache = this.#ensureCache();
-    let node = cache.nodes.get(nodeId);
-    if (node === undefined) {
-      node = this.materializeNode(cache.reader, nodeId);
-      cache.nodes.set(nodeId, node);
-    }
-    return node;
+    return this.materializeNode(this.#ensureCache().reader, nodeId);
   }
 
   /** Arena id of `nodeId`'s parent in the pass snapshot, or undefined at the root. */

@@ -48,37 +48,10 @@ fn hast_with_link_replaces() -> (
     satteri_arena::Arena<satteri_arena::Hast>,
     Vec<satteri_ast::rebuild::Patch<satteri_arena::Hast>>,
 ) {
-    use satteri_arena::{ArenaBuilder, Hast, StringRef};
-    use satteri_ast::hast::codec::encode_element_data;
-    use satteri_ast::rebuild::PatchContent;
-
     let (mdast, _) =
         satteri_pulldown_cmark::parse(MARKDOWN, satteri_pulldown_cmark::DEFAULT_OPTIONS);
     let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
-
-    let mut patches = Vec::new();
-    for id in 0..hast.len() as u32 {
-        let node = hast.get_node(id);
-        if node.node_type != satteri_ast::hast::HastNodeType::Element as u8 {
-            continue;
-        }
-        let td = hast.get_type_data(id);
-        if td.len() < 8 || hast.get_str(StringRef::from_bytes(&td[0..8])) != "a" {
-            continue;
-        }
-        let mut b = ArenaBuilder::<Hast>::new(String::new());
-        let tag = b.alloc_string("span");
-        let class_name = b.alloc_string("className");
-        let class_val = b.alloc_string("link");
-        b.open_node(satteri_ast::hast::HastNodeType::Element as u8);
-        b.set_data_current(&encode_element_data(tag, &[(class_name, 0, class_val)]));
-        b.close_node();
-        patches.push(satteri_ast::rebuild::Patch::Replace {
-            node_id: id,
-            new_tree: PatchContent::Tree(b.finish()),
-            keep_children: true,
-        });
-    }
+    let patches = satteri_bench::link_replace_patches(&hast);
     assert!(patches.len() > 10, "fixture should contain many links");
     (hast, patches)
 }
