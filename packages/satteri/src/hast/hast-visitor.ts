@@ -988,7 +988,7 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
   }
 
   protected override materializeNode(reader: HastReader, nodeId: number): HastNode {
-    return materializeHastNode(reader, nodeId);
+    return materializeHastNode(reader, nodeId, true);
   }
 
   protected override readParentId(reader: HastReader, nodeId: number): number {

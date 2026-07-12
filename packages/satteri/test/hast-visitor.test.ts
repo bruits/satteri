@@ -465,6 +465,51 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain("<h1>Recovered</h1>");
   });
 
+  test("walk-path materialized nodes are frozen against plugin mutation", () => {
+    const { handle, source } = setup("# Hello");
+    const vandal = defineHastPlugin({
+      name: "vandal",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          const parent = ctx.parent(node);
+          if (!parent) throw new Error("h1 must have a parent");
+          const h1 = parent.children.find((c) => c.type === "element") as Element;
+          // container freeze lands with the first children read
+          const text = h1.children[0] as Text;
+          expect(Object.isFrozen(parent)).toBe(true);
+          expect(Object.isFrozen(h1)).toBe(true);
+          expect(() => {
+            (h1 as { tagName: string }).tagName = "h2";
+          }).toThrow(TypeError);
+          expect(() => {
+            h1.properties.id = "corrupted";
+          }).toThrow(TypeError);
+          expect(() => {
+            (text as { value: string }).value = "corrupted";
+          }).toThrow(TypeError);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(vandal);
+    visitHastHandle(handle, vandal, subs, source, undefined);
+
+    const witness = defineHastPlugin({
+      name: "witness",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          const parent = ctx.parent(node);
+          expect(parent).toBeDefined();
+          const h1 = parent!.children.find((c) => c.type === "element") as Element;
+          expect((h1.children[0] as Text).value).toBe("Hello");
+        },
+      },
+    });
+    visitHastHandle(handle, witness, resolveSubscriptions(witness), source, undefined);
+    expect(renderHandle(handle)).toContain("<h1>Hello</h1>");
+  });
+
   test("context.setProperty(node, 'children', ...) preserves the element's properties", () => {
     const { handle, source } = setup("[x](https://example.com)");
     const plugin = defineHastPlugin({

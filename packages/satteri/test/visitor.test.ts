@@ -364,6 +364,32 @@ test("a child getter throwing during 'children' encoding leaves the buffer usabl
   expect(html).toMatch(/<h1>Recovered<\/h1>/);
 });
 
+test("walk-path materialized nodes are frozen against plugin mutation", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      const parent = ctx.parent(node);
+      if (!parent) throw new Error("heading must have a parent");
+      // container freeze lands with the first children read
+      const first = parent.children[0]!;
+      expect(Object.isFrozen(parent)).toBe(true);
+      expect(() => {
+        (parent as { type: string }).type = "corrupted";
+      }).toThrow(TypeError);
+      expect(() => {
+        (parent as { children: MdastNode[] }).children = [];
+      }).toThrow(TypeError);
+      const pos = first.position;
+      expect(pos).toBeDefined();
+      expect(() => {
+        (pos!.start as { line: number }).line = 999;
+      }).toThrow(TypeError);
+      const clone = structuredClone(parent);
+      (clone as { type: string }).type = "mutable-copy";
+    },
+  });
+  expect(html).toContain("Hello");
+});
+
 test("context.insertChildAt() prepends at index 0", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node, ctx) {

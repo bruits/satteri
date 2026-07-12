@@ -17,6 +17,7 @@ import type { Root } from "hast";
 import type { HastNode } from "../types.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
 import { restorePhantomSpaces } from "../phantom.js";
+import { deepFreeze } from "../freeze.js";
 
 export type { HastNode };
 
@@ -34,37 +35,63 @@ function propsToRecord(
 interface ReaderCache {
   nodes: Map<number, HastNode>;
   children: PropertyDescriptor;
+  frozen: boolean;
 }
 
 const READER_CACHES = new WeakMap<HastReader, ReaderCache>();
 
-function readerCache(reader: HastReader): ReaderCache {
+/** Freeze waits for the first children read; sealing earlier would force every read through a getter. */
+function frozenChildrenDescriptor(reader: HastReader): PropertyDescriptor {
+  return {
+    get(this: HastNode) {
+      const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+      const value = reader.getChildIds(nodeId).map((id) => materializeHastNode(reader, id, true));
+      Object.defineProperty(this, "children", {
+        value,
+        writable: false,
+        configurable: false,
+        enumerable: true,
+      });
+      Object.freeze(this);
+      return value;
+    },
+    configurable: true,
+    enumerable: true,
+  };
+}
+
+function readerCache(reader: HastReader, frozen: boolean): ReaderCache {
   let cache = READER_CACHES.get(reader);
   if (cache === undefined) {
-    const children: PropertyDescriptor = {
-      get(this: HastNode) {
-        const nodeId = (this as unknown as { _nodeId: number })._nodeId;
-        const value = reader.getChildIds(nodeId).map((id) => materializeHastNode(reader, id));
-        Object.defineProperty(this, "children", {
-          value,
-          writable: true,
+    const children: PropertyDescriptor = frozen
+      ? frozenChildrenDescriptor(reader)
+      : {
+          get(this: HastNode) {
+            const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+            const value = reader.getChildIds(nodeId).map((id) => materializeHastNode(reader, id));
+            Object.defineProperty(this, "children", {
+              value,
+              writable: true,
+              configurable: true,
+              enumerable: true,
+            });
+            return value;
+          },
           configurable: true,
           enumerable: true,
-        });
-        return value;
-      },
-      configurable: true,
-      enumerable: true,
-    };
-    cache = { nodes: new Map(), children };
+        };
+    cache = { nodes: new Map(), children, frozen };
     READER_CACHES.set(reader, cache);
+  }
+  if (cache.frozen !== frozen) {
+    throw new Error("materializeHastNode: a reader cannot mix frozen and mutable materialization");
   }
   return cache;
 }
 
-/** Materialize a single HAST node; scalars eager, `children` lazy, memoized per `(reader, id)`. */
-export function materializeHastNode(reader: HastReader, nodeId: number): HastNode {
-  const cache = readerCache(reader);
+/** Materialize a single HAST node; scalars eager, `children` lazy, memoized per `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins cannot corrupt the shared cache. */
+export function materializeHastNode(reader: HastReader, nodeId: number, frozen = false): HastNode {
+  const cache = readerCache(reader, frozen);
   let node = cache.nodes.get(nodeId);
   if (node === undefined) {
     node = buildHastNode(reader, cache, nodeId);
@@ -151,6 +178,26 @@ function buildHastNode(reader: HastReader, cache: ReaderCache, nodeId: number): 
       if (process.env.NODE_ENV !== "production") {
         console.warn(`materializeHastNode: malformed node_data for nodeId=${nodeId}`, err);
       }
+    }
+  }
+
+  if (cache.frozen) {
+    const n = node as HastNode & Record<string, unknown>;
+    if (position !== undefined) {
+      Object.freeze(position.start);
+      Object.freeze(position.end);
+      Object.freeze(position);
+    }
+    deepFreeze(n.properties);
+    deepFreeze(n.attributes);
+    deepFreeze(n.data);
+    const hasChildren =
+      nodeType === HAST_ROOT ||
+      nodeType === HAST_ELEMENT ||
+      nodeType === HAST_MDX_JSX_ELEMENT ||
+      nodeType === HAST_MDX_JSX_TEXT_ELEMENT;
+    if (!hasChildren) {
+      Object.freeze(node);
     }
   }
 

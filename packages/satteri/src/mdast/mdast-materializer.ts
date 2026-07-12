@@ -3,6 +3,7 @@ import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
 import { materializeMdastFields } from "./generated/layout.js";
+import { deepFreeze } from "../freeze.js";
 
 // Leaf node types that do NOT have children.
 // Type 9 = `definition`; type 18 = `imageReference` — leaves per mdast spec
@@ -81,37 +82,63 @@ function addTypeProperties(
 interface ReaderCache {
   nodes: Map<number, MdastNode>;
   children: PropertyDescriptor;
+  frozen: boolean;
 }
 
 const READER_CACHES = new WeakMap<MdastReader, ReaderCache>();
 
-function readerCache(reader: MdastReader): ReaderCache {
+/** Freeze waits for the first children read; sealing earlier would force every read through a getter. */
+function frozenChildrenDescriptor(reader: MdastReader): PropertyDescriptor {
+  return {
+    get(this: MdastNode) {
+      const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+      const value = reader.getChildIds(nodeId).map((id) => materializeNode(reader, id, true));
+      Object.defineProperty(this, "children", {
+        value,
+        writable: false,
+        configurable: false,
+        enumerable: true,
+      });
+      Object.freeze(this);
+      return value;
+    },
+    configurable: true,
+    enumerable: true,
+  };
+}
+
+function readerCache(reader: MdastReader, frozen: boolean): ReaderCache {
   let cache = READER_CACHES.get(reader);
   if (cache === undefined) {
-    const children: PropertyDescriptor = {
-      get(this: MdastNode) {
-        const nodeId = (this as unknown as { _nodeId: number })._nodeId;
-        const value = reader.getChildIds(nodeId).map((id) => materializeNode(reader, id));
-        Object.defineProperty(this, "children", {
-          value,
-          writable: true,
+    const children: PropertyDescriptor = frozen
+      ? frozenChildrenDescriptor(reader)
+      : {
+          get(this: MdastNode) {
+            const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+            const value = reader.getChildIds(nodeId).map((id) => materializeNode(reader, id));
+            Object.defineProperty(this, "children", {
+              value,
+              writable: true,
+              configurable: true,
+              enumerable: true,
+            });
+            return value;
+          },
           configurable: true,
           enumerable: true,
-        });
-        return value;
-      },
-      configurable: true,
-      enumerable: true,
-    };
-    cache = { nodes: new Map(), children };
+        };
+    cache = { nodes: new Map(), children, frozen };
     READER_CACHES.set(reader, cache);
+  }
+  if (cache.frozen !== frozen) {
+    throw new Error("materializeNode: a reader cannot mix frozen and mutable materialization");
   }
   return cache;
 }
 
-/** Materialize a single MDAST node; scalars eager, `children` lazy, memoized per `(reader, id)`. */
-export function materializeNode(reader: MdastReader, nodeId: number): MdastNode {
-  const cache = readerCache(reader);
+/** Materialize a single MDAST node; scalars eager, `children` lazy, memoized per `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins cannot corrupt the shared cache. */
+export function materializeNode(reader: MdastReader, nodeId: number, frozen = false): MdastNode {
+  const cache = readerCache(reader, frozen);
   let node = cache.nodes.get(nodeId);
   if (node === undefined) {
     node = buildMdastNode(reader, cache, nodeId);
@@ -165,6 +192,21 @@ function buildMdastNode(reader: MdastReader, cache: ReaderCache, nodeId: number)
   // children: lazy getter (only for non-leaf nodes)
   if (!LEAF_TYPES.has(nodeType)) {
     Object.defineProperty(node, "children", cache.children);
+  }
+
+  if (cache.frozen) {
+    const n = node as MdastNode & Record<string, unknown>;
+    if (position !== undefined) {
+      Object.freeze(position.start);
+      Object.freeze(position.end);
+      Object.freeze(position);
+    }
+    deepFreeze(n.data);
+    deepFreeze(n.align);
+    deepFreeze(n.attributes);
+    if (LEAF_TYPES.has(nodeType)) {
+      Object.freeze(node);
+    }
   }
 
   return node;

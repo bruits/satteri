@@ -465,7 +465,7 @@ class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
   }
 
   protected override materializeNode(reader: MdastReader, nodeId: number): MdastNode {
-    return materializeNode(reader, nodeId);
+    return materializeNode(reader, nodeId, true);
   }
 
   protected override readParentId(reader: MdastReader, nodeId: number): number {
