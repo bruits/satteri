@@ -40,12 +40,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cargo fmt
-        run: cargo fmt -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-features -- -D warnings
-
       - name: Setup pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
@@ -58,11 +52,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Build TypeScript
+        run: pnpm run --recursive --if-present build:ts
+
       - name: Codegen up to date
         run: pnpm codegen:check
 
-      - name: Lint JS
-        run: pnpm oxlint
+      - name: Lint
+        run: pnpm lint
 
   test:
     name: Test
