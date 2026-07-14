@@ -236,6 +236,14 @@ export class MdastReader {
   }
 
   /**
+   * DescriptionDetailsData #[repr(C)]: spread(0). Valid for descriptionDetails.
+   */
+  getDescriptionDetailsData(nodeId: number): { spread: boolean } {
+    const data = this.getTypeData(nodeId);
+    return { spread: data.length > 0 && data[0] !== 0 };
+  }
+
+  /**
    * TableData #[repr(C)]: align_count(0..4), then align_count bytes.
    * Alignment bytes: 0=none, 1=left, 2=right, 3=center.
    */

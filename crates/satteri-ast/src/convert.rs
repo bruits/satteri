@@ -6,10 +6,11 @@ use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast, St
 use crate::hast::codec::encode_element_data_into;
 use crate::hast::HastNodeType;
 use crate::mdast::{
-    decode_code_data, decode_definition_data, decode_footnote_definition_data, decode_heading_data,
-    decode_image_data, decode_image_reference_alt, decode_link_data, decode_list_data,
-    decode_list_item_data, decode_math_data, decode_reference_data, decode_table_alignments,
-    ColumnAlign, ListItemData, MdastNodeType,
+    decode_code_data, decode_definition_data, decode_description_details_data,
+    decode_footnote_definition_data, decode_heading_data, decode_image_data,
+    decode_image_reference_alt, decode_link_data, decode_list_data, decode_list_item_data,
+    decode_math_data, decode_reference_data, decode_table_alignments, ColumnAlign, ListItemData,
+    MdastNodeType,
 };
 #[cfg(feature = "mdx")]
 use crate::mdast::{
@@ -1378,6 +1379,43 @@ fn convert_node(
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
                 convert_children(node_id, view, builder, ctx);
+            }
+            builder.close_node();
+        }
+
+        Some(MdastNodeType::DescriptionList) => {
+            let action = open_h_element(builder, view, node_id, "dl", &[]);
+            copy_position(node_id, view, builder);
+            if matches!(action, ChildrenAction::Recurse) {
+                convert_children_with_newlines(node_id, view, builder, ctx);
+            }
+            builder.close_node();
+        }
+
+        Some(MdastNodeType::DescriptionTerm) => {
+            let action = open_h_element(builder, view, node_id, "dt", &[]);
+            copy_position(node_id, view, builder);
+            if matches!(action, ChildrenAction::Recurse) {
+                convert_children(node_id, view, builder, ctx);
+            }
+            builder.close_node();
+        }
+
+        Some(MdastNodeType::DescriptionDetails) => {
+            // Tight `<dd>`s unwrap their paragraph via ListItem's path (no task
+            // checkbox, hence `None`); loose ones keep it.
+            let action = open_h_element(builder, view, node_id, "dd", &[]);
+            copy_position(node_id, view, builder);
+            if matches!(action, ChildrenAction::Replaced) {
+                builder.close_node();
+                return;
+            }
+            let data = view.get_type_data(node_id);
+            let loose = !data.is_empty() && decode_description_details_data(data).spread;
+            if loose {
+                convert_children_with_newlines(node_id, view, builder, ctx);
+            } else {
+                convert_children_unwrap_paragraphs_task(node_id, view, builder, ctx, None);
             }
             builder.close_node();
         }

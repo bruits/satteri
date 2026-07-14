@@ -45,6 +45,9 @@ import type {
   InlineMath,
   Superscript,
   Subscript,
+  DescriptionList,
+  DescriptionTerm,
+  DescriptionDetails,
   Data,
   SourceFormat,
 } from "../types.js";
@@ -388,6 +391,9 @@ export interface MdastPluginInstance {
   textDirective?: MdastVisitorFn<TextDirective>;
   superscript?: MdastVisitorFn<Superscript>;
   subscript?: MdastVisitorFn<Subscript>;
+  descriptionList?: MdastVisitorFn<DescriptionList>;
+  descriptionTerm?: MdastVisitorFn<DescriptionTerm>;
+  descriptionDetails?: MdastVisitorFn<DescriptionDetails>;
   mdxJsxFlowElement?: MdastVisitorFn<MdxJsxFlowElement>;
   mdxJsxTextElement?: MdastVisitorFn<MdxJsxTextElement>;
   mdxFlowExpression?: MdastVisitorFn<MdxFlowExpression>;
@@ -605,6 +611,11 @@ function readMdastMatchedNode(
         const checked = buf[pos]!;
         node.checked = checked === 2 ? null : checked === 1;
         node.spread = buf[pos + 1]! !== 0;
+        break;
+      }
+      case 37: {
+        // descriptionDetails
+        node.spread = buf[pos]! !== 0;
         break;
       }
       // table (21), directives (30/31/32) and mdxJsx elements (100/101) are

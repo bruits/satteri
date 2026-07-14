@@ -148,6 +148,26 @@ impl ListItemData {
     }
 }
 
+/// `spread`: false = tight (`<dd>` holds bare content), true = loose (`<dd>`
+/// wraps its content in a `<p>`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct DescriptionDetailsData {
+    pub spread: bool,
+}
+
+impl DescriptionDetailsData {
+    pub fn to_bytes(&self) -> [u8; 1] {
+        [self.spread as u8]
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            spread: bytes[0] != 0,
+        }
+    }
+}
+
 /// Immediately followed in type_data by `align_count` [`ColumnAlign`] bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -471,6 +491,14 @@ pub fn encode_list_item_data(checked: u8, spread: bool) -> Vec<u8> {
 
 pub fn decode_list_item_data(bytes: &[u8]) -> ListItemData {
     ListItemData::from_bytes(bytes)
+}
+
+pub fn encode_description_details_data(spread: bool) -> Vec<u8> {
+    DescriptionDetailsData { spread }.to_bytes().to_vec()
+}
+
+pub fn decode_description_details_data(bytes: &[u8]) -> DescriptionDetailsData {
+    DescriptionDetailsData::from_bytes(bytes)
 }
 
 pub fn encode_table_data(alignments: &[ColumnAlign]) -> Vec<u8> {

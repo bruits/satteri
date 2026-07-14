@@ -45,6 +45,13 @@ function addTypeProperties(
       break;
     }
 
+    case 37: {
+      // descriptionDetails
+      const d = reader.getDescriptionDetailsData(nodeId);
+      (node as { spread: boolean }).spread = d.spread;
+      break;
+    }
+
     case 21: // table
       (node as { align: unknown }).align = reader.getTableAlign(nodeId);
       break;

@@ -20,6 +20,7 @@ const N = NAME_TO_TYPE;
 const HAND_WRITTEN_FIELDS: Readonly<Record<number, readonly string[]>> = {
   [N.list!]: ["ordered", "start", "spread"],
   [N.listItem!]: ["spread", "checked"],
+  [N.descriptionDetails!]: ["spread"],
   [N.table!]: ["align"],
   [N.containerDirective!]: ["name", "attributes"],
   [N.leafDirective!]: ["name", "attributes"],

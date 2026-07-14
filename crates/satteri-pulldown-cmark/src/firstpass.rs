@@ -122,6 +122,38 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         (self.tree, self.allocs, self.mdx_errors)
     }
 
+    /// Split a term paragraph's inline children into one detached `(head, tail)`
+    /// chain per source line, breaking at (and dropping) the `SoftBreak`s that
+    /// separate the lines. Each segment becomes its own `<dt>`, matching
+    /// mdast-util-definition-list.
+    fn collect_term_segments(&mut self, child: Option<TreeIndex>) -> Vec<(TreeIndex, TreeIndex)> {
+        let mut segments = Vec::new();
+        let mut seg: Option<(TreeIndex, TreeIndex)> = None;
+        let mut cur = child;
+        while let Some(node) = cur {
+            let next = self.tree[node].next;
+            if matches!(self.tree[node].item.body, ItemBody::SoftBreak) {
+                if let Some(s) = seg.take() {
+                    segments.push(s);
+                }
+            } else {
+                self.tree[node].next = None;
+                seg = Some(match seg {
+                    None => (node, node),
+                    Some((head, tail)) => {
+                        self.tree[tail].next = Some(node);
+                        (head, node)
+                    }
+                });
+            }
+            cur = next;
+        }
+        if let Some(s) = seg.take() {
+            segments.push(s);
+        }
+        segments
+    }
+
     /// Returns offset after block.
     fn parse_block(&mut self, mut start_ix: usize) -> usize {
         let bytes = self.text.as_bytes();
@@ -400,16 +432,24 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 })
                 .flatten()
                 .filter(|(_, item)| {
-                    matches!(
-                        item,
-                        Item {
-                            body: ItemBody::Paragraph
-                                | ItemBody::TightParagraph
-                                | ItemBody::MaybeDefinitionListTitle
-                                | ItemBody::DefinitionListDefinition(_),
-                            ..
+                    match item.body {
+                        // A term may sit at most one blank line from its
+                        // definition (pandoc / mdast-util-definition-list); two+
+                        // disconnect it. `item.end` includes the paragraph's
+                        // trailing newline, so the gap to the marker holds 0
+                        // newlines when tight, 1 when loose, 2+ when disconnected.
+                        ItemBody::Paragraph | ItemBody::TightParagraph => {
+                            let gap_start = item.end.min(container_start);
+                            bytes[gap_start..container_start]
+                                .iter()
+                                .filter(|&&b| b == b'\n')
+                                .count()
+                                <= 1
                         }
-                    )
+                        ItemBody::MaybeDefinitionListTitle
+                        | ItemBody::DefinitionListDefinition(..) => true,
+                        _ => false,
+                    }
                 })
                 .and_then(|item| {
                     Some((
@@ -422,29 +462,73 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             {
                 match item.body {
                     ItemBody::Paragraph | ItemBody::TightParagraph => {
+                        // Repurpose the term paragraph as the `<dl>`, one `<dt>`
+                        // per source line.
                         item.body = ItemBody::DefinitionList(true);
                         let Item { start, end, .. } = *item;
+                        let segments = self.collect_term_segments(child);
+                        // Drop the old inline chain (now re-parented under the
+                        // titles) and append the titles as the list's children.
                         let list_idx = self.tree.cur().unwrap();
-                        let title_idx = self.tree.create_node(Item {
-                            start,
-                            end, // will get updated later if item not empty
-                            body: ItemBody::DefinitionListTitle,
-                        });
-                        self.tree[title_idx].child = child;
-                        self.tree[list_idx].child = Some(title_idx);
+                        self.tree[list_idx].child = None;
                         self.tree.push();
+                        if segments.is_empty() {
+                            self.tree.append(Item {
+                                start,
+                                end,
+                                body: ItemBody::DefinitionListTitle,
+                            });
+                        } else {
+                            for (head, tail) in segments {
+                                let t_start = self.tree[head].item.start;
+                                let t_end = self.tree[tail].item.end;
+                                let title = self.tree.append(Item {
+                                    start: t_start,
+                                    end: t_end,
+                                    body: ItemBody::DefinitionListTitle,
+                                });
+                                self.tree[title].child = Some(head);
+                            }
+                        }
                     }
                     ItemBody::MaybeDefinitionListTitle => {
+                        // A new term after a definition: reuse this paragraph as
+                        // the first `<dt>`; any further source lines become
+                        // sibling `<dt>`s, mirroring the initial-term split.
                         item.body = ItemBody::DefinitionListTitle;
+                        let node_idx = self.tree.cur().unwrap();
+                        let segments = self.collect_term_segments(child);
+                        if let Some((head, tail)) = segments.first().copied() {
+                            let t_start = self.tree[head].item.start;
+                            let t_end = self.tree[tail].item.end;
+                            self.tree[node_idx].child = Some(head);
+                            self.tree[node_idx].item.start = t_start;
+                            self.tree[node_idx].item.end = t_end;
+                        }
+                        for (head, tail) in segments.into_iter().skip(1) {
+                            let t_start = self.tree[head].item.start;
+                            let t_end = self.tree[tail].item.end;
+                            let title = self.tree.append(Item {
+                                start: t_start,
+                                end: t_end,
+                                body: ItemBody::DefinitionListTitle,
+                            });
+                            self.tree[title].child = Some(head);
+                        }
                     }
-                    ItemBody::DefinitionListDefinition(_) => {}
+                    ItemBody::DefinitionListDefinition(..) => {}
                     _ => unreachable!(),
                 }
                 let after_marker_index = start_ix + line_start.bytes_scanned();
+                // Record looseness per-definition (blank line before the marker)
+                // so mixed tight/loose lists render correctly. The list-wide
+                // `is_tight` below still drives `surgerize_tight_list`, and stays
+                // consistent because a fully tight list has no loose definition.
+                let loose = self.last_line_blank;
                 self.tree.append(Item {
                     start: container_start - outer_indent,
                     end: after_marker_index, // will get updated later if item not empty
-                    body: ItemBody::DefinitionListDefinition(indent),
+                    body: ItemBody::DefinitionListDefinition(indent, loose),
                 });
                 if let Some(ItemBody::DefinitionList(ref mut is_tight)) =
                     self.tree.peek_up().map(|cur| &mut self.tree[cur].item.body)
@@ -677,7 +761,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // `_\n>\n>-` → paragraph + blockquote(list(empty))).
                         self.list_interrupted_paragraph = false;
                     }
-                    ItemBody::ListItem(indent, _) | ItemBody::DefinitionListDefinition(indent)
+                    ItemBody::ListItem(indent, _)
+                    | ItemBody::DefinitionListDefinition(indent, _)
                         if self.begin_list_item.is_some() =>
                     {
                         self.last_line_blank = true;
@@ -3030,7 +3115,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if self.last_line_blank {
                 // A list item can begin with at most one blank line.
                 if let Some(node_ix) = self.tree.peek_up() {
-                    if let ItemBody::ListItem(_, _) | ItemBody::DefinitionListDefinition(_) =
+                    if let ItemBody::ListItem(_, _) | ItemBody::DefinitionListDefinition(..) =
                         self.tree[node_ix].item.body
                     {
                         self.pop(begin_list_item);
@@ -3825,9 +3910,9 @@ fn scan_paragraph_interrupt_no_table(
                     )
                 }))
                 || tree.walk_spine().nth(tree_position).is_some_and(|cur| {
-                    matches!(tree[*cur].item.body, ItemBody::DefinitionListDefinition(_))
+                    matches!(tree[*cur].item.body, ItemBody::DefinitionListDefinition(..))
                 }))
-            && bytes.starts_with(b":")
+            && is_definition_list_marker(bytes)
         || (has_footnote
             && bytes.starts_with(b"[^")
             && scan_link_label_rest(
@@ -5845,7 +5930,7 @@ fn fixup_end_of_definition_list(tree: &mut Tree<Item>, list_ix: TreeIndex) {
     let mut previous_list_item = None;
     while let Some(listitem_ix) = list_item {
         match &mut tree[listitem_ix].item.body {
-            ItemBody::DefinitionListTitle | ItemBody::DefinitionListDefinition(_) => {
+            ItemBody::DefinitionListTitle | ItemBody::DefinitionListDefinition(..) => {
                 previous_list_item = list_item;
                 list_item = tree[listitem_ix].next;
             }

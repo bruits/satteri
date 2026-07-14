@@ -3446,7 +3446,7 @@ fn regression_test_201() {
   : def text def text
 "##;
     let expected = r##"<ul>
-<li><p>def this</p><p><p>def text def text</p></p></li>
+<li><dl><dt>def this</dt><dd>def text def text</dd></dl></li>
 </ul>
 "##;
 
@@ -3484,10 +3484,13 @@ fn regression_test_203() {
 "##;
     let expected = r##"<p><strong>A:</strong></p>
 <blockquote>
-<p><p>B C
-I J :x: K</p><p><p>x: L M
+<p>B C
+I J :x: K
+:x: L M
 N O <em>P</em> Q R. (S
-T U, V W</p></p><p><p>x:,:x:,:x:, and :x: but no :x: or</p></p><p><p>x:.)</p></p></p>
+T U, V W
+:x:,:x:,:x:, and :x: but no :x: or
+:x:.)</p>
 </blockquote>
 "##;
 
@@ -3504,8 +3507,9 @@ fn regression_test_204() {
  
  &gt; Something is wrong!
 "##;
-    let expected = r##"<p><p>[abc] check <code>foobar_raz</code>
-Some preamble <code>foobar_raz</code>, not <code>barfoo_raz</code></p><p><p>D</p></p></p>
+    let expected = r##"<p>[abc] check <code>foobar_raz</code>
+Some preamble <code>foobar_raz</code>, not <code>barfoo_raz</code>
+:D</p>
 <p>This should fix:</p>
 <p>&gt; Something is wrong!</p>
 "##;

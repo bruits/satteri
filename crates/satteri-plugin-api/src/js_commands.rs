@@ -782,6 +782,7 @@ pub(crate) struct FieldCollector<'a> {
 fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mdast>) {
     const LIST: u8 = MdastNodeType::List as u8;
     const LIST_ITEM: u8 = MdastNodeType::ListItem as u8;
+    const DESCRIPTION_DETAILS: u8 = MdastNodeType::DescriptionDetails as u8;
 
     if c.finalized {
         return;
@@ -802,6 +803,7 @@ fn finalize_collector(c: &mut FieldCollector<'_>, builder: &mut ArenaBuilder<Mda
             ),
             // checked: 2 = not a task item
             LIST_ITEM => encode_list_item_data(c.checked.unwrap_or(2), c.spread.unwrap_or(false)),
+            DESCRIPTION_DETAILS => encode_description_details_data(c.spread.unwrap_or(false)),
             // Remaining tags carry no type_data.
             _ => Vec::new(),
         };

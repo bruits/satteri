@@ -63,6 +63,8 @@ pub struct JsFeatures {
     pub subscript: Option<bool>,
     /// Obsidian-style wikilinks (`[[link]]`). Default: false.
     pub wikilinks: Option<bool>,
+    /// Definition lists (`Term` then `: definition`). Default: false.
+    pub definition_list: Option<bool>,
     /// Smart punctuation: all categories on. Default: false.
     pub smart_punctuation: Option<bool>,
     /// Granular smart-punctuation control (overrides `smart_punctuation`).
@@ -83,6 +85,7 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
         superscript: None,
         subscript: None,
         wikilinks: None,
+        definition_list: None,
         smart_punctuation: None,
         smart_punctuation_options: None,
     });
@@ -135,6 +138,9 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
     }
     if f.wikilinks.unwrap_or(false) {
         opts |= Options::ENABLE_WIKILINKS;
+    }
+    if f.definition_list.unwrap_or(false) {
+        opts |= Options::ENABLE_DEFINITION_LIST;
     }
     if let Some(sp) = f.smart_punctuation_options {
         if sp.quotes.unwrap_or(true) {

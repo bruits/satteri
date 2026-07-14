@@ -100,6 +100,7 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
   if (features.superscript !== undefined) result.superscript = features.superscript;
   if (features.subscript !== undefined) result.subscript = features.subscript;
   if (features.wikilinks !== undefined) result.wikilinks = features.wikilinks;
+  if (features.definitionList !== undefined) result.definitionList = features.definitionList;
   if (features.smartPunctuation !== undefined) {
     if (typeof features.smartPunctuation === "object") {
       result.smartPunctuationOptions = features.smartPunctuation;
@@ -429,6 +430,8 @@ export interface Features {
   subscript?: boolean;
   /** Obsidian-style wikilinks (`[[link]]`). Default: false. */
   wikilinks?: boolean;
+  /** Definition lists (a term line then a `: definition`). Default: false. */
+  definitionList?: boolean;
   /**
    * Smart punctuation à la SmartyPants. Default: false.
    *

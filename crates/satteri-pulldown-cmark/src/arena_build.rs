@@ -6,8 +6,8 @@ use alloc::borrow::Cow;
 use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
 use satteri_ast::mdast::{
     encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
-    CodeData, ColumnAlign, DefinitionData, FootnoteDefinitionData, ImageData, LinkData, ListData,
-    ListItemData, MathData, MdastNodeType, ReferenceData,
+    CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
+    ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType, ReferenceData,
 };
 #[cfg(feature = "mdx")]
 use satteri_ast::mdast::{encode_mdx_jsx_element_data, ExpressionData};
@@ -634,6 +634,32 @@ fn parse_inner(
                         // Already closed above; skip the common close_node path.
                         inner.tree.next_sibling(ix);
                         continue;
+                    }
+                    // dl/dt/dd: extend the end to span the last child, like List.
+                    ItemBody::DefinitionList(..)
+                    | ItemBody::DefinitionListTitle
+                    | ItemBody::DefinitionListDefinition(..) => {
+                        let id = builder.current_node_id();
+                        let node = builder.arena_ref().get_node(id);
+                        let orig_start = node.start_offset;
+                        let orig_start_line = node.start_line;
+                        let orig_start_col = node.start_column;
+                        let (cont_end, cont_end_line, cont_end_col) =
+                            if let Some(last_child) = builder.last_sibling_id() {
+                                let lc = builder.arena_ref().get_node(last_child);
+                                (lc.end_offset, lc.end_line, lc.end_column)
+                            } else {
+                                (end, end_line, end_col)
+                            };
+                        builder.set_position_current(
+                            orig_start,
+                            cont_end,
+                            orig_start_line,
+                            orig_start_col,
+                            cont_end_line,
+                            cont_end_col,
+                        );
+                        builder.close_node();
                     }
                     // Regular container close.
                     _ => {
@@ -1336,14 +1362,29 @@ fn parse_inner(
                         continue;
                     }
 
-                    // Definition list → map to paragraph for now.
-                    ItemBody::DefinitionList(_)
-                    | ItemBody::DefinitionListTitle
-                    | ItemBody::DefinitionListDefinition(_) => {
-                        builder.open_node(MdastNodeType::Paragraph as u8);
+                    ItemBody::DefinitionList(_) => {
+                        builder.open_node(MdastNodeType::DescriptionList as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
+                        inner.tree.push();
+                    }
+                    ItemBody::DefinitionListTitle => {
+                        builder.open_node(MdastNodeType::DescriptionTerm as u8);
+                        builder.set_position_current(
+                            start, end, start_line, start_col, end_line, end_col,
+                        );
+                        inner.tree.push();
+                    }
+                    ItemBody::DefinitionListDefinition(_, loose) => {
+                        builder.open_node(MdastNodeType::DescriptionDetails as u8);
+                        builder.set_position_current(
+                            start, end, start_line, start_col, end_line, end_col,
+                        );
+                        // `loose` is per-dd (firstpass sets it when a blank line
+                        // precedes this definition's `:` marker).
+                        builder
+                            .set_data_current(&DescriptionDetailsData { spread: loose }.to_bytes());
                         inner.tree.push();
                     }
                     ItemBody::Superscript => {

@@ -272,6 +272,15 @@ fn serialize_mdast_node_inline(
             }
         }
 
+        // DescriptionDetails(37): spread(0)
+        37 => {
+            out.push(if type_data.is_empty() {
+                0
+            } else {
+                type_data[0]
+            });
+        }
+
         // Containers and no-type-data nodes: nothing after the prelude.
         _ => {}
     }

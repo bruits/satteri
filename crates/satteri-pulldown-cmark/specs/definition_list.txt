@@ -1,0 +1,327 @@
+# Definition lists
+
+A term followed by a colon-marked definition becomes a `<dl>` with `<dt>` and
+`<dd>` children. The `_deflists` suffix enables `Options::ENABLE_DEFINITION_LIST`.
+
+A tight definition (no blank line before the `:`) puts the content directly in
+the `<dd>`:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+</dl>
+````````````````````````````````
+
+A loose definition (a blank line between term and definition) wraps the `<dd>`
+content in a `<p>`:
+
+```````````````````````````````` example_deflists
+Apple
+
+:   Red.
+.
+<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+</dd>
+</dl>
+````````````````````````````````
+
+One term can have several definitions:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+:   Green.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dd>Green.</dd>
+</dl>
+````````````````````````````````
+
+Several term lines share one definition — each line is its own `<dt>`, matching
+mdast-util-definition-list:
+
+```````````````````````````````` example_deflists
+Term 1
+Term 2
+:   Shared definition.
+.
+<dl>
+<dt>Term 1</dt>
+<dt>Term 2</dt>
+<dd>Shared definition.</dd>
+</dl>
+````````````````````````````````
+
+Inline markup is parsed in both the term and the definition:
+
+```````````````````````````````` example_deflists
+*Apple*
+:   A **fruit**.
+.
+<dl>
+<dt><em>Apple</em></dt>
+<dd>A <strong>fruit</strong>.</dd>
+</dl>
+````````````````````````````````
+
+Blank lines between whole entries keep the list tight:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+
+Orange
+:   Orange.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dt>Orange</dt>
+<dd>Orange.</dd>
+</dl>
+````````````````````````````````
+
+Tight and loose definitions can mix within one term: each definition is loose
+(its `<dd>` keeps an inner `<p>`) only when a blank line precedes its own `:`
+marker. A blank before the *second* definition makes only that one loose:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+
+:   Green.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dd>
+<p>Green.</p>
+</dd>
+</dl>
+````````````````````````````````
+
+A blank between the term and its first definition makes that first definition
+loose, while a later definition with no preceding blank stays tight:
+
+```````````````````````````````` example_deflists
+Apple
+
+:   Red.
+:   Green.
+.
+<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+</dd>
+<dd>Green.</dd>
+</dl>
+````````````````````````````````
+
+A blank line between definitions does not make the earlier ones loose — only
+the definition it directly precedes:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+:   Green.
+
+:   Blue.
+.
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dd>Green.</dd>
+<dd>
+<p>Blue.</p>
+</dd>
+</dl>
+````````````````````````````````
+
+A `<dd>` is block-level: a loose definition can hold several paragraphs, and
+continuation lines indented to the marker width belong to the same definition:
+
+```````````````````````````````` example_deflists
+Apple
+
+:   Red.
+
+    More red.
+.
+<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+<p>More red.</p>
+</dd>
+</dl>
+````````````````````````````````
+
+A definition can contain any block content, such as an indented code block:
+
+```````````````````````````````` example_deflists
+Apple
+
+:   text
+
+        code
+.
+<dl>
+<dt>Apple</dt>
+<dd>
+<p>text</p>
+<pre><code>code
+</code></pre>
+</dd>
+</dl>
+````````````````````````````````
+
+…or a nested list:
+
+```````````````````````````````` example_deflists
+Apple
+
+:   item:
+
+    - a
+    - b
+.
+<dl>
+<dt>Apple</dt>
+<dd>
+<p>item:</p>
+<ul>
+<li>a</li>
+<li>b</li>
+</ul>
+</dd>
+</dl>
+````````````````````````````````
+
+An empty definition produces an empty `<dd>`:
+
+```````````````````````````````` example_deflists
+Apple
+:
+.
+<dl>
+<dt>Apple</dt>
+<dd></dd>
+</dl>
+````````````````````````````````
+
+A definition list nests inside a block quote:
+
+```````````````````````````````` example_deflists
+> Apple
+> :   Red.
+.
+<blockquote>
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+</dl>
+</blockquote>
+````````````````````````````````
+
+…inside a list item:
+
+```````````````````````````````` example_deflists
+- Apple
+  :   Red.
+.
+<ul>
+<li>
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+</dl>
+</li>
+</ul>
+````````````````````````````````
+
+…and inside another definition's `<dd>`:
+
+```````````````````````````````` example_deflists
+Outer
+
+:   Inner
+    :   Deep.
+.
+<dl>
+<dt>Outer</dt>
+<dd>
+<dl>
+<dt>Inner</dt>
+<dd>Deep.</dd>
+</dl>
+</dd>
+</dl>
+````````````````````````````````
+
+## Colon-marker edge cases
+
+The marker is a *lone* colon followed by whitespace (or the end of the line),
+matching pandoc / mdast-util-definition-list. A run of two or more colons
+(`::`, `:::`) is never a definition marker, so a directive fence is left intact
+when both extensions are enabled; with the definition-list extension alone, the
+run stays part of the paragraph:
+
+```````````````````````````````` example_deflists
+Apple
+::tada:
+.
+<p>Apple
+::tada:</p>
+````````````````````````````````
+
+A single colon glued to its content (no space after the `:`) is likewise not a
+marker — the reference requires whitespace after the colon, so the line stays
+part of the paragraph:
+
+```````````````````````````````` example_deflists
+Apple
+:tada:
+.
+<p>Apple
+:tada:</p>
+````````````````````````````````
+
+A colon marker whose definition text itself begins with a colon (`: :tada:`)
+keeps that inner colon in the `<dd>`:
+
+```````````````````````````````` example_deflists
+Apple
+: :tada:
+.
+<dl>
+<dt>Apple</dt>
+<dd>:tada:</dd>
+</dl>
+````````````````````````````````
+
+## Term–definition association
+
+A term may be separated from its first definition by a single blank line (which
+makes the definition loose). But two or more blank lines disconnect them — the
+paragraph is no longer a term and the marker line becomes its own paragraph,
+matching pandoc / mdast-util-definition-list:
+
+```````````````````````````````` example_deflists
+Apple
+
+
+:   Red.
+.
+<p>Apple</p>
+<p>:   Red.</p>
+````````````````````````````````

@@ -72,46 +72,49 @@ type MdastVisitorResult =
 
 Keys without a feature note are always available. Feature-gated keys only fire when the corresponding flag is enabled in `features`.
 
-| Key                  | Feature       |
-| -------------------- | ------------- |
-| `paragraph`          | —             |
-| `heading`            | —             |
-| `thematicBreak`      | —             |
-| `blockquote`         | —             |
-| `list`               | —             |
-| `listItem`           | —             |
-| `html`               | —             |
-| `code`               | —             |
-| `definition`         | —             |
-| `text`               | —             |
-| `emphasis`           | —             |
-| `strong`             | —             |
-| `inlineCode`         | —             |
-| `break`              | —             |
-| `link`               | —             |
-| `image`              | —             |
-| `linkReference`      | —             |
-| `imageReference`     | —             |
-| `table`              | `gfm`         |
-| `tableRow`           | `gfm`         |
-| `tableCell`          | `gfm`         |
-| `delete`             | `gfm`         |
-| `footnoteDefinition` | `gfm`         |
-| `footnoteReference`  | `gfm`         |
-| `math`               | `math`        |
-| `inlineMath`         | `math`        |
-| `yaml`               | `frontmatter` |
-| `toml`               | `frontmatter` |
-| `containerDirective` | `directive`   |
-| `leafDirective`      | `directive`   |
-| `textDirective`      | `directive`   |
-| `superscript`        | `superscript` |
-| `subscript`          | `subscript`   |
-| `mdxJsxFlowElement`  | MDX entry     |
-| `mdxJsxTextElement`  | MDX entry     |
-| `mdxFlowExpression`  | MDX entry     |
-| `mdxTextExpression`  | MDX entry     |
-| `mdxjsEsm`           | MDX entry     |
+| Key                  | Feature          |
+| -------------------- | ---------------- |
+| `paragraph`          | —                |
+| `heading`            | —                |
+| `thematicBreak`      | —                |
+| `blockquote`         | —                |
+| `list`               | —                |
+| `listItem`           | —                |
+| `html`               | —                |
+| `code`               | —                |
+| `definition`         | —                |
+| `text`               | —                |
+| `emphasis`           | —                |
+| `strong`             | —                |
+| `inlineCode`         | —                |
+| `break`              | —                |
+| `link`               | —                |
+| `image`              | —                |
+| `linkReference`      | —                |
+| `imageReference`     | —                |
+| `table`              | `gfm`            |
+| `tableRow`           | `gfm`            |
+| `tableCell`          | `gfm`            |
+| `delete`             | `gfm`            |
+| `footnoteDefinition` | `gfm`            |
+| `footnoteReference`  | `gfm`            |
+| `math`               | `math`           |
+| `inlineMath`         | `math`           |
+| `yaml`               | `frontmatter`    |
+| `toml`               | `frontmatter`    |
+| `containerDirective` | `directive`      |
+| `leafDirective`      | `directive`      |
+| `textDirective`      | `directive`      |
+| `superscript`        | `superscript`    |
+| `subscript`          | `subscript`      |
+| `descriptionList`    | `definitionList` |
+| `descriptionTerm`    | `definitionList` |
+| `descriptionDetails` | `definitionList` |
+| `mdxJsxFlowElement`  | MDX entry        |
+| `mdxJsxTextElement`  | MDX entry        |
+| `mdxFlowExpression`  | MDX entry        |
+| `mdxTextExpression`  | MDX entry        |
+| `mdxjsEsm`           | MDX entry        |
 
 MDX visitor keys only fire when the document is compiled via the MDX entry point (`mdxToJs` or `.mdx` imports), not from `markdownToHtml`.
 
