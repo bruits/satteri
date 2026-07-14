@@ -494,6 +494,148 @@ export const mathChaos = makeChaos("$\\");
 export const fmChaos = makeChaos("-+:");
 export const mdxChaos = makeChaos("<>{}/");
 
+// GFM autolink-literal arbitraries. Dense coverage of the dimensions the
+// hand-rolled scanner has to match micromark + mdast-util on: scheme case,
+// domain/path bytes (incl. `_`/`-`/non-ASCII), trailing-punctuation runs and
+// entities, preceding/following chars (which select construct vs FNR), and
+// the block/inline contexts whose precedence matters (blockquote, list, link
+// label, inside a `<…>` construct, code span).
+const AL_SCHEME = fc.constantFrom(
+  "www.",
+  "http://",
+  "https://",
+  "HTTP://",
+  "HTTPS://",
+  "WWW.",
+  "wWw.",
+  "HtTpS://",
+  "ftp://",
+  "www",
+  "mailto:",
+  "",
+);
+const AL_DOMAIN_UNIT = fc.constantFrom(...[..."abXYZ019"], "-", "_", ".", "點", "é");
+const AL_PATH_UNIT = fc.constantFrom(...[..."ab019"], ..."/()?#&=-_.[]~*!,:;'\"+%".split(""), "點");
+const AL_TRAIL = fc.constantFrom(
+  "",
+  ".",
+  ",",
+  "!",
+  "?",
+  ":",
+  ";",
+  ")",
+  "]",
+  "}",
+  ">",
+  "<",
+  "&",
+  "].",
+  "...",
+  ")))",
+  "&amp;",
+  "&copy;",
+  "&notreal",
+  "?!",
+  "*_~",
+  '">',
+  ");",
+  "''",
+  ".)",
+  "(a)",
+);
+const AL_PREV = fc.constantFrom(
+  ...[
+    "",
+    "",
+    " ",
+    "(",
+    "[",
+    "*",
+    "_",
+    "~",
+    "a",
+    "5",
+    ".",
+    "/",
+    "@",
+    "é",
+    "點",
+    ")",
+    ">",
+    "x",
+    ":",
+    "<",
+    "!",
+  ],
+);
+const AL_POST = fc.constantFrom(
+  ...["", "", " ", "\n", ")", "]", ".", "x", " end\n", ">", "\t", "!"],
+);
+
+const autolinkUrl = fc
+  .tuple(
+    AL_SCHEME,
+    fc.array(AL_DOMAIN_UNIT, { minLength: 1, maxLength: 14 }),
+    fc.array(AL_PATH_UNIT, { minLength: 0, maxLength: 16 }),
+  )
+  .map(([scheme, dom, path]) => scheme + dom.join("") + path.join(""));
+
+const EMAIL_LOCAL_UNIT = fc.constantFrom(...[..."ab019"], ".", "+", "-", "_");
+const EMAIL_DOMAIN_UNIT = fc.constantFrom(...[..."ab019"], ".", "-", "_", "點");
+const autolinkEmail = fc
+  .tuple(
+    fc.array(EMAIL_LOCAL_UNIT, { minLength: 1, maxLength: 8 }),
+    fc.array(EMAIL_DOMAIN_UNIT, { minLength: 1, maxLength: 12 }),
+  )
+  .map(([local, dom]) => `${local.join("")}@${dom.join("")}`);
+
+const autolinkLine = fc
+  // URLs twice as likely as emails.
+  .tuple(AL_PREV, fc.oneof(autolinkUrl, autolinkUrl, autolinkEmail), AL_TRAIL, AL_POST)
+  .map(([prev, core, trail, post]) => prev + core + trail + post);
+
+export const autolinkDocument = fc
+  .tuple(
+    autolinkLine,
+    fc.constantFrom(
+      "plain",
+      "plain",
+      "bq",
+      "bq0",
+      "list",
+      "label",
+      "angle",
+      "code",
+      "para2",
+      "img",
+    ),
+  )
+  .map(([line, ctx]) => {
+    switch (ctx) {
+      case "bq":
+        return `> ${line}\n`;
+      case "bq0":
+        return `>${line}\n`;
+      case "list":
+        return `- ${line}\n`;
+      case "label":
+        return `[${line}](/x)\n`;
+      case "angle":
+        return `<${line}>\n`;
+      case "code":
+        return "`" + line + "`\n";
+      case "para2":
+        return `text\n${line}\n`;
+      case "img":
+        return `![${line}](/i)\n`;
+      default:
+        return line + "\n";
+    }
+  });
+
+export const autolinkChaos = makeChaos("./:@~_-wWhHtTpP><&;()");
+
 // MDX arbitraries
 
 // Align with @mdx-js/mdx + remarkGfm. Disable satteri features that don't
@@ -1220,9 +1362,6 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
     if (isMdxStrictScannerDivergence(input, level, actual, expected, refError)) {
       return null;
     }
-    if (isStrikethroughPhaseOrderingDivergence(input, level, actual, expected)) {
-      return null;
-    }
     if (isAlignAttributeDivergence(input, level, actual, expected)) {
       return null;
     }
@@ -1358,51 +1497,6 @@ function treeContainsMultilineMdxExpression(node: unknown): boolean {
   if (Array.isArray(n.children)) {
     return n.children.some((c) => treeContainsMultilineMdxExpression(c));
   }
-  return false;
-}
-
-// `find_match`'s single-pass strikethrough/subscript phase-ordering rule
-// refuses a `~…~` (or `^…^`) match when any `*`/`_` opener sits earlier on
-// the stack — a proxy for "emphasis claims its pair first" (micromark
-// resolves emphasis before tildes/circumflexes). The proxy is too broad:
-// when the earlier `*`/`_` opener has no real closer, emphasis can't claim
-// its pair, so strikethrough/subscript should still win. Two-pass resolve
-// would handle this exactly; see §J in plans/mdx-conformance.md.
-//
-// Signal: input has `_` or `*` somewhere before a `~X~` or `^X^` pair; the
-// reference produces a `delete`/`sub`/`sup` node (mdast) or `del`/`sub`/`sup`
-// element (hast); satteri does not.
-function isStrikethroughPhaseOrderingDivergence(
-  input: string,
-  level: FuzzLevel,
-  actual: unknown,
-  expected: unknown,
-): boolean {
-  // Strikethrough/subscript is GFM and runs at every fuzz level the suite
-  // covers (mdast/hast/html and their mdx-/math-/fm- variants).
-  void level;
-  if (!/[_*][\s\S]*?[~^][\s\S]*?[~^]/.test(input)) return false;
-  if (HTML_LEVELS.has(level)) {
-    if (typeof actual !== "string" || typeof expected !== "string") return false;
-    const refHasMark = /<(del|sub|sup)\b/.test(expected);
-    const satHasMark = /<(del|sub|sup)\b/.test(actual);
-    return refHasMark && !satHasMark;
-  }
-  if (typeof actual !== "object" || actual === null) return false;
-  if (typeof expected !== "object" || expected === null) return false;
-  const refHas = treeHasStrikeOrSubSup(expected);
-  const satHas = treeHasStrikeOrSubSup(actual);
-  return refHas && !satHas;
-}
-
-function treeHasStrikeOrSubSup(node: unknown): boolean {
-  if (typeof node !== "object" || node === null) return false;
-  const n = node as { type?: string; tagName?: string; children?: unknown[] };
-  if (n.type === "delete" || n.type === "sub" || n.type === "sup") return true;
-  if (n.type === "element" && (n.tagName === "del" || n.tagName === "sub" || n.tagName === "sup")) {
-    return true;
-  }
-  if (Array.isArray(n.children)) return n.children.some((c) => treeHasStrikeOrSubSup(c));
   return false;
 }
 

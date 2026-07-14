@@ -284,11 +284,13 @@ fn emit_h_child(builder: &mut ArenaBuilder<Hast>, child: &serde_json::Value) {
 
 fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
     let bytes = url.as_bytes();
-    // A `%` is only "safe" when it's the start of a valid percent-encoding
-    // (followed by two hex digits). An invalid `%2X` (X not hex) means the
-    // `%` itself should be encoded as `%25` — matches remark's behavior.
+    // micromark's `normalizeUri` keeps a `%` as-is when it is followed by two
+    // ASCII *alphanumerics* (not strictly hex digits, so `%ax` and `%2g` are
+    // kept); otherwise the `%` itself is percent-encoded as `%25`.
     let pct_safe = |i: usize| -> bool {
-        i + 2 < bytes.len() && is_hex_digit(bytes[i + 1]) && is_hex_digit(bytes[i + 2])
+        i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_alphanumeric()
+            && bytes[i + 2].is_ascii_alphanumeric()
     };
     let needs_encode = bytes.iter().enumerate().any(|(i, &b)| {
         if b == b'%' {
@@ -316,10 +318,6 @@ fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
         }
     }
     builder.alloc_string(&encoded)
-}
-
-fn is_hex_digit(b: u8) -> bool {
-    b.is_ascii_hexdigit()
 }
 
 fn is_url_safe(b: u8) -> bool {
@@ -391,7 +389,7 @@ fn resolve_backref(backref: &Backref, number: usize, k: usize) -> String {
 
 /// Convert an MDAST arena directly to a HAST arena using default options.
 pub fn mdast_arena_to_hast_arena(source: &Arena<Mdast>) -> Arena<Hast> {
-    mdast_arena_to_hast_arena_with_options(source, &ConvertOptions::default())
+    mdast_arena_to_hast_arena_impl(source, &ConvertOptions::default(), None)
 }
 
 /// Convert an MDAST arena to a HAST arena with the given conversion options.
@@ -399,15 +397,42 @@ pub fn mdast_arena_to_hast_arena_with_options(
     source: &Arena<Mdast>,
     options: &ConvertOptions,
 ) -> Arena<Hast> {
+    mdast_arena_to_hast_arena_impl(source, options, None)
+}
+
+/// Reuse-friendly variant: takes a pre-pooled `Arena<Hast>`, resets it, and
+/// fills it in instead of allocating a fresh arena. Saves the per-compile
+/// `Vec` and `String` mallocs that dominate the cost on tiny inputs.
+pub fn mdast_arena_to_hast_arena_into(
+    source: &Arena<Mdast>,
+    options: &ConvertOptions,
+    reuse: Arena<Hast>,
+) -> Arena<Hast> {
+    mdast_arena_to_hast_arena_impl(source, options, Some(reuse))
+}
+
+fn mdast_arena_to_hast_arena_impl(
+    source: &Arena<Mdast>,
+    options: &ConvertOptions,
+    reuse: Option<Arena<Hast>>,
+) -> Arena<Hast> {
     let src = source.string_pool();
-    let mut builder: ArenaBuilder<Hast> = ArenaBuilder::new(src.to_string());
+    let n = source.len();
+    let mut hast_arena = if let Some(mut a) = reuse {
+        a.reset();
+        a.string_pool.reserve(src.len());
+        a.string_pool.push_str(src);
+        a.nodes.reserve(n);
+        a.children.reserve(n);
+        a.type_data.reserve(n * 20);
+        a
+    } else {
+        Arena::<Hast>::with_capacity(src.to_string(), n, n, n * 20)
+    };
     // Reuses the MDAST pool (heap included) so StringRefs stay valid; the
     // original-input prefix is identical, so carry the boundary over.
-    builder.arena_mut().source_len = source.source_len;
-    let n = source.len();
-    builder.arena_mut().nodes.reserve(n);
-    builder.arena_mut().children.reserve(n);
-    builder.arena_mut().type_data.reserve(n * 20);
+    hast_arena.source_len = source.source_len;
+    let mut builder: ArenaBuilder<Hast> = ArenaBuilder::from_arena(hast_arena);
     let newline_ref = builder.alloc_string("\n");
     let refs = collect_refs(source);
     let ctx = ConvertCtx {
@@ -482,8 +507,10 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     // their IDs come later even though they appear earlier in the
     // document. Collect Definition node ids first, then sort by source
     // position before inserting.
+    // Root walk, not an id scan: in-place applies leave detached garbage that must not resolve refs
     let mut def_nodes: Vec<u32> = Vec::new();
-    for id in 0..view.len() as u32 {
+    let mut stack: Vec<u32> = if view.is_empty() { Vec::new() } else { vec![0] };
+    while let Some(id) = stack.pop() {
         let node = view.get_node(id);
         let data = view.get_type_data(id);
         match MdastNodeType::from_u8(node.node_type) {
@@ -497,6 +524,10 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
             }
             _ => {}
         }
+        // Push children in reverse so they pop in document order: `or_insert`
+        // below is first-wins, and duplicate footnote definitions must resolve
+        // to the *first* one in the document (matching remark-gfm).
+        stack.extend(view.get_children(id).iter().rev().copied());
     }
     def_nodes.sort_by_key(|&id| view.get_node(id).start_offset);
     for id in &def_nodes {
@@ -939,7 +970,8 @@ fn copy_position_to(
     builder: &mut ArenaBuilder<Hast>,
 ) {
     let node = view.get_node(src_node_id);
-    if node.start_line > 0 || node.start_offset > 0 {
+    // See `copy_position`: offsets flow through even in skip-positions mode.
+    if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
         builder.arena_mut().set_position(
             target_id,
             node.start_offset,
@@ -1001,7 +1033,11 @@ fn encode_code_node_data(lang: &str, meta: &str) -> Vec<u8> {
 
 fn copy_position(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>) {
     let node = view.get_node(node_id);
-    if node.start_line > 0 || node.start_offset > 0 {
+    // Skip-positions mode leaves line/col 0 but the parser still records byte
+    // offsets; copy them so MDX codegen resolves line:col on demand via
+    // `Location`. `readPosition` gates plugin `node.position` on the line, so a
+    // non-opted-in plugin still sees `undefined`.
+    if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
         builder.set_position_current(
             node.start_offset,
             node.end_offset,

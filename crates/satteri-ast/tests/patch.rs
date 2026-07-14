@@ -2,17 +2,73 @@
 //!
 //! Tests apply patches to the "# Hello\n\nWorld" arena and verify the resulting structure.
 
-use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast};
+use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::rebuild::{rebuild as rebuild_raw, Patch};
+use satteri_ast::patch::{apply_patches_in_place, apply_patches_strict, Patch, PatchContent};
 
+/// Compare the reachable trees of two arenas: shapes, positions, node_data.
+fn assert_skeleton_eq<K: ArenaKind>(a: &Arena<K>, b: &Arena<K>, ida: u32, idb: u32, path: &str) {
+    let na = a.get_node(ida);
+    let nb = b.get_node(idb);
+    assert_eq!(na.node_type, nb.node_type, "node_type at {path}");
+    let pos_a = (
+        na.start_offset,
+        na.end_offset,
+        na.start_line,
+        na.start_column,
+        na.end_line,
+        na.end_column,
+    );
+    let pos_b = (
+        nb.start_offset,
+        nb.end_offset,
+        nb.start_line,
+        nb.start_column,
+        nb.end_line,
+        nb.end_column,
+    );
+    assert_eq!(pos_a, pos_b, "position at {path}");
+    assert_eq!(
+        a.get_node_data(ida),
+        b.get_node_data(idb),
+        "node_data at {path}"
+    );
+    let ca = a.get_children(ida).to_vec();
+    let cb = b.get_children(idb).to_vec();
+    assert_eq!(ca.len(), cb.len(), "child count at {path}");
+    for (i, (&x, &y)) in ca.iter().zip(cb.iter()).enumerate() {
+        assert_skeleton_eq(a, b, x, y, &format!("{path}/{i}"));
+    }
+}
+
+/// In-place apply leaves detached garbage; only root-reachable nodes count.
+fn reachable_count<K: ArenaKind>(arena: &Arena<K>) -> usize {
+    fn walk<K: ArenaKind>(arena: &Arena<K>, id: u32) -> usize {
+        1 + arena
+            .get_children(id)
+            .iter()
+            .map(|&c| walk(arena, c))
+            .sum::<usize>()
+    }
+    if arena.is_empty() {
+        0
+    } else {
+        walk(arena, 0)
+    }
+}
+
+/// Strict entry matching the old `rebuild` contract: dropped patches panic.
 fn rebuild(arena: &Arena<Mdast>, patches: &[Patch<Mdast>]) -> Arena<Mdast> {
-    rebuild_raw(arena, patches).expect("rebuild failed")
+    let mut arena = arena.clone();
+    apply_patches_strict(&mut arena, patches).expect("apply failed");
+    arena
 }
 
 fn rebuild_hast(arena: &Arena<Hast>, patches: &[Patch<Hast>]) -> Arena<Hast> {
-    rebuild_raw(arena, patches).expect("rebuild failed")
+    let mut arena = arena.clone();
+    apply_patches_strict(&mut arena, patches).expect("apply failed");
+    arena
 }
 
 /// Tree structure:
@@ -82,7 +138,11 @@ fn empty_patches_preserves_all_nodes() {
     let orig = build_hello_world();
     let rebuilt = rebuild(&orig, &[]);
 
-    assert_eq!(rebuilt.len(), orig.len(), "node count unchanged");
+    assert_eq!(
+        reachable_count(&rebuilt),
+        orig.len(),
+        "node count unchanged"
+    );
 
     assert_eq!(rebuilt.get_children(0).len(), 2);
     let h = rebuilt.get_children(0)[0];
@@ -109,7 +169,7 @@ fn remove_leaf_node() {
         }],
     );
 
-    assert_eq!(rebuilt.len(), 4, "one node removed");
+    assert_eq!(reachable_count(&rebuilt), 4, "one node removed");
     let new_h = rebuilt.get_children(0)[0];
     assert_eq!(
         rebuilt.get_node(new_h).node_type,
@@ -142,7 +202,11 @@ fn remove_non_leaf_removes_subtree() {
         }],
     );
 
-    assert_eq!(rebuilt.len(), 3, "heading + its text child removed");
+    assert_eq!(
+        reachable_count(&rebuilt),
+        3,
+        "heading + its text child removed"
+    );
     let root_children = rebuilt.get_children(0);
     assert_eq!(root_children.len(), 1);
     assert_eq!(
@@ -162,13 +226,13 @@ fn replace_leaf_node() {
         &orig,
         &[Patch::Replace {
             node_id: text_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
 
     assert_eq!(
-        rebuilt.len(),
+        reachable_count(&rebuilt),
         orig.len(),
         "same node count (1-for-1 replacement)"
     );
@@ -190,14 +254,14 @@ fn replace_root_child_with_different_type() {
         &orig,
         &[Patch::Replace {
             node_id: heading_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
 
     // The heading + its text child (2 nodes) are replaced by 1 Paragraph
     // So: Root + new Paragraph + original Paragraph + Text(World) = 4 nodes
-    assert_eq!(rebuilt.len(), 4);
+    assert_eq!(reachable_count(&rebuilt), 4);
     let root_children = rebuilt.get_children(0);
     assert_eq!(root_children.len(), 2);
     assert_eq!(
@@ -220,7 +284,7 @@ fn insert_before_node() {
         &orig,
         &[Patch::InsertBefore {
             node_id: para_id,
-            new_tree,
+            new_tree: PatchContent::Tree(new_tree),
         }],
     );
 
@@ -250,7 +314,7 @@ fn insert_after_node() {
         &orig,
         &[Patch::InsertAfter {
             node_id: heading_id,
-            new_tree,
+            new_tree: PatchContent::Tree(new_tree),
         }],
     );
 
@@ -280,7 +344,7 @@ fn append_child() {
         &orig,
         &[Patch::AppendChild {
             node_id: heading_id,
-            child_tree,
+            child_tree: PatchContent::Tree(child_tree),
         }],
     );
 
@@ -307,7 +371,7 @@ fn prepend_child() {
         &orig,
         &[Patch::PrependChild {
             node_id: heading_id,
-            child_tree,
+            child_tree: PatchContent::Tree(child_tree),
         }],
     );
 
@@ -338,7 +402,7 @@ fn multiple_patches_applied_together() {
         },
         Patch::InsertAfter {
             node_id: para_id,
-            new_tree,
+            new_tree: PatchContent::Tree(new_tree),
         },
     ];
     let rebuilt = rebuild(&orig, &patches);
@@ -355,7 +419,7 @@ fn multiple_patches_applied_together() {
     );
 
     // Total: Root + Paragraph + Text(World) + ThematicBreak = 4 nodes
-    assert_eq!(rebuilt.len(), 4);
+    assert_eq!(reachable_count(&rebuilt), 4);
 }
 
 /// Replacement subtree containing a directive child must have the directive's
@@ -407,7 +471,7 @@ fn replacement_with_directive_child_remaps_string_refs() {
         &orig,
         &[Patch::Replace {
             node_id: para_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -471,7 +535,7 @@ fn list_start_survives_source_base_remap() {
         &orig,
         &[Patch::Replace {
             node_id: para_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -501,7 +565,7 @@ fn parent_references_consistent_after_rebuild() {
         &orig,
         &[Patch::InsertAfter {
             node_id: para_id,
-            new_tree,
+            new_tree: PatchContent::Tree(new_tree),
         }],
     );
 
@@ -553,7 +617,7 @@ where
         &orig,
         &[Patch::Replace {
             node_id: para_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     )
@@ -800,7 +864,7 @@ fn replace_keep_children_remaps_wrapper_string_refs() {
         &orig,
         &[Patch::Replace {
             node_id: para_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: true,
         }],
     );
@@ -863,7 +927,7 @@ fn hast_element_with_properties_round_trip() {
         &orig,
         &[Patch::Replace {
             node_id: text_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -942,7 +1006,7 @@ fn append_child_with_string_ref_type_data_round_trip() {
         &orig,
         &[Patch::AppendChild {
             node_id: para_id,
-            child_tree,
+            child_tree: PatchContent::Tree(child_tree),
         }],
     );
 
@@ -977,7 +1041,7 @@ fn insert_after_with_string_ref_type_data_round_trip() {
         &orig,
         &[Patch::InsertAfter {
             node_id: para_id,
-            new_tree,
+            new_tree: PatchContent::Tree(new_tree),
         }],
     );
 
@@ -1020,7 +1084,7 @@ fn node_data_preserved_through_keep_children_replace() {
         &orig,
         &[Patch::Replace {
             node_id: para_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: true,
         }],
     );
@@ -1065,7 +1129,7 @@ fn hast_text_round_trip_with_source_base() {
         &orig,
         &[Patch::Replace {
             node_id: elem_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -1126,7 +1190,7 @@ fn hast_empty_text_child_ref_with_nonzero_offset_is_remapped() {
         &orig,
         &[Patch::Replace {
             node_id: elem_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -1209,7 +1273,7 @@ fn mdast_empty_text_child_ref_with_nonzero_offset_is_remapped() {
         &orig,
         &[Patch::Replace {
             node_id: link_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -1254,7 +1318,7 @@ fn replace_with_root_wrapped_tree_strips_root() {
         &orig,
         &[Patch::Replace {
             node_id: para_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -1288,7 +1352,7 @@ fn replace_inline_with_root_wrapped_tree_strips_only_root() {
         &orig,
         &[Patch::Replace {
             node_id: text_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -1315,7 +1379,7 @@ fn replace_with_multi_block_root_splices_all_siblings() {
         &orig,
         &[Patch::Replace {
             node_id: para_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -1348,7 +1412,7 @@ fn replace_with_empty_root_removes_slot() {
         &orig,
         &[Patch::Replace {
             node_id: para_id,
-            new_tree: replacement,
+            new_tree: PatchContent::Tree(replacement),
             keep_children: false,
         }],
     );
@@ -1369,7 +1433,7 @@ fn replace_with_empty_root_removes_slot() {
 fn replace_with_ref_to_self_splices_once() {
     use satteri_arena::StringRef;
     use satteri_ast::hast::codec::encode_element_data;
-    use satteri_ast::rebuild::REF_NODE_TYPE;
+    use satteri_ast::patch::REF_NODE_TYPE;
 
     // Root > Element(h2) > Text "Heading"
     let mut b = ArenaBuilder::<Hast>::new("Heading".to_string());
@@ -1403,7 +1467,7 @@ fn replace_with_ref_to_self_splices_once() {
         &orig,
         &[Patch::Replace {
             node_id: heading_id,
-            new_tree,
+            new_tree: PatchContent::Tree(new_tree),
             keep_children: false,
         }],
     );
@@ -1475,7 +1539,7 @@ fn wrap_keeps_wrapper_children_after_wrapped_node() {
         &orig,
         &[Patch::Wrap {
             node_id: heading_id,
-            parent_tree,
+            parent_tree: PatchContent::Tree(parent_tree),
         }],
     );
 
@@ -1549,15 +1613,15 @@ fn wrap_applies_prepend_and_append_child_on_wrapped_node() {
         &[
             Patch::Wrap {
                 node_id: heading_id,
-                parent_tree: single(HastNodeType::Element), // <div>-shaped wrapper
+                parent_tree: PatchContent::Tree(single(HastNodeType::Element)), // <div>-shaped wrapper
             },
             Patch::PrependChild {
                 node_id: heading_id,
-                child_tree: single(HastNodeType::Text),
+                child_tree: PatchContent::Tree(single(HastNodeType::Text)),
             },
             Patch::AppendChild {
                 node_id: heading_id,
-                child_tree: single(HastNodeType::Comment),
+                child_tree: PatchContent::Tree(single(HastNodeType::Comment)),
             },
         ],
     );
@@ -1579,4 +1643,686 @@ fn wrap_applies_prepend_and_append_child_on_wrapped_node() {
         rebuilt.get_node(kids[2]).node_type,
         HastNodeType::Comment as u8
     );
+}
+
+// In-place coverage for shapes the original rebuild tests don't exercise.
+
+fn ref_payload_mdast(target: u32) -> Arena<Mdast> {
+    use satteri_ast::patch::REF_NODE_TYPE;
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node_raw(REF_NODE_TYPE);
+    b.set_data_current(&target.to_le_bytes());
+    b.close_node();
+    b.finish()
+}
+
+/// Lenient apply: returns the arena plus the dropped-anchor list.
+fn rebuild_lenient_both(
+    arena: &Arena<Mdast>,
+    patches: &[Patch<Mdast>],
+) -> (Arena<Mdast>, Vec<u32>) {
+    let mut arena = arena.clone();
+    let dropped = apply_patches_in_place(&mut arena, patches).expect("apply failed");
+    (arena, dropped)
+}
+
+#[test]
+fn root_set_children_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::SetChildren {
+            node_id: 0,
+            new_children: PatchContent::Tree(root_wrapped_arena(&[MdastNodeType::ThematicBreak])),
+        }],
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 1);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+}
+
+#[test]
+fn root_prepend_and_append_child() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::PrependChild {
+                node_id: 0,
+                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+            Patch::AppendChild {
+                node_id: 0,
+                child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+            },
+        ],
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 4);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(kids[3]).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+}
+
+/// Root-anchored Replace: the replacement's shape lands on node 0 and the
+/// old subtree is discarded. The root id stays 0.
+#[test]
+fn root_replace_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: 0,
+            new_tree: PatchContent::Tree(root_wrapped_arena(&[
+                MdastNodeType::ThematicBreak,
+                MdastNodeType::Break,
+            ])),
+            keep_children: false,
+        }],
+    );
+    assert_eq!(rebuilt.get_node(0).node_type, MdastNodeType::Root as u8);
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 2);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(kids[1]).node_type,
+        MdastNodeType::Break as u8
+    );
+    assert_eq!(reachable_count(&rebuilt), 3);
+}
+
+/// Root-anchored Replace with keep_children keeps the original children.
+#[test]
+fn root_replace_keep_children_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: 0,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+            keep_children: true,
+        }],
+    );
+    assert_eq!(
+        rebuilt.get_node(0).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 2);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::Heading as u8
+    );
+    assert_eq!(reachable_count(&rebuilt), orig.len());
+}
+
+/// Root-anchored Remove empties the document but keeps a serializable root.
+#[test]
+fn root_remove_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(&orig, &[Patch::Remove { node_id: 0 }]);
+    assert_eq!(rebuilt.get_node(0).node_type, MdastNodeType::Root as u8);
+    assert_eq!(rebuilt.get_children(0).len(), 0);
+    assert_eq!(reachable_count(&rebuilt), 1);
+}
+
+/// Root-anchored Wrap: the wrapper takes over node 0; the old root becomes
+/// its first child with all children intact.
+#[test]
+fn root_wrap_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Wrap {
+            node_id: 0,
+            parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+        }],
+    );
+    assert_eq!(
+        rebuilt.get_node(0).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 1);
+    let old_root = kids[0];
+    assert_eq!(
+        rebuilt.get_node(old_root).node_type,
+        MdastNodeType::Root as u8
+    );
+    assert_eq!(rebuilt.get_children(old_root).len(), 2);
+    assert_eq!(reachable_count(&rebuilt), orig.len() + 1);
+}
+
+/// Sibling inserts on the root have no defined position and stay errors.
+#[test]
+fn root_sibling_insert_errors() {
+    use satteri_ast::commands::CommandError;
+    let orig = build_hello_world();
+    let mut arena = orig.clone();
+    let err = apply_patches_strict(
+        &mut arena,
+        &[Patch::InsertBefore {
+            node_id: 0,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
+        }],
+    )
+    .unwrap_err();
+    match err {
+        CommandError::UnsupportedPatchShape("sibling insert on root (root has no siblings)") => {}
+        other => panic!("expected sibling-insert-on-root error, got {other:?}"),
+    }
+    // Untouched on error.
+    assert_eq!(arena.len(), orig.len());
+}
+
+/// Root Replace via a *grafted* payload (the opstream shape JS plugins use).
+#[test]
+fn root_replace_grafted_payload() {
+    let orig = build_hello_world();
+    let mut arena = orig.clone();
+    let payload = root_wrapped_arena(&[MdastNodeType::ThematicBreak, MdastNodeType::Break]);
+    let roots = graft_tree_for_test(&mut arena, &payload);
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[Patch::Replace {
+            node_id: 0,
+            new_tree: PatchContent::Grafted(roots),
+            keep_children: false,
+        }],
+    )
+    .expect("apply failed");
+    assert!(dropped.is_empty());
+    // The payload root (a Root node) lands on node 0.
+    assert_eq!(arena.get_node(0).node_type, MdastNodeType::Root as u8);
+    let kids = arena.get_children(0);
+    assert_eq!(kids.len(), 2);
+    assert_eq!(
+        arena.get_node(kids[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+    assert_eq!(
+        arena.get_node(kids[1]).node_type,
+        MdastNodeType::Break as u8
+    );
+}
+
+#[test]
+fn ref_to_linked_target_copies() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+    // Replace the heading with a ref to the (surviving) paragraph.
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: heading,
+            new_tree: PatchContent::Tree(ref_payload_mdast(paragraph)),
+            keep_children: false,
+        }],
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 2);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(kids[1]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+    assert_eq!(rebuilt.get_children(kids[0]).len(), 1);
+    assert_eq!(rebuilt.get_children(kids[1]).len(), 1);
+}
+
+#[test]
+fn ref_used_twice_duplicates_target() {
+    use satteri_ast::patch::REF_NODE_TYPE;
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let text_in_heading = orig.get_children(heading)[0];
+
+    let mut sub = ArenaBuilder::<Mdast>::new(String::new());
+    sub.open_node(MdastNodeType::Paragraph as u8);
+    sub.open_node_raw(REF_NODE_TYPE);
+    sub.set_data_current(&text_in_heading.to_le_bytes());
+    sub.close_node();
+    sub.open_node_raw(REF_NODE_TYPE);
+    sub.set_data_current(&text_in_heading.to_le_bytes());
+    sub.close_node();
+    sub.close_node();
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: heading,
+            new_tree: PatchContent::Tree(sub.finish()),
+            keep_children: false,
+        }],
+    );
+    let para = rebuilt.get_children(0)[0];
+    assert_eq!(rebuilt.get_children(para).len(), 2);
+}
+
+#[test]
+fn ref_to_patched_target_applies_its_patch() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let text_in_heading = orig.get_children(heading)[0];
+
+    // The heading is replaced by a ref to its own text child, which itself
+    // is replaced: the splice must carry the text's replacement.
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::Replace {
+                node_id: heading,
+                new_tree: PatchContent::Tree(ref_payload_mdast(text_in_heading)),
+                keep_children: false,
+            },
+            Patch::Replace {
+                node_id: text_in_heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+                keep_children: false,
+            },
+        ],
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 2);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+}
+
+#[test]
+fn set_children_drops_descendant_patch() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let text_in_heading = orig.get_children(heading)[0];
+    let (rebuilt, dropped) = rebuild_lenient_both(
+        &orig,
+        &[
+            Patch::SetChildren {
+                node_id: heading,
+                new_children: PatchContent::Tree(root_wrapped_arena(&[
+                    MdastNodeType::ThematicBreak,
+                ])),
+            },
+            Patch::Replace {
+                node_id: text_in_heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+                keep_children: false,
+            },
+        ],
+    );
+    assert_eq!(dropped, vec![text_in_heading]);
+    let h = rebuilt.get_children(0)[0];
+    assert_eq!(rebuilt.get_children(h).len(), 1);
+    assert_eq!(
+        rebuilt.get_node(rebuilt.get_children(h)[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+}
+
+#[test]
+fn wrap_with_empty_wrapper_is_degenerate() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Wrap {
+            node_id: heading,
+            parent_tree: PatchContent::Tree(Arena::<Mdast>::new(String::new())),
+        }],
+    );
+    assert_eq!(rebuilt.get_children(0).len(), 2);
+    let h = rebuilt.get_children(0)[0];
+    assert_eq!(rebuilt.get_node(h).node_type, MdastNodeType::Heading as u8);
+    assert_eq!(rebuilt.get_children(h).len(), 1);
+}
+
+#[test]
+fn wrap_composes_with_sibling_inserts() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let rebuilt = rebuild(
+        &orig,
+        &[
+            Patch::InsertBefore {
+                node_id: heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+            Patch::Wrap {
+                node_id: heading,
+                parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+            },
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Paragraph)),
+            },
+        ],
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 4);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(kids[1]).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    let wrapped = rebuilt.get_children(kids[1]);
+    assert_eq!(wrapped.len(), 1);
+    assert_eq!(
+        rebuilt.get_node(wrapped[0]).node_type,
+        MdastNodeType::Heading as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(kids[2]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+}
+
+// Property fuzz: random patch sets, including re-entrant shapes, must
+// either apply cleanly or return a structured error; applied arenas must
+// render (or fail rendering) without hanging. A containment cycle would
+// abort the process via stack overflow, keeping regressions loud.
+// Deterministic LCG so failures reproduce.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+#[test]
+fn property_fuzz_in_place_apply() {
+    let doc = "# Title\n\nSome *text* with [a link](https://x.y).\n\n- one\n- two\n- three\n\n> quoted\n\nAnother paragraph here.\n\n## Sub\n\nFinal words.";
+    let (parsed, _) =
+        satteri_pulldown_cmark::parse(doc, satteri_pulldown_cmark::Options::ENABLE_GFM);
+    let corpora = [build_hello_world(), parsed];
+
+    let rounds: u64 = std::env::var("SATTERI_FUZZ_ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1500);
+    let mut rng = Lcg(0x5EED_CAFE);
+    let mut applied = 0u64;
+    let mut errored = 0u64;
+    for round in 0..rounds {
+        let orig = &corpora[(round % 2) as usize];
+        let len = orig.len() as u64;
+        let patch_count = 1 + rng.below(5) as usize;
+        let mut patches: Vec<Patch<Mdast>> = Vec::with_capacity(patch_count);
+        for _ in 0..patch_count {
+            let anchor = 1 + rng.below(len - 1) as u32;
+            let payload = |rng: &mut Lcg| -> Arena<Mdast> {
+                match rng.below(4) {
+                    0 => single_node_arena(MdastNodeType::ThematicBreak),
+                    1 => single_node_arena(MdastNodeType::Paragraph),
+                    2 => root_wrapped_arena(&[
+                        MdastNodeType::Paragraph,
+                        MdastNodeType::ThematicBreak,
+                    ]),
+                    _ => ref_payload_mdast(rng.below(len) as u32),
+                }
+            };
+            patches.push(match rng.below(10) {
+                8 => Patch::SetChildren {
+                    node_id: anchor,
+                    new_children: PatchContent::Tree(root_wrapped_arena(&[
+                        MdastNodeType::ThematicBreak,
+                        MdastNodeType::Paragraph,
+                    ])),
+                },
+                9 => Patch::Wrap {
+                    node_id: anchor,
+                    parent_tree: PatchContent::Tree(ref_payload_mdast(rng.below(len) as u32)),
+                },
+                0 => Patch::Remove { node_id: anchor },
+                1 => Patch::Replace {
+                    node_id: anchor,
+                    new_tree: PatchContent::Tree(payload(&mut rng)),
+                    keep_children: false,
+                },
+                2 => Patch::Replace {
+                    node_id: anchor,
+                    new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+                    keep_children: true,
+                },
+                3 => Patch::InsertBefore {
+                    node_id: anchor,
+                    new_tree: PatchContent::Tree(payload(&mut rng)),
+                },
+                4 => Patch::InsertAfter {
+                    node_id: anchor,
+                    new_tree: PatchContent::Tree(payload(&mut rng)),
+                },
+                5 => Patch::PrependChild {
+                    node_id: anchor,
+                    child_tree: PatchContent::Tree(payload(&mut rng)),
+                },
+                6 => Patch::AppendChild {
+                    node_id: anchor,
+                    child_tree: PatchContent::Tree(payload(&mut rng)),
+                },
+                _ => Patch::Wrap {
+                    node_id: anchor,
+                    parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+                },
+            });
+        }
+
+        // Differential: the same patches with payloads pre-grafted into the
+        // arena as orphans (the opstream decode path) must behave identically
+        // to standalone Tree payloads.
+        let mut grafted_arena = orig.clone();
+        let grafted_patches: Vec<Patch<Mdast>> = patches
+            .iter()
+            .map(|p| {
+                let mut graft = |content: &PatchContent<Mdast>| -> PatchContent<Mdast> {
+                    let PatchContent::Tree(t) = content else {
+                        unreachable!()
+                    };
+                    PatchContent::Grafted(graft_tree_for_test(&mut grafted_arena, t))
+                };
+                match p {
+                    Patch::Remove { node_id } => Patch::Remove { node_id: *node_id },
+                    Patch::Replace {
+                        node_id,
+                        new_tree,
+                        keep_children,
+                    } => {
+                        if *keep_children {
+                            // Grafted keep_children is rejected by design.
+                            let PatchContent::Tree(t) = new_tree else {
+                                unreachable!()
+                            };
+                            Patch::Replace {
+                                node_id: *node_id,
+                                new_tree: PatchContent::Tree(t.clone()),
+                                keep_children: true,
+                            }
+                        } else {
+                            Patch::Replace {
+                                node_id: *node_id,
+                                new_tree: graft(new_tree),
+                                keep_children: false,
+                            }
+                        }
+                    }
+                    Patch::InsertBefore { node_id, new_tree } => Patch::InsertBefore {
+                        node_id: *node_id,
+                        new_tree: graft(new_tree),
+                    },
+                    Patch::InsertAfter { node_id, new_tree } => Patch::InsertAfter {
+                        node_id: *node_id,
+                        new_tree: graft(new_tree),
+                    },
+                    Patch::PrependChild {
+                        node_id,
+                        child_tree,
+                    } => Patch::PrependChild {
+                        node_id: *node_id,
+                        child_tree: graft(child_tree),
+                    },
+                    Patch::AppendChild {
+                        node_id,
+                        child_tree,
+                    } => Patch::AppendChild {
+                        node_id: *node_id,
+                        child_tree: graft(child_tree),
+                    },
+                    Patch::Wrap {
+                        node_id,
+                        parent_tree,
+                    } => Patch::Wrap {
+                        node_id: *node_id,
+                        parent_tree: graft(parent_tree),
+                    },
+                    Patch::SetChildren {
+                        node_id,
+                        new_children,
+                    } => Patch::SetChildren {
+                        node_id: *node_id,
+                        new_children: graft(new_children),
+                    },
+                }
+            })
+            .collect();
+
+        let mut tree_arena = orig.clone();
+        let tree_result = apply_patches_in_place(&mut tree_arena, &patches);
+        let grafted_result = apply_patches_in_place(&mut grafted_arena, &grafted_patches);
+        match (tree_result, grafted_result) {
+            (Ok(a_dropped), Ok(b_dropped)) => {
+                applied += 1;
+                assert_eq!(a_dropped, b_dropped, "dropped diverged in round {round}");
+                assert_skeleton_eq(
+                    &tree_arena,
+                    &grafted_arena,
+                    0,
+                    0,
+                    &format!("fuzz round {round}"),
+                );
+                // Type-blind fuzz trees may legitimately fail conversion; the
+                // catch guards panics, not hangs.
+                let render = |arena: &Arena<Mdast>| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let h = satteri_ast::hast::mdast_arena_to_hast_arena(arena);
+                        satteri_ast::hast::hast_arena_to_html(&h)
+                    }))
+                    .ok()
+                };
+                match (render(&tree_arena), render(&grafted_arena)) {
+                    (Some(x), Some(y)) => assert_eq!(x, y, "html diverged in round {round}"),
+                    (None, None) => {}
+                    _ => panic!("round {round}: one payload kind rendered, the other panicked"),
+                }
+            }
+            (Err(a), Err(b)) => {
+                errored += 1;
+                assert_eq!(
+                    std::mem::discriminant(&a),
+                    std::mem::discriminant(&b),
+                    "error kind diverged in round {round}"
+                );
+            }
+            (a, b) => panic!("round {round}: payload kinds disagree: tree={a:?} grafted={b:?}"),
+        }
+    }
+    assert!(applied > 0, "fuzzer never applied");
+    assert!(errored > 0, "fuzzer never exercised the rejection paths");
+}
+
+/// Copy a payload tree into the arena as orphan subtrees, the shape the
+/// opstream decode produces: strings land in the main pool (refs remapped by
+/// pool base), REF placeholder nodes copied verbatim.
+fn graft_tree_for_test(arena: &mut Arena<Mdast>, payload: &Arena<Mdast>) -> Vec<u32> {
+    use satteri_ast::patch::REF_NODE_TYPE;
+    if payload.is_empty() {
+        return Vec::new();
+    }
+    let base = if payload.string_pool().is_empty() {
+        0
+    } else {
+        arena.alloc_string(payload.string_pool()).offset
+    };
+    fn copy(arena: &mut Arena<Mdast>, payload: &Arena<Mdast>, id: u32, base: u32) -> u32 {
+        use satteri_ast::patch::REF_NODE_TYPE;
+        let node = *payload.get_node(id);
+        let new_id = arena.alloc_node(node.node_type);
+        let td = payload.get_type_data(id);
+        if !td.is_empty() {
+            if base != 0 && node.node_type != REF_NODE_TYPE {
+                let mut remapped = td.to_vec();
+                satteri_ast::patch::remap_mdast_refs_for_test(&mut remapped, node.node_type, base);
+                arena.set_type_data(new_id, &remapped);
+            } else {
+                arena.set_type_data(new_id, td);
+            }
+        }
+        let children: Vec<u32> = payload.get_children(id).to_vec();
+        if !children.is_empty() {
+            let ids: Vec<u32> = children
+                .iter()
+                .map(|&c| copy(arena, payload, c, base))
+                .collect();
+            arena.set_children(new_id, &ids);
+        }
+        new_id
+    }
+    let _ = REF_NODE_TYPE;
+    vec![copy(arena, payload, 0, base)]
+}
+
+#[test]
+fn repro_dropped_divergence() {
+    let doc = "# Title\n\nSome *text* with [a link](https://x.y).\n\n- one\n- two\n- three\n\n> quoted\n\nAnother paragraph here.\n\n## Sub\n\nFinal words.";
+    let (orig, _) = satteri_pulldown_cmark::parse(doc, satteri_pulldown_cmark::Options::ENABLE_GFM);
+    let patches = vec![
+        Patch::PrependChild {
+            node_id: 22,
+            child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Paragraph)),
+        },
+        Patch::InsertBefore {
+            node_id: 20,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Paragraph)),
+        },
+        Patch::AppendChild {
+            node_id: 27,
+            child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Paragraph)),
+        },
+        Patch::Replace {
+            node_id: 18,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+            keep_children: false,
+        },
+        Patch::AppendChild {
+            node_id: 1,
+            child_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Paragraph)),
+        },
+    ];
+    // Expected drop list verified against the original rebuild before its removal.
+    let mut arena = orig;
+    let dropped = apply_patches_in_place(&mut arena, &patches).unwrap();
+    assert_eq!(dropped, vec![20]);
 }

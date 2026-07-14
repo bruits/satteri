@@ -28,7 +28,7 @@ pub struct Arena<K: ArenaKind> {
     /// `source_len` marks the boundary; for the input as written use `source()`.
     pub string_pool: String,
     /// Byte length of the original-input prefix of `string_pool`. Set at
-    /// construction; preserved across rebuild and mdast→hast conversion, which
+    /// construction; preserved across patch application and mdast→hast conversion, which
     /// copy the full pool to keep `StringRef` offsets valid.
     pub source_len: u32,
     /// Per-node `data` blobs (JSON bytes), set by JS plugins.
@@ -106,6 +106,20 @@ impl<K: ArenaKind> Arena<K> {
             cp_offsets: Vec::new(),
             _kind: PhantomData,
         }
+    }
+
+    /// Clear all state but keep allocated capacity, for arena pooling. The
+    /// caller must repopulate `source` and reset `mdx` / `parse_options` for
+    /// the next document.
+    pub fn reset(&mut self) {
+        self.nodes.clear();
+        self.children.clear();
+        self.type_data.clear();
+        self.string_pool.clear();
+        self.node_data.clear();
+        self.cp_offsets.clear();
+        self.mdx = false;
+        self.parse_options = 0;
     }
 
     /// Allocate a new node. The returned ID equals the node's index in `self.nodes`.
@@ -252,6 +266,22 @@ impl<K: ArenaKind> Arena<K> {
         StringRef::new(offset, len)
     }
 
+    /// Concatenate `prev` + `extra` in the pool without a temporary buffer;
+    /// grows `prev` in place when it is the pool's tail.
+    pub fn append_string(&mut self, prev: StringRef, extra: &str) -> StringRef {
+        let pool_len = self.string_pool.len() as u32;
+        if prev.offset + prev.len == pool_len {
+            self.string_pool.push_str(extra);
+            return StringRef::new(prev.offset, prev.len + extra.len() as u32);
+        }
+        let range = prev.offset as usize..(prev.offset + prev.len) as usize;
+        self.string_pool.reserve(prev.len as usize + extra.len());
+        // Copying a whole previously-pooled string keeps UTF-8 boundaries intact.
+        unsafe { self.string_pool.as_mut_vec().extend_from_within(range) };
+        self.string_pool.push_str(extra);
+        StringRef::new(pool_len, prev.len + extra.len() as u32)
+    }
+
     pub fn get_type_data(&self, node_id: u32) -> &[u8] {
         let node = &self.nodes[node_id as usize];
         let start = node.data_offset as usize;
@@ -279,6 +309,49 @@ mod tests {
         assert_eq!(arena.len(), 1);
         let node = arena.get_node(id);
         assert_eq!(node.node_type, 0);
+    }
+
+    /// The exhaustive destructure makes adding an `Arena` field without deciding its reset behavior a compile error.
+    #[test]
+    fn reset_clears_every_per_document_field() {
+        let mut arena: Arena<Mdast> = Arena::new("junk source".to_string());
+        let parent = arena.alloc_node(1);
+        let child = arena.alloc_node(2);
+        arena.set_children(parent, &[child]);
+        arena.set_type_data(parent, &[9, 9, 9, 9]);
+        arena.alloc_string("interned junk");
+        arena.set_node_data(child, vec![1, 2, 3]);
+        arena.cp_offsets.push((7, 9));
+        arena.mdx = true;
+        arena.parse_options = 0xDEAD_BEEF;
+        arena.source_len = 77;
+
+        arena.reset();
+
+        let Arena {
+            nodes,
+            children,
+            type_data,
+            string_pool,
+            source_len,
+            node_data,
+            mdx,
+            parse_options,
+            cp_offsets,
+            _kind: _,
+        } = &arena;
+        assert!(nodes.is_empty());
+        assert!(children.is_empty());
+        assert!(type_data.is_empty());
+        assert!(string_pool.is_empty());
+        assert!(node_data.is_empty());
+        assert!(cp_offsets.is_empty());
+        assert!(!mdx);
+        assert_eq!(*parse_options, 0);
+        // source_len is the reuse sites' responsibility (set after reset)
+        assert_eq!(*source_len, 77);
+        assert!(arena.nodes.capacity() >= 2, "reset must keep capacity");
+        assert!(arena.string_pool.capacity() >= "junk source".len());
     }
 
     #[test]

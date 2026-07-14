@@ -36,6 +36,22 @@ type HastPluginInput = HastPluginDefinition | (() => HastPluginDefinition);
 
 Factories are called once per invocation, so closures reset between documents.
 
+### Source positions
+
+Visitors read `node.position` (the `{ start, end }` source range) only when the plugin opts in with `options: { position: true }`. Tracking positions adds a measurable parsing cost (~15% of parse), so it is off by default. `node.position` is `undefined` unless some plugin in the pipeline requests it.
+
+```js
+const plugin = defineMdastPlugin({
+  name: "needs-source-range",
+  options: { position: true },
+  heading(node) {
+    console.log(node.position); // { start, end } instead of undefined
+  },
+});
+```
+
+A single opted-in plugin enables positions for the whole pipeline, so a later plugin sees them too.
+
 ## MDAST visitors
 
 An MDAST plugin maps node types to visitor functions. Each visitor receives the node (as `Readonly`) and a `ctx` object.
@@ -180,9 +196,13 @@ mdxFlowExpression(node) {
 
 In order to avoid very expensive serialization costs between Rust and JS, Sätteri keeps both mdast and hast trees exclusively in Rust, exposing nodes to JavaScript plugins only as thin references when possible.
 
-This means that ergonomics are slightly different than one might expect from a plain JavaScript tree, and understanding of reference vs copy semantics is important to avoid bugs. After a visitor ends, any kept nodes may become totally invalid. Other plugins might've mutated the tree, or, once the pipeline has ended, the tree will have been discarded entirely.
+This means that ergonomics are slightly different than one might expect from a plain JavaScript tree, and understanding of reference vs copy semantics is important to avoid bugs.
 
-To keep a node's data beyond the visit, create an explicit copy of it and its subtree. For example, to collect all headings in a document:
+A node kept past its visitor pass reads as the tree looked _during that pass_: later plugins' mutations are never reflected in it. Reads on a retained node keep working as long as its pass's snapshot is recoverable, which is the case when node content was resolved from the tree during the pass (this pins the pass snapshot for every node handed out in it), or when nothing has mutated or freed the tree yet by the time of the first read. Resolving means reading a child node's field or calling `ctx.parent()`/`ctx.indexOf()`; eagerly decoded fields such as an element's `tagName` or `properties` come with the node and do not pin anything. The one unrecoverable case throws: a node whose content was never resolved in-pass, first read after the tree has changed or the pipeline has ended. The error says exactly that.
+
+Node objects are shared, not copied: the same underlying node reached through any path (`children`, `ctx.parent()`, a later pass over an unchanged tree) is the same JavaScript object, and it is frozen: assigning to its fields, `position`, `properties`, or `attributes` throws a `TypeError` rather than corrupting what later plugins see. Go through the context methods for changes, or copy first (`structuredClone(node)`) and edit the copy.
+
+Retaining a node keeps its whole pass snapshot alive in memory until the node is garbage collected. To keep just a node's data beyond the visit, prefer an explicit copy of it and its subtree. For example, to collect all headings in a document:
 
 ```js
 const headings = [];
@@ -314,3 +334,5 @@ Each Sätteri plugin walks the tree **once** — there is no re-walking until th
 - **Passed-through children keep their identity.** When a visitor returns a replacement that reuses the original children (e.g. `{ ...node, children: [...node.children] }`), those children are spliced back unchanged, so a transform queued on a nested one in the same pass still applies. This is what lets a single `containerDirective` visitor turn both an outer `:::note` and a nested `:::tip` into asides in one go.
 - **A plugin's own freshly-built nodes are not re-walked by that plugin.** A brand-new node a visitor returns isn't visited again by the same plugin. Produce its final shape directly, or hand it to a later plugin — every plugin runs over the fully materialized output of the ones before it.
 - **Dropping a subtree drops the transforms queued inside it.** If one visitor removes or replaces a node while another queued a transform on something inside that subtree, the orphaned transform is dropped and a warning is logged. Usually that's intended; the warning catches the cases where it isn't.
+- **Nodes from another document throw.** Handing a context method a node kept from a previous compile — or an mdast node inside a hast plugin — fails the compile. Keep nodes around within a document freely; don't carry them across.
+- **A few contradictory combinations throw.** Replacing a node with new content that reuses that same node while another plugin edits something inside it in the same pass, two replacements that each reuse the other's node, and inserting a sibling next to the root. Replacing, removing, or wrapping the root itself — say, via `ctx.parent()` on a top-level node — works fine.

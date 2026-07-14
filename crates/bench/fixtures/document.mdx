@@ -1,0 +1,82 @@
+---
+title: Getting Started
+description: A representative MDX document for profiling
+tags: [mdx, markdown, profiling]
+---
+
+import { Callout } from './components/Callout.jsx'
+import { Chart } from './components/Chart.jsx'
+import Layout from './layouts/Doc.jsx'
+
+export const meta = { author: 'Bench', updated: 2026 }
+
+# Getting Started with MDX
+
+MDX lets you use **JSX** in your *Markdown* content. You can import
+components and render them inline, like <Callout type="info">a small note</Callout>,
+or as block-level elements.
+
+## Why MDX?
+
+- Write content in familiar Markdown
+- Drop in interactive components where you need them
+- Keep everything in one file with `import` and `export`
+
+<Callout type="warning">
+  Components used in flow position can contain **their own** Markdown,
+  including [links](https://example.com) and `inline code`.
+</Callout>
+
+### A quick example
+
+Here is a chart rendered from inline data:
+
+<Chart
+  values={[1, 2, 3, 5, 8, 13, 21]}
+  labels={['a', 'b', 'c', 'd', 'e', 'f', 'g']}
+  options={{ animate: true, color: meta.author }}
+/>
+
+The expression {2 + 2} evaluates at build time, and so does {meta.title ?? 'Untitled'}.
+
+## Code blocks
+
+```js
+import { compile } from '@bruits/satteri'
+
+const out = await compile(source, { jsx: true })
+console.log(out.length)
+```
+
+> A blockquote with a [reference link][ref] and some **strong** text.
+>
+> Second paragraph inside the quote.
+
+[ref]: https://example.com/reference "Title"
+
+## A longer section
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nunc vel arcu
+sit amet justo *porttitor* faucibus. Curabitur **non** lectus at velit
+tempus tincidunt. See <Callout type="tip">this tip</Callout> for details.
+
+1. First ordered item
+2. Second item with a nested list:
+   - nested one
+   - nested two
+3. Third item
+
+| Feature | Markdown | MDX |
+|---------|----------|-----|
+| Headings | yes | yes |
+| Components | no | yes |
+| Expressions | no | yes |
+
+<Layout>
+  ## Wrapped content
+
+  This content is wrapped by a layout component and still parses as
+  Markdown, with <Callout>inline components</Callout> and {meta.updated}.
+</Layout>
+
+Final paragraph with a www.example.com autolink and an email@example.com address.

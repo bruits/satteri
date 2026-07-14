@@ -5,11 +5,11 @@ use crate::plugin::{NodeView, Plugin, VisitResult};
 use crate::typed_nodes::*;
 use satteri_arena::{Arena, ArenaBuilder, Mdast};
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::rebuild::{rebuild, Patch};
+use satteri_ast::patch::{apply_patches_strict, Patch, PatchContent};
 
 /// Result of running plugins against an arena.
 pub struct PluginRunResult {
-    /// The (possibly modified) arena, same instance if no mutations, rebuilt if mutations occurred.
+    /// The (possibly modified) arena, same instance if no mutations, patched in place if mutations occurred.
     pub arena: Arena<Mdast>,
     pub commands: Vec<Command>,
     pub diagnostics: Vec<Diagnostic>,
@@ -50,9 +50,13 @@ impl PluginRunner {
             // Call before
             plugin.before(&current_arena, &mut ctx);
 
-            // Walk the arena depth-first, dispatch to typed visitor methods
-            let node_count = current_arena.len() as u32;
-            for node_id in 0..node_count {
+            // Root walk, not an id scan: in-place applies leave detached garbage in the arena
+            let mut stack: Vec<u32> = if current_arena.is_empty() {
+                Vec::new()
+            } else {
+                vec![0]
+            };
+            while let Some(node_id) = stack.pop() {
                 let node = current_arena.get_node(node_id);
                 let node_type_byte = node.node_type;
 
@@ -73,6 +77,10 @@ impl PluginRunner {
                     }
                     VisitResult::NoChange => {}
                 }
+
+                for &child_id in current_arena.get_children(node_id).iter().rev() {
+                    stack.push(child_id);
+                }
             }
 
             // Call after
@@ -83,20 +91,14 @@ impl PluginRunner {
             all_diagnostics.extend(diagnostics);
 
             if has_cmds {
-                // Convert commands to patches and rebuild the arena
                 let patches = commands_to_patches(commands.iter().collect(), &current_arena);
                 if !patches.is_empty() {
-                    match rebuild(&current_arena, &patches) {
-                        Ok(rebuilt) => current_arena = rebuilt,
-                        Err(err) => {
-                            // Drop the rebuild for this plugin's pass and surface
-                            // the bad combination so the plugin author can fix it.
-                            all_diagnostics.push(Diagnostic {
-                                message: format!("invalid patch combination: {err}"),
-                                node_id: None,
-                                severity: Severity::Error,
-                            });
-                        }
+                    if let Err(err) = apply_patches_strict(&mut current_arena, &patches) {
+                        all_diagnostics.push(Diagnostic {
+                            message: format!("invalid patch combination: {err}"),
+                            node_id: None,
+                            severity: Severity::Error,
+                        });
                     }
                 }
                 all_commands.extend(commands);
@@ -127,7 +129,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             Command::Replace { node_id, new_node } => {
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::Replace {
                     node_id: *node_id,
-                    new_tree: sub,
+                    new_tree: PatchContent::Tree(sub),
                     keep_children: false,
                 })
             }
@@ -135,13 +137,13 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             Command::InsertBefore { node_id, new_node } => {
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::InsertBefore {
                     node_id: *node_id,
-                    new_tree: sub,
+                    new_tree: PatchContent::Tree(sub),
                 })
             }
             Command::InsertAfter { node_id, new_node } => {
                 built_node_to_arena(new_node, arena.string_pool()).map(|sub| Patch::InsertAfter {
                     node_id: *node_id,
-                    new_tree: sub,
+                    new_tree: PatchContent::Tree(sub),
                 })
             }
             Command::Wrap {
@@ -149,7 +151,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
                 parent_node,
             } => built_node_to_arena(parent_node, arena.string_pool()).map(|sub| Patch::Wrap {
                 node_id: *node_id,
-                parent_tree: sub,
+                parent_tree: PatchContent::Tree(sub),
             }),
             Command::PrependChild {
                 node_id,
@@ -157,7 +159,7 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             } => built_node_to_arena(child_node, arena.string_pool()).map(|sub| {
                 Patch::PrependChild {
                     node_id: *node_id,
-                    child_tree: sub,
+                    child_tree: PatchContent::Tree(sub),
                 }
             }),
             Command::AppendChild {
@@ -166,11 +168,11 @@ fn commands_to_patches(commands: Vec<&Command>, arena: &Arena<Mdast>) -> Vec<Pat
             } => {
                 built_node_to_arena(child_node, arena.string_pool()).map(|sub| Patch::AppendChild {
                     node_id: *node_id,
-                    child_tree: sub,
+                    child_tree: PatchContent::Tree(sub),
                 })
             }
             Command::SetData { .. } => {
-                // Already applied via DataMap in PluginContext, no arena rebuild needed
+                // Already applied via DataMap in PluginContext, no arena mutation needed
                 None
             }
         })

@@ -2,7 +2,6 @@
 
 import { ru16, ru32, rstr } from "../../wire-read.js";
 import { restorePhantomSpaces } from "../../phantom.js";
-import { lazyGroup } from "../../lazy-props.js";
 import { decodeMdxJsxAttr } from "../../mdx-attr.js";
 import { decodeColumnAlign } from "../column-align.js";
 import type { MdastReader } from "../mdast-reader.js";
@@ -79,8 +78,7 @@ const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {
 };
 
 /** Materialized property names per tag (the non-skip `js` names above),
- *  precomputed so `materializeMdastFields` doesn't rebuild them per node.
- *  Exported for the child-stub field tables. */
+ *  exported for the child-stub field tables. */
 export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
   2: ["depth"],
   7: ["value"],
@@ -277,7 +275,7 @@ export function decodeMdastTypeData(
  * Attach a node's fixed `type_data` fields, materialized from the arena
  * snapshot, driven by `MDAST_LAYOUTS`. Returns `false` for tags with no entry,
  * so the materializer falls through to its hand-written cases (list, table,
- * directives, MDX JSX). Fields resolve lazily on first access.
+ * directives, MDX JSX). Fields are eager plain stores.
  */
 export function materializeMdastFields(
   reader: MdastReader,
@@ -287,28 +285,23 @@ export function materializeMdastFields(
 ): boolean {
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields === undefined) return false;
-  lazyGroup(node, MDAST_LAYOUT_KEYS[nodeType]!, () => {
-    const data = reader.getTypeData(nodeId);
-    const out: Record<string, unknown> = {};
-    for (const f of fields) {
-      if (f.kind === "u8") {
-        // Short type_data falls back to the layout's declared default,
-        // matching the Rust walk serializer.
-        const b = data[f.offset] ?? f.default ?? 0;
-        if (!f.skip) out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
-      } else {
-        // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
-        // yields an empty ref, mirroring the Rust decoders' bounds checks.
-        const ref =
-          f.offset + 8 <= data.length
-            ? reader.readStringRef(data, f.offset)
-            : { offset: 0, len: 0 };
-        if (f.skip) continue;
-        const s = f.nullable && ref.len === 0 ? null : reader.getString(ref.offset, ref.len);
-        out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;
-      }
+  const data = reader.getTypeData(nodeId);
+  const out = node as Record<string, unknown>;
+  for (const f of fields) {
+    if (f.kind === "u8") {
+      // Short type_data falls back to the layout's declared default,
+      // matching the Rust walk serializer.
+      const b = data[f.offset] ?? f.default ?? 0;
+      if (!f.skip) out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
+    } else {
+      // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
+      // yields an empty ref, mirroring the Rust decoders' bounds checks.
+      const ref =
+        f.offset + 8 <= data.length ? reader.readStringRef(data, f.offset) : { offset: 0, len: 0 };
+      if (f.skip) continue;
+      const s = f.nullable && ref.len === 0 ? null : reader.getString(ref.offset, ref.len);
+      out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;
     }
-    return out;
-  });
+  }
   return true;
 }

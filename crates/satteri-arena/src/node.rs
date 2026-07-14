@@ -41,7 +41,7 @@ impl StringRef {
 
 /// All positions use byte offsets and 1-based line/column numbers from the
 /// source text.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct ArenaNode {
     pub id: u32,

@@ -7,6 +7,16 @@
 
 import type { CommandBuffer } from "./command-buffer.js";
 
+/** Plugin-level configuration, set via `options` on a plugin definition. */
+export interface PluginOptions {
+  /**
+   * Set to `true` if any visitor reads `node.position`. When no plugin in the
+   * pipeline opts in, source-position tracking is skipped during parsing
+   * (~15% faster parse), and `node.position` is `undefined`.
+   */
+  position?: boolean;
+}
+
 const EMPTY_BYTES = new Uint8Array(0);
 
 export function asArray<T>(value: T | T[]): T[] {

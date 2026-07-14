@@ -38,7 +38,7 @@ fn main() {}
 ````
 
 | Parser          | HAST `data`                              |
-|-----------------|------------------------------------------|
+| --------------- | ---------------------------------------- |
 | `remark-rehype` | `{ meta: "title=foo.rs" }`               |
 | Sätteri         | `{ lang: "rust", meta: "title=foo.rs" }` |
 
@@ -70,7 +70,7 @@ GFM tables with column alignment produce different HAST properties.
 ```
 
 | Parser          | HAST output                                |
-|-----------------|--------------------------------------------|
+| --------------- | ------------------------------------------ |
 | `remark-rehype` | `<th align="right">right</th>`             |
 | Sätteri         | `<th style="text-align: right">right</th>` |
 

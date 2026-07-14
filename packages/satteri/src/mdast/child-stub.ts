@@ -1,4 +1,9 @@
-import { flatByTag, stubDescriptors } from "../child-stub.js";
+import {
+  flatByTag,
+  installStubDescriptors,
+  stubDescriptors,
+  type StubDescriptorEntry,
+} from "../child-stub.js";
 import type { LazyChildResolver } from "../lazy-child-resolver.js";
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
@@ -26,7 +31,7 @@ const HAND_WRITTEN_FIELDS: Readonly<Record<number, readonly string[]>> = {
 
 const TYPE_NAME_BY_TAG = flatByTag(TYPE_NAMES);
 
-const MDAST_STUB_DESCRIPTORS: (PropertyDescriptorMap | undefined)[] = [];
+const MDAST_STUB_DESCRIPTORS: (readonly StubDescriptorEntry[] | undefined)[] = [];
 for (const tag of Object.keys(TYPE_NAMES)) {
   const nodeType = Number(tag);
   const fields = [...(MDAST_LAYOUT_KEYS[nodeType] ?? HAND_WRITTEN_FIELDS[nodeType] ?? [])];
@@ -40,9 +45,8 @@ const FALLBACK_DESCRIPTORS = stubDescriptors([]);
 /**
  * Walk-path child stub: arena id + `type` eagerly, every other field a lazy
  * forward to the materialized node (first read snapshots the arena via
- * `materializeOne`, which enforces the handle epoch — the pass seal is checked
- * where the stubs are built). Spread/identity rules are enforced by `nid()`
- * (authoritative doc in hast-visitor.ts).
+ * `materializeOne`, which enforces the handle epoch). Spread/identity rules
+ * are enforced by `nid()` (authoritative doc in hast-visitor.ts).
  */
 export class MdastChildStub {
   _resolver: MdastResolver;
@@ -53,6 +57,6 @@ export class MdastChildStub {
     this._resolver = resolver;
     this._id = id;
     this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
-    Object.defineProperties(this, MDAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
+    installStubDescriptors(this, MDAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
   }
 }

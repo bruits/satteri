@@ -1,9 +1,9 @@
 import type { Root } from "mdast";
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
-import { lazyProp, lazyGroup } from "../lazy-props.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
 import { materializeMdastFields } from "./generated/layout.js";
+import { createMaterializer } from "../materializer-cache.js";
 
 // Leaf node types that do NOT have children.
 // Type 9 = `definition`; type 18 = `imageReference` — leaves per mdast spec
@@ -13,7 +13,7 @@ export const LEAF_TYPES: ReadonlySet<number> = new Set([
 ]);
 
 /**
- * Add type-specific lazy properties to a node object.
+ * Add type-specific properties to a node object as eager plain stores.
  */
 function addTypeProperties(
   node: MdastNode,
@@ -28,38 +28,51 @@ function addTypeProperties(
   switch (nodeType) {
     case 5: {
       // list
-      const resolveList = () => {
-        const d = reader.getListData(nodeId);
-        return { ordered: d.ordered, start: d.ordered ? d.start : null, spread: d.spread };
-      };
-      lazyGroup(node, ["ordered", "start", "spread"], resolveList);
+      const d = reader.getListData(nodeId);
+      const n = node as { ordered: boolean; start: number | null; spread: boolean };
+      n.ordered = d.ordered;
+      n.start = d.ordered ? d.start : null;
+      n.spread = d.spread;
       break;
     }
 
-    case 6: // listItem
-      lazyGroup(node, ["spread", "checked"], () => reader.getListItemData(nodeId));
+    case 6: {
+      // listItem
+      const d = reader.getListItemData(nodeId);
+      const n = node as { spread: boolean; checked: boolean | null };
+      n.spread = d.spread;
+      n.checked = d.checked;
       break;
+    }
 
     case 37: // descriptionDetails
       lazyGroup(node, ["spread"], () => reader.getDescriptionDetailsData(nodeId));
       break;
 
     case 21: // table
-      Object.defineProperties(node, {
-        align: lazyProp("align", () => reader.getTableAlign(nodeId)),
-      });
+      (node as { align: unknown }).align = reader.getTableAlign(nodeId);
       break;
 
     case 30: // containerDirective
     case 31: // leafDirective
-    case 32: // textDirective
-      lazyGroup(node, ["name", "attributes"], () => reader.getDirectiveData(nodeId));
+    case 32: {
+      // textDirective
+      const d = reader.getDirectiveData(nodeId);
+      const n = node as { name: string; attributes: unknown };
+      n.name = d.name;
+      n.attributes = d.attributes;
       break;
+    }
 
     case 100: // mdxJsxFlowElement
-    case 101: // mdxJsxTextElement
-      lazyGroup(node, ["name", "attributes"], () => reader.getMdxJsxElementData(nodeId));
+    case 101: {
+      // mdxJsxTextElement
+      const d = reader.getMdxJsxElementData(nodeId);
+      const n = node as { name: string | null; attributes: unknown };
+      n.name = d.name;
+      n.attributes = d.attributes;
       break;
+    }
 
     // Nodes with no type-specific props:
     // root(0), paragraph(1), thematicBreak(3), blockquote(4),
@@ -70,71 +83,16 @@ function addTypeProperties(
 }
 
 /**
- * Materialize a single MDAST node from a binary buffer as a lazy JS object.
+ * Materialize a single MDAST node; scalars eager, `children` lazy, memoized
+ * per `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
+ * cannot corrupt the shared cache.
  */
-export function materializeNode(reader: MdastReader, nodeId: number): MdastNode {
-  const rawNode = reader.getNode(nodeId);
-  const nodeType = rawNode.type;
-  const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
-
-  const node = { type: typeName } as MdastNode;
-  if (rawNode.position !== undefined) {
-    (node as { position: typeof rawNode.position }).position = rawNode.position;
-  }
-
-  // _nodeId: non-enumerable internal reference
-  Object.defineProperty(node, "_nodeId", {
-    value: nodeId,
-    writable: false,
-    configurable: true,
-    enumerable: false,
-  });
-
-  // Type-specific lazy properties
-  addTypeProperties(node, reader, nodeId, nodeType);
-
-  // Plugin-set `data` survives the visitor walk via its own getter but
-  // would be dropped when materialized from a serialized handle.
-  const rawData = reader.getNodeData(nodeId);
-  if (rawData !== null) {
-    try {
-      const parsed = JSON.parse(rawData) as Record<string, unknown>;
-      if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
-        Object.defineProperty(node, "data", {
-          value: parsed,
-          writable: true,
-          configurable: true,
-          enumerable: true,
-        });
-      }
-    } catch (err) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(`materializeNode: malformed node_data for nodeId=${nodeId}`, err);
-      }
-    }
-  }
-
-  // children: lazy getter (only for non-leaf nodes)
-  if (!LEAF_TYPES.has(nodeType)) {
-    Object.defineProperty(node, "children", {
-      get(this: MdastNode) {
-        const childIds = reader.getChildIds(nodeId);
-        const children = childIds.map((id) => materializeNode(reader, id));
-        Object.defineProperty(this, "children", {
-          value: children,
-          writable: true,
-          configurable: true,
-          enumerable: true,
-        });
-        return children;
-      },
-      configurable: true,
-      enumerable: true,
-    });
-  }
-
-  return node;
-}
+export const materializeNode = createMaterializer<MdastReader, MdastNode>({
+  label: "materializeNode",
+  typeNames: TYPE_NAMES,
+  hasChildren: (nodeType) => !LEAF_TYPES.has(nodeType),
+  populate: addTypeProperties,
+});
 
 /** Materialize the full tree from root (nodeId=0). */
 export function materializeMdastTree(reader: MdastReader): Root {

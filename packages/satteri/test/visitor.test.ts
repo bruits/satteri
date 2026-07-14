@@ -13,7 +13,7 @@ import {
   renderHandle,
 } from "../index.js";
 import type { DirectiveAttributes, MdastNode } from "../src/types.js";
-import type { Heading, Text } from "mdast";
+import type { Heading, Paragraph, Text } from "mdast";
 import { defineMdastPlugin } from "../src/plugin.js";
 import { markdownToHtml, applyCommandsToMdastHandle } from "../src/index.js";
 
@@ -32,10 +32,9 @@ function visitAndRender(
   return renderHandle(hastHandle);
 }
 
-function setup() {
-  const handle = createMdastHandle("# Hello\n\nWorld");
-  const source = getHandleSource(handle);
-  return { handle, source };
+function setup(source = "# Hello\n\nWorld") {
+  const handle = createMdastHandle(source);
+  return { handle, source: getHandleSource(handle) };
 }
 
 test("visitor with no subscriptions produces no mutations, no diagnostics", () => {
@@ -344,6 +343,155 @@ test("context.setProperty(node, 'children', ...) keeps reused children", () => {
     },
   });
   expect(html).toMatch(/<h1>&gt; Hello<\/h1>/);
+});
+
+test("a child getter throwing during 'children' encoding leaves the buffer usable", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      expect(() =>
+        ctx.setProperty(node, "children", [
+          {
+            get type(): "text" {
+              throw new Error("boom");
+            },
+            value: "x",
+          },
+        ]),
+      ).toThrow("boom");
+      ctx.setProperty(node, "children", [{ type: "text", value: "Recovered" }]);
+    },
+  });
+  expect(html).toMatch(/<h1>Recovered<\/h1>/);
+});
+
+test("walk-path materialized nodes are frozen against plugin mutation", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node, ctx) {
+      const parent = ctx.parent(node);
+      if (!parent) throw new Error("heading must have a parent");
+      // containers are frozen eagerly at construction; reading children
+      // just materializes more frozen nodes
+      const first = parent.children[0]!;
+      expect(Object.isFrozen(parent)).toBe(true);
+      expect(() => {
+        (parent as { type: string }).type = "corrupted";
+      }).toThrow(TypeError);
+      expect(() => {
+        (parent as { children: MdastNode[] }).children = [];
+      }).toThrow(TypeError);
+      const pos = first.position;
+      expect(pos).toBeDefined();
+      expect(() => {
+        (pos!.start as { line: number }).line = 999;
+      }).toThrow(TypeError);
+      const clone = structuredClone(parent);
+      (clone as { type: string }).type = "mutable-copy";
+    },
+  });
+  expect(html).toContain("Hello");
+});
+
+test("frozen cache: children arrays reject push and stay intact for later reads", () => {
+  const { handle, source } = setup("# Hello\n\nWorld");
+  let ran = false;
+  const plugin = {
+    heading(node: MdastNode, ctx: MdastVisitorContext) {
+      ran = true;
+      const parent = ctx.parent(node);
+      if (!parent) throw new Error("heading must have a parent");
+      const children = (parent as { children: MdastNode[] }).children;
+      expect(Object.isFrozen(children)).toBe(true);
+      expect(() => {
+        children.push({ type: "text", value: "junk" } as MdastNode);
+      }).toThrow(TypeError);
+      // memoized: a later read returns the same, untouched array
+      expect((parent as { children: MdastNode[] }).children).toBe(children);
+      expect(children.length).toBe(2);
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, undefined);
+  expect(ran).toBe(true);
+});
+
+test("containers are frozen at construction: field write throws before children are read", () => {
+  const { handle, source } = setup("# Hello\n\nWorld");
+  let ran = false;
+  const plugin = {
+    text(node: MdastNode, ctx: MdastVisitorContext) {
+      const parent = ctx.parent(node);
+      if (!parent || parent.type !== "heading") return;
+      ran = true;
+      // materialized without touching its children
+      expect(Object.isFrozen(parent)).toBe(true);
+      expect(() => {
+        (parent as { depth: number }).depth = 5;
+      }).toThrow(TypeError);
+      expect((parent as Heading).depth).toBe(1);
+      // children still materialize fine afterwards
+      expect((parent as Heading).children.length).toBe(1);
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, undefined);
+  expect(ran).toBe(true);
+});
+
+test("stub property writes throw on both cold and hot paths", () => {
+  const { handle, source } = setup("a *b*");
+  let ran = false;
+  const plugin = {
+    paragraph(node: MdastNode) {
+      ran = true;
+      const [first, em] = (node as Paragraph).children as [Text, MdastNode];
+      // cold stub, field not yet read: getter-only accessor rejects writes
+      expect(() => {
+        (first as { value: string }).value = "X";
+      }).toThrow(TypeError);
+      // first read forces the pass snapshot and memoizes the value...
+      expect(first.value).toBe("a ");
+      // ...and the memoized field is still read-only
+      expect(() => {
+        (first as { value: string }).value = "Y";
+      }).toThrow(TypeError);
+      expect(first.value).toBe("a ");
+      // hot path: children materialize as deep-frozen real nodes
+      const emText = (em as { children: Text[] }).children[0]!;
+      expect(Object.isFrozen(emText)).toBe(true);
+      expect(() => {
+        (emText as { value: string }).value = "Z";
+      }).toThrow(TypeError);
+      expect(emText.value).toBe("b");
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, undefined);
+  expect(ran).toBe(true);
+});
+
+test("materialized node positions are deep-frozen", () => {
+  const { handle, source } = setup("# Hello\n\nWorld");
+  let ran = false;
+  const plugin = {
+    heading(node: MdastNode, ctx: MdastVisitorContext) {
+      ran = true;
+      const parent = ctx.parent(node);
+      if (!parent) throw new Error("heading must have a parent");
+      const heading = (parent as { children: MdastNode[] }).children[0]!;
+      const pos = heading.position;
+      expect(pos).toBeDefined();
+      expect(Object.isFrozen(pos)).toBe(true);
+      expect(Object.isFrozen(pos!.start)).toBe(true);
+      expect(Object.isFrozen(pos!.end)).toBe(true);
+      expect(() => {
+        (pos!.start as { line: number }).line = 999;
+      }).toThrow(TypeError);
+      expect(pos!.start.line).toBe(1);
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, undefined);
+  expect(ran).toBe(true);
 });
 
 test("context.insertChildAt() prepends at index 0", () => {
@@ -725,7 +873,7 @@ test("async visitor reads `.children` in a deferred callback", async () => {
   expect(firstChild).toMatchObject({ type: "text", value: "Hello" });
 });
 
-test("a node retained past its visitor pass throws on its first `.children` read", () => {
+test("a node retained past a non-mutating pass keeps pass-time children readable", () => {
   const { handle, source } = setup();
   let retained: Readonly<Heading> | undefined;
   const plugin = defineMdastPlugin({
@@ -736,10 +884,10 @@ test("a node retained past its visitor pass throws on its first `.children` read
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
   expect(retained).toBeDefined();
-  expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+  expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
 });
 
-test("a retained node throws on `.children` after an async pass settles", async () => {
+test("a retained node keeps `.children` readable after an async pass settles", async () => {
   const { handle, source } = setup();
   let retained: Readonly<Heading> | undefined;
   const plugin = defineMdastPlugin({
@@ -750,7 +898,59 @@ test("a retained node throws on `.children` after an async pass settles", async 
     },
   });
   await visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
-  expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+  expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
+});
+
+test("an in-pass deep read pins the snapshot: retained nodes survive a later mutating pass", () => {
+  const { handle, source } = setup("# Hello\n\nWorld");
+  let retainedP: Readonly<Paragraph> | undefined;
+  const pinAndRetain = defineMdastPlugin({
+    name: "pin-and-retain",
+    heading(node) {
+      const first = node.children[0]!;
+      void (first.type === "text" && first.value);
+    },
+    paragraph(node) {
+      retainedP = node;
+    },
+  });
+  visitMdastHandle(
+    handle,
+    pinAndRetain,
+    resolveMdastSubscriptions(pinAndRetain),
+    source,
+    undefined,
+  );
+  // Rewriting the retained paragraph itself makes the assertion discriminating: live re-read = "Changed"
+  const mutator = defineMdastPlugin({
+    name: "rewrite-paragraph",
+    paragraph() {
+      return {
+        type: "paragraph",
+        children: [{ type: "text", value: "Changed" }],
+      } satisfies MdastNode;
+    },
+  });
+  const mutation = visitMdastHandle(
+    handle,
+    mutator,
+    resolveMdastSubscriptions(mutator),
+    source,
+    undefined,
+  ) as { commandBuffer: Uint8Array };
+  applyCommandsToMdastHandle(handle, mutation.commandBuffer);
+
+  let liveValue: string | undefined;
+  const readBack = defineMdastPlugin({
+    name: "read-live-paragraph",
+    paragraph(node) {
+      const first = node.children[0]!;
+      if (first.type === "text") liveValue = first.value;
+    },
+  });
+  visitMdastHandle(handle, readBack, resolveMdastSubscriptions(readBack), source, undefined);
+  expect(liveValue).toBe("Changed");
+  expect(retainedP!.children[0]).toMatchObject({ type: "text", value: "World" });
 });
 
 test("ctx.source returns the verbatim input, not the string-interning heap", () => {
@@ -993,7 +1193,7 @@ test("parent throws on plugin-built nodes (no arena id)", () => {
   expect(error?.message).toMatch(/no arena id/);
 });
 
-test("parent called after the pass throws the retention error", () => {
+test("parent called after a non-mutating pass resolves from the pass snapshot", () => {
   const { handle, source } = setup();
   let retained: Readonly<Heading> | undefined;
   let retainedCtx: MdastVisitorContext | undefined;
@@ -1005,7 +1205,25 @@ test("parent called after the pass throws the retention error", () => {
     },
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
-  expect(() => retainedCtx!.parent(retained!)).toThrow(/retained past its visitor pass/);
+  expect(retainedCtx!.parent(retained!)).toMatchObject({ type: "root" });
+});
+
+test("materialized nodes share identity across access paths", () => {
+  const { handle, source } = setup();
+  let same: boolean | undefined;
+  const plugin = defineMdastPlugin({
+    name: "identity-check",
+    heading(node, ctx) {
+      // parent() first so the snapshot is hot and node.children materializes real nodes
+      const root = ctx.parent(node);
+      const viaMatchedList = node.children[0];
+      const rootChild = root?.type === "root" ? root.children[0] : undefined;
+      const viaReaderList = rootChild?.type === "heading" ? rootChild.children[0] : undefined;
+      same = viaMatchedList !== undefined && viaMatchedList === viaReaderList;
+    },
+  });
+  visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
+  expect(same).toBe(true);
 });
 
 test("a parent is a valid anchor for structural mutations", () => {

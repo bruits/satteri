@@ -438,6 +438,197 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain(`<h1 id="title">Hi</h1>`);
   });
 
+  test("a child getter throwing during 'children' encoding leaves the buffer usable", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "throwing-children-encode",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          expect(() =>
+            ctx.setProperty(node, "children", [
+              {
+                get type(): "text" {
+                  throw new Error("boom");
+                },
+                value: "x",
+              },
+            ]),
+          ).toThrow("boom");
+          ctx.setProperty(node, "children", [{ type: "text", value: "Recovered" }]);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Recovered</h1>");
+  });
+
+  test("walk-path materialized nodes are frozen against plugin mutation", () => {
+    const { handle, source } = setup("# Hello");
+    const vandal = defineHastPlugin({
+      name: "vandal",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          const parent = ctx.parent(node);
+          if (!parent) throw new Error("h1 must have a parent");
+          const h1 = parent.children.find((c) => c.type === "element") as Element;
+          // containers are frozen eagerly at construction; reading children
+          // just materializes more frozen nodes
+          const text = h1.children[0] as Text;
+          expect(Object.isFrozen(parent)).toBe(true);
+          expect(Object.isFrozen(h1)).toBe(true);
+          expect(() => {
+            (h1 as { tagName: string }).tagName = "h2";
+          }).toThrow(TypeError);
+          expect(() => {
+            h1.properties.id = "corrupted";
+          }).toThrow(TypeError);
+          expect(() => {
+            (text as { value: string }).value = "corrupted";
+          }).toThrow(TypeError);
+        },
+      },
+    });
+    const subs = resolveSubscriptions(vandal);
+    visitHastHandle(handle, vandal, subs, source, undefined);
+
+    const witness = defineHastPlugin({
+      name: "witness",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          const parent = ctx.parent(node);
+          expect(parent).toBeDefined();
+          const h1 = parent!.children.find((c) => c.type === "element") as Element;
+          expect((h1.children[0] as Text).value).toBe("Hello");
+        },
+      },
+    });
+    visitHastHandle(handle, witness, resolveSubscriptions(witness), source, undefined);
+    expect(renderHandle(handle)).toContain("<h1>Hello</h1>");
+  });
+
+  test("frozen cache: children arrays reject push and stay intact for later reads", () => {
+    const { handle, source } = setup("# Hello");
+    let ran = false;
+    const vandal = defineHastPlugin({
+      name: "children-array-vandal",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ran = true;
+          const parent = ctx.parent(node);
+          if (!parent) throw new Error("h1 must have a parent");
+          const children = parent.children;
+          expect(Object.isFrozen(children)).toBe(true);
+          expect(() => {
+            (children as ElementContent[]).push({ type: "text", value: "junk" });
+          }).toThrow(TypeError);
+          // memoized: a later read returns the same, untouched array
+          expect(parent.children).toBe(children);
+          expect(parent.children.length).toBe(1);
+        },
+      },
+    });
+    visitHastHandle(handle, vandal, resolveSubscriptions(vandal), source, undefined);
+    expect(ran).toBe(true);
+    expect(renderHandle(handle)).toContain("<h1>Hello</h1>");
+  });
+
+  test("containers are frozen at construction: tagName write throws before children are read", () => {
+    const { handle, source } = setup("*Hello* world");
+    let ran = false;
+    const plugin = defineHastPlugin({
+      name: "eager-freeze-probe",
+      element: {
+        filter: ["em"],
+        visit(node, ctx) {
+          ran = true;
+          // materialized without touching its children
+          const parent = ctx.parent(node) as Element;
+          expect(parent.tagName).toBe("p");
+          expect(Object.isFrozen(parent)).toBe(true);
+          expect(() => {
+            (parent as { tagName: string }).tagName = "div";
+          }).toThrow(TypeError);
+          // children still materialize fine afterwards
+          expect(parent.children.some((c) => c.type === "element")).toBe(true);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(ran).toBe(true);
+    expect(renderHandle(handle)).toContain("<em>Hello</em>");
+  });
+
+  test("stub property writes throw on both cold and hot paths", () => {
+    const { handle, source } = setup("a *b*");
+    let ran = false;
+    const plugin = defineHastPlugin({
+      name: "stub-write-probe",
+      element: {
+        filter: ["p"],
+        visit(node) {
+          ran = true;
+          if (node.type !== "element") throw new Error("expected element");
+          const [first, em] = node.children as [Text, Element];
+          // cold stub, field not yet read: getter-only accessor rejects writes
+          expect(() => {
+            (first as { value: string }).value = "X";
+          }).toThrow(TypeError);
+          // first read forces the pass snapshot and memoizes the value...
+          expect(first.value).toBe("a ");
+          // ...and the memoized field is still read-only
+          expect(() => {
+            (first as { value: string }).value = "Y";
+          }).toThrow(TypeError);
+          expect(first.value).toBe("a ");
+          // hot path: children materialize as deep-frozen real nodes
+          const emText = em.children[0] as Text;
+          expect(Object.isFrozen(emText)).toBe(true);
+          expect(() => {
+            (emText as { value: string }).value = "Z";
+          }).toThrow(TypeError);
+          expect(emText.value).toBe("b");
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(ran).toBe(true);
+    expect(renderHandle(handle)).toContain("a <em>b</em>");
+  });
+
+  test("materialized node positions are deep-frozen", () => {
+    const { handle, source } = setup("# Hello");
+    let ran = false;
+    const plugin = defineHastPlugin({
+      name: "position-freeze-probe",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ran = true;
+          const parent = ctx.parent(node);
+          if (!parent) throw new Error("h1 must have a parent");
+          const h1 = parent.children[0] as Element;
+          const pos = h1.position as Position;
+          expect(pos).toBeDefined();
+          expect(Object.isFrozen(pos)).toBe(true);
+          expect(Object.isFrozen(pos.start)).toBe(true);
+          expect(Object.isFrozen(pos.end)).toBe(true);
+          expect(() => {
+            (pos.start as { line: number }).line = 999;
+          }).toThrow(TypeError);
+          expect(pos.start.line).toBe(1);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(ran).toBe(true);
+  });
+
   test("context.setProperty(node, 'children', ...) preserves the element's properties", () => {
     const { handle, source } = setup("[x](https://example.com)");
     const plugin = defineHastPlugin({
@@ -1024,7 +1215,7 @@ describe("visitHastHandle - lazy children lifecycle", () => {
     expect(firstChild).toMatchObject({ type: "text", value: "Hello" });
   });
 
-  test("a node retained past its visitor pass throws on its first `.children` read", () => {
+  test("a node retained past a non-mutating pass keeps pass-time children readable", () => {
     const { handle, source } = setup();
     let retained: Readonly<Element> | undefined;
     const plugin = defineHastPlugin({
@@ -1038,10 +1229,10 @@ describe("visitHastHandle - lazy children lifecycle", () => {
     });
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     expect(retained).toBeDefined();
-    expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+    expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
   });
 
-  test("a retained node throws on `.children` after an async pass settles", async () => {
+  test("a retained node keeps `.children` readable after an async pass settles", async () => {
     const { handle, source } = setup();
     let retained: Readonly<Element> | undefined;
     const plugin = defineHastPlugin({
@@ -1055,7 +1246,58 @@ describe("visitHastHandle - lazy children lifecycle", () => {
       },
     });
     await visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
-    expect(() => retained!.children).toThrow(/retained past its visitor pass/);
+    expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
+  });
+
+  test("an in-pass deep read pins the snapshot: retained nodes survive a later mutating pass", () => {
+    const { handle, source } = setup("# Hello\n\nWorld");
+    let retainedP: Readonly<Element> | undefined;
+    const pinAndRetain = defineHastPlugin({
+      name: "pin-and-retain",
+      element: {
+        filter: ["h1", "p"],
+        visit(node) {
+          if (node.tagName === "p") {
+            retainedP = node;
+            return;
+          }
+          const first = node.children[0]!;
+          void (first.type === "text" && first.value);
+        },
+      },
+    });
+    visitHastHandle(handle, pinAndRetain, resolveSubscriptions(pinAndRetain), source, undefined);
+    // Rewriting the retained paragraph itself makes the assertion discriminating: live re-read = "Changed"
+    const mutator = defineHastPlugin({
+      name: "rewrite-p",
+      element: {
+        filter: ["p"],
+        visit() {
+          return {
+            type: "element",
+            tagName: "p",
+            properties: {},
+            children: [{ type: "text", value: "Changed" }],
+          };
+        },
+      },
+    });
+    visitHastHandle(handle, mutator, resolveSubscriptions(mutator), source, undefined);
+
+    let liveValue: string | undefined;
+    const readBack = defineHastPlugin({
+      name: "read-live-p",
+      element: {
+        filter: ["p"],
+        visit(node) {
+          const first = node.children[0]!;
+          if (first.type === "text") liveValue = first.value;
+        },
+      },
+    });
+    visitHastHandle(handle, readBack, resolveSubscriptions(readBack), source, undefined);
+    expect(liveValue).toBe("Changed");
+    expect(retainedP!.children[0]).toMatchObject({ type: "text", value: "World" });
   });
 
   test("children materialized in-pass stay usable after the pass", () => {
