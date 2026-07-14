@@ -25,7 +25,7 @@ use satteri_ast::commands::CommandError;
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::rebuild::{Patch, REF_NODE_TYPE};
+use satteri_ast::patch::{Patch, PatchContent, REF_NODE_TYPE};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
 use satteri_ast::shared::{
@@ -70,6 +70,15 @@ impl<'a> BufReader<'a> {
         ]);
         self.pos += 4;
         Ok(v)
+    }
+
+    /// Anchors must predate the decode's orphan grafts; a stale id would panic inside the apply.
+    fn read_anchor(&mut self, original_len: u32) -> Result<u32, CommandError> {
+        let node_id = self.read_u32()?;
+        if node_id >= original_len {
+            return Err(CommandError::InvalidNodeId(node_id));
+        }
+        Ok(node_id)
     }
 
     fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], CommandError> {
@@ -317,12 +326,13 @@ impl Default for MdastCommandOptions {
 }
 
 /// Emit a reference placeholder: a `REF_NODE_TYPE` node carrying the target
-/// original id (u32 LE) in its type_data. The rebuild resolves it by splicing
+/// original id (u32 LE) in its type_data. The apply resolves it by splicing
 /// that original subtree and applying any pending patch on it.
-fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) {
-    builder.open_node_raw(REF_NODE_TYPE);
+fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
+    let id = builder.open_node_raw(REF_NODE_TYPE);
     builder.set_data_current(&ref_id.to_le_bytes());
     builder.close_node();
+    id
 }
 
 // Generated per-type arena encoder, driven by the node registry. See
@@ -583,7 +593,7 @@ trait OpCollector<'a>: Sized {
     fn align(&mut self, _bytes: &'a [u8]) {}
 }
 
-/// Deepest `OP_OPEN` nesting the replay accepts: the rebuild splices a
+/// Deepest `OP_OPEN` nesting the replay accepts: the apply splices a
 /// replayed sub-arena recursively, so its depth must stay well inside the
 /// host stack. 128 = serde_json's default recursion limit, ample for content.
 const MAX_OPSTREAM_DEPTH: usize = 128;
@@ -592,23 +602,24 @@ const MAX_OPSTREAM_DEPTH: usize = 128;
 /// `KEEP_CHILDREN` (splice the replaced node's original children, as refs).
 fn replay_opstream<'a, C: OpCollector<'a>>(
     ops: &'a [u8],
-    orig: &Arena<C::Kind>,
+    builder: &mut ArenaBuilder<C::Kind>,
+    original_len: u32,
     anchor: u32,
-) -> Result<Arena<C::Kind>, CommandError> {
-    let mut builder = ArenaBuilder::<C::Kind>::new(String::new());
+) -> Result<Vec<u32>, CommandError> {
     let mut reader = BufReader::new(ops);
     let mut stack: Vec<C> = Vec::new();
+    let mut roots: Vec<u32> = Vec::new();
 
     while reader.remaining() > 0 {
         match reader.read_u8()? {
             OP_OPEN => {
                 if let Some(c) = stack.last_mut() {
-                    c.finalize(&mut builder);
+                    c.finalize(builder);
                 }
                 let node_type = reader.read_u8()?;
                 C::check_tag(node_type)?;
                 // A root is only valid as the stream's top-level wrapper
-                // (the rebuild splices its children); nested it would smuggle
+                // (the apply splices its children); nested it would smuggle
                 // a node the JS visitors refuse to encode.
                 if !stack.is_empty() && node_type == <C::Kind as ArenaKind>::ROOT_TAG {
                     return Err(CommandError::UnencodableNodeType("root"));
@@ -616,37 +627,47 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 if stack.len() >= MAX_OPSTREAM_DEPTH {
                     return Err(CommandError::OpstreamTooDeep(MAX_OPSTREAM_DEPTH));
                 }
-                builder.open_node(node_type);
+                let id = builder.open_node(node_type);
+                if stack.is_empty() {
+                    roots.push(id);
+                }
                 stack.push(C::open(node_type));
             }
             OP_CLOSE => {
                 let Some(mut c) = stack.pop() else {
                     return Err(CommandError::UnbalancedOpstream);
                 };
-                c.finalize(&mut builder);
+                c.finalize(builder);
                 builder.close_node();
             }
             OP_REF => {
                 if let Some(c) = stack.last_mut() {
-                    c.finalize(&mut builder);
+                    c.finalize(builder);
                 }
                 let id = reader.read_u32()?;
                 // A stale id (e.g. a node cached across passes) would
-                // otherwise panic deep inside the rebuild's arena indexing.
-                if id as usize >= orig.len() {
+                // otherwise panic deep inside the arena indexing.
+                if id >= original_len {
                     return Err(CommandError::InvalidNodeId(id));
                 }
-                emit_ref_node(id, &mut builder);
+                let ref_id = emit_ref_node(id, builder);
+                if stack.is_empty() {
+                    roots.push(ref_id);
+                }
             }
             OP_KEEP_CHILDREN => {
                 if let Some(c) = stack.last_mut() {
-                    c.finalize(&mut builder);
+                    c.finalize(builder);
                 }
-                if anchor as usize >= orig.len() {
+                if anchor >= original_len {
                     return Err(CommandError::InvalidNodeId(anchor));
                 }
-                for &child in orig.get_children(anchor) {
-                    emit_ref_node(child, &mut builder);
+                let children = builder.arena_ref().get_children(anchor).to_vec();
+                for child in children {
+                    let ref_id = emit_ref_node(child, builder);
+                    if stack.is_empty() {
+                        roots.push(ref_id);
+                    }
                 }
             }
             OP_STR => {
@@ -709,7 +730,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
     if !stack.is_empty() {
         return Err(CommandError::UnbalancedOpstream);
     }
-    Ok(builder.finish())
+    Ok(roots)
 }
 
 /// Intern MDX-JSX attribute strings into `(kind, name, value)` rows; spreads
@@ -879,10 +900,11 @@ impl<'a> OpCollector<'a> for FieldCollector<'a> {
 
 fn replay_mdast_opstream(
     ops: &[u8],
-    orig: &Arena<Mdast>,
+    builder: &mut ArenaBuilder<Mdast>,
+    original_len: u32,
     anchor: u32,
-) -> Result<Arena<Mdast>, CommandError> {
-    replay_opstream::<FieldCollector>(ops, orig, anchor)
+) -> Result<Vec<u32>, CommandError> {
+    replay_opstream::<FieldCollector>(ops, builder, original_len, anchor)
 }
 
 /// Returns (arena, keep_children) for an MDAST sub-tree payload. `orig`/`anchor`
@@ -891,30 +913,34 @@ fn replay_mdast_opstream(
 fn read_mdast_payload(
     reader: &mut BufReader<'_>,
     parse_markdown: &dyn Fn(&str) -> Arena<Mdast>,
-    orig: &Arena<Mdast>,
+    builder: &mut ArenaBuilder<Mdast>,
+    original_len: u32,
     anchor: u32,
     options: MdastCommandOptions,
-) -> Result<(Arena<Mdast>, bool), CommandError> {
+) -> Result<(PatchContent<Mdast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
     let len = reader.read_u32()? as usize;
 
     match payload_type {
         PAYLOAD_RAW_MARKDOWN => {
             let md = reader.read_str(len)?;
-            Ok((parse_markdown(md), false))
+            Ok((PatchContent::Tree(parse_markdown(md)), false))
         }
         PAYLOAD_RAW_HTML => {
             let html = reader.read_str(len)?;
             if options.escape_raw_html_braces {
                 let escaped = escape_braces_in_html_text(html);
-                Ok((parse_markdown(&escaped), false))
+                Ok((PatchContent::Tree(parse_markdown(&escaped)), false))
             } else {
-                Ok((parse_markdown(html), false))
+                Ok((PatchContent::Tree(parse_markdown(html)), false))
             }
         }
         PAYLOAD_OPSTREAM => {
             let ops = reader.read_bytes(len)?;
-            Ok((replay_mdast_opstream(ops, orig, anchor)?, false))
+            Ok((
+                PatchContent::Grafted(replay_mdast_opstream(ops, builder, original_len, anchor)?),
+                false,
+            ))
         }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
@@ -1040,10 +1066,11 @@ impl<'a> OpCollector<'a> for HastFieldCollector<'a> {
 
 fn replay_hast_opstream(
     ops: &[u8],
-    orig: &Arena<Hast>,
+    builder: &mut ArenaBuilder<Hast>,
+    original_len: u32,
     anchor: u32,
-) -> Result<Arena<Hast>, CommandError> {
-    replay_opstream::<HastFieldCollector>(ops, orig, anchor)
+) -> Result<Vec<u32>, CommandError> {
+    replay_opstream::<HastFieldCollector>(ops, builder, original_len, anchor)
 }
 
 /// Returns (arena, keep_children) for a HAST sub-tree payload. Only
@@ -1051,16 +1078,20 @@ fn replay_hast_opstream(
 /// grammar, so raw markdown / HTML are not, and there is no JSON path.
 fn read_hast_payload(
     reader: &mut BufReader<'_>,
-    orig: &Arena<Hast>,
+    builder: &mut ArenaBuilder<Hast>,
+    original_len: u32,
     anchor: u32,
-) -> Result<(Arena<Hast>, bool), CommandError> {
+) -> Result<(PatchContent<Hast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
     let len = reader.read_u32()? as usize;
 
     match payload_type {
         PAYLOAD_OPSTREAM => {
             let ops = reader.read_bytes(len)?;
-            Ok((replay_hast_opstream(ops, orig, anchor)?, false))
+            Ok((
+                PatchContent::Grafted(replay_hast_opstream(ops, builder, original_len, anchor)?),
+                false,
+            ))
         }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
@@ -1068,7 +1099,7 @@ fn read_hast_payload(
 
 /// Apply a command buffer to an MDAST arena. Set-property mutations are
 /// applied in-place; structural mutations are collected as `Patch<Mdast>`
-/// objects and applied via `rebuild()`.
+/// objects and applied in place via `apply_patches_in_place`.
 ///
 /// `parse_markdown` avoids a circular dependency on the parser crate; it
 /// is invoked for `RAW_MARKDOWN` and `RAW_HTML` payloads.
@@ -1147,6 +1178,12 @@ pub fn apply_mdast_commands_lenient_with_options(
         return Ok((arena, Vec::new()));
     }
 
+    // One builder wraps the arena for the whole decode: opstream payloads
+    // replay directly into it as orphan subtrees (strings land in the main
+    // pool, so the apply needs no remap and no per-command mini-arena).
+    let original_len = arena.len() as u32;
+    let mut builder =
+        ArenaBuilder::from_arena(std::mem::replace(&mut arena, Arena::new(String::new())));
     let mut patches: Vec<Patch<Mdast>> = Vec::new();
     let mut reader = BufReader::new(command_buf);
 
@@ -1155,38 +1192,56 @@ pub fn apply_mdast_commands_lenient_with_options(
 
         match cmd {
             CMD_REMOVE => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 patches.push(Patch::Remove { node_id });
             }
 
             CMD_SET_PROPERTY => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                apply_mdast_set_property(&mut arena, node_id, name, value_type, value)?;
+                apply_mdast_set_property(builder.arena_mut(), node_id, name, value_type, value)?;
             }
 
             CMD_INSERT_BEFORE => {
-                let node_id = reader.read_u32()?;
-                let (new_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (new_tree, _) = read_mdast_payload(
+                    &mut reader,
+                    parse_markdown,
+                    &mut builder,
+                    original_len,
+                    node_id,
+                    options,
+                )?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
-                let node_id = reader.read_u32()?;
-                let (new_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (new_tree, _) = read_mdast_payload(
+                    &mut reader,
+                    parse_markdown,
+                    &mut builder,
+                    original_len,
+                    node_id,
+                    options,
+                )?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
-                let node_id = reader.read_u32()?;
-                let (child_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (child_tree, _) = read_mdast_payload(
+                    &mut reader,
+                    parse_markdown,
+                    &mut builder,
+                    original_len,
+                    node_id,
+                    options,
+                )?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1194,9 +1249,15 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_APPEND_CHILD => {
-                let node_id = reader.read_u32()?;
-                let (child_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (child_tree, _) = read_mdast_payload(
+                    &mut reader,
+                    parse_markdown,
+                    &mut builder,
+                    original_len,
+                    node_id,
+                    options,
+                )?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1204,9 +1265,15 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_WRAP => {
-                let node_id = reader.read_u32()?;
-                let (parent_tree, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (parent_tree, _) = read_mdast_payload(
+                    &mut reader,
+                    parse_markdown,
+                    &mut builder,
+                    original_len,
+                    node_id,
+                    options,
+                )?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -1214,9 +1281,15 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_REPLACE => {
-                let node_id = reader.read_u32()?;
-                let (new_tree, keep_children) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (new_tree, keep_children) = read_mdast_payload(
+                    &mut reader,
+                    parse_markdown,
+                    &mut builder,
+                    original_len,
+                    node_id,
+                    options,
+                )?;
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -1225,9 +1298,15 @@ pub fn apply_mdast_commands_lenient_with_options(
             }
 
             CMD_SET_CHILDREN => {
-                let node_id = reader.read_u32()?;
-                let (new_children, _) =
-                    read_mdast_payload(&mut reader, parse_markdown, &arena, node_id, options)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (new_children, _) = read_mdast_payload(
+                    &mut reader,
+                    parse_markdown,
+                    &mut builder,
+                    original_len,
+                    node_id,
+                    options,
+                )?;
                 patches.push(Patch::SetChildren {
                     node_id,
                     new_children,
@@ -1238,17 +1317,18 @@ pub fn apply_mdast_commands_lenient_with_options(
         }
     }
 
+    let mut arena = builder.finish();
     if patches.is_empty() {
         Ok((arena, Vec::new()))
     } else {
-        let result = satteri_ast::rebuild::rebuild_lenient(&arena, &patches)?;
-        Ok((result.arena, result.dropped))
+        let dropped = satteri_ast::patch::apply_patches_in_place(&mut arena, &patches)?;
+        Ok((arena, dropped))
     }
 }
 
 /// Apply a command buffer to a HAST arena. Set-property mutations are
 /// applied in-place; structural mutations are collected as `Patch<Hast>`
-/// objects and applied via `rebuild()`. Errors if a patch is stranded inside a
+/// objects and applied in place via `apply_patches_in_place`. Errors if a patch is stranded inside a
 /// removed/replaced subtree; [`apply_hast_commands_lenient`] drops it instead.
 ///
 /// HAST plugins inject sub-trees via `PAYLOAD_OPSTREAM` only — there is
@@ -1287,6 +1367,11 @@ pub fn apply_hast_commands_lenient(
         return Ok((arena, Vec::new()));
     }
 
+    // See the MDAST twin: one builder for the whole decode, opstream payloads
+    // replay directly into the arena as orphan subtrees.
+    let original_len = arena.len() as u32;
+    let mut builder =
+        ArenaBuilder::from_arena(std::mem::replace(&mut arena, Arena::new(String::new())));
     let mut patches: Vec<Patch<Hast>> = Vec::new();
     let mut reader = BufReader::new(command_buf);
 
@@ -1295,35 +1380,38 @@ pub fn apply_hast_commands_lenient(
 
         match cmd {
             CMD_REMOVE => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 patches.push(Patch::Remove { node_id });
             }
 
             CMD_SET_PROPERTY => {
-                let node_id = reader.read_u32()?;
+                let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                apply_hast_set_property(&mut arena, node_id, name, value_type, value)?;
+                apply_hast_set_property(builder.arena_mut(), node_id, name, value_type, value)?;
             }
 
             CMD_INSERT_BEFORE => {
-                let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (new_tree, _) =
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
-                let node_id = reader.read_u32()?;
-                let (new_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (new_tree, _) =
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
-                let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (child_tree, _) =
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1331,8 +1419,9 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_APPEND_CHILD => {
-                let node_id = reader.read_u32()?;
-                let (child_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (child_tree, _) =
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1340,8 +1429,9 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_WRAP => {
-                let node_id = reader.read_u32()?;
-                let (parent_tree, _) = read_hast_payload(&mut reader, &arena, node_id)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (parent_tree, _) =
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -1349,8 +1439,9 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_REPLACE => {
-                let node_id = reader.read_u32()?;
-                let (new_tree, keep_children) = read_hast_payload(&mut reader, &arena, node_id)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (new_tree, keep_children) =
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -1359,8 +1450,9 @@ pub fn apply_hast_commands_lenient(
             }
 
             CMD_SET_CHILDREN => {
-                let node_id = reader.read_u32()?;
-                let (new_children, _) = read_hast_payload(&mut reader, &arena, node_id)?;
+                let node_id = reader.read_anchor(original_len)?;
+                let (new_children, _) =
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
                 patches.push(Patch::SetChildren {
                     node_id,
                     new_children,
@@ -1371,17 +1463,43 @@ pub fn apply_hast_commands_lenient(
         }
     }
 
+    let mut arena = builder.finish();
     if patches.is_empty() {
         Ok((arena, Vec::new()))
     } else {
-        let result = satteri_ast::rebuild::rebuild_lenient(&arena, &patches)?;
-        Ok((result.arena, result.dropped))
+        let dropped = satteri_ast::patch::apply_patches_in_place(&mut arena, &patches)?;
+        Ok((arena, dropped))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Old-signature shim for the replay tests: replays into a builder over a
+    /// clone of `orig` and returns (arena, roots).
+    fn replay_mdast_for_test(
+        ops: &[u8],
+        orig: &Arena<Mdast>,
+        anchor: u32,
+    ) -> Result<(Arena<Mdast>, Vec<u32>), CommandError> {
+        let original_len = orig.len() as u32;
+        let mut builder = ArenaBuilder::from_arena(orig.clone());
+        let roots = replay_mdast_opstream(ops, &mut builder, original_len, anchor)?;
+        Ok((builder.finish(), roots))
+    }
+
+    fn replay_hast_for_test(
+        ops: &[u8],
+        orig: &Arena<Hast>,
+        anchor: u32,
+    ) -> Result<(Arena<Hast>, Vec<u32>), CommandError> {
+        let original_len = orig.len() as u32;
+        let mut builder = ArenaBuilder::from_arena(orig.clone());
+        let roots = replay_hast_opstream(ops, &mut builder, original_len, anchor)?;
+        Ok((builder.finish(), roots))
+    }
+
     use satteri_ast::shared::PROP_INT;
 
     fn op_open(b: &mut Vec<u8>, t: MdastNodeType) {
@@ -1422,11 +1540,14 @@ mod tests {
         op_close(&mut ops);
 
         let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
-        let arena = replay_mdast_opstream(&ops, &empty, 0).unwrap();
+        let (arena, roots) = replay_mdast_for_test(&ops, &empty, 0).unwrap();
 
-        // node 0 = blockquote with 2 children
-        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Blockquote as u8);
-        let top = arena.get_children(0).to_vec();
+        let bq = roots[0];
+        assert_eq!(
+            arena.get_node(bq).node_type,
+            MdastNodeType::Blockquote as u8
+        );
+        let top = arena.get_children(bq).to_vec();
         assert_eq!(top.len(), 2);
         // heading depth 3, child text "Note"
         let h = top[0];
@@ -1449,11 +1570,11 @@ mod tests {
     #[test]
     fn opstream_replay_rejects_unbalanced_close() {
         let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
-        let err = replay_mdast_opstream(&[OP_CLOSE], &empty, 0).unwrap_err();
+        let err = replay_mdast_for_test(&[OP_CLOSE], &empty, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnbalancedOpstream));
 
         let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
-        let err = replay_hast_opstream(&[OP_CLOSE], &empty_hast, 0).unwrap_err();
+        let err = replay_hast_for_test(&[OP_CLOSE], &empty_hast, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnbalancedOpstream));
 
         // A balanced prefix doesn't excuse a trailing extra close.
@@ -1461,7 +1582,7 @@ mod tests {
         op_open(&mut ops, MdastNodeType::Paragraph);
         op_close(&mut ops);
         op_close(&mut ops);
-        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        let err = replay_mdast_for_test(&ops, &empty, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnbalancedOpstream));
     }
 
@@ -1474,12 +1595,12 @@ mod tests {
         op_u8(&mut ops, OF_DEPTH, 2);
 
         let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
-        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        let err = replay_mdast_for_test(&ops, &empty, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnbalancedOpstream));
 
         let hast_ops = vec![OP_OPEN, HastNodeType::Element as u8];
         let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
-        let err = replay_hast_opstream(&hast_ops, &empty_hast, 0).unwrap_err();
+        let err = replay_hast_for_test(&hast_ops, &empty_hast, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnbalancedOpstream));
     }
 
@@ -1493,7 +1614,7 @@ mod tests {
         ops.push(OP_KEEP_CHILDREN);
         op_close(&mut ops);
 
-        let err = replay_mdast_opstream(&ops, &orig, bad_anchor).unwrap_err();
+        let err = replay_mdast_for_test(&ops, &orig, bad_anchor).unwrap_err();
         assert!(matches!(err, CommandError::InvalidNodeId(id) if id == bad_anchor));
     }
 
@@ -1517,11 +1638,11 @@ mod tests {
     #[test]
     fn opstream_replay_rejects_unknown_tags() {
         let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
-        let err = replay_mdast_opstream(&[OP_OPEN, 200], &empty, 0).unwrap_err();
+        let err = replay_mdast_for_test(&[OP_OPEN, 200], &empty, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnknownNodeType(_)));
 
         let empty_hast = ArenaBuilder::<Hast>::new(String::new()).finish();
-        let err = replay_hast_opstream(&[OP_OPEN, 200], &empty_hast, 0).unwrap_err();
+        let err = replay_hast_for_test(&[OP_OPEN, 200], &empty_hast, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnknownNodeType(_)));
     }
 
@@ -1539,10 +1660,14 @@ mod tests {
         ops.push(OP_KEEP_CHILDREN);
         op_close(&mut ops);
 
-        let arena = replay_mdast_opstream(&ops, &orig, para).unwrap();
-        assert_eq!(arena.get_node(0).node_type, MdastNodeType::Heading as u8);
-        assert_eq!(decode_heading_data(arena.get_type_data(0)).depth, 2);
-        let children = arena.get_children(0).to_vec();
+        let (arena, roots) = replay_mdast_for_test(&ops, &orig, para).unwrap();
+        let heading = roots[0];
+        assert_eq!(
+            arena.get_node(heading).node_type,
+            MdastNodeType::Heading as u8
+        );
+        assert_eq!(decode_heading_data(arena.get_type_data(heading)).depth, 2);
+        let children = arena.get_children(heading).to_vec();
         assert_eq!(children.len(), 1);
         assert_eq!(arena.get_node(children[0]).node_type, REF_NODE_TYPE);
         assert_eq!(
@@ -1554,7 +1679,7 @@ mod tests {
     #[test]
     fn opstream_ref_rejects_out_of_range_id() {
         // A stale id (a node cached across passes) must error at decode, not
-        // panic inside the rebuild's arena indexing.
+        // panic inside the apply's arena indexing.
         let orig = test_parse_markdown("Hello");
         let bad = orig.len() as u32 + 100;
 
@@ -1564,7 +1689,7 @@ mod tests {
         ops.extend_from_slice(&bad.to_le_bytes());
         op_close(&mut ops);
 
-        let err = replay_mdast_opstream(&ops, &orig, 0).unwrap_err();
+        let err = replay_mdast_for_test(&ops, &orig, 0).unwrap_err();
         assert!(matches!(err, CommandError::InvalidNodeId(id) if id == bad));
     }
 
@@ -1576,12 +1701,12 @@ mod tests {
         let mut ok = Vec::new();
         op_open(&mut ok, MdastNodeType::Root);
         op_close(&mut ok);
-        assert!(replay_mdast_opstream(&ok, &empty, 0).is_ok());
+        assert!(replay_mdast_for_test(&ok, &empty, 0).is_ok());
 
         let mut ops = Vec::new();
         op_open(&mut ops, MdastNodeType::Root);
         op_open(&mut ops, MdastNodeType::Root);
-        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        let err = replay_mdast_for_test(&ops, &empty, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnencodableNodeType("root")));
     }
 
@@ -1589,20 +1714,20 @@ mod tests {
     fn hast_opstream_rejects_doctype() {
         let empty = ArenaBuilder::<Hast>::new(String::new()).finish();
         let ops = vec![OP_OPEN, HastNodeType::Doctype as u8, OP_CLOSE];
-        let err = replay_hast_opstream(&ops, &empty, 0).unwrap_err();
+        let err = replay_hast_for_test(&ops, &empty, 0).unwrap_err();
         assert!(matches!(err, CommandError::UnencodableNodeType("doctype")));
     }
 
     #[test]
     fn opstream_rejects_over_deep_nesting() {
-        // The rebuild splices replayed content recursively, so unbounded
+        // The apply splices replayed content recursively, so unbounded
         // nesting would overflow the host stack (an abort napi can't catch).
         let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
         let mut ops = Vec::new();
         for _ in 0..(MAX_OPSTREAM_DEPTH + 1) {
             op_open(&mut ops, MdastNodeType::Blockquote);
         }
-        let err = replay_mdast_opstream(&ops, &empty, 0).unwrap_err();
+        let err = replay_mdast_for_test(&ops, &empty, 0).unwrap_err();
         assert!(matches!(err, CommandError::OpstreamTooDeep(_)));
     }
 
@@ -1804,6 +1929,29 @@ mod tests {
         let result = apply_mdast_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
         let root_children = result.get_children(0);
         assert!(root_children.len() >= 2);
+    }
+
+    #[test]
+    fn stale_anchor_in_grafted_orphan_range_errors() {
+        let arena = build_hello_world();
+        let original_len = arena.len() as u32;
+
+        let mut ops = Vec::new();
+        op_open(&mut ops, MdastNodeType::Paragraph);
+        op_close(&mut ops);
+
+        // the append grafts orphans at ids >= original_len; anchoring one must error, not panic
+        let mut buf = Vec::new();
+        buf.push(CMD_APPEND_CHILD);
+        push_u32(&mut buf, 0);
+        buf.push(PAYLOAD_OPSTREAM);
+        push_u32(&mut buf, ops.len() as u32);
+        buf.extend_from_slice(&ops);
+        buf.push(CMD_REMOVE);
+        push_u32(&mut buf, original_len);
+
+        let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidNodeId(id) if id == original_len));
     }
 
     #[test]

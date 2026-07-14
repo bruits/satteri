@@ -30,6 +30,8 @@ import {
   createMdxMdastHandle,
   dropHandle,
   getHandleSource,
+  createHastHandleWithFrontmatter,
+  createMdxHastHandleWithFrontmatter,
   getMdastFrontmatter,
   markdownToHtmlFast,
   mdxToJsFast,
@@ -952,6 +954,26 @@ function createHastHandleFromMdast(
   data: Data,
   trackPositions: boolean,
 ): HastWithFrontmatter | Promise<HastWithFrontmatter> {
+  if (mdastPlugins.length === 0) {
+    const [hastHandle, raw] = mdx
+      ? createMdxHastHandleWithFrontmatter(
+          source,
+          nativeFeatures,
+          nativeConvertOptions,
+          trackPositions,
+        )
+      : createHastHandleWithFrontmatter(
+          source,
+          nativeFeatures,
+          nativeConvertOptions,
+          trackPositions,
+        );
+    return {
+      hastHandle,
+      frontmatter: raw ? { kind: raw.kind === "toml" ? "toml" : "yaml", value: raw.value } : null,
+    };
+  }
+
   const mdastHandle = mdx
     ? createMdxMdastHandle(source, nativeFeatures, trackPositions)
     : createMdastHandle(source, nativeFeatures, trackPositions);
@@ -974,10 +996,6 @@ function createHastHandleFromMdast(
   };
 
   try {
-    if (mdastPlugins.length === 0) {
-      return finalize({ handle: mdastHandle });
-    }
-
     const mdastResult = runMdastPluginsOnHandle(
       mdastHandle,
       mdastPlugins,

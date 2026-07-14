@@ -143,17 +143,6 @@ export class HastReader {
     return readPosition(this.#view, base + FIELD.start_offset);
   }
 
-  /** Whether the node carries a source position (line 0 + offset 0 is the
-   *  synthesized-node sentinel), without decoding the three position objects. */
-  hasPosition(nodeId: number): boolean {
-    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
-    const v = this.#view;
-    return (
-      v.getUint32(base + FIELD.start_line, true) !== 0 ||
-      v.getUint32(base + FIELD.start_offset, true) !== 0
-    );
-  }
-
   /** Get the node_type byte for a given node ID. */
   getNodeType(nodeId: number): number {
     const { nodesOffset, nodeStructSize } = this.#header;

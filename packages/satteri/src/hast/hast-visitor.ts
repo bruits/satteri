@@ -14,6 +14,7 @@ import type { MdxFlowExpressionHast, MdxTextExpressionHast } from "../mdx-types.
 import type { MdxjsEsmHast } from "../mdx-types.js";
 import {
   HastReader,
+  HAST_ROOT,
   HAST_ELEMENT,
   HAST_TEXT,
   HAST_COMMENT,
@@ -34,8 +35,10 @@ import {
   acquireCommandBuffer,
   releaseCommandBuffer,
   CommandBuffer,
+  STRUCTURAL_CMD,
   type StructuralOp,
 } from "../command-buffer.js";
+import { CMD_SET_CHILDREN } from "../generated/wire-constants.js";
 import {
   OpWriter,
   OF_VALUE,
@@ -68,9 +71,14 @@ import {
   type PluginOptions,
   unencodableContentError,
 } from "../visitor-shared.js";
-import { LazyChildResolver, markHandleMutated } from "../lazy-child-resolver.js";
+import {
+  LazyChildResolver,
+  markHandleMutated,
+  registerEpochCacheSlot,
+  type EpochCache,
+} from "../lazy-child-resolver.js";
 import { HastChildStub } from "./child-stub.js";
-import type { HastHandle } from "../handles.js";
+import type { AnyHandle, HastHandle } from "../handles.js";
 
 export type { HastHandle };
 
@@ -202,64 +210,29 @@ function hastReusedId(node: unknown): number | undefined {
   return typeof id === "number" ? id : undefined;
 }
 
-// Reused across replacements in a pass — see the note on `mdastWriter`.
-const hastWriter = new OpWriter();
-
-/** Compile a set-children payload: a root-wrapped child list, the shape
+/** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function compileHastChildrenToOpstream(children: unknown): Uint8Array | null {
-  if (!Array.isArray(children)) return null;
-  hastWriter.begin();
-  try {
-    hastWriter.open(NAME_TO_TYPE.root!);
+function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown): boolean {
+  if (!Array.isArray(children)) return false;
+  return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
+    buffer.open(HAST_ROOT);
     for (const c of children) {
-      if (!emitHastOp(hastWriter, c, false)) return null;
+      if (!emitHastOp(buffer, c, false)) return false;
     }
-    hastWriter.close();
-    return hastWriter.take();
-  } finally {
-    hastWriter.end();
-  }
+    buffer.close();
+    return true;
+  });
 }
 
-/** Encode `node` as the `op` structural command. HAST content is always a
- *  declarative node (no raw escape hatch), so it compiles to the op-stream or
- *  it's a hard error — the op-stream is the only structural encoding. The
- *  switch stays inline so the buffer calls are monomorphic (computed method
- *  names defeat inline caches on this warm path). */
+/** Encode `node` as the `op` structural command, emitting the op-stream
+ *  payload directly into the command buffer (no intermediate copy). HAST
+ *  content is always a declarative node (no raw escape hatch), so it
+ *  compiles or it's a hard error. */
 function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
-  const ops = compileHastToOpstream(node);
-  if (ops === null) throw unencodableContentError(node);
-  switch (op) {
-    case "replace":
-      return buffer.replaceOpstream(id, ops);
-    case "insertBefore":
-      return buffer.insertBeforeOpstream(id, ops);
-    case "insertAfter":
-      return buffer.insertAfterOpstream(id, ops);
-    case "prependChild":
-      return buffer.prependChildOpstream(id, ops);
-    case "appendChild":
-      return buffer.appendChildOpstream(id, ops);
-    case "wrapNode":
-      return buffer.wrapNodeOpstream(id, ops);
-  }
-}
-
-/**
- * Compile a declarative HAST replacement tree to the op-stream — the only
- * structural encoding. Reused nodes become `ref`s (transparent passthrough).
- * Returns null when the tree holds a type the replay can't reproduce
- * identically; the caller throws.
- */
-function compileHastToOpstream(root: unknown): Uint8Array | null {
-  hastWriter.begin();
-  try {
-    if (!emitHastOp(hastWriter, root, true)) return null;
-    return hastWriter.take();
-  } finally {
-    hastWriter.end();
-  }
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
+    emitHastOp(buffer, node, true),
+  );
+  if (!ok) throw unencodableContentError(node);
 }
 
 function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
@@ -411,9 +384,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
-      const ops = compileHastChildrenToOpstream(value);
-      if (!ops) throw unencodableContentError(value);
-      this.#commandBuffer.setChildrenOpstream(id, ops);
+      if (!emitHastChildrenCommand(this.#commandBuffer, id, value)) {
+        throw unencodableContentError(value);
+      }
       return;
     }
     if (key === "data") {
@@ -638,9 +611,9 @@ function decodeProperties(
 }
 
 /** Build the child-stub list for a matched node from the wire's `[child_ids]
- *  [child_types]` blocks — no arena snapshot. The seal check still applies:
- *  post-pass ids are stale, and a stub built from them could later splice the
- *  wrong node as a ref. */
+ *  [child_types]` blocks, no arena snapshot. Stale ids are caught at
+ *  materialization: the resolver's epoch check refuses a snapshot once the
+ *  arena has mutated or been dropped. */
 function readChildStubs(
   view: DataView,
   buf: Uint8Array,
@@ -649,7 +622,14 @@ function readChildStubs(
   count: number,
   resolver: HastLazyChildResolver,
 ): HastNode[] {
-  resolver.assertUnsealed();
+  // With a hot snapshot a stub's deferral buys nothing; real nodes skip its per-field getters.
+  if (resolver.hasHotSnapshot()) {
+    const nodes: HastNode[] = new Array(count);
+    for (let i = 0; i < count; i++) {
+      nodes[i] = resolver.materializeOne(view.getUint32(idsPos + i * 4, true));
+    }
+    return nodes;
+  }
   const stubs: HastNode[] = new Array(count);
   for (let i = 0; i < count; i++) {
     stubs[i] = new HastChildStub(
@@ -662,6 +642,13 @@ function readChildStubs(
 }
 
 type HastProperties = Record<string, string | number | boolean | string[]>;
+
+/** Per-walk wire state; one reference per element keeps constructor stores minimal. */
+interface WalkWire {
+  view: DataView;
+  buf: Uint8Array;
+  resolver: HastLazyChildResolver;
+}
 
 // Shared own-getter descriptors for WalkElement's lazy fields, populated in
 // its static block so the getters can read the private wire fields.
@@ -686,35 +673,29 @@ class WalkElement {
   declare children?: HastNode[];
 
   readonly #nodeId: number;
-  #view: DataView;
-  #buf: Uint8Array;
+  #wire: WalkWire;
   #propsPos: number;
   #childIdsPos: number;
   #childTypesPos: number;
   #childCount: number;
-  #resolver: HastLazyChildResolver;
 
   constructor(
     tagName: string,
     nodeId: number,
-    view: DataView,
-    buf: Uint8Array,
+    wire: WalkWire,
     propsPos: number,
     propCount: number,
     childIdsPos: number,
     childTypesPos: number,
     childCount: number,
-    resolver: HastLazyChildResolver,
   ) {
     this.tagName = tagName;
     this.#nodeId = nodeId;
-    this.#view = view;
-    this.#buf = buf;
+    this.#wire = wire;
     this.#propsPos = propsPos;
     this.#childIdsPos = childIdsPos;
     this.#childTypesPos = childTypesPos;
     this.#childCount = childCount;
-    this.#resolver = resolver;
     if (propCount === 0) {
       this.properties = {};
     } else {
@@ -737,7 +718,8 @@ class WalkElement {
       enumerable: true,
       configurable: true,
       get(this: WalkElement): HastProperties {
-        const val = decodeProperties(this.#view, this.#buf, this.#propsPos);
+        const w = this.#wire;
+        const val = decodeProperties(w.view, w.buf, this.#propsPos);
         Object.defineProperty(this, "properties", {
           value: val,
           writable: true,
@@ -751,13 +733,14 @@ class WalkElement {
       enumerable: true,
       configurable: true,
       get(this: WalkElement): HastNode[] {
+        const w = this.#wire;
         const val = readChildStubs(
-          this.#view,
-          this.#buf,
+          w.view,
+          w.buf,
           this.#childIdsPos,
           this.#childTypesPos,
           this.#childCount,
-          this.#resolver,
+          w.resolver,
         );
         Object.defineProperty(this, "children", {
           value: val,
@@ -774,11 +757,9 @@ class WalkElement {
 /** Read the tail of a matched element node (tag + properties).
  *  Common prelude (data/position/children) is already consumed by `readMatchedNode`. */
 function readElementFromBinary(
-  view: DataView,
-  buf: Uint8Array,
+  wire: WalkWire,
   offset: number,
   nodeId: number,
-  resolver: HastLazyChildResolver,
   position: Position | undefined,
   childIdsPos: number,
   childTypesPos: number,
@@ -788,23 +769,21 @@ function readElementFromBinary(
   let pos = offset;
 
   // Eager: tagName (almost always accessed by visitors)
-  const tagLen = view.getUint16(pos, true);
+  const tagLen = wire.view.getUint16(pos, true);
   pos += 2;
-  const tagName = rstr(buf, pos, tagLen);
+  const tagName = rstr(wire.buf, pos, tagLen);
   pos += tagLen;
 
-  const propCount = view.getUint16(pos, true);
+  const propCount = wire.view.getUint16(pos, true);
   const node = new WalkElement(
     tagName,
     nodeId,
-    view,
-    buf,
+    wire,
     pos,
     propCount,
     childIdsPos,
     childTypesPos,
     childCount,
-    resolver,
   );
   if (position !== undefined) node.position = position;
   if (data !== null) node.data = data;
@@ -896,13 +875,12 @@ function readMdxJsxFromBinary(
 }
 
 function readMatchedNode(
-  view: DataView,
-  buf: Uint8Array,
+  wire: WalkWire,
   offset: number,
   nodeId: number,
   nodeType: number,
-  resolver: HastLazyChildResolver,
 ): HastNode {
+  const { view, buf, resolver } = wire;
   let pos = offset;
 
   // Shared prelude (matches serialize_hast_node_inline / serialize_mdast_node_inline):
@@ -936,11 +914,9 @@ function readMatchedNode(
   // Dispatch to type-specific tail (pos now sits at the type-specific section)
   if (nodeType === HAST_ELEMENT) {
     return readElementFromBinary(
-      view,
-      buf,
+      wire,
       pos,
       nodeId,
-      resolver,
       position,
       childIdsPos,
       childTypesPos,
@@ -980,13 +956,19 @@ function readMatchedNode(
   return node;
 }
 
+const HAST_EPOCH_CACHE = registerEpochCacheSlot(new WeakMap<AnyHandle, EpochCache<HastReader>>());
+
 class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
+  protected override cacheSlot() {
+    return HAST_EPOCH_CACHE;
+  }
+
   protected override createReader(wire: Uint8Array): HastReader {
     return new HastReader(wire);
   }
 
   protected override materializeNode(reader: HastReader, nodeId: number): HastNode {
-    return materializeHastNode(reader, nodeId);
+    return materializeHastNode(reader, nodeId, true);
   }
 
   protected override readParentId(reader: HastReader, nodeId: number): number {
@@ -1087,6 +1069,7 @@ function dispatchMatches(
 ): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = matchView.getUint32(0, true);
+  const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
   let deferred:
     | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
     | null = null;
@@ -1098,7 +1081,7 @@ function dispatchMatches(
     const dataOffset = matchView.getUint32(indexBase + 6, true);
 
     const sub = subs[subIndex]!;
-    const node = readMatchedNode(matchView, matchBuf, dataOffset, nodeId, sub.nodeType, resolver);
+    const node = readMatchedNode(wire, dataOffset, nodeId, sub.nodeType);
     const result = sub.visitFn(node, ctx);
     deferred = handleVisitResult(result, nodeId, returnBuffer, deferred, node);
   }
@@ -1171,14 +1154,10 @@ export function visitHastHandleCollect(
           emitHastTree(returnBuffer, "replace", nodeId, result);
         }
       }
-      // Mutations land next, renumbering the arena: snapshots taken after
-      // this point would resolve match-time child ids against wrong nodes.
-      resolver.seal();
       return collectCommands(returnBuffer, ctx);
     });
   }
 
-  resolver.seal();
   return collectCommands(returnBuffer, ctx);
 }
 

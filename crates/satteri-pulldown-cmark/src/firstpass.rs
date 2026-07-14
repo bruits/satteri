@@ -25,7 +25,8 @@ pub(crate) fn run_first_pass(
     text: &str,
     options: Options,
 ) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
-    let start_capacity = max(128, text.len() / 32);
+    // Measured: real-world Markdown yields ~1 tree item per 10 source bytes.
+    let start_capacity = max(128, text.len() / 10);
     let lookup_table = &create_lut(&options);
     let first_pass = FirstPass {
         text,
@@ -4531,10 +4532,8 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize, has_math: bool) -> boo
     if prev_line_end > 0 && bytes[prev_line_end] == b'\n' && bytes[prev_line_end - 1] == b'\r' {
         prev_line_end -= 1;
     }
-    let mut prev_line_start = prev_line_end;
-    while prev_line_start > 0 && !matches!(bytes[prev_line_start - 1], b'\n' | b'\r') {
-        prev_line_start -= 1;
-    }
+    let prev_line_start =
+        memchr::memrchr2(b'\n', b'\r', &bytes[..prev_line_end]).map_or(0, |nl| nl + 1);
     let line = &bytes[prev_line_start..prev_line_end];
     // Lines without `<` (or `\`) can't open a JSX tag — skip them outright.
     // For lines that do contain `<`, memchr to each candidate; a per-byte
@@ -4647,10 +4646,7 @@ fn is_inside_gfm_autolink_url(bytes: &[u8], pos: usize) -> bool {
     if pos == 0 || pos >= bytes.len() {
         return false;
     }
-    let mut line_start = pos;
-    while line_start > 0 && !matches!(bytes[line_start - 1], b'\n' | b'\r') {
-        line_start -= 1;
-    }
+    let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos]).map_or(0, |nl| nl + 1);
     // Track unbalanced `[` (and `![`) the way micromark does: if there's
     // one open ahead of the URL, the literalAutolink construct doesn't fire.
     let mut bracket_depth: i32 = 0;
@@ -4981,10 +4977,7 @@ fn try_emit_gfm_autolink<'a>(
 /// manifests in practice.
 fn is_inside_angle_construct(text: &str, pos: usize) -> bool {
     let bytes = text.as_bytes();
-    let line_start = bytes[..pos]
-        .iter()
-        .rposition(|&b| b == b'\n' || b == b'\r')
-        .map_or(0, |nl| nl + 1);
+    let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos]).map_or(0, |nl| nl + 1);
     // Fast reject: a single-line `<…>` construct spanning `pos` must open at a
     // `<` at or before `pos` on this line. With none, there's nothing to defer
     // to. memchr is much cheaper than the construct-resolving walk below, and
@@ -5277,10 +5270,8 @@ fn has_unbalanced_bracket_from(bytes: &[u8], floor: usize, pos: usize) -> bool {
         while i > floor {
             i -= 1;
             if matches!(bytes[i], b'\n' | b'\r') {
-                let mut line_start = i;
-                while line_start > floor && !matches!(bytes[line_start - 1], b'\n' | b'\r') {
-                    line_start -= 1;
-                }
+                let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[floor..i])
+                    .map_or(floor, |nl| floor + nl + 1);
                 let line_is_blank = bytes[line_start..i]
                     .iter()
                     .all(|&b| matches!(b, b' ' | b'\t'));

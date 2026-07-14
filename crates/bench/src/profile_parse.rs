@@ -44,6 +44,14 @@ fn main() {
                 satteri_mdxjs::compile(src, &opts, satteri_pulldown_cmark::MDX_OPTIONS).unwrap();
             std::hint::black_box(out);
         }),
+        "apply" => (md_src, |src, opts| {
+            let (mdast, _) = satteri_pulldown_cmark::parse(src, opts);
+            let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
+            let patches = satteri_bench::link_replace_patches(&hast);
+            let mut applied = hast;
+            satteri_ast::patch::apply_patches_in_place(&mut applied, &patches).unwrap();
+            std::hint::black_box(applied);
+        }),
         other => panic!("unknown workload: {other}"),
     };
     let opts = if workload.starts_with("mdx") {

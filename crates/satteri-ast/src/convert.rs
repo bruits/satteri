@@ -506,8 +506,10 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     // their IDs come later even though they appear earlier in the
     // document. Collect Definition node ids first, then sort by source
     // position before inserting.
+    // Root walk, not an id scan: in-place applies leave detached garbage that must not resolve refs
     let mut def_nodes: Vec<u32> = Vec::new();
-    for id in 0..view.len() as u32 {
+    let mut stack: Vec<u32> = if view.is_empty() { Vec::new() } else { vec![0] };
+    while let Some(id) = stack.pop() {
         let node = view.get_node(id);
         let data = view.get_type_data(id);
         match MdastNodeType::from_u8(node.node_type) {
@@ -521,6 +523,10 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
             }
             _ => {}
         }
+        // Push children in reverse so they pop in document order: `or_insert`
+        // below is first-wins, and duplicate footnote definitions must resolve
+        // to the *first* one in the document (matching remark-gfm).
+        stack.extend(view.get_children(id).iter().rev().copied());
     }
     def_nodes.sort_by_key(|&id| view.get_node(id).start_offset);
     for id in &def_nodes {

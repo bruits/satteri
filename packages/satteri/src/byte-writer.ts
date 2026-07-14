@@ -108,10 +108,17 @@ export class ByteWriter {
     const lenPos = this.n;
     this.n += 4;
     const written = encoder.encodeInto(s, this.buf.subarray(this.n)).written;
-    this.buf[lenPos] = written & 255;
-    this.buf[lenPos + 1] = (written >> 8) & 255;
-    this.buf[lenPos + 2] = (written >> 16) & 255;
-    this.buf[lenPos + 3] = (written >>> 24) & 255;
+    this.patchU32(lenPos, written);
     this.n += written;
+  }
+
+  /** Backpatch a u32 (LE) at `pos` in the already-written region; the cursor
+   *  is left untouched. */
+  protected patchU32(pos: number, v: number): void {
+    const buf = this.buf;
+    buf[pos] = v & 255;
+    buf[pos + 1] = (v >> 8) & 255;
+    buf[pos + 2] = (v >> 16) & 255;
+    buf[pos + 3] = (v >>> 24) & 255;
   }
 }

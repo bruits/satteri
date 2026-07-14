@@ -5,8 +5,10 @@ import {
   releaseCommandBuffer,
   classifyReturn,
   CommandBuffer,
+  STRUCTURAL_CMD,
   type StructuralOp,
 } from "../command-buffer.js";
+import { CMD_SET_CHILDREN } from "../generated/wire-constants.js";
 import { ru32, rstr, readPosition } from "../wire-read.js";
 import { decodeMdastTypeData } from "./generated/layout.js";
 import {
@@ -54,9 +56,13 @@ import {
   type PluginOptions,
   unencodableContentError,
 } from "../visitor-shared.js";
-import { LazyChildResolver } from "../lazy-child-resolver.js";
+import {
+  LazyChildResolver,
+  registerEpochCacheSlot,
+  type EpochCache,
+} from "../lazy-child-resolver.js";
 import { MdastChildStub } from "./child-stub.js";
-import type { MdastHandle } from "../handles.js";
+import type { AnyHandle, MdastHandle } from "../handles.js";
 import type {
   Blockquote,
   Break,
@@ -250,9 +256,9 @@ export class MdastVisitorContext {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
       const id = requireNid(node as MdastNode, "setProperty");
-      const ops = compileMdastChildrenToOpstream(value);
-      if (!ops) throw unencodableContentError(value);
-      this.#commandBuffer.setChildrenOpstream(id, ops);
+      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value)) {
+        throw unencodableContentError(value);
+      }
       return;
     }
     if (key === "data") {
@@ -447,13 +453,19 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
   return { subs, rustSubs };
 }
 
+const MDAST_EPOCH_CACHE = registerEpochCacheSlot(new WeakMap<AnyHandle, EpochCache<MdastReader>>());
+
 class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
+  protected override cacheSlot() {
+    return MDAST_EPOCH_CACHE;
+  }
+
   protected override createReader(wire: Uint8Array): MdastReader {
     return new MdastReader(wire);
   }
 
   protected override materializeNode(reader: MdastReader, nodeId: number): MdastNode {
-    return materializeNode(reader, nodeId);
+    return materializeNode(reader, nodeId, true);
   }
 
   protected override readParentId(reader: MdastReader, nodeId: number): number {
@@ -466,9 +478,9 @@ class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
 }
 
 /** Build the child-stub list for a matched node from the wire's `[child_ids]
- *  [child_types]` blocks — no arena snapshot. The seal check still applies:
- *  post-pass ids are stale, and a stub built from them could later splice the
- *  wrong node as a ref. */
+ *  [child_types]` blocks, no arena snapshot. Stale ids are caught at
+ *  materialization: the resolver's epoch check refuses a snapshot once the
+ *  arena has mutated or been dropped. */
 function readMdastChildStubs(
   view: DataView,
   buf: Uint8Array,
@@ -477,7 +489,14 @@ function readMdastChildStubs(
   count: number,
   resolver: MdastLazyChildResolver,
 ): MdastNode[] {
-  resolver.assertUnsealed();
+  // With a hot snapshot a stub's deferral buys nothing; real nodes skip its per-field getters.
+  if (resolver.hasHotSnapshot()) {
+    const nodes: MdastNode[] = new Array(count);
+    for (let i = 0; i < count; i++) {
+      nodes[i] = resolver.materializeOne(ru32(view, idsPos + i * 4));
+    }
+    return nodes;
+  }
   const stubs: MdastNode[] = new Array(count);
   for (let i = 0; i < count; i++) {
     stubs[i] = new MdastChildStub(
@@ -604,6 +623,8 @@ function readMdastMatchedNode(
   return node as unknown as MdastNode;
 }
 
+const MDAST_ROOT = NAME_TO_TYPE.root!;
+
 /** The arena id of a node if it is an existing (materialized) node, else
  *  undefined for a freshly-built one. */
 function reusedId(node: unknown): number | undefined {
@@ -612,43 +633,18 @@ function reusedId(node: unknown): number | undefined {
   return typeof id === "number" ? id : undefined;
 }
 
-// Reused across every replacement in a pass: compile is synchronous and its
-// result is copied into the command buffer before the next call, so a single
-// writer is safe and avoids a 512-byte allocation per built node.
-const mdastWriter = new OpWriter();
-
-/**
- * Compile a declarative MDAST replacement tree to the op-stream — the only
- * structural encoding. Reused nodes (those still carrying an arena id) become
- * `ref`s so the rebuild splices the original back in place. Returns null when
- * the replay can't reproduce the tree identically (unsupported node type or
- * out-of-range numeric field); the caller turns that into a hard error.
- */
-function compileMdastToOpstream(root: unknown, forReplace = false): Uint8Array | null {
-  mdastWriter.begin();
-  try {
-    if (!emitMdastOp(mdastWriter, root, true, forReplace)) return null;
-    return mdastWriter.take();
-  } finally {
-    mdastWriter.end();
-  }
-}
-
-/** Compile a set-children payload: a root-wrapped child list, the shape
+/** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function compileMdastChildrenToOpstream(children: unknown): Uint8Array | null {
-  if (!Array.isArray(children)) return null;
-  mdastWriter.begin();
-  try {
-    mdastWriter.open(NAME_TO_TYPE.root!);
+function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown): boolean {
+  if (!Array.isArray(children)) return false;
+  return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
+    buffer.open(MDAST_ROOT);
     for (const c of children) {
-      if (!emitMdastOp(mdastWriter, c, false, false)) return null;
+      if (!emitMdastOp(buffer, c, false, false)) return false;
     }
-    mdastWriter.close();
-    return mdastWriter.take();
-  } finally {
-    mdastWriter.end();
-  }
+    buffer.close();
+    return true;
+  });
 }
 
 function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean): boolean {
@@ -763,22 +759,10 @@ function emitMdastTree(
         return buffer.wrapNode(id, content);
     }
   }
-  const ops = compileMdastToOpstream(content, forReplace);
-  if (ops === null) throw unencodableContentError(content);
-  switch (op) {
-    case "replace":
-      return buffer.replaceOpstream(id, ops);
-    case "insertBefore":
-      return buffer.insertBeforeOpstream(id, ops);
-    case "insertAfter":
-      return buffer.insertAfterOpstream(id, ops);
-    case "prependChild":
-      return buffer.prependChildOpstream(id, ops);
-    case "appendChild":
-      return buffer.appendChildOpstream(id, ops);
-    case "wrapNode":
-      return buffer.wrapNodeOpstream(id, ops);
-  }
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
+    emitMdastOp(buffer, content, true, forReplace),
+  );
+  if (!ok) throw unencodableContentError(content);
 }
 
 /** MDAST node types whose `value` Rust can set in place via setProperty. A
@@ -907,15 +891,10 @@ export function visitMdastHandle(
       for (const { nodeId, result, originalNode } of results) {
         applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
       }
-      // End of the pass — the caller applies the returned command buffer next,
-      // renumbering the arena, so later snapshots would resolve match-time
-      // child ids against wrong nodes. This is the last point we control.
-      resolver.seal();
       return finalizeMdastVisit(handle, context, returnBuffer);
     });
   }
 
-  resolver.seal();
   return finalizeMdastVisit(handle, context, returnBuffer);
 }
 

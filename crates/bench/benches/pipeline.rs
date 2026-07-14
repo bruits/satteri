@@ -43,6 +43,32 @@ fn main() {
     divan::main();
 }
 
+/// HAST arena plus per-`<a>` keep-children Replace patches (link-transform shape).
+fn hast_with_link_replaces() -> (
+    satteri_arena::Arena<satteri_arena::Hast>,
+    Vec<satteri_ast::patch::Patch<satteri_arena::Hast>>,
+) {
+    let (mdast, _) =
+        satteri_pulldown_cmark::parse(MARKDOWN, satteri_pulldown_cmark::DEFAULT_OPTIONS);
+    let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
+    let patches = satteri_bench::link_replace_patches(&hast);
+    assert!(patches.len() > 10, "fixture should contain many links");
+    (hast, patches)
+}
+
+/// Structural command application: one keep-children Replace per `<a>`.
+#[divan::bench]
+fn apply_link_replaces(bencher: divan::Bencher) {
+    let (hast, patches) = hast_with_link_replaces();
+    bencher
+        .with_inputs(|| hast.clone())
+        .bench_values(|mut arena| {
+            satteri_ast::patch::apply_patches_in_place(&mut arena, divan::black_box(&patches))
+                .unwrap();
+            arena
+        });
+}
+
 /// Parse Markdown source into an Arena.
 #[divan::bench]
 fn parse_markdown(bencher: divan::Bencher) {

@@ -138,6 +138,11 @@ export class MdastReader {
     return this.#view.getUint8(nodesOffset + nodeId * nodeStructSize + FIELD.node_type);
   }
 
+  getPosition(nodeId: number): ReturnType<typeof readPosition> {
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    return readPosition(this.#view, base + FIELD.start_offset);
+  }
+
   /** Fast path: read only the parent id for a node (0xffffffff at the root). */
   getParentId(nodeId: number): number {
     const { nodesOffset, nodeStructSize } = this.#header;

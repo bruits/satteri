@@ -4,7 +4,6 @@ import {
   HAST_ELEMENT,
   HAST_TEXT,
   HAST_COMMENT,
-  HAST_DOCTYPE,
   HAST_RAW,
   HAST_MDX_JSX_ELEMENT,
   HAST_MDX_JSX_TEXT_ELEMENT,
@@ -16,10 +15,18 @@ import {
 import type { Root } from "hast";
 import type { HastNode } from "../types.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
-import { lazyProp, lazyGroup } from "../lazy-props.js";
 import { restorePhantomSpaces } from "../phantom.js";
+import { createMaterializer } from "../materializer-cache.js";
 
 export type { HastNode };
+
+/** Container node types (the ones that carry `children`); everything else is a leaf. */
+export const HAST_CONTAINER_TYPES: ReadonlySet<number> = new Set([
+  HAST_ROOT,
+  HAST_ELEMENT,
+  HAST_MDX_JSX_ELEMENT,
+  HAST_MDX_JSX_TEXT_ELEMENT,
+]);
 
 function propsToRecord(
   props: HastProperty[],
@@ -32,145 +39,52 @@ function propsToRecord(
 }
 
 /**
- * Materialize a single HAST node from a binary buffer as a lazy JS object.
+ * Materialize a single HAST node; scalars eager, `children` lazy, memoized per
+ * `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
+ * cannot corrupt the shared cache.
  */
-export function materializeHastNode(reader: HastReader, nodeId: number): HastNode {
-  const nodeType = reader.getNodeType(nodeId);
-  const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
-
-  const node = { type: typeName } as HastNode;
-  // Position decodes to three objects; defer it — passthrough children (e.g.
-  // replaceNode keeping `node.children`) never read it.
-  if (reader.hasPosition(nodeId)) {
-    Object.defineProperty(
-      node,
-      "position",
-      lazyProp("position", () => reader.getPosition(nodeId)),
-    );
-  }
-
-  // _nodeId: non-enumerable internal reference
-  Object.defineProperty(node, "_nodeId", {
-    value: nodeId,
-    writable: false,
-    configurable: true,
-    enumerable: false,
-  });
-
-  switch (nodeType) {
-    case HAST_ROOT:
-      // children: lazy getter
-      Object.defineProperty(node, "children", {
-        get(this: HastNode) {
-          const childIds = reader.getChildIds(nodeId);
-          const children = childIds.map((id) => materializeHastNode(reader, id));
-          Object.defineProperty(this, "children", {
-            value: children,
-            writable: true,
-            configurable: true,
-            enumerable: true,
-          });
-          return children;
-        },
-        configurable: true,
-        enumerable: true,
-      });
-      break;
-
-    case HAST_ELEMENT: {
-      // tagName and properties: lazy, resolved together from one reader call
-      lazyGroup(node, ["tagName", "properties"], () => {
+export const materializeHastNode = createMaterializer<HastReader, HastNode>({
+  label: "materializeHastNode",
+  typeNames: TYPE_NAMES,
+  hasChildren: (nodeType) => HAST_CONTAINER_TYPES.has(nodeType),
+  populate(node, reader, nodeId, nodeType) {
+    switch (nodeType) {
+      case HAST_ELEMENT: {
         const { tagName, properties } = reader.getElementData(nodeId);
-        return { tagName, properties: propsToRecord(properties) };
-      });
-      // children: lazy
-      Object.defineProperty(node, "children", {
-        get(this: HastNode) {
-          const childIds = reader.getChildIds(nodeId);
-          const children = childIds.map((id) => materializeHastNode(reader, id));
-          Object.defineProperty(this, "children", {
-            value: children,
-            writable: true,
-            configurable: true,
-            enumerable: true,
-          });
-          return children;
-        },
-        configurable: true,
-        enumerable: true,
-      });
-      break;
-    }
-
-    case HAST_TEXT:
-    case HAST_COMMENT:
-    case HAST_RAW:
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => reader.getTextValue(nodeId)),
-      });
-      break;
-
-    case HAST_DOCTYPE:
-      // No extra properties
-      break;
-
-    case HAST_MDX_JSX_ELEMENT:
-    case HAST_MDX_JSX_TEXT_ELEMENT:
-      lazyGroup(node, ["name", "attributes"], () => reader.getMdxJsxElementData(nodeId));
-      Object.defineProperty(node, "children", {
-        get(this: HastNode) {
-          const childIds = reader.getChildIds(nodeId);
-          const children = childIds.map((id) => materializeHastNode(reader, id));
-          Object.defineProperty(this, "children", {
-            value: children,
-            writable: true,
-            configurable: true,
-            enumerable: true,
-          });
-          return children;
-        },
-        configurable: true,
-        enumerable: true,
-      });
-      break;
-
-    case HAST_MDX_FLOW_EXPRESSION:
-    case HAST_MDX_TEXT_EXPRESSION:
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => restorePhantomSpaces(reader.getTextValue(nodeId))),
-      });
-      break;
-
-    case HAST_MDX_ESM:
-      Object.defineProperties(node, {
-        value: lazyProp("value", () => reader.getTextValue(nodeId)),
-      });
-      break;
-  }
-
-  // Plugins can set `data` on any node type, so rehydrate generically
-  // (see website/content/docs/divergences.md for the code-block case).
-  const rawData = reader.getNodeData(nodeId);
-  if (rawData !== null) {
-    try {
-      const parsed = JSON.parse(rawData) as Record<string, unknown>;
-      if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
-        Object.defineProperty(node, "data", {
-          value: parsed,
-          writable: true,
-          configurable: true,
-          enumerable: true,
-        });
+        (node as { tagName: string }).tagName = tagName;
+        (node as { properties: unknown }).properties = propsToRecord(properties);
+        break;
       }
-    } catch (err) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(`materializeHastNode: malformed node_data for nodeId=${nodeId}`, err);
-      }
-    }
-  }
 
-  return node;
-}
+      case HAST_TEXT:
+      case HAST_COMMENT:
+      case HAST_RAW:
+        (node as { value: string }).value = reader.getTextValue(nodeId);
+        break;
+
+      case HAST_MDX_JSX_ELEMENT:
+      case HAST_MDX_JSX_TEXT_ELEMENT: {
+        const { name, attributes } = reader.getMdxJsxElementData(nodeId);
+        (node as { name: string | null }).name = name;
+        (node as { attributes: unknown }).attributes = attributes;
+        break;
+      }
+
+      case HAST_MDX_FLOW_EXPRESSION:
+      case HAST_MDX_TEXT_EXPRESSION:
+        (node as { value: string }).value = restorePhantomSpaces(reader.getTextValue(nodeId));
+        break;
+
+      case HAST_MDX_ESM:
+        (node as { value: string }).value = reader.getTextValue(nodeId);
+        break;
+
+      // HAST_ROOT / HAST_DOCTYPE: no extra properties
+      default:
+        break;
+    }
+  },
+});
 
 /**
  * Materialize the full HAST tree from root (nodeId=0).

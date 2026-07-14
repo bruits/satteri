@@ -2254,10 +2254,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 /// tab stops, matching micromark.
 pub(crate) fn column_at(bytes: &[u8], pos: usize) -> usize {
     const TAB_WIDTH: usize = 4;
-    let mut line_start = pos;
-    while line_start > 0 && bytes[line_start - 1] != b'\n' && bytes[line_start - 1] != b'\r' {
-        line_start -= 1;
-    }
+    let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos]).map_or(0, |nl| nl + 1);
     let mut col: usize = 1;
     let mut i = line_start;
     while i < pos {

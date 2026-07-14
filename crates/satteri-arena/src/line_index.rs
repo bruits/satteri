@@ -104,6 +104,21 @@ impl<'a> LineIndex<'a> {
         LineIndexCursor {
             index: self,
             last_line_idx: 0,
+            last_line_col: (u32::MAX, (0, 0)),
+        }
+    }
+
+    /// Code-point offset for a 1-based `(line, col)` pair from this index;
+    /// columns already count code points, so no source rescan is needed.
+    pub fn cp_offset_at(&self, line: u32, col: u32) -> u32 {
+        if line == 0 {
+            return 0;
+        }
+        let idx = (line - 1) as usize;
+        match self.line_meta.get(idx) {
+            Some(meta) => meta.cp_offset + (col - 1),
+            // No per-line meta means byte offsets equal code-point offsets.
+            None => self.line_offsets.get(idx).copied().unwrap_or(0) + (col - 1),
         }
     }
 }
@@ -115,6 +130,8 @@ impl<'a> LineIndex<'a> {
 pub struct LineIndexCursor<'idx, 'src> {
     index: &'idx LineIndex<'src>,
     last_line_idx: usize,
+    /// One-entry memo; a sibling's end offset is usually the next one's start.
+    last_line_col: (u32, (u32, u32)),
 }
 
 impl LineIndexCursor<'_, '_> {
@@ -123,13 +140,17 @@ impl LineIndexCursor<'_, '_> {
         if self.index.disabled {
             return (0, 0);
         }
+        if offset == self.last_line_col.0 {
+            return self.last_line_col.1;
+        }
         let (idx, line_start) = self.find_line_idx(offset);
         let col = if self.index.all_ascii || self.index.line_meta[idx].is_ascii {
             offset - line_start + 1
         } else {
             code_point_count_bytes(&self.index.source[line_start as usize..offset as usize]) + 1
         };
-        (idx as u32 + 1, col)
+        self.last_line_col = (offset, (idx as u32 + 1, col));
+        self.last_line_col.1
     }
 
     /// Convert a byte offset into the source to a code-point offset. Used
@@ -160,13 +181,27 @@ impl LineIndexCursor<'_, '_> {
         let offsets = &self.index.line_offsets;
         let len = offsets.len();
         let mut idx = self.last_line_idx;
+        // Nearby offsets are the common case; far jumps binary-search instead.
+        const LINEAR_STEPS: usize = 4;
         if offset >= offsets[idx] {
+            let mut steps = 0;
             while idx + 1 < len && offsets[idx + 1] <= offset {
                 idx += 1;
+                steps += 1;
+                if steps == LINEAR_STEPS {
+                    idx += offsets[idx + 1..].partition_point(|&o| o <= offset);
+                    break;
+                }
             }
         } else {
+            let mut steps = 0;
             while idx > 0 && offsets[idx] > offset {
                 idx -= 1;
+                steps += 1;
+                if steps == LINEAR_STEPS {
+                    idx = offsets[..idx + 1].partition_point(|&o| o <= offset) - 1;
+                    break;
+                }
             }
         }
         self.last_line_idx = idx;

@@ -72,6 +72,15 @@ pub fn parse_no_positions_into(
     parse_inner(source, options, false, Some(reuse))
 }
 
+/// Same as [`parse`] but recycles a caller-pooled arena; see [`parse_no_positions_into`].
+pub fn parse_into(
+    source: &str,
+    options: Options,
+    reuse: Arena<Mdast>,
+) -> (Arena<Mdast>, Vec<(usize, String)>) {
+    parse_inner(source, options, true, Some(reuse))
+}
+
 fn parse_inner(
     source: &str,
     options: Options,
@@ -102,9 +111,9 @@ fn parse_inner(
     };
     let mut cursor = line_index.cursor();
 
-    // Pre-allocate based on source size heuristics.
-    let estimated_nodes = source.len() / 18 + 16;
-    let source_extra = source.len() / 2;
+    // Measured: ~1 node/16 bytes, ~11 type-data bytes/node, pool up to ~2.5x source.
+    let estimated_nodes = source.len() / 16 + 16;
+    let source_extra = source.len() * 2;
     let arena = if let Some(mut a) = reuse {
         // Recycle: clear all per-document state but keep the already-grown
         // `Vec` / `String` allocations. For tiny inputs the saved `malloc`s
@@ -116,7 +125,7 @@ fn parse_inner(
         a.source_len = source.len() as u32;
         a.nodes.reserve(estimated_nodes);
         a.children.reserve(estimated_nodes);
-        a.type_data.reserve(estimated_nodes * 9);
+        a.type_data.reserve(estimated_nodes * 12);
         a
     } else {
         let mut source_buf = String::with_capacity(source.len() + source_extra);
@@ -125,7 +134,7 @@ fn parse_inner(
             source_buf,
             estimated_nodes,
             estimated_nodes,
-            estimated_nodes * 9,
+            estimated_nodes * 12,
         )
     };
     let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::from_arena(arena);
@@ -1418,9 +1427,8 @@ fn parse_inner(
                                 let prev_data = builder.arena_ref().get_type_data(pid);
                                 if prev_data.len() >= 8 {
                                     let prev_sr = StringRef::from_bytes(prev_data);
-                                    let prev_text = builder.arena_ref().get_str(prev_sr);
-                                    let combined = [prev_text, text_value].concat();
-                                    let new_sr = builder.alloc_string(&combined);
+                                    let new_sr =
+                                        builder.arena_mut().append_string(prev_sr, text_value);
                                     let pn = builder.arena_ref().get_node(pid);
                                     builder.update_leaf_full(
                                         pid,
@@ -1581,9 +1589,8 @@ fn parse_inner(
                                 let prev_data = builder.arena_ref().get_type_data(pid);
                                 if prev_data.len() >= 8 {
                                     let prev_sr = StringRef::from_bytes(prev_data);
-                                    let prev_text = builder.arena_ref().get_str(prev_sr);
-                                    let combined = [prev_text, break_text].concat();
-                                    let new_sr = builder.alloc_string(&combined);
+                                    let new_sr =
+                                        builder.arena_mut().append_string(prev_sr, break_text);
                                     let pn = builder.arena_ref().get_node(pid);
                                     builder.update_leaf_full(
                                         pid,
@@ -1792,9 +1799,8 @@ fn parse_inner(
                                 let prev_data = builder.arena_ref().get_type_data(pid);
                                 if prev_data.len() >= 8 {
                                     let prev_sr = StringRef::from_bytes(prev_data);
-                                    let prev_text = builder.arena_ref().get_str(prev_sr);
-                                    let combined = [prev_text, text_value].concat();
-                                    let new_sr = builder.alloc_string(&combined);
+                                    let new_sr =
+                                        builder.arena_mut().append_string(prev_sr, text_value);
                                     let pn = builder.arena_ref().get_node(pid);
                                     builder.update_leaf_full(
                                         pid,
@@ -1930,8 +1936,8 @@ fn parse_inner(
                 (0u32, 0u32)
             } else {
                 (
-                    cursor.byte_to_cp_offset(node.start_offset),
-                    cursor.byte_to_cp_offset(node.end_offset),
+                    line_index.cp_offset_at(node.start_line, node.start_column),
+                    line_index.cp_offset_at(node.end_line, node.end_column),
                 )
             };
             cp_offsets.push(pair);

@@ -78,6 +78,12 @@ export declare function convertMdastToHastHandle(handle: MdastHandle, convertOpt
 export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
 /**
+ * Parse + frontmatter + HAST conversion in one crossing (HAST-plugin path
+ * head). Returns a `[handle, frontmatter]` pair.
+ */
+export declare function createHastHandleWithFrontmatter(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
+
+/**
  * Parse markdown source into an MDAST arena handle.
  *
  * `track_positions` (default `true`) controls whether `position` is recorded
@@ -89,12 +95,15 @@ export declare function createMdastHandle(source: string, features?: JsFeatures 
 /** Parse MDX source and convert to HAST. Returns an opaque handle. */
 export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
+/** MDX variant of [`create_hast_handle_with_frontmatter`]. */
+export declare function createMdxHastHandleWithFrontmatter(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
+
 /** Parse MDX source into an MDAST arena handle. */
 export declare function createMdxMdastHandle(source: string, features?: JsFeatures | undefined | null, trackPositions?: boolean | undefined | null): MdastHandle
 
 /**
- * Release a handle's arena memory. The handle becomes empty but remains
- * valid (subsequent calls are no-ops or return empty results).
+ * Empty a handle's arena into the thread-local pool; the handle stays valid
+ * (subsequent calls are no-ops or return empty results).
  */
 export declare function dropHandle(handle: AnyHandle): void
 
