@@ -637,28 +637,14 @@ function reusedId(node: unknown): number | undefined {
  *  `Patch::SetChildren` splices in. Reused children become refs. */
 function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown): boolean {
   if (!Array.isArray(children)) return false;
-  const start = buffer.length;
-  const lenPos = buffer.beginOpstream(CMD_SET_CHILDREN, id);
-  // ok starts false so a throwing child getter still hits the abort in finally
-  let ok = false;
-  try {
+  return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(MDAST_ROOT);
-    let encoded = true;
     for (const c of children) {
-      if (!emitMdastOp(buffer, c, false, false)) {
-        encoded = false;
-        break;
-      }
+      if (!emitMdastOp(buffer, c, false, false)) return false;
     }
-    if (encoded) {
-      buffer.close();
-      ok = true;
-    }
-  } finally {
-    if (!ok) buffer.abortOpstream(start);
-  }
-  if (ok) buffer.endOpstream(lenPos);
-  return ok;
+    buffer.close();
+    return true;
+  });
 }
 
 function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean): boolean {
@@ -773,16 +759,10 @@ function emitMdastTree(
         return buffer.wrapNode(id, content);
     }
   }
-  const start = buffer.length;
-  const lenPos = buffer.beginOpstream(STRUCTURAL_CMD[op], id);
-  let ok = false;
-  try {
-    ok = emitMdastOp(buffer, content, true, forReplace);
-  } finally {
-    if (!ok) buffer.abortOpstream(start);
-  }
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
+    emitMdastOp(buffer, content, true, forReplace),
+  );
   if (!ok) throw unencodableContentError(content);
-  buffer.endOpstream(lenPos);
 }
 
 /** MDAST node types whose `value` Rust can set in place via setProperty. A

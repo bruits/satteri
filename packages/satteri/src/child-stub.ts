@@ -35,11 +35,13 @@ function fieldGetter(key: string): (this: StubHost) => unknown {
         REAL_NODES.set(this, real);
       }
       const value = real[key];
+      // Read-only like the deep-frozen materialized node this forwards to.
+      // Nothing redefines stub fields after this, so non-configurable is safe.
       Object.defineProperty(this, key, {
         value,
-        writable: true,
+        writable: false,
         enumerable: true,
-        configurable: true,
+        configurable: false,
       });
       return value;
     };

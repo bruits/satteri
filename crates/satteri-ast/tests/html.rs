@@ -327,3 +327,18 @@ fn footnote_numbers_follow_source_order() {
         )
     );
 }
+
+#[test]
+fn footnote_duplicate_definitions_resolve_first_wins() {
+    // remark-gfm resolves the reference to the *first* definition in
+    // document order.
+    let out = html("x[^a]\n\n[^a]: first\n\n[^a]: second\n");
+    assert!(
+        out.contains("first"),
+        "expected first definition's body: {out}"
+    );
+    assert!(
+        !out.contains("second"),
+        "duplicate definition must not win: {out}"
+    );
+}

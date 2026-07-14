@@ -466,6 +466,72 @@ pub struct JsSubscription {
     pub tag_filter: Vec<String>,
 }
 
+/// Shared head of the handle-creation pipelines: acquire a pooled MDAST arena,
+/// parse `source` into it (with or without position tracking), surface the
+/// first MDX parse error (MDX callers only — plain-markdown parses never
+/// produce any, so those entry points ignore the list), and stamp
+/// `parse_options` on the arena.
+///
+/// On an MDX parse error the arena is dropped rather than pooled, so a
+/// half-built error state never poisons the pool.
+fn parse_mdast_pooled(
+    source: &str,
+    opts: satteri_pulldown_cmark::Options,
+    mdx: bool,
+    track_positions: bool,
+) -> Result<satteri_arena::Arena<Mdast>> {
+    let reuse = acquire_mdast_arena();
+    let (mut mdast, mdx_errors) = if track_positions {
+        satteri_pulldown_cmark::parse_into(source, opts, reuse)
+    } else {
+        satteri_pulldown_cmark::parse_no_positions_into(source, opts, reuse)
+    };
+    #[cfg(feature = "mdx")]
+    if mdx {
+        if let Some((offset, msg)) = mdx_errors.first() {
+            return Err(napi::Error::from_reason(
+                satteri_mdxjs::parse_error_to_message(source, *offset, msg).to_string(),
+            ));
+        }
+    }
+    #[cfg(not(feature = "mdx"))]
+    let _ = (mdx, mdx_errors);
+    mdast.parse_options = opts.bits();
+    Ok(mdast)
+}
+
+/// Shared pipeline behind the four `create*HastHandle*` exports: parse into a
+/// pooled MDAST arena → optional frontmatter extraction → MDAST→HAST
+/// conversion into a second pooled arena → release the MDAST arena back to
+/// the pool → stamp the HAST arena's flags.
+fn create_hast_handle_impl(
+    env: Env,
+    source: &str,
+    features: Option<JsFeatures>,
+    convert_options: Option<JsConvertOptions>,
+    mdx: bool,
+    track_positions: bool,
+    want_frontmatter: bool,
+) -> Result<(HastHandle, Option<JsFrontmatter>)> {
+    let opts = features_to_options(features, mdx);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
+    let mdast = parse_mdast_pooled(source, opts, mdx, track_positions)?;
+    let frontmatter = if want_frontmatter {
+        extract_mdast_frontmatter(&mdast)
+    } else {
+        None
+    };
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
+    hast.mdx = mdx;
+    hast.parse_options = opts.bits();
+    Ok((External::new(Mutex::new(hast)), frontmatter))
+}
+
 /// Parse markdown source into an MDAST arena handle.
 ///
 /// `track_positions` (default `true`) controls whether `position` is recorded
@@ -478,14 +544,8 @@ pub fn create_mdast_handle(
     track_positions: Option<bool>,
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, false);
-    let reuse = acquire_mdast_arena();
-    let (mut arena, _) = if track_positions.unwrap_or(true) {
-        satteri_pulldown_cmark::parse_into(&source, opts, reuse)
-    } else {
-        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, reuse)
-    };
+    let mut arena = parse_mdast_pooled(&source, opts, false, track_positions.unwrap_or(true))?;
     arena.mdx = false;
-    arena.parse_options = opts.bits();
     Ok(External::new(Mutex::new(arena)))
 }
 
@@ -498,19 +558,8 @@ pub fn create_mdx_mdast_handle(
     track_positions: Option<bool>,
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, true);
-    let reuse = acquire_mdast_arena();
-    let (mut arena, mdx_errors) = if track_positions.unwrap_or(true) {
-        satteri_pulldown_cmark::parse_into(&source, opts, reuse)
-    } else {
-        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, reuse)
-    };
-    if let Some((offset, msg)) = mdx_errors.first() {
-        return Err(napi::Error::from_reason(
-            satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
-        ));
-    }
+    let mut arena = parse_mdast_pooled(&source, opts, true, track_positions.unwrap_or(true))?;
     arena.mdx = true;
-    arena.parse_options = opts.bits();
     Ok(External::new(Mutex::new(arena)))
 }
 
@@ -894,19 +943,9 @@ pub fn create_hast_handle(
     features: Option<JsFeatures>,
     convert_options: Option<JsConvertOptions>,
 ) -> Result<HastHandle> {
-    let opts = features_to_options(features, false);
-    let convert_opts = js_convert_options_to_rust(env, convert_options);
-    let (mut mdast, _) = satteri_pulldown_cmark::parse_into(&source, opts, acquire_mdast_arena());
-    mdast.parse_options = opts.bits();
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mdast,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
-    release_mdast_arena(mdast);
-    hast.mdx = false;
-    hast.parse_options = opts.bits();
-    Ok(External::new(Mutex::new(hast)))
+    let (handle, _) =
+        create_hast_handle_impl(env, &source, features, convert_options, false, true, false)?;
+    Ok(handle)
 }
 
 /// Parse MDX source and convert to HAST. Returns an opaque handle.
@@ -918,25 +957,9 @@ pub fn create_mdx_hast_handle(
     features: Option<JsFeatures>,
     convert_options: Option<JsConvertOptions>,
 ) -> Result<HastHandle> {
-    let opts = features_to_options(features, true);
-    let convert_opts = js_convert_options_to_rust(env, convert_options);
-    let (mut mdast, mdx_errors) =
-        satteri_pulldown_cmark::parse_into(&source, opts, acquire_mdast_arena());
-    if let Some((offset, msg)) = mdx_errors.first() {
-        return Err(napi::Error::from_reason(
-            satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
-        ));
-    }
-    mdast.parse_options = opts.bits();
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mdast,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
-    release_mdast_arena(mdast);
-    hast.mdx = true;
-    hast.parse_options = opts.bits();
-    Ok(External::new(Mutex::new(hast)))
+    let (handle, _) =
+        create_hast_handle_impl(env, &source, features, convert_options, true, true, false)?;
+    Ok(handle)
 }
 
 /// Parse + frontmatter + HAST conversion in one crossing (HAST-plugin path
@@ -949,25 +972,15 @@ pub fn create_hast_handle_with_frontmatter(
     convert_options: Option<JsConvertOptions>,
     track_positions: Option<bool>,
 ) -> Result<(HastHandle, Option<JsFrontmatter>)> {
-    let opts = features_to_options(features, false);
-    let convert_opts = js_convert_options_to_rust(env, convert_options);
-    let reuse = acquire_mdast_arena();
-    let (mut mdast, _) = if track_positions.unwrap_or(true) {
-        satteri_pulldown_cmark::parse_into(&source, opts, reuse)
-    } else {
-        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, reuse)
-    };
-    mdast.parse_options = opts.bits();
-    let frontmatter = extract_mdast_frontmatter(&mdast);
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mdast,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
-    release_mdast_arena(mdast);
-    hast.mdx = false;
-    hast.parse_options = opts.bits();
-    Ok((External::new(Mutex::new(hast)), frontmatter))
+    create_hast_handle_impl(
+        env,
+        &source,
+        features,
+        convert_options,
+        false,
+        track_positions.unwrap_or(true),
+        true,
+    )
 }
 
 /// MDX variant of [`create_hast_handle_with_frontmatter`].
@@ -980,30 +993,15 @@ pub fn create_mdx_hast_handle_with_frontmatter(
     convert_options: Option<JsConvertOptions>,
     track_positions: Option<bool>,
 ) -> Result<(HastHandle, Option<JsFrontmatter>)> {
-    let opts = features_to_options(features, true);
-    let convert_opts = js_convert_options_to_rust(env, convert_options);
-    let reuse = acquire_mdast_arena();
-    let (mut mdast, mdx_errors) = if track_positions.unwrap_or(true) {
-        satteri_pulldown_cmark::parse_into(&source, opts, reuse)
-    } else {
-        satteri_pulldown_cmark::parse_no_positions_into(&source, opts, reuse)
-    };
-    if let Some((offset, msg)) = mdx_errors.first() {
-        return Err(napi::Error::from_reason(
-            satteri_mdxjs::parse_error_to_message(&source, *offset, msg).to_string(),
-        ));
-    }
-    mdast.parse_options = opts.bits();
-    let frontmatter = extract_mdast_frontmatter(&mdast);
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mdast,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
-    release_mdast_arena(mdast);
-    hast.mdx = true;
-    hast.parse_options = opts.bits();
-    Ok((External::new(Mutex::new(hast)), frontmatter))
+    create_hast_handle_impl(
+        env,
+        &source,
+        features,
+        convert_options,
+        true,
+        track_positions.unwrap_or(true),
+        true,
+    )
 }
 
 /// Walk a HAST handle's arena and return matched nodes as a flat binary buffer.

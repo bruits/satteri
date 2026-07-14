@@ -8,21 +8,22 @@ import type { LazyChildResolver } from "../lazy-child-resolver.js";
 import type { HastNode } from "../types.js";
 import type { HastReader } from "./hast-reader.js";
 import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
+import { HAST_CONTAINER_TYPES } from "./hast-materializer.js";
 
 type HastResolver = LazyChildResolver<HastReader, HastNode>;
 
 const N = NAME_TO_TYPE;
 
-/** Per-type stub fields, mirroring `materializeHastNode`'s switch. */
+/** Per-type stub fields; must mirror `materializeHastNode`'s populate switch. */
 const HAST_STUB_FIELDS: Readonly<Record<number, readonly string[]>> = {
-  [N.root!]: ["children"],
-  [N.element!]: ["tagName", "properties", "children"],
+  [N.root!]: [],
+  [N.element!]: ["tagName", "properties"],
   [N.text!]: ["value"],
   [N.comment!]: ["value"],
   [N.doctype!]: [],
   [N.raw!]: ["value"],
-  [N.mdxJsxFlowElement!]: ["name", "attributes", "children"],
-  [N.mdxJsxTextElement!]: ["name", "attributes", "children"],
+  [N.mdxJsxFlowElement!]: ["name", "attributes"],
+  [N.mdxJsxTextElement!]: ["name", "attributes"],
   [N.mdxFlowExpression!]: ["value"],
   [N.mdxTextExpression!]: ["value"],
   [N.mdxjsEsm!]: ["value"],
@@ -33,7 +34,9 @@ const TYPE_NAME_BY_TAG = flatByTag(TYPE_NAMES);
 const HAST_STUB_DESCRIPTORS: (readonly StubDescriptorEntry[] | undefined)[] = [];
 for (const tag of Object.keys(HAST_STUB_FIELDS)) {
   const nodeType = Number(tag);
-  HAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(HAST_STUB_FIELDS[nodeType]!);
+  const fields = [...HAST_STUB_FIELDS[nodeType]!];
+  if (HAST_CONTAINER_TYPES.has(nodeType)) fields.push("children");
+  HAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(fields);
 }
 
 /** Unknown node types still expose the prelude-backed lazy fields. */

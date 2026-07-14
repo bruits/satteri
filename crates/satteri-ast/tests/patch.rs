@@ -5,7 +5,7 @@
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::patch::{apply_patches_in_place, Patch, PatchContent};
+use satteri_ast::patch::{apply_patches_in_place, apply_patches_strict, Patch, PatchContent};
 
 /// Compare the reachable trees of two arenas: shapes, positions, node_data.
 fn assert_skeleton_eq<K: ArenaKind>(a: &Arena<K>, b: &Arena<K>, ida: u32, idb: u32, path: &str) {
@@ -58,17 +58,17 @@ fn reachable_count<K: ArenaKind>(arena: &Arena<K>) -> usize {
     }
 }
 
-/// Strict shim matching the old `rebuild` contract: dropped patches panic.
+/// Strict entry matching the old `rebuild` contract: dropped patches panic.
 fn rebuild(arena: &Arena<Mdast>, patches: &[Patch<Mdast>]) -> Arena<Mdast> {
-    let r = apply_patches_in_place(arena.clone(), patches).expect("apply failed");
-    assert!(r.dropped.is_empty(), "unexpected dropped: {:?}", r.dropped);
-    r.arena
+    let mut arena = arena.clone();
+    apply_patches_strict(&mut arena, patches).expect("apply failed");
+    arena
 }
 
 fn rebuild_hast(arena: &Arena<Hast>, patches: &[Patch<Hast>]) -> Arena<Hast> {
-    let r = apply_patches_in_place(arena.clone(), patches).expect("apply failed");
-    assert!(r.dropped.is_empty(), "unexpected dropped: {:?}", r.dropped);
-    r.arena
+    let mut arena = arena.clone();
+    apply_patches_strict(&mut arena, patches).expect("apply failed");
+    arena
 }
 
 /// Tree structure:
@@ -1661,8 +1661,9 @@ fn rebuild_lenient_both(
     arena: &Arena<Mdast>,
     patches: &[Patch<Mdast>],
 ) -> (Arena<Mdast>, Vec<u32>) {
-    let r = apply_patches_in_place(arena.clone(), patches).expect("apply failed");
-    (r.arena, r.dropped)
+    let mut arena = arena.clone();
+    let dropped = apply_patches_in_place(&mut arena, patches).expect("apply failed");
+    (arena, dropped)
 }
 
 #[test]
@@ -1708,6 +1709,151 @@ fn root_prepend_and_append_child() {
     assert_eq!(
         rebuilt.get_node(kids[3]).node_type,
         MdastNodeType::Blockquote as u8
+    );
+}
+
+/// Root-anchored Replace: the replacement's shape lands on node 0 and the
+/// old subtree is discarded. The root id stays 0.
+#[test]
+fn root_replace_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: 0,
+            new_tree: PatchContent::Tree(root_wrapped_arena(&[
+                MdastNodeType::ThematicBreak,
+                MdastNodeType::Break,
+            ])),
+            keep_children: false,
+        }],
+    );
+    assert_eq!(rebuilt.get_node(0).node_type, MdastNodeType::Root as u8);
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 2);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(kids[1]).node_type,
+        MdastNodeType::Break as u8
+    );
+    assert_eq!(reachable_count(&rebuilt), 3);
+}
+
+/// Root-anchored Replace with keep_children keeps the original children.
+#[test]
+fn root_replace_keep_children_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: 0,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+            keep_children: true,
+        }],
+    );
+    assert_eq!(
+        rebuilt.get_node(0).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 2);
+    assert_eq!(
+        rebuilt.get_node(kids[0]).node_type,
+        MdastNodeType::Heading as u8
+    );
+    assert_eq!(reachable_count(&rebuilt), orig.len());
+}
+
+/// Root-anchored Remove empties the document but keeps a serializable root.
+#[test]
+fn root_remove_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(&orig, &[Patch::Remove { node_id: 0 }]);
+    assert_eq!(rebuilt.get_node(0).node_type, MdastNodeType::Root as u8);
+    assert_eq!(rebuilt.get_children(0).len(), 0);
+    assert_eq!(reachable_count(&rebuilt), 1);
+}
+
+/// Root-anchored Wrap: the wrapper takes over node 0; the old root becomes
+/// its first child with all children intact.
+#[test]
+fn root_wrap_in_place() {
+    let orig = build_hello_world();
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Wrap {
+            node_id: 0,
+            parent_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Blockquote)),
+        }],
+    );
+    assert_eq!(
+        rebuilt.get_node(0).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    let kids = rebuilt.get_children(0);
+    assert_eq!(kids.len(), 1);
+    let old_root = kids[0];
+    assert_eq!(
+        rebuilt.get_node(old_root).node_type,
+        MdastNodeType::Root as u8
+    );
+    assert_eq!(rebuilt.get_children(old_root).len(), 2);
+    assert_eq!(reachable_count(&rebuilt), orig.len() + 1);
+}
+
+/// Sibling inserts on the root have no defined position and stay errors.
+#[test]
+fn root_sibling_insert_errors() {
+    use satteri_ast::commands::CommandError;
+    let orig = build_hello_world();
+    let mut arena = orig.clone();
+    let err = apply_patches_strict(
+        &mut arena,
+        &[Patch::InsertBefore {
+            node_id: 0,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::Break)),
+        }],
+    )
+    .unwrap_err();
+    match err {
+        CommandError::UnsupportedPatchShape("sibling insert on root (root has no siblings)") => {}
+        other => panic!("expected sibling-insert-on-root error, got {other:?}"),
+    }
+    // Untouched on error.
+    assert_eq!(arena.len(), orig.len());
+}
+
+/// Root Replace via a *grafted* payload (the opstream shape JS plugins use).
+#[test]
+fn root_replace_grafted_payload() {
+    let orig = build_hello_world();
+    let mut arena = orig.clone();
+    let payload = root_wrapped_arena(&[MdastNodeType::ThematicBreak, MdastNodeType::Break]);
+    let roots = graft_tree_for_test(&mut arena, &payload);
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[Patch::Replace {
+            node_id: 0,
+            new_tree: PatchContent::Grafted(roots),
+            keep_children: false,
+        }],
+    )
+    .expect("apply failed");
+    assert!(dropped.is_empty());
+    // The payload root (a Root node) lands on node 0.
+    assert_eq!(arena.get_node(0).node_type, MdastNodeType::Root as u8);
+    let kids = arena.get_children(0);
+    assert_eq!(kids.len(), 2);
+    assert_eq!(
+        arena.get_node(kids[0]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+    assert_eq!(
+        arena.get_node(kids[1]).node_type,
+        MdastNodeType::Break as u8
     );
 }
 
@@ -2063,13 +2209,20 @@ fn property_fuzz_in_place_apply() {
             })
             .collect();
 
-        let tree_result = apply_patches_in_place(orig.clone(), &patches);
-        let grafted_result = apply_patches_in_place(grafted_arena, &grafted_patches);
+        let mut tree_arena = orig.clone();
+        let tree_result = apply_patches_in_place(&mut tree_arena, &patches);
+        let grafted_result = apply_patches_in_place(&mut grafted_arena, &grafted_patches);
         match (tree_result, grafted_result) {
-            (Ok(a), Ok(b)) => {
+            (Ok(a_dropped), Ok(b_dropped)) => {
                 applied += 1;
-                assert_eq!(a.dropped, b.dropped, "dropped diverged in round {round}");
-                assert_skeleton_eq(&a.arena, &b.arena, 0, 0, &format!("fuzz round {round}"));
+                assert_eq!(a_dropped, b_dropped, "dropped diverged in round {round}");
+                assert_skeleton_eq(
+                    &tree_arena,
+                    &grafted_arena,
+                    0,
+                    0,
+                    &format!("fuzz round {round}"),
+                );
                 // Type-blind fuzz trees may legitimately fail conversion; the
                 // catch guards panics, not hangs.
                 let render = |arena: &Arena<Mdast>| {
@@ -2079,7 +2232,7 @@ fn property_fuzz_in_place_apply() {
                     }))
                     .ok()
                 };
-                match (render(&a.arena), render(&b.arena)) {
+                match (render(&tree_arena), render(&grafted_arena)) {
                     (Some(x), Some(y)) => assert_eq!(x, y, "html diverged in round {round}"),
                     (None, None) => {}
                     _ => panic!("round {round}: one payload kind rendered, the other panicked"),
@@ -2093,11 +2246,7 @@ fn property_fuzz_in_place_apply() {
                     "error kind diverged in round {round}"
                 );
             }
-            (a, b) => panic!(
-                "round {round}: payload kinds disagree: tree={:?} grafted={:?}",
-                a.map(|r| r.dropped),
-                b.map(|r| r.dropped)
-            ),
+            (a, b) => panic!("round {round}: payload kinds disagree: tree={a:?} grafted={b:?}"),
         }
     }
     assert!(applied > 0, "fuzzer never applied");
@@ -2173,6 +2322,7 @@ fn repro_dropped_divergence() {
         },
     ];
     // Expected drop list verified against the original rebuild before its removal.
-    let r = apply_patches_in_place(orig, &patches).unwrap();
-    assert_eq!(r.dropped, vec![20]);
+    let mut arena = orig;
+    let dropped = apply_patches_in_place(&mut arena, &patches).unwrap();
+    assert_eq!(dropped, vec![20]);
 }

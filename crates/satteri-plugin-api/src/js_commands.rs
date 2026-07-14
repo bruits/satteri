@@ -1317,12 +1317,12 @@ pub fn apply_mdast_commands_lenient_with_options(
         }
     }
 
-    let arena = builder.finish();
+    let mut arena = builder.finish();
     if patches.is_empty() {
         Ok((arena, Vec::new()))
     } else {
-        let result = satteri_ast::patch::apply_patches_in_place(arena, &patches)?;
-        Ok((result.arena, result.dropped))
+        let dropped = satteri_ast::patch::apply_patches_in_place(&mut arena, &patches)?;
+        Ok((arena, dropped))
     }
 }
 
@@ -1463,12 +1463,12 @@ pub fn apply_hast_commands_lenient(
         }
     }
 
-    let arena = builder.finish();
+    let mut arena = builder.finish();
     if patches.is_empty() {
         Ok((arena, Vec::new()))
     } else {
-        let result = satteri_ast::patch::apply_patches_in_place(arena, &patches)?;
-        Ok((result.arena, result.dropped))
+        let dropped = satteri_ast::patch::apply_patches_in_place(&mut arena, &patches)?;
+        Ok((arena, dropped))
     }
 }
 

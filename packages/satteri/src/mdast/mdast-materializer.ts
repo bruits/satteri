@@ -3,7 +3,7 @@ import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
 import { materializeMdastFields } from "./generated/layout.js";
-import { deepFreeze } from "../freeze.js";
+import { createMaterializer } from "../materializer-cache.js";
 
 // Leaf node types that do NOT have children.
 // Type 9 = `definition`; type 18 = `imageReference` — leaves per mdast spec
@@ -78,139 +78,17 @@ function addTypeProperties(
   }
 }
 
-/** Node memo + shared lazy `children` descriptor; the memo keeps one object per `(reader, id)` so identity-based plugin dedup works across access paths. */
-interface ReaderCache {
-  nodes: Map<number, MdastNode>;
-  children: PropertyDescriptor;
-  frozen: boolean;
-}
-
-const READER_CACHES = new WeakMap<MdastReader, ReaderCache>();
-
-/** Freeze waits for the first children read; sealing earlier would force every read through a getter. */
-function frozenChildrenDescriptor(reader: MdastReader): PropertyDescriptor {
-  return {
-    get(this: MdastNode) {
-      const nodeId = (this as unknown as { _nodeId: number })._nodeId;
-      const value = reader.getChildIds(nodeId).map((id) => materializeNode(reader, id, true));
-      Object.defineProperty(this, "children", {
-        value,
-        writable: false,
-        configurable: false,
-        enumerable: true,
-      });
-      Object.freeze(this);
-      return value;
-    },
-    configurable: true,
-    enumerable: true,
-  };
-}
-
-function readerCache(reader: MdastReader, frozen: boolean): ReaderCache {
-  let cache = READER_CACHES.get(reader);
-  if (cache === undefined) {
-    const children: PropertyDescriptor = frozen
-      ? frozenChildrenDescriptor(reader)
-      : {
-          get(this: MdastNode) {
-            const nodeId = (this as unknown as { _nodeId: number })._nodeId;
-            const value = reader.getChildIds(nodeId).map((id) => materializeNode(reader, id));
-            Object.defineProperty(this, "children", {
-              value,
-              writable: true,
-              configurable: true,
-              enumerable: true,
-            });
-            return value;
-          },
-          configurable: true,
-          enumerable: true,
-        };
-    cache = { nodes: new Map(), children, frozen };
-    READER_CACHES.set(reader, cache);
-  }
-  if (cache.frozen !== frozen) {
-    throw new Error("materializeNode: a reader cannot mix frozen and mutable materialization");
-  }
-  return cache;
-}
-
-/** Materialize a single MDAST node; scalars eager, `children` lazy, memoized per `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins cannot corrupt the shared cache. */
-export function materializeNode(reader: MdastReader, nodeId: number, frozen = false): MdastNode {
-  const cache = readerCache(reader, frozen);
-  let node = cache.nodes.get(nodeId);
-  if (node === undefined) {
-    node = buildMdastNode(reader, cache, nodeId);
-    cache.nodes.set(nodeId, node);
-  }
-  return node;
-}
-
-function buildMdastNode(reader: MdastReader, cache: ReaderCache, nodeId: number): MdastNode {
-  const nodeType = reader.getNodeType(nodeId);
-  const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
-
-  const node = { type: typeName } as MdastNode;
-  const position = reader.getPosition(nodeId);
-  if (position !== undefined) {
-    (node as { position: typeof position }).position = position;
-  }
-
-  // _nodeId: non-enumerable internal reference
-  Object.defineProperty(node, "_nodeId", {
-    value: nodeId,
-    writable: false,
-    configurable: true,
-    enumerable: false,
-  });
-
-  // Type-specific lazy properties
-  addTypeProperties(node, reader, nodeId, nodeType);
-
-  // Plugin-set `data` survives the visitor walk via its own getter but
-  // would be dropped when materialized from a serialized handle.
-  const rawData = reader.getNodeData(nodeId);
-  if (rawData !== null) {
-    try {
-      const parsed = JSON.parse(rawData) as Record<string, unknown>;
-      if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
-        Object.defineProperty(node, "data", {
-          value: parsed,
-          writable: true,
-          configurable: true,
-          enumerable: true,
-        });
-      }
-    } catch (err) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(`materializeNode: malformed node_data for nodeId=${nodeId}`, err);
-      }
-    }
-  }
-
-  // children: lazy getter (only for non-leaf nodes)
-  if (!LEAF_TYPES.has(nodeType)) {
-    Object.defineProperty(node, "children", cache.children);
-  }
-
-  if (cache.frozen) {
-    const n = node as MdastNode & Record<string, unknown>;
-    if (position !== undefined) {
-      Object.freeze(position.start);
-      Object.freeze(position.end);
-      Object.freeze(position);
-    }
-    deepFreeze(n.data);
-    deepFreeze(n.align);
-    deepFreeze(n.attributes);
-    if (LEAF_TYPES.has(nodeType)) {
-      Object.freeze(node);
-    }
-  }
-
-  return node;
-}
+/**
+ * Materialize a single MDAST node; scalars eager, `children` lazy, memoized
+ * per `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
+ * cannot corrupt the shared cache.
+ */
+export const materializeNode = createMaterializer<MdastReader, MdastNode>({
+  label: "materializeNode",
+  typeNames: TYPE_NAMES,
+  hasChildren: (nodeType) => !LEAF_TYPES.has(nodeType),
+  populate: addTypeProperties,
+});
 
 /** Materialize the full tree from root (nodeId=0). */
 export function materializeMdastTree(reader: MdastReader): Root {

@@ -227,3 +227,107 @@ fn plugins_run_in_order() {
         "plugins should run in order: 1 then 2"
     );
 }
+
+/// A plugin can replace the document root via commands (e.g. from `after`,
+/// or a future root visitor emitting commands anchored on node 0).
+#[test]
+fn plugin_replaces_root_via_commands() {
+    struct ReplaceRoot;
+    impl Plugin for ReplaceRoot {
+        fn meta(&self) -> PluginMeta {
+            PluginMeta::new("replace-root")
+        }
+        fn after(&mut self, _arena: &Arena<Mdast>, ctx: &mut PluginContext) {
+            ctx.replace_node(0, NodeBuilder::paragraph().build());
+        }
+    }
+
+    let arena = build_test_arena();
+    let mut runner = PluginRunner::new(vec![Box::new(ReplaceRoot)]);
+    let mut data_map = DataMap::new();
+    let mut typed_data = TypedDataMap::new();
+    let result = runner.run(arena, &mut data_map, &mut typed_data);
+
+    assert!(
+        result.diagnostics.is_empty(),
+        "root replace should apply cleanly: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+    assert!(result.has_mutations);
+    assert_eq!(
+        result.arena.get_node(0).node_type,
+        MdastNodeType::Paragraph as u8,
+        "the replacement's shape lands on node 0"
+    );
+    assert_eq!(result.arena.get_children(0).len(), 0);
+}
+
+/// A plugin can wrap the document root: the wrapper takes over node 0 and
+/// the old root (children intact) becomes its first child.
+#[test]
+fn plugin_wraps_root_via_commands() {
+    struct WrapRoot;
+    impl Plugin for WrapRoot {
+        fn meta(&self) -> PluginMeta {
+            PluginMeta::new("wrap-root")
+        }
+        fn after(&mut self, _arena: &Arena<Mdast>, ctx: &mut PluginContext) {
+            ctx.wrap_node(0, NodeBuilder::new(MdastNodeType::Blockquote).build());
+        }
+    }
+
+    let arena = build_test_arena();
+    let mut runner = PluginRunner::new(vec![Box::new(WrapRoot)]);
+    let mut data_map = DataMap::new();
+    let mut typed_data = TypedDataMap::new();
+    let result = runner.run(arena, &mut data_map, &mut typed_data);
+
+    assert!(result.diagnostics.is_empty());
+    assert_eq!(
+        result.arena.get_node(0).node_type,
+        MdastNodeType::Blockquote as u8
+    );
+    let wrapped = result.arena.get_children(0);
+    assert_eq!(wrapped.len(), 1);
+    let old_root = wrapped[0];
+    assert_eq!(
+        result.arena.get_node(old_root).node_type,
+        MdastNodeType::Root as u8
+    );
+    assert_eq!(
+        result.arena.get_children(old_root).len(),
+        2,
+        "old root keeps its children under the wrapper"
+    );
+}
+
+/// A plugin can remove the document root, leaving an empty document.
+#[test]
+fn plugin_removes_root_via_commands() {
+    struct RemoveRoot;
+    impl Plugin for RemoveRoot {
+        fn meta(&self) -> PluginMeta {
+            PluginMeta::new("remove-root")
+        }
+        fn after(&mut self, _arena: &Arena<Mdast>, ctx: &mut PluginContext) {
+            ctx.remove_node(0);
+        }
+    }
+
+    let arena = build_test_arena();
+    let mut runner = PluginRunner::new(vec![Box::new(RemoveRoot)]);
+    let mut data_map = DataMap::new();
+    let mut typed_data = TypedDataMap::new();
+    let result = runner.run(arena, &mut data_map, &mut typed_data);
+
+    assert!(result.diagnostics.is_empty());
+    assert_eq!(
+        result.arena.get_node(0).node_type,
+        MdastNodeType::Root as u8
+    );
+    assert_eq!(result.arena.get_children(0).len(), 0);
+}

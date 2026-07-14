@@ -523,7 +523,10 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
             }
             _ => {}
         }
-        stack.extend_from_slice(view.get_children(id));
+        // Push children in reverse so they pop in document order: `or_insert`
+        // below is first-wins, and duplicate footnote definitions must resolve
+        // to the *first* one in the document (matching remark-gfm).
+        stack.extend(view.get_children(id).iter().rev().copied());
     }
     def_nodes.sort_by_key(|&id| view.get_node(id).start_offset);
     for id in &def_nodes {

@@ -214,28 +214,14 @@ function hastReusedId(node: unknown): number | undefined {
  *  `Patch::SetChildren` splices in. Reused children become refs. */
 function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown): boolean {
   if (!Array.isArray(children)) return false;
-  const start = buffer.length;
-  const lenPos = buffer.beginOpstream(CMD_SET_CHILDREN, id);
-  // ok starts false so a throwing child getter still hits the abort in finally
-  let ok = false;
-  try {
+  return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
-    let encoded = true;
     for (const c of children) {
-      if (!emitHastOp(buffer, c, false)) {
-        encoded = false;
-        break;
-      }
+      if (!emitHastOp(buffer, c, false)) return false;
     }
-    if (encoded) {
-      buffer.close();
-      ok = true;
-    }
-  } finally {
-    if (!ok) buffer.abortOpstream(start);
-  }
-  if (ok) buffer.endOpstream(lenPos);
-  return ok;
+    buffer.close();
+    return true;
+  });
 }
 
 /** Encode `node` as the `op` structural command, emitting the op-stream
@@ -243,16 +229,10 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
  *  content is always a declarative node (no raw escape hatch), so it
  *  compiles or it's a hard error. */
 function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
-  const start = buffer.length;
-  const lenPos = buffer.beginOpstream(STRUCTURAL_CMD[op], id);
-  let ok = false;
-  try {
-    ok = emitHastOp(buffer, node, true);
-  } finally {
-    if (!ok) buffer.abortOpstream(start);
-  }
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
+    emitHastOp(buffer, node, true),
+  );
   if (!ok) throw unencodableContentError(node);
-  buffer.endOpstream(lenPos);
 }
 
 function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {

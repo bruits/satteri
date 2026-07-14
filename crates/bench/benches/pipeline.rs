@@ -60,11 +60,13 @@ fn hast_with_link_replaces() -> (
 #[divan::bench]
 fn apply_link_replaces(bencher: divan::Bencher) {
     let (hast, patches) = hast_with_link_replaces();
-    bencher.with_inputs(|| hast.clone()).bench_values(|arena| {
-        satteri_ast::patch::apply_patches_in_place(arena, divan::black_box(&patches))
-            .unwrap()
-            .arena
-    });
+    bencher
+        .with_inputs(|| hast.clone())
+        .bench_values(|mut arena| {
+            satteri_ast::patch::apply_patches_in_place(&mut arena, divan::black_box(&patches))
+                .unwrap();
+            arena
+        });
 }
 
 /// Parse Markdown source into an Arena.

@@ -66,7 +66,7 @@ export function releaseCommandBuffer(buf: CommandBuffer): void {
   commandBufferPool.push(buf);
 }
 
-/** Structural commands that carry a subtree payload emitted in place via `beginOpstream`/`endOpstream`. */
+/** Structural commands that carry a subtree payload emitted in place via `emitOpstreamCommand`. */
 export type StructuralOp =
   | "replace"
   | "insertBefore"
@@ -106,10 +106,28 @@ export class CommandBuffer extends OpWriter {
     }
   }
 
+  /** Emit a structural command whose opstream payload is written by `emit`
+   *  via the inherited op methods. If `emit` returns false or throws, the
+   *  buffer is rolled back to the command start so the Rust decoder never
+   *  sees a half-written command. Returns `emit`'s verdict. */
+  emitOpstreamCommand(cmd: number, nodeId: number, emit: () => boolean): boolean {
+    const commandStart = this.n;
+    const lenPos = this.#beginOpstream(cmd, nodeId);
+    // ok starts false so a throwing emit still hits the abort in finally
+    let ok = false;
+    try {
+      ok = emit();
+    } finally {
+      if (!ok) this.#abortOpstream(commandStart);
+    }
+    if (ok) this.#endOpstream(lenPos);
+    return ok;
+  }
+
   /** Open a structural command whose opstream payload is emitted in place via
    *  the inherited op methods; returns the backpatch position for
-   *  `endOpstream`. Pair with `abortOpstream` on failure. */
-  beginOpstream(cmd: number, nodeId: number): number {
+   *  `#endOpstream`. Pair with `#abortOpstream` on failure. */
+  #beginOpstream(cmd: number, nodeId: number): number {
     this.#assertNotEncoding();
     this.#inOpstream = true;
     this.ensure(10);
@@ -121,18 +139,13 @@ export class CommandBuffer extends OpWriter {
     return lenPos;
   }
 
-  endOpstream(lenPos: number): void {
+  #endOpstream(lenPos: number): void {
     this.#inOpstream = false;
-    const written = this.n - (lenPos + 4);
-    const buf = this.buf;
-    buf[lenPos] = written & 255;
-    buf[lenPos + 1] = (written >> 8) & 255;
-    buf[lenPos + 2] = (written >> 16) & 255;
-    buf[lenPos + 3] = (written >>> 24) & 255;
+    this.patchU32(lenPos, this.n - (lenPos + 4));
   }
 
   /** Roll back an in-progress opstream command (unencodable content). */
-  abortOpstream(commandStart: number): void {
+  #abortOpstream(commandStart: number): void {
     this.#inOpstream = false;
     this.n = commandStart;
   }
