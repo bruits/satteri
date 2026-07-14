@@ -57,8 +57,8 @@ Term 2
 :   Shared definition.
 "##;
     let expected = r##"<dl>
-<dt>Term 1
-Term 2</dt>
+<dt>Term 1</dt>
+<dt>Term 2</dt>
 <dd>Shared definition.</dd>
 </dl>
 "##;
@@ -94,6 +94,251 @@ Orange
 <dt>Orange</dt>
 <dd>Orange.</dd>
 </dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_7() {
+    let original = r##"Apple
+:   Red.
+
+:   Green.
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dd>
+<p>Green.</p>
+</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_8() {
+    let original = r##"Apple
+
+:   Red.
+:   Green.
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+</dd>
+<dd>Green.</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_9() {
+    let original = r##"Apple
+:   Red.
+:   Green.
+
+:   Blue.
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+<dd>Green.</dd>
+<dd>
+<p>Blue.</p>
+</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_10() {
+    let original = r##"Apple
+
+:   Red.
+
+    More red.
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+<p>More red.</p>
+</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_11() {
+    let original = r##"Apple
+
+:   text
+
+        code
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>
+<p>text</p>
+<pre><code>code
+</code></pre>
+</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_12() {
+    let original = r##"Apple
+
+:   item:
+
+    - a
+    - b
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>
+<p>item:</p>
+<ul>
+<li>a</li>
+<li>b</li>
+</ul>
+</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_13() {
+    let original = r##"Apple
+:
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd></dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_14() {
+    let original = r##"> Apple
+> :   Red.
+"##;
+    let expected = r##"<blockquote>
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+</dl>
+</blockquote>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_15() {
+    let original = r##"- Apple
+  :   Red.
+"##;
+    let expected = r##"<ul>
+<li>
+<dl>
+<dt>Apple</dt>
+<dd>Red.</dd>
+</dl>
+</li>
+</ul>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_16() {
+    let original = r##"Outer
+
+:   Inner
+    :   Deep.
+"##;
+    let expected = r##"<dl>
+<dt>Outer</dt>
+<dd>
+<dl>
+<dt>Inner</dt>
+<dd>Deep.</dd>
+</dl>
+</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_17() {
+    let original = r##"Apple
+::tada:
+"##;
+    let expected = r##"<p>Apple
+::tada:</p>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_18() {
+    let original = r##"Apple
+:tada:
+"##;
+    let expected = r##"<p>Apple
+:tada:</p>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_19() {
+    let original = r##"Apple
+: :tada:
+"##;
+    let expected = r##"<dl>
+<dt>Apple</dt>
+<dd>:tada:</dd>
+</dl>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, true, false);
+}
+
+#[test]
+fn definition_list_test_20() {
+    let original = r##"Apple
+
+
+:   Red.
+"##;
+    let expected = r##"<p>Apple</p>
+<p>:   Red.</p>
 "##;
 
     test_markdown_html(original, expected, 0, false, false, false, false, true, false);

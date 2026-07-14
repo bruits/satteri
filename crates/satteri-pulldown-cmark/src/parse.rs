@@ -136,7 +136,7 @@ pub(crate) enum ItemBody {
     // depending on whether there's a definition after it
     MaybeDefinitionListTitle,
     DefinitionListTitle,
-    DefinitionListDefinition(usize),
+    DefinitionListDefinition(usize, bool), // indent level, spread (loose definition)
 
     // Tables
     Table(AlignmentIndex),
@@ -2294,7 +2294,7 @@ pub(crate) fn scan_containers(
                     break;
                 }
             }
-            ItemBody::DefinitionListDefinition(indent) => {
+            ItemBody::DefinitionListDefinition(indent, _) => {
                 let save = line_start.clone();
                 if !line_start.scan_space(indent) && !line_start.is_at_eol() {
                     *line_start = save;
@@ -3307,7 +3307,7 @@ fn body_to_tag_end(body: &ItemBody) -> TagEnd {
         ItemBody::MetadataBlock(kind) => TagEnd::MetadataBlock(kind),
         ItemBody::DefinitionList(_) => TagEnd::DefinitionList,
         ItemBody::DefinitionListTitle => TagEnd::DefinitionListTitle,
-        ItemBody::DefinitionListDefinition(_) => TagEnd::DefinitionListDefinition,
+        ItemBody::DefinitionListDefinition(..) => TagEnd::DefinitionListDefinition,
         #[cfg(feature = "mdx")]
         ItemBody::MdxJsxFlowElement(..) => TagEnd::MdxJsxFlowElement,
         #[cfg(feature = "mdx")]
@@ -3418,7 +3418,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         }
         ItemBody::DefinitionList(_) => Tag::DefinitionList,
         ItemBody::DefinitionListTitle => Tag::DefinitionListTitle,
-        ItemBody::DefinitionListDefinition(_) => Tag::DefinitionListDefinition,
+        ItemBody::DefinitionListDefinition(..) => Tag::DefinitionListDefinition,
         #[cfg(feature = "mdx")]
         ItemBody::MdxJsxFlowElement(jsx_ix) => {
             let jsx = allocs.take_jsx_element(jsx_ix);

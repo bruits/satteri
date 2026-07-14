@@ -303,13 +303,16 @@ impl<'a> LineStart<'a> {
     ) -> Option<usize> {
         let save = self.clone();
         if self.scan_ch(b':') {
-            // A run of colons (`::`, `:::`) is a directive fence, not a
-            // definition marker. Only a lone colon opens a definition, so the
-            // directive extension keeps its `::`/`:::` fences when both the
-            // definition-list and directive extensions are enabled.
-            if self.bytes.get(self.ix) == Some(&b':') {
-                *self = save;
-                return None;
+            // A marker is a lone colon followed by whitespace or end-of-line
+            // (matching pandoc / mdast-util-definition-list). This rejects a
+            // colon run (`::`), so directive fences survive when both extensions
+            // are on, and a colon glued to content (`:tada:`).
+            match self.bytes.get(self.ix) {
+                None | Some(&(b' ' | b'\t' | b'\r' | b'\n')) => {}
+                _ => {
+                    *self = save;
+                    return None;
+                }
             }
             let save = self.clone();
             if self.scan_space(5) {
@@ -473,6 +476,16 @@ impl<'a> LineStart<'a> {
 
 pub(crate) fn is_ascii_whitespace(c: u8) -> bool {
     (0x09..=0x0d).contains(&c) || c == b' '
+}
+
+/// Whether `bytes` (positioned at the marker, indentation already consumed)
+/// begins with a definition-list marker: a lone colon then whitespace or
+/// end-of-line. Must stay in sync with the marker scanner
+/// [`LineStart::scan_definition_list_definition_marker_with_indent`] so the
+/// paragraph-interrupt check accepts exactly what the scanner will consume.
+pub(crate) fn is_definition_list_marker(bytes: &[u8]) -> bool {
+    bytes.first() == Some(&b':')
+        && matches!(bytes.get(1), None | Some(&(b' ' | b'\t' | b'\r' | b'\n')))
 }
 
 pub(crate) fn is_ascii_whitespace_no_nl(c: u8) -> bool {

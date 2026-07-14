@@ -301,7 +301,7 @@ const LIST_ITEM_SLOTS: &[SetSlot] = &[
     sl("checked", 0, Slot::CheckedTri),
     sl("spread", 1, Slot::Bool),
 ];
-/// `DescriptionDetailsData`: spread @0 (per-definition tight vs loose).
+/// `DescriptionDetailsData`: spread @0.
 const DESCRIPTION_DETAILS_SLOTS: &[SetSlot] = &[sl("spread", 0, Slot::Bool)];
 /// `MdxJsxElementData`: name `StringRef` @0.
 const MDX_JSX_SLOTS: &[SetSlot] = &[sl("name", 0, Slot::Str)];

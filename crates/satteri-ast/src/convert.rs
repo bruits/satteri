@@ -1348,8 +1348,6 @@ fn convert_node(
         }
 
         Some(MdastNodeType::DescriptionList) => {
-            // `<dl>`: dt/dd are block-level children, so separate them with
-            // `\n` text nodes like `<ul>`/`<ol>` do.
             let action = open_h_element(builder, view, node_id, "dl", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
@@ -1359,8 +1357,6 @@ fn convert_node(
         }
 
         Some(MdastNodeType::DescriptionTerm) => {
-            // `<dt>`: the term is inline content, emitted without inter-child
-            // newlines (like a heading).
             let action = open_h_element(builder, view, node_id, "dt", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
@@ -1370,9 +1366,8 @@ fn convert_node(
         }
 
         Some(MdastNodeType::DescriptionDetails) => {
-            // `<dd>`: this node's own `spread` decides tight vs loose. Loose
-            // keeps the inner `<p>`; tight unwraps it — reusing ListItem's
-            // paragraph-unwrap with no task checkbox.
+            // Tight `<dd>`s unwrap their paragraph via ListItem's path (no task
+            // checkbox, hence `None`); loose ones keep it.
             let action = open_h_element(builder, view, node_id, "dd", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Replaced) {

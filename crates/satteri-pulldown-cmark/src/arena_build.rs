@@ -94,10 +94,6 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     let mut code_block_buf: Option<String> = None;
     let mut image_alt_buf: Option<String> = None;
     let mut image_depth: usize = 0;
-    // Definition-list tight/loose is tracked per-list by firstpass; stash it on
-    // each open `DescriptionList` so every child `DescriptionDetails` can copy
-    // it into its own `spread` (mdast-util-definition-list puts spread on dd).
-    let mut deflist_tight_stack: Vec<bool> = Vec::new();
 
     // JSX tag pairing state. The third element is `is_flow` — true if the
     // open tag was on its own block line (MdxJsxFlowElement), false if it
@@ -553,16 +549,10 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         inner.tree.next_sibling(ix);
                         continue;
                     }
-                    // Definition-list containers (`dl`/`dt`/`dd`): extend the
-                    // end position to span the last child, mirroring List above.
-                    // `spread` lives on each `dd` (written on open), so the only
-                    // extra bookkeeping is popping the list's tight/loose flag.
+                    // dl/dt/dd: extend the end to span the last child, like List.
                     ItemBody::DefinitionList(..)
                     | ItemBody::DefinitionListTitle
-                    | ItemBody::DefinitionListDefinition(_) => {
-                        if matches!(inner.tree[ix].item.body, ItemBody::DefinitionList(..)) {
-                            deflist_tight_stack.pop();
-                        }
+                    | ItemBody::DefinitionListDefinition(..) => {
                         let id = builder.current_node_id();
                         let node = builder.arena_ref().get_node(id);
                         let orig_start = node.start_offset;
@@ -1285,16 +1275,11 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         continue;
                     }
 
-                    // Definition list: `<dl>` and its `<dt>`/`<dd>` children.
-                    // firstpass decides tight/loose per list; `spread` lives on
-                    // each `descriptionDetails`, so stash the flag on open and
-                    // copy it into every definition below.
-                    ItemBody::DefinitionList(is_tight) => {
+                    ItemBody::DefinitionList(_) => {
                         builder.open_node(MdastNodeType::DescriptionList as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        deflist_tight_stack.push(is_tight);
                         inner.tree.push();
                     }
                     ItemBody::DefinitionListTitle => {
@@ -1304,21 +1289,15 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         );
                         inner.tree.push();
                     }
-                    ItemBody::DefinitionListDefinition(_) => {
+                    ItemBody::DefinitionListDefinition(_, loose) => {
                         builder.open_node(MdastNodeType::DescriptionDetails as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        // A `dd` is only ever opened inside an open `dl`, so the
-                        // stack can't be empty here. Assert it in debug to catch a
-                        // malformed tree; fall back to tight (`spread = false`) in
-                        // release rather than silently masking the bug.
-                        debug_assert!(
-                            !deflist_tight_stack.is_empty(),
-                            "descriptionDetails opened with no descriptionList on the stack",
-                        );
-                        let spread = !deflist_tight_stack.last().copied().unwrap_or(true);
-                        builder.set_data_current(&DescriptionDetailsData { spread }.to_bytes());
+                        // `loose` is per-dd (firstpass sets it when a blank line
+                        // precedes this definition's `:` marker).
+                        builder
+                            .set_data_current(&DescriptionDetailsData { spread: loose }.to_bytes());
                         inner.tree.push();
                     }
                     ItemBody::Superscript => {

@@ -148,9 +148,8 @@ impl ListItemData {
     }
 }
 
-/// `spread`: false = tight (this `<dd>` holds bare inline/flow content),
-/// true = loose (this `<dd>` wraps its content in a `<p>`). Set per-definition
-/// on each `descriptionDetails`, mirroring mdast-util-definition-list.
+/// `spread`: false = tight (`<dd>` holds bare content), true = loose (`<dd>`
+/// wraps its content in a `<p>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct DescriptionDetailsData {

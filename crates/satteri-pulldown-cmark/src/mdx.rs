@@ -2015,7 +2015,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         for &node_ix in self.tree.walk_spine() {
             match self.tree[node_ix].item.body {
                 ItemBody::BlockQuote(..) => col += 2, // `>` + space
-                ItemBody::ListItem(indent, _) | ItemBody::DefinitionListDefinition(indent) => {
+                ItemBody::ListItem(indent, _) | ItemBody::DefinitionListDefinition(indent, _) => {
                     col += indent
                 }
                 ItemBody::FootnoteDefinition(..)
