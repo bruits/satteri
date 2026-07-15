@@ -125,6 +125,65 @@ test("a stranded HAST transform is dropped with a warning, like MDAST", () => {
   }
 });
 
+test("an array replaceNode strands a transform queued under the discarded target", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const plugin = defineHastPlugin({
+      name: "split-heading",
+      element: {
+        filter: ["h1", "em"],
+        visit(node, ctx) {
+          if (node.tagName === "h1") {
+            ctx.replaceNode(node, [
+              { type: "element", tagName: "h2", properties: {}, children: [] },
+              { type: "element", tagName: "hr", properties: {}, children: [] },
+            ]);
+            return;
+          }
+          if (node.tagName === "em") {
+            return { type: "element", tagName: "strong", properties: {}, children: node.children };
+          }
+        },
+      },
+    });
+    const { html } = markdownToHtml("# *Hi*", { hastPlugins: [plugin] });
+    expect(html.trim()).toBe("<h2></h2><hr>");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("dropped");
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test("an array replaceNode that passes children through keeps their queued transforms", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const plugin = defineHastPlugin({
+      name: "split-heading-keep",
+      element: {
+        filter: ["h1", "em"],
+        visit(node, ctx) {
+          if (node.tagName === "h1") {
+            ctx.replaceNode(node, [
+              { type: "element", tagName: "hr", properties: {}, children: [] },
+              { type: "element", tagName: "h2", properties: {}, children: node.children },
+            ]);
+            return;
+          }
+          if (node.tagName === "em") {
+            return { type: "element", tagName: "strong", properties: {}, children: node.children };
+          }
+        },
+      },
+    });
+    const { html } = markdownToHtml("# *Hi*", { hastPlugins: [plugin] });
+    expect(html.trim()).toBe("<hr><h2><strong>Hi</strong></h2>");
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 test("a passed-through child is fully transformed before the next plugin runs", () => {
   const aside = defineMdastPlugin({
     name: "aside",

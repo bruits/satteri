@@ -216,6 +216,39 @@ test("P1: setProperty after replaceNode (fold path) space-joins arrays the same 
   });
 });
 
+test("P1: an array replaceNode clears the queued replacement so a later setProperty can't resurrect it", () => {
+  const handle = createMdxHastHandle("<Box />");
+  const source = getHandleSource(handle);
+  const isEl = (n: TreeNode): n is Element => n.type === "element";
+  const plugin = defineHastPlugin({
+    name: "single-then-array-then-set",
+    mdxJsxFlowElement: {
+      filter: ["Box"],
+      visit(node, ctx) {
+        // A scalar replacement queues `node` in pendingNodes, the fold target for
+        // a later mdxJsx setProperty.
+        ctx.replaceNode(node, { ...node, name: "Stale" });
+        // The array replacement must drop that queue. Otherwise the setProperty
+        // below folds into "Stale" and re-emits its `replace`, which lands last
+        // and clobbers [a, b].
+        ctx.replaceNode(node, [
+          { type: "element", tagName: "a-el", properties: {}, children: [] },
+          { type: "element", tagName: "b-el", properties: {}, children: [] },
+        ]);
+        ctx.setProperty(node, "id", "x");
+      },
+    },
+  });
+  visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+  const tree = materializeHastTree(new HastReader(serializeHandle(handle)));
+  // The array replacement stands: both elements survive and no "Stale" JSX node
+  // was resurrected by the fold path.
+  expect(collect(tree, isJsxFlow)).toHaveLength(0);
+  const tags = collect(tree, isEl).map((e) => e.tagName);
+  expect(tags).toContain("a-el");
+  expect(tags).toContain("b-el");
+});
+
 // P2 — walk-vs-reader parity for element properties
 
 // S1 — ref-stub children: a matched node's `.children` are id+type stubs whose

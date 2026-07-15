@@ -384,6 +384,134 @@ describe("visitHastHandle - mutations", () => {
     expect(html).not.toContain("<h1>");
   });
 
+  test("context.replaceNode() swaps a node for an array, in order", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "explode-heading",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "h2", properties: {}, children: [] },
+            { type: "comment", value: "mid" },
+            { type: "element", tagName: "hr", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    const html = renderHandle(handle);
+    expect(html.trim()).toBe("<h2></h2><!--mid--><hr>");
+  });
+
+  test("an array replacement passes the target's children through as refs", () => {
+    const { handle, source } = setup("[hello **bold**](/x)");
+    const plugin = defineHastPlugin({
+      name: "unwrap-link",
+      element: {
+        filter: ["a"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "span", properties: {}, children: node.children },
+            { type: "text", value: "!" },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle)).toContain("<span>hello <strong>bold</strong></span>!");
+  });
+
+  test("an array replacement may splice the target back in as a nested ref", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "wrap-and-rule",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "div", properties: {}, children: [node] },
+            { type: "element", tagName: "hr", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle).trim()).toBe("<div><h1>Hello</h1></div><hr>");
+  });
+
+  test("an array replacement lands between sibling inserts on the same node", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "surround-and-replace",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.insertAfter(node, { type: "comment", value: "after" });
+          ctx.insertBefore(node, { type: "comment", value: "before" });
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "h2", properties: {}, children: [] },
+            { type: "element", tagName: "h3", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle).trim()).toBe("<!--before--><h2></h2><h3></h3><!--after-->");
+  });
+
+  test("context.replaceNode() with an empty array drops the node, like removeNode", () => {
+    const { handle, source } = setup("# Hello\n\nWorld");
+    const plugin = defineHastPlugin({
+      name: "replace-with-nothing",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, []);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    const html = renderHandle(handle);
+    expect(html).not.toContain("<h1>");
+    expect(html).toContain("World");
+  });
+
+  test("a single-element array replacement behaves like the scalar form", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "replace-with-one",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "h2", properties: {}, children: [{ type: "text", value: "Hi" }] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle).trim()).toBe("<h2>Hi</h2>");
+  });
+
+  test("an array replacement accepts a raw node alongside elements", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "raw-in-list",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "raw", value: "<hr>" },
+            { type: "element", tagName: "h2", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle).trim()).toBe("<hr><h2></h2>");
+  });
+
   test("mutations work on child nodes accessed via node.children", () => {
     const { handle, source } = setup("# Hello");
     const plugin = {

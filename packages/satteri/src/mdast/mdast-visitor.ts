@@ -237,8 +237,29 @@ export class MdastVisitorContext {
     if (child) this.removeNode(child);
   }
 
-  replaceNode(node: Readonly<MdastNode>, newNode: MdastContent): void {
+  /**
+   * Swap `node` for one node, or for an array of nodes placed in order at its
+   * position. An empty array drops the node, the same as `removeNode`.
+   */
+  replaceNode(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode");
+    if (Array.isArray(newNode)) {
+      // The last node carries the `replace` so refs back to the target still splice.
+      let previous: MdastContent | undefined;
+      for (const n of newNode) {
+        if (previous !== undefined) {
+          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous);
+        }
+        previous = n;
+      }
+      if (previous === undefined) {
+        // Replacing with nothing drops the node, like removeNode.
+        this.removeNode(node);
+      } else {
+        emitMdastTree(this.#commandBuffer, "replace", id, previous, true);
+      }
+      return;
+    }
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true);
   }
 

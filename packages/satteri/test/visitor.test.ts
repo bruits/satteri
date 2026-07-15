@@ -316,6 +316,103 @@ test("context.replaceNode() replaces a node via context method", () => {
   expect(html).toContain("Replaced");
 });
 
+test("context.replaceNode() swaps a node for an array, in order", () => {
+  const plugin = defineMdastPlugin({
+    name: "explode-heading",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [
+        { type: "paragraph", children: [{ type: "text", value: "one" }] },
+        { type: "thematicBreak" },
+        { type: "paragraph", children: [{ type: "text", value: "two" }] },
+      ]);
+    },
+  });
+  const html = visitAndRender("# Hello", plugin);
+  expect(html.trim()).toBe("<p>one</p>\n<hr>\n<p>two</p>");
+});
+
+test("an array replacement accepts the raw escape hatches alongside nodes", () => {
+  const plugin = defineMdastPlugin({
+    name: "raw-in-list",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [
+        { rawHtml: "<hr>" },
+        { type: "paragraph", children: [{ type: "text", value: "tail" }] },
+      ]);
+    },
+  });
+  const html = visitAndRender("# Hello", plugin);
+  expect(html).toContain("<hr>");
+  expect(html).toContain("<p>tail</p>");
+  expect(html).not.toContain("<h1>");
+});
+
+test("an array replacement passes the target's children through as refs", () => {
+  const plugin = defineMdastPlugin({
+    name: "unwrap-heading",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [
+        { type: "paragraph", children: node.children },
+        { type: "thematicBreak" },
+      ]);
+    },
+  });
+  const html = visitAndRender("# Hello *there*", plugin);
+  expect(html.trim()).toBe("<p>Hello <em>there</em></p>\n<hr>");
+});
+
+test("context.replaceNode() with an empty array drops the node, like removeNode", () => {
+  const plugin = defineMdastPlugin({
+    name: "replace-with-nothing",
+    heading(node, ctx) {
+      ctx.replaceNode(node, []);
+    },
+  });
+  const html = visitAndRender("# Hello\n\nWorld", plugin);
+  expect(html).not.toContain("<h1>");
+  expect(html).toContain("World");
+});
+
+test("a single-element array replacement behaves like the scalar form", () => {
+  const plugin = defineMdastPlugin({
+    name: "replace-with-one",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [{ type: "paragraph", children: [{ type: "text", value: "solo" }] }]);
+    },
+  });
+  expect(visitAndRender("# Hello", plugin).trim()).toBe("<p>solo</p>");
+});
+
+test("an array replacement may splice the target back in as a nested ref", () => {
+  const plugin = defineMdastPlugin({
+    name: "wrap-and-rule",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [{ type: "blockquote", children: [node] }, { type: "thematicBreak" }]);
+    },
+  });
+  const html = visitAndRender("# Hello", plugin).trim();
+  expect(html).toContain("<blockquote>");
+  expect(html).toContain("<h1>Hello</h1>");
+  expect(html.endsWith("<hr>")).toBe(true);
+});
+
+test("an array replacement lands between sibling inserts on the same node", () => {
+  const plugin = defineMdastPlugin({
+    name: "surround-and-replace",
+    heading(node, ctx) {
+      ctx.insertAfter(node, { type: "paragraph", children: [{ type: "text", value: "after" }] });
+      ctx.insertBefore(node, { type: "paragraph", children: [{ type: "text", value: "before" }] });
+      ctx.replaceNode(node, [
+        { type: "thematicBreak" },
+        { type: "paragraph", children: [{ type: "text", value: "mid" }] },
+      ]);
+    },
+  });
+  expect(visitAndRender("# Hello", plugin).trim()).toBe(
+    "<p>before</p>\n<hr>\n<p>mid</p>\n<p>after</p>",
+  );
+});
+
 test("context.setProperty(node, 'children', ...) replaces a node's children", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node, ctx) {
