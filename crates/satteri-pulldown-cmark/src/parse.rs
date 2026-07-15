@@ -1743,11 +1743,13 @@ impl<'input> ParserInner<'input> {
                             if can_close && double_quote_open {
                                 double_quote_open = false;
                                 ItemBody::SynthesizeChar('”')
-                            } else {
-                                if can_open && !double_quote_open {
-                                    double_quote_open = true;
-                                }
+                            } else if can_open {
+                                double_quote_open = true;
                                 ItemBody::SynthesizeChar('“')
+                            } else {
+                                // Unmatched close-flanking quote (e.g. the inch
+                                // mark in `24"`): render a closing curly quote.
+                                ItemBody::SynthesizeChar('”')
                             }
                         }
                     };
