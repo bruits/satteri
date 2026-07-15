@@ -481,6 +481,41 @@ describe("visitHastHandle - mutations", () => {
     expect(renderHandle(handle)).toContain("<h1>Hello</h1>");
   });
 
+  test("a single-element array replacement behaves like the scalar form", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "replace-with-one",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "element", tagName: "h2", properties: {}, children: [{ type: "text", value: "Hi" }] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle).trim()).toBe("<h2>Hi</h2>");
+  });
+
+  test("an array replacement accepts a raw node alongside elements", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "raw-in-list",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, [
+            { type: "raw", value: "<hr>" },
+            { type: "element", tagName: "h2", properties: {}, children: [] },
+          ]);
+        },
+      },
+    });
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    expect(renderHandle(handle).trim()).toBe("<hr><h2></h2>");
+  });
+
   test("mutations work on child nodes accessed via node.children", () => {
     const { handle, source } = setup("# Hello");
     const plugin = {

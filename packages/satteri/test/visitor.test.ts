@@ -372,6 +372,62 @@ test("context.replaceNode() throws on an empty array", () => {
   expect(() => visitAndRender("# Hello", plugin)).toThrow(/empty array.*removeNode/);
 });
 
+test("a rejected empty-array replacement leaves the target untouched", () => {
+  const plugin = defineMdastPlugin({
+    name: "replace-with-nothing-caught",
+    heading(node, ctx) {
+      // The throw fires before any op is emitted, so a caller that swallows it
+      // is left with the original node intact rather than a partial mutation.
+      try {
+        ctx.replaceNode(node, []);
+      } catch {
+        // ignore
+      }
+    },
+  });
+  expect(visitAndRender("# Hello", plugin)).toContain("<h1>Hello</h1>");
+});
+
+test("a single-element array replacement behaves like the scalar form", () => {
+  const plugin = defineMdastPlugin({
+    name: "replace-with-one",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [{ type: "paragraph", children: [{ type: "text", value: "solo" }] }]);
+    },
+  });
+  expect(visitAndRender("# Hello", plugin).trim()).toBe("<p>solo</p>");
+});
+
+test("an array replacement may splice the target back in as a nested ref", () => {
+  const plugin = defineMdastPlugin({
+    name: "wrap-and-rule",
+    heading(node, ctx) {
+      ctx.replaceNode(node, [{ type: "blockquote", children: [node] }, { type: "thematicBreak" }]);
+    },
+  });
+  const html = visitAndRender("# Hello", plugin).trim();
+  expect(html).toContain("<blockquote>");
+  expect(html).toContain("<h1>Hello</h1>");
+  expect(html.endsWith("<hr>")).toBe(true);
+});
+
+test("an array replacement lands between sibling inserts on the same node", () => {
+  const plugin = defineMdastPlugin({
+    name: "surround-and-replace",
+    heading(node, ctx) {
+      ctx.insertAfter(node, { type: "paragraph", children: [{ type: "text", value: "after" }] });
+      ctx.insertBefore(node, { type: "paragraph", children: [{ type: "text", value: "before" }] });
+      ctx.replaceNode(node, [
+        { type: "thematicBreak" },
+        { type: "paragraph", children: [{ type: "text", value: "mid" }] },
+      ]);
+    },
+  });
+  expect(visitAndRender("# Hello", plugin).trim()).toBe(
+    "<p>before</p>\n<hr>\n<p>mid</p>\n<p>after</p>",
+  );
+});
+
 test("context.setProperty(node, 'children', ...) replaces a node's children", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node, ctx) {
