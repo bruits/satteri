@@ -78,17 +78,17 @@ export declare function convertMdastToHastHandle(handle: MdastHandle, convertOpt
 export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
 /**
- * Parse + frontmatter + HAST conversion in one crossing (HAST-plugin path
- * head). Returns a `[handle, frontmatter]` pair.
- */
-export declare function createHastHandleWithFrontmatter(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
-
-/**
  * Parse an HTML string into structured HAST (elements, text, comments) using
  * html5ever's tree builder. Mirrors `hast-util-from-html` in document mode.
  * Returns an opaque handle; the arena stays in Rust memory.
  */
 export declare function createHastHandleFromHtml(html: string): HastHandle
+
+/**
+ * Parse + frontmatter + HAST conversion in one crossing (HAST-plugin path
+ * head). Returns a `[handle, frontmatter]` pair.
+ */
+export declare function createHastHandleWithFrontmatter(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
 
 /**
  * Parse markdown source into an MDAST arena handle.
