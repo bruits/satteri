@@ -38,6 +38,14 @@ import {
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
 
+/** Content accepted by the structural mutators: a declarative node, a raw string
+ *  re-parsed as Markdown (`mdxExpressions: false` keeps MDX `{…}` literal), or
+ *  the deprecated `{rawHtml}` alias. */
+type StructuralContent =
+  | MdastNode
+  | { raw: string; mdxExpressions?: boolean }
+  | { rawHtml: string };
+
 export function classifyReturn(value: unknown): ReturnClass {
   if (value === undefined || value === null) return "no_change";
   const v = value as Record<string, unknown>;
@@ -196,27 +204,27 @@ export class CommandBuffer extends OpWriter {
     this.utf8WithU32Len(str);
   }
 
-  insertBefore(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  insertBefore(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_INSERT_BEFORE, nodeId, newNode);
   }
 
-  insertAfter(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  insertAfter(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_INSERT_AFTER, nodeId, newNode);
   }
 
-  prependChild(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  prependChild(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_PREPEND_CHILD, nodeId, newNode);
   }
 
-  appendChild(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  appendChild(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_APPEND_CHILD, nodeId, newNode);
   }
 
-  wrapNode(nodeId: number, parentNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  wrapNode(nodeId: number, parentNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_WRAP, nodeId, parentNode);
   }
 
-  replace(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  replace(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_REPLACE, nodeId, newNode);
   }
 
@@ -235,12 +243,15 @@ export class CommandBuffer extends OpWriter {
     return this.take();
   }
 
-  /** Raw structural content (`{raw}`/`{rawHtml}` escape hatches). Declarative
+  /** Raw structural content escape hatch. The string is re-parsed as Markdown;
+   *  `mdxExpressions: false` (or the deprecated `{rawHtml}` alias) instead routes
+   *  through the brace-escaping payload so MDX `{…}` stay literal. Declarative
    *  nodes go through the `*Opstream` methods, not here. */
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {
     const v = node as Record<string, unknown>;
     if (typeof v.raw === "string") {
-      this.writePayloadCommand(cmd, nodeId, PAYLOAD_RAW_MARKDOWN, v.raw as string);
+      const payload = v.mdxExpressions === false ? PAYLOAD_RAW_HTML : PAYLOAD_RAW_MARKDOWN;
+      this.writePayloadCommand(cmd, nodeId, payload, v.raw as string);
     } else if (typeof v.rawHtml === "string") {
       this.writePayloadCommand(cmd, nodeId, PAYLOAD_RAW_HTML, v.rawHtml as string);
     } else {

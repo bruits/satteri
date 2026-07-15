@@ -100,10 +100,29 @@ import type { MdxFlowExpression, MdxTextExpression } from "../mdx-types.js";
 import type { MdxjsEsm } from "../mdx-types.js";
 import type { ContainerDirective, LeafDirective, TextDirective } from "../directive-types.js";
 
-/** New content for a structural mutation: a declarative node, or a raw markdown
- *  / HTML escape hatch. Declarative nodes compile to the op-stream; a type the
- *  op-stream can't encode is a hard error. */
-export type MdastContent = MdastNode | { raw: string } | { rawHtml: string };
+/** A raw string spliced into the tree, re-parsed as Markdown. In MDX output, set
+ *  `mdxExpressions: false` to keep `{…}` as literal text — use this when injecting
+ *  generated HTML (KaTeX, syntax highlighters, diagrams) whose braces must not be
+ *  read as JS expressions. Has no effect on Markdown output. Defaults to `true`. */
+export interface RawMdastContent {
+  raw: string;
+  mdxExpressions?: boolean;
+}
+
+/** Deprecated raw-HTML escape hatch. Kept for backwards compatibility. */
+export interface RawHtmlMdastContent {
+  /**
+   * @deprecated Use `{ raw, mdxExpressions: false }` instead. `{ rawHtml: x }` is
+   * exactly `{ raw: x, mdxExpressions: false }` — both re-parse the string as
+   * Markdown; the only difference is that MDX `{…}` are kept as literal text.
+   */
+  rawHtml: string;
+}
+
+/** New content for a structural mutation: a declarative node, or a raw string
+ *  escape hatch ({@link RawMdastContent}). Declarative nodes compile to the
+ *  op-stream; a type the op-stream can't encode is a hard error. */
+export type MdastContent = MdastNode | RawMdastContent | RawHtmlMdastContent;
 
 export interface MdastDiagnostic {
   message: string;
@@ -365,8 +384,8 @@ export class MdastVisitorContext {
 
 type MdastVisitorResult =
   | MdastNode
-  | { raw: string }
-  | { rawHtml: string }
+  | RawMdastContent
+  | RawHtmlMdastContent
   | undefined
   | null
   | void;
@@ -757,8 +776,8 @@ function alignCode(a: unknown): number {
  *  payloads instead of the declarative encoder. */
 function isRawMdastContent(
   content: MdastContent,
-): content is { raw: string } | { rawHtml: string } {
-  const c = content as Record<string, unknown>;
+): content is RawMdastContent | RawHtmlMdastContent {
+  const c = content as unknown as Record<string, unknown>;
   return typeof c.raw === "string" || typeof c.rawHtml === "string";
 }
 
@@ -843,10 +862,10 @@ function applyMdastVisitResult(
   const cls = classifyReturn(result);
   switch (cls) {
     case "raw_markdown":
-      returnBuffer.replace(nodeId, result as unknown as { raw: string });
+      returnBuffer.replace(nodeId, result as unknown as RawMdastContent);
       break;
     case "raw_html":
-      returnBuffer.replace(nodeId, result as unknown as { rawHtml: string });
+      returnBuffer.replace(nodeId, result as unknown as RawHtmlMdastContent);
       break;
     case "structured_node": {
       const node = result as MdastNode;
