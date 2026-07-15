@@ -6,6 +6,7 @@ const buttons = document.querySelectorAll<HTMLButtonElement>(".theme-toggle");
 
 function apply(theme: "light" | "dark") {
   root.dataset.theme = theme;
+  root.dataset.pfTheme = theme;
   try {
     localStorage.setItem("theme", theme);
   } catch {}
