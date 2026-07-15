@@ -28,7 +28,7 @@ fn main() -> Result<BuildOutput, Box<dyn std::error::Error>> {
         maudit_options,
     )?;
 
-    tokio::runtime::Builder::new_multi_thread()
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(build_pagefind(output_dir))?;
@@ -39,7 +39,7 @@ fn main() -> Result<BuildOutput, Box<dyn std::error::Error>> {
 async fn build_pagefind(dist: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let mut index = PagefindIndex::new(None)?;
 
-    let dist_str = dist.clone().to_string_lossy().to_string();
+    let dist_str = dist.to_string_lossy().to_string();
     index.add_directory(dist_str, None).await?;
 
     let index_dist_str = dist.join("pagefind").to_string_lossy().to_string();

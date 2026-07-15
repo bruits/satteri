@@ -119,7 +119,7 @@
   --pf-border-focus: var(--color-secondary);
   --pf-skeleton: var(--color-surface);
   --pf-skeleton-shine: var(--color-border);
-  /*--pf-hover: color-mix(in srgb, var(--color-surface) 60%, var(--color-paper));*/
+  --pf-hover: color-mix(in srgb, var(--color-surface) 60%, var(--color-paper));
   --pf-mark: var(--color-success);
   --pf-outline-focus: var(--color-secondary);
   --pf-error-bg: var(--color-error-bg);
@@ -170,7 +170,7 @@ pagefind-modal-trigger {
 
 /* Shared box-model so the highlighted <pre> overlay aligns 1:1 with the
    transparent textarea sitting on top of it. Padding, font, line-height, tab
-   stops, and wrap behaviour all have to match or the syntax colors! drift
+   stops, and wrap behaviour all have to match or the syntax colors drift
    away from the characters. */
 .demo-editor-layer {
   padding: 1rem;

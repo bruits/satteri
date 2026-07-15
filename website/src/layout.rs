@@ -107,7 +107,7 @@ const NAV_LINKS: &[(&str, &str)] = &[
 fn header() -> Markup {
     html! {
         header.border-b.border-border.bg-paper.relative.z-40 {
-            div.max-w-5xl.mx-auto.px-6.py-5.flex.gap-3.items-center."md:gap-6" {
+            div.max-w-5xl.mx-auto.px-6.py-3.flex.gap-3.items-center."md:gap-6" {
                 a.no-underline.text-ink.font-logo.text-3xl.leading-none.transition-opacity."hover:opacity-70"."mr-[12px]"."md:mr-0" href="/" {
                     "Sätteri"
                 }
