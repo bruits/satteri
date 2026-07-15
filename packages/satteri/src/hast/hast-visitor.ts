@@ -63,7 +63,6 @@ import {
 
 import {
   asArray,
-  emptyReplacementError,
   makeRequireNid,
   mergeAndReset,
   type PluginOptions,
@@ -130,7 +129,7 @@ export interface HastVisitorContext {
   removeNode(node: Readonly<HastNode>): void;
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
-   * position. An empty array throws; use `removeNode` to drop a node.
+   * position. An empty array drops the node, the same as `removeNode`.
    */
   replaceNode(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -372,8 +371,12 @@ class HastVisitorContextImpl implements HastVisitorContext {
         if (previous !== undefined) emitHastTree(this.#commandBuffer, "insertBefore", id, previous);
         previous = n;
       }
-      if (previous === undefined) throw emptyReplacementError();
-      emitHastTree(this.#commandBuffer, "replace", id, previous);
+      if (previous === undefined) {
+        // Replacing with nothing drops the node, like removeNode.
+        this.removeNode(node);
+      } else {
+        emitHastTree(this.#commandBuffer, "replace", id, previous);
+      }
       // A stale queued replacement would win: setProperty folds into it, landing last.
       this.#pendingNodes.delete(id);
       return;

@@ -272,7 +272,7 @@ declare module "satteri" {
 
 `wrapNode` places the wrapped node as `parentNode`'s **first** child. If `parentNode` declares its own children, they are kept after it. Wrapping a heading in a `<div>` that holds an anchor link yields `<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position instead, return a replacement from the visitor.
 
-`replaceNode`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and `insertChildAt` each accept either a single node or an array of nodes. An array is inserted in order at the target position, so `replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. Passing `replaceNode` an empty array throws: the other five read `[]` as "insert nothing", so an empty array is never a way to delete a node. Call `removeNode(node)` for that.
+`replaceNode`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and `insertChildAt` each accept either a single node or an array of nodes. An array is inserted in order at the target position, so `replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. Passing `replaceNode` an empty array removes the node.
 
 For MDAST, `key` must be a field of the node type and `value` must match that field's type. For HAST, `key` is a `string` and `value` is `unknown`.
 

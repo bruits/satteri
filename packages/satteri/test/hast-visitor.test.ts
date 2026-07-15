@@ -460,25 +460,21 @@ describe("visitHastHandle - mutations", () => {
     expect(renderHandle(handle).trim()).toBe("<!--before--><h2></h2><h3></h3><!--after-->");
   });
 
-  test("context.replaceNode() throws on an empty array", () => {
-    const { handle, source } = setup("# Hello");
-    let error: Error | undefined;
+  test("context.replaceNode() with an empty array drops the node, like removeNode", () => {
+    const { handle, source } = setup("# Hello\n\nWorld");
     const plugin = defineHastPlugin({
       name: "replace-with-nothing",
       element: {
         filter: ["h1"],
         visit(node, ctx) {
-          try {
-            ctx.replaceNode(node, []);
-          } catch (e) {
-            error = e as Error;
-          }
+          ctx.replaceNode(node, []);
         },
       },
     });
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
-    expect(error?.message).toMatch(/empty array.*removeNode/);
-    expect(renderHandle(handle)).toContain("<h1>Hello</h1>");
+    const html = renderHandle(handle);
+    expect(html).not.toContain("<h1>");
+    expect(html).toContain("World");
   });
 
   test("a single-element array replacement behaves like the scalar form", () => {

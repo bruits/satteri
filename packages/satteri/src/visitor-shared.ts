@@ -23,13 +23,6 @@ export function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
-/** Every other list-taking method reads `[]` as "insert nothing", so here it can't quietly delete. */
-export function emptyReplacementError(): Error {
-  return new Error(
-    "replaceNode: cannot replace a node with an empty array. Call removeNode(node) to drop it instead.",
-  );
-}
-
 /** Thrown when declarative replacement content can't be compiled to the
  *  structural op-stream — an unsupported node type (e.g. a bare `root`/`doctype`
  *  handed in as content) or an out-of-range numeric field. The op-stream is the

@@ -362,30 +362,16 @@ test("an array replacement passes the target's children through as refs", () => 
   expect(html.trim()).toBe("<p>Hello <em>there</em></p>\n<hr>");
 });
 
-test("context.replaceNode() throws on an empty array", () => {
+test("context.replaceNode() with an empty array drops the node, like removeNode", () => {
   const plugin = defineMdastPlugin({
     name: "replace-with-nothing",
     heading(node, ctx) {
       ctx.replaceNode(node, []);
     },
   });
-  expect(() => visitAndRender("# Hello", plugin)).toThrow(/empty array.*removeNode/);
-});
-
-test("a rejected empty-array replacement leaves the target untouched", () => {
-  const plugin = defineMdastPlugin({
-    name: "replace-with-nothing-caught",
-    heading(node, ctx) {
-      // The throw fires before any op is emitted, so a caller that swallows it
-      // is left with the original node intact rather than a partial mutation.
-      try {
-        ctx.replaceNode(node, []);
-      } catch {
-        // ignore
-      }
-    },
-  });
-  expect(visitAndRender("# Hello", plugin)).toContain("<h1>Hello</h1>");
+  const html = visitAndRender("# Hello\n\nWorld", plugin);
+  expect(html).not.toContain("<h1>");
+  expect(html).toContain("World");
 });
 
 test("a single-element array replacement behaves like the scalar form", () => {
