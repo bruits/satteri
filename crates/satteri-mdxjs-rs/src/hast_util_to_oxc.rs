@@ -339,7 +339,6 @@ fn one<'a>(
     }
 }
 
-/// The error for a `raw` node reaching JSX output; see the `Raw` arm of `one`.
 fn raw_html_in_mdx_error(context: &Context<'_>, node_id: u32) -> message::Message {
     message::Message {
         reason: "Cannot compile a `raw` node (raw HTML) to MDX/JSX output. \

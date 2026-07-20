@@ -51,6 +51,8 @@ pub const CMD_SET_PROPERTY: u8 = 0x0c; // [valueType: u8][name str][value str], 
 pub const CMD_SET_CHILDREN: u8 = 0x0d; // payload is a Root-wrapped child list
 
 // Structural-command payload types (0x10+, a range distinct from commands).
-pub const PAYLOAD_RAW_MARKDOWN: u8 = 0x10; // [len: u32 LE][utf8] — re-parsed as markdown
-pub const PAYLOAD_RAW_HTML: u8 = 0x11; // [len: u32 LE][utf8] — re-parsed as HTML/MDX
+pub const PAYLOAD_RAW: u8 = 0x10; // [flags: u8][len: u32 LE][utf8] — re-parsed as markdown; see RAW_* flags
 pub const PAYLOAD_OPSTREAM: u8 = 0x14; // [len: u32 LE][op bytes] — replayed straight into the arena
+
+// Flag bits for the `PAYLOAD_RAW` payload.
+pub const RAW_LITERAL_BRACES: u8 = 0x01; // keep MDX `{…}` as literal text (only affects MDX output)
