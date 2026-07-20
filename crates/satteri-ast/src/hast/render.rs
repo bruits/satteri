@@ -8,7 +8,8 @@ use crate::hast::codec::{
 use crate::hast::properties::property_to_attribute;
 use crate::hast::HastNodeType;
 use crate::shared::{
-    PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_SPACE_SEP, PROP_STRING,
+    PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
+    PROP_STRING,
 };
 
 /// Render HTML from an arena.
@@ -126,7 +127,8 @@ pub(crate) fn render_node_inner<'cb>(
                         out.push_str(&attr_name);
                     }
                     PROP_BOOL_FALSE => {}
-                    PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP => {
+                    PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP
+                    | PROP_COMMA_SEP_NUM => {
                         let value = view.get_str(value_ref);
                         out.push(' ');
                         out.push_str(&attr_name);

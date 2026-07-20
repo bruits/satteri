@@ -29,7 +29,7 @@ export const HAST_MDX_TEXT_EXPRESSION = NAME_TO_TYPE.mdxTextExpression!;
 
 export interface HastProperty {
   name: string;
-  value: string | number | boolean | string[];
+  value: string | number | boolean | (string | number)[];
 }
 
 export class HastReader {

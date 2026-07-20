@@ -33,6 +33,8 @@ pub enum PropKind {
     CommaSeparated,
     /// Comma/whitespace-split list.
     CommaOrSpaceSeparated,
+    /// Comma-split list whose numeric items become numbers (`coords`).
+    NumberCommaSeparated,
 }
 
 impl PropKind {
@@ -44,6 +46,7 @@ impl PropKind {
             4 => PropKind::SpaceSeparated,
             5 => PropKind::CommaSeparated,
             6 => PropKind::CommaOrSpaceSeparated,
+            7 => PropKind::NumberCommaSeparated,
             _ => PropKind::String,
         }
     }

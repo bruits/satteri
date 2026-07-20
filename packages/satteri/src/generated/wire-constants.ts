@@ -64,6 +64,7 @@ export const PROP_SPACE_SEP = 3; // space-separated list (UTF-8)
 export const PROP_COMMA_SEP = 4; // comma-separated list (UTF-8)
 export const PROP_INT = 5; // decimal string, parsed to i64
 export const PROP_NULL = 6; // no value bytes
+export const PROP_COMMA_SEP_NUM = 7; // comma-separated list, numeric items parsed to numbers
 
 // MDX JSX attribute kinds (MDAST and HAST MDX JSX element type_data).
 export const MDX_ATTR_BOOLEAN_PROP = 0; // name only, no value

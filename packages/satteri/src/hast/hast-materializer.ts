@@ -30,8 +30,8 @@ export const HAST_CONTAINER_TYPES: ReadonlySet<number> = new Set([
 
 function propsToRecord(
   props: HastProperty[],
-): Record<string, string | number | boolean | string[]> {
-  const result: Record<string, string | number | boolean | string[]> = {};
+): Record<string, string | number | boolean | (string | number)[]> {
+  const result: Record<string, string | number | boolean | (string | number)[]> = {};
   for (const p of props) {
     result[p.name] = p.value;
   }

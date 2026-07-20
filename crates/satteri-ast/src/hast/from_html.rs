@@ -27,7 +27,9 @@ use crate::mdast::codec::{
     decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
     decode_mdx_jsx_explicit, encode_mdx_jsx_element_data,
 };
-use crate::shared::{PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
+use crate::shared::{
+    PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP, PROP_STRING,
+};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
@@ -448,7 +450,8 @@ fn emit(
                         let (property, prop_kind) = find_property(&attr.name.local, in_svg);
                         let name_ref = builder.alloc_string(&property);
                         let value = scrub_markers(&attr.value, leaked);
-                        let (kind, value_ref) = coerce_value(builder, prop_kind, &value);
+                        let (kind, value_ref) =
+                            coerce_value(builder, prop_kind, &attr.name.local, &value);
                         (name_ref, kind, value_ref)
                     })
                     .collect();
@@ -609,10 +612,21 @@ fn reparse_children_into(src: &Arena<Hast>, parent: u32, builder: &mut ArenaBuil
 }
 
 /// Coerce an attribute string into its typed wire `(kind, value)` pair.
-fn coerce_value(builder: &mut ArenaBuilder<Hast>, kind: PropKind, value: &str) -> (u8, StringRef) {
+/// `attr_name` is the lowercased attribute name: a boolean attribute is only
+/// `true` when its value is empty or repeats the name (`disabled="disabled"`);
+/// any other value stays a string (`disabled="false"` is NOT `true`).
+fn coerce_value(
+    builder: &mut ArenaBuilder<Hast>,
+    kind: PropKind,
+    attr_name: &str,
+    value: &str,
+) -> (u8, StringRef) {
     match kind {
-        PropKind::Boolean => (PROP_BOOL_TRUE, StringRef::empty()),
-        PropKind::OverloadedBoolean if value.is_empty() => (PROP_BOOL_TRUE, StringRef::empty()),
+        PropKind::Boolean | PropKind::OverloadedBoolean
+            if value.is_empty() || value.eq_ignore_ascii_case(attr_name) =>
+        {
+            (PROP_BOOL_TRUE, StringRef::empty())
+        }
         PropKind::Number if is_numeric(value) => (PROP_INT, builder.alloc_string(value)),
         PropKind::SpaceSeparated => {
             let joined = value.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -621,6 +635,10 @@ fn coerce_value(builder: &mut ArenaBuilder<Hast>, kind: PropKind, value: &str) -
         PropKind::CommaSeparated => {
             let joined = split_comma(value).join(",");
             (PROP_COMMA_SEP, builder.alloc_string(&joined))
+        }
+        PropKind::NumberCommaSeparated => {
+            let joined = split_comma(value).join(",");
+            (PROP_COMMA_SEP_NUM, builder.alloc_string(&joined))
         }
         PropKind::CommaOrSpaceSeparated => {
             let joined = value
@@ -635,18 +653,50 @@ fn coerce_value(builder: &mut ArenaBuilder<Hast>, kind: PropKind, value: &str) -
     }
 }
 
+/// Split a comma-separated value: items are trimmed, interior empty items are
+/// kept, and only a trailing empty item is dropped (`"a,,b"` → `["a","","b"]`,
+/// `"a,"` → `["a"]`).
 fn split_comma(value: &str) -> Vec<&str> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect()
+    let mut items: Vec<&str> = value.split(',').map(str::trim).collect();
+    if items.last() == Some(&"") {
+        items.pop();
+    }
+    items
 }
 
-/// Non-empty and finite; infinities and NaN stay strings.
+/// Whether `value` coerces to a number under JavaScript `Number()` semantics,
+/// which is what consumers use to read the wire value back: decimal (with
+/// optional sign/exponent), `0x`/`0o`/`0b` integer literals, and exactly-spelled
+/// `Infinity`. Rust-only spellings (`inf`, `nan`, lowercase `infinity`) and
+/// `NaN` stay strings.
 fn is_numeric(value: &str) -> bool {
-    let trimmed = value.trim();
-    !trimmed.is_empty() && trimmed.parse::<f64>().is_ok_and(f64::is_finite)
+    let t = value.trim();
+    if t.is_empty() {
+        return false;
+    }
+    for (prefix, radix) in [
+        ("0x", 16),
+        ("0X", 16),
+        ("0o", 8),
+        ("0O", 8),
+        ("0b", 2),
+        ("0B", 2),
+    ] {
+        if let Some(digits) = t.strip_prefix(prefix) {
+            return !digits.is_empty() && digits.chars().all(|c| c.is_digit(radix));
+        }
+    }
+    let unsigned = t.strip_prefix(['+', '-']).unwrap_or(t);
+    if unsigned == "Infinity" {
+        return true;
+    }
+    if unsigned.eq_ignore_ascii_case("inf")
+        || unsigned.eq_ignore_ascii_case("infinity")
+        || unsigned.eq_ignore_ascii_case("nan")
+    {
+        return false;
+    }
+    t.parse::<f64>().is_ok()
 }
 
 /// Scripting disabled, so `<noscript>` content parses as markup rather than
@@ -692,10 +742,12 @@ pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
     builder.finish()
 }
 
-/// Parse an HTML fragment in a `<body>` context, returning the node list, the
-/// top-level node indices, and the markers of any swallowed stitches. The
-/// fragment algorithm wraps content in a synthesised `<html>` root; the
-/// returned roots are that wrapper's children.
+/// Parse an HTML fragment in a `<template>` context — the most permissive
+/// insertion mode, so table parts (`<td>`, `<tr>`, ...) survive outside a
+/// table instead of being dropped. Returns the node list, the top-level node
+/// indices, and the markers of any swallowed stitches. The fragment algorithm
+/// wraps content in a synthesised `<html>` root; the returned roots are that
+/// wrapper's children.
 fn parse_fragment_nodes(
     html: &str,
     stitch: Option<StitchRecognizer>,
@@ -703,7 +755,7 @@ fn parse_fragment_nodes(
     let context = QualName::new(
         None,
         Namespace::from(HTML_NAMESPACE),
-        LocalName::from("body"),
+        LocalName::from("template"),
     );
     let sink = parse_fragment(
         HtmlSink::new(stitch),
@@ -946,6 +998,55 @@ mod tests {
         assert_eq!(
             props_of(&arena, "img"),
             [("width".into(), PROP_STRING, "auto".into())]
+        );
+    }
+
+    /// A boolean attribute is `true` only when its value is empty or repeats
+    /// the attribute name (case-insensitively); anything else stays a string.
+    #[test]
+    fn boolean_true_only_for_empty_or_name_matching_values() {
+        let arena = html_to_hast_arena(
+            r#"<input disabled><input disabled="" data-i="2"><input disabled="disabled" data-i="3"><input disabled="DISABLED" data-i="4"><input disabled="false" data-i="5"><input checked="0" data-i="6"><a download="download">x</a><div hidden="hidden">y</div>"#,
+        );
+        let all: Vec<Vec<(String, u8, String)>> = (0..arena.len() as u32)
+            .filter(|&id| arena.get_node(id).node_type == HastNodeType::Element as u8)
+            .filter(|&id| {
+                let tag = decode_element_tag(arena.get_type_data(id));
+                arena.get_str(tag) == "input"
+            })
+            .map(|id| {
+                let data = arena.get_type_data(id);
+                (0..decode_element_prop_count(data))
+                    .map(|i| {
+                        let (name, kind, value) = decode_element_prop(data, i);
+                        (
+                            arena.get_str(name).to_string(),
+                            kind,
+                            arena.get_str(value).to_string(),
+                        )
+                    })
+                    .filter(|(name, ..)| !name.starts_with("dataI"))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            all,
+            [
+                vec![("disabled".to_string(), PROP_BOOL_TRUE, String::new())],
+                vec![("disabled".to_string(), PROP_BOOL_TRUE, String::new())],
+                vec![("disabled".to_string(), PROP_BOOL_TRUE, String::new())],
+                vec![("disabled".to_string(), PROP_BOOL_TRUE, String::new())],
+                vec![("disabled".to_string(), PROP_STRING, "false".to_string())],
+                vec![("checked".to_string(), PROP_STRING, "0".to_string())],
+            ]
+        );
+        assert_eq!(
+            props_of(&arena, "a"),
+            [("download".into(), PROP_BOOL_TRUE, String::new())]
+        );
+        assert_eq!(
+            props_of(&arena, "div"),
+            [("hidden".into(), PROP_BOOL_TRUE, String::new())]
         );
     }
 

@@ -233,7 +233,7 @@ pub(crate) static HTML_TABLE: &[(&str, &str, &str, u8)] = &[
     ("contenteditable", "contentEditable", "contenteditable", 0),
     ("controls", "controls", "controls", 1),
     ("controlslist", "controlsList", "controlslist", 4),
-    ("coords", "coords", "coords", 3),
+    ("coords", "coords", "coords", 7),
     ("credentialless", "credentialless", "credentialless", 1),
     ("crossorigin", "crossOrigin", "crossorigin", 0),
     ("data", "data", "data", 0),

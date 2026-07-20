@@ -13,6 +13,7 @@ pub const PROP_SPACE_SEP: u8 = 3; // space-separated list (UTF-8)
 pub const PROP_COMMA_SEP: u8 = 4; // comma-separated list (UTF-8)
 pub const PROP_INT: u8 = 5; // decimal string, parsed to i64
 pub const PROP_NULL: u8 = 6; // no value bytes
+pub const PROP_COMMA_SEP_NUM: u8 = 7; // comma-separated list, numeric items parsed to numbers
 
 // MDX JSX attribute kinds (MDAST and HAST MDX JSX element type_data).
 #[cfg(feature = "mdx")]
