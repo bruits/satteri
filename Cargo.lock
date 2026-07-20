@@ -1170,6 +1170,7 @@ dependencies = [
  "pulldown-cmark-escape",
  "rustc-hash",
  "satteri-arena",
+ "satteri-property-info",
  "satteri-pulldown-cmark",
  "serde",
  "serde_json",
@@ -1237,6 +1238,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "satteri-property-info"
+version = "0.1.0"
 
 [[package]]
 name = "satteri-pulldown-cmark"

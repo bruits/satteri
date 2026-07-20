@@ -109,6 +109,7 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
       result.smartPunctuation = features.smartPunctuation;
     }
   }
+  if (features.rawHtml !== undefined) result.rawHtml = features.rawHtml;
   return { features: result, convertOptions };
 }
 
@@ -442,6 +443,18 @@ export interface Features {
    * ```
    */
   smartPunctuation?: boolean | SmartPunctuationOptions;
+  /**
+   * Parse raw HTML embedded in Markdown into real HAST element nodes, the
+   * equivalent of `rehype-raw`. Default: false.
+   *
+   * By default, inline and block HTML in Markdown is kept as opaque `raw`
+   * nodes (re-emitted verbatim on stringify). With `rawHtml: true`, the tree
+   * is reparsed through an HTML parser so that raw HTML becomes structured
+   * `element`/`text`/`comment` nodes with normalized properties — including
+   * tags that open in one raw block and close in another. Positions are not
+   * preserved through the reparse.
+   */
+  rawHtml?: boolean;
 }
 
 export interface CompileOptions {

@@ -100,4 +100,19 @@ const tree = htmlToHast("<p>hi</p>");
 tree.type; // "root"
 ```
 
-It differs from `hast-util-from-html` in two documented ways: attribute names are kept verbatim (e.g. `class`, not the normalised `className` array — full `property-information` mapping is a follow-up), and `<template>` content is emitted as the element's `children` rather than a separate `content` root, so it round-trips through Sätteri but not through third-party `hast-util-to-html`.
+Attributes are normalised into hast properties exactly like `hast-util-from-html` (`class` → `className: ["…"]`, `disabled` → `true`, `tabindex` → a number, `data-foo-bar` → `dataFooBar`), using the same `property-information` tables. It differs in one documented way: `<template>` content is emitted as the element's `children` rather than a separate `content` root, so it round-trips through Sätteri but not through third-party `hast-util-to-html`.
+
+## Reparsing raw HTML (`rehype-raw`)
+
+By default, inline and block HTML in Markdown is preserved as opaque `raw` nodes and re-emitted verbatim. Pass `features: { rawHtml: true }` to reparse it into structured HAST — the equivalent of [`rehype-raw`](https://github.com/rehypejs/rehype-raw):
+
+```js
+import { markdownToHast } from "satteri";
+
+const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
+  features: { rawHtml: true },
+});
+// <div> is now a real element wrapping the parsed <p><strong>hi</strong></p>
+```
+
+Like `rehype-raw`, the whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Positions are not preserved through the reparse.

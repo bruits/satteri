@@ -49,11 +49,17 @@ describe("htmlToHast", () => {
     expect(text.value).toBe("hi");
   });
 
-  test("captures element attributes", () => {
-    const tree = htmlToHast(`<a href="/x" class="y">z</a>`);
+  test("captures element attributes, normalized like property-information", () => {
+    const tree = htmlToHast(`<a href="/x" class="y" download tabindex="2">z</a>`);
     const a = findElement(tree, "a")!;
     if (a.type !== "element") return;
-    expect(a.properties).toMatchObject({ href: "/x", class: "y" });
+    // `class` → `className` array, `download` → boolean, `tabindex` → number.
+    expect(a.properties).toMatchObject({
+      href: "/x",
+      className: ["y"],
+      download: true,
+      tabIndex: 2,
+    });
   });
 
   test("decodes character references in text", () => {

@@ -13,7 +13,7 @@ pub use crate::convert::{
     mdast_arena_to_hast_arena_with_options, Backref, ConvertOptions,
 };
 #[cfg(feature = "from-html")]
-pub use from_html::html_to_hast_arena;
+pub use from_html::{html_to_hast_arena, raw_to_hast_arena};
 pub use node::HastNodeType;
 pub use render::{hast_arena_to_html, render_node};
 

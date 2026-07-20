@@ -179,6 +179,12 @@ export interface JsFeatures {
   smartPunctuation?: boolean
   /** Granular smart-punctuation control (overrides `smart_punctuation`). */
   smartPunctuationOptions?: JsSmartPunctuationOptions
+  /**
+   * Parse raw HTML embedded in Markdown into real HAST nodes, the equivalent
+   * of `rehype-raw`. Default: false. Only effective in builds with the
+   * `from-html` feature.
+   */
+  rawHtml?: boolean
 }
 
 /** Frontmatter extracted from an MDAST arena. */
