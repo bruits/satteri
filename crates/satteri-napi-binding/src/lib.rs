@@ -69,10 +69,6 @@ pub struct JsFeatures {
     pub smart_punctuation: Option<bool>,
     /// Granular smart-punctuation control (overrides `smart_punctuation`).
     pub smart_punctuation_options: Option<JsSmartPunctuationOptions>,
-    /// Parse raw HTML embedded in Markdown into real HAST nodes, the equivalent
-    /// of `rehype-raw`. Default: false. Only effective in builds with the
-    /// `from-html` feature.
-    pub raw_html: Option<bool>,
 }
 
 fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulldown_cmark::Options {
@@ -92,7 +88,6 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
         definition_list: None,
         smart_punctuation: None,
         smart_punctuation_options: None,
-        raw_html: None,
     });
 
     let mut opts = Options::empty();
@@ -233,6 +228,9 @@ pub struct JsConvertOptions {
     /// footnote number (`1`) or `number-K` (`1-2`) for repeated references.
     /// Default: `"Back to reference {reference}"`.
     pub footnote_back_label: Option<Either<String, FunctionRef<FnArgs<(u32, u32)>, String>>>,
+    /// Reparse raw HTML embedded in markdown into real HAST nodes. Default:
+    /// false. Only effective in builds with the `from-html` feature.
+    pub raw_html: Option<bool>,
 }
 
 fn js_backref_to_rust(
@@ -266,6 +264,10 @@ fn js_convert_options_to_rust(
         }
         if let Some(v) = js.footnote_back_label {
             out.footnote_back_label = js_backref_to_rust(env, v);
+        }
+        #[cfg(feature = "from-html")]
+        if let Some(v) = js.raw_html {
+            out.raw_html = v;
         }
     }
     out
@@ -524,7 +526,6 @@ fn create_hast_handle_impl(
     track_positions: bool,
     want_frontmatter: bool,
 ) -> Result<(HastHandle, Option<JsFrontmatter>)> {
-    let raw_html = features.as_ref().and_then(|f| f.raw_html).unwrap_or(false);
     let opts = features_to_options(features, mdx);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     let mdast = parse_mdast_pooled(source, opts, mdx, track_positions)?;
@@ -539,13 +540,6 @@ fn create_hast_handle_impl(
         acquire_hast_arena(),
     );
     release_mdast_arena(mdast);
-    // `rehype-raw` equivalent: reparse embedded raw HTML into real HAST nodes.
-    #[cfg(feature = "from-html")]
-    if raw_html {
-        hast = satteri_ast::hast::raw_to_hast_arena(&hast);
-    }
-    #[cfg(not(feature = "from-html"))]
-    let _ = raw_html;
     hast.mdx = mdx;
     hast.parse_options = opts.bits();
     Ok((External::new(Mutex::new(hast)), frontmatter))
@@ -967,8 +961,7 @@ pub fn create_hast_handle(
     Ok(handle)
 }
 
-/// Parse an HTML string into structured HAST (elements, text, comments) using
-/// html5ever's tree builder. Mirrors `hast-util-from-html` in document mode.
+/// Parse an HTML string into structured HAST (elements, text, comments).
 /// Returns an opaque handle; the arena stays in Rust memory.
 #[cfg(feature = "from-html")]
 #[napi]

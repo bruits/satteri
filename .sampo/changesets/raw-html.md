@@ -2,7 +2,7 @@
 npm/satteri: minor
 ---
 
-Added a `rawHtml` feature that reparses raw HTML embedded in Markdown into real HAST nodes — the equivalent of `rehype-raw`. Enable it with `markdownToHast(source, { features: { rawHtml: true } })`.
+Added a `rawHtml` feature that reparses raw HTML embedded in Markdown into real HAST nodes — the equivalent of `rehype-raw`. Enable it with `features: { rawHtml: true }` on any entry point; it is applied during the MDAST→HAST conversion, so `markdownToHast`, `markdownToHtml`, and the plugin pipelines all reparse identically, and hast plugins see the reparsed elements (matching `rehype-raw`'s position in a unified pipeline).
 
 The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalized into hast properties (`class` → `className: [...]`, `disabled` → `true`, `tabindex` → number, `data-foo-bar` → `dataFooBar`) using the same `property-information` tables as `hast-util-from-html`, so the output matches `rehype-raw`. `htmlToHast` now normalizes properties the same way.
 
