@@ -91,7 +91,7 @@ tree.children[0].depth; // 1
 
 This is useful when you want Sätteri's fast native parsing but another pipeline (e.g. remark plugins and `remark-stringify`) for the rest. The returned tree is plain objects, yours to keep — see [Node lifetime](/docs/plugin-api/#node-lifetime) for why that matters.
 
-`htmlToHast` is the exception: it parses an HTML string (not Markdown or MDX) into HAST using html5ever's spec-compliant tree builder, the equivalent of `hast-util-from-html` in document mode. Use it to bring existing HTML into a HAST plugin pipeline.
+`htmlToHast` is the exception: it parses an HTML string (not Markdown or MDX) into HAST using html5ever's spec-compliant tree builder, in document mode: the result is a `root` wrapping the implied `<html>` subtree. Use it to bring existing HTML into a HAST plugin pipeline.
 
 ```js
 import { htmlToHast } from "satteri";
@@ -100,11 +100,11 @@ const tree = htmlToHast("<p>hi</p>");
 tree.type; // "root"
 ```
 
-Attributes are normalised into hast properties exactly like `hast-util-from-html` (`class` → `className: ["…"]`, `disabled` → `true`, `tabindex` → a number, `data-foo-bar` → `dataFooBar`), using the same `property-information` tables. It differs in one documented way: `<template>` content is emitted as the element's `children` rather than a separate `content` root, so it round-trips through Sätteri but not through third-party `hast-util-to-html`.
+Attributes are normalised into typed hast properties (`class` → `className: ["…"]`, `disabled` → `true`, `tabindex` → a number, `data-foo-bar` → `dataFooBar`). One deliberate divergence from standard hast: `<template>` content is emitted as the element's `children` rather than a separate `content` root, so external serializers that only read `content` will not re-serialize it.
 
-## Reparsing raw HTML (`rehype-raw`)
+## Reparsing raw HTML (`rawHtml`)
 
-By default, inline and block HTML in Markdown is preserved as opaque `raw` nodes and re-emitted verbatim. Pass `features: { rawHtml: true }` to reparse it into structured HAST — the equivalent of [`rehype-raw`](https://github.com/rehypejs/rehype-raw):
+By default, inline and block HTML in Markdown is preserved as opaque `raw` nodes and re-emitted verbatim. Pass `features: { rawHtml: true }` to reparse it into structured HAST:
 
 ```js
 import { markdownToHast } from "satteri";
@@ -115,4 +115,4 @@ const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
 // <div> is now a real element wrapping the parsed <p><strong>hi</strong></p>
 ```
 
-Like `rehype-raw`, the whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Positions are not preserved through the reparse.
+The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Positions are not preserved through the reparse.
