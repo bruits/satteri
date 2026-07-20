@@ -319,17 +319,7 @@ For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, 
 
 The `mdxExpressions` option (default `true`) controls how MDX curly braces in the string are treated. With the default, `{…}` is a live MDX expression. Set `mdxExpressions: false` to keep `{` and `}` as **literal text** — necessary when you inject generated HTML whose braces are not expressions, e.g. a Mermaid decision node `C{JWT valid?}` or KaTeX/Shiki output. In plain Markdown output the option has no effect (there are no MDX expressions), so `{ raw }` and `{ raw, mdxExpressions: false }` are identical there.
 
-:::caution[Inject HTML with `{ raw, mdxExpressions: false }`, not an `html` node]
-To splice HTML into the output, return `{ raw: "<span>…</span>", mdxExpressions: false }` — **not** an mdast `html` node such as `{ type: "html", value: "<span>…</span>" }`.
 
-An `html` node is opaque, unparsed HTML. It renders verbatim in Markdown/HTML output, but JSX has no way to represent an unparsed HTML string, so compiling one to **MDX throws** (`raw-html`). `{ raw }` avoids this: it is re-parsed into real elements, so it works in both Markdown and MDX.
-
-This matters most for plugins that generate markup — syntax highlighters, math renderers (KaTeX), diagram tools. If such a plugin returns `{ type: "html" }`, it will appear to work in Markdown but break under MDX.
-:::
-
-:::note[`rawHtml` is deprecated]
-`{ rawHtml: x }` is equivalent to `{ raw: x, mdxExpressions: false }` and remains supported for backwards compatibility, but is deprecated — prefer the `raw` form. The old name implied HTML parsing; in reality both spellings re-parse the string as Markdown, and the only difference is whether MDX `{…}` are kept literal.
-:::
 
 ## Async plugins
 
