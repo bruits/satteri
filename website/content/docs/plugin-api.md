@@ -315,7 +315,7 @@ For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, 
 | `{ raw: string }`                       | Splice a string, re-parsed as Markdown  | N/A     |
 | `{ raw: string, mdxExpressions: false }`| Same, but keep MDX `{…}` literal        | N/A     |
 
-`{ raw }` takes a string and re-parses it as Markdown, splicing the result in place of the node. Any HTML in that string is passed through, so this is also how you inject HTML.
+`{ raw }` takes a string and re-parses it as Markdown, splicing the result in place of the node.
 
 The `mdxExpressions` option (default `true`) controls how MDX curly braces in the string are treated. With the default, `{…}` is a live MDX expression. Set `mdxExpressions: false` to keep `{` and `}` as **literal text** — necessary when you inject generated HTML whose braces are not expressions, e.g. a Mermaid decision node `C{JWT valid?}` or KaTeX/Shiki output. In plain Markdown output the option has no effect (there are no MDX expressions), so `{ raw }` and `{ raw, mdxExpressions: false }` are identical there.
 
