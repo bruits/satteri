@@ -91,7 +91,7 @@ tree.children[0].depth; // 1
 
 This is useful when you want Sätteri's fast native parsing but another pipeline (e.g. remark plugins and `remark-stringify`) for the rest. The returned tree is plain objects, yours to keep — see [Node lifetime](/docs/plugin-api/#node-lifetime) for why that matters.
 
-`htmlToHast` is the exception: it parses an HTML string (not Markdown or MDX) into HAST using html5ever's spec-compliant tree builder, in document mode: the result is a `root` wrapping the implied `<html>` subtree. Use it to bring existing HTML into a HAST plugin pipeline.
+`htmlToHast` is the exception: it parses an HTML string (not Markdown or MDX) into HAST, with the same spec-compliant parsing a browser does — malformed markup is recovered, implied elements are filled in. The result is a `root` wrapping the implied `<html>` subtree. Use it to bring existing HTML into a HAST plugin pipeline.
 
 ```js
 import { htmlToHast } from "satteri";
