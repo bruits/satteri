@@ -6,6 +6,8 @@ Added a `rawHtml` feature that reparses raw HTML embedded in Markdown into real 
 
 The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalized into hast properties (`class` → `className: [...]`, `disabled` → `true`, `tabindex` → number, `data-foo-bar` → `dataFooBar`) using the same `property-information` tables as `hast-util-from-html`, so the output matches `rehype-raw`. `htmlToHast` now normalizes properties the same way.
 
+MDX nodes are passed through the reparse rather than dropped, mirroring `rehype-raw`'s `passThrough`: each JSX element/expression is preserved in place while the surrounding raw HTML is still resolved around it. So `mdxToHast(source, { features: { rawHtml: true } })` keeps its MDX content.
+
 ```ts
 import { markdownToHast } from "satteri";
 

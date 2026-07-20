@@ -54,11 +54,42 @@ pub fn render_node(
     in_raw_text: bool,
     in_svg: bool,
 ) {
+    render_node_inner(node_id, view, out, in_raw_text, in_svg, None);
+}
+
+/// Comment marker used to carry non-HTML nodes (MDX) through the raw-HTML
+/// reparse. [`crate::hast::from_html`] serialises each such node as
+/// `<!--{STITCH_COMMENT_PREFIX}{index}-->`, parses that alongside the rest of
+/// the tree, then swaps each parsed placeholder comment back for the original
+/// subtree. Mirrors `hast-util-raw`'s "stitches".
+pub(crate) const STITCH_COMMENT_PREFIX: &str = "satteri:stitch:";
+
+/// Render a HAST node subtree to HTML.
+///
+/// When `stitches` is `Some`, MDX nodes — which have no HTML representation —
+/// are emitted as placeholder comments and their ids pushed onto the
+/// accumulator, so the raw-HTML reparse can restore them instead of dropping
+/// them. When `None` (normal rendering), MDX nodes are skipped as before.
+pub(crate) fn render_node_inner(
+    node_id: u32,
+    view: &Arena<Hast>,
+    out: &mut String,
+    in_raw_text: bool,
+    in_svg: bool,
+    mut stitches: Option<&mut Vec<u32>>,
+) {
     let node = view.get_node(node_id);
 
     let Some(node_type) = HastNodeType::from_u8(node.node_type) else {
         for &child_id in view.get_children(node_id) {
-            render_node(child_id, view, out, in_raw_text, in_svg);
+            render_node_inner(
+                child_id,
+                view,
+                out,
+                in_raw_text,
+                in_svg,
+                stitches.as_mut().map(|s| &mut **s),
+            );
         }
         return;
     };
@@ -66,7 +97,14 @@ pub fn render_node(
     match node_type {
         HastNodeType::Root => {
             for &child_id in view.get_children(node_id) {
-                render_node(child_id, view, out, in_raw_text, in_svg);
+                render_node_inner(
+                    child_id,
+                    view,
+                    out,
+                    in_raw_text,
+                    in_svg,
+                    stitches.as_mut().map(|s| &mut **s),
+                );
             }
         }
 
@@ -114,7 +152,14 @@ pub fn render_node(
                 out.push('>');
                 let child_in_raw_text = in_raw_text || is_raw_text_element(tag);
                 for &child_id in view.get_children(node_id) {
-                    render_node(child_id, view, out, child_in_raw_text, element_in_svg);
+                    render_node_inner(
+                        child_id,
+                        view,
+                        out,
+                        child_in_raw_text,
+                        element_in_svg,
+                        stitches.as_mut().map(|s| &mut **s),
+                    );
                 }
                 out.push_str("</");
                 out.push_str(tag);
@@ -159,22 +204,25 @@ pub fn render_node(
             }
         }
 
-        // MDX nodes have no HTML representation and are skipped. The arm is
-        // cfg-split only to keep the match exhaustive in both builds: the enum
-        // variants always exist (they carry wire-format discriminants), so the
-        // lite build still needs to name them even though MDX is compiled out.
-        #[cfg(feature = "mdx")]
+        // MDX nodes have no HTML representation. In a normal render (`stitches`
+        // is `None`) they are skipped. During the raw-HTML reparse (`stitches`
+        // is `Some`) each is emitted as a placeholder comment and its id
+        // recorded, so the reparse can restore the original node afterwards
+        // rather than destroying it — mirroring `hast-util-raw`'s passthrough.
         HastNodeType::MdxJsxElement
         | HastNodeType::MdxJsxTextElement
         | HastNodeType::MdxFlowExpression
         | HastNodeType::MdxTextExpression
-        | HastNodeType::MdxEsm => {}
-        #[cfg(not(feature = "mdx"))]
-        HastNodeType::MdxJsxElement
-        | HastNodeType::MdxJsxTextElement
-        | HastNodeType::MdxFlowExpression
-        | HastNodeType::MdxTextExpression
-        | HastNodeType::MdxEsm => {}
+        | HastNodeType::MdxEsm => {
+            if let Some(stitches) = stitches.as_mut() {
+                let index = stitches.len();
+                stitches.push(node_id);
+                out.push_str("<!--");
+                out.push_str(STITCH_COMMENT_PREFIX);
+                out.push_str(&index.to_string());
+                out.push_str("-->");
+            }
+        }
     }
 }
 

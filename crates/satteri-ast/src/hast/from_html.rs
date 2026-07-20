@@ -30,9 +30,17 @@ use html5ever::{
 use satteri_arena::{Arena, ArenaBuilder, Hast, StringRef};
 use satteri_property_info::{find_property, PropKind};
 
-use crate::hast::codec::encode_element_data;
-use crate::hast::render::render_node;
+use crate::hast::codec::{
+    decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
+    encode_element_data,
+};
+use crate::hast::render::{render_node_inner, STITCH_COMMENT_PREFIX};
 use crate::hast::HastNodeType;
+#[cfg(feature = "mdx")]
+use crate::mdast::codec::{
+    decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
+    decode_mdx_jsx_explicit, encode_mdx_jsx_element_data,
+};
 use crate::shared::{PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
@@ -301,10 +309,13 @@ impl TreeSink for HtmlSink {
     }
 }
 
-/// A unit of work for the iterative emitter: emit a node (scheduling its
-/// subtree), or close the element that a previously emitted node opened.
+/// A unit of work for the iterative emitter: emit a node from the parsed sink
+/// tree (scheduling its subtree), splice a preserved node back in from the
+/// source arena (`EmitArena`, used for `hast-util-raw`-style MDX passthrough),
+/// or close the element that a previously emitted node opened.
 enum EmitTask {
     Emit(usize),
+    EmitArena(u32),
     Close,
 }
 
@@ -315,7 +326,20 @@ enum EmitTask {
 /// recursive walk would overflow the native stack — and abort the process —
 /// on adversarially deep input like `"<div>".repeat(100_000)`. The explicit
 /// stack moves that growth to the heap.
-fn emit(nodes: &[Node], roots: &[usize], builder: &mut ArenaBuilder<Hast>) {
+///
+/// `src`/`stitches` drive MDX passthrough: when the parsed tree contains a
+/// placeholder comment (`<!--satteri:stitch:N-->`, emitted by
+/// [`render_node_inner`] for a node with no HTML form), the emitter splices the
+/// original subtree — `stitches[N]` in `src` — back in via [`EmitTask::EmitArena`]
+/// instead of emitting the comment. `src` is `None` for [`html_to_hast_arena`],
+/// which never stitches.
+fn emit(
+    nodes: &[Node],
+    roots: &[usize],
+    builder: &mut ArenaBuilder<Hast>,
+    src: Option<&Arena<Hast>>,
+    stitches: &[u32],
+) {
     // Seed with the roots reversed, so they pop in document order.
     let mut stack: Vec<EmitTask> = roots.iter().rev().map(|&id| EmitTask::Emit(id)).collect();
 
@@ -323,6 +347,10 @@ fn emit(nodes: &[Node], roots: &[usize], builder: &mut ArenaBuilder<Hast>) {
         let id = match task {
             EmitTask::Close => {
                 builder.close_node();
+                continue;
+            }
+            EmitTask::EmitArena(aid) => {
+                emit_arena_node(src.expect("EmitArena without a source arena"), aid, builder, &mut stack);
                 continue;
             }
             EmitTask::Emit(id) => id,
@@ -345,6 +373,14 @@ fn emit(nodes: &[Node], roots: &[usize], builder: &mut ArenaBuilder<Hast>) {
                     .set_type_data(leaf, &text_ref.as_bytes());
             }
             NodeData::Comment { contents } => {
+                // A placeholder comment stands in for a preserved MDX node:
+                // splice the original subtree from `src` rather than emitting a
+                // comment. `parse_stitch` only matches our own marker, so real
+                // comments fall through untouched.
+                if let Some(index) = parse_stitch(contents, stitches) {
+                    stack.push(EmitTask::EmitArena(stitches[index]));
+                    continue;
+                }
                 let text_ref = builder.alloc_string(contents);
                 let leaf = builder.add_leaf_raw(HastNodeType::Comment as u8);
                 builder
@@ -398,6 +434,141 @@ fn emit(nodes: &[Node], roots: &[usize], builder: &mut ArenaBuilder<Hast>) {
             }
         }
     }
+}
+
+/// If `contents` is one of our stitch placeholders (`satteri:stitch:N`),
+/// return the stitch index `N`, but only when it is in range for `stitches`.
+/// Any other comment (including a coincidental look-alike with an out-of-range
+/// index) returns `None` and is emitted as a normal comment.
+fn parse_stitch(contents: &str, stitches: &[u32]) -> Option<usize> {
+    let index: usize = contents.strip_prefix(STITCH_COMMENT_PREFIX)?.parse().ok()?;
+    (index < stitches.len()).then_some(index)
+}
+
+/// Copy the source-arena subtree rooted at `aid` into `builder`, scheduling its
+/// children (and a matching `Close`) on `stack`. Used to splice a preserved MDX
+/// node back into the reparsed tree. Strings are re-allocated into the builder's
+/// pool and the type-data re-encoded, since `src` and the builder have separate
+/// string pools.
+fn emit_arena_node(
+    src: &Arena<Hast>,
+    aid: u32,
+    builder: &mut ArenaBuilder<Hast>,
+    stack: &mut Vec<EmitTask>,
+) {
+    let node_type = src.get_node(aid).node_type;
+    let data = src.get_type_data(aid);
+
+    // Schedule `aid`'s children (reversed, so they pop in document order) after
+    // a `Close`. Shared by every container arm below.
+    let open_container = |stack: &mut Vec<EmitTask>| {
+        stack.push(EmitTask::Close);
+        for &child in src.get_children(aid).iter().rev() {
+            stack.push(EmitTask::EmitArena(child));
+        }
+    };
+
+    match HastNodeType::from_u8(node_type) {
+        Some(HastNodeType::Root) => {
+            for &child in src.get_children(aid).iter().rev() {
+                stack.push(EmitTask::EmitArena(child));
+            }
+        }
+        Some(HastNodeType::Doctype) => {
+            builder.add_leaf_raw(HastNodeType::Doctype as u8);
+        }
+        Some(HastNodeType::Text | HastNodeType::Comment | HastNodeType::Raw) if data.len() >= 8 => {
+            let value = src.get_str(decode_text_data(data)).to_owned();
+            let value_ref = builder.alloc_string(&value);
+            let leaf = builder.add_leaf_raw(node_type);
+            builder.arena_mut().set_type_data(leaf, &value_ref.as_bytes());
+        }
+        Some(HastNodeType::Element) if data.len() >= 16 => {
+            let tag = src.get_str(decode_element_tag(data)).to_owned();
+            let props: Vec<(String, u8, String)> = (0..decode_element_prop_count(data))
+                .map(|i| {
+                    let (name, kind, value) = decode_element_prop(data, i);
+                    (src.get_str(name).to_owned(), kind, src.get_str(value).to_owned())
+                })
+                .collect();
+            let tag_ref = builder.alloc_string(&tag);
+            let props: Vec<(StringRef, u8, StringRef)> = props
+                .iter()
+                .map(|(name, kind, value)| {
+                    (builder.alloc_string(name), *kind, builder.alloc_string(value))
+                })
+                .collect();
+            let element = builder.open_node_raw(HastNodeType::Element as u8);
+            let encoded = encode_element_data(tag_ref, &props);
+            builder.arena_mut().set_type_data(element, &encoded);
+            open_container(stack);
+        }
+        #[cfg(feature = "mdx")]
+        Some(HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement) if data.len() >= 16 => {
+            let name = src.get_str(decode_mdx_jsx_element_name(data)).to_owned();
+            let explicit = decode_mdx_jsx_explicit(data);
+            let attrs: Vec<(u8, String, String)> = (0..decode_mdx_jsx_attr_count(data))
+                .map(|i| {
+                    let (kind, name, value) = decode_mdx_jsx_attr(data, i);
+                    (kind, src.get_str(name).to_owned(), src.get_str(value).to_owned())
+                })
+                .collect();
+            let name_ref = builder.alloc_string(&name);
+            let attrs: Vec<(u8, StringRef, StringRef)> = attrs
+                .iter()
+                .map(|(kind, name, value)| {
+                    (*kind, builder.alloc_string(name), builder.alloc_string(value))
+                })
+                .collect();
+            let element = builder.open_node_raw(node_type);
+            let encoded = encode_mdx_jsx_element_data(name_ref, &attrs, explicit);
+            builder.arena_mut().set_type_data(element, &encoded);
+            // Passthrough recurses into the MDX node's own children, reparsing
+            // them so raw HTML nested inside the element is resolved too (the
+            // `[<x>]</x>` case) — matching `hast-util-raw`, which runs the
+            // passed-through node's children back through the parser rather than
+            // copying them verbatim.
+            reparse_children_into(src, aid, builder);
+            builder.close_node();
+        }
+        #[cfg(feature = "mdx")]
+        Some(HastNodeType::MdxFlowExpression | HastNodeType::MdxTextExpression | HastNodeType::MdxEsm)
+            if data.len() >= 8 =>
+        {
+            let value = src.get_str(decode_text_data(data)).to_owned();
+            let value_ref = builder.alloc_string(&value);
+            let leaf = builder.add_leaf_raw(node_type);
+            builder.arena_mut().set_type_data(leaf, &value_ref.as_bytes());
+        }
+        // Unknown discriminant, or a known node with a malformed/empty type-data
+        // buffer: preserve its children so a wrapper never silently swallows a
+        // whole subtree. (MDX arms are compiled out in non-`mdx` builds, where
+        // such nodes cannot occur anyway.)
+        _ => {
+            for &child in src.get_children(aid).iter().rev() {
+                stack.push(EmitTask::EmitArena(child));
+            }
+        }
+    }
+}
+
+/// Serialise `parent`'s children to HTML — MDX nodes become stitch placeholders
+/// — reparse that as a fragment, and emit the result into `builder` at the
+/// currently open node.
+///
+/// Shared by the top-level raw reparse ([`raw_to_hast_arena`], where `parent` is
+/// the root) and by the passthrough of a preserved MDX node's own children, so
+/// raw HTML nested inside an MDX element is resolved just like top-level raw
+/// HTML. Recurses through [`emit`] → [`emit_arena_node`] once per nested MDX
+/// level, mirroring `hast-util-raw`'s recursive stitch.
+fn reparse_children_into(src: &Arena<Hast>, parent: u32, builder: &mut ArenaBuilder<Hast>) {
+    let mut html = String::new();
+    let mut stitches: Vec<u32> = Vec::new();
+    for &child in src.get_children(parent) {
+        render_node_inner(child, src, &mut html, false, false, Some(&mut stitches));
+    }
+    let (nodes, roots) = parse_fragment_nodes(&html);
+    emit(&nodes, &roots, builder, Some(src), &stitches);
 }
 
 /// Coerce an attribute string value into a typed hast property, mirroring
@@ -469,7 +640,7 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node_raw(HastNodeType::Root as u8);
-    emit(&nodes, &nodes[0].children, &mut builder);
+    emit(&nodes, &nodes[0].children, &mut builder, None, &[]);
     builder.close_node();
     builder.finish()
 }
@@ -485,16 +656,24 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
 /// `rehype-raw` performs. The result is a fresh `root` with no synthesised
 /// `<html>`/`<head>`/`<body>` wrapper, matching `rehype-raw`'s output.
 ///
+/// MDX nodes (JSX elements and expressions) have no HTML form. Rather than
+/// being dropped by the serialise/reparse round-trip, they are passed through:
+/// each is serialised as a placeholder comment and swapped back into its
+/// reparsed position afterwards, so raw tags that open before and close after an
+/// MDX node still resolve around it. This mirrors `hast-util-raw`'s `passThrough`
+/// (which `rehype-raw` uses for MDX), so `mdxToHast(.., { rawHtml: true })`
+/// keeps its MDX content instead of destroying it.
+///
 /// Positions are not preserved: the reparse works from serialised HTML, so the
 /// tree is rebuilt from scratch (as it effectively is under `rehype-raw` too).
 pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
-    let mut html = String::new();
-    render_node(0, arena, &mut html, false, false);
-
-    let (nodes, roots) = parse_fragment_nodes(&html);
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node_raw(HastNodeType::Root as u8);
-    emit(&nodes, &roots, &mut builder);
+    // Reparse the root's children. MDX nodes have no HTML form, so they are
+    // serialised as placeholder comments and swapped back into their reparsed
+    // positions (see `reparse_children_into`), mirroring `hast-util-raw`'s
+    // passthrough — the surrounding raw HTML still resolves around them.
+    reparse_children_into(arena, 0, &mut builder);
     builder.close_node();
     builder.finish()
 }
@@ -799,6 +978,137 @@ mod tests {
         assert_eq!(
             props_of(&reparsed, "div"),
             [("className".into(), PROP_SPACE_SEP, "n".into())]
+        );
+    }
+
+    /// `rehype-raw`-style passthrough: an MDX node has no HTML form, so the raw
+    /// reparse must preserve it — including resolving raw tags that open before
+    /// and close after it (the `[<x>]</x>` case from `hast-util-raw`). Without
+    /// passthrough the whole `<section>` subtree would be destroyed.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_preserves_mdx_nodes_and_wraps_them_in_surrounding_raw() {
+        use crate::shared::MDX_ATTR_EXPRESSION_PROP;
+
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(HastNodeType::Root as u8);
+
+        // A `<section>` opened in one raw node and closed in a later one, with a
+        // preserved `<Foo bar={1}>hi</Foo>` MDX element parked between them.
+        let open = b.alloc_string("<section>");
+        let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
+        b.arena_mut().set_type_data(leaf, &open.as_bytes());
+
+        let name = b.alloc_string("Foo");
+        let attr_name = b.alloc_string("bar");
+        let attr_value = b.alloc_string("1");
+        let mdx = b.open_node_raw(HastNodeType::MdxJsxElement as u8);
+        let data = encode_mdx_jsx_element_data(
+            name,
+            &[(MDX_ATTR_EXPRESSION_PROP, attr_name, attr_value)],
+            true,
+        );
+        b.arena_mut().set_type_data(mdx, &data);
+        let hi = b.alloc_string("hi");
+        let text = b.add_leaf_raw(HastNodeType::Text as u8);
+        b.arena_mut().set_type_data(text, &hi.as_bytes());
+        b.close_node(); // </Foo>
+
+        let close = b.alloc_string("</section>");
+        let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
+        b.arena_mut().set_type_data(leaf, &close.as_bytes());
+
+        b.close_node(); // </root>
+        let arena = b.finish();
+
+        let reparsed = raw_to_hast_arena(&arena);
+
+        // root > section(element) > Foo(mdx) > "hi"(text)
+        let root_children = reparsed.get_children(0);
+        assert_eq!(root_children.len(), 1, "single <section> at the root");
+        let section = root_children[0];
+        assert_eq!(reparsed.get_node(section).node_type, HastNodeType::Element as u8);
+        assert_eq!(
+            reparsed.get_str(decode_element_tag(reparsed.get_type_data(section))),
+            "section"
+        );
+
+        let section_children = reparsed.get_children(section);
+        assert_eq!(section_children.len(), 1, "<section> wraps the MDX node");
+        let foo = section_children[0];
+        assert_eq!(
+            reparsed.get_node(foo).node_type,
+            HastNodeType::MdxJsxElement as u8,
+            "the MDX node survived the reparse"
+        );
+
+        let foo_data = reparsed.get_type_data(foo);
+        assert_eq!(reparsed.get_str(decode_mdx_jsx_element_name(foo_data)), "Foo");
+        assert!(decode_mdx_jsx_explicit(foo_data));
+        assert_eq!(decode_mdx_jsx_attr_count(foo_data), 1);
+        let (kind, an, av) = decode_mdx_jsx_attr(foo_data, 0);
+        assert_eq!(kind, MDX_ATTR_EXPRESSION_PROP);
+        assert_eq!(reparsed.get_str(an), "bar");
+        assert_eq!(reparsed.get_str(av), "1");
+
+        let foo_children = reparsed.get_children(foo);
+        assert_eq!(foo_children.len(), 1);
+        let text = foo_children[0];
+        assert_eq!(reparsed.get_node(text).node_type, HastNodeType::Text as u8);
+        assert_eq!(
+            reparsed.get_str(decode_text_data(reparsed.get_type_data(text))),
+            "hi"
+        );
+    }
+
+    /// Passthrough recurses: a `raw` node nested *inside* a preserved MDX element
+    /// is itself reparsed into real nodes (matching `hast-util-raw`), not copied
+    /// through verbatim.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_recurses_into_mdx_element_children() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(HastNodeType::Root as u8);
+
+        // <Note> containing a single raw node `<em>hi</em>`.
+        let name = b.alloc_string("Note");
+        let mdx = b.open_node_raw(HastNodeType::MdxJsxElement as u8);
+        let data = encode_mdx_jsx_element_data(name, &[], true);
+        b.arena_mut().set_type_data(mdx, &data);
+
+        let raw = b.alloc_string("<em>hi</em>");
+        let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
+        b.arena_mut().set_type_data(leaf, &raw.as_bytes());
+
+        b.close_node(); // </Note>
+        b.close_node(); // </root>
+        let arena = b.finish();
+
+        let reparsed = raw_to_hast_arena(&arena);
+
+        // root > Note(mdx) > em(element) > "hi"(text): the nested raw became <em>.
+        let note = reparsed.get_children(0)[0];
+        assert_eq!(
+            reparsed.get_node(note).node_type,
+            HastNodeType::MdxJsxElement as u8,
+            "the MDX element is preserved"
+        );
+        let note_children = reparsed.get_children(note);
+        assert_eq!(note_children.len(), 1, "nested raw reparsed to one element");
+        let em = note_children[0];
+        assert_eq!(
+            reparsed.get_node(em).node_type,
+            HastNodeType::Element as u8,
+            "the nested raw node was reparsed, not copied verbatim"
+        );
+        assert_eq!(
+            reparsed.get_str(decode_element_tag(reparsed.get_type_data(em))),
+            "em"
+        );
+        let text = reparsed.get_children(em)[0];
+        assert_eq!(
+            reparsed.get_str(decode_text_data(reparsed.get_type_data(text))),
+            "hi"
         );
     }
 }
