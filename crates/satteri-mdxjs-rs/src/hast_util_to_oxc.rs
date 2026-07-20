@@ -323,14 +323,9 @@ fn one<'a>(
         Some(HastNodeType::Root) => transform_root(context, node_id, explicit_jsxs),
         Some(HastNodeType::Element) => transform_element(context, node_id, explicit_jsxs),
         Some(HastNodeType::Text) => Ok(transform_text(context, node_id)),
-        // A `raw` HAST node (from an mdast `html` node, i.e. a plugin returning
-        // `{ type: "html" }`) is unparsed HTML with no JSX representation. Unlike
-        // the HTML backend — which emits raw nodes verbatim — JSX cannot hold an
-        // opaque HTML string, so we refuse rather than silently escape it as text.
-        // Matches the reference MDX pipeline (`hast-util-to-estree` throws on
-        // `raw`). Plugins that want HTML to render should return `{ rawHtml }`,
-        // which is re-parsed into real elements. When `optimize_static` is set,
-        // raw nodes are collapsed into a raw-HTML injection before reaching here.
+        // `raw` is opaque HTML with no JSX representation, so error rather than
+        // silently escape it as text. (`optimize_static` collapses raw into an
+        // HTML injection upstream, so this arm only fires on the plain path.)
         Some(HastNodeType::Raw) => Err(raw_html_in_mdx_error(context, node_id)),
         Some(HastNodeType::Comment) => Ok(Some(transform_comment(context, node_id))),
         Some(HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement) => {
@@ -344,9 +339,7 @@ fn one<'a>(
     }
 }
 
-/// Build the error raised when a `raw` HTML node reaches the JSX output. Points
-/// at the node's source position when it has one (synthetic plugin nodes may
-/// not) and tells the author how to fix it.
+/// The error for a `raw` node reaching JSX output; see the `Raw` arm of `one`.
 fn raw_html_in_mdx_error(context: &Context<'_>, node_id: u32) -> message::Message {
     message::Message {
         reason: "Cannot compile a `raw` node (raw HTML) to MDX/JSX output. \

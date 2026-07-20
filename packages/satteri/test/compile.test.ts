@@ -846,16 +846,14 @@ describe("mdxToJs", () => {
       },
     });
 
-    // mdxExpressions: false escapes braces to literal text — the new spelling of
-    // the deprecated `{ rawHtml }` alias. Both compile identically.
+    // mdxExpressions:false replaces the deprecated `{ rawHtml }`, so both must match.
     const optCode = mdxToJs("x\n", { mdastPlugins: [withOption] }).code;
     const legacyCode = mdxToJs("x\n", { mdastPlugins: [legacy] }).code;
     expect(optCode).toBe(legacyCode);
     expect(optCode).toContain('"{"');
     expect(optCode).toContain('"}"');
 
-    // The default (mdxExpressions unset ⇒ true) treats `{foo}` as a live JS
-    // expression instead of literal text.
+    // Omitting the option leaves expressions live, so `{foo}` must not be a literal.
     const liveCode = mdxToJs("x\n", { mdastPlugins: [expressionsLive] }).code;
     expect(liveCode).not.toContain('"{"');
     expect(liveCode).toContain("children: foo");
@@ -871,9 +869,7 @@ describe("mdxToJs", () => {
       },
     });
 
-    // A `raw` HAST node (from an mdast `html` node) cannot be represented as
-    // JSX, so the MDX pipeline refuses rather than silently escaping it. Authors
-    // should return `{ raw, mdxExpressions: false }`, which is re-parsed into elements.
+    // A `raw` node has no JSX representation, so MDX errors rather than escaping it.
     expect(() => mdxToJs("```\nhi\n```", { mdastPlugins: [plugin] })).toThrow(/mdxExpressions/);
 
     // The same html node still renders verbatim in the (non-MDX) HTML output.

@@ -100,22 +100,16 @@ import type { MdxFlowExpression, MdxTextExpression } from "../mdx-types.js";
 import type { MdxjsEsm } from "../mdx-types.js";
 import type { ContainerDirective, LeafDirective, TextDirective } from "../directive-types.js";
 
-/** A raw string spliced into the tree, re-parsed as Markdown. In MDX output, set
- *  `mdxExpressions: false` to keep `{…}` as literal text — use this when injecting
- *  generated HTML (KaTeX, syntax highlighters, diagrams) whose braces must not be
- *  read as JS expressions. Has no effect on Markdown output. Defaults to `true`. */
+/** A string spliced into the tree, re-parsed as Markdown. Set `mdxExpressions:
+ *  false` to keep MDX `{…}` literal — needed when injecting generated HTML
+ *  (KaTeX, highlighters, diagrams) whose braces aren't expressions. Default true. */
 export interface RawMdastContent {
   raw: string;
   mdxExpressions?: boolean;
 }
 
-/** Deprecated raw-HTML escape hatch. Kept for backwards compatibility. */
 export interface RawHtmlMdastContent {
-  /**
-   * @deprecated Use `{ raw, mdxExpressions: false }` instead. `{ rawHtml: x }` is
-   * exactly `{ raw: x, mdxExpressions: false }` — both re-parse the string as
-   * Markdown; the only difference is that MDX `{…}` are kept as literal text.
-   */
+  /** @deprecated Use the equivalent `{ raw, mdxExpressions: false }`. */
   rawHtml: string;
 }
 

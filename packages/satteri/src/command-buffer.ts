@@ -38,9 +38,7 @@ import {
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
 
-/** Content accepted by the structural mutators: a declarative node, a raw string
- *  re-parsed as Markdown (`mdxExpressions: false` keeps MDX `{…}` literal), or
- *  the deprecated `{rawHtml}` alias. */
+/** Input to the structural mutators (`replace`, `insertBefore`, …). */
 type StructuralContent =
   | MdastNode
   | { raw: string; mdxExpressions?: boolean }
@@ -243,10 +241,7 @@ export class CommandBuffer extends OpWriter {
     return this.take();
   }
 
-  /** Raw structural content escape hatch. The string is re-parsed as Markdown;
-   *  `mdxExpressions: false` (or the deprecated `{rawHtml}` alias) instead routes
-   *  through the brace-escaping payload so MDX `{…}` stay literal. Declarative
-   *  nodes go through the `*Opstream` methods, not here. */
+  /** Encode the raw-string escape hatch; declarative nodes use `*Opstream` instead. */
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {
     const v = node as Record<string, unknown>;
     if (typeof v.raw === "string") {
