@@ -1,23 +1,9 @@
-//! Parse an HTML string into a HAST arena.
+//! Parse an HTML string into a HAST arena. Feature-gated behind `from-html`.
 //!
-//! Feature-gated behind `from-html`. This is the `hast-util-from-html`
-//! equivalent: it runs `html5ever`'s spec-compliant tree builder against a
-//! minimal in-memory tree (`TreeSink`), then walks that tree in document order
-//! and emits it into an append-only `ArenaBuilder<Hast>`.
-//!
-//! The tree builder needs random-access mutation (foster parenting,
-//! reparenting, insert-before-sibling), which the append-only builder cannot
-//! offer, so the sink first materialises a flat `Vec<Node>` addressed by index.
-//! Attributes are normalised into typed hast properties via the
-//! [`satteri_property_info`] crate, so `class` becomes `className: [...]`,
-//! `disabled` becomes `true`, `tabindex` becomes a number, and `data-foo-bar`
-//! becomes `dataFooBar` — matching `hast-util-from-html`.
-//!
-//! `<template>` content is parsed into a detached content document by the tree
-//! builder. Standard hast models this as a separate `content` root, which the
-//! arena has no field for, so the content is emitted as the template's
-//! `children` instead of being dropped. This keeps Sätteri's own round-trip
-//! lossless; a third-party `hast-util-to-html` won't re-serialise it.
+//! html5ever's tree builder needs random-access mutation (foster parenting,
+//! reparenting, insert-before-sibling), which the append-only `ArenaBuilder`
+//! cannot offer, so parsing goes through a flat, index-addressed `Vec<Node>`
+//! that is then emitted into the builder in document order.
 
 use std::cell::{Cell, Ref, RefCell};
 
@@ -34,7 +20,7 @@ use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
     encode_element_data,
 };
-use crate::hast::render::{render_node_inner, STITCH_COMMENT_PREFIX};
+use crate::hast::render::render_node_inner;
 use crate::hast::HastNodeType;
 #[cfg(feature = "mdx")]
 use crate::mdast::codec::{
@@ -46,8 +32,7 @@ use crate::shared::{PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_SPACE_SEP, PR
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 
-/// A node in the sink's intermediate tree. Handles are indices into
-/// `HtmlSink::nodes`; the document is always index 0.
+/// Handles are indices into `HtmlSink::nodes`; the document is always index 0.
 struct Node {
     parent: Option<usize>,
     children: Vec<usize>,
@@ -64,6 +49,9 @@ enum NodeData {
         contents: StrTendril,
     },
     ProcessingInstruction,
+    /// Placeholder for the preserved MDX node `stitches[index]` during the
+    /// raw-HTML reparse.
+    Stitch(usize),
     Element {
         name: QualName,
         attrs: Vec<Attribute>,
@@ -71,16 +59,15 @@ enum NodeData {
     },
 }
 
-/// A `TreeSink` that builds a flat, index-addressed tree. Interior mutability
-/// mirrors the trait (all methods take `&self`); a single `RefCell<Vec<Node>>`
-/// stands in for `rcdom`'s per-node `RefCell`s.
+/// Interior mutability because every `TreeSink` method takes `&self`.
 struct HtmlSink {
     nodes: RefCell<Vec<Node>>,
     quirks_mode: Cell<QuirksMode>,
+    stitch: Option<StitchRecognizer>,
 }
 
 impl HtmlSink {
-    fn new() -> Self {
+    fn new(stitch: Option<StitchRecognizer>) -> Self {
         HtmlSink {
             nodes: RefCell::new(vec![Node {
                 parent: None,
@@ -88,8 +75,62 @@ impl HtmlSink {
                 data: NodeData::Document,
             }]),
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
+            stitch,
         }
     }
+}
+
+/// Claims the reparse's own MDX placeholder comments as the tree builder
+/// creates them. The marker prefix embeds a per-reparse random nonce, so
+/// document content cannot forge one. A marker the parser swallowed as text
+/// (unclosed raw-text element, split tag, unterminated comment) is never
+/// claimed; [`Self::leaked_markers`] reports those for scrubbing.
+struct StitchRecognizer {
+    prefix: String,
+    claimed: RefCell<Vec<bool>>,
+}
+
+impl StitchRecognizer {
+    fn new(prefix: String, count: usize) -> Self {
+        StitchRecognizer {
+            prefix,
+            claimed: RefCell::new(vec![false; count]),
+        }
+    }
+
+    fn claim(&self, contents: &str) -> Option<usize> {
+        let index: usize = contents.strip_prefix(self.prefix.as_str())?.parse().ok()?;
+        let mut claimed = self.claimed.borrow_mut();
+        if index < claimed.len() && !claimed[index] {
+            claimed[index] = true;
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    /// Markers of stitches that were never claimed during the parse.
+    fn leaked_markers(self) -> Vec<String> {
+        let claimed = self.claimed.into_inner();
+        claimed
+            .iter()
+            .enumerate()
+            .filter(|(_, &was_claimed)| !was_claimed)
+            .map(|(index, _)| format!("{}{}", self.prefix, index))
+            .collect()
+    }
+}
+
+/// Marker prefix carrying a 128-bit nonce. `RandomState` supplies OS entropy
+/// without a new dependency.
+fn stitch_prefix() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let entropy = std::collections::hash_map::RandomState::new();
+    let mut lo = entropy.build_hasher();
+    lo.write_u64(0);
+    let mut hi = entropy.build_hasher();
+    hi.write_u64(1);
+    format!("satteri:stitch:{:016x}{:016x}:", hi.finish(), lo.finish())
 }
 
 fn new_node(nodes: &mut Vec<Node>, data: NodeData) -> usize {
@@ -102,7 +143,6 @@ fn new_node(nodes: &mut Vec<Node>, data: NodeData) -> usize {
     id
 }
 
-/// Find `target`'s parent and its position within that parent's children.
 fn parent_and_index(nodes: &[Node], target: usize) -> Option<(usize, usize)> {
     let parent = nodes[target].parent?;
     let index = nodes[parent]
@@ -120,7 +160,6 @@ fn detach(nodes: &mut [Node], target: usize) {
     }
 }
 
-/// Append `child` (a parentless node) as the last child of `parent`.
 fn append_node(nodes: &mut [Node], parent: usize, child: usize) {
     debug_assert!(
         nodes[child].parent.is_none(),
@@ -130,8 +169,7 @@ fn append_node(nodes: &mut [Node], parent: usize, child: usize) {
     nodes[parent].children.push(child);
 }
 
-/// Coalesce `text` into `target` when it is a text node, mirroring the tree
-/// builder's expectation that adjacent text is merged.
+/// The tree builder expects adjacent text to coalesce into a single node.
 fn push_text(nodes: &mut [Node], target: usize, text: &str) -> bool {
     if let NodeData::Text { contents } = &mut nodes[target].data {
         contents.push_slice(text);
@@ -179,6 +217,9 @@ impl TreeSink for HtmlSink {
     }
 
     fn create_comment(&self, text: StrTendril) -> usize {
+        if let Some(index) = self.stitch.as_ref().and_then(|s| s.claim(&text)) {
+            return new_node(&mut self.nodes.borrow_mut(), NodeData::Stitch(index));
+        }
         new_node(
             &mut self.nodes.borrow_mut(),
             NodeData::Comment { contents: text },
@@ -309,36 +350,30 @@ impl TreeSink for HtmlSink {
     }
 }
 
-/// A unit of work for the iterative emitter: emit a node from the parsed sink
-/// tree (scheduling its subtree), splice a preserved node back in from the
-/// source arena (`EmitArena`, used for `hast-util-raw`-style MDX passthrough),
-/// or close the element that a previously emitted node opened.
+/// A unit of work for the iterative emitter: emit a sink node, copy a
+/// preserved node from the source arena, or close the open element.
 enum EmitTask {
     Emit(usize),
     EmitArena(u32),
     Close,
 }
 
-/// Emit `roots` (and their subtrees) into the HAST builder in document order.
+/// Emit `roots` into the HAST builder in document order.
 ///
-/// Walks with an explicit work stack rather than recursion: HTML nesting is
-/// unbounded (html5ever imposes no depth cap on the tree it builds), so a
-/// recursive walk would overflow the native stack — and abort the process —
-/// on adversarially deep input like `"<div>".repeat(100_000)`. The explicit
-/// stack moves that growth to the heap.
+/// Walks with an explicit stack: HTML nesting is unbounded, so recursion
+/// would overflow the native stack on adversarially deep input.
 ///
-/// `src`/`stitches` drive MDX passthrough: when the parsed tree contains a
-/// placeholder comment (`<!--satteri:stitch:N-->`, emitted by
-/// [`render_node_inner`] for a node with no HTML form), the emitter splices the
-/// original subtree — `stitches[N]` in `src` — back in via [`EmitTask::EmitArena`]
-/// instead of emitting the comment. `src` is `None` for [`html_to_hast_arena`],
-/// which never stitches.
+/// A [`NodeData::Stitch`] node is replaced by the preserved subtree
+/// `stitches[N]` from `src` (`None` for [`html_to_hast_arena`], which never
+/// stitches). `leaked` markers are scrubbed from emitted text, comments, and
+/// attributes.
 fn emit(
     nodes: &[Node],
     roots: &[usize],
     builder: &mut ArenaBuilder<Hast>,
     src: Option<&Arena<Hast>>,
     stitches: &[u32],
+    leaked: &[String],
 ) {
     // Seed with the roots reversed, so they pop in document order.
     let mut stack: Vec<EmitTask> = roots.iter().rev().map(|&id| EmitTask::Emit(id)).collect();
@@ -350,7 +385,12 @@ fn emit(
                 continue;
             }
             EmitTask::EmitArena(aid) => {
-                emit_arena_node(src.expect("EmitArena without a source arena"), aid, builder, &mut stack);
+                emit_arena_node(
+                    src.expect("EmitArena without a source arena"),
+                    aid,
+                    builder,
+                    &mut stack,
+                );
                 continue;
             }
             EmitTask::Emit(id) => id,
@@ -366,26 +406,23 @@ fn emit(
                 builder.add_leaf_raw(HastNodeType::Doctype as u8);
             }
             NodeData::Text { contents } => {
-                let text_ref = builder.alloc_string(contents);
+                let text = scrub_markers(contents, leaked);
+                let text_ref = builder.alloc_string(&text);
                 let leaf = builder.add_leaf_raw(HastNodeType::Text as u8);
                 builder
                     .arena_mut()
                     .set_type_data(leaf, &text_ref.as_bytes());
             }
             NodeData::Comment { contents } => {
-                // A placeholder comment stands in for a preserved MDX node:
-                // splice the original subtree from `src` rather than emitting a
-                // comment. `parse_stitch` only matches our own marker, so real
-                // comments fall through untouched.
-                if let Some(index) = parse_stitch(contents, stitches) {
-                    stack.push(EmitTask::EmitArena(stitches[index]));
-                    continue;
-                }
-                let text_ref = builder.alloc_string(contents);
+                let text = scrub_markers(contents, leaked);
+                let text_ref = builder.alloc_string(&text);
                 let leaf = builder.add_leaf_raw(HastNodeType::Comment as u8);
                 builder
                     .arena_mut()
                     .set_type_data(leaf, &text_ref.as_bytes());
+            }
+            NodeData::Stitch(index) => {
+                stack.push(EmitTask::EmitArena(stitches[*index]));
             }
             // HAST has no processing-instruction node; HTML parsing turns `<?...>`
             // into a comment anyway, so this is effectively unreachable.
@@ -395,17 +432,23 @@ fn emit(
                 attrs,
                 template_contents,
             } => {
-                let tag_ref = builder.alloc_string(&name.local);
-                // `hast-util-from-html` picks the property schema from the
-                // element's namespace, so SVG attributes (`viewBox`, ...) keep
-                // their casing while HTML ones normalise.
+                let tag_ref = builder.alloc_string(&scrub_markers(&name.local, leaked));
+                // The SVG property schema keeps attribute casing (`viewBox`);
+                // the HTML schema normalises it.
                 let in_svg = &*name.ns == SVG_NAMESPACE;
                 let props: Vec<(StringRef, u8, StringRef)> = attrs
                     .iter()
+                    // An attribute name containing a leaked marker is junk the
+                    // tokenizer minted from marker text; drop it.
+                    .filter(|attr| {
+                        leaked.is_empty()
+                            || !leaked.iter().any(|m| attr.name.local.contains(m.as_str()))
+                    })
                     .map(|attr| {
                         let (property, prop_kind) = find_property(&attr.name.local, in_svg);
                         let name_ref = builder.alloc_string(&property);
-                        let (kind, value_ref) = coerce_value(builder, prop_kind, &attr.value);
+                        let value = scrub_markers(&attr.value, leaked);
+                        let (kind, value_ref) = coerce_value(builder, prop_kind, &value);
                         (name_ref, kind, value_ref)
                     })
                     .collect();
@@ -413,16 +456,10 @@ fn emit(
                 let data = encode_element_data(tag_ref, &props);
                 builder.arena_mut().set_type_data(element, &data);
 
-                // Emitted in reverse of document order, since the stack is LIFO:
-                // Close runs last, then `<template>` content, then the element's
-                // own children (which therefore emit first).
                 stack.push(EmitTask::Close);
-                // `<template>` content is parsed into a detached document node
-                // (`template_contents`), not the element's own children. HAST
-                // models this as a separate `content` root, which Sätteri's arena
-                // has no field for, so emit the content as the template's children
-                // rather than dropping it. `children` is otherwise empty for
-                // templates.
+                // `<template>` content lives in a detached document, not the
+                // element's children. The arena has no separate content field,
+                // so emit it as the template's children rather than dropping it.
                 if let Some(contents) = template_contents {
                     for &child in nodes[*contents].children.iter().rev() {
                         stack.push(EmitTask::Emit(child));
@@ -436,20 +473,25 @@ fn emit(
     }
 }
 
-/// If `contents` is one of our stitch placeholders (`satteri:stitch:N`),
-/// return the stitch index `N`, but only when it is in range for `stitches`.
-/// Any other comment (including a coincidental look-alike with an out-of-range
-/// index) returns `None` and is emitted as a normal comment.
-fn parse_stitch(contents: &str, stitches: &[u32]) -> Option<usize> {
-    let index: usize = contents.strip_prefix(STITCH_COMMENT_PREFIX)?.parse().ok()?;
-    (index < stitches.len()).then_some(index)
+/// Remove leaked stitch markers from `text`, longest form first so a marker's
+/// `<!--`/`-->` shell goes with it. Borrows unchanged when nothing leaked.
+fn scrub_markers<'a>(text: &'a str, leaked: &[String]) -> std::borrow::Cow<'a, str> {
+    let mut out = std::borrow::Cow::Borrowed(text);
+    for marker in leaked {
+        if out.contains(marker.as_str()) {
+            let scrubbed = out
+                .replace(&format!("<!--{marker}-->"), "")
+                .replace(&format!("<!--{marker}"), "")
+                .replace(marker.as_str(), "");
+            out = std::borrow::Cow::Owned(scrubbed);
+        }
+    }
+    out
 }
 
-/// Copy the source-arena subtree rooted at `aid` into `builder`, scheduling its
-/// children (and a matching `Close`) on `stack`. Used to splice a preserved MDX
-/// node back into the reparsed tree. Strings are re-allocated into the builder's
-/// pool and the type-data re-encoded, since `src` and the builder have separate
-/// string pools.
+/// Copy the source-arena subtree rooted at `aid` into `builder`, scheduling
+/// its children on `stack`. Strings are re-allocated because `src` and the
+/// builder have separate pools.
 fn emit_arena_node(
     src: &Arena<Hast>,
     aid: u32,
@@ -458,15 +500,6 @@ fn emit_arena_node(
 ) {
     let node_type = src.get_node(aid).node_type;
     let data = src.get_type_data(aid);
-
-    // Schedule `aid`'s children (reversed, so they pop in document order) after
-    // a `Close`. Shared by every container arm below.
-    let open_container = |stack: &mut Vec<EmitTask>| {
-        stack.push(EmitTask::Close);
-        for &child in src.get_children(aid).iter().rev() {
-            stack.push(EmitTask::EmitArena(child));
-        }
-    };
 
     match HastNodeType::from_u8(node_type) {
         Some(HastNodeType::Root) => {
@@ -478,72 +511,68 @@ fn emit_arena_node(
             builder.add_leaf_raw(HastNodeType::Doctype as u8);
         }
         Some(HastNodeType::Text | HastNodeType::Comment | HastNodeType::Raw) if data.len() >= 8 => {
-            let value = src.get_str(decode_text_data(data)).to_owned();
-            let value_ref = builder.alloc_string(&value);
+            let value_ref = builder.alloc_string(src.get_str(decode_text_data(data)));
             let leaf = builder.add_leaf_raw(node_type);
-            builder.arena_mut().set_type_data(leaf, &value_ref.as_bytes());
+            builder
+                .arena_mut()
+                .set_type_data(leaf, &value_ref.as_bytes());
         }
         Some(HastNodeType::Element) if data.len() >= 16 => {
-            let tag = src.get_str(decode_element_tag(data)).to_owned();
-            let props: Vec<(String, u8, String)> = (0..decode_element_prop_count(data))
+            let tag_ref = builder.alloc_string(src.get_str(decode_element_tag(data)));
+            let props: Vec<(StringRef, u8, StringRef)> = (0..decode_element_prop_count(data))
                 .map(|i| {
                     let (name, kind, value) = decode_element_prop(data, i);
-                    (src.get_str(name).to_owned(), kind, src.get_str(value).to_owned())
-                })
-                .collect();
-            let tag_ref = builder.alloc_string(&tag);
-            let props: Vec<(StringRef, u8, StringRef)> = props
-                .iter()
-                .map(|(name, kind, value)| {
-                    (builder.alloc_string(name), *kind, builder.alloc_string(value))
+                    (
+                        builder.alloc_string(src.get_str(name)),
+                        kind,
+                        builder.alloc_string(src.get_str(value)),
+                    )
                 })
                 .collect();
             let element = builder.open_node_raw(HastNodeType::Element as u8);
             let encoded = encode_element_data(tag_ref, &props);
             builder.arena_mut().set_type_data(element, &encoded);
-            open_container(stack);
+            stack.push(EmitTask::Close);
+            for &child in src.get_children(aid).iter().rev() {
+                stack.push(EmitTask::EmitArena(child));
+            }
         }
         #[cfg(feature = "mdx")]
         Some(HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement) if data.len() >= 16 => {
-            let name = src.get_str(decode_mdx_jsx_element_name(data)).to_owned();
+            let name_ref = builder.alloc_string(src.get_str(decode_mdx_jsx_element_name(data)));
             let explicit = decode_mdx_jsx_explicit(data);
-            let attrs: Vec<(u8, String, String)> = (0..decode_mdx_jsx_attr_count(data))
+            let attrs: Vec<(u8, StringRef, StringRef)> = (0..decode_mdx_jsx_attr_count(data))
                 .map(|i| {
                     let (kind, name, value) = decode_mdx_jsx_attr(data, i);
-                    (kind, src.get_str(name).to_owned(), src.get_str(value).to_owned())
-                })
-                .collect();
-            let name_ref = builder.alloc_string(&name);
-            let attrs: Vec<(u8, StringRef, StringRef)> = attrs
-                .iter()
-                .map(|(kind, name, value)| {
-                    (*kind, builder.alloc_string(name), builder.alloc_string(value))
+                    (
+                        kind,
+                        builder.alloc_string(src.get_str(name)),
+                        builder.alloc_string(src.get_str(value)),
+                    )
                 })
                 .collect();
             let element = builder.open_node_raw(node_type);
             let encoded = encode_mdx_jsx_element_data(name_ref, &attrs, explicit);
             builder.arena_mut().set_type_data(element, &encoded);
-            // Passthrough recurses into the MDX node's own children, reparsing
-            // them so raw HTML nested inside the element is resolved too (the
-            // `[<x>]</x>` case) — matching `hast-util-raw`, which runs the
-            // passed-through node's children back through the parser rather than
-            // copying them verbatim.
+            // Reparse rather than copy, so raw HTML nested inside the MDX
+            // element is resolved too.
             reparse_children_into(src, aid, builder);
             builder.close_node();
         }
         #[cfg(feature = "mdx")]
-        Some(HastNodeType::MdxFlowExpression | HastNodeType::MdxTextExpression | HastNodeType::MdxEsm)
-            if data.len() >= 8 =>
-        {
-            let value = src.get_str(decode_text_data(data)).to_owned();
-            let value_ref = builder.alloc_string(&value);
+        Some(
+            HastNodeType::MdxFlowExpression
+            | HastNodeType::MdxTextExpression
+            | HastNodeType::MdxEsm,
+        ) if data.len() >= 8 => {
+            let value_ref = builder.alloc_string(src.get_str(decode_text_data(data)));
             let leaf = builder.add_leaf_raw(node_type);
-            builder.arena_mut().set_type_data(leaf, &value_ref.as_bytes());
+            builder
+                .arena_mut()
+                .set_type_data(leaf, &value_ref.as_bytes());
         }
-        // Unknown discriminant, or a known node with a malformed/empty type-data
-        // buffer: preserve its children so a wrapper never silently swallows a
-        // whole subtree. (MDX arms are compiled out in non-`mdx` builds, where
-        // such nodes cannot occur anyway.)
+        // Unknown or malformed node: emit its children so a bad wrapper never
+        // silently swallows a whole subtree.
         _ => {
             for &child in src.get_children(aid).iter().rev() {
                 stack.push(EmitTask::EmitArena(child));
@@ -552,28 +581,34 @@ fn emit_arena_node(
     }
 }
 
-/// Serialise `parent`'s children to HTML — MDX nodes become stitch placeholders
-/// — reparse that as a fragment, and emit the result into `builder` at the
-/// currently open node.
-///
-/// Shared by the top-level raw reparse ([`raw_to_hast_arena`], where `parent` is
-/// the root) and by the passthrough of a preserved MDX node's own children, so
-/// raw HTML nested inside an MDX element is resolved just like top-level raw
-/// HTML. Recurses through [`emit`] → [`emit_arena_node`] once per nested MDX
-/// level, mirroring `hast-util-raw`'s recursive stitch.
+/// Serialise `parent`'s children to HTML — MDX nodes become placeholder
+/// comments — reparse that as a fragment, and emit the result into the
+/// currently open node. Recurses once per nested MDX level via
+/// [`emit_arena_node`]. An MDX node whose placeholder the parser swallowed as
+/// text (e.g. inside an unclosed raw `<script>`) is dropped and its marker
+/// scrubbed from the output.
 fn reparse_children_into(src: &Arena<Hast>, parent: u32, builder: &mut ArenaBuilder<Hast>) {
+    let prefix = stitch_prefix();
     let mut html = String::new();
     let mut stitches: Vec<u32> = Vec::new();
-    for &child in src.get_children(parent) {
-        render_node_inner(child, src, &mut html, false, false, Some(&mut stitches));
+    {
+        let mut on_mdx = |out: &mut String, node_id: u32| {
+            out.push_str("<!--");
+            out.push_str(&prefix);
+            out.push_str(&stitches.len().to_string());
+            out.push_str("-->");
+            stitches.push(node_id);
+        };
+        for &child in src.get_children(parent) {
+            render_node_inner(child, src, &mut html, false, false, Some(&mut on_mdx));
+        }
     }
-    let (nodes, roots) = parse_fragment_nodes(&html);
-    emit(&nodes, &roots, builder, Some(src), &stitches);
+    let recognizer = StitchRecognizer::new(prefix, stitches.len());
+    let (nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer));
+    emit(&nodes, &roots, builder, Some(src), &stitches, &leaked);
 }
 
-/// Coerce an attribute string value into a typed hast property, mirroring
-/// `hast-util-from-html`. Returns the wire `(kind, value)` pair. The property
-/// name and [`PropKind`] come from [`find_property`](satteri_property_info::find_property).
+/// Coerce an attribute string into its typed wire `(kind, value)` pair.
 fn coerce_value(builder: &mut ArenaBuilder<Hast>, kind: PropKind, value: &str) -> (u8, StringRef) {
     match kind {
         PropKind::Boolean => (PROP_BOOL_TRUE, StringRef::empty()),
@@ -608,17 +643,14 @@ fn split_comma(value: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Whether `hast-util-from-html` would coerce this value to a number: non-empty
-/// and parses as a finite number (`Number(value)` is not `NaN`/`±Infinity`).
+/// Non-empty and finite; infinities and NaN stay strings.
 fn is_numeric(value: &str) -> bool {
     let trimmed = value.trim();
     !trimmed.is_empty() && trimmed.parse::<f64>().is_ok_and(f64::is_finite)
 }
 
-/// Shared parse options: scripting disabled, matching `hast-util-from-html`'s
-/// default so `<noscript>` contents parse as a normal tree of nodes rather than
-/// a single raw-text node (the WHATWG "no scripting" mode used by tools that
-/// transform HTML without executing scripts).
+/// Scripting disabled, so `<noscript>` content parses as markup rather than
+/// as a single raw-text node.
 fn parse_opts() -> ParseOpts {
     ParseOpts {
         tree_builder: TreeBuilderOpts {
@@ -629,73 +661,68 @@ fn parse_opts() -> ParseOpts {
     }
 }
 
-/// Parse an HTML document string into a HAST arena.
-///
-/// Mirrors `hast-util-from-html` in document mode: the result is a `root`
-/// whose children are the parsed document (the doctype, if any, and the
-/// implied `<html>` subtree).
+/// Parse an HTML document string into a HAST arena: a `root` whose children
+/// are the doctype (if any) and the implied `<html>` subtree.
 pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
-    let sink = parse_document(HtmlSink::new(), parse_opts()).one(html);
+    let sink = parse_document(HtmlSink::new(None), parse_opts()).one(html);
     let nodes = sink.nodes.into_inner();
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node_raw(HastNodeType::Root as u8);
-    emit(&nodes, &nodes[0].children, &mut builder, None, &[]);
+    emit(&nodes, &nodes[0].children, &mut builder, None, &[], &[]);
     builder.close_node();
     builder.finish()
 }
 
-/// Reparse the raw HTML embedded in a HAST arena into real HAST nodes — the
-/// Sätteri equivalent of `rehype-raw`.
+/// Reparse the raw HTML embedded in a HAST arena into real HAST nodes.
 ///
-/// Markdown HTML (blocks and inline) lands in the tree as `raw` nodes holding
-/// literal HTML strings. This renders the whole tree back to HTML (raw nodes
-/// pass through verbatim, everything else serialises) and reparses it as a
-/// single fragment, so a tag opened in one raw node and closed in a later one
-/// is resolved against the surrounding markup — exactly the interleaving
-/// `rehype-raw` performs. The result is a fresh `root` with no synthesised
-/// `<html>`/`<head>`/`<body>` wrapper, matching `rehype-raw`'s output.
+/// The whole tree is rendered back to HTML (raw nodes verbatim) and reparsed
+/// as one fragment, so a tag opened in one raw node and closed in a later one
+/// resolves against the surrounding markup. The result is a fresh `root` with
+/// no synthesised `<html>`/`<head>`/`<body>` wrapper.
 ///
-/// MDX nodes (JSX elements and expressions) have no HTML form. Rather than
-/// being dropped by the serialise/reparse round-trip, they are passed through:
-/// each is serialised as a placeholder comment and swapped back into its
-/// reparsed position afterwards, so raw tags that open before and close after an
-/// MDX node still resolve around it. This mirrors `hast-util-raw`'s `passThrough`
-/// (which `rehype-raw` uses for MDX), so `mdxToHast(.., { rawHtml: true })`
-/// keeps its MDX content instead of destroying it.
-///
-/// Positions are not preserved: the reparse works from serialised HTML, so the
-/// tree is rebuilt from scratch (as it effectively is under `rehype-raw` too).
+/// MDX nodes have no HTML form; they are carried through as placeholder
+/// comments and spliced back afterwards. Positions are not preserved: the
+/// tree is rebuilt from serialised HTML.
 pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node_raw(HastNodeType::Root as u8);
-    // Reparse the root's children. MDX nodes have no HTML form, so they are
-    // serialised as placeholder comments and swapped back into their reparsed
-    // positions (see `reparse_children_into`), mirroring `hast-util-raw`'s
-    // passthrough — the surrounding raw HTML still resolves around them.
     reparse_children_into(arena, 0, &mut builder);
     builder.close_node();
     builder.finish()
 }
 
-/// Parse an HTML fragment in a `<body>` context, returning the flat node list
-/// and the indices of the fragment's top-level nodes. html5ever's fragment
-/// algorithm appends a synthesised `<html>` root to the document (node 0); the
-/// real fragment content are that root's children, so callers get the body-level
-/// nodes without any wrapper.
-fn parse_fragment_nodes(html: &str) -> (Vec<Node>, Vec<usize>) {
+/// Parse an HTML fragment in a `<body>` context, returning the node list, the
+/// top-level node indices, and the markers of any swallowed stitches. The
+/// fragment algorithm wraps content in a synthesised `<html>` root; the
+/// returned roots are that wrapper's children.
+fn parse_fragment_nodes(
+    html: &str,
+    stitch: Option<StitchRecognizer>,
+) -> (Vec<Node>, Vec<usize>, Vec<String>) {
     let context = QualName::new(
         None,
         Namespace::from(HTML_NAMESPACE),
         LocalName::from("body"),
     );
-    let sink = parse_fragment(HtmlSink::new(), parse_opts(), context, Vec::new(), false).one(html);
+    let sink = parse_fragment(
+        HtmlSink::new(stitch),
+        parse_opts(),
+        context,
+        Vec::new(),
+        false,
+    )
+    .one(html);
+    let leaked = sink
+        .stitch
+        .map(StitchRecognizer::leaked_markers)
+        .unwrap_or_default();
     let nodes = sink.nodes.into_inner();
     let roots = match nodes[0].children.first() {
         Some(&html_root) => nodes[html_root].children.clone(),
         None => Vec::new(),
     };
-    (nodes, roots)
+    (nodes, roots, leaked)
 }
 
 #[cfg(test)]
@@ -705,8 +732,6 @@ mod tests {
     use crate::hast::hast_arena_to_html;
 
     fn render(html: &str) -> String {
-        // The HTML renderer appends a trailing newline; trim it so the
-        // expectations below stay focused on structure.
         hast_arena_to_html(&html_to_hast_arena(html))
             .trim_end()
             .to_string()
@@ -791,8 +816,7 @@ mod tests {
 
     #[test]
     fn implies_tbody_and_foster_parents_stray_content() {
-        // The stray <b> is foster-parented out of the table, and <tr> gets an
-        // implied <tbody>. Exercises append_before_sibling.
+        // Exercises append_before_sibling.
         let out = render("<table><b>x</b><tr><td>y</td></tr></table>");
         assert!(out.contains("<b>x</b><table>"), "foster parenting: {out}");
         assert!(
@@ -803,7 +827,7 @@ mod tests {
 
     #[test]
     fn handles_misnested_tags_via_adoption_agency() {
-        // Canonical adoption-agency case; exercises reparent_children.
+        // Exercises reparent_children.
         let out = render("<b>1<p>2</b>3</p>");
         assert!(
             out.contains("<b>1</b><p><b>2</b>3</p>"),
@@ -830,14 +854,10 @@ mod tests {
 
     #[test]
     fn preserves_template_content() {
-        // `<template>` children are parsed into a detached content document by
-        // the tree builder. Emitting them as the element's children keeps the
-        // content instead of dropping it.
         assert_eq!(
             render("<template><p>hi</p></template>"),
             "<html><head><template><p>hi</p></template></head><body></body></html>"
         );
-        // Bare text content is preserved too.
         assert_eq!(
             render("<template>foo</template>"),
             "<html><head><template>foo</template></head><body></body></html>"
@@ -846,9 +866,6 @@ mod tests {
 
     #[test]
     fn parses_noscript_content_as_markup_with_scripting_disabled() {
-        // `hast-util-from-html` parses with scripting disabled, so `<noscript>`
-        // contents are a normal tree of nodes rather than a single raw-text
-        // node (html5lib tree-construction `noscript01.dat`).
         let out = render("<head><noscript><link><!--c--></noscript>");
         assert!(
             out.contains("<noscript><link><!--c--></noscript>"),
@@ -858,14 +875,9 @@ mod tests {
 
     #[test]
     fn deeply_nested_input_does_not_overflow_the_stack() {
-        // html5ever imposes no depth cap, so untrusted HTML can build an
-        // arbitrarily deep tree. The emitter must walk it iteratively; a
-        // recursive walk would overflow the native stack and abort the process.
-        // Count elements by scanning the flat arena — a recursive walk here
-        // (like the `tags` helper) would itself overflow and defeat the test.
-        // `<span>` nests without triggering html5ever's O(n^2) scope checks
-        // (unlike `<div>`, which re-scans the open-element stack per token), so
-        // the parse stays linear while still building a very deep tree.
+        // Count by scanning the flat arena — a recursive walk would itself
+        // overflow and defeat the test. `<span>` avoids html5ever's per-token
+        // scope re-scans, keeping the parse linear at this depth.
         let depth = 50_000;
         let arena = html_to_hast_arena(&"<span>".repeat(depth));
 
@@ -926,7 +938,6 @@ mod tests {
 
     #[test]
     fn overloaded_boolean_and_numeric_fallbacks() {
-        // `download` with a value stays a string; a non-numeric `width` too.
         let arena = html_to_hast_arena(r#"<a download="f.txt">x</a><img width="auto">"#);
         assert_eq!(
             props_of(&arena, "a"),
@@ -938,19 +949,12 @@ mod tests {
         );
     }
 
-    /// Build a small HAST arena that splits a `<div>` across two `raw` nodes with
-    /// a real element between them — the case `rehype-raw` exists to resolve.
+    /// A `<div>` split across two raw nodes with a real element between them.
     fn arena_with_split_raw() -> Arena<Hast> {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
         b.open_node_raw(HastNodeType::Root as u8);
 
-        fn add_raw(b: &mut ArenaBuilder<Hast>, html: &str) {
-            let r = b.alloc_string(html);
-            let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
-            b.arena_mut().set_type_data(leaf, &r.as_bytes());
-        }
-
-        add_raw(&mut b, r#"<div class="n">"#);
+        add_raw_node(&mut b, r#"<div class="n">"#);
         let tag = b.alloc_string("p");
         let el = b.open_node_raw(HastNodeType::Element as u8);
         let data = encode_element_data(tag, &[]);
@@ -959,7 +963,7 @@ mod tests {
         let text = b.add_leaf_raw(HastNodeType::Text as u8);
         b.arena_mut().set_type_data(text, &t.as_bytes());
         b.close_node();
-        add_raw(&mut b, "</div>");
+        add_raw_node(&mut b, "</div>");
 
         b.close_node();
         b.finish()
@@ -968,23 +972,18 @@ mod tests {
     #[test]
     fn raw_reparse_resolves_tags_split_across_raw_nodes() {
         let reparsed = raw_to_hast_arena(&arena_with_split_raw());
-        // The `<div>` opened in one raw node now wraps the `<p>` and is closed by
-        // the second raw node — with no synthesised <html>/<head>/<body> wrapper.
         assert_eq!(
             hast_arena_to_html(&reparsed).trim_end(),
             r#"<div class="n"><p>hi</p></div>"#
         );
-        // And the reparsed `<div>` carries a normalised `className`.
         assert_eq!(
             props_of(&reparsed, "div"),
             [("className".into(), PROP_SPACE_SEP, "n".into())]
         );
     }
 
-    /// `rehype-raw`-style passthrough: an MDX node has no HTML form, so the raw
-    /// reparse must preserve it — including resolving raw tags that open before
-    /// and close after it (the `[<x>]</x>` case from `hast-util-raw`). Without
-    /// passthrough the whole `<section>` subtree would be destroyed.
+    /// Raw tags opening before and closing after an MDX node must resolve
+    /// around it, with the MDX node preserved in place.
     #[cfg(feature = "mdx")]
     #[test]
     fn raw_reparse_preserves_mdx_nodes_and_wraps_them_in_surrounding_raw() {
@@ -993,8 +992,7 @@ mod tests {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
         b.open_node_raw(HastNodeType::Root as u8);
 
-        // A `<section>` opened in one raw node and closed in a later one, with a
-        // preserved `<Foo bar={1}>hi</Foo>` MDX element parked between them.
+        // raw "<section>" + <Foo bar={1}>hi</Foo> + raw "</section>"
         let open = b.alloc_string("<section>");
         let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
         b.arena_mut().set_type_data(leaf, &open.as_bytes());
@@ -1027,7 +1025,10 @@ mod tests {
         let root_children = reparsed.get_children(0);
         assert_eq!(root_children.len(), 1, "single <section> at the root");
         let section = root_children[0];
-        assert_eq!(reparsed.get_node(section).node_type, HastNodeType::Element as u8);
+        assert_eq!(
+            reparsed.get_node(section).node_type,
+            HastNodeType::Element as u8
+        );
         assert_eq!(
             reparsed.get_str(decode_element_tag(reparsed.get_type_data(section))),
             "section"
@@ -1043,7 +1044,10 @@ mod tests {
         );
 
         let foo_data = reparsed.get_type_data(foo);
-        assert_eq!(reparsed.get_str(decode_mdx_jsx_element_name(foo_data)), "Foo");
+        assert_eq!(
+            reparsed.get_str(decode_mdx_jsx_element_name(foo_data)),
+            "Foo"
+        );
         assert!(decode_mdx_jsx_explicit(foo_data));
         assert_eq!(decode_mdx_jsx_attr_count(foo_data), 1);
         let (kind, an, av) = decode_mdx_jsx_attr(foo_data, 0);
@@ -1061,9 +1065,8 @@ mod tests {
         );
     }
 
-    /// Passthrough recurses: a `raw` node nested *inside* a preserved MDX element
-    /// is itself reparsed into real nodes (matching `hast-util-raw`), not copied
-    /// through verbatim.
+    /// A raw node nested inside a preserved MDX element is itself reparsed,
+    /// not copied through verbatim.
     #[cfg(feature = "mdx")]
     #[test]
     fn raw_reparse_recurses_into_mdx_element_children() {
@@ -1109,6 +1112,127 @@ mod tests {
         assert_eq!(
             reparsed.get_str(decode_text_data(reparsed.get_type_data(text))),
             "hi"
+        );
+    }
+
+    fn add_raw_node(b: &mut ArenaBuilder<Hast>, html: &str) {
+        let r = b.alloc_string(html);
+        let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
+        b.arena_mut().set_type_data(leaf, &r.as_bytes());
+    }
+
+    #[cfg(feature = "mdx")]
+    fn add_mdx_foo(b: &mut ArenaBuilder<Hast>) {
+        let name = b.alloc_string("Foo");
+        let mdx = b.open_node_raw(HastNodeType::MdxJsxElement as u8);
+        let data = encode_mdx_jsx_element_data(name, &[], true);
+        b.arena_mut().set_type_data(mdx, &data);
+        b.close_node();
+    }
+
+    /// A stitch-like comment authored in raw HTML must survive as an ordinary
+    /// comment, not be swapped for (and duplicate) the preserved MDX node.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_ignores_forged_stitch_markers() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(HastNodeType::Root as u8);
+        add_raw_node(&mut b, "<!--satteri:stitch:0-->");
+        add_mdx_foo(&mut b);
+        b.close_node();
+        let reparsed = raw_to_hast_arena(&b.finish());
+
+        let children = reparsed.get_children(0);
+        assert_eq!(children.len(), 2, "comment + MDX node, nothing duplicated");
+        assert_eq!(
+            reparsed.get_node(children[0]).node_type,
+            HastNodeType::Comment as u8
+        );
+        assert_eq!(
+            reparsed.get_str(decode_text_data(reparsed.get_type_data(children[0]))),
+            "satteri:stitch:0",
+            "the forged comment survives verbatim"
+        );
+        assert_eq!(
+            reparsed.get_node(children[1]).node_type,
+            HastNodeType::MdxJsxElement as u8
+        );
+    }
+
+    /// An MDX node between an unclosed raw `<script>` and its close tag cannot
+    /// be preserved (its placeholder is swallowed as script text), but the
+    /// marker must not leak into the output.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_scrubs_markers_swallowed_by_raw_text_elements() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(HastNodeType::Root as u8);
+        add_raw_node(&mut b, "<script>alert(1)");
+        add_mdx_foo(&mut b);
+        add_raw_node(&mut b, "</script>");
+        b.close_node();
+        let reparsed = raw_to_hast_arena(&b.finish());
+
+        let out = hast_arena_to_html(&reparsed);
+        assert!(
+            !out.contains("satteri:stitch"),
+            "marker text must not leak: {out}"
+        );
+        assert!(
+            out.contains("<script>alert(1)</script>"),
+            "script content is restored exactly: {out}"
+        );
+    }
+
+    /// An MDX node between a raw chunk ending mid-tag and the chunk closing
+    /// the tag: the marker becomes attribute junk, which must be dropped.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_scrubs_markers_swallowed_into_tags() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(HastNodeType::Root as u8);
+        add_raw_node(&mut b, "<div ");
+        add_mdx_foo(&mut b);
+        add_raw_node(&mut b, "class=\"x\">hi</div>");
+        b.close_node();
+        let reparsed = raw_to_hast_arena(&b.finish());
+
+        let out = hast_arena_to_html(&reparsed);
+        assert!(
+            !out.contains("satteri:stitch"),
+            "marker text must not leak: {out}"
+        );
+        assert!(
+            props_of(&reparsed, "div").is_empty(),
+            "the marker-junk attribute is dropped"
+        );
+    }
+
+    /// An MDX node after an unterminated raw comment: the marker merges into
+    /// that comment's contents and must be scrubbed back out.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_scrubs_markers_merged_into_unterminated_comments() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(HastNodeType::Root as u8);
+        add_raw_node(&mut b, "<!--oops ");
+        add_mdx_foo(&mut b);
+        b.close_node();
+        let reparsed = raw_to_hast_arena(&b.finish());
+
+        let out = hast_arena_to_html(&reparsed);
+        assert!(
+            !out.contains("satteri:stitch"),
+            "marker text must not leak: {out}"
+        );
+        let comment = reparsed.get_children(0)[0];
+        assert_eq!(
+            reparsed.get_node(comment).node_type,
+            HastNodeType::Comment as u8
+        );
+        assert_eq!(
+            reparsed.get_str(decode_text_data(reparsed.get_type_data(comment))),
+            "oops "
         );
     }
 }
