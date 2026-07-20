@@ -11,30 +11,10 @@ import { mdxToHast, markdownToHast } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 
 /**
- * Conformance probe for `rawHtml` (the `rehype-raw` equivalent) combined with
- * MDX — i.e. `mdxToHast(src, { features: { rawHtml: true } })`.
- *
- * The headline result of this file: **MDX + `rehype-raw` has no upstream
- * reference behavior to conform to.** In MDX, HTML-looking syntax is parsed as
- * JSX (`mdxJsxFlowElement` / `mdxFlowExpression`), not as `raw` nodes, so:
- *
- *  1. The reference unified pipeline (remark-mdx → remark-rehype → rehype-raw
- *     → rehype-stringify) throws when it reaches an MDX node — `rehype-raw`
- *     passes MDX nodes through untouched and `rehype-stringify` then refuses to
- *     serialize them (`Cannot compile unknown node 'mdxJsxFlowElement'`).
- *  2. Sätteri's raw reparse (`raw_to_hast_arena`) renders the tree back to HTML
- *     before reparsing, and MDX nodes have no HTML representation, so the whole
- *     MDX subtree is silently dropped.
- *
- * The contract (per the maintainer, see REVIEW-rawHtml-mdx.md): MDX + `rawHtml`
- * must WORK — the reparse preserves MDX nodes (real passthrough, mirroring
- * `hast-util-raw`'s `passThrough`), rather than gating `rawHtml` off for MDX.
- * Sätteri implements this by serialising each MDX node as a placeholder comment,
- * reparsing, then swapping the original subtree back in. For the MDX *parse*
- * path the observable result is that the tree is unchanged, because `mdxToHast`
- * never emits `raw` nodes (verified below), so passthrough finds nothing to
- * reparse. Passthrough (not gating) matters when `raw` nodes are *injected* into
- * an MDX-flagged tree via the plugin/command API — the scenario PR #160 covers.
+ * `rawHtml` combined with MDX. MDX parses HTML-looking syntax as JSX, never as
+ * `raw` nodes, so the reparse must preserve MDX nodes and leave the tree
+ * observably unchanged; the reference pipeline needs `passThrough` for the MDX
+ * node types on both remark-rehype and rehype-raw.
  */
 
 const MDX_PASS_THROUGH: Array<MdastNodes["type"]> = [
