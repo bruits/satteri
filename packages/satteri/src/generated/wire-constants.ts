@@ -50,9 +50,11 @@ export const CMD_SET_PROPERTY = 0x0c; // [valueType: u8][name str][value str], P
 export const CMD_SET_CHILDREN = 0x0d; // payload is a Root-wrapped child list
 
 // Structural-command payload types (0x10+, a range distinct from commands).
-export const PAYLOAD_RAW_MARKDOWN = 0x10; // [len: u32 LE][utf8] — re-parsed as markdown
-export const PAYLOAD_RAW_HTML = 0x11; // [len: u32 LE][utf8] — re-parsed as HTML/MDX
+export const PAYLOAD_RAW = 0x10; // [flags: u8][len: u32 LE][utf8] — re-parsed as markdown; see RAW_* flags
 export const PAYLOAD_OPSTREAM = 0x14; // [len: u32 LE][op bytes] — replayed straight into the arena
+
+// Flag bits for the `PAYLOAD_RAW` payload.
+export const RAW_LITERAL_BRACES = 0x01; // keep MDX `{…}` as literal text (only affects MDX output)
 
 // Property value kinds (HAST element properties and SET_PROPERTY commands).
 export const PROP_STRING = 0; // UTF-8 value

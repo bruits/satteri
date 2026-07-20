@@ -322,7 +322,11 @@ fn one<'a>(
     match HastNodeType::from_u8(raw_type) {
         Some(HastNodeType::Root) => transform_root(context, node_id, explicit_jsxs),
         Some(HastNodeType::Element) => transform_element(context, node_id, explicit_jsxs),
-        Some(HastNodeType::Text | HastNodeType::Raw) => Ok(transform_text(context, node_id)),
+        Some(HastNodeType::Text) => Ok(transform_text(context, node_id)),
+        // `raw` is opaque HTML with no JSX representation, so error rather than
+        // silently escape it as text. (`optimize_static` collapses raw into an
+        // HTML injection upstream, so this arm only fires on the plain path.)
+        Some(HastNodeType::Raw) => Err(raw_html_in_mdx_error(context, node_id)),
         Some(HastNodeType::Comment) => Ok(Some(transform_comment(context, node_id))),
         Some(HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement) => {
             transform_mdx_jsx_element(context, node_id, explicit_jsxs)
@@ -332,6 +336,25 @@ fn one<'a>(
         }
         Some(HastNodeType::MdxEsm) => transform_mdxjs_esm(context, node_id),
         _ => Ok(None),
+    }
+}
+
+fn raw_html_in_mdx_error(context: &Context<'_>, node_id: u32) -> message::Message {
+    message::Message {
+        reason: "Cannot compile a `raw` node (raw HTML) to MDX/JSX output. \
+            A plugin returned an `html` node (`{ type: \"html\", value: ... }`), \
+            which cannot be represented as JSX. Return \
+            `{ raw: ..., mdxExpressions: false }` instead so the HTML is parsed \
+            into elements, or use the markdown (non-MDX) output where raw HTML is \
+            emitted verbatim."
+            .into(),
+        place: crate::oxc_utils::u32_to_point(
+            node_span(context.view, node_id).start,
+            context.location,
+        )
+        .map(|p| Box::new(message::Place::Point(p))),
+        source: Box::new("mdxjs-rs".into()),
+        rule_id: Box::new("raw-html".into()),
     }
 }
 

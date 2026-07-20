@@ -1218,14 +1218,9 @@ pub const PAYLOADS: WireTable = WireTable {
     hex: true,
     consts: &[
         wc(
-            "PAYLOAD_RAW_MARKDOWN",
+            "PAYLOAD_RAW",
             0x10,
-            "[len: u32 LE][utf8] — re-parsed as markdown",
-        ),
-        wc(
-            "PAYLOAD_RAW_HTML",
-            0x11,
-            "[len: u32 LE][utf8] — re-parsed as HTML/MDX",
+            "[flags: u8][len: u32 LE][utf8] — re-parsed as markdown; see RAW_* flags",
         ),
         wc(
             "PAYLOAD_OPSTREAM",
@@ -1233,6 +1228,18 @@ pub const PAYLOADS: WireTable = WireTable {
             "[len: u32 LE][op bytes] — replayed straight into the arena",
         ),
     ],
+};
+
+/// Flag bits carried by the `PAYLOAD_RAW` `flags` byte.
+pub const RAW_FLAGS: WireTable = WireTable {
+    doc: &["Flag bits for the `PAYLOAD_RAW` payload."],
+    cfg: None,
+    hex: true,
+    consts: &[wc(
+        "RAW_LITERAL_BRACES",
+        0x01,
+        "keep MDX `{…}` as literal text (only affects MDX output)",
+    )],
 };
 
 /// Property value kinds, shared by HAST element properties (stored in
@@ -1266,7 +1273,8 @@ pub const MDX_ATTR_KINDS: WireTable = WireTable {
 };
 
 /// Tables emitted into `satteri-plugin-api/src/generated/wire_constants.rs`.
-pub const PLUGIN_WIRE_TABLES: &[&WireTable] = &[&OP_CODES, &OP_FIELDS, &COMMANDS, &PAYLOADS];
+pub const PLUGIN_WIRE_TABLES: &[&WireTable] =
+    &[&OP_CODES, &OP_FIELDS, &COMMANDS, &PAYLOADS, &RAW_FLAGS];
 /// Tables emitted into `satteri-ast/src/generated/wire_constants.rs`
 /// (re-exported by `shared.rs`).
 pub const AST_WIRE_TABLES: &[&WireTable] = &[&PROP_KINDS, &MDX_ATTR_KINDS];
@@ -1276,6 +1284,7 @@ pub const TS_WIRE_TABLES: &[&WireTable] = &[
     &OP_FIELDS,
     &COMMANDS,
     &PAYLOADS,
+    &RAW_FLAGS,
     &PROP_KINDS,
     &MDX_ATTR_KINDS,
 ];

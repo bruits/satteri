@@ -921,23 +921,24 @@ fn read_mdast_payload(
     options: MdastCommandOptions,
 ) -> Result<(PatchContent<Mdast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
-    let len = reader.read_u32()? as usize;
 
     match payload_type {
-        PAYLOAD_RAW_MARKDOWN => {
-            let md = reader.read_str(len)?;
-            Ok((PatchContent::Tree(parse_markdown(md)), false))
-        }
-        PAYLOAD_RAW_HTML => {
-            let html = reader.read_str(len)?;
-            if options.escape_raw_html_braces {
-                let escaped = escape_braces_in_html_text(html);
-                Ok((PatchContent::Tree(parse_markdown(&escaped)), false))
+        PAYLOAD_RAW => {
+            let flags = reader.read_u8()?;
+            let len = reader.read_u32()? as usize;
+            let raw = reader.read_str(len)?;
+            // Braces are kept literal only when the caller asked (RAW_LITERAL_BRACES,
+            // set by `mdxExpressions: false` / the deprecated `{rawHtml}`) and the
+            // document is MDX; in plain markdown there are no expressions to escape.
+            let tree = if flags & RAW_LITERAL_BRACES != 0 && options.escape_raw_html_braces {
+                parse_markdown(&escape_braces_in_html_text(raw))
             } else {
-                Ok((PatchContent::Tree(parse_markdown(html)), false))
-            }
+                parse_markdown(raw)
+            };
+            Ok((PatchContent::Tree(tree), false))
         }
         PAYLOAD_OPSTREAM => {
+            let len = reader.read_u32()? as usize;
             let ops = reader.read_bytes(len)?;
             Ok((
                 PatchContent::Grafted(replay_mdast_opstream(ops, builder, original_len, anchor)?),
@@ -1924,7 +1925,8 @@ mod tests {
         let mut buf = Vec::new();
         buf.push(CMD_REPLACE);
         push_u32(&mut buf, heading_id);
-        buf.push(PAYLOAD_RAW_MARKDOWN);
+        buf.push(PAYLOAD_RAW);
+        buf.push(0); // flags
         push_u32(&mut buf, raw_md.len() as u32);
         buf.extend_from_slice(raw_md.as_bytes());
 

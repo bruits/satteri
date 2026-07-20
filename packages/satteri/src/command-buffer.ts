@@ -31,12 +31,18 @@ import {
   CMD_REPLACE,
   CMD_SET_PROPERTY,
   CMD_SET_CHILDREN,
-  PAYLOAD_RAW_MARKDOWN,
-  PAYLOAD_RAW_HTML,
+  PAYLOAD_RAW,
+  RAW_LITERAL_BRACES,
   PAYLOAD_OPSTREAM,
 } from "./generated/wire-constants.js";
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
+
+/** Input to the structural mutators (`replace`, `insertBefore`, …). */
+type StructuralContent =
+  | MdastNode
+  | { raw: string; mdxExpressions?: boolean }
+  | { rawHtml: string };
 
 export function classifyReturn(value: unknown): ReturnClass {
   if (value === undefined || value === null) return "no_change";
@@ -196,37 +202,38 @@ export class CommandBuffer extends OpWriter {
     this.utf8WithU32Len(str);
   }
 
-  insertBefore(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  insertBefore(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_INSERT_BEFORE, nodeId, newNode);
   }
 
-  insertAfter(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  insertAfter(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_INSERT_AFTER, nodeId, newNode);
   }
 
-  prependChild(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  prependChild(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_PREPEND_CHILD, nodeId, newNode);
   }
 
-  appendChild(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  appendChild(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_APPEND_CHILD, nodeId, newNode);
   }
 
-  wrapNode(nodeId: number, parentNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  wrapNode(nodeId: number, parentNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_WRAP, nodeId, parentNode);
   }
 
-  replace(nodeId: number, newNode: MdastNode | { raw: string } | { rawHtml: string }): void {
+  replace(nodeId: number, newNode: StructuralContent): void {
     this.writeStructuralCommand(CMD_REPLACE, nodeId, newNode);
   }
 
-  /** Header (cmd + nodeId + payloadType) followed by a length-prefixed string payload. */
-  private writePayloadCommand(cmd: number, nodeId: number, payloadType: number, s: string): void {
+  /** Header (cmd + nodeId + PAYLOAD_RAW + flags) followed by a length-prefixed string. */
+  private writeRawCommand(cmd: number, nodeId: number, flags: number, s: string): void {
     this.#assertNotEncoding();
-    this.ensure(6);
+    this.ensure(7);
     this.buf[this.n++] = cmd;
     this.writeU32(nodeId);
-    this.buf[this.n++] = payloadType;
+    this.buf[this.n++] = PAYLOAD_RAW;
+    this.buf[this.n++] = flags;
     this.utf8WithU32Len(s);
   }
 
@@ -235,14 +242,14 @@ export class CommandBuffer extends OpWriter {
     return this.take();
   }
 
-  /** Raw structural content (`{raw}`/`{rawHtml}` escape hatches). Declarative
-   *  nodes go through the `*Opstream` methods, not here. */
+  /** Encode the raw-string escape hatch; declarative nodes use `*Opstream` instead. */
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {
     const v = node as Record<string, unknown>;
     if (typeof v.raw === "string") {
-      this.writePayloadCommand(cmd, nodeId, PAYLOAD_RAW_MARKDOWN, v.raw as string);
+      const flags = v.mdxExpressions === false ? RAW_LITERAL_BRACES : 0;
+      this.writeRawCommand(cmd, nodeId, flags, v.raw as string);
     } else if (typeof v.rawHtml === "string") {
-      this.writePayloadCommand(cmd, nodeId, PAYLOAD_RAW_HTML, v.rawHtml as string);
+      this.writeRawCommand(cmd, nodeId, RAW_LITERAL_BRACES, v.rawHtml as string);
     } else {
       throw new Error("CommandBuffer: structural content must be {raw} or {rawHtml}");
     }

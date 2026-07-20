@@ -825,6 +825,58 @@ describe("mdxToJs", () => {
     expect(js).toContain("JWT valid?");
   });
 
+  test("{ raw, mdxExpressions: false } keeps MDX braces literal; deprecated rawHtml is equivalent", () => {
+    const html = '<span class="k">{foo}</span>';
+    const withOption = defineMdastPlugin({
+      name: "raw-opt",
+      paragraph() {
+        return { raw: html, mdxExpressions: false };
+      },
+    });
+    const legacy = defineMdastPlugin({
+      name: "raw-html-legacy",
+      paragraph() {
+        return { rawHtml: html };
+      },
+    });
+    const expressionsLive = defineMdastPlugin({
+      name: "raw-default",
+      paragraph() {
+        return { raw: html };
+      },
+    });
+
+    // mdxExpressions:false replaces the deprecated `{ rawHtml }`, so both must match.
+    const optCode = mdxToJs("x\n", { mdastPlugins: [withOption] }).code;
+    const legacyCode = mdxToJs("x\n", { mdastPlugins: [legacy] }).code;
+    expect(optCode).toBe(legacyCode);
+    expect(optCode).toContain('"{"');
+    expect(optCode).toContain('"}"');
+
+    // Omitting the option leaves expressions live, so `{foo}` must not be a literal.
+    const liveCode = mdxToJs("x\n", { mdastPlugins: [expressionsLive] }).code;
+    expect(liveCode).not.toContain('"{"');
+    expect(liveCode).toContain("children: foo");
+  });
+
+  test("html node compiling to MDX throws (raw HTML has no JSX representation)", () => {
+    const plugin = defineMdastPlugin({
+      name: "html-node",
+      code(node) {
+        if (node.type === "code") {
+          return { type: "html", value: `<pre class="hl">${node.value}</pre>` };
+        }
+      },
+    });
+
+    // A `raw` node has no JSX representation, so MDX errors rather than escaping it.
+    expect(() => mdxToJs("```\nhi\n```", { mdastPlugins: [plugin] })).toThrow(/mdxExpressions/);
+
+    // The same html node still renders verbatim in the (non-MDX) HTML output.
+    const { html } = markdownToHtml("```\nhi\n```", { mdastPlugins: [plugin] });
+    expect(html).toContain('<pre class="hl">hi</pre>');
+  });
+
   test("MDAST plugin can read JSX attributes", () => {
     const collected: unknown[] = [];
     const readAttrs = defineMdastPlugin({

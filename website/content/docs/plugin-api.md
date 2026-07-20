@@ -61,12 +61,14 @@ type MdastVisitor<N> = (node: Readonly<N>, ctx: MdastVisitorContext) => MdastVis
 
 type MdastVisitorResult =
   | MdastNode // replace with this node
-  | { raw: string } // splice in raw Markdown (re-parsed)
-  | { rawHtml: string } // splice in raw HTML (passed through)
+  | { raw: string; mdxExpressions?: boolean } // splice in a string, re-parsed as Markdown
+  | { rawHtml: string } // deprecated — see below
   | undefined
   | null
   | void; // keep node, apply ctx mutations
 ```
+
+To inject HTML, return `{ raw: "<span>…</span>", mdxExpressions: false }` rather than an mdast `html` node (`{ type: "html", value }`) — the latter renders in Markdown but throws under MDX. See [Return value semantics](#return-value-semantics).
 
 ### Supported visitor keys
 
@@ -305,15 +307,19 @@ For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, 
 
 ## Return value semantics
 
-| Returned                      | MDAST                            | HAST    |
-| ----------------------------- | -------------------------------- | ------- |
-| `undefined` / `null` / `void` | Keep node, apply `ctx` mutations | Same    |
-| The same node object          | Same (no-op replace)             | Same    |
-| A different node              | Replace the visited node         | Replace |
-| `{ raw: string }`             | Splice raw Markdown (re-parsed)  | N/A     |
-| `{ rawHtml: string }`         | Splice raw HTML (passthrough)    | N/A     |
+| Returned                                | MDAST                                   | HAST    |
+| --------------------------------------- | --------------------------------------- | ------- |
+| `undefined` / `null` / `void`           | Keep node, apply `ctx` mutations        | Same    |
+| The same node object                    | Same (no-op replace)                    | Same    |
+| A different node                        | Replace the visited node                | Replace |
+| `{ raw: string }`                       | Splice a string, re-parsed as Markdown  | N/A     |
+| `{ raw: string, mdxExpressions: false }`| Same, but keep MDX `{…}` literal        | N/A     |
 
-`rawHtml` is emitted verbatim, as such literal `{` and `}` are preserved, so HTML carrying curly brackets (e.g. a Mermaid decision node `C{JWT valid?}`) survives intact in Markdown. In MDX since the same content is reparsed as MDX, curly brackets are auto-escaped so they still render as literals.
+`{ raw }` takes a string and re-parses it as Markdown, splicing the result in place of the node.
+
+The `mdxExpressions` option (default `true`) controls how MDX curly braces in the string are treated. With the default, `{…}` is a live MDX expression. Set `mdxExpressions: false` to keep `{` and `}` as **literal text** — necessary when you inject generated HTML whose braces are not expressions, e.g. a Mermaid decision node `C{JWT valid?}` or KaTeX/Shiki output. In plain Markdown output the option has no effect (there are no MDX expressions), so `{ raw }` and `{ raw, mdxExpressions: false }` are identical there.
+
+
 
 ## Async plugins
 
