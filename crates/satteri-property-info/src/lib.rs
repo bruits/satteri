@@ -1,13 +1,11 @@
-//! A Rust port of the parts of the [`property-information`] package that Sätteri
-//! needs: HTML/SVG attribute ↔ hast-property name mapping, plus the
-//! value-coercion hints (`Info`) that `hast-util-from-html` uses when building a
-//! tree.
+//! HTML/SVG attribute ↔ hast-property name mapping plus value-coercion hints.
+//! Table data is ported from [`property-information`].
 //!
-//! The data lives in [`tables`]. A single table per schema serves both
-//! directions: each name is keyed in both its attribute and property forms, so
-//! attribute→property ([`find_property`], parsing) reads the property column and
-//! property→attribute ([`property_to_attribute`], rendering) reads the attribute
-//! column.
+//! A single table per schema serves both directions: each name is keyed in
+//! both its attribute and property forms, so attribute→property
+//! ([`find_property`], parsing) reads the property column and
+//! property→attribute ([`property_to_attribute`], rendering) reads the
+//! attribute column.
 //!
 //! [`property-information`]: https://github.com/wooorm/property-information
 
@@ -18,8 +16,7 @@ use tables::{HTML_TABLE, SVG_TABLE};
 
 type Table = &'static [(&'static str, &'static str, &'static str, u8)];
 
-/// How an attribute's string value is coerced into a hast property value,
-/// mirroring `property-information`'s `Info` flags.
+/// How an attribute's string value is coerced into a hast property value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PropKind {
     /// Plain string (also `booleanish`, which hast keeps as a string).
@@ -60,8 +57,7 @@ fn table(in_svg: bool) -> Table {
     }
 }
 
-/// Lowercase `name` for a table lookup, mirroring `property-information`'s
-/// `normalize` (which lowercases before matching). Borrows when already lower.
+/// Lowercase `name` for a table lookup; borrows when already lowercase.
 fn normalize(name: &str) -> Cow<'_, str> {
     if name.bytes().any(|b| b.is_ascii_uppercase()) {
         Cow::Owned(name.to_ascii_lowercase())
@@ -75,8 +71,8 @@ fn lookup(table: Table, key: &str) -> Option<usize> {
 }
 
 /// Resolve an HTML/SVG attribute name to its hast property name and value
-/// coercion, mirroring `property-information`'s `find`. Known attributes come
-/// from the table; `data-*` names are camel-cased; unknown names pass through.
+/// coercion. Known attributes come from the table; `data-*` names are
+/// camel-cased; unknown names pass through.
 pub fn find_property(local: &str, in_svg: bool) -> (Cow<'_, str>, PropKind) {
     let t = table(in_svg);
     let key = normalize(local);
@@ -90,9 +86,8 @@ pub fn find_property(local: &str, in_svg: bool) -> (Cow<'_, str>, PropKind) {
     (Cow::Owned(key.into_owned()), PropKind::String)
 }
 
-/// Convert a hast property name to its serialized HTML/SVG attribute name,
-/// mirroring `property-information` / `hast-util-to-html`. `in_svg` selects the
-/// SVG schema; otherwise HTML. Unknown properties pass through unchanged.
+/// Convert a hast property name to its serialized HTML/SVG attribute name.
+/// `in_svg` selects the SVG schema; unknown properties pass through unchanged.
 pub fn property_to_attribute(name: &str, in_svg: bool) -> Cow<'_, str> {
     // Common HTML case: a lowercase name is already its attribute form. Skips
     // the ladder for `href`, `src`, `id`, ...
@@ -141,13 +136,12 @@ fn attribute_of(name: &str, in_svg: bool) -> Option<&'static str> {
     lookup(t, normalize(name).as_ref()).map(|i| t[i].2)
 }
 
-/// Turn a `data-*` attribute name into its hast property name, mirroring
-/// `property-information`'s algorithm (`data-foo-bar` → `dataFooBar`,
-/// `data-a-b-c` → `dataABC`, `data-x-1` → `dataX-1`). Expects `name` already
-/// lowercased. Returns `None` for names that are not valid data attributes.
+/// Turn a `data-*` attribute name into its hast property name
+/// (`data-foo-bar` → `dataFooBar`, `data-a-b-c` → `dataABC`,
+/// `data-x-1` → `dataX-1`). Expects `name` already lowercased; returns `None`
+/// for names that are not valid data attributes.
 fn data_to_property(name: &str) -> Option<String> {
     let bytes = name.as_bytes();
-    // `/^data[-\w.:]+$/` with the property form requiring `data-…`.
     if bytes.len() <= 4 || &bytes[..4] != b"data" || bytes[4] != b'-' {
         return None;
     }
@@ -157,7 +151,6 @@ fn data_to_property(name: &str) -> Option<String> {
     {
         return None;
     }
-    // `rest = value.slice(5).replace(/-[a-z]/g, m => m[1].toUpperCase())`.
     let rest = &name.as_bytes()[5..];
     let mut camel = String::with_capacity(rest.len());
     let mut i = 0;
@@ -325,7 +318,6 @@ mod tests {
         // Property that does not start with an uppercase after the prefix is unchanged.
         assert_eq!(html("datatype"), "datatype");
         assert_eq!(html("arial"), "arial");
-        // Custom/React-style properties unknown to property-information pass through.
         assert_eq!(html("dangerouslySetInnerHTML"), "dangerouslySetInnerHTML");
         assert_eq!(html("customProp"), "customProp");
     }

@@ -96,11 +96,8 @@ describe("htmlToHast", () => {
   });
 
   test("preserves <template> content", () => {
-    // Template children are parsed into a detached content document by the tree
-    // builder. Sätteri's hast has no `content` root, so the content is emitted
-    // as the template's `children` instead of being dropped. Note this diverges
-    // from standard hast (`content` root), so third-party `hast-util-to-html`
-    // won't re-serialize it; Sätteri's own renderer round-trips it correctly.
+    // Template content is emitted as `children` rather than the standard hast
+    // `content` root, which the arena has no field for.
     const tree = htmlToHast("<template><p>hi</p></template>");
     const template = findElement(tree, "template")!;
     expect(template).toBeDefined();
@@ -115,8 +112,6 @@ describe("htmlToHast", () => {
   });
 
   test("parses <noscript> content as markup (scripting disabled)", () => {
-    // `hast-util-from-html` parses with scripting disabled, so `<noscript>`
-    // content is a real element tree rather than a single raw-text node.
     const tree = htmlToHast("<noscript><link><!--c--></noscript>");
     const noscript = findElement(tree, "noscript")!;
     expect(noscript).toBeDefined();

@@ -78,7 +78,10 @@ function clean(node: HastNode): unknown {
 const cases: Array<{ name: string; md: string }> = [
   { name: "jsx flow element", md: `<Foo bar={1} />\n` },
   { name: "flow expression", md: `{1 + 1}\n` },
-  { name: "html-looking block wrapping markdown", md: `<div class="note">\n\ntext **bold**\n\n</div>` },
+  {
+    name: "html-looking block wrapping markdown",
+    md: `<div class="note">\n\ntext **bold**\n\n</div>`,
+  },
   { name: "heading then jsx", md: `# Hi\n\n<Foo />\n` },
 ];
 

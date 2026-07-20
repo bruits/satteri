@@ -226,7 +226,6 @@ Apple
 
 A tight definition puts its content directly in the `<dd>`; a loose one — separated from its term by a blank line — wraps it in a `<p>`. The parser produces `descriptionList`, `descriptionTerm`, and `descriptionDetails` mdast nodes, each available to plugins.
 
-
 ## Smart punctuation
 
 Default: `false`.

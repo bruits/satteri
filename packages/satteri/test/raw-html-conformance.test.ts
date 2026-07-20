@@ -30,7 +30,9 @@ const referenceTree = (md: string): HastNode =>
   reference.runSync(reference.parse(md)) as unknown as HastNode;
 
 const stringify = (tree: HastNode): string =>
-  unified().use(rehypeStringify).stringify(tree as never);
+  unified()
+    .use(rehypeStringify)
+    .stringify(tree as never);
 
 /** Keep only structural fields so trees compare regardless of positions/internals. */
 function clean(node: HastNode): unknown {
