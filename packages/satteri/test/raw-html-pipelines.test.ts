@@ -65,3 +65,20 @@ test("rawHtml off leaves raw HTML verbatim on every path", () => {
   expect(html).toContain('class="a  b"');
   expect(html).not.toContain("<tbody>");
 });
+
+test("plugin-spliced raw HTML is reparsed too", () => {
+  const splicer = defineMdastPlugin({
+    name: "splicer",
+    code(node) {
+      if (node.lang !== "box") return;
+      return { raw: `<aside class="n  m">${node.value}</aside>` };
+    },
+  });
+  const { html } = sync(
+    markdownToHtml("before\n\n```box\nhi\n```\n", {
+      features: { rawHtml: true },
+      mdastPlugins: [splicer],
+    }),
+  );
+  expect(html).toContain('<aside class="n m">hi</aside>');
+});
