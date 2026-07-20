@@ -1,0 +1,133 @@
+## Smart punctuation (commonmark.js conformance)
+
+These cases extend the upstream CommonMark `smart_punct.txt` suite with
+edge cases it does not cover. The expected HTML is the output of
+`commonmark.js` in smart mode (the reference implementation Sätteri aims to
+match for smart punctuation), captured as a static oracle. Regenerate by
+running the inputs below through `commonmark.js` with `{ smart: true }`.
+
+### Inch and foot marks
+
+An unmatched close-flanking double quote (e.g. an inch mark) renders as a
+closing curly quote, not an opening one. Regression coverage for
+https://github.com/bruits/satteri/issues/156.
+
+```````````````````````````````` example_smartpunct
+24" monitor
+.
+<p>24” monitor</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+Height 6'2"
+.
+<p>Height 6’2”</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+5'8"
+.
+<p>5’8”</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+6' tall
+.
+<p>6’ tall</p>
+````````````````````````````````
+
+### Matched and unmatched double quotes
+
+```````````````````````````````` example_smartpunct
+The "thing"
+.
+<p>The “thing”</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+"open only
+.
+<p>“open only</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+a "b" c
+.
+<p>a “b” c</p>
+````````````````````````````````
+
+### Pairing across inline emphasis
+
+Quotes on either side of an emphasis span still pair into curly quotes.
+(This is where Sätteri and commonmark.js agree but `remark-smartypants`
+diverges — see the Divergences reference.)
+
+```````````````````````````````` example_smartpunct
+a "*quoted*" word
+.
+<p>a “<em>quoted</em>” word</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+"something **bold** else"
+.
+<p>“something <strong>bold</strong> else”</p>
+````````````````````````````````
+
+### Single quotes, apostrophes, and nesting
+
+```````````````````````````````` example_smartpunct
+'quoted'
+.
+<p>‘quoted’</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+the 70's
+.
+<p>the 70’s</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+it isn't
+.
+<p>it isn’t</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+'Tis the season
+.
+<p>’Tis the season</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+rock 'n' roll
+.
+<p>rock ‘n’ roll</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+'He said, "hi."'
+.
+<p>‘He said, “hi.”’</p>
+````````````````````````````````
+
+### Dashes and ellipses
+
+```````````````````````````````` example_smartpunct
+a -- b
+.
+<p>a – b</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+a --- b
+.
+<p>a — b</p>
+````````````````````````````````
+
+```````````````````````````````` example_smartpunct
+wait...
+.
+<p>wait…</p>
+````````````````````````````````
