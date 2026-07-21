@@ -577,13 +577,10 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     let mut fn_numbers: FxHashMap<&str, usize> = FxHashMap::default();
     let mut fn_def_order: Vec<u32> = Vec::new();
 
-    // Collect refs encountered in the main document (everything except
-    // footnote definition bodies), in DFS order. Store as node ids.
-    //
-    // Skip directive subtrees too: our HAST conversion drops directives, so
-    // any footnote reference inside a directive never appears in the output.
-    // Counting it here would incorrectly force the footnote `<section>` to
-    // appear even when no live reference remains.
+    // A footnote ref inside a directive only reaches the output when the
+    // directive renders its own mdast children: it is dropped without an
+    // `hName`, and `hChildren` replaces those children. Counting a ref that
+    // won't render forces an empty footnote `<section>`.
     fn walk_main_refs(view: &Arena<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
         let node = view.get_node(node_id);
         let ty = MdastNodeType::from_u8(node.node_type);
@@ -598,7 +595,10 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
                     | MdastNodeType::TextDirective
             )
         ) {
-            return;
+            let h = HData::read(view, node_id);
+            if h.h_name().is_none() || h.h_children().is_some() {
+                return;
+            }
         }
         if ty == Some(MdastNodeType::FootnoteReference) {
             refs.push(node_id);
@@ -2564,6 +2564,73 @@ mod hast_convert_tests {
         assert!(html.contains("<aside class=\"note\">"), "got {html}");
         assert!(html.contains("Hello"), "got {html}");
         assert!(html.contains("</aside>"), "got {html}");
+    }
+
+    #[test]
+    fn footnote_ref_inside_rendered_directive_is_numbered() {
+        // Regression test for #157.
+        let (mut mdast, _) = satteri_pulldown_cmark::parse(
+            "Outside.[^a]\n\n:::note\nInside.[^b]\n:::\n\n[^a]: One.\n\n[^b]: Two.\n",
+            satteri_pulldown_cmark::Options::ENABLE_GFM
+                | satteri_pulldown_cmark::Options::ENABLE_DIRECTIVE
+                | satteri_pulldown_cmark::Options::ENABLE_FOOTNOTES,
+        );
+        let dir_id = find_first(&mdast, MdastNodeType::ContainerDirective);
+        set_data(&mut mdast, dir_id, r#"{"hName":"div"}"#);
+        let html = hast_arena_to_html(&mdast_arena_to_hast_arena(&mdast));
+        assert!(!html.contains("[^b]"), "ref rendered literally, got {html}");
+        assert!(
+            html.contains("user-content-fnref-b"),
+            "nested ref not numbered, got {html}"
+        );
+        assert!(
+            html.contains("user-content-fn-b") && html.contains("Two."),
+            "nested definition dropped, got {html}"
+        );
+        // Numbering follows document order: `a` (#1) before `b` (#2).
+        let a_pos = html.find("user-content-fn-a").unwrap();
+        let b_pos = html.find("user-content-fn-b").unwrap();
+        assert!(a_pos < b_pos, "footnotes out of order, got {html}");
+    }
+
+    #[test]
+    fn footnote_ref_inside_h_children_directive_is_not_numbered() {
+        // `hChildren` replaces the mdast children, so the nested ref never
+        // renders and must not force a footnote `<section>`.
+        let (mut mdast, _) = satteri_pulldown_cmark::parse(
+            ":::note\nInside.[^b]\n:::\n\n[^b]: Two.\n",
+            satteri_pulldown_cmark::Options::ENABLE_GFM
+                | satteri_pulldown_cmark::Options::ENABLE_DIRECTIVE
+                | satteri_pulldown_cmark::Options::ENABLE_FOOTNOTES,
+        );
+        let dir_id = find_first(&mdast, MdastNodeType::ContainerDirective);
+        set_data(
+            &mut mdast,
+            dir_id,
+            r#"{"hName":"div","hChildren":[{"type":"text","value":"replaced"}]}"#,
+        );
+        let html = hast_arena_to_html(&mdast_arena_to_hast_arena(&mdast));
+        assert!(
+            html.contains("replaced"),
+            "hChildren not rendered, got {html}"
+        );
+        assert!(!html.contains("class=\"footnotes\""), "got {html}");
+        assert!(!html.contains("user-content-fn-b"), "got {html}");
+    }
+
+    #[test]
+    fn footnote_ref_inside_dropped_directive_is_not_numbered() {
+        // Without an `hName` the directive is dropped, so the nested ref must
+        // not force a footnote `<section>`.
+        let (mdast, _) = satteri_pulldown_cmark::parse(
+            ":::note\nInside.[^b]\n:::\n\n[^b]: Two.\n",
+            satteri_pulldown_cmark::Options::ENABLE_GFM
+                | satteri_pulldown_cmark::Options::ENABLE_DIRECTIVE
+                | satteri_pulldown_cmark::Options::ENABLE_FOOTNOTES,
+        );
+        let html = hast_arena_to_html(&mdast_arena_to_hast_arena(&mdast));
+        assert!(!html.contains("class=\"footnotes\""), "got {html}");
+        assert!(!html.contains("user-content-fn-b"), "got {html}");
     }
 
     #[test]
