@@ -610,6 +610,12 @@ pub const MDAST_NODES: &[Node] = &[
         "descriptionDetails",
         DESCRIPTION_DETAILS_SLOTS,
     ),
+    // User-defined node: one internal tag whose stored `name` StringRef carries
+    // the author's arbitrary public `type` string (surfaced back as `node.type`,
+    // not `node.name`, by the JS read paths). Renders through `data.hName`
+    // (default `<div>`) and recurses its children, so plugins can introduce
+    // their own node types (e.g. a `section` wrapper).
+    n(Mdast, 38, "Custom", "custom", &[s16("name", 0)]),
     xts(
         Mdast,
         100,

@@ -44,6 +44,7 @@ export type {
 export type {
   MdastNode,
   HastNode,
+  Custom,
   DataMap,
   Data,
   SourceFormat,

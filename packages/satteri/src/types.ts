@@ -82,6 +82,20 @@ export interface DescriptionDetails extends MdastParent {
   spread?: boolean;
 }
 
+/**
+ * A user-defined mdast node. `type` is an arbitrary string the plugin chooses
+ * (e.g. `"section"`); it round-trips and is surfaced back as `node.type`. The
+ * node renders to HTML through `data.hName` (default `<div>`), merging
+ * `data.hProperties`, and recurses its real `children`. Pass one to
+ * `ctx.replaceNode` / `insertBefore` / `appendChild`, etc.
+ */
+export interface Custom {
+  type: string;
+  children: MdastNode[];
+  data?: Record<string, unknown>;
+  position?: Position;
+}
+
 declare module "mdast" {
   interface FrontmatterContentMap {
     toml: Toml;

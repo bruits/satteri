@@ -1,9 +1,13 @@
 import type { Root } from "mdast";
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
-import { TYPE_NAMES } from "./generated/node-types.js";
+import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
 import { materializeMdastFields } from "./generated/layout.js";
 import { createMaterializer } from "../materializer-cache.js";
+
+/** Internal tag for user-defined nodes; its stored `name` field carries the
+ *  author's public `type` string. */
+const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
 
 // Leaf node types that do NOT have children.
 // Type 9 = `definition`; type 18 = `imageReference` — leaves per mdast spec
@@ -23,7 +27,15 @@ function addTypeProperties(
 ): void {
   // Fixed-field types materialize from the generated layout table; the rest
   // (variable-length / cross-field) stay in the hand-written switch.
-  if (materializeMdastFields(reader, node, nodeId, nodeType)) return;
+  if (materializeMdastFields(reader, node, nodeId, nodeType)) {
+    // User-defined node: surface the stored `name` as the open `node.type`.
+    if (nodeType === MDAST_CUSTOM) {
+      const n = node as { type: string; name?: string };
+      n.type = n.name!;
+      delete n.name;
+    }
+    return;
+  }
 
   switch (nodeType) {
     case 5: {

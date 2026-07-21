@@ -31,10 +31,17 @@ const HAND_WRITTEN_FIELDS: Readonly<Record<number, readonly string[]>> = {
 
 const TYPE_NAME_BY_TAG = flatByTag(TYPE_NAMES);
 
+/** Internal tag for user-defined nodes; its stored `name` field is folded into
+ *  the open `node.type`, so the stub exposes no separate `name`. */
+const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
+
 const MDAST_STUB_DESCRIPTORS: (readonly StubDescriptorEntry[] | undefined)[] = [];
 for (const tag of Object.keys(TYPE_NAMES)) {
   const nodeType = Number(tag);
-  const fields = [...(MDAST_LAYOUT_KEYS[nodeType] ?? HAND_WRITTEN_FIELDS[nodeType] ?? [])];
+  const fields =
+    nodeType === MDAST_CUSTOM
+      ? []
+      : [...(MDAST_LAYOUT_KEYS[nodeType] ?? HAND_WRITTEN_FIELDS[nodeType] ?? [])];
   if (!LEAF_TYPES.has(nodeType)) fields.push("children");
   MDAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(fields);
 }
@@ -56,7 +63,13 @@ export class MdastChildStub {
   constructor(resolver: MdastResolver, id: number, nodeType: number) {
     this._resolver = resolver;
     this._id = id;
-    this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
+    // A user-defined node's public `type` isn't derivable from the tag alone;
+    // read it off the materialized node (which folds the stored `name` into
+    // `type`). Every other type maps straight from the tag.
+    this.type =
+      nodeType === MDAST_CUSTOM
+        ? (resolver.materializeOne(id) as { type: string }).type
+        : (TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`);
     installStubDescriptors(this, MDAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
   }
 }

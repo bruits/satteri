@@ -1764,6 +1764,19 @@ fn convert_node(
             }
         }
 
+        Some(MdastNodeType::Custom) => {
+            // User-defined node: render through `data.hName` (default `<div>`),
+            // merge `hProperties`, honour `hChildren`, otherwise recurse the
+            // real children. Content inside stays a first-class subtree — unlike
+            // directives, which drop without an `hName`.
+            let action = open_h_element(builder, view, node_id, "div", &[]);
+            copy_position(node_id, view, builder);
+            if matches!(action, ChildrenAction::Recurse) {
+                convert_children(node_id, view, builder, ctx);
+            }
+            builder.close_node();
+        }
+
         _ => {
             // Unknown: recurse into children
             convert_children(node_id, view, builder, ctx);
