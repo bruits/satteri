@@ -8,7 +8,8 @@ use crate::hast::codec::{
 use crate::hast::properties::property_to_attribute;
 use crate::hast::HastNodeType;
 use crate::shared::{
-    PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_INT, PROP_SPACE_SEP, PROP_STRING,
+    PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
+    PROP_STRING,
 };
 
 /// Render HTML from an arena.
@@ -54,11 +55,34 @@ pub fn render_node(
     in_raw_text: bool,
     in_svg: bool,
 ) {
+    render_node_inner(node_id, view, out, in_raw_text, in_svg, None);
+}
+
+/// Raw-HTML reparse hook: receives the output buffer and the MDX node's id.
+pub(crate) type OnMdx<'a> = dyn FnMut(&mut String, u32) + 'a;
+
+/// MDX nodes have no HTML representation: `on_mdx` decides what to emit for
+/// them; `None` skips them.
+pub(crate) fn render_node_inner<'cb>(
+    node_id: u32,
+    view: &Arena<Hast>,
+    out: &mut String,
+    in_raw_text: bool,
+    in_svg: bool,
+    mut on_mdx: Option<&mut OnMdx<'cb>>,
+) {
     let node = view.get_node(node_id);
 
     let Some(node_type) = HastNodeType::from_u8(node.node_type) else {
         for &child_id in view.get_children(node_id) {
-            render_node(child_id, view, out, in_raw_text, in_svg);
+            render_node_inner(
+                child_id,
+                view,
+                out,
+                in_raw_text,
+                in_svg,
+                on_mdx.as_deref_mut(),
+            );
         }
         return;
     };
@@ -66,7 +90,14 @@ pub fn render_node(
     match node_type {
         HastNodeType::Root => {
             for &child_id in view.get_children(node_id) {
-                render_node(child_id, view, out, in_raw_text, in_svg);
+                render_node_inner(
+                    child_id,
+                    view,
+                    out,
+                    in_raw_text,
+                    in_svg,
+                    on_mdx.as_deref_mut(),
+                );
             }
         }
 
@@ -96,7 +127,8 @@ pub fn render_node(
                         out.push_str(&attr_name);
                     }
                     PROP_BOOL_FALSE => {}
-                    PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP => {
+                    PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP
+                    | PROP_COMMA_SEP_NUM => {
                         let value = view.get_str(value_ref);
                         out.push(' ');
                         out.push_str(&attr_name);
@@ -114,7 +146,14 @@ pub fn render_node(
                 out.push('>');
                 let child_in_raw_text = in_raw_text || is_raw_text_element(tag);
                 for &child_id in view.get_children(node_id) {
-                    render_node(child_id, view, out, child_in_raw_text, element_in_svg);
+                    render_node_inner(
+                        child_id,
+                        view,
+                        out,
+                        child_in_raw_text,
+                        element_in_svg,
+                        on_mdx.as_deref_mut(),
+                    );
                 }
                 out.push_str("</");
                 out.push_str(tag);
@@ -159,22 +198,15 @@ pub fn render_node(
             }
         }
 
-        // MDX nodes have no HTML representation and are skipped. The arm is
-        // cfg-split only to keep the match exhaustive in both builds: the enum
-        // variants always exist (they carry wire-format discriminants), so the
-        // lite build still needs to name them even though MDX is compiled out.
-        #[cfg(feature = "mdx")]
         HastNodeType::MdxJsxElement
         | HastNodeType::MdxJsxTextElement
         | HastNodeType::MdxFlowExpression
         | HastNodeType::MdxTextExpression
-        | HastNodeType::MdxEsm => {}
-        #[cfg(not(feature = "mdx"))]
-        HastNodeType::MdxJsxElement
-        | HastNodeType::MdxJsxTextElement
-        | HastNodeType::MdxFlowExpression
-        | HastNodeType::MdxTextExpression
-        | HastNodeType::MdxEsm => {}
+        | HastNodeType::MdxEsm => {
+            if let Some(cb) = on_mdx.as_mut() {
+                cb(out, node_id);
+            }
+        }
     }
 }
 

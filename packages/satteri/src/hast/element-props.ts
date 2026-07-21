@@ -6,10 +6,11 @@ import {
   PROP_BOOL_FALSE,
   PROP_SPACE_SEP,
   PROP_COMMA_SEP,
+  PROP_COMMA_SEP_NUM,
   PROP_INT,
 } from "../generated/wire-constants.js";
 
-export type HastPropertyValue = string | number | boolean | string[];
+export type HastPropertyValue = string | number | boolean | (string | number)[];
 
 export function decodeElementProp(kind: number, value: string): HastPropertyValue {
   switch (kind) {
@@ -19,11 +20,17 @@ export function decodeElementProp(kind: number, value: string): HastPropertyValu
       return false;
     case PROP_SPACE_SEP:
       return value.split(" ").filter((s) => s.length > 0);
-    case PROP_COMMA_SEP:
-      return value
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+    case PROP_COMMA_SEP: {
+      // Interior empty items are kept; only a trailing empty is dropped.
+      const items = value.split(",").map((s) => s.trim());
+      if (items[items.length - 1] === "") items.pop();
+      return items;
+    }
+    case PROP_COMMA_SEP_NUM: {
+      const items = value.split(",").map((s) => s.trim());
+      if (items[items.length - 1] === "") items.pop();
+      return items.map((s) => (s !== "" && !Number.isNaN(Number(s)) ? Number(s) : s));
+    }
     case PROP_INT:
       return Number(value);
     default:

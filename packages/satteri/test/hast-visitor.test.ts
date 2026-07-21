@@ -485,7 +485,12 @@ describe("visitHastHandle - mutations", () => {
         filter: ["h1"],
         visit(node, ctx) {
           ctx.replaceNode(node, [
-            { type: "element", tagName: "h2", properties: {}, children: [{ type: "text", value: "Hi" }] },
+            {
+              type: "element",
+              tagName: "h2",
+              properties: {},
+              children: [{ type: "text", value: "Hi" }],
+            },
           ]);
         },
       },

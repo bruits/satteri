@@ -351,6 +351,13 @@ pub struct ConvertOptions {
     /// to the same definition, matching remark-rehype's default.
     /// Default: `"Back to reference {reference}"`.
     pub footnote_back_label: Backref,
+    /// Reparse raw HTML embedded in the converted tree into real HAST nodes
+    /// (see [`raw_to_hast_arena`](crate::hast::from_html::raw_to_hast_arena)).
+    /// Applied as the final conversion step so every pipeline that converts
+    /// MDAST to HAST gets it. Positions are not preserved through the reparse.
+    /// Default: `false`.
+    #[cfg(feature = "from-html")]
+    pub raw_html: bool,
 }
 
 /// Value for per-backref strings. Either a template with the `{reference}`
@@ -369,6 +376,8 @@ impl Default for ConvertOptions {
             footnote_label: "Footnotes".to_string(),
             footnote_back_content: Backref::Template("\u{21a9}".to_string()),
             footnote_back_label: Backref::Template("Back to reference {reference}".to_string()),
+            #[cfg(feature = "from-html")]
+            raw_html: false,
         }
     }
 }
@@ -445,7 +454,12 @@ fn mdast_arena_to_hast_arena_impl(
         options,
     };
     convert_node(0, source, &mut builder, &ctx);
-    builder.finish()
+    let arena = builder.finish();
+    #[cfg(feature = "from-html")]
+    if options.raw_html {
+        return crate::hast::from_html::raw_to_hast_arena(&arena);
+    }
+    arena
 }
 
 /// Shared read-only context threaded through the conversion.

@@ -10,6 +10,7 @@ export {
   compileMdx,
   convertMdastToHastHandle,
   createHastHandle,
+  createHastHandleFromHtml,
   createHastHandleWithFrontmatter,
   createMdastHandle,
   createMdxHastHandle,

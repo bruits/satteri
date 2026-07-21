@@ -1256,6 +1256,11 @@ pub const PROP_KINDS: WireTable = WireTable {
         wc("PROP_COMMA_SEP", 4, "comma-separated list (UTF-8)"),
         wc("PROP_INT", 5, "decimal string, parsed to i64"),
         wc("PROP_NULL", 6, "no value bytes"),
+        wc(
+            "PROP_COMMA_SEP_NUM",
+            7,
+            "comma-separated list, numeric items parsed to numbers",
+        ),
     ],
 };
 

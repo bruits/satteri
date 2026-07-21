@@ -25,6 +25,7 @@ import {
   compileHandle,
   convertMdastToHastHandle,
   createHastHandle,
+  createHastHandleFromHtml,
   createMdastHandle,
   createMdxHastHandle,
   createMdxMdastHandle,
@@ -107,6 +108,12 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
     } else {
       result.smartPunctuation = features.smartPunctuation;
     }
+  }
+  if (features.rawHtml !== undefined) {
+    // Routed to convert options so every pipeline (fast paths, plugin paths,
+    // *ToHast) applies the reparse.
+    convertOptions = convertOptions ?? {};
+    convertOptions.rawHtml = features.rawHtml;
   }
   return { features: result, convertOptions };
 }
@@ -441,6 +448,17 @@ export interface Features {
    * ```
    */
   smartPunctuation?: boolean | SmartPunctuationOptions;
+  /**
+   * Parse raw HTML embedded in Markdown into real HAST element nodes.
+   * Default: false.
+   *
+   * By default, inline and block HTML is kept as opaque `raw` nodes
+   * (re-emitted verbatim on stringify). With `rawHtml: true`, the tree is
+   * reparsed so raw HTML becomes structured `element`/`text`/`comment` nodes
+   * with normalized properties — including tags that open in one raw block
+   * and close in another. Positions are not preserved through the reparse.
+   */
+  rawHtml?: boolean;
 }
 
 export interface CompileOptions {
@@ -1057,6 +1075,20 @@ export function markdownToHast(source: string, options: { features?: Features } 
 export function mdxToHast(source: string, options: { features?: Features } = {}): HastNode {
   const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
   const handle = createMdxHastHandle(source, nativeFeatures, convertOptions);
+  try {
+    return materializeHastTree(new HastReader(serializeHandle(handle)));
+  } finally {
+    releaseHandle(handle, true);
+  }
+}
+
+/**
+ * Parse an HTML string into a materialized hast tree: a `root` whose children
+ * are the doctype (if any) and the implied `<html>` subtree. Only available
+ * in builds that include the `from-html` feature.
+ */
+export function htmlToHast(html: string): HastNode {
+  const handle = createHastHandleFromHtml(html);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {

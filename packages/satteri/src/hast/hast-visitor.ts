@@ -611,10 +611,10 @@ function decodeProperties(
   view: DataView,
   buf: Uint8Array,
   pos: number,
-): Record<string, string | number | boolean | string[]> {
+): Record<string, string | number | boolean | (string | number)[]> {
   const propCount = view.getUint16(pos, true);
   pos += 2;
-  const properties: Record<string, string | number | boolean | string[]> = {};
+  const properties: Record<string, string | number | boolean | (string | number)[]> = {};
   for (let i = 0; i < propCount; i++) {
     const nameLen = view.getUint16(pos, true);
     pos += 2;
@@ -662,7 +662,7 @@ function readChildStubs(
   return stubs;
 }
 
-type HastProperties = Record<string, string | number | boolean | string[]>;
+type HastProperties = Record<string, string | number | boolean | (string | number)[]>;
 
 /** Per-walk wire state; one reference per element keeps constructor stores minimal. */
 interface WalkWire {

@@ -6,9 +6,11 @@ description = "MDAST and HAST node types, codecs, tree operations, and conversio
 license = "MIT"
 
 [dependencies]
+html5ever = { version = "0.39", optional = true }
 pulldown-cmark-escape = "0.11"
 rustc-hash = { workspace = true }
 satteri-arena = { workspace = true }
+satteri-property-info = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 
@@ -21,3 +23,6 @@ default = ["mdx"]
 # conversion arms, and JSX attr helpers. The dev-dep parser builds with its
 # own default features (mdx on), so the parity tests keep compiling.
 mdx = []
+# `from-html` pulls in html5ever's tree builder for the HTML -> HAST parser.
+# It is opt-in so size-conscious consumers can drop html5ever entirely.
+from-html = ["dep:html5ever"]

@@ -78,6 +78,7 @@ markdownToMdast(source: string, options?: { features?: Features }): MdastNode;
 mdxToMdast(source: string, options?: { features?: Features }): MdastNode;
 markdownToHast(source: string, options?: { features?: Features }): HastNode;
 mdxToHast(source: string, options?: { features?: Features }): HastNode;
+htmlToHast(html: string): HastNode;
 ```
 
 ```js
@@ -89,3 +90,29 @@ tree.children[0].depth; // 1
 ```
 
 This is useful when you want Sätteri's fast native parsing but another pipeline (e.g. remark plugins and `remark-stringify`) for the rest. The returned tree is plain objects, yours to keep — see [Node lifetime](/docs/plugin-api/#node-lifetime) for why that matters.
+
+`htmlToHast` is the exception: it parses an HTML string (not Markdown or MDX) into HAST, with the same spec-compliant parsing a browser does — malformed markup is recovered, implied elements are filled in. The result is a `root` wrapping the implied `<html>` subtree. Use it to bring existing HTML into a HAST plugin pipeline.
+
+```js
+import { htmlToHast } from "satteri";
+
+const tree = htmlToHast("<p>hi</p>");
+tree.type; // "root"
+```
+
+Attributes are normalised into typed hast properties (`class` → `className: ["…"]`, `disabled` → `true`, `tabindex` → a number, `data-foo-bar` → `dataFooBar`). One deliberate divergence from standard hast: `<template>` content is emitted as the element's `children` rather than a separate `content` root, so external serializers that only read `content` will not re-serialize it.
+
+## Reparsing raw HTML (`rawHtml`)
+
+By default, inline and block HTML in Markdown is preserved as opaque `raw` nodes and re-emitted verbatim. Pass `features: { rawHtml: true }` to reparse it into structured HAST:
+
+```js
+import { markdownToHast } from "satteri";
+
+const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
+  features: { rawHtml: true },
+});
+// <div> is now a real element wrapping the parsed <p><strong>hi</strong></p>
+```
+
+The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Positions are not preserved through the reparse.

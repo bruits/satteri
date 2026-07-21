@@ -68,6 +68,7 @@ export const compileHandle = __napiModule.exports.compileHandle
 export const compileMdx = __napiModule.exports.compileMdx
 export const convertMdastToHastHandle = __napiModule.exports.convertMdastToHastHandle
 export const createHastHandle = __napiModule.exports.createHastHandle
+export const createHastHandleFromHtml = __napiModule.exports.createHastHandleFromHtml
 export const createHastHandleWithFrontmatter = __napiModule.exports.createHastHandleWithFrontmatter
 export const createMdastHandle = __napiModule.exports.createMdastHandle
 export const createMdxHastHandle = __napiModule.exports.createMdxHastHandle

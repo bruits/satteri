@@ -78,6 +78,12 @@ export declare function convertMdastToHastHandle(handle: MdastHandle, convertOpt
 export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
 
 /**
+ * Parse an HTML string into structured HAST (elements, text, comments).
+ * Returns an opaque handle; the arena stays in Rust memory.
+ */
+export declare function createHastHandleFromHtml(html: string): HastHandle
+
+/**
  * Parse + frontmatter + HAST conversion in one crossing (HAST-plugin path
  * head). Returns a `[handle, frontmatter]` pair.
  */
@@ -142,6 +148,11 @@ export interface JsConvertOptions {
    * Default: `"Back to reference {reference}"`.
    */
   footnoteBackLabel?: string | ((arg0: number, arg1: number) => string)
+  /**
+   * Reparse raw HTML embedded in markdown into real HAST nodes. Default:
+   * false. Only effective in builds with the `from-html` feature.
+   */
+  rawHtml?: boolean
 }
 
 /** Feature toggles for the Markdown/MDX parser, passed from JavaScript. */

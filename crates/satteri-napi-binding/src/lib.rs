@@ -228,6 +228,9 @@ pub struct JsConvertOptions {
     /// footnote number (`1`) or `number-K` (`1-2`) for repeated references.
     /// Default: `"Back to reference {reference}"`.
     pub footnote_back_label: Option<Either<String, FunctionRef<FnArgs<(u32, u32)>, String>>>,
+    /// Reparse raw HTML embedded in markdown into real HAST nodes. Default:
+    /// false. Only effective in builds with the `from-html` feature.
+    pub raw_html: Option<bool>,
 }
 
 fn js_backref_to_rust(
@@ -261,6 +264,10 @@ fn js_convert_options_to_rust(
         }
         if let Some(v) = js.footnote_back_label {
             out.footnote_back_label = js_backref_to_rust(env, v);
+        }
+        #[cfg(feature = "from-html")]
+        if let Some(v) = js.raw_html {
+            out.raw_html = v;
         }
     }
     out
@@ -952,6 +959,17 @@ pub fn create_hast_handle(
     let (handle, _) =
         create_hast_handle_impl(env, &source, features, convert_options, false, true, false)?;
     Ok(handle)
+}
+
+/// Parse an HTML string into structured HAST (elements, text, comments).
+/// Returns an opaque handle; the arena stays in Rust memory.
+#[cfg(feature = "from-html")]
+#[napi]
+pub fn create_hast_handle_from_html(html: String) -> Result<HastHandle> {
+    let mut hast = satteri_ast::hast::html_to_hast_arena(&html);
+    hast.mdx = false;
+    hast.parse_options = 0;
+    Ok(External::new(Mutex::new(hast)))
 }
 
 /// Parse MDX source and convert to HAST. Returns an opaque handle.
