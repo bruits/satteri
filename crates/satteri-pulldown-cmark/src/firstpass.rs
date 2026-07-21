@@ -6007,9 +6007,10 @@ fn delim_run_can_open(
     }
 
     // Double quotes can open after a non-space word character. For example, `에"About Me"` has
-    // quoted text attached directly after Korean text.
+    // quoted text attached directly after Korean text. Digits are excluded: a
+    // quote after a digit is an inch mark (`24"x36"`), not an opening quote.
     if delim == b'"' {
-        return !is_punctuation(next_char)
+        return (!is_punctuation(next_char) && !prev_char.is_ascii_digit())
             || prev_char.is_whitespace()
             || is_punctuation(prev_char);
     }

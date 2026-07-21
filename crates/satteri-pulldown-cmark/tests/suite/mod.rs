@@ -15,6 +15,7 @@ mod math_multi_dollar;
 mod metadata_blocks;
 mod regression;
 mod smart_punct;
+mod smartypants;
 mod spec;
 mod strikethrough;
 mod super_sub;
