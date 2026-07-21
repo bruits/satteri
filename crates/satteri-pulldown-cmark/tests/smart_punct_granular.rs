@@ -143,3 +143,27 @@ fn unmatched_double_quote_after_apostrophe_height_closes() {
     let html = render(r#"Height 6'2""#, opts_quotes_only());
     assert_eq!(html, "<p>Height 6’2”</p>\n");
 }
+
+// A quote after a digit is an inch mark even mid-word, so dimension notation
+// closes throughout.
+#[test]
+fn double_quote_after_digit_before_word_closes() {
+    let html = render(r#"24"x36""#, opts_quotes_only());
+    assert_eq!(html, "<p>24”x36”</p>\n");
+}
+
+// Deliberate divergence from commonmark.js, which treats any
+// punctuation-sandwiched quote as a closer and renders `("!")` as `(”!”)`.
+#[test]
+fn double_quote_between_punctuation_opens() {
+    let html = render(r#"("!")"#, opts_quotes_only());
+    assert_eq!(html, "<p>(“!”)</p>\n");
+}
+
+// Same divergence, degenerate form: quote runs pair up instead of closing
+// after the first pair (commonmark.js renders `“”””`).
+#[test]
+fn double_quote_run_pairs_alternately() {
+    let html = render("\"\"\"\"", opts_quotes_only());
+    assert_eq!(html, "<p>“”“”</p>\n");
+}

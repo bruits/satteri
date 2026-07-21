@@ -45,6 +45,46 @@ fn smartypants_test_4() {
 
 #[test]
 fn smartypants_test_5() {
+    let original = r##"24"x36"
+"##;
+    let expected = r##"<p>24”x36”</p>
+"##;
+
+    test_markdown_html(original, expected, 0, true, false, false, false, false, false);
+}
+
+#[test]
+fn smartypants_test_6() {
+    let original = r##"a " b
+"##;
+    let expected = r##"<p>a “ b</p>
+"##;
+
+    test_markdown_html(original, expected, 0, true, false, false, false, false, false);
+}
+
+#[test]
+fn smartypants_test_7() {
+    let original = r##"" alone
+"##;
+    let expected = r##"<p>“ alone</p>
+"##;
+
+    test_markdown_html(original, expected, 0, true, false, false, false, false, false);
+}
+
+#[test]
+fn smartypants_test_8() {
+    let original = r##""open then " mid
+"##;
+    let expected = r##"<p>“open then “ mid</p>
+"##;
+
+    test_markdown_html(original, expected, 0, true, false, false, false, false, false);
+}
+
+#[test]
+fn smartypants_test_9() {
     let original = r##"The "thing"
 "##;
     let expected = r##"<p>The “thing”</p>
@@ -54,7 +94,7 @@ fn smartypants_test_5() {
 }
 
 #[test]
-fn smartypants_test_6() {
+fn smartypants_test_10() {
     let original = r##""open only
 "##;
     let expected = r##"<p>“open only</p>
@@ -64,7 +104,7 @@ fn smartypants_test_6() {
 }
 
 #[test]
-fn smartypants_test_7() {
+fn smartypants_test_11() {
     let original = r##"a "b" c
 "##;
     let expected = r##"<p>a “b” c</p>
@@ -74,7 +114,17 @@ fn smartypants_test_7() {
 }
 
 #[test]
-fn smartypants_test_8() {
+fn smartypants_test_12() {
+    let original = r##""some "nested quotes""
+"##;
+    let expected = r##"<p>“some “nested quotes””</p>
+"##;
+
+    test_markdown_html(original, expected, 0, true, false, false, false, false, false);
+}
+
+#[test]
+fn smartypants_test_13() {
     let original = r##"a "*quoted*" word
 "##;
     let expected = r##"<p>a “<em>quoted</em>” word</p>
@@ -84,7 +134,7 @@ fn smartypants_test_8() {
 }
 
 #[test]
-fn smartypants_test_9() {
+fn smartypants_test_14() {
     let original = r##""something **bold** else"
 "##;
     let expected = r##"<p>“something <strong>bold</strong> else”</p>
@@ -94,7 +144,7 @@ fn smartypants_test_9() {
 }
 
 #[test]
-fn smartypants_test_10() {
+fn smartypants_test_15() {
     let original = r##"'quoted'
 "##;
     let expected = r##"<p>‘quoted’</p>
@@ -104,7 +154,7 @@ fn smartypants_test_10() {
 }
 
 #[test]
-fn smartypants_test_11() {
+fn smartypants_test_16() {
     let original = r##"the 70's
 "##;
     let expected = r##"<p>the 70’s</p>
@@ -114,7 +164,7 @@ fn smartypants_test_11() {
 }
 
 #[test]
-fn smartypants_test_12() {
+fn smartypants_test_17() {
     let original = r##"it isn't
 "##;
     let expected = r##"<p>it isn’t</p>
@@ -124,7 +174,7 @@ fn smartypants_test_12() {
 }
 
 #[test]
-fn smartypants_test_13() {
+fn smartypants_test_18() {
     let original = r##"'Tis the season
 "##;
     let expected = r##"<p>’Tis the season</p>
@@ -134,7 +184,7 @@ fn smartypants_test_13() {
 }
 
 #[test]
-fn smartypants_test_14() {
+fn smartypants_test_19() {
     let original = r##"rock 'n' roll
 "##;
     let expected = r##"<p>rock ‘n’ roll</p>
@@ -144,7 +194,7 @@ fn smartypants_test_14() {
 }
 
 #[test]
-fn smartypants_test_15() {
+fn smartypants_test_20() {
     let original = r##"'He said, "hi."'
 "##;
     let expected = r##"<p>‘He said, “hi.”’</p>
@@ -154,7 +204,7 @@ fn smartypants_test_15() {
 }
 
 #[test]
-fn smartypants_test_16() {
+fn smartypants_test_21() {
     let original = r##"a -- b
 "##;
     let expected = r##"<p>a – b</p>
@@ -164,7 +214,7 @@ fn smartypants_test_16() {
 }
 
 #[test]
-fn smartypants_test_17() {
+fn smartypants_test_22() {
     let original = r##"a --- b
 "##;
     let expected = r##"<p>a — b</p>
@@ -174,7 +224,7 @@ fn smartypants_test_17() {
 }
 
 #[test]
-fn smartypants_test_18() {
+fn smartypants_test_23() {
     let original = r##"wait...
 "##;
     let expected = r##"<p>wait…</p>
