@@ -1494,3 +1494,16 @@ fn heading_attribute_custom_id() -> Result<(), satteri_arena::mdx_types::Message
     );
     Ok(())
 }
+
+// Issue #162: setext headings carry the id too, despite being inline-parsed
+// as a paragraph before the underline is seen.
+#[test]
+fn heading_attribute_custom_id_setext() -> Result<(), satteri_arena::mdx_types::Message> {
+    let opts = MDX_OPTS | satteri_pulldown_cmark::Options::ENABLE_HEADING_ATTRIBUTES;
+    let js = compile("Heading {#custom-id}\n===\n", &Options::default(), opts)?;
+    assert!(
+        js.contains("_jsx(_components.h1, {\n        id: \"custom-id\","),
+        "id prop missing in compiled JS: {js}"
+    );
+    Ok(())
+}

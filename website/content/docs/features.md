@@ -185,7 +185,7 @@ MDX treats `{...}` as a JavaScript expression, which normally collides with the 
 # Welcome {name}
 ```
 
-This applies to ATX headings (`#`-prefixed). Setext headings (underlined with `===`/`---`) do not support attributes in MDX.
+This works for both ATX headings (`#`-prefixed) and setext headings (underlined with `===`/`---`).
 
 Because the test is "is the body valid JavaScript?", an attribute block that happens to parse as an expression is evaluated instead of applied — with no error. `{hidden}`, `{level=2}` and `{title="Home"}` are all valid JavaScript, so in MDX they become expressions, not attributes (in plain Markdown they stay attributes). A `#`/`.` shorthand or a hyphenated key (`{data-x=y}`) is never valid JavaScript, so it always reads as attributes; add one to force a block that is otherwise valid JavaScript to be treated as attributes (e.g. `{#id hidden}` applies both).
 

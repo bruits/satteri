@@ -1589,17 +1589,23 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
             // Truncating to the block's `{` (below) drops any trailing directive
             // run with it, so reparse that run to keep its own `{...}` attributes.
-            // Setext content is inline-parsed before the underline is seen, so
-            // under MDX the `{...}` is already an expression; attributes are ATX-only.
-            let (content_end, attrs_, tail_start) = if self.options.contains(Options::ENABLE_MDX) {
-                (header_end, None, None)
-            } else {
+            let (content_end, attrs_, tail_start) =
                 match self.extract_and_parse_heading_attribute_block(header_start, header_end) {
                     Some(block) => (block.block_open, Some(block.attrs), block.tail_start),
                     None => (header_end, None, None),
-                }
-            };
+                };
             attrs = attrs_;
+
+            // Setext content is inline-parsed as a paragraph before the underline
+            // is seen, so under MDX an attribute-shaped trailing `{...}` was
+            // already validated as an expression and left a stale oxc error. Now
+            // that it's claimed as attributes, drop errors within its span; a
+            // trailing directive run, if any, is reparsed below and re-reports.
+            #[cfg(feature = "mdx")]
+            if attrs.is_some() && self.options.contains(Options::ENABLE_MDX) {
+                self.mdx_errors
+                    .retain(|(offset, _)| *offset < content_end || *offset >= header_end);
+            }
 
             // strip trailing whitespace
             let new_end = if has_trailing_content {
