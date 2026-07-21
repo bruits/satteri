@@ -1,4 +1,6 @@
 ---
+cargo/satteri-ast: minor
+cargo/satteri-napi: minor
 npm/satteri: minor
 ---
 

@@ -1,4 +1,8 @@
 ---
+cargo/satteri-ast: minor
+cargo/satteri-mdxjs: patch
+cargo/satteri-napi: minor
+cargo/satteri-property-info: minor
 npm/satteri: minor
 ---
 
