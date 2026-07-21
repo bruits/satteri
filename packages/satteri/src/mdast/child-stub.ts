@@ -32,7 +32,8 @@ const HAND_WRITTEN_FIELDS: Readonly<Record<number, readonly string[]>> = {
 const TYPE_NAME_BY_TAG = flatByTag(TYPE_NAMES);
 
 /** Internal tag for user-defined nodes; its stored `name` field is folded into
- *  the open `node.type`, so the stub exposes no separate `name`. */
+ *  the open `node.type`, so the stub exposes `value` (leaf content) but no
+ *  separate `name`. */
 const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
 
 const MDAST_STUB_DESCRIPTORS: (readonly StubDescriptorEntry[] | undefined)[] = [];
@@ -40,7 +41,7 @@ for (const tag of Object.keys(TYPE_NAMES)) {
   const nodeType = Number(tag);
   const fields =
     nodeType === MDAST_CUSTOM
-      ? []
+      ? ["value"]
       : [...(MDAST_LAYOUT_KEYS[nodeType] ?? HAND_WRITTEN_FIELDS[nodeType] ?? [])];
   if (!LEAF_TYPES.has(nodeType)) fields.push("children");
   MDAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(fields);

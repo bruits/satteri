@@ -665,10 +665,12 @@ function readMdastMatchedNode(
 
   // User-defined node: the stored `name` field holds the author's public type
   // string. Surface it as `node.type` (open type string) instead of the
-  // internal `"custom"`, and drop the redundant `name`.
+  // internal `"custom"`, drop the redundant `name`, and drop an empty `value`
+  // so a parent node isn't given a spurious leaf field.
   if (nodeType === MDAST_CUSTOM) {
     node.type = node.name as string;
     delete node.name;
+    if (node.value === "") delete node.value;
   }
 
   mdastNodeIdMap.set(node as object, nodeId);
@@ -729,6 +731,11 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
     // user-defined node. Only genuinely-unknown type strings become custom.
     if (NAME_TO_TYPE[n.type] !== undefined) return false;
     type = MDAST_CUSTOM;
+    isCustom = true;
+  } else if (type === MDAST_CUSTOM) {
+    // `"custom"` is the internal tag's own public name, so it resolves here
+    // instead of falling through as unknown. Still a user-defined node — carry
+    // the `type` string as the name so it round-trips rather than vanishing.
     isCustom = true;
   }
   w.open(type);

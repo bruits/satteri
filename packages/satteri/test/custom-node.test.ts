@@ -105,3 +105,92 @@ test("GFM content survives inside a custom node (the #125 repro, fixed)", () => 
   expect(html).toContain("<table>");
   expect(html).toContain("<td>1</td>");
 });
+
+test("custom leaf node (value, no children) renders as an escaped text node", () => {
+  const wrap = defineMdastPlugin({
+    name: "leaf",
+    paragraph(node, ctx) {
+      // Replace the paragraph with a value-bearing leaf — no children, no hName.
+      ctx.replaceNode(node, { type: "token", value: "a < b & c" });
+    },
+  });
+  const { html } = markdownToHtml("placeholder", { mdastPlugins: [wrap] });
+  // Rendered as text (not wrapped in an element) and HTML-escaped.
+  expect(html).toContain("a &lt; b &amp; c");
+  expect(html).not.toContain("<token>");
+  expect(html).not.toContain("<div>");
+});
+
+test("custom leaf's value round-trips and is visible to the custom visitor", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "token", value: "hi" });
+    },
+  });
+  let seenType: string | undefined;
+  let seenValue: unknown = "UNSET";
+  let seenChildren: unknown = "UNSET";
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node) {
+      seenType = node.type;
+      seenValue = (node as { value?: string }).value;
+      seenChildren = (node as { children?: unknown }).children;
+    },
+  });
+  markdownToHtml("placeholder", { mdastPlugins: [create, inspect] });
+  expect(seenType).toBe("token");
+  expect(seenValue).toBe("hi");
+  expect(seenChildren).toBeUndefined();
+});
+
+test("custom parent node carries no spurious value field", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, {
+        type: "section",
+        data: { hName: "section" },
+        children: node.children as unknown as MdastNode[],
+      });
+    },
+  });
+  let hasValueKey = true;
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node) {
+      hasValueKey = "value" in node;
+    },
+  });
+  markdownToHtml("hello", { mdastPlugins: [create, inspect] });
+  expect(hasValueKey).toBe(false);
+});
+
+test("a node whose type is literally 'custom' round-trips its type", () => {
+  // `"custom"` is the internal tag's own public name; a plugin may still pick
+  // it as a user-defined type, and it must survive rather than emptying out.
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, {
+        type: "custom",
+        data: { hName: "aside" },
+        children: node.children as unknown as MdastNode[],
+      });
+    },
+  });
+
+  let seenType: string | undefined = "UNSET";
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node) {
+      seenType = node.type;
+    },
+  });
+
+  const { html } = markdownToHtml("Hello **bold**", { mdastPlugins: [create, inspect] });
+  expect(seenType).toBe("custom");
+  expect(html).toContain("<aside>");
+  expect(html).toContain("<strong>bold</strong>");
+});

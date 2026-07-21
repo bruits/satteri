@@ -305,6 +305,24 @@ impl MathData {
     }
 }
 
+/// `custom` node type_data. `name` carries the author's arbitrary public
+/// `type` string; `value` carries optional leaf text content (empty for a
+/// parent node). Pinned by the generated layout asserts.
+#[repr(C)]
+pub struct CustomData {
+    pub name: StringRef,
+    pub value: StringRef,
+}
+
+impl CustomData {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            name: StringRef::from_bytes(&bytes[0..8]),
+            value: StringRef::from_bytes(&bytes[8..16]),
+        }
+    }
+}
+
 /// Header for directive type_data (ContainerDirective, LeafDirective, TextDirective).
 ///
 /// Full layout (variable-length): this 16-byte header, then `attr_count`
@@ -663,6 +681,10 @@ pub fn encode_math_data(meta: StringRef, value: StringRef) -> Vec<u8> {
 
 pub fn decode_math_data(bytes: &[u8]) -> MathData {
     MathData::from_bytes(bytes)
+}
+
+pub fn decode_custom_data(bytes: &[u8]) -> CustomData {
+    CustomData::from_bytes(bytes)
 }
 
 pub fn encode_string_ref_data(sr: StringRef) -> Vec<u8> {

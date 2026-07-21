@@ -29,10 +29,12 @@ function addTypeProperties(
   // (variable-length / cross-field) stay in the hand-written switch.
   if (materializeMdastFields(reader, node, nodeId, nodeType)) {
     // User-defined node: surface the stored `name` as the open `node.type`.
+    // Drop an empty `value` so a parent node isn't given a spurious leaf field.
     if (nodeType === MDAST_CUSTOM) {
-      const n = node as { type: string; name?: string };
+      const n = node as { type: string; name?: string; value?: string };
       n.type = n.name!;
       delete n.name;
+      if (n.value === "") delete n.value;
     }
     return;
   }
