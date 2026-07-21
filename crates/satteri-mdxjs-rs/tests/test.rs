@@ -1483,7 +1483,7 @@ fn apostrophe_in_jsx_text_after_close_tag() -> Result<(), satteri_arena::mdx_typ
     Ok(())
 }
 
-// Issue #162: a custom heading id reaches the compiled JSX as an `id` prop.
+// Issue #162: custom heading id reaches the compiled JSX.
 #[test]
 fn heading_attribute_custom_id() -> Result<(), satteri_arena::mdx_types::Message> {
     let opts = MDX_OPTS | satteri_pulldown_cmark::Options::ENABLE_HEADING_ATTRIBUTES;
@@ -1495,8 +1495,7 @@ fn heading_attribute_custom_id() -> Result<(), satteri_arena::mdx_types::Message
     Ok(())
 }
 
-// Issue #162: setext headings carry the id too, despite being inline-parsed
-// as a paragraph before the underline is seen.
+// Issue #162: setext too, though parsed as a paragraph before the underline.
 #[test]
 fn heading_attribute_custom_id_setext() -> Result<(), satteri_arena::mdx_types::Message> {
     let opts = MDX_OPTS | satteri_pulldown_cmark::Options::ENABLE_HEADING_ATTRIBUTES;

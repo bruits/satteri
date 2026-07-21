@@ -1596,11 +1596,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 };
             attrs = attrs_;
 
-            // Setext content is inline-parsed as a paragraph before the underline
-            // is seen, so under MDX an attribute-shaped trailing `{...}` was
-            // already validated as an expression and left a stale oxc error. Now
-            // that it's claimed as attributes, drop errors within its span; a
-            // trailing directive run, if any, is reparsed below and re-reports.
+            // The block already errored as an expression during the paragraph
+            // pass, before the underline marked this a heading; drop that stale
+            // error now that it's attributes (a directive tail reparses below).
             #[cfg(feature = "mdx")]
             if attrs.is_some() && self.options.contains(Options::ENABLE_MDX) {
                 self.mdx_errors
@@ -3220,8 +3218,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         };
         let (end, content_end, attrs) = if let Some((block, header_end)) = attr_block {
             self.parse_line(ix, Some(block.block_open), TableParseMode::Disabled);
-            // Parse the trailing directive run as a second span so the
-            // directive keeps its own `{...}` attributes.
+            // Reparse the trailing directive run separately so it keeps its own `{...}`.
             let content_end = match block.tail_start {
                 Some(tail_start) => {
                     self.parse_line(tail_start, Some(header_end), TableParseMode::Disabled);
@@ -3733,9 +3730,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             extract_attribute_block_content_from_header_text(header_bytes);
         let range = attr_block_range_rel?;
 
-        // Under MDX `{...}` is otherwise an expression; claim it as attributes only
-        // when the body isn't valid JS. `?` bails when the body parses (no error),
-        // leaving real expressions like `{title}` to expression handling.
+        // Claim as attributes only when the body isn't valid JS — otherwise MDX
+        // treats `{...}` as an expression. try_parse_expression_body returns None
+        // when it parses, so `?` bails and leaves real expressions alone.
         #[cfg(feature = "mdx")]
         if self.options.contains(Options::ENABLE_MDX) {
             let inner_start = header_start + range.start;

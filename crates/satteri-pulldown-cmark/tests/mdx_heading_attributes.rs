@@ -76,9 +76,7 @@ fn atx_attributes_reach_events() {
 
 #[test]
 fn setext_custom_id() {
-    // Setext content is inline-parsed as a paragraph before the underline, so
-    // the trailing `{#custom-id}` was validated as an expression and errored;
-    // claiming it as attributes must also clear that stale error.
+    // Asserts the stale expression error from the paragraph pass is cleared.
     let (arena, errs) = parse("Heading {#custom-id}\n===\n", opts());
     assert!(errs.is_empty(), "{errs:?}");
     assert_eq!(
@@ -99,8 +97,6 @@ fn setext_dashes_id_class_and_attrs() {
 
 #[test]
 fn setext_expression_stays_expression() {
-    // A valid-JS body isn't attribute-shaped, so it stays an expression: no
-    // attributes and no error, same as ATX.
     let (arena, errs) = parse("Heading {title}\n===\n", opts());
     assert!(errs.is_empty(), "{errs:?}");
     assert!(
@@ -111,15 +107,13 @@ fn setext_expression_stays_expression() {
 
 #[test]
 fn setext_invalid_expression_still_errors() {
-    // `{1 +}` is not attribute-shaped, so it isn't claimed and its error stands.
     assert!(!errors("Heading {1 +}\n===\n").is_empty());
 }
 
 #[test]
 fn setext_mid_expression_error_preserved() {
-    // The trailing `{#id}` becomes attributes, but a genuine broken expression
-    // earlier in the heading keeps its error — only the trailing block's span
-    // is cleared.
+    // Error-clearing is scoped to the trailing block's span, so a broken
+    // expression earlier in the heading keeps its error.
     let (arena, errs) = parse("Hi {1 +} {#custom-id}\n===\n", opts());
     assert!(!errs.is_empty(), "mid-heading `{{1 +}}` should still error");
     assert!(
