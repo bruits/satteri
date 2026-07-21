@@ -1,5 +1,12 @@
 # satteri-arena
 
+## 0.3.0 — 2026-07-21
+
+### Minor changes
+
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Faster across the board: parsing is ~10% cheaper, editing the tree from plugins now costs proportionally to how much you change rather than how big the document is (3 edits on a 115KB document: ~160µs → under 50µs), reading nodes inside plugins is 40-75% faster, and memory stays flat under sustained workloads. — Thanks @Princesseuh!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Improves performance all across the project in pretty much all cases — Thanks @Princesseuh!
+
 ## 0.2.2 — 2026-06-29
 
 ### Patch changes

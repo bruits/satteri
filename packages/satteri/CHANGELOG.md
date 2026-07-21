@@ -1,5 +1,78 @@
 # satteri
 
+## 0.10.0 — 2026-07-21
+
+### Minor changes
+
+- [63fbb77](https://github.com/bruits/satteri/commit/63fbb77a16b88d4df4928ed07e943752e87fff17) Plugins now splice strings with a single shape, `{ raw: string, mdxExpressions?: boolean }`, accepted by visitor return values and every structural mutator (`replace`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, `wrapNode`). The string is re-parsed in place of the node.
+  
+  `mdxExpressions` (default `true`) controls what `{…}` means when the document is MDX: live expressions by default, or literal text with `mdxExpressions: false` — the right choice when injecting generated HTML whose braces are not expressions, like a Mermaid decision node `C{JWT valid?}` or math renderer output. Plain Markdown has no expressions, so the option is a no-op there.
+  
+  `{ rawHtml: string }` is deprecated; it keeps working and behaves exactly like `{ raw, mdxExpressions: false }`.
+  
+  ```ts
+  defineMdastPlugin({
+    code(node) {
+      if (node.lang !== "mermaid") return;
+      return { raw: renderMermaid(node.value), mdxExpressions: false };
+    },
+  });
+  ```
+   — Thanks @Princesseuh!
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Nodes handed to plugins are shared and now frozen: writing to a node's fields, `position`, `properties`/`attributes`, or `children` throws a `TypeError` instead of silently corrupting what later plugins see — go through the context methods to make changes.
+  
+  Keeping a node around after your visitor ran now works: it reads as the tree looked at that moment, instead of always throwing. The error only remains if you never read the node's content before the tree changed. Trees returned by `markdownToMdast`/`mdxToMdast`/`markdownToHast`/`mdxToHast` are your own data and stay fully mutable. — Thanks @Princesseuh!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Plugins now have to opt into source positions per plugin with `options: { position: true }`. As such, `node.position` is `undefined` in a visitor unless that plugin (or another plugin in the same pipeline) opts in.
+  
+  The reason for doing so is mostly performance, tracking positions is inherently expensive and cause a lot more node data to be transfered across Rust and JS despite very little plugins actually requiring positions in the first place. Note that this does not affect positions inside errors. — Thanks @Princesseuh!
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added `htmlToHast`, which parses an HTML string into a HAST tree (elements, text, comments, doctype) with the same spec-compliant parsing a browser does. The result is a `root` wrapping the implied `<html>` subtree.
+  
+  ```ts
+  import { htmlToHast } from "satteri";
+  
+  const tree = htmlToHast("<p>hi</p>");
+  // { type: "root", children: [{ type: "element", tagName: "html", ... }] }
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+- [53fa9a9](https://github.com/bruits/satteri/commit/53fa9a9575f41eb858cf50b4298aea3a0c5f0f73) `ctx.replaceNode(node, newNode)` now accepts an array of nodes as well as a single node, matching `insertBefore`, `insertAfter`, `prependChild`, `appendChild` and `insertChildAt`. The nodes take the target's place in order, so `ctx.replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. This works on both the MDAST and HAST visitor contexts. — Thanks @Princesseuh!
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added a `rawHtml` feature that reparses raw HTML embedded in Markdown into real HAST nodes. Enable it with `features: { rawHtml: true }` on any entry point; it is applied during the MDAST→HAST conversion, so `markdownToHast`, `markdownToHtml`, and the plugin pipelines all reparse identically, and hast plugins always see the reparsed elements.
+  
+  The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalized into typed hast properties (`class` → `className: [...]`, `disabled` → `true`, `tabindex` → number, `data-foo-bar` → `dataFooBar`). `htmlToHast` normalizes properties the same way.
+  
+  MDX nodes are passed through the reparse rather than dropped: each JSX element/expression is preserved in place while the surrounding raw HTML is still resolved around it. So `mdxToHast(source, { features: { rawHtml: true } })` keeps its MDX content.
+  
+  ```ts
+  import { markdownToHast } from "satteri";
+  
+  const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
+    features: { rawHtml: true },
+  });
+  // <div> is a real element wrapping <p><strong>hi</strong></p>
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+
+### Patch changes
+
+- [88fbb7e](https://github.com/bruits/satteri/commit/88fbb7e45482f9ba53d4478e6565c3e75b0350fd) Fixes a crash in the browser and bundler builds where loading Sätteri could fail with `WebAssembly.Compile is disallowed on the main thread, if the buffer size is larger than 4KB`. The WebAssembly module now initializes asynchronously instead of compiling synchronously on the main thread. — Thanks @Princesseuh!
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Editing a node that belongs to a different document — a node kept from a previous compile, or an mdast node used in a hast plugin — now fails the compile with `invalid node id`. A few pathological edits now throw `unsupported patch shape`, most notably replacing a node with new content that reuses that same node while another plugin edits something inside it in the same pass, and inserting a sibling next to the root.
+  
+  Edits to nodes that another plugin removed in the same pass are still just dropped with a warning, and replacing, removing, or wrapping the root keeps working. — Thanks @Princesseuh!
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Faster across the board: parsing is ~10% cheaper, editing the tree from plugins now costs proportionally to how much you change rather than how big the document is (3 edits on a 115KB document: ~160µs → under 50µs), reading nodes inside plugins is 40-75% faster, and memory stays flat under sustained workloads. — Thanks @Princesseuh!
+- [419e711](https://github.com/bruits/satteri/commit/419e711fd4e3092c84fff462d3bbbae406a09472) With smart punctuation enabled, an unmatched close-flanking double quote — like the inch mark in `24" monitor` — now renders as a closing curly quote instead of an opening one. A double quote after a digit no longer opens a quotation, so dimension notation like `24"x36"` closes throughout. — Thanks @Princesseuh!
+- [64f3d5f](https://github.com/bruits/satteri/commit/64f3d5f8666851494195ebd150bfa47df4da56e9) Fixes inline code being mangled when it contains directive-like syntax. With directives enabled, writing something like `` `:foo[` `` followed by more inline code no longer merges the two code spans or drops a backtick — a `:` inside a code span is now treated as literal text, so you can safely show directive syntax in code. — Thanks @Princesseuh!
+- [9a164f1](https://github.com/bruits/satteri/commit/9a164f110f2d01c525f9f5c03376508bd227e860) Fixes footnotes being ignored inside directives. A footnote reference nested in a rendered directive (e.g. `:::note … [^id] … :::`) now works like anywhere else — it renders as a footnote link and its definition appears in the footnotes section — instead of being left as literal `[^id]` text. — Thanks @Princesseuh!
+- [d8b7172](https://github.com/bruits/satteri/commit/d8b71724ba3a6bfcad24265c5b1d021b1de1eaa0) Adds a `definitionList` feature (off by default) that renders definition lists to `<dl>`/`<dt>`/`<dd>`.
+  
+  New `descriptionList` / `descriptionTerm` / `descriptionDetails` nodes are available to plugins when this option is enabled.
+  
+  ```text
+  Apple
+  :   Pomaceous fruit.
+  :   A tech company.
+  ```
+   — Thanks @lolifamily for your first contribution 🎉!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Improves performance all across the project in pretty much all cases — Thanks @Princesseuh!
+
 ## 0.9.5 — 2026-07-08
 
 ### Patch changes

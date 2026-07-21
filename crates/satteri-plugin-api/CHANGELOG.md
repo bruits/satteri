@@ -1,5 +1,41 @@
 # satteri-plugin-api
 
+## 0.4.3 — 2026-07-21
+
+### Patch changes
+
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Editing a node that belongs to a different document — a node kept from a previous compile, or an mdast node used in a hast plugin — now fails the compile with `invalid node id`. A few pathological edits now throw `unsupported patch shape`, most notably replacing a node with new content that reuses that same node while another plugin edits something inside it in the same pass, and inserting a sibling next to the root.
+  
+  Edits to nodes that another plugin removed in the same pass are still just dropped with a warning, and replacing, removing, or wrapping the root keeps working. — Thanks @Princesseuh!
+- [63fbb77](https://github.com/bruits/satteri/commit/63fbb77a16b88d4df4928ed07e943752e87fff17) Plugins now splice strings with a single shape, `{ raw: string, mdxExpressions?: boolean }`, accepted by visitor return values and every structural mutator (`replace`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, `wrapNode`). The string is re-parsed in place of the node.
+  
+  `mdxExpressions` (default `true`) controls what `{…}` means when the document is MDX: live expressions by default, or literal text with `mdxExpressions: false` — the right choice when injecting generated HTML whose braces are not expressions, like a Mermaid decision node `C{JWT valid?}` or math renderer output. Plain Markdown has no expressions, so the option is a no-op there.
+  
+  `{ rawHtml: string }` is deprecated; it keeps working and behaves exactly like `{ raw, mdxExpressions: false }`.
+  
+  ```ts
+  defineMdastPlugin({
+    code(node) {
+      if (node.lang !== "mermaid") return;
+      return { raw: renderMermaid(node.value), mdxExpressions: false };
+    },
+  });
+  ```
+   — Thanks @Princesseuh!
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Faster across the board: parsing is ~10% cheaper, editing the tree from plugins now costs proportionally to how much you change rather than how big the document is (3 edits on a 115KB document: ~160µs → under 50µs), reading nodes inside plugins is 40-75% faster, and memory stays flat under sustained workloads. — Thanks @Princesseuh!
+- [d8b7172](https://github.com/bruits/satteri/commit/d8b71724ba3a6bfcad24265c5b1d021b1de1eaa0) Adds a `definitionList` feature (off by default) that renders definition lists to `<dl>`/`<dt>`/`<dd>`.
+  
+  New `descriptionList` / `descriptionTerm` / `descriptionDetails` nodes are available to plugins when this option is enabled.
+  
+  ```text
+  Apple
+  :   Pomaceous fruit.
+  :   A tech company.
+  ```
+   — Thanks @lolifamily for your first contribution 🎉!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Improves performance all across the project in pretty much all cases — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.0, satteri-ast (Cargo)@0.5.0
+
 ## 0.4.2 — 2026-07-08
 
 ### Patch changes
