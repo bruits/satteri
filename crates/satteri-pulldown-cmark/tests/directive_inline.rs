@@ -166,3 +166,24 @@ fn text_directive_label_is_inline_parsed() {
         ]
     );
 }
+
+// Issue 158: code spans bind tighter than directives, so a `:`-fragment
+// inside one is literal and must not swallow a later code span's backticks.
+#[test]
+fn directive_fragment_inside_code_span_does_not_swallow_later_code() {
+    let input = "`:foo[` and `bar]`";
+    let (arena, _) = parse(input, dir_options());
+
+    let para = arena.get_children(0)[0];
+    assert_eq!(
+        types_of(&arena, para),
+        vec![
+            MdastNodeType::InlineCode as u8, // `:foo[`
+            MdastNodeType::Text as u8,       // " and "
+            MdastNodeType::InlineCode as u8, // `bar]`
+        ]
+    );
+    let children = arena.get_children(para);
+    assert_eq!(node_value(&arena, children[0]), ":foo[");
+    assert_eq!(node_value(&arena, children[2]), "bar]");
+}

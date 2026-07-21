@@ -287,3 +287,23 @@ fn container_extensions_test_24() {
 
     test_markdown_html(original, expected, 0, false, false, false, false, false, true);
 }
+
+#[test]
+fn container_extensions_test_25() {
+    let original = r##"`:foo[` and `bar]`
+"##;
+    let expected = r##"<p><code>:foo[</code> and <code>bar]</code></p>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_26() {
+    let original = r##"text `:link[` more `code]` after
+"##;
+    let expected = r##"<p>text <code>:link[</code> more <code>code]</code> after</p>
+"##;
+
+    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+}
