@@ -3,4 +3,4 @@ cargo/satteri-pulldown-cmark: patch
 npm/satteri: patch
 ---
 
-With directives enabled, a `:`-directive fragment inside a code span — like `` `:foo[` `` — is now treated as literal code. Previously the directive was recognized and its label scan reached past the code span's backticks, collapsing a following inline code span into the first one and dropping a backtick. Code spans now correctly bind tighter than text directives.
+Fixes inline code being mangled when it contains directive-like syntax. With directives enabled, writing something like `` `:foo[` `` followed by more inline code no longer merges the two code spans or drops a backtick — a `:` inside a code span is now treated as literal text, so you can safely show directive syntax in code.
