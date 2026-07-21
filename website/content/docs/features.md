@@ -175,6 +175,18 @@ Explicit `id=` and `class=` merge with the `#`/`.` shorthands instead of produci
 <h2 id="main" class="intro lead">Heading</h2>
 ```
 
+### In MDX
+
+MDX treats `{...}` as a JavaScript expression, which normally collides with the attribute syntax. Sätteri resolves this by only reading a trailing `{...}` as heading attributes when its contents aren't a valid expression — so `{#id}`, `{.class}` and `{data-x=y}` become attributes, while a real expression such as `{title}` is still evaluated:
+
+```mdx
+# My heading {#my-id}
+
+# Welcome {name}
+```
+
+A `{...}` that *is* valid JavaScript stays an expression even when it looks like attributes: `{hidden}`, `{level=2}` and `{title="Home"}` evaluate rather than apply — silently, and unlike in plain Markdown. Add a `#`/`.` shorthand to force attributes; `{#id hidden}` applies both.
+
 ## Directives
 
 Default: `false`.
