@@ -24,17 +24,17 @@ oxc_parser = "0.121.0"
 oxc_span = "0.121.0"
 oxc_syntax = "0.121.0"
 rustc-hash = "2"
-satteri-arena = { path = "crates/satteri-arena", version = "0.2.2" }
+satteri-arena = { path = "crates/satteri-arena", version = "0.3.0" }
 # default-features = false here is what lets consumers drop the `mdx` default
 # (and, for pulldown-cmark, the whole oxc stack). A per-crate
 # `default-features = false` is IGNORED for `workspace = true` deps unless it is
 # also declared in this table — so it must live here. Each consumer re-enables
 # `mdx`/`std` through its own feature graph.
-satteri-ast = { path = "crates/satteri-ast", version = "0.4.2", default-features = false }
-satteri-mdxjs = { path = "crates/satteri-mdxjs-rs", version = "0.3.8" }
-satteri-plugin-api = { path = "crates/satteri-plugin-api", version = "0.4.2", default-features = false }
-satteri-property-info = { path = "crates/satteri-property-info", version = "0.1.0" }
-satteri-pulldown-cmark = { path = "crates/satteri-pulldown-cmark", version = "0.5.8", default-features = false }
+satteri-ast = { path = "crates/satteri-ast", version = "0.5.0", default-features = false }
+satteri-mdxjs = { path = "crates/satteri-mdxjs-rs", version = "0.3.9" }
+satteri-plugin-api = { path = "crates/satteri-plugin-api", version = "0.4.3", default-features = false }
+satteri-property-info = { path = "crates/satteri-property-info", version = "0.2.0" }
+satteri-pulldown-cmark = { path = "crates/satteri-pulldown-cmark", version = "0.6.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-id-start = "1"

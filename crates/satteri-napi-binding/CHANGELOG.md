@@ -1,5 +1,49 @@
 # satteri-napi
 
+## 0.5.0 — 2026-07-21
+
+### Minor changes
+
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added `htmlToHast`, which parses an HTML string into a HAST tree (elements, text, comments, doctype) with the same spec-compliant parsing a browser does. The result is a `root` wrapping the implied `<html>` subtree.
+  
+  ```ts
+  import { htmlToHast } from "satteri";
+  
+  const tree = htmlToHast("<p>hi</p>");
+  // { type: "root", children: [{ type: "element", tagName: "html", ... }] }
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Faster across the board: parsing is ~10% cheaper, editing the tree from plugins now costs proportionally to how much you change rather than how big the document is (3 edits on a 115KB document: ~160µs → under 50µs), reading nodes inside plugins is 40-75% faster, and memory stays flat under sustained workloads. — Thanks @Princesseuh!
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added a `rawHtml` feature that reparses raw HTML embedded in Markdown into real HAST nodes. Enable it with `features: { rawHtml: true }` on any entry point; it is applied during the MDAST→HAST conversion, so `markdownToHast`, `markdownToHtml`, and the plugin pipelines all reparse identically, and hast plugins always see the reparsed elements.
+  
+  The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalized into typed hast properties (`class` → `className: [...]`, `disabled` → `true`, `tabindex` → number, `data-foo-bar` → `dataFooBar`). `htmlToHast` normalizes properties the same way.
+  
+  MDX nodes are passed through the reparse rather than dropped: each JSX element/expression is preserved in place while the surrounding raw HTML is still resolved around it. So `mdxToHast(source, { features: { rawHtml: true } })` keeps its MDX content.
+  
+  ```ts
+  import { markdownToHast } from "satteri";
+  
+  const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
+    features: { rawHtml: true },
+  });
+  // <div> is a real element wrapping <p><strong>hi</strong></p>
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+
+### Patch changes
+
+- [d8b7172](https://github.com/bruits/satteri/commit/d8b71724ba3a6bfcad24265c5b1d021b1de1eaa0) Adds a `definitionList` feature (off by default) that renders definition lists to `<dl>`/`<dt>`/`<dd>`.
+  
+  New `descriptionList` / `descriptionTerm` / `descriptionDetails` nodes are available to plugins when this option is enabled.
+  
+  ```text
+  Apple
+  :   Pomaceous fruit.
+  :   A tech company.
+  ```
+   — Thanks @lolifamily for your first contribution 🎉!
+- Updated dependencies: satteri-arena (Cargo)@0.3.0, satteri-ast (Cargo)@0.5.0, satteri-mdxjs (Cargo)@0.3.9, satteri-plugin-api (Cargo)@0.4.3, satteri-pulldown-cmark (Cargo)@0.6.0
+
 ## 0.4.7 — 2026-07-08
 
 ### Patch changes

@@ -1,5 +1,28 @@
 # satteri-pulldown-cmark
 
+## 0.6.0 — 2026-07-21
+
+### Minor changes
+
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Faster across the board: parsing is ~10% cheaper, editing the tree from plugins now costs proportionally to how much you change rather than how big the document is (3 edits on a 115KB document: ~160µs → under 50µs), reading nodes inside plugins is 40-75% faster, and memory stays flat under sustained workloads. — Thanks @Princesseuh!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Improves performance all across the project in pretty much all cases — Thanks @Princesseuh!
+
+### Patch changes
+
+- [419e711](https://github.com/bruits/satteri/commit/419e711fd4e3092c84fff462d3bbbae406a09472) With smart punctuation enabled, an unmatched close-flanking double quote — like the inch mark in `24" monitor` — now renders as a closing curly quote instead of an opening one. A double quote after a digit no longer opens a quotation, so dimension notation like `24"x36"` closes throughout. — Thanks @Princesseuh!
+- [64f3d5f](https://github.com/bruits/satteri/commit/64f3d5f8666851494195ebd150bfa47df4da56e9) Fixes inline code being mangled when it contains directive-like syntax. With directives enabled, writing something like `` `:foo[` `` followed by more inline code no longer merges the two code spans or drops a backtick — a `:` inside a code span is now treated as literal text, so you can safely show directive syntax in code. — Thanks @Princesseuh!
+- [d8b7172](https://github.com/bruits/satteri/commit/d8b71724ba3a6bfcad24265c5b1d021b1de1eaa0) Adds a `definitionList` feature (off by default) that renders definition lists to `<dl>`/`<dt>`/`<dd>`.
+  
+  New `descriptionList` / `descriptionTerm` / `descriptionDetails` nodes are available to plugins when this option is enabled.
+  
+  ```text
+  Apple
+  :   Pomaceous fruit.
+  :   A tech company.
+  ```
+   — Thanks @lolifamily for your first contribution 🎉!
+- Updated dependencies: satteri-arena (Cargo)@0.3.0, satteri-ast (Cargo)@0.5.0
+
 ## 0.5.8 — 2026-07-08
 
 ### Patch changes

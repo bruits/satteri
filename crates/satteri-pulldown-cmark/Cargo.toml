@@ -1,6 +1,6 @@
 [package]
 name = "satteri-pulldown-cmark"
-version = "0.5.8"
+version = "0.6.0"
 authors = [
   "Raph Levien <raph.levien@gmail.com>",
   "Marcus Klaas de Vries <mail@marcusklaas.nl>",
