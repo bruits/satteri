@@ -2299,6 +2299,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // Must not be preceded by another colon (to avoid ::, :::)
                     if ix > 0 && bytes[ix - 1] == b':' {
                         LoopInstruction::ContinueAndSkip(0)
+                    } else if is_inside_code_span(bytes, ix) {
+                        // Code spans bind tighter: a `:` inside one is literal, not
+                        // a directive whose label scan would reach past the span's
+                        // backticks and swallow them (issue #158).
+                        LoopInstruction::ContinueAndSkip(0)
                     } else if let Some((dir_data, end_pos)) =
                         parse_directive_after_colons(self.text, bytes, ix + 1)
                     {

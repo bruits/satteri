@@ -238,3 +238,19 @@ Leaf directive name only:
 ::break
 .
 ````````````````````````````````
+
+Colon-directive fragment inside a code span is literal (issue #158):
+
+```````````````````````````````` example_container_extensions
+`:foo[` and `bar]`
+.
+<p><code>:foo[</code> and <code>bar]</code></p>
+````````````````````````````````
+
+Same, mid-paragraph:
+
+```````````````````````````````` example_container_extensions
+text `:link[` more `code]` after
+.
+<p>text <code>:link[</code> more <code>code]</code> after</p>
+````````````````````````````````
