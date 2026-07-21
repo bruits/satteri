@@ -1589,11 +1589,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
             // Truncating to the block's `{` (below) drops any trailing directive
             // run with it, so reparse that run to keep its own `{...}` attributes.
-            let (content_end, attrs_, tail_start) =
+            // Setext content is inline-parsed before the underline is seen, so
+            // under MDX the `{...}` is already an expression; attributes are ATX-only.
+            let (content_end, attrs_, tail_start) = if self.options.contains(Options::ENABLE_MDX) {
+                (header_end, None, None)
+            } else {
                 match self.extract_and_parse_heading_attribute_block(header_start, header_end) {
                     Some(block) => (block.block_open, Some(block.attrs), block.tail_start),
                     None => (header_end, None, None),
-                };
+                }
+            };
             attrs = attrs_;
 
             // strip trailing whitespace
@@ -3200,35 +3205,25 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let header_start = ix;
         let header_node_idx = self.tree.push(); // so that we can set the endpoint later
 
-        // trim the trailing attribute block before parsing the entire line, if necessary.
-        // When MDX is enabled, `{...}` in headings should be treated as MDX expressions,
-        // not heading attribute blocks. MDX expressions and heading attributes use the
-        // same `{...}` syntax and would conflict.
-        let (end, content_end, attrs) = if self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES)
-            && !self.options.contains(Options::ENABLE_MDX)
-        {
-            // the start of the next line is the end of the header since the
-            // header cannot have line breaks
+        let attr_block = if self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES) {
             let header_end = header_start + scan_nextline(&bytes[header_start..]);
-            match self.extract_and_parse_heading_attribute_block(header_start, header_end) {
-                Some(block) => {
-                    self.parse_line(ix, Some(block.block_open), TableParseMode::Disabled);
-                    // Parse the trailing directive run as a second span so the
-                    // directive keeps its own `{...}` attributes.
-                    let content_end = match block.tail_start {
-                        Some(tail_start) => {
-                            self.parse_line(tail_start, Some(header_end), TableParseMode::Disabled);
-                            header_end
-                        }
-                        None => block.block_open,
-                    };
-                    (header_end, content_end, Some(block.attrs))
+            self.extract_and_parse_heading_attribute_block(header_start, header_end)
+                .map(|block| (block, header_end))
+        } else {
+            None
+        };
+        let (end, content_end, attrs) = if let Some((block, header_end)) = attr_block {
+            self.parse_line(ix, Some(block.block_open), TableParseMode::Disabled);
+            // Parse the trailing directive run as a second span so the
+            // directive keeps its own `{...}` attributes.
+            let content_end = match block.tail_start {
+                Some(tail_start) => {
+                    self.parse_line(tail_start, Some(header_end), TableParseMode::Disabled);
+                    header_end
                 }
-                None => {
-                    self.parse_line(ix, Some(header_end), TableParseMode::Disabled);
-                    (header_end, header_end, None)
-                }
-            }
+                None => block.block_open,
+            };
+            (header_end, content_end, Some(block.attrs))
         } else {
             // ATX headings can't span lines. In MDX mode bound the inline
             // scan to the current line so an unclosed expression body like
@@ -3712,13 +3707,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
     /// Extracts and parses a heading's trailing attribute block, with its span.
     fn extract_and_parse_heading_attribute_block(
-        &self,
+        &mut self,
         header_start: usize,
         header_end: usize,
     ) -> Option<HeadingAttrBlock<'a>> {
-        if !self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES)
-            || self.options.contains(Options::ENABLE_MDX)
-        {
+        if !self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES) {
             return None;
         }
 
@@ -3733,6 +3726,20 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let (content_len, attr_block_range_rel) =
             extract_attribute_block_content_from_header_text(header_bytes);
         let range = attr_block_range_rel?;
+
+        // Under MDX `{...}` is otherwise an expression; claim it as attributes only
+        // when the body isn't valid JS. `?` bails when the body parses (no error),
+        // leaving real expressions like `{title}` to expression handling.
+        #[cfg(feature = "mdx")]
+        if self.options.contains(Options::ENABLE_MDX) {
+            let inner_start = header_start + range.start;
+            let inner_end = header_start + range.end;
+            crate::mdx::try_parse_expression_body(
+                &self.text[inner_start..inner_end],
+                &mut self.mdx_expr_allocator,
+            )?;
+        }
+
         let attrs = parse_inside_attribute_block(
             &self.text[(header_start + range.start)..(header_start + range.end)],
         )?;

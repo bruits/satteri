@@ -1482,3 +1482,15 @@ fn apostrophe_in_jsx_text_after_close_tag() -> Result<(), satteri_arena::mdx_typ
 
     Ok(())
 }
+
+// Issue #162: a custom heading id reaches the compiled JSX as an `id` prop.
+#[test]
+fn heading_attribute_custom_id() -> Result<(), satteri_arena::mdx_types::Message> {
+    let opts = MDX_OPTS | satteri_pulldown_cmark::Options::ENABLE_HEADING_ATTRIBUTES;
+    let js = compile("# Heading {#custom-id}\n", &Options::default(), opts)?;
+    assert!(
+        js.contains("_jsx(_components.h1, {\n        id: \"custom-id\","),
+        "id prop missing in compiled JS: {js}"
+    );
+    Ok(())
+}
