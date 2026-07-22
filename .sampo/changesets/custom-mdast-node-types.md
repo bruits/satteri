@@ -10,12 +10,25 @@ Added support for user-defined MDAST node types. A plugin can create a node with
 - a **parent** with `children` renders to an element via `data.hName` (defaulting to `<div>`), with `data.hProperties` merged in and its children rendered;
 - a **leaf** with a `value` (and no `children` or `data.h*`) renders to an HTML text node.
 
-Subscribe to every user-defined node with the `custom` visitor key and discriminate on `node.type`.
+Create one from any visitor:
 
 ```js
 ctx.replaceNode(node, {
   type: "section",
   data: { hName: "section" },
   children: node.children,
+});
+```
+
+Subscribe to every user-defined node with the `custom` visitor key and discriminate on `node.type`:
+
+```js
+const inspect = defineMdastPlugin({
+  name: "inspect",
+  custom(node) {
+    if (node.type === "section") {
+      /* ... */
+    }
+  },
 });
 ```
