@@ -94,6 +94,7 @@ Keys without a feature note are always available. Feature-gated keys only fire w
 | `image`              | —                |
 | `linkReference`      | —                |
 | `imageReference`     | —                |
+| `custom`             | —                |
 | `table`              | `gfm`            |
 | `tableRow`           | `gfm`            |
 | `tableCell`          | `gfm`            |
@@ -119,6 +120,39 @@ Keys without a feature note are always available. Feature-gated keys only fire w
 | `mdxjsEsm`           | MDX entry        |
 
 MDX visitor keys only fire when the document is compiled via the MDX entry point (`mdxToJs` or `.mdx` imports), not from `markdownToHtml`.
+
+### Custom nodes
+
+Plugins aren't limited to the built-in node types. Return a node whose `type` is any string not in the table above and it becomes a **custom node**: it round-trips through the pipeline and stays a first-class part of the tree, so later plugins still visit its content (unlike a directive, whose contents other passes skip).
+
+A custom node renders as either shape, mirroring `mdast-util-to-hast`'s default handling:
+
+- a **parent** (with `children`) becomes an element through `data.hName` (defaulting to `<div>`), with `data.hProperties` merged onto it and its children rendered;
+- a **leaf** (with a `value`, and no `children` or `data.h*`) becomes an HTML text node.
+
+```js
+// A remark-sectionize-style wrapper: swap a block for a <section> holding its children.
+paragraph(node, ctx) {
+  ctx.replaceNode(node, {
+    type: "section",
+    data: { hName: "section", hProperties: { className: ["note"] } },
+    children: node.children,
+  });
+}
+```
+
+The `custom` visitor key fires for every user-defined node, whatever its `type`; discriminate on `node.type` inside the visitor.
+
+```js
+const inspect = defineMdastPlugin({
+  name: "inspect",
+  custom(node) {
+    if (node.type === "section") {
+      /* ... */
+    }
+  },
+});
+```
 
 ## HAST visitors
 
