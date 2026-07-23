@@ -18,7 +18,7 @@ fn dirty_arena<K: ArenaKind>() -> Arena<K> {
     arena.set_type_data(parent, &[0xAA; 24]);
     arena.alloc_string("stale interned string");
     arena.set_node_data(child, vec![0xBB; 64]);
-    arena.cp_offsets.push((3, 5));
+    arena.utf16_offsets.push((3, 5));
     arena.mdx = true;
     arena.parse_options = 0xDEAD_BEEF;
     arena
@@ -49,8 +49,8 @@ fn assert_arena_eq<K: ArenaKind>(fresh: &Arena<K>, reused: &Arena<K>, what: &str
         "{what}: parse_options diverged"
     );
     assert_eq!(
-        fresh.cp_offsets, reused.cp_offsets,
-        "{what}: cp_offsets diverged"
+        fresh.utf16_offsets, reused.utf16_offsets,
+        "{what}: utf16_offsets diverged"
     );
 }
 
@@ -60,8 +60,8 @@ fn parse_into_dirty_arena_matches_fresh_parse() {
     let (fresh, _) = satteri_pulldown_cmark::parse(DOC, opts);
     let (reused, _) = satteri_pulldown_cmark::parse_into(DOC, opts, dirty_arena());
     assert!(
-        !fresh.cp_offsets.is_empty(),
-        "non-ASCII doc must populate cp_offsets or the comparison is vacuous"
+        !fresh.utf16_offsets.is_empty(),
+        "non-ASCII doc must populate utf16_offsets or the comparison is vacuous"
     );
     assert_arena_eq(&fresh, &reused, "parse_into");
 }

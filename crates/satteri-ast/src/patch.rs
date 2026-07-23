@@ -1445,8 +1445,8 @@ fn apply_patches_impl<K: ArenaKind>(
         flush_pending_splices(arena, &mut pending_splices, parent);
     }
 
-    // `rebuild` never carried cp_offsets into the new arena; match it.
-    arena.cp_offsets = Vec::new();
+    // `rebuild` never carried utf16_offsets into the new arena; match it.
+    arena.utf16_offsets = Vec::new();
 
     let mut dropped: Vec<u32> = plans
         .iter()

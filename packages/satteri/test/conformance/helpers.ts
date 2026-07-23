@@ -392,10 +392,10 @@ function stripPositions(node: AnyNode): AnyNode {
   return out;
 }
 
-/** Like `assertExtMdastConformance` but ignores `position`. Use this when the
- * input contains non-ASCII characters: remark counts columns in code points
- * while satteri currently counts in bytes, so positions diverge even when
- * trees are structurally identical. */
+/** Like `assertExtMdastConformance` but ignores `position`. Use this when
+ * positions legitimately diverge even though trees are structurally identical
+ * — e.g. remark's post-transform GFM autolink nodes carry no position while
+ * ours do. */
 export function assertExtMdastConformanceNoPosition(md: string, extensions: ExtensionSet[]): void {
   const proc = buildMdastProcessor(extensions);
   const features = featuresToSatteri(extensions);
