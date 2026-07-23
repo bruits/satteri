@@ -81,6 +81,10 @@ pub(crate) fn write_mdast_type_data_inline(
         28 => {
             write_str32(arena, out, type_data, 8);
         }
+        38 => {
+            write_str16(arena, out, type_data, 0);
+            write_str32(arena, out, type_data, 8);
+        }
         102 | 103 | 104 => {
             write_str32(arena, out, type_data, 0);
         }

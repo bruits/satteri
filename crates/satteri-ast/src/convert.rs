@@ -6,7 +6,7 @@ use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast, St
 use crate::hast::codec::encode_element_data_into;
 use crate::hast::HastNodeType;
 use crate::mdast::{
-    decode_code_data, decode_definition_data, decode_description_details_data,
+    decode_code_data, decode_custom_data, decode_definition_data, decode_description_details_data,
     decode_footnote_definition_data, decode_heading_data, decode_image_data,
     decode_image_reference_alt, decode_link_data, decode_list_data, decode_list_item_data,
     decode_math_data, decode_reference_data, decode_table_alignments, ColumnAlign, ListItemData,
@@ -1758,6 +1758,29 @@ fn convert_node(
                 if let Some(children) = h.h_children() {
                     emit_h_children(builder, children);
                 } else {
+                    convert_children(node_id, view, builder, ctx);
+                }
+                builder.close_node();
+            }
+        }
+
+        Some(MdastNodeType::Custom) => {
+            // User-defined node, either shape (mirrors mdast-util-to-hast's
+            // default handler). A `value` leaf with no children and no `data.h*`
+            // becomes a text node; anything else is an element through
+            // `data.hName` (default `<div>`), merging `hProperties`, honouring
+            // `hChildren`, else recursing the real children. Content inside stays
+            // a first-class subtree — unlike directives, which drop without an
+            // `hName`.
+            let value = decode_custom_data(view.get_type_data(node_id)).value;
+            let has_children = !view.get_children(node_id).is_empty();
+            if value.len > 0 && !has_children && HData::read(view, node_id).is_empty() {
+                let id = add_text_node_with_ref(builder, value);
+                copy_position_to(id, node_id, view, builder);
+            } else {
+                let action = open_h_element(builder, view, node_id, "div", &[]);
+                copy_position(node_id, view, builder);
+                if matches!(action, ChildrenAction::Recurse) {
                     convert_children(node_id, view, builder, ctx);
                 }
                 builder.close_node();

@@ -126,6 +126,13 @@ pub(crate) fn encode_mdast_type_data_from_ops(
             buf[8..16].copy_from_slice(&r.as_bytes());
             16
         }
+        38 => {
+            let r = alloc_opt_str(builder, c.strs[OF_NAME as usize]);
+            buf[0..8].copy_from_slice(&r.as_bytes());
+            let r = alloc_opt_str(builder, c.strs[OF_VALUE as usize]);
+            buf[8..16].copy_from_slice(&r.as_bytes());
+            16
+        }
         102 | 103 | 104 => {
             let r = alloc_opt_str(builder, c.strs[OF_VALUE as usize]);
             buf[0..8].copy_from_slice(&r.as_bytes());

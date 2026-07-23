@@ -610,6 +610,19 @@ pub const MDAST_NODES: &[Node] = &[
         "descriptionDetails",
         DESCRIPTION_DETAILS_SLOTS,
     ),
+    // User-defined node: one internal tag whose stored `name` StringRef carries
+    // the author's arbitrary public `type` string (surfaced back as `node.type`,
+    // not `node.name`, by the JS read paths). A parent (with `children`) renders
+    // through `data.hName` (default `<div>`) and recurses; a leaf (with `value`,
+    // no children/`data.h*`) renders as a text node — so plugins can introduce
+    // their own node types (e.g. a `section` wrapper or an inline token).
+    n(
+        Mdast,
+        38,
+        "Custom",
+        "custom",
+        &[s16("name", 0), s32("value", 8)],
+    ),
     xts(
         Mdast,
         100,
@@ -782,6 +795,11 @@ pub const MDAST_STRUCTS: &[ArenaStruct] = &[
         offsets: &[("meta", 0), ("value", 8)],
     },
     ArenaStruct {
+        rust: "CustomData",
+        size: 16,
+        offsets: &[("name", 0), ("value", 8)],
+    },
+    ArenaStruct {
         rust: "LinkData",
         size: 16,
         offsets: &[("url", 0), ("title", 8)],
@@ -850,6 +868,7 @@ const STRUCT_BY_NODE: &[(&str, &str)] = &[
     ("code", "CodeData"),
     ("math", "MathData"),
     ("inlineMath", "MathData"),
+    ("custom", "CustomData"),
     ("link", "LinkData"),
     ("image", "ImageData"),
     ("definition", "DefinitionData"),

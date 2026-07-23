@@ -48,6 +48,7 @@ import type {
   DescriptionList,
   DescriptionTerm,
   DescriptionDetails,
+  Custom,
   Data,
   SourceFormat,
 } from "../types.js";
@@ -116,7 +117,7 @@ export interface RawHtmlMdastContent {
 /** New content for a structural mutation: a declarative node, or a raw string
  *  escape hatch ({@link RawMdastContent}). Declarative nodes compile to the
  *  op-stream; a type the op-stream can't encode is a hard error. */
-export type MdastContent = MdastNode | RawMdastContent | RawHtmlMdastContent;
+export type MdastContent = MdastNode | Custom | RawMdastContent | RawHtmlMdastContent;
 
 export interface MdastDiagnostic {
   message: string;
@@ -384,7 +385,7 @@ type MdastVisitorResult =
   | null
   | void;
 
-type MdastVisitorFn<N extends MdastNode = MdastNode> = (
+type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
   node: Readonly<N>,
   context: MdastVisitorContext,
 ) => MdastVisitorResult | Promise<MdastVisitorResult>;
@@ -433,6 +434,9 @@ export interface MdastPluginInstance {
   mdxFlowExpression?: MdastVisitorFn<MdxFlowExpression>;
   mdxTextExpression?: MdastVisitorFn<MdxTextExpression>;
   mdxjsEsm?: MdastVisitorFn<MdxjsEsm>;
+  /** Fires for every user-defined node (any node created with a `type` outside
+   *  the built-in set). Discriminate with `node.type`. */
+  custom?: MdastVisitorFn<Custom>;
 }
 
 interface MdastVisitResult {
@@ -659,6 +663,16 @@ function readMdastMatchedNode(
     }
   }
 
+  // User-defined node: the stored `name` field holds the author's public type
+  // string. Surface it as `node.type` (open type string) instead of the
+  // internal `"custom"`, drop the redundant `name`, and drop an empty `value`
+  // so a parent node isn't given a spurious leaf field.
+  if (nodeType === MDAST_CUSTOM) {
+    node.type = node.name as string;
+    delete node.name;
+    if (node.value === "") delete node.value;
+  }
+
   mdastNodeIdMap.set(node as object, nodeId);
 
   if (initialData) {
@@ -669,6 +683,10 @@ function readMdastMatchedNode(
 }
 
 const MDAST_ROOT = NAME_TO_TYPE.root!;
+/** Internal tag for user-defined nodes. The stored `name` field holds the
+ *  author's public `type` string; the read paths surface it as `node.type`
+ *  and the emit path routes any unrecognized `type` here. */
+const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
 
 /** The arena id of a node if it is an existing (materialized) node, else
  *  undefined for a freshly-built one. */
@@ -702,9 +720,26 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
     }
   }
   const n = node as Record<string, unknown>;
-  const type = MDAST_OPSTREAM_TYPES[n.type as string];
-  if (type === undefined) return false;
+  // Any `type` outside the built-in set is a user-defined node: route it to the
+  // internal `custom` tag and carry the author's `type` string as the name.
+  let type = MDAST_OPSTREAM_TYPES[n.type as string];
+  let isCustom = false;
+  if (type === undefined) {
+    if (typeof n.type !== "string" || n.type.length === 0) return false;
+    // A known built-in that just isn't op-stream-encodable (e.g. `root`) is a
+    // real type used wrong — fail loudly rather than reinterpreting it as a
+    // user-defined node. Only genuinely-unknown type strings become custom.
+    if (NAME_TO_TYPE[n.type] !== undefined) return false;
+    type = MDAST_CUSTOM;
+    isCustom = true;
+  } else if (type === MDAST_CUSTOM) {
+    // `"custom"` is the internal tag's own public name, so it resolves here
+    // instead of falling through as unknown. Still a user-defined node — carry
+    // the `type` string as the name so it round-trips rather than vanishing.
+    isCustom = true;
+  }
   w.open(type);
+  if (isCustom) w.str(OF_NAME, n.type as string);
   if (typeof n.value === "string") w.str(OF_VALUE, n.value);
   if (typeof n.url === "string") w.str(OF_URL, n.url);
   if (typeof n.title === "string") w.str(OF_TITLE, n.title);
@@ -727,7 +762,7 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   }
   if (typeof n.ordered === "boolean") w.bool(OF_ORDERED, n.ordered);
   if (typeof n.spread === "boolean") w.bool(OF_SPREAD, n.spread);
-  if (typeof n.name === "string") w.str(OF_NAME, n.name);
+  if (!isCustom && typeof n.name === "string") w.str(OF_NAME, n.name);
   const attrs = n.attributes;
   if (Array.isArray(attrs)) {
     for (const a of attrs) emitMdxAttr(w, a as Record<string, unknown>);
