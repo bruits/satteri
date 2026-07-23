@@ -341,12 +341,13 @@ fn one<'a>(
 
 fn raw_html_in_mdx_error(context: &Context<'_>, node_id: u32) -> message::Message {
     message::Message {
-        reason: "Cannot compile a `raw` node (raw HTML) to MDX/JSX output. \
-            A plugin returned an `html` node (`{ type: \"html\", value: ... }`), \
-            which cannot be represented as JSX. Return \
-            `{ raw: ..., mdxExpressions: false }` instead so the HTML is parsed \
-            into elements, or use the markdown (non-MDX) output where raw HTML is \
-            emitted verbatim."
+        reason: "Cannot compile a `raw` node (raw HTML) to JSX output. \
+            Raw HTML comes from HTML in plain Markdown input, or from a plugin \
+            returning an `html` node (`{ type: \"html\", value: ... }`), and has \
+            no JSX representation. Enable `features: { rawHtml: true }` to parse \
+            the HTML into elements (a plugin can instead return \
+            `{ raw: ..., mdxExpressions: false }`), or use the HTML output where \
+            raw HTML is emitted verbatim."
             .into(),
         place: crate::oxc_utils::u32_to_point(
             node_span(context.view, node_id).start,

@@ -22,6 +22,7 @@ export {
   getMdastFrontmatter,
   getNodeData,
   markdownToHtmlFast,
+  markdownToJsFast,
   mdastTextContentHandle,
   mdxToJsFast,
   parseEsm,

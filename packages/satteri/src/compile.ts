@@ -35,6 +35,7 @@ import {
   createMdxHastHandleWithFrontmatter,
   getMdastFrontmatter,
   markdownToHtmlFast,
+  markdownToJsFast,
   mdxToJsFast,
   renderHandle,
   serializeHandle,
@@ -538,6 +539,12 @@ export interface MdxOnlyOptions {
 
 export interface MdxCompileOptions extends CompileOptions, MdxOnlyOptions {}
 
+/**
+ * Options for {@link markdownToJs}. The {@link MdxOnlyOptions} fields all
+ * concern the compiled JS/JSX output, so they apply to Markdown input too.
+ */
+export interface MarkdownToJsOptions extends CompileOptions, MdxOnlyOptions {}
+
 /** Frontmatter block extracted from the parsed Markdown/MDX source. */
 export interface Frontmatter {
   /** Delimiter syntax used for the block. */
@@ -558,6 +565,16 @@ export interface MarkdownToHtmlResult {
 
 /** Result of {@link mdxToJs}. */
 export interface MdxToJsResult {
+  /** Compiled JavaScript module source. */
+  code: string;
+  /** Frontmatter block at the start of the document, or `null` if none. */
+  frontmatter: Frontmatter | null;
+  /** Document-level data bag shared with plugins via `ctx.data`; the seeded `data` option if provided, else a fresh `{}`. */
+  data: Data;
+}
+
+/** Result of {@link markdownToJs}. */
+export interface MarkdownToJsResult {
   /** Compiled JavaScript module source. */
   code: string;
   /** Frontmatter block at the start of the document, or `null` if none. */
@@ -766,6 +783,34 @@ export function mdxToJs(
   source: string,
   options: MdxCompileOptions = {},
 ): MdxToJsResult | Promise<MdxToJsResult> {
+  return toJsImpl(source, options, true);
+}
+
+/**
+ * Compile plain Markdown to a JavaScript module: like {@link mdxToJs}, but
+ * without MDX syntax — `{...}` expressions, JSX tags, and `import`/`export`
+ * lines are ordinary Markdown. HTML in the source becomes `raw` nodes, which
+ * have no JSX representation; enable `features: { rawHtml: true }` to compile
+ * such documents.
+ */
+export function markdownToJs<O extends MarkdownToJsOptions>(
+  source: string,
+  options?: O,
+): ResultFor<O, MarkdownToJsResult>;
+export function markdownToJs(
+  source: string,
+  options: MarkdownToJsOptions = {},
+): MarkdownToJsResult | Promise<MarkdownToJsResult> {
+  return toJsImpl(source, options, false);
+}
+
+/** Shared body of {@link mdxToJs} and {@link markdownToJs}; `mdx` picks the
+ *  parser, the compile pipeline is identical from MDAST on. */
+function toJsImpl(
+  source: string,
+  options: MdxCompileOptions,
+  mdx: boolean,
+): MdxToJsResult | Promise<MdxToJsResult> {
   const {
     mdastPlugins: mdastInput = [],
     hastPlugins: hastInput = [],
@@ -785,7 +830,7 @@ export function mdxToJs(
   // frontmatter extraction all happen inside a single NAPI call. Skips 5 of
   // the 6 handle-based crossings the plugin-capable path needs.
   if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
-    const { code, frontmatter } = mdxToJsFast(
+    const { code, frontmatter } = (mdx ? mdxToJsFast : markdownToJsFast)(
       source,
       nativeFeatures,
       mdxOptions,
@@ -805,14 +850,16 @@ export function mdxToJs(
   // MDAST-plugins-only fused tail (no HAST plugins): apply + extract
   // frontmatter + convert + simplify + compile happen in one NAPI call.
   if (hastPlugins.length === 0) {
-    const mdastHandle = createMdxMdastHandle(source, nativeFeatures, trackPositions);
+    const mdastHandle = mdx
+      ? createMdxMdastHandle(source, nativeFeatures, trackPositions)
+      : createMdastHandle(source, nativeFeatures, trackPositions);
     try {
       const mdastResult = runMdastPluginsOnHandle(
         mdastHandle,
         mdastPlugins,
         fileURL,
         data,
-        "mdx",
+        mdx ? "mdx" : "markdown",
         true,
       );
       const finishMdast = (r: MdastPipelineResult): MdxToJsResult => {
@@ -851,7 +898,7 @@ export function mdxToJs(
   const result = createHastHandleFromMdast(
     source,
     mdastPlugins,
-    true,
+    mdx,
     fileURL,
     nativeFeatures,
     nativeConvertOptions,
@@ -868,7 +915,7 @@ export function mdxToJs(
         source,
         fileURL,
         data,
-        "mdx",
+        mdx ? "mdx" : "markdown",
       );
     } catch (err) {
       releaseHandle(r.hastHandle, hastMayHaveStubs);

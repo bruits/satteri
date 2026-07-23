@@ -38,9 +38,25 @@ import { mdxToJs } from "satteri";
 const { code } = mdxToJs("# Hello\n\n<MyComponent />");
 ```
 
+## markdownToJs
+
+```ts
+markdownToJs(source: string, options?: MarkdownToJsOptions): MarkdownToJsResult;
+```
+
+Like `mdxToJs`, but the source is plain Markdown: `{...}` expressions, JSX tags, and `import`/`export` lines are ordinary Markdown text instead of MDX syntax. The options and result mirror `mdxToJs` — the MDX-specific fields all concern the compiled JS/JSX output, so they apply here too.
+
+```js
+import { markdownToJs } from "satteri";
+
+const { code } = markdownToJs("# Hello\n\n{not an expression}");
+```
+
+HTML in the source becomes `raw` nodes, which have no JSX representation and make the compile throw. Enable [`features: { rawHtml: true }`](#reparsing-raw-html-rawhtml) to parse the HTML into real elements instead.
+
 ## Result shape
 
-Both functions return an object, never a bare string:
+These functions return an object, never a bare string:
 
 ```ts
 interface MarkdownToHtmlResult {
@@ -55,6 +71,8 @@ interface MdxToJsResult {
   data: Data;
 }
 ```
+
+`MarkdownToJsResult` has the same shape as `MdxToJsResult`.
 
 `frontmatter` is the parsed block at the top of the document, or `null` if there is none — see [Frontmatter](/docs/features/#frontmatter) for its shape. `data` is the [document data bag](/docs/options/#data).
 

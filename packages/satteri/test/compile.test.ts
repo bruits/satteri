@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   markdownToHtml,
+  markdownToJs,
   mdxToJs,
   markdownToMdast,
   mdxToMdast,
@@ -1632,6 +1633,82 @@ describe("mdxToJs", () => {
     });
     expect(html).toContain('<img src="https://example.com/img.png" alt="alt text">');
     expect(html).not.toContain("<p>");
+  });
+});
+
+describe("markdownToJs", () => {
+  test("basic Markdown compilation", () => {
+    const { code: js } = markdownToJs("# Hello\n\nWorld");
+    expect(js).toContain("function MDXContent");
+    expect(js).toContain("Hello");
+  });
+
+  test("curly braces stay literal text instead of becoming an expression", () => {
+    const source = "Hello {xxx} world";
+    const { code: js } = markdownToJs(source);
+    expect(js).toContain('"Hello {xxx} world"');
+
+    // Contrast: the MDX pipeline reads `{xxx}` as a live expression.
+    const { code: mdxJs } = mdxToJs(source);
+    expect(mdxJs).not.toContain('"Hello {xxx} world"');
+    expect(mdxJs).toContain("xxx");
+  });
+
+  test("import/export lines stay literal text instead of becoming ESM", () => {
+    const { code: js } = markdownToJs("export const a = 1");
+    expect(js).toContain('"export const a = 1"');
+    expect(js).not.toContain("export const a = 1;");
+  });
+
+  test("returns frontmatter", () => {
+    const { code: js, frontmatter } = markdownToJs("---\ntitle: Hi\n---\n# Body");
+    expect(frontmatter).toEqual({ kind: "yaml", value: "title: Hi" });
+    expect(js).toContain("Body");
+  });
+
+  test("raw HTML throws without rawHtml and compiles with it", () => {
+    expect(() => markdownToJs("a <b>bold</b> word")).toThrow(/rawHtml/);
+
+    const { code: js } = markdownToJs("a <b>bold</b> word", { features: { rawHtml: true } });
+    expect(js).toContain('b: "b"');
+    expect(js).toContain("bold");
+  });
+
+  test("MDAST plugin affects output", () => {
+    const removeHeadings = defineMdastPlugin({
+      name: "remove-headings",
+      heading(node, ctx) {
+        ctx.removeNode(node);
+      },
+    });
+
+    const { code: js } = markdownToJs("# Gone\n\nKept {x}", {
+      mdastPlugins: [removeHeadings],
+    });
+    expect(js).not.toContain("Gone");
+    expect(js).toContain('"Kept {x}"');
+  });
+
+  test("HAST plugin affects output", () => {
+    const addClass = defineHastPlugin({
+      name: "add-class",
+      element: {
+        filter: ["p"],
+        visit(node) {
+          return {
+            type: "element" as const,
+            tagName: node.tagName,
+            properties: { class: "prose" },
+            children: node.children,
+            data: undefined,
+          } as HastNode;
+        },
+      },
+    });
+
+    const { code: js } = markdownToJs("Hello {x}", { hastPlugins: [addClass] });
+    expect(js).toContain('class: "prose"');
+    expect(js).toContain('"Hello {x}"');
   });
 });
 

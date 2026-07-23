@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { markdownToHtml, mdxToJs } from "../src/compile.js";
+import { markdownToHtml, markdownToJs, mdxToJs } from "../src/compile.js";
 import { defineMdastPlugin, defineHastPlugin } from "../src/plugin.js";
 import type { SourceFormat } from "../src/types.js";
 
@@ -60,5 +60,34 @@ describe("ctx.sourceFormat", () => {
 
     mdxToJs("hi", { hastPlugins: [inspect] });
     expect(seen).toBe("mdx");
+  });
+
+  it('is "markdown" for an mdast plugin under markdownToJs', () => {
+    let seen: SourceFormat | undefined;
+    const inspect = defineMdastPlugin({
+      name: "inspect",
+      paragraph(_node, ctx) {
+        seen = ctx.sourceFormat;
+      },
+    });
+
+    markdownToJs("hi", { mdastPlugins: [inspect] });
+    expect(seen).toBe("markdown");
+  });
+
+  it('is "markdown" for a hast plugin under markdownToJs', () => {
+    let seen: SourceFormat | undefined;
+    const inspect = defineHastPlugin({
+      name: "inspect",
+      element: {
+        filter: ["p"],
+        visit(_node, ctx) {
+          seen = ctx.sourceFormat;
+        },
+      },
+    });
+
+    markdownToJs("hi", { hastPlugins: [inspect] });
+    expect(seen).toBe("markdown");
   });
 });

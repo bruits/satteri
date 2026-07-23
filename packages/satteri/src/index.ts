@@ -1,6 +1,7 @@
 // Public API: compile functions
 export {
   markdownToHtml,
+  markdownToJs,
   mdxToJs,
   evaluate,
   markdownToMdast,
@@ -13,12 +14,14 @@ export type {
   CompileOptions,
   MdxCompileOptions,
   MdxOnlyOptions,
+  MarkdownToJsOptions,
   EvaluateOptions,
   OptimizeStaticConfig,
   Features,
   SmartPunctuationOptions,
   Frontmatter,
   MarkdownToHtmlResult,
+  MarkdownToJsResult,
   MdxToJsResult,
 } from "./compile.js";
 
