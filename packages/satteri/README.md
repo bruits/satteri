@@ -31,9 +31,19 @@ import { mdxToJs } from "satteri";
 const { code } = mdxToJs("# Hello\n\n<MyComponent />");
 ```
 
+### Markdown to JS
+
+Like `mdxToJs`, but the source is plain Markdown: `{...}` expressions, JSX tags, and `import`/`export` lines are ordinary text instead of MDX syntax.
+
+```ts
+import { markdownToJs } from "satteri";
+
+const { code } = markdownToJs("# Hello\n\n{not an expression}");
+```
+
 ### With plugins
 
-Both functions accept `mdastPlugins` (operate on the Markdown AST) and `hastPlugins` (operate on the HTML AST). A plugin is an object with a `name` and a visitor per node type; `defineMdastPlugin` / `defineHastPlugin` add type inference.
+All three functions accept `mdastPlugins` (operate on the Markdown AST) and `hastPlugins` (operate on the HTML AST). A plugin is an object with a `name` and a visitor per node type; `defineMdastPlugin` / `defineHastPlugin` add type inference.
 
 ```ts
 import { markdownToHtml, defineMdastPlugin } from "satteri";
