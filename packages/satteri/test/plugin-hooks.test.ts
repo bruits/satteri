@@ -172,6 +172,28 @@ describe("mdast lifecycle hooks", () => {
     expect(code).toContain('"Two"');
   });
 
+  test("hooks prepend an import and append an export on an empty document", () => {
+    const { code } = mdxToJs("", {
+      mdastPlugins: [
+        {
+          name: "inject-esm-empty",
+          before(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.prependChild(root, {
+              type: "mdxjsEsm",
+              value: 'import { config } from "./config.js";',
+            });
+          },
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.appendChild(root, { type: "mdxjsEsm", value: "export const toc = [];" });
+          },
+        },
+      ],
+    }) as { code: string };
+    expect(code).toContain('import { config } from "./config.js"');
+    expect(code).toContain("export const toc = []");
+    expect(code.indexOf("import { config }")).toBeLessThan(code.indexOf("export const toc"));
+  });
+
   test("hooks inject an import and an export into an MDX document", () => {
     const { code } = mdxToJs("# Hi\n\n<Aside>note</Aside>", {
       mdastPlugins: [
