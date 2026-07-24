@@ -319,6 +319,13 @@ export interface MarkdownHtmlOneShot {
 export declare function markdownToHtmlFast(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MarkdownHtmlOneShot
 
 /**
+ * Plain-Markdown variant of [`mdx_to_js_fast`]: MDX expression/JSX/ESM syntax
+ * is treated as literal Markdown text. Used by `markdownToJs` when the caller
+ * didn't configure any plugins.
+ */
+export declare function markdownToJsFast(source: string, features?: JsFeatures | undefined | null, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
+
+/**
  * Collect the concatenated text content of an MDAST node and all its descendants.
  * Mirrors `mdast-util-to-string`: collects value from text nodes, alt from images.
  */

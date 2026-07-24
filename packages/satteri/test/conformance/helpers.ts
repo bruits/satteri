@@ -3,6 +3,7 @@ import type { EvaluateOptions as MdxEvaluateOptions } from "@mdx-js/mdx";
 import {
   evaluate as satteriEvaluate,
   defineHastPlugin,
+  markdownToJs,
   markdownToMdast,
   markdownToHast,
   markdownToHtml,
@@ -20,6 +21,7 @@ import remarkFrontmatter from "remark-frontmatter";
 import remarkDirective from "remark-directive";
 
 import remarkRehype from "remark-rehype";
+import rehypeRaw from "rehype-raw";
 import rehypeStringify from "rehype-stringify";
 import type { Nodes } from "hast";
 import { expect } from "vitest";
@@ -466,6 +468,49 @@ export async function assertMdxConformance(
   const { default: SatComponent } = await satteriEvaluate(input, {
     ...satteriRuntime,
   });
+  const satHtml = renderToStaticMarkup(
+    createElement(SatComponent as React.FC<Record<string, unknown>>, { components }),
+  );
+
+  expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
+}
+
+// Reference for `markdownToJs` is @mdx-js/mdx with `format: "md"` — the
+// ecosystem's plain-Markdown compile mode. Both sides evaluate to a component
+// and render through react-dom/server, so string escaping is identical and
+// only structural differences survive the comparison. GFM is on for both to
+// match satteri's default.
+export interface MarkdownJsConformanceOptions {
+  components?: Record<string, unknown>;
+  /** Reparse raw HTML into elements: satteri `features.rawHtml`, reference rehype-raw. */
+  rawHtml?: boolean;
+  /** Enable frontmatter on both sides. */
+  frontmatter?: boolean;
+}
+
+export async function assertMarkdownJsConformance(
+  input: string,
+  options: MarkdownJsConformanceOptions = {},
+): Promise<void> {
+  const { components = {}, rawHtml = false, frontmatter = false } = options;
+
+  const remarkPlugins: unknown[] = [remarkGfm];
+  if (frontmatter) remarkPlugins.push([remarkFrontmatter, ["yaml", "toml"]]);
+  const { default: MdxComponent } = (await mdxEvaluate(input, {
+    ...mdxRuntime,
+    format: "md",
+    remarkPlugins: remarkPlugins as MdxEvaluateOptions["remarkPlugins"],
+    rehypePlugins: rawHtml ? [rehypeRaw] : [],
+  })) as { default: Function };
+  const mdxHtml = renderToStaticMarkup(
+    createElement(MdxComponent as React.FC<Record<string, unknown>>, { components }),
+  );
+
+  const { code } = markdownToJs(input, {
+    outputFormat: "function-body",
+    features: { frontmatter, math: false, rawHtml },
+  });
+  const { default: SatComponent } = new Function(code)(satteriRuntime) as { default: Function };
   const satHtml = renderToStaticMarkup(
     createElement(SatComponent as React.FC<Record<string, unknown>>, { components }),
   );
