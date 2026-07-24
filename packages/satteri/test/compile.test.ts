@@ -1854,10 +1854,10 @@ describe("per-plugin position opt-in", () => {
     expect(hastSeen?.start.line).toBe(1);
   });
 
-  // Issue #172: with multibyte characters before a node, the walk path leaked
-  // byte offsets, so `ctx.source.slice(start.offset, end.offset)` drifted
-  // right. Offsets and columns are JS string indices (UTF-16 code units) —
-  // BMP multibyte (❤️你好αβγ) and astral pairs (😀) alike must slice cleanly.
+  // Issue #172: the walk path leaked byte offsets, so
+  // `ctx.source.slice(start.offset, end.offset)` drifted right after any
+  // multibyte character. Offsets and columns are UTF-16 code units, so
+  // astral pairs (😀) must slice cleanly too.
   test("offsets after multibyte characters slice ctx.source and agree with line/column", () => {
     const doc = [
       "[baseline](https://example.com)",

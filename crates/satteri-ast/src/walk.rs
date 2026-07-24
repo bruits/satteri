@@ -99,9 +99,8 @@ pub fn walk_hast(arena: &Arena<Hast>, subscriptions: &[Subscription]) -> Vec<u8>
     )
 }
 
-/// Writes one matched node's payload (prelude + type-specific tail) onto the
-/// data section: `(arena, node_id, node_type, type_data, utf16_offsets, out)`,
-/// where `utf16_offsets` is the node's `(start, end)` already converted to
+/// Serializes one matched node's payload (prelude + type-specific tail). The
+/// `(u32, u32)` pair is the node's start/end offsets already converted to
 /// UTF-16 code units.
 type SerializeNodeFn<K> = fn(&Arena<K>, u32, u8, &[u8], (u32, u32), &mut Vec<u8>);
 
@@ -115,11 +114,10 @@ fn walk_and_collect_inner<K: ArenaKind>(
         return 0u32.to_le_bytes().to_vec();
     }
 
-    // Node offsets are byte offsets (the parser works in bytes), but
-    // `position.offset` is a JS string index (UTF-16 code units). Convert at
-    // the wire boundary like `to_raw_buffer`: use the parse-time cache when
-    // it is intact, otherwise (e.g. after a plugin-mutation rebuild) build a
-    // one-shot `LineIndex`.
+    // Node offsets are byte offsets, but `position.offset` is a JS string
+    // index (UTF-16 code units). Convert at the wire boundary: use the
+    // parse-time cache when intact, else a one-shot `LineIndex` (rebuilds
+    // and position mutations drop the cache).
     let cached = arena.utf16_offsets.len() == arena.nodes.len();
     let line_index = (!cached && !arena.string_pool().is_ascii())
         .then(|| LineIndex::from_source(arena.string_pool()));
@@ -242,8 +240,7 @@ fn walk_and_collect_inner<K: ArenaKind>(
 }
 
 /// The shared per-match prelude (see the module header): node-data JSON block,
-/// position, then child ids + types. `utf16_offsets` is the node's
-/// `(start, end)` byte offsets already converted to UTF-16 code units.
+/// position, then child ids + types.
 fn write_walk_prelude<K: ArenaKind>(
     arena: &Arena<K>,
     node_id: u32,

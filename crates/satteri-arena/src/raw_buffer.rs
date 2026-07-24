@@ -72,9 +72,9 @@ impl<K: ArenaKind> Arena<K> {
         buf.extend_from_slice(&hdr);
 
         // The arena tracks `start_offset`/`end_offset` as **byte** offsets
-        // (the parser works in bytes). remark/micromark report JS string
-        // indices (UTF-16 code units) in `position`, so we convert here at
-        // serialization time. Columns and lines are already in UTF-16 units.
+        // (the parser works in bytes); `position` carries JS string indices
+        // (UTF-16 code units), so convert here at serialization time.
+        // Columns and lines are already in UTF-16 units.
         // SAFETY: ArenaNode is #[repr(C)] with explicit padding; same-process
         // serialization, never deserialized back into Rust.
         let nodes_slice: &[u8] =

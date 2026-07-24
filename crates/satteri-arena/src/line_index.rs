@@ -14,9 +14,8 @@ struct LineMeta {
 
 /// Maps byte offsets to 1-based (line, column) pairs and 0-based UTF-16
 /// offsets. Built once; lookups are O(log n). Columns and offsets count UTF-16
-/// code units — the unit JS strings index by, and what remark/micromark
-/// report — so positions slice the JS source and match the reference parsers
-/// even for astral characters (emoji beyond the BMP count as two units).
+/// code units — the unit JS strings index by — so `position` values slice the
+/// source string even for astral characters (two units each).
 pub struct LineIndex<'a> {
     source: &'a [u8],
     /// `line_offsets[i]` is the byte offset where line `i+1` starts.
@@ -154,9 +153,9 @@ impl LineIndexCursor<'_, '_> {
         self.last_line_col.1
     }
 
-    /// Convert a byte offset into the source to a UTF-16 offset. Used for
-    /// `position.start.offset` / `position.end.offset` which remark reports
-    /// as JS string indices (UTF-16 code units), not bytes.
+    /// Convert a byte offset into the source to a UTF-16 offset;
+    /// `position.start.offset` / `position.end.offset` are JS string
+    /// indices, not bytes.
     #[inline]
     pub fn byte_to_utf16_offset(&mut self, byte_offset: u32) -> u32 {
         if self.index.all_ascii || self.index.disabled {
@@ -208,10 +207,9 @@ impl LineIndexCursor<'_, '_> {
     }
 }
 
-/// UTF-16 length of a UTF-8 byte slice. Continuation bytes match
-/// `0b10xxxxxx`; every other byte starts a code point, and a 4-byte
-/// sequence (lead byte `0b11110xxx`) encodes a supplementary-plane code
-/// point that JS strings store as a surrogate pair — two units.
+/// UTF-16 length of a UTF-8 byte slice. Continuation bytes (`0b10xxxxxx`)
+/// don't count; a 4-byte sequence (lead byte ≥ `0xF0`) is an astral code
+/// point — a surrogate pair, two units.
 fn utf16_len_bytes(bytes: &[u8]) -> u32 {
     let mut count: u32 = 0;
     for &b in bytes {
@@ -298,7 +296,7 @@ mod tests {
     #[test]
     fn byte_to_utf16_offset_multibyte() {
         // "❤️" is U+2764 U+FE0F: 6 bytes, 2 units. "😀" is U+1F600: 4 bytes,
-        // 2 units (surrogate pair). Mirrors `"❤️a\n😀b".indexOf(...)` in JS.
+        // 2 units (surrogate pair).
         let idx = LineIndex::from_source("❤️a\n😀b");
         let mut c = idx.cursor();
         assert_eq!(c.byte_to_utf16_offset(0), 0); // ❤️
