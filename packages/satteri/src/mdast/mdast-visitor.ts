@@ -389,9 +389,26 @@ type MdastVisitorFn<N extends MdastNode = MdastNode> = (
   context: MdastVisitorContext,
 ) => MdastVisitorResult | Promise<MdastVisitorResult>;
 
+/** Unlike visitors, return values are ignored — hooks mutate via `context`. */
+type MdastHookFn = (
+  root: Readonly<MdastRoot>,
+  context: MdastVisitorContext,
+) => void | Promise<void>;
+
 export interface MdastPluginInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
+  /**
+   * Runs once per document — even an empty one — before any of the plugin's
+   * visitors; awaited before they dispatch when async.
+   */
+  before?: MdastHookFn;
+  /**
+   * Runs once per document — even an empty one — after all of the plugin's
+   * visitors have settled, so it can emit output built from state they
+   * collected.
+   */
+  after?: MdastHookFn;
   paragraph?: MdastVisitorFn<Paragraph>;
   heading?: MdastVisitorFn<Heading>;
   thematicBreak?: MdastVisitorFn<ThematicBreak>;
@@ -490,6 +507,11 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
     }
   }
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
+  if (typeof plugin.before === "function" || typeof plugin.after === "function") {
+    // Node 0 always exists, so this matches exactly once per document, empty
+    // ones included.
+    rustSubs.push({ nodeType: MDAST_ROOT, tagFilter: [] });
+  }
   return { subs, rustSubs };
 }
 
@@ -626,6 +648,9 @@ function readMdastMatchedNode(
   if (position !== undefined) node.position = position;
   if (childCount > 0) {
     makeLazyChildren(node, view, buf, childIdsPos, childTypesPos, childCount, resolver);
+  } else if (nodeType === MDAST_ROOT) {
+    // Hooks receive the root even when empty; real children keep spreads working.
+    node.children = [];
   }
 
   // Fixed-field types decode from the generated layout table; the rest
@@ -898,49 +923,85 @@ export function visitMdastHandle(
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  let deferred:
-    | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
-    | null = null;
-
-  for (let i = 0; i < matchCount; i++) {
-    const indexBase = 4 + i * 10;
-    const nodeId = ru32(matchView, indexBase);
-    const subIndex = matchBuf[indexBase + 4]!;
-    const dataOffset = ru32(matchView, indexBase + 6);
-
-    const sub = subs[subIndex]!;
-    const node = readMdastMatchedNode(
+  // The hook root subscription sits at index subs.length; pre-order puts its
+  // match first.
+  let hookRoot: MdastRoot | null = null;
+  let matchStart = 0;
+  if (matchCount > 0 && matchBuf[8] === subs.length) {
+    hookRoot = readMdastMatchedNode(
       matchView,
       matchBuf,
-      dataOffset,
-      nodeId,
-      sub.nodeType,
+      ru32(matchView, 10),
+      ru32(matchView, 4),
+      MDAST_ROOT,
       resolver,
-    );
-    const result = sub.visitFn.call(plugin, node, context);
-
-    if (result instanceof Promise) {
-      deferred ??= [];
-      deferred.push({ nodeId, promise: result, originalNode: node });
-    } else {
-      applyMdastVisitResult(result as MdastVisitorResult, nodeId, returnBuffer, node);
-    }
+    ) as MdastRoot;
+    matchStart = 1;
   }
 
-  if (deferred) {
-    return Promise.all(
-      deferred.map((d) =>
-        d.promise.then((r) => ({ nodeId: d.nodeId, result: r, originalNode: d.originalNode })),
-      ),
-    ).then((results) => {
-      for (const { nodeId, result, originalNode } of results) {
-        applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
+  const dispatchAndFinalize = (): MdastVisitResult | Promise<MdastVisitResult> => {
+    let deferred:
+      | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
+      | null = null;
+
+    for (let i = matchStart; i < matchCount; i++) {
+      const indexBase = 4 + i * 10;
+      const nodeId = ru32(matchView, indexBase);
+      const subIndex = matchBuf[indexBase + 4]!;
+      const dataOffset = ru32(matchView, indexBase + 6);
+
+      const sub = subs[subIndex]!;
+      const node = readMdastMatchedNode(
+        matchView,
+        matchBuf,
+        dataOffset,
+        nodeId,
+        sub.nodeType,
+        resolver,
+      );
+      const result = sub.visitFn.call(plugin, node, context);
+
+      if (result instanceof Promise) {
+        deferred ??= [];
+        deferred.push({ nodeId, promise: result, originalNode: node });
+      } else {
+        applyMdastVisitResult(result as MdastVisitorResult, nodeId, returnBuffer, node);
+      }
+    }
+
+    const runAfterAndFinalize = (): MdastVisitResult | Promise<MdastVisitResult> => {
+      const afterFn = plugin.after;
+      if (typeof afterFn === "function" && hookRoot !== null) {
+        const result = afterFn.call(plugin, hookRoot, context);
+        if (result instanceof Promise) {
+          return result.then(() => finalizeMdastVisit(handle, context, returnBuffer));
+        }
       }
       return finalizeMdastVisit(handle, context, returnBuffer);
-    });
-  }
+    };
 
-  return finalizeMdastVisit(handle, context, returnBuffer);
+    if (deferred) {
+      return Promise.all(
+        deferred.map((d) =>
+          d.promise.then((r) => ({ nodeId: d.nodeId, result: r, originalNode: d.originalNode })),
+        ),
+      ).then((results) => {
+        for (const { nodeId, result, originalNode } of results) {
+          applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
+        }
+        return runAfterAndFinalize();
+      });
+    }
+
+    return runAfterAndFinalize();
+  };
+
+  const beforeFn = plugin.before;
+  if (typeof beforeFn === "function" && hookRoot !== null) {
+    const result = beforeFn.call(plugin, hookRoot, context);
+    if (result instanceof Promise) return result.then(dispatchAndFinalize);
+  }
+  return dispatchAndFinalize();
 }
 
 function finalizeMdastVisit(

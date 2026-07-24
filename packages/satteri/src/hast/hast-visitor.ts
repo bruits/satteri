@@ -515,9 +515,23 @@ type HastVisitorFn<N extends HastNode = HastNode> = (
   ctx: HastVisitorContext,
 ) => HastNode | void | Promise<HastNode | void>;
 
+/** Unlike visitors, return values are ignored — hooks mutate via `ctx`. */
+type HastHookFn = (root: Readonly<HastRoot>, ctx: HastVisitorContext) => void | Promise<void>;
+
 export interface HastVisitorInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
+  /**
+   * Runs once per document — even an empty one — before any of the plugin's
+   * visitors; awaited before they dispatch when async.
+   */
+  before?: HastHookFn;
+  /**
+   * Runs once per document — even an empty one — after all of the plugin's
+   * visitors have settled, so it can emit output built from state they
+   * collected.
+   */
+  after?: HastHookFn;
   // Element-like nodes: filtered by tag/component name (single or array)
   element?: HastFilteredVisitor<Element> | HastFilteredVisitor<Element>[];
   mdxJsxFlowElement?:
@@ -599,6 +613,11 @@ function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
   }
 
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
+  if (typeof plugin.before === "function" || typeof plugin.after === "function") {
+    // Node 0 always exists, so this matches exactly once per document, empty
+    // ones included.
+    rustSubs.push({ nodeType: HAST_ROOT, tagFilter: [] });
+  }
   return { subs, rustSubs };
 }
 
@@ -968,10 +987,18 @@ function readMatchedNode(
       data,
     );
   }
-  // Fallback (e.g. doctype): minimal node carrying whatever prelude data we found
+  // Fallback (root, doctype): minimal node carrying whatever prelude data we found
   const base: Record<string, unknown> = { type: TYPE_NAMES[nodeType] ?? `unknown(${nodeType})` };
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
+  if (nodeType === HAST_ROOT) {
+    // Hooks receive the root even when empty; real children keep spreads working.
+    if (childCount > 0) {
+      makeLazyChildren(base, view, buf, childIdsPos, childTypesPos, childCount, resolver);
+    } else {
+      base.children = [];
+    }
+  }
   const node = base as unknown as HastNode;
   nodeIdMap.set(node, nodeId);
   return node;
@@ -1078,24 +1105,25 @@ function isTextValueSwap(result: HastNode, original: HastNode): boolean {
 }
 
 /**
- * Dispatch matched nodes from a binary match buffer to visitor functions.
- * Returns null if all sync, or an array of deferred promises if any visitor was async.
+ * Dispatch matched nodes from a binary match buffer to visitor functions,
+ * starting at `startIndex` (the caller skips a leading hook-root match).
+ * Returns null if all sync, or an array of deferred promises if any visitor
+ * was async.
  */
 function dispatchMatches(
-  matchBuf: Uint8Array,
+  wire: WalkWire,
+  matchCount: number,
+  startIndex: number,
   subs: ResolvedSubscription[],
   ctx: HastVisitorContextImpl,
   returnBuffer: CommandBuffer,
-  resolver: HastLazyChildResolver,
 ): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
-  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
-  const matchCount = matchView.getUint32(0, true);
-  const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
+  const { view: matchView, buf: matchBuf } = wire;
   let deferred:
     | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
     | null = null;
 
-  for (let i = 0; i < matchCount; i++) {
+  for (let i = startIndex; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
     const nodeId = matchView.getUint32(indexBase, true);
     const subIndex = matchBuf[indexBase + 4]!;
@@ -1162,24 +1190,63 @@ export function visitHastHandleCollect(
   const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data, sourceFormat);
   const returnBuffer = acquireCommandBuffer();
   const rustSubs = getRustSubs(plugin);
-  const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
+  const matchBuf = walkHandle(handle, rustSubs);
+  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
+  const matchCount = matchView.getUint32(0, true);
+  const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
 
-  if (deferred) {
-    return Promise.all(
-      deferred.map((d) =>
-        d.promise.then((result) => ({ nodeId: d.nodeId, result, originalNode: d.originalNode })),
-      ),
-    ).then((results) => {
-      for (const { nodeId, result, originalNode } of results) {
-        if (result != null && result !== originalNode) {
-          emitHastTree(returnBuffer, "replace", nodeId, result);
+  // The hook root subscription sits at index subs.length; pre-order puts its
+  // match first.
+  let hookRoot: HastRoot | null = null;
+  let matchStart = 0;
+  if (matchCount > 0 && matchBuf[8] === subs.length) {
+    hookRoot = readMatchedNode(
+      wire,
+      matchView.getUint32(10, true),
+      matchView.getUint32(4, true),
+      HAST_ROOT,
+    ) as HastRoot;
+    matchStart = 1;
+  }
+
+  const dispatchAndCollect = (): Uint8Array | Promise<Uint8Array> => {
+    const deferred = dispatchMatches(wire, matchCount, matchStart, subs, ctx, returnBuffer);
+
+    const runAfterAndCollect = (): Uint8Array | Promise<Uint8Array> => {
+      const afterFn = plugin.after;
+      if (typeof afterFn === "function" && hookRoot !== null) {
+        const result = afterFn(hookRoot, ctx);
+        if (result instanceof Promise) {
+          return result.then(() => collectCommands(returnBuffer, ctx));
         }
       }
       return collectCommands(returnBuffer, ctx);
-    });
-  }
+    };
 
-  return collectCommands(returnBuffer, ctx);
+    if (deferred) {
+      return Promise.all(
+        deferred.map((d) =>
+          d.promise.then((result) => ({ nodeId: d.nodeId, result, originalNode: d.originalNode })),
+        ),
+      ).then((results) => {
+        for (const { nodeId, result, originalNode } of results) {
+          if (result != null && result !== originalNode) {
+            emitHastTree(returnBuffer, "replace", nodeId, result);
+          }
+        }
+        return runAfterAndCollect();
+      });
+    }
+
+    return runAfterAndCollect();
+  };
+
+  const beforeFn = plugin.before;
+  if (typeof beforeFn === "function" && hookRoot !== null) {
+    const result = beforeFn(hookRoot, ctx);
+    if (result instanceof Promise) return result.then(dispatchAndCollect);
+  }
+  return dispatchAndCollect();
 }
 
 function collectCommands(returnBuffer: CommandBuffer, ctx: HastVisitorContextImpl): Uint8Array {
