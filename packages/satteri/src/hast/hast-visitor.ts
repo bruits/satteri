@@ -1237,25 +1237,56 @@ export function visitHastHandleCollect(
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
 
   // The hook root subscription sits at index subs.length; pre-order puts its
-  // match first.
-  let hookRoot: HastRoot | null = null;
-  let matchStart = 0;
+  // match first. Hook dispatch lives in a cold function so the no-hook pass
+  // pays nothing beyond this check.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
-    hookRoot = readMatchedNode(
-      wire,
-      matchView.getUint32(10, true),
-      matchView.getUint32(4, true),
-      HAST_ROOT,
-    ) as HastRoot;
-    matchStart = 1;
+    return visitHastHandleWithHooks(plugin, subs, ctx, returnBuffer, wire, matchCount);
   }
 
+  const deferred = dispatchMatches(wire, matchCount, 0, subs, ctx, returnBuffer);
+
+  if (deferred) {
+    return Promise.all(
+      deferred.map((d) =>
+        d.promise.then((result) => ({ nodeId: d.nodeId, result, originalNode: d.originalNode })),
+      ),
+    ).then((results) => {
+      for (const { nodeId, result, originalNode } of results) {
+        if (result != null && result !== originalNode) {
+          emitHastTree(returnBuffer, "replace", nodeId, result);
+        }
+      }
+      return collectCommands(returnBuffer, ctx);
+    });
+  }
+
+  return collectCommands(returnBuffer, ctx);
+}
+
+/** The with-hooks pass: before → visitors → after, anchored on the hook root
+ *  (match 0). Cold by design — see the call site. */
+function visitHastHandleWithHooks(
+  plugin: HastVisitorInstance,
+  subs: ResolvedSubscription[],
+  ctx: HastVisitorContextImpl,
+  returnBuffer: CommandBuffer,
+  wire: WalkWire,
+  matchCount: number,
+): Uint8Array | Promise<Uint8Array> {
+  const { view: matchView } = wire;
+  const hookRoot = readMatchedNode(
+    wire,
+    matchView.getUint32(10, true),
+    matchView.getUint32(4, true),
+    HAST_ROOT,
+  ) as HastRoot;
+
   const dispatchAndCollect = (): Uint8Array | Promise<Uint8Array> => {
-    const deferred = dispatchMatches(wire, matchCount, matchStart, subs, ctx, returnBuffer);
+    const deferred = dispatchMatches(wire, matchCount, 1, subs, ctx, returnBuffer);
 
     const runAfterAndCollect = (): Uint8Array | Promise<Uint8Array> => {
       const afterFn = plugin.after;
-      if (typeof afterFn === "function" && hookRoot !== null) {
+      if (typeof afterFn === "function") {
         const result = afterFn(hookRoot, ctx);
         if (result instanceof Promise) {
           return result.then(() => collectCommands(returnBuffer, ctx));
@@ -1283,7 +1314,7 @@ export function visitHastHandleCollect(
   };
 
   const beforeFn = plugin.before;
-  if (typeof beforeFn === "function" && hookRoot !== null) {
+  if (typeof beforeFn === "function") {
     const result = beforeFn(hookRoot, ctx);
     if (result instanceof Promise) return result.then(dispatchAndCollect);
   }

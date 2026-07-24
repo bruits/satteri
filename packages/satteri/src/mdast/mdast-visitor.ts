@@ -1020,27 +1020,95 @@ export function visitMdastHandle(
   const matchCount = ru32(matchView, 0);
 
   // The hook root subscription sits at index subs.length; pre-order puts its
-  // match first.
-  let hookRoot: MdastRoot | null = null;
-  let matchStart = 0;
+  // match first. Hook dispatch lives in a cold function so the hot loop below
+  // keeps stack locals — closure capture measurably slowed per-node dispatch.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
-    hookRoot = readMdastMatchedNode(
+    return visitMdastHandleWithHooks(
+      handle,
+      plugin,
+      subs,
+      context,
+      returnBuffer,
+      resolver,
       matchView,
       matchBuf,
-      ru32(matchView, 10),
-      ru32(matchView, 4),
-      MDAST_ROOT,
-      resolver,
-    ) as MdastRoot;
-    matchStart = 1;
+      matchCount,
+    );
   }
+
+  let deferred:
+    | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
+    | null = null;
+
+  for (let i = 0; i < matchCount; i++) {
+    const indexBase = 4 + i * 10;
+    const nodeId = ru32(matchView, indexBase);
+    const subIndex = matchBuf[indexBase + 4]!;
+    const dataOffset = ru32(matchView, indexBase + 6);
+
+    const sub = subs[subIndex]!;
+    const node = readMdastMatchedNode(
+      matchView,
+      matchBuf,
+      dataOffset,
+      nodeId,
+      sub.nodeType,
+      resolver,
+    );
+    const result = sub.visitFn.call(plugin, node, context);
+
+    if (result instanceof Promise) {
+      deferred ??= [];
+      deferred.push({ nodeId, promise: result, originalNode: node });
+    } else {
+      applyMdastVisitResult(result as MdastVisitorResult, nodeId, returnBuffer, node);
+    }
+  }
+
+  if (deferred) {
+    return Promise.all(
+      deferred.map((d) =>
+        d.promise.then((r) => ({ nodeId: d.nodeId, result: r, originalNode: d.originalNode })),
+      ),
+    ).then((results) => {
+      for (const { nodeId, result, originalNode } of results) {
+        applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
+      }
+      return finalizeMdastVisit(handle, context, returnBuffer);
+    });
+  }
+
+  return finalizeMdastVisit(handle, context, returnBuffer);
+}
+
+/** The with-hooks pass: before → visitors → after, anchored on the hook root
+ *  (match 0). Cold by design — see the call site. */
+function visitMdastHandleWithHooks(
+  handle: MdastHandle,
+  plugin: MdastPluginInstance,
+  subs: MdastSubscription[],
+  context: MdastVisitorContext,
+  returnBuffer: CommandBuffer,
+  resolver: MdastLazyChildResolver,
+  matchView: DataView,
+  matchBuf: Uint8Array,
+  matchCount: number,
+): MdastVisitResult | Promise<MdastVisitResult> {
+  const hookRoot = readMdastMatchedNode(
+    matchView,
+    matchBuf,
+    ru32(matchView, 10),
+    ru32(matchView, 4),
+    MDAST_ROOT,
+    resolver,
+  ) as MdastRoot;
 
   const dispatchAndFinalize = (): MdastVisitResult | Promise<MdastVisitResult> => {
     let deferred:
       | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
       | null = null;
 
-    for (let i = matchStart; i < matchCount; i++) {
+    for (let i = 1; i < matchCount; i++) {
       const indexBase = 4 + i * 10;
       const nodeId = ru32(matchView, indexBase);
       const subIndex = matchBuf[indexBase + 4]!;
@@ -1067,7 +1135,7 @@ export function visitMdastHandle(
 
     const runAfterAndFinalize = (): MdastVisitResult | Promise<MdastVisitResult> => {
       const afterFn = plugin.after;
-      if (typeof afterFn === "function" && hookRoot !== null) {
+      if (typeof afterFn === "function") {
         const result = afterFn.call(plugin, hookRoot, context);
         if (result instanceof Promise) {
           return result.then(() => finalizeMdastVisit(handle, context, returnBuffer));
@@ -1093,7 +1161,7 @@ export function visitMdastHandle(
   };
 
   const beforeFn = plugin.before;
-  if (typeof beforeFn === "function" && hookRoot !== null) {
+  if (typeof beforeFn === "function") {
     const result = beforeFn.call(plugin, hookRoot, context);
     if (result instanceof Promise) return result.then(dispatchAndFinalize);
   }
