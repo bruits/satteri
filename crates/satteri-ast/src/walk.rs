@@ -19,7 +19,7 @@
 //! Every matched node's payload shares the same prelude (MDAST and HAST alike):
 //! ```text
 //! [node_data: u32 len + utf8 JSON bytes]   ; 0-length when the node has no `data`
-//! [position: 6×u32 = 24B]                  ; start_offset, end_offset, start_line, start_col, end_line, end_col
+//! [position: 6×u32 = 24B]                  ; start_offset, end_offset (UTF-16 code units), start_line, start_col, end_line, end_col
 //! [child_count: u32][child_ids: child_count × u32][child_types: child_count × u8]
 //! [type-specific resolved data]
 //! ```
@@ -56,7 +56,7 @@
 //! arms in `serialize_mdast_node_inline`; unmatched HAST tags fall back to a
 //! u16-length-prefixed raw `type_data` blob.
 
-use satteri_arena::{Arena, ArenaKind, Hast, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaKind, Hast, LineIndex, Mdast, StringRef};
 
 /// A single subscription: match nodes of a given type, optionally filtered
 /// by tag name (for HAST element nodes).
@@ -99,15 +99,29 @@ pub fn walk_hast(arena: &Arena<Hast>, subscriptions: &[Subscription]) -> Vec<u8>
     )
 }
 
+/// Serializes one matched node's payload (prelude + type-specific tail). The
+/// `(u32, u32)` pair is the node's start/end offsets already converted to
+/// UTF-16 code units.
+type SerializeNodeFn<K> = fn(&Arena<K>, u32, u8, &[u8], (u32, u32), &mut Vec<u8>);
+
 fn walk_and_collect_inner<K: ArenaKind>(
     arena: &Arena<K>,
     subscriptions: &[Subscription],
-    serialize: fn(&Arena<K>, u32, u8, &[u8], &mut Vec<u8>),
+    serialize: SerializeNodeFn<K>,
     has_name: fn(u8) -> bool,
 ) -> Vec<u8> {
     if subscriptions.is_empty() {
         return 0u32.to_le_bytes().to_vec();
     }
+
+    // Node offsets are byte offsets, but `position.offset` is a JS string
+    // index (UTF-16 code units). Convert at the wire boundary: use the
+    // parse-time cache when intact, else a one-shot `LineIndex` (rebuilds
+    // and position mutations drop the cache).
+    let cached = arena.utf16_offsets.len() == arena.nodes.len();
+    let line_index = (!cached && !arena.string_pool().is_ascii())
+        .then(|| LineIndex::from_source(arena.string_pool()));
+    let mut offset_cursor = line_index.as_ref().map(|index| index.cursor());
 
     // Build fast lookup: node_type → list of (subscription_index, tag_filter)
     let mut type_subs: [Vec<(u8, &[String])>; 256] = std::array::from_fn(|_| Vec::new());
@@ -161,8 +175,30 @@ fn walk_and_collect_inner<K: ArenaKind>(
                 };
 
                 if matched {
+                    // A zero start line marks a synthesized node with no
+                    // source range — nothing to convert (JS surfaces
+                    // `position: undefined`).
+                    let utf16_offsets = if node.start_line == 0 {
+                        (node.start_offset, node.end_offset)
+                    } else if cached {
+                        arena.utf16_offsets[node_id as usize]
+                    } else if let Some(cursor) = offset_cursor.as_mut() {
+                        (
+                            cursor.byte_to_utf16_offset(node.start_offset),
+                            cursor.byte_to_utf16_offset(node.end_offset),
+                        )
+                    } else {
+                        (node.start_offset, node.end_offset)
+                    };
                     let data_start = data_section.len() as u32;
-                    serialize(arena, node_id, node_type, type_data, &mut data_section);
+                    serialize(
+                        arena,
+                        node_id,
+                        node_type,
+                        type_data,
+                        utf16_offsets,
+                        &mut data_section,
+                    );
                     matches.push((node_id, sub_idx));
                     data_offsets.push(data_start);
                 }
@@ -205,7 +241,12 @@ fn walk_and_collect_inner<K: ArenaKind>(
 
 /// The shared per-match prelude (see the module header): node-data JSON block,
 /// position, then child ids + types.
-fn write_walk_prelude<K: ArenaKind>(arena: &Arena<K>, node_id: u32, out: &mut Vec<u8>) {
+fn write_walk_prelude<K: ArenaKind>(
+    arena: &Arena<K>,
+    node_id: u32,
+    utf16_offsets: (u32, u32),
+    out: &mut Vec<u8>,
+) {
     let node = arena.get_node(node_id);
 
     // Node data (JSON bytes), length-prefixed, always first so JS can read it at a known offset
@@ -217,8 +258,8 @@ fn write_walk_prelude<K: ArenaKind>(arena: &Arena<K>, node_id: u32, out: &mut Ve
     }
 
     // Position (always present)
-    out.extend_from_slice(&node.start_offset.to_le_bytes());
-    out.extend_from_slice(&node.end_offset.to_le_bytes());
+    out.extend_from_slice(&utf16_offsets.0.to_le_bytes());
+    out.extend_from_slice(&utf16_offsets.1.to_le_bytes());
     out.extend_from_slice(&node.start_line.to_le_bytes());
     out.extend_from_slice(&node.start_column.to_le_bytes());
     out.extend_from_slice(&node.end_line.to_le_bytes());
@@ -241,9 +282,10 @@ fn serialize_mdast_node_inline(
     node_id: u32,
     node_type: u8,
     type_data: &[u8],
+    utf16_offsets: (u32, u32),
     out: &mut Vec<u8>,
 ) {
-    write_walk_prelude(arena, node_id, out);
+    write_walk_prelude(arena, node_id, utf16_offsets, out);
 
     // Fixed-field and name+count+items types are generated from the registry;
     // this returns false for the raw-byte tails handled below.
@@ -340,9 +382,10 @@ fn serialize_hast_node_inline(
     node_id: u32,
     node_type: u8,
     type_data: &[u8],
+    utf16_offsets: (u32, u32),
     out: &mut Vec<u8>,
 ) {
-    write_walk_prelude(arena, node_id, out);
+    write_walk_prelude(arena, node_id, utf16_offsets, out);
 
     // Every typed tail (element, MDX JSX, single-value) is generated from the
     // registry; what's left falls back to a generic length-prefixed blob.
@@ -382,6 +425,71 @@ mod tests {
         // Byte 65535 would split the 'é', so the clamp backs off to 65534.
         assert_eq!(len, 65534);
         assert!(std::str::from_utf8(&out[2..]).is_ok());
+    }
+
+    fn read_match_data_offset(buf: &[u8], index: usize) -> usize {
+        u32::from_le_bytes(
+            buf[4 + index * 10 + 6..4 + index * 10 + 10]
+                .try_into()
+                .unwrap(),
+        ) as usize
+    }
+
+    /// Read the position block's `(start_offset, end_offset)` for a match.
+    fn read_match_offsets(buf: &[u8], index: usize) -> (u32, u32) {
+        let data = read_match_data_offset(buf, index);
+        let data_len = u32::from_le_bytes(buf[data..data + 4].try_into().unwrap()) as usize;
+        let pos = data + 4 + data_len;
+        (
+            u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap()),
+            u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap()),
+        )
+    }
+
+    /// A HAST arena over "❤️😀 ab" with one text node spanning "ab":
+    /// bytes 11..13, UTF-16 units 5..7 (❤️ and 😀 are 2 units each).
+    fn build_multibyte_text_arena() -> Arena<Hast> {
+        let mut b = ArenaBuilder::<Hast>::new("❤️😀 ab".to_string());
+        b.open_node_raw(0);
+        b.open_node_raw(2);
+        b.set_position_current(11, 13, 1, 6, 1, 8);
+        let val_ref = b.alloc_string("ab");
+        let mut td = [0u8; 8];
+        td[0..4].copy_from_slice(&val_ref.offset.to_le_bytes());
+        td[4..8].copy_from_slice(&val_ref.len.to_le_bytes());
+        b.set_data_current(&td);
+        b.close_node();
+        b.close_node();
+        b.finish()
+    }
+
+    // Regression for issue #172: the walk wire used to leak the arena's raw
+    // byte offsets, so plugin `ctx.source.slice(start.offset, end.offset)`
+    // drifted right of the node whenever multibyte characters preceded it.
+    #[test]
+    fn walk_position_offsets_are_utf16_units() {
+        let arena = build_multibyte_text_arena();
+        let subs = vec![Subscription {
+            node_type: 2,
+            tag_filter: vec![],
+        }];
+        let buf = walk_hast(&arena, &subs);
+        assert_eq!(read_match_count(&buf), 1);
+        assert_eq!(read_match_offsets(&buf, 0), (5, 7));
+    }
+
+    #[test]
+    fn walk_position_offsets_use_the_precomputed_cache() {
+        let mut arena = build_multibyte_text_arena();
+        // Parallel to `nodes` (root, text); the walk must prefer it over a
+        // fresh LineIndex scan.
+        arena.utf16_offsets = vec![(0, 0), (5, 7)];
+        let subs = vec![Subscription {
+            node_type: 2,
+            tag_filter: vec![],
+        }];
+        let buf = walk_hast(&arena, &subs);
+        assert_eq!(read_match_offsets(&buf, 0), (5, 7));
     }
 
     fn build_hast_with_elements(tags: &[&str]) -> Arena<Hast> {

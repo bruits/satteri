@@ -1853,6 +1853,42 @@ describe("per-plugin position opt-in", () => {
     expect(mdastSeen).toBeDefined();
     expect(hastSeen?.start.line).toBe(1);
   });
+
+  // Issue #172: the walk path leaked byte offsets, so
+  // `ctx.source.slice(start.offset, end.offset)` drifted right after any
+  // multibyte character. Offsets and columns are UTF-16 code units, so
+  // astral pairs (😀) must slice cleanly too.
+  test("offsets after multibyte characters slice ctx.source and agree with line/column", () => {
+    const doc = [
+      "[baseline](https://example.com)",
+      "",
+      "❤️ [emoji](https://example.com)",
+      "",
+      "❤️你好αβγ [mixed](https://example.com)",
+      "",
+      "😀 [astral](https://example.com)",
+    ].join("\n");
+    let visits = 0;
+    markdownToHtml(doc, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "slice-check",
+          options: { position: true },
+          link(node, ctx) {
+            visits++;
+            const { start, end } = node.position!;
+            const expected = ctx.source
+              .split("\n")
+              [start.line - 1]!.slice(start.column - 1, end.column - 1);
+            expect(ctx.source.slice(start.offset, end.offset)).toBe(expected);
+            expect(expected.startsWith("[")).toBe(true);
+            expect(expected.endsWith(")")).toBe(true);
+          },
+        }),
+      ],
+    });
+    expect(visits).toBe(4);
+  });
 });
 
 // A visitor returning a same-type `{ type, value }` node is routed through

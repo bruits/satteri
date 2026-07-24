@@ -72,9 +72,9 @@ impl<K: ArenaKind> Arena<K> {
         buf.extend_from_slice(&hdr);
 
         // The arena tracks `start_offset`/`end_offset` as **byte** offsets
-        // (the parser works in bytes). remark/micromark report code-point
-        // offsets in `position`, so we convert here at serialization time.
-        // Columns and lines are already in code-point units.
+        // (the parser works in bytes); `position` carries JS string indices
+        // (UTF-16 code units), so convert here at serialization time.
+        // Columns and lines are already in UTF-16 units.
         // SAFETY: ArenaNode is #[repr(C)] with explicit padding; same-process
         // serialization, never deserialized back into Rust.
         let nodes_slice: &[u8] =
@@ -84,9 +84,9 @@ impl<K: ArenaKind> Arena<K> {
         if !self.string_pool.is_ascii() {
             const START_OFF_FIELD: usize = offset_of!(ArenaNode, start_offset);
             const END_OFF_FIELD: usize = offset_of!(ArenaNode, end_offset);
-            let cached = self.cp_offsets.len() == self.nodes.len();
+            let cached = self.utf16_offsets.len() == self.nodes.len();
             if cached {
-                for (i, &(cp_start, cp_end)) in self.cp_offsets.iter().enumerate() {
+                for (i, &(utf16_start, utf16_end)) in self.utf16_offsets.iter().enumerate() {
                     let node = &self.nodes[i];
                     // A zero start line marks a synthesized node with no source
                     // range (lines are 1-based), even when a patch splice left it a
@@ -96,9 +96,9 @@ impl<K: ArenaKind> Arena<K> {
                     }
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
                     buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                        .copy_from_slice(&cp_start.to_le_bytes());
+                        .copy_from_slice(&utf16_start.to_le_bytes());
                     buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                        .copy_from_slice(&cp_end.to_le_bytes());
+                        .copy_from_slice(&utf16_end.to_le_bytes());
                 }
             } else {
                 // Fallback: no precomputed cache (e.g. arena assembled
@@ -113,13 +113,13 @@ impl<K: ArenaKind> Arena<K> {
                     if node.start_line == 0 {
                         continue;
                     }
-                    let cp_start = cursor.byte_to_cp_offset(node.start_offset);
-                    let cp_end = cursor.byte_to_cp_offset(node.end_offset);
+                    let utf16_start = cursor.byte_to_utf16_offset(node.start_offset);
+                    let utf16_end = cursor.byte_to_utf16_offset(node.end_offset);
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
                     buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                        .copy_from_slice(&cp_start.to_le_bytes());
+                        .copy_from_slice(&utf16_start.to_le_bytes());
                     buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                        .copy_from_slice(&cp_end.to_le_bytes());
+                        .copy_from_slice(&utf16_end.to_le_bytes());
                 }
             }
         }

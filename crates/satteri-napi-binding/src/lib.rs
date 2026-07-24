@@ -417,7 +417,7 @@ fn arena_retained_bytes<K: satteri_arena::ArenaKind>(arena: &satteri_arena::Aren
         + arena.string_pool.capacity()
         + arena.node_data.capacity() * std::mem::size_of::<(u32, Vec<u8>)>()
         + arena.node_data.values().map(Vec::capacity).sum::<usize>()
-        + arena.cp_offsets.capacity() * std::mem::size_of::<(u32, u32)>()
+        + arena.utf16_offsets.capacity() * std::mem::size_of::<(u32, u32)>()
 }
 
 /// A pooled zero-capacity placeholder would shadow the real grown arena below it in the LIFO pool.
@@ -1405,11 +1405,11 @@ mod pool_tests {
     }
 
     #[test]
-    fn retained_bytes_counts_node_data_and_cp_offsets() {
+    fn retained_bytes_counts_node_data_and_utf16_offsets() {
         let mut arena = satteri_arena::Arena::<Mdast>::new(String::new());
         let base = arena_retained_bytes(&arena);
         arena.node_data.insert(0, vec![0u8; 4096]);
-        arena.cp_offsets.reserve(512);
+        arena.utf16_offsets.reserve(512);
         assert!(arena_retained_bytes(&arena) >= base + 4096 + 512 * 8);
     }
 }

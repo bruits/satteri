@@ -38,13 +38,14 @@ pub struct Arena<K: ArenaKind> {
     /// The pulldown-cmark Options bits used to parse this arena.
     /// Stored so that re-parsing (e.g. after plugin mutations) uses the same options.
     pub parse_options: u32,
-    /// Per-node `(cp_start, cp_end)` parallel to `nodes`. Populated by
-    /// `arena_build` at end-of-parse (skipped for ASCII sources where
-    /// cp == byte). Read by `to_raw_buffer` to skip the second
-    /// `LineIndex` build + per-node `byte_to_cp_offset` lookup that
-    /// would otherwise re-traverse the source. Empty means "not
-    /// precomputed" — readers fall back to live conversion.
-    pub cp_offsets: Vec<(u32, u32)>,
+    /// Per-node `(utf16_start, utf16_end)` parallel to `nodes`. Populated by
+    /// `arena_build` at end-of-parse (skipped for ASCII sources where the
+    /// UTF-16 offset equals the byte offset). Read by `to_raw_buffer` and the
+    /// walk to skip the second `LineIndex` build + per-node
+    /// `byte_to_utf16_offset` lookup that would otherwise re-traverse the
+    /// source. Empty means "not precomputed" — readers fall back to live
+    /// conversion.
+    pub utf16_offsets: Vec<(u32, u32)>,
     pub(crate) _kind: PhantomData<fn() -> K>,
 }
 
@@ -59,7 +60,7 @@ impl<K: ArenaKind> Clone for Arena<K> {
             node_data: self.node_data.clone(),
             mdx: self.mdx,
             parse_options: self.parse_options,
-            cp_offsets: self.cp_offsets.clone(),
+            utf16_offsets: self.utf16_offsets.clone(),
             _kind: PhantomData,
         }
     }
@@ -80,7 +81,7 @@ impl<K: ArenaKind> Arena<K> {
             node_data: FxHashMap::default(),
             mdx: false,
             parse_options: 0,
-            cp_offsets: Vec::new(),
+            utf16_offsets: Vec::new(),
             _kind: PhantomData,
         }
     }
@@ -103,7 +104,7 @@ impl<K: ArenaKind> Arena<K> {
             node_data: FxHashMap::default(),
             mdx: false,
             parse_options: 0,
-            cp_offsets: Vec::new(),
+            utf16_offsets: Vec::new(),
             _kind: PhantomData,
         }
     }
@@ -117,7 +118,7 @@ impl<K: ArenaKind> Arena<K> {
         self.type_data.clear();
         self.string_pool.clear();
         self.node_data.clear();
-        self.cp_offsets.clear();
+        self.utf16_offsets.clear();
         self.mdx = false;
         self.parse_options = 0;
     }
@@ -147,8 +148,8 @@ impl<K: ArenaKind> Arena<K> {
         node.start_column = start_column;
         node.end_line = end_line;
         node.end_column = end_column;
-        // Position mutation invalidates the cached byte→cp offsets.
-        self.cp_offsets.clear();
+        // Position mutation invalidates the cached byte→UTF-16 offsets.
+        self.utf16_offsets.clear();
     }
 
     /// Appends to the shared flat children array, calling this more than
@@ -321,7 +322,7 @@ mod tests {
         arena.set_type_data(parent, &[9, 9, 9, 9]);
         arena.alloc_string("interned junk");
         arena.set_node_data(child, vec![1, 2, 3]);
-        arena.cp_offsets.push((7, 9));
+        arena.utf16_offsets.push((7, 9));
         arena.mdx = true;
         arena.parse_options = 0xDEAD_BEEF;
         arena.source_len = 77;
@@ -337,7 +338,7 @@ mod tests {
             node_data,
             mdx,
             parse_options,
-            cp_offsets,
+            utf16_offsets,
             _kind: _,
         } = &arena;
         assert!(nodes.is_empty());
@@ -345,7 +346,7 @@ mod tests {
         assert!(type_data.is_empty());
         assert!(string_pool.is_empty());
         assert!(node_data.is_empty());
-        assert!(cp_offsets.is_empty());
+        assert!(utf16_offsets.is_empty());
         assert!(!mdx);
         assert_eq!(*parse_options, 0);
         // source_len is the reuse sites' responsibility (set after reset)

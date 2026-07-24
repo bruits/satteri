@@ -90,12 +90,21 @@ test("C2: MDX expression value strips phantom spaces on the walk path, matching 
 // pins the decode offsets and guards the walk path from fabricating positions)
 
 test("C3: walk-path position matches the reader for every matched node", () => {
-  const md = "# Heading\n\nA paragraph with **bold** and a [link](/x).";
-  for (const type of ["heading", "paragraph", "text", "strong", "link"] as const) {
-    const { walked, materialized } = walkAndReader(md, type);
-    expect(walked.length).toBe(materialized.length);
-    for (let i = 0; i < walked.length; i++) {
-      expect(walked[i]!.position).toEqual(materialized[i]!.position);
+  // The second doc leads with multibyte characters (❤️/CJK/astral 😀): the
+  // walk path used to serialize raw byte offsets while the reader converted
+  // to UTF-16 code units, so positions diverged after any multibyte char.
+  const docs = [
+    "# Heading\n\nA paragraph with **bold** and a [link](/x).",
+    "# ❤️你好\n\n😀 A paragraph with **bold** and a [link](/x).",
+  ];
+  for (const md of docs) {
+    for (const type of ["heading", "paragraph", "text", "strong", "link"] as const) {
+      const { walked, materialized } = walkAndReader(md, type);
+      expect(walked.length).toBe(materialized.length);
+      expect(walked.length).toBeGreaterThan(0);
+      for (let i = 0; i < walked.length; i++) {
+        expect(walked[i]!.position).toEqual(materialized[i]!.position);
+      }
     }
   }
 });

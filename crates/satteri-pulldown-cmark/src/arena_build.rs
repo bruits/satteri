@@ -1965,25 +1965,26 @@ fn parse_inner(
         }
     }
 
-    // Precompute per-node code-point offsets so `to_raw_buffer` skips a
-    // second `LineIndex` build + per-node `byte_to_cp_offset` lookup.
-    // ASCII sources skip — `cp == byte` and `to_raw_buffer` won't touch
-    // the cache. The cursor is already warm from the arena walk.
-    // Skip-positions mode skips too: downstream paths don't read cp_offsets.
+    // Precompute per-node UTF-16 offsets so `to_raw_buffer` skips a
+    // second `LineIndex` build + per-node `byte_to_utf16_offset` lookup.
+    // ASCII sources skip — UTF-16 offsets equal byte offsets and downstream
+    // serializers won't touch the cache. The cursor is already warm from the
+    // arena walk.
+    // Skip-positions mode skips too: downstream paths don't read utf16_offsets.
     if track_positions && !source.is_ascii() {
-        let mut cp_offsets = Vec::with_capacity(arena.nodes.len());
+        let mut utf16_offsets = Vec::with_capacity(arena.nodes.len());
         for node in &arena.nodes {
             let pair = if node.start_line == 0 && node.start_offset == 0 {
                 (0u32, 0u32)
             } else {
                 (
-                    line_index.cp_offset_at(node.start_line, node.start_column),
-                    line_index.cp_offset_at(node.end_line, node.end_column),
+                    line_index.utf16_offset_at(node.start_line, node.start_column),
+                    line_index.utf16_offset_at(node.end_line, node.end_column),
                 )
             };
-            cp_offsets.push(pair);
+            utf16_offsets.push(pair);
         }
-        arena.cp_offsets = cp_offsets;
+        arena.utf16_offsets = utf16_offsets;
     }
 
     (arena, mdx_errors)

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { assertExtMdastConformance, assertExtMdastConformanceNoPosition } from "./helpers.js";
+import { assertExtMdastConformance } from "./helpers.js";
 import { mdxToMdast } from "../../src/index.js";
 
 const DIR: ["directive"] = ["directive"];
@@ -77,18 +77,16 @@ describe("Directive MDAST conformance", () => {
     // Regression: the name scanner used to treat every non-ASCII byte as a
     // valid name character, swallowing Japanese `。` and similar punctuation
     // into the name. Now uses unicode_id_continue, which rejects Po/Ps/etc.
-    // These tests strip position because satteri counts bytes and remark
-    // counts code points — unrelated to this fix.
     test("CJK letters in textDirective name", () => {
-      assertExtMdastConformanceNoPosition("text :API를 more", DIR);
+      assertExtMdastConformance("text :API를 more", DIR);
     });
 
     test("Japanese full-stop terminates directive name", () => {
-      assertExtMdastConformanceNoPosition("text :word。more", DIR);
+      assertExtMdastConformance("text :word。more", DIR);
     });
 
     test("Han letters in directive name", () => {
-      assertExtMdastConformanceNoPosition(":日本語\ncontent\n:::", DIR);
+      assertExtMdastConformance(":日本語\ncontent\n:::", DIR);
     });
   });
 
@@ -274,18 +272,15 @@ describe("Directive MDAST conformance", () => {
   // named `GatsbyレイアウトをAstro…`, leaving the slug as just `ガイド付き例`.
   describe("text directives: colon boundary in headings", () => {
     test("ASCII colon + CJK id_start consumes rest as directive name", () => {
-      assertExtMdastConformanceNoPosition("## ガイド付き例:GatsbyレイアウトをAstroへ変換する", DIR);
+      assertExtMdastConformance("## ガイド付き例:GatsbyレイアウトをAstroへ変換する", DIR);
     });
 
     test("ASCII colon + space leaves colon as plain text", () => {
-      assertExtMdastConformanceNoPosition("## 参考: Astro構文への変換する", DIR);
+      assertExtMdastConformance("## 参考: Astro構文への変換する", DIR);
     });
 
     test("full-width colon never triggers directive parsing", () => {
-      assertExtMdastConformanceNoPosition(
-        "### ヒント：JSXファイルでReactコンポーネントを定義する方法",
-        DIR,
-      );
+      assertExtMdastConformance("### ヒント：JSXファイルでReactコンポーネントを定義する方法", DIR);
     });
 
     test("ASCII colon + latin letter consumes following word as directive", () => {
@@ -301,7 +296,7 @@ describe("Directive MDAST conformance", () => {
     });
 
     test("ASCII colon + non-id punctuation (CJK full stop) leaves colon as text", () => {
-      assertExtMdastConformanceNoPosition("## Punct colon:。後ろ", DIR);
+      assertExtMdastConformance("## Punct colon:。後ろ", DIR);
     });
   });
 
