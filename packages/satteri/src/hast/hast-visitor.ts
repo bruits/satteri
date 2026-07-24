@@ -515,8 +515,7 @@ type HastVisitorFn<N extends HastNode = HastNode> = (
   ctx: HastVisitorContext,
 ) => HastNode | void | Promise<HastNode | void>;
 
-/** A once-per-document lifecycle hook. Receives the document root; mutate via
- *  `ctx` — return values are ignored. */
+/** Unlike visitors, return values are ignored — hooks mutate via `ctx`. */
 type HastHookFn = (root: Readonly<HastRoot>, ctx: HastVisitorContext) => void | Promise<void>;
 
 export interface HastVisitorInstance {
@@ -524,14 +523,13 @@ export interface HastVisitorInstance {
   options?: PluginOptions;
   /**
    * Runs once per document — even an empty one — before any of the plugin's
-   * visitors, e.g. to seed `ctx.data` or closure state they read. Awaited
-   * before visitors dispatch when async.
+   * visitors; awaited before they dispatch when async.
    */
   before?: HastHookFn;
   /**
    * Runs once per document — even an empty one — after all of the plugin's
    * visitors have settled, so it can emit output built from state they
-   * collected. Anchor mutations on the given root, e.g. `ctx.appendChild`.
+   * collected.
    */
   after?: HastHookFn;
   // Element-like nodes: filtered by tag/component name (single or array)
@@ -616,8 +614,8 @@ function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
 
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
   if (typeof plugin.before === "function" || typeof plugin.after === "function") {
-    // Hooks ride an extra root subscription: node 0 always exists, so the
-    // walk yields exactly one match per document, empty ones included.
+    // Node 0 always exists, so this matches exactly once per document, empty
+    // ones included.
     rustSubs.push({ nodeType: HAST_ROOT, tagFilter: [] });
   }
   return { subs, rustSubs };
@@ -994,8 +992,7 @@ function readMatchedNode(
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   if (nodeType === HAST_ROOT) {
-    // Root is the one container visited even when empty; real (empty) children
-    // keep the `{ ...node, children: [...] }` idiom working.
+    // Hooks receive the root even when empty; real children keep spreads working.
     if (childCount > 0) {
       makeLazyChildren(base, view, buf, childIdsPos, childTypesPos, childCount, resolver);
     } else {
@@ -1198,8 +1195,7 @@ export function visitHastHandleCollect(
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
 
-  // The before/after hooks ride an extra root subscription appended after the
-  // visitor subs (its index is subs.length); the pre-order walk puts that
+  // The hook root subscription sits at index subs.length; pre-order puts its
   // match first.
   let hookRoot: HastRoot | null = null;
   let matchStart = 0;
