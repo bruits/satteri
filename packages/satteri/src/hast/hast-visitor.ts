@@ -1237,8 +1237,7 @@ export function visitHastHandleCollect(
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
 
   // The hook root subscription sits at index subs.length; pre-order puts its
-  // match first. Hook dispatch lives in a cold function so the no-hook pass
-  // pays nothing beyond this check.
+  // match first. Hooks branch off so the no-hook pass pays only this check.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
     return visitHastHandleWithHooks(plugin, subs, ctx, returnBuffer, wire, matchCount);
   }
@@ -1263,8 +1262,8 @@ export function visitHastHandleCollect(
   return collectCommands(returnBuffer, ctx);
 }
 
-/** The with-hooks pass: before → visitors → after, anchored on the hook root
- *  (match 0). Cold by design — see the call site. */
+/** Match 0 must be the hook root (caller-checked). Cold by design — see the
+ *  call site. */
 function visitHastHandleWithHooks(
   plugin: HastVisitorInstance,
   subs: ResolvedSubscription[],
