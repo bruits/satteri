@@ -194,6 +194,37 @@ mdxFlowExpression(node) {
 },
 ```
 
+## Lifecycle hooks
+
+Besides visitors, both plugin kinds accept two lifecycle hooks. Each runs **exactly once per document — even an empty one** — and receives the document root plus the usual `ctx`:
+
+- `before(root, ctx)` runs before any of the plugin's visitors, e.g. to seed `ctx.data` or closure state they read.
+- `after(root, ctx)` runs after all of the plugin's visitors have settled (async ones included), so it can emit output built from state they collected.
+
+`after` is the place for per-document work that must not depend on any particular node existing, such as injecting an ESM export:
+
+```js
+// A factory, so the collected headings reset for each document.
+const toc = () => {
+  const headings = [];
+  return defineMdastPlugin({
+    name: "toc",
+    heading(node, ctx) {
+      headings.push(ctx.textContent(node));
+    },
+    after(root, ctx) {
+      // Runs even when the document has no headings at all.
+      ctx.appendChild(root, {
+        type: "mdxjsEsm",
+        value: `export const toc = ${JSON.stringify(headings)};`,
+      });
+    },
+  });
+};
+```
+
+All `ctx` methods work on the root node as usual. Hooks are procedures, not transformers: their return values are ignored (an async hook is awaited), so mutate via `ctx`. Note that mutations queue until the end of the pass, so `before` cannot show the plugin's own visitors a changed tree — use a preceding plugin for that.
+
 ## Node lifetime
 
 In order to avoid very expensive serialization costs between Rust and JS, Sätteri keeps both mdast and hast trees exclusively in Rust, exposing nodes to JavaScript plugins only as thin references when possible.
@@ -307,19 +338,17 @@ For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, 
 
 ## Return value semantics
 
-| Returned                                | MDAST                                   | HAST    |
-| --------------------------------------- | --------------------------------------- | ------- |
-| `undefined` / `null` / `void`           | Keep node, apply `ctx` mutations        | Same    |
-| The same node object                    | Same (no-op replace)                    | Same    |
-| A different node                        | Replace the visited node                | Replace |
-| `{ raw: string }`                       | Splice a string, re-parsed as Markdown  | N/A     |
-| `{ raw: string, mdxExpressions: false }`| Same, but keep MDX `{…}` literal        | N/A     |
+| Returned                                 | MDAST                                  | HAST    |
+| ---------------------------------------- | -------------------------------------- | ------- |
+| `undefined` / `null` / `void`            | Keep node, apply `ctx` mutations       | Same    |
+| The same node object                     | Same (no-op replace)                   | Same    |
+| A different node                         | Replace the visited node               | Replace |
+| `{ raw: string }`                        | Splice a string, re-parsed as Markdown | N/A     |
+| `{ raw: string, mdxExpressions: false }` | Same, but keep MDX `{…}` literal       | N/A     |
 
 `{ raw }` takes a string and re-parses it as Markdown, splicing the result in place of the node.
 
 The `mdxExpressions` option (default `true`) controls how MDX curly braces in the string are treated. With the default, `{…}` is a live MDX expression. Set `mdxExpressions: false` to keep `{` and `}` as **literal text** — necessary when you inject generated HTML whose braces are not expressions, e.g. a Mermaid decision node `C{JWT valid?}` or KaTeX/Shiki output. In plain Markdown output the option has no effect (there are no MDX expressions), so `{ raw }` and `{ raw, mdxExpressions: false }` are identical there.
-
-
 
 ## Async plugins
 
