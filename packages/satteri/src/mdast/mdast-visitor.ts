@@ -1020,8 +1020,8 @@ export function visitMdastHandle(
   const matchCount = ru32(matchView, 0);
 
   // The hook root subscription sits at index subs.length; pre-order puts its
-  // match first. Hook dispatch lives in a cold function so the hot loop below
-  // keeps stack locals — closure capture measurably slowed per-node dispatch.
+  // match first. Hooks branch off — closure-capturing this loop's locals
+  // measurably slowed per-node dispatch.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
     return visitMdastHandleWithHooks(
       handle,
@@ -1081,8 +1081,8 @@ export function visitMdastHandle(
   return finalizeMdastVisit(handle, context, returnBuffer);
 }
 
-/** The with-hooks pass: before → visitors → after, anchored on the hook root
- *  (match 0). Cold by design — see the call site. */
+/** Match 0 must be the hook root (caller-checked). Cold by design — see the
+ *  call site. */
 function visitMdastHandleWithHooks(
   handle: MdastHandle,
   plugin: MdastPluginInstance,
