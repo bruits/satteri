@@ -240,6 +240,37 @@ mdxFlowExpression(node) {
 },
 ```
 
+## Lifecycle hooks
+
+Besides visitors, both plugin kinds accept two lifecycle hooks. Each runs **exactly once per document — even an empty one** — and receives the document root plus the usual `ctx`:
+
+- `before(root, ctx)` runs before any of the plugin's visitors, e.g. to seed `ctx.data` or closure state they read.
+- `after(root, ctx)` runs after all of the plugin's visitors have settled (async ones included), so it can emit output built from state they collected.
+
+`after` is the place for per-document work that must not depend on any particular node existing, such as injecting an ESM export:
+
+```js
+// A factory, so the collected headings reset for each document.
+const toc = () => {
+  const headings = [];
+  return defineMdastPlugin({
+    name: "toc",
+    heading(node, ctx) {
+      headings.push(ctx.textContent(node));
+    },
+    after(root, ctx) {
+      // Runs even when the document has no headings at all.
+      ctx.appendChild(root, {
+        type: "mdxjsEsm",
+        value: `export const toc = ${JSON.stringify(headings)};`,
+      });
+    },
+  });
+};
+```
+
+All `ctx` methods work on the root node as usual. Hooks are procedures, not transformers: their return values are ignored (an async hook is awaited), so mutate via `ctx`. Note that mutations queue until the end of the pass, so `before` cannot show the plugin's own visitors a changed tree — use a preceding plugin for that.
+
 ## Node lifetime
 
 In order to avoid very expensive serialization costs between Rust and JS, Sätteri keeps both mdast and hast trees exclusively in Rust, exposing nodes to JavaScript plugins only as thin references when possible.
