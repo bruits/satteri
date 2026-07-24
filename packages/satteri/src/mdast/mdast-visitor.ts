@@ -407,8 +407,7 @@ type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
   context: MdastVisitorContext,
 ) => MdastVisitorResult | Promise<MdastVisitorResult>;
 
-/** A once-per-document lifecycle hook. Receives the document root; mutate via
- *  `context` — return values are ignored. */
+/** Unlike visitors, return values are ignored — hooks mutate via `context`. */
 type MdastHookFn = (
   root: Readonly<MdastRoot>,
   context: MdastVisitorContext,
@@ -419,14 +418,13 @@ export interface MdastPluginInstance {
   options?: PluginOptions;
   /**
    * Runs once per document — even an empty one — before any of the plugin's
-   * visitors, e.g. to seed `ctx.data` or closure state they read. Awaited
-   * before visitors dispatch when async.
+   * visitors; awaited before they dispatch when async.
    */
   before?: MdastHookFn;
   /**
    * Runs once per document — even an empty one — after all of the plugin's
    * visitors have settled, so it can emit output built from state they
-   * collected. Anchor mutations on the given root, e.g. `ctx.appendChild`.
+   * collected.
    */
   after?: MdastHookFn;
   paragraph?: MdastVisitorFn<Paragraph>;
@@ -531,8 +529,8 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
   }
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
   if (typeof plugin.before === "function" || typeof plugin.after === "function") {
-    // Hooks ride an extra root subscription: node 0 always exists, so the
-    // walk yields exactly one match per document, empty ones included.
+    // Node 0 always exists, so this matches exactly once per document, empty
+    // ones included.
     rustSubs.push({ nodeType: MDAST_ROOT, tagFilter: [] });
   }
   return { subs, rustSubs };
@@ -1021,8 +1019,7 @@ export function visitMdastHandle(
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  // The before/after hooks ride an extra root subscription appended after the
-  // visitor subs (its index is subs.length); the pre-order walk puts that
+  // The hook root subscription sits at index subs.length; pre-order puts its
   // match first.
   let hookRoot: MdastRoot | null = null;
   let matchStart = 0;
