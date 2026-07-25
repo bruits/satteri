@@ -74,6 +74,7 @@ export type {
   MdastPluginInstance,
   MdastVisitorContext,
   MdastContent,
+  MdastTarget,
 } from "./mdast/mdast-visitor.js";
 export {
   visitHastHandle,

@@ -119,6 +119,10 @@ export interface RawHtmlMdastContent {
  *  op-stream; a type the op-stream can't encode is a hard error. */
 export type MdastContent = MdastNode | Custom | RawMdastContent | RawHtmlMdastContent;
 
+/** An existing node a mutation targets. Includes {@link Custom} so a node
+ *  reached through the `custom` visitor can be passed straight back in. */
+export type MdastTarget = MdastNode | Custom;
+
 export interface MdastDiagnostic {
   message: string;
   nodeId?: number | undefined;
@@ -196,16 +200,16 @@ export class MdastVisitorContext {
     return value;
   }
 
-  removeNode(node: Readonly<MdastNode>): void {
+  removeNode(node: Readonly<MdastTarget>): void {
     this.#commandBuffer.removeNode(requireNid(node as MdastNode, "removeNode"));
   }
 
-  insertBefore(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
+  insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "insertBefore");
     for (const n of asArray(newNode)) emitMdastTree(this.#commandBuffer, "insertBefore", id, n);
   }
 
-  insertAfter(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
+  insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "insertAfter");
     for (const n of asArray(newNode)) emitMdastTree(this.#commandBuffer, "insertAfter", id, n);
   }
@@ -214,28 +218,28 @@ export class MdastVisitorContext {
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
    * children `parentNode` declares are kept after it.
    */
-  wrapNode(node: Readonly<MdastNode>, parentNode: MdastContent): void {
+  wrapNode(node: Readonly<MdastTarget>, parentNode: MdastContent): void {
     const id = requireNid(node as MdastNode, "wrapNode");
     emitMdastTree(this.#commandBuffer, "wrapNode", id, parentNode);
   }
 
-  prependChild(node: Readonly<MdastNode>, childNode: MdastContent | MdastContent[]): void {
+  prependChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "prependChild");
     for (const n of asArray(childNode)) emitMdastTree(this.#commandBuffer, "prependChild", id, n);
   }
 
-  appendChild(node: Readonly<MdastNode>, childNode: MdastContent | MdastContent[]): void {
+  appendChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "appendChild");
     for (const n of asArray(childNode)) emitMdastTree(this.#commandBuffer, "appendChild", id, n);
   }
 
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
   insertChildAt(
-    node: Readonly<MdastNode>,
+    node: Readonly<MdastTarget>,
     index: number,
     childNode: MdastContent | MdastContent[],
   ): void {
-    const children = "children" in node ? node.children : [];
+    const children = ("children" in node ? node.children : undefined) ?? [];
     if (index <= 0 || children.length === 0) {
       this.prependChild(node, childNode);
     } else if (index >= children.length) {
@@ -246,8 +250,8 @@ export class MdastVisitorContext {
   }
 
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
-  removeChildAt(node: Readonly<MdastNode>, index: number): void {
-    const child = "children" in node ? node.children[index] : undefined;
+  removeChildAt(node: Readonly<MdastTarget>, index: number): void {
+    const child = "children" in node ? node.children?.[index] : undefined;
     if (child) this.removeNode(child);
   }
 
@@ -255,7 +259,7 @@ export class MdastVisitorContext {
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
    */
-  replaceNode(node: Readonly<MdastNode>, newNode: MdastContent | MdastContent[]): void {
+  replaceNode(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode");
     if (Array.isArray(newNode)) {
       // The last node carries the `replace` so refs back to the target still splice.
@@ -277,19 +281,23 @@ export class MdastVisitorContext {
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true);
   }
 
-  setProperty<N extends MdastNode, K extends keyof N & string>(
+  setProperty<N extends MdastTarget, K extends keyof N & string>(
     node: Readonly<N>,
     key: K,
     value: N[K],
   ): void;
   /** `children` is structural and every parent accepts it, so the key also
    *  works on node-type unions (e.g. a node returned by `parent()`). */
-  setProperty(node: Readonly<MdastNode>, key: "children", value: readonly MdastNode[]): void;
+  setProperty(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
   /** `data` is an open per-node bag serialized to JSON on the wire, so it
    *  accepts any record (hName/hProperties/custom fields), not just the node's
    *  declared `data` shape. `null` clears it. */
-  setProperty(node: Readonly<MdastNode>, key: "data", value: Record<string, unknown> | null): void;
-  setProperty(node: Readonly<MdastNode>, key: string, value: unknown): void {
+  setProperty(
+    node: Readonly<MdastTarget>,
+    key: "data",
+    value: Record<string, unknown> | null,
+  ): void;
+  setProperty(node: Readonly<MdastTarget>, key: string, value: unknown): void {
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
@@ -313,7 +321,7 @@ export class MdastVisitorContext {
 
   /** Collect the concatenated text of all descendant text nodes (like mdast-util-to-string). */
   textContent(
-    node: Readonly<MdastNode>,
+    node: Readonly<MdastTarget>,
     options?: { includeImageAlt?: boolean; includeHtml?: boolean },
   ): string {
     return mdastTextContentHandle(
@@ -329,8 +337,8 @@ export class MdastVisitorContext {
    * by identity.
    */
   parent<N extends Exclude<MdastNode, MdastRoot>>(node: Readonly<N>): Readonly<MdastParents>;
-  parent(node: Readonly<MdastNode>): Readonly<MdastParents> | undefined;
-  parent(node: Readonly<MdastNode>): Readonly<MdastParents> | undefined {
+  parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined;
+  parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined {
     const parentId = this.#resolver.parentIdOf(requireNid(node as MdastNode, "parent"));
     if (parentId === undefined) return undefined;
     const byId = (this.#parentsById ??= new Map());
@@ -346,7 +354,7 @@ export class MdastVisitorContext {
    * Index of `node` within its parent's children, or `undefined` at the root.
    * Use this rather than `parent.children.indexOf(node)`, which won't find it.
    */
-  indexOf(node: Readonly<MdastNode>): number | undefined {
+  indexOf(node: Readonly<MdastTarget>): number | undefined {
     return this.#resolver.indexInParent(requireNid(node as MdastNode, "indexOf"));
   }
 
@@ -356,12 +364,12 @@ export class MdastVisitorContext {
     severity = "error",
   }: {
     message: string;
-    node?: Readonly<MdastNode>;
+    node?: Readonly<MdastTarget>;
     severity?: "error" | "warning" | "info";
   }): void {
     this.#diagnostics.push({
       message,
-      nodeId: node ? nid(node) : undefined,
+      nodeId: node ? nid(node as MdastNode) : undefined,
       position: node?.position,
       severity,
     });

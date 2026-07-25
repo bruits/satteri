@@ -88,15 +88,17 @@ export interface DescriptionDetails extends MdastParent {
  * (e.g. `"section"`); it round-trips and is surfaced back as `node.type`. Pass
  * one to `ctx.replaceNode` / `insertBefore` / `appendChild`, etc.
  *
- * Works as either shape, mirroring `mdast-util-to-hast`'s default handler:
+ * Works as either shape:
  * - a **parent** with `children` renders to an element through `data.hName`
- *   (default `<div>`), merges `data.hProperties`, and recurses its children;
- * - a **leaf** with a `value` (and no `children` or `data.h*`) renders to an
- *   HTML text node.
+ *   (default `<div>`), merges `data.hProperties`, and renders its children;
+ * - a **leaf** with a non-empty `value` (and no `children` or `data.h*`)
+ *   renders to an HTML text node.
+ *
+ * Only these fields survive the round trip; put anything else in `data`.
  */
 export interface Custom {
   type: string;
-  children?: MdastNode[];
+  children?: (MdastNode | Custom)[];
   value?: string;
   data?: MdastData;
   position?: Position;
