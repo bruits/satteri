@@ -515,6 +515,32 @@ describe("MDAST conformance: closing code fence whitespace", () => {
   });
 });
 
+// Astral characters are a single code point but two UTF-16 units, and
+// `position` counts UTF-16 units — so both columns and offsets advance by
+// two. BMP multibyte text can't catch a regression back to code points;
+// only these can.
+describe("MDAST conformance: astral characters in positions", () => {
+  test("astral before a link", () => {
+    assertMdastConformance("😀 [a](/x)");
+  });
+
+  test("astral in a heading", () => {
+    assertMdastConformance("# 😀 head");
+  });
+
+  test("astral across blocks and lines", () => {
+    assertMdastConformance("😀 one\n\n😀😀 **two**\n\n- 😀 item");
+  });
+
+  test("astral mixed with BMP multibyte", () => {
+    assertMdastConformance("❤️你好😀αβγ [mixed](/x)");
+  });
+
+  test("astral at end of document", () => {
+    assertMdastConformance("a [l](/x) 😀");
+  });
+});
+
 describe("MDAST conformance: fuzz regressions", () => {
   // GFM strikethrough requires the opening `~~` to be left-flanking per
   // CommonMark emphasis rules: a `~~` preceded by an alphanumeric and

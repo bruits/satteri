@@ -481,15 +481,16 @@ mod tests {
     #[test]
     fn walk_position_offsets_use_the_precomputed_cache() {
         let mut arena = build_multibyte_text_arena();
-        // Parallel to `nodes` (root, text); the walk must prefer it over a
-        // fresh LineIndex scan.
-        arena.utf16_offsets = vec![(0, 0), (5, 7)];
+        // Parallel to `nodes` (root, text). The values are deliberately not
+        // the ones a LineIndex scan would produce (5, 7), so this fails if
+        // the walk recomputes instead of reading the cache.
+        arena.utf16_offsets = vec![(0, 0), (99, 100)];
         let subs = vec![Subscription {
             node_type: 2,
             tag_filter: vec![],
         }];
         let buf = walk_hast(&arena, &subs);
-        assert_eq!(read_match_offsets(&buf, 0), (5, 7));
+        assert_eq!(read_match_offsets(&buf, 0), (99, 100));
     }
 
     fn build_hast_with_elements(tags: &[&str]) -> Arena<Hast> {
