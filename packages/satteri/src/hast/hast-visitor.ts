@@ -656,7 +656,12 @@ function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
   if (typeof plugin.before === "function" || typeof plugin.after === "function") {
     // Node 0 always exists, so this matches exactly once per document, empty
-    // ones included.
+    // ones included. Dispatch keys off it being the *only* root subscription;
+    // fail loudly here if `root` ever becomes subscribable, rather than with a
+    // bare TypeError deep in the visitor loop.
+    if (process.env.NODE_ENV !== "production" && subs.some((s) => s.nodeType === HAST_ROOT)) {
+      throw new Error("satteri: `root` is subscribable, which breaks plugin hook dispatch");
+    }
     rustSubs.push({ nodeType: HAST_ROOT, tagFilter: [] });
   }
   return { subs, rustSubs };
@@ -1236,8 +1241,9 @@ export function visitHastHandleCollect(
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
 
-  // The hook root subscription sits at index subs.length; pre-order puts its
-  // match first. Hooks branch off so the no-hook pass pays only this check.
+  // `root` is not a subscribable visitor key, so a root match can only come
+  // from the hook subscription at index subs.length, and pre-order puts it
+  // first. `buildSubscriptions` guards that invariant in dev.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
     return visitHastHandleWithHooks(plugin, subs, ctx, returnBuffer, wire, matchCount);
   }
@@ -1245,21 +1251,30 @@ export function visitHastHandleCollect(
   const deferred = dispatchMatches(wire, matchCount, 0, subs, ctx, returnBuffer);
 
   if (deferred) {
-    return Promise.all(
-      deferred.map((d) =>
-        d.promise.then((result) => ({ nodeId: d.nodeId, result, originalNode: d.originalNode })),
-      ),
-    ).then((results) => {
-      for (const { nodeId, result, originalNode } of results) {
-        if (result != null && result !== originalNode) {
-          emitHastTree(returnBuffer, "replace", nodeId, result);
-        }
-      }
-      return collectCommands(returnBuffer, ctx);
-    });
+    return applyDeferredHastResults(deferred, returnBuffer).then(() =>
+      collectCommands(returnBuffer, ctx),
+    );
   }
 
   return collectCommands(returnBuffer, ctx);
+}
+
+/** Settle the async visitors, then apply their replacements in match order. */
+function applyDeferredHastResults(
+  deferred: { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[],
+  returnBuffer: CommandBuffer,
+): Promise<void> {
+  return Promise.all(
+    deferred.map((d) =>
+      d.promise.then((result) => ({ nodeId: d.nodeId, result, originalNode: d.originalNode })),
+    ),
+  ).then((results) => {
+    for (const { nodeId, result, originalNode } of results) {
+      if (result != null && result !== originalNode) {
+        emitHastTree(returnBuffer, "replace", nodeId, result);
+      }
+    }
+  });
 }
 
 /** Match 0 must be the hook root (caller-checked). Cold by design — see the
@@ -1295,18 +1310,7 @@ function visitHastHandleWithHooks(
     };
 
     if (deferred) {
-      return Promise.all(
-        deferred.map((d) =>
-          d.promise.then((result) => ({ nodeId: d.nodeId, result, originalNode: d.originalNode })),
-        ),
-      ).then((results) => {
-        for (const { nodeId, result, originalNode } of results) {
-          if (result != null && result !== originalNode) {
-            emitHastTree(returnBuffer, "replace", nodeId, result);
-          }
-        }
-        return runAfterAndCollect();
-      });
+      return applyDeferredHastResults(deferred, returnBuffer).then(runAfterAndCollect);
     }
 
     return runAfterAndCollect();
