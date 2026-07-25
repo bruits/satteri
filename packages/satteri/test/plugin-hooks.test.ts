@@ -241,6 +241,76 @@ describe("mdast lifecycle hooks", () => {
     expect(html).toContain("<p>late</p>");
   });
 
+  test("sync visitor replacements apply when hooks are present", () => {
+    const { html } = markdownToHtml("# Old", {
+      mdastPlugins: [
+        {
+          name: "sync-replace",
+          before() {},
+          heading(): MdastNode {
+            return { type: "paragraph", children: [{ type: "text", value: "New" }] } as MdastNode;
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toContain("<p>New</p>");
+    expect(html).not.toContain("<h1>");
+  });
+
+  test("async visitor replacements apply when hooks are present", async () => {
+    const { html } = await markdownToHtml("# Old", {
+      mdastPlugins: [
+        {
+          name: "async-replace",
+          after() {},
+          async heading(): Promise<MdastNode> {
+            await Promise.resolve();
+            return { type: "paragraph", children: [{ type: "text", value: "New" }] } as MdastNode;
+          },
+        },
+      ],
+    });
+    expect(html).toContain("<p>New</p>");
+    expect(html).not.toContain("<h1>");
+  });
+
+  test("{ raw } visitor returns apply when hooks are present", () => {
+    const { html } = markdownToHtml("# Old", {
+      mdastPlugins: [
+        {
+          name: "raw-return",
+          after() {},
+          heading() {
+            return { raw: "**bold**" };
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toContain("<strong>bold</strong>");
+    expect(html).not.toContain("<h1>");
+  });
+
+  test("visitor and after mutations both land in the same pass", () => {
+    const { html } = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        {
+          name: "both",
+          heading(node: MdastNode, ctx: MdastVisitorContext) {
+            ctx.setProperty(node, "depth", 3);
+          },
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.appendChild(root, {
+              type: "paragraph",
+              children: [{ type: "text", value: "tail" }],
+            });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toContain("<h3>Hi</h3>");
+    expect(html).toContain("<p>tail</p>");
+  });
+
   test("each plugin gets its own hook invocations, in plugin order", () => {
     const calls: string[] = [];
     markdownToHtml("", {
@@ -257,6 +327,30 @@ describe("mdast lifecycle hooks", () => {
       ],
     });
     expect(calls).toEqual(["a:before", "a:after", "b:after"]);
+  });
+
+  test("a later plugin sees the root a previous plugin's after appended to", () => {
+    let seen: string[] = [];
+    markdownToHtml("# Hi", {
+      mdastPlugins: [
+        {
+          name: "a",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.appendChild(root, {
+              type: "paragraph",
+              children: [{ type: "text", value: "A" }],
+            });
+          },
+        },
+        {
+          name: "b",
+          after(root: MdastRoot) {
+            seen = root.children.map((c) => c.type);
+          },
+        },
+      ],
+    });
+    expect(seen).toEqual(["heading", "paragraph"]);
   });
 });
 
