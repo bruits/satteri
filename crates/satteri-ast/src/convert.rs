@@ -1765,13 +1765,8 @@ fn convert_node(
         }
 
         Some(MdastNodeType::Custom) => {
-            // User-defined node, either shape (mirrors mdast-util-to-hast's
-            // default handler). A `value` leaf with no children and no `data.h*`
-            // becomes a text node; anything else is an element through
-            // `data.hName` (default `<div>`), merging `hProperties`, honouring
-            // `hChildren`, else recursing the real children. Content inside stays
-            // a first-class subtree — unlike directives, which drop without an
-            // `hName`.
+            // Only a bare `value` leaf renders as text; everything else stays an
+            // element so children are never dropped for want of an `hName`.
             let value = decode_custom_data(view.get_type_data(node_id)).value;
             let has_children = !view.get_children(node_id).is_empty();
             if value.len > 0 && !has_children && HData::read(view, node_id).is_empty() {

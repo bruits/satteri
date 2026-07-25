@@ -123,15 +123,15 @@ MDX visitor keys only fire when the document is compiled via the MDX entry point
 
 ### Custom nodes
 
-Plugins aren't limited to the built-in node types. Return a node whose `type` is any string not in the table above and it becomes a **custom node**: it round-trips through the pipeline and stays a first-class part of the tree, so later plugins still visit its content (unlike a directive, whose contents other passes skip).
+Plugins aren't limited to the built-in node types. Return a node whose `type` is any string not in the table above and it becomes a **custom node**: it round-trips through the pipeline, later plugins still visit its content, and it renders to HTML as a real element. A container directive is the alternative, but it renders nothing at all unless a plugin gives it an `hName`, which takes its whole subtree with it.
 
-A custom node renders as either shape, mirroring `mdast-util-to-hast`'s default handling:
+A custom node renders as either shape:
 
 - a **parent** (with `children`) becomes an element through `data.hName` (defaulting to `<div>`), with `data.hProperties` merged onto it and its children rendered;
-- a **leaf** (with a `value`, and no `children` or `data.h*`) becomes an HTML text node.
+- a **leaf** (with a non-empty `value`, and no `children` or `data.h*`) becomes an HTML text node.
 
 ```js
-// A remark-sectionize-style wrapper: swap a block for a <section> holding its children.
+// A sectionizing wrapper: swap a block for a <section> holding its children.
 paragraph(node, ctx) {
   ctx.replaceNode(node, {
     type: "section",
@@ -139,6 +139,16 @@ paragraph(node, ctx) {
     children: node.children,
   });
 }
+```
+
+A node carrying both `children` and a `value` renders as a parent; the `value` is ignored. Only `children`, `value`, `data` and `position` survive the round trip, so per-node metadata belongs in `data`:
+
+```js
+ctx.replaceNode(node, {
+  type: "section",
+  data: { hName: "section", depth: 2 }, // `depth` on the node itself would be dropped
+  children: node.children,
+});
 ```
 
 The `custom` visitor key fires for every user-defined node, whatever its `type`; discriminate on `node.type` inside the visitor.
@@ -153,6 +163,8 @@ const inspect = defineMdastPlugin({
   },
 });
 ```
+
+There is no per-type visitor key: a `section(node) {}` key is not a subscription and never fires. And because any string is a valid custom `type`, a misspelled built-in (`paragrph`) is a custom node rather than an error — it renders as a `<div>` instead of failing.
 
 ## HAST visitors
 
@@ -341,19 +353,17 @@ For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, 
 
 ## Return value semantics
 
-| Returned                                | MDAST                                   | HAST    |
-| --------------------------------------- | --------------------------------------- | ------- |
-| `undefined` / `null` / `void`           | Keep node, apply `ctx` mutations        | Same    |
-| The same node object                    | Same (no-op replace)                    | Same    |
-| A different node                        | Replace the visited node                | Replace |
-| `{ raw: string }`                       | Splice a string, re-parsed as Markdown  | N/A     |
-| `{ raw: string, mdxExpressions: false }`| Same, but keep MDX `{…}` literal        | N/A     |
+| Returned                                 | MDAST                                  | HAST    |
+| ---------------------------------------- | -------------------------------------- | ------- |
+| `undefined` / `null` / `void`            | Keep node, apply `ctx` mutations       | Same    |
+| The same node object                     | Same (no-op replace)                   | Same    |
+| A different node                         | Replace the visited node               | Replace |
+| `{ raw: string }`                        | Splice a string, re-parsed as Markdown | N/A     |
+| `{ raw: string, mdxExpressions: false }` | Same, but keep MDX `{…}` literal       | N/A     |
 
 `{ raw }` takes a string and re-parses it as Markdown, splicing the result in place of the node.
 
 The `mdxExpressions` option (default `true`) controls how MDX curly braces in the string are treated. With the default, `{…}` is a live MDX expression. Set `mdxExpressions: false` to keep `{` and `}` as **literal text** — necessary when you inject generated HTML whose braces are not expressions, e.g. a Mermaid decision node `C{JWT valid?}` or KaTeX/Shiki output. In plain Markdown output the option has no effect (there are no MDX expressions), so `{ raw }` and `{ raw, mdxExpressions: false }` are identical there.
-
-
 
 ## Async plugins
 
