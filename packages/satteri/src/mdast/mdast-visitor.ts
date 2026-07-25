@@ -285,9 +285,17 @@ export class MdastVisitorContext {
       if (previous === undefined) {
         // Replacing with nothing drops the node, like removeNode.
         this.removeNode(node);
+      } else if (id === ROOT_NODE_ID && (previous as { type?: string }).type === "root") {
+        emitMdastRootReplace(this.#commandBuffer, previous);
       } else {
         emitMdastTree(this.#commandBuffer, "replace", id, previous, true);
       }
+      return;
+    }
+    // The root is the one node a `root` may replace, and only a hook can hold
+    // it — an id comparison keeps the swap off the per-node encoder.
+    if (id === ROOT_NODE_ID && (newNode as { type?: string }).type === "root") {
+      emitMdastRootReplace(this.#commandBuffer, newNode);
       return;
     }
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true);
@@ -767,17 +775,24 @@ function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: u
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(MDAST_ROOT);
     for (const c of children) {
-      if (!emitMdastOp(buffer, c, false, false, false)) return false;
+      if (!emitMdastOp(buffer, c, false, false)) return false;
     }
     buffer.close();
     return true;
   });
 }
 
-/** A `root` as replacement content, valid only as the top-level payload of a
- *  root-anchored replace: it lands on node 0 instead of a sibling slot. Cold,
- *  so it stays out of the per-node encoder. */
-function emitMdastRootOp(w: OpWriter, n: Record<string, unknown>, forReplace: boolean): boolean {
+/** Swap the whole document: a `root` payload lands on node 0 instead of a
+ *  sibling slot. Only a hook can hold the root, so this and its encoder stay
+ *  out of the per-node path entirely. */
+function emitMdastRootReplace(buffer: CommandBuffer, root: MdastContent): void {
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
+    emitMdastRootOp(buffer, root as unknown as Record<string, unknown>),
+  );
+  if (!ok) throw unencodableContentError(root);
+}
+
+function emitMdastRootOp(w: OpWriter, n: Record<string, unknown>): boolean {
   w.open(MDAST_ROOT);
   if (n.data != null) w.data(n.data);
   if (n._keepChildren === true) {
@@ -785,20 +800,14 @@ function emitMdastRootOp(w: OpWriter, n: Record<string, unknown>, forReplace: bo
   } else {
     const children = n.children;
     if (Array.isArray(children)) {
-      for (const c of children) if (!emitMdastOp(w, c, false, forReplace, false)) return false;
+      for (const c of children) if (!emitMdastOp(w, c, false, true)) return false;
     }
   }
   w.close();
   return true;
 }
 
-function emitMdastOp(
-  w: OpWriter,
-  node: unknown,
-  isRoot: boolean,
-  forReplace: boolean,
-  allowRoot: boolean,
-): boolean {
+function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
     const id = reusedId(node);
@@ -814,13 +823,10 @@ function emitMdastOp(
   let isCustom = false;
   if (type === undefined) {
     if (typeof n.type !== "string" || n.type.length === 0) return false;
-    // A known built-in that just isn't op-stream-encodable is a real type used
-    // wrong — fail loudly rather than reinterpreting it as a user-defined node,
-    // except for the one caller allowed to swap a `root`. Only
-    // genuinely-unknown type strings become custom.
-    if (NAME_TO_TYPE[n.type] !== undefined) {
-      return allowRoot && n.type === "root" ? emitMdastRootOp(w, n, forReplace) : false;
-    }
+    // A known built-in that just isn't op-stream-encodable (e.g. `root`) is a
+    // real type used wrong — fail loudly rather than reinterpreting it as a
+    // user-defined node. Only genuinely-unknown type strings become custom.
+    if (NAME_TO_TYPE[n.type] !== undefined) return false;
     type = MDAST_CUSTOM;
     isCustom = true;
   } else if (type === MDAST_CUSTOM) {
@@ -879,7 +885,7 @@ function emitMdastOp(
     // and emit the declared children.
     const children = n.children;
     if (Array.isArray(children)) {
-      for (const c of children) if (!emitMdastOp(w, c, false, forReplace, false)) return false;
+      for (const c of children) if (!emitMdastOp(w, c, false, forReplace)) return false;
     }
   }
   w.close();
@@ -931,7 +937,7 @@ function emitMdastTree(
     }
   }
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitMdastOp(buffer, content, true, forReplace, op === "replace" && id === ROOT_NODE_ID),
+    emitMdastOp(buffer, content, true, forReplace),
   );
   if (!ok) throw unencodableContentError(content);
 }

@@ -260,7 +260,7 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
     for (const c of children) {
-      if (!emitHastOp(buffer, c, false, false)) return false;
+      if (!emitHastOp(buffer, c, false)) return false;
     }
     buffer.close();
     return true;
@@ -273,26 +273,33 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
  *  compiles or it's a hard error. */
 function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitHastOp(buffer, node, true, op === "replace" && id === ROOT_NODE_ID),
+    emitHastOp(buffer, node, true),
   );
   if (!ok) throw unencodableContentError(node);
 }
 
-/** A `root` as replacement content, valid only as the top-level payload of a
- *  root-anchored replace: it lands on node 0 instead of a sibling slot. Cold,
- *  so it stays out of the per-node encoder. */
+/** Swap the whole document: a `root` payload lands on node 0 instead of a
+ *  sibling slot. Only a hook can hold the root, so this and its encoder stay
+ *  out of the per-node path entirely. */
+function emitHastRootReplace(buffer: CommandBuffer, root: HastContent): void {
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
+    emitHastRootOp(buffer, root as unknown as Record<string, unknown>),
+  );
+  if (!ok) throw unencodableContentError(root);
+}
+
 function emitHastRootOp(w: OpWriter, n: Record<string, unknown>): boolean {
   w.open(HAST_ROOT);
   if (n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false, false)) return false;
+    for (const c of children) if (!emitHastOp(w, c, false)) return false;
   }
   w.close();
   return true;
 }
 
-function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, allowRoot: boolean): boolean {
+function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
     const id = hastReusedId(node);
@@ -303,9 +310,7 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, allowRoot: bool
   }
   const n = node as Record<string, unknown>;
   const type = HAST_OPSTREAM_TYPES[n.type as string];
-  if (type === undefined) {
-    return allowRoot && n.type === "root" ? emitHastRootOp(w, n) : false;
-  }
+  if (type === undefined) return false;
   w.open(type);
   if (type === HAST_ELEMENT) {
     w.str(OF_TAGNAME, typeof n.tagName === "string" ? n.tagName : "div");
@@ -332,7 +337,7 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, allowRoot: bool
   if (n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false, false)) return false;
+    for (const c of children) if (!emitHastOp(w, c, false)) return false;
   }
   w.close();
   return true;
@@ -402,11 +407,19 @@ class HastVisitorContextImpl implements HastVisitorContext {
       if (previous === undefined) {
         // Replacing with nothing drops the node, like removeNode.
         this.removeNode(node);
+      } else if (id === ROOT_NODE_ID && (previous as { type?: string }).type === "root") {
+        emitHastRootReplace(this.#commandBuffer, previous);
       } else {
         emitHastTree(this.#commandBuffer, "replace", id, previous);
       }
       // A stale queued replacement would win: setProperty folds into it, landing last.
       this.#pendingNodes.delete(id);
+      return;
+    }
+    // The root is the one node a `root` may replace, and only a hook can hold
+    // it — an id comparison keeps the swap off the per-node encoder.
+    if (id === ROOT_NODE_ID && (newNode as { type?: string }).type === "root") {
+      emitHastRootReplace(this.#commandBuffer, newNode);
       return;
     }
     emitHastTree(this.#commandBuffer, "replace", id, newNode);
