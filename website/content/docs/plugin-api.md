@@ -269,7 +269,9 @@ const toc = () => {
 };
 ```
 
-All `ctx` methods work on the root node as usual. Hooks are procedures, not transformers: their return values are ignored (an async hook is awaited), so mutate via `ctx`. Note that mutations queue until the end of the pass, so `before` cannot show the plugin's own visitors a changed tree — use a preceding plugin for that.
+The child operations — `appendChild`, `prependChild`, `insertChildAt`, `removeChildAt` — work on the root as they do on any node, as do `removeNode`, `setProperty` and `wrapNode`. The sibling ones do not: the root has no siblings, so `insertBefore` and `insertAfter` throw on it, as does replacing it with another `root` via `replaceNode`.
+
+Hooks are procedures, not transformers: their return values are ignored (an async hook is awaited), so mutate via `ctx`. Mutations queue until the end of the pass, so neither hook sees a tree its own pass changed: `before` cannot show the plugin's own visitors a changed tree, and `root.children` in `after` still reflects the document as it was walked, not what those visitors returned. Reach for a separate plugin when you need to work against the applied result.
 
 ## Node lifetime
 
