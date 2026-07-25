@@ -296,7 +296,18 @@ const toc = () => {
 };
 ```
 
-The child operations — `appendChild`, `prependChild`, `insertChildAt`, `removeChildAt` — work on the root as they do on any node, as do `removeNode`, `setProperty` and `wrapNode`. The sibling ones do not: the root has no siblings, so `insertBefore` and `insertAfter` throw on it, as does replacing it with another `root` via `replaceNode`.
+The child operations — `appendChild`, `prependChild`, `insertChildAt`, `removeChildAt` — work on the root as they do on any node, as do `removeNode`, `setProperty` and `wrapNode`. The sibling ones do not: the root has no siblings, so `insertBefore` and `insertAfter` throw on it.
+
+`replaceNode` works on the root too, and it is how a hook swaps the whole document for a tree it built itself. The root is the one place a `root` node is accepted as content; children taken from the old root are reused as they are, rather than rebuilt:
+
+```js
+after(root, ctx) {
+  ctx.replaceNode(root, {
+    type: "root",
+    children: [{ type: "mdxjsEsm", value: "export const toc = [];" }, ...root.children],
+  });
+},
+```
 
 Hooks are procedures, not transformers: their return values are ignored (an async hook is awaited), so mutate via `ctx`. Mutations queue until the end of the pass, so neither hook sees a tree its own pass changed: `before` cannot show the plugin's own visitors a changed tree, and `root.children` in `after` still reflects the document as it was walked, not what those visitors returned. Reach for a separate plugin when you need to work against the applied result.
 

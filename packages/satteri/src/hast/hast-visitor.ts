@@ -69,6 +69,7 @@ import {
   makeRequireNid,
   mergeAndReset,
   type PluginOptions,
+  ROOT_NODE_ID,
   unencodableContentError,
 } from "../visitor-shared.js";
 import {
@@ -138,6 +139,8 @@ export interface HastVisitorContext {
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
+   * Passing the document root a `root` swaps the whole document — the only
+   * place a `root` is accepted as content.
    */
   replaceNode(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -257,7 +260,7 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
     for (const c of children) {
-      if (!emitHastOp(buffer, c, false)) return false;
+      if (!emitHastOp(buffer, c, false, false)) return false;
     }
     buffer.close();
     return true;
@@ -270,12 +273,26 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
  *  compiles or it's a hard error. */
 function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitHastOp(buffer, node, true),
+    emitHastOp(buffer, node, true, op === "replace" && id === ROOT_NODE_ID),
   );
   if (!ok) throw unencodableContentError(node);
 }
 
-function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
+/** A `root` as replacement content, valid only as the top-level payload of a
+ *  root-anchored replace: it lands on node 0 instead of a sibling slot. Cold,
+ *  so it stays out of the per-node encoder. */
+function emitHastRootOp(w: OpWriter, n: Record<string, unknown>): boolean {
+  w.open(HAST_ROOT);
+  if (n.data != null) w.data(n.data);
+  const children = n.children;
+  if (Array.isArray(children)) {
+    for (const c of children) if (!emitHastOp(w, c, false, false)) return false;
+  }
+  w.close();
+  return true;
+}
+
+function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, allowRoot: boolean): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
     const id = hastReusedId(node);
@@ -286,7 +303,9 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
   }
   const n = node as Record<string, unknown>;
   const type = HAST_OPSTREAM_TYPES[n.type as string];
-  if (type === undefined) return false;
+  if (type === undefined) {
+    return allowRoot && n.type === "root" ? emitHastRootOp(w, n) : false;
+  }
   w.open(type);
   if (type === HAST_ELEMENT) {
     w.str(OF_TAGNAME, typeof n.tagName === "string" ? n.tagName : "div");
@@ -313,7 +332,7 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
   if (n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false)) return false;
+    for (const c of children) if (!emitHastOp(w, c, false, false)) return false;
   }
   w.close();
   return true;
