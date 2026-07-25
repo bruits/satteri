@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import { markdownToHtml } from "../src/index.js";
 import { defineMdastPlugin } from "../src/plugin.js";
-import type { MdastNode } from "../src/types.js";
+import type { MdastContent } from "../src/mdast/mdast-visitor.js";
 
 // Issue #125: user-defined mdast node types. A plugin creates a node with an
 // arbitrary `type` string; it round-trips, renders via `data.hName` (default
@@ -14,7 +14,7 @@ test("custom node renders via data.hName with children recursed", () => {
       ctx.replaceNode(node, {
         type: "section",
         data: { hName: "section" },
-        children: node.children as unknown as MdastNode[],
+        children: node.children,
       });
     },
   });
@@ -31,7 +31,7 @@ test("custom node with hProperties merges attributes", () => {
       ctx.replaceNode(node, {
         type: "section",
         data: { hName: "section", hProperties: { className: ["note"], id: "s1" } },
-        children: node.children as unknown as MdastNode[],
+        children: node.children,
       });
     },
   });
@@ -46,7 +46,7 @@ test("custom node without hName defaults to <div>", () => {
     paragraph(node, ctx) {
       ctx.replaceNode(node, {
         type: "callout",
-        children: node.children as unknown as MdastNode[],
+        children: node.children,
       });
     },
   });
@@ -62,7 +62,7 @@ test("custom type round-trips as node.type and content stays visible to other pl
       ctx.replaceNode(node, {
         type: "section",
         data: { hName: "section" },
-        children: node.children as unknown as MdastNode[],
+        children: node.children,
       });
     },
   });
@@ -75,8 +75,7 @@ test("custom type round-trips as node.type and content stays visible to other pl
       seenType = node.type;
     },
     strong() {
-      // A later pass still visits descendants of the custom node — content is
-      // not skipped the way directive content is.
+      // Wrapping only adds a level: a later pass still reaches the descendants.
       seenStrong = true;
     },
   });
@@ -88,14 +87,14 @@ test("custom type round-trips as node.type and content stays visible to other pl
 
 test("GFM content survives inside a custom node (the #125 repro, fixed)", () => {
   // Replace a blockquote with a section wrapping its children — a GFM table
-  // among them. In the directive world this content would be dropped.
+  // among them. A directive wrapper drops all of it without an `hName`.
   const wrap = defineMdastPlugin({
     name: "wrap-block",
     blockquote(node, ctx) {
       ctx.replaceNode(node, {
         type: "section",
         data: { hName: "section" },
-        children: node.children as unknown as MdastNode[],
+        children: node.children,
       });
     },
   });
@@ -152,7 +151,7 @@ test("custom parent node carries no spurious value field", () => {
       ctx.replaceNode(node, {
         type: "section",
         data: { hName: "section" },
-        children: node.children as unknown as MdastNode[],
+        children: node.children,
       });
     },
   });
@@ -176,7 +175,7 @@ test("a node whose type is literally 'custom' round-trips its type", () => {
       ctx.replaceNode(node, {
         type: "custom",
         data: { hName: "aside" },
-        children: node.children as unknown as MdastNode[],
+        children: node.children,
       });
     },
   });
@@ -193,4 +192,123 @@ test("a node whose type is literally 'custom' round-trips its type", () => {
   expect(seenType).toBe("custom");
   expect(html).toContain("<aside>");
   expect(html).toContain("<strong>bold</strong>");
+});
+
+test("children win over value when a custom node declares both", () => {
+  const wrap = defineMdastPlugin({
+    name: "both",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "weird", value: "IGNORED", children: node.children });
+    },
+  });
+  const { html } = markdownToHtml("Hello **bold**", { mdastPlugins: [wrap] });
+  expect(html).toContain("<div>Hello <strong>bold</strong></div>");
+  expect(html).not.toContain("IGNORED");
+});
+
+test("a custom node with an empty value is a parent, not a text node", () => {
+  const wrap = defineMdastPlugin({
+    name: "empty",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "token", value: "" });
+    },
+  });
+  const { html } = markdownToHtml("placeholder", { mdastPlugins: [wrap] });
+  expect(html.trim()).toBe("<div></div>");
+});
+
+test("fields outside the node shape are dropped; data carries metadata", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, {
+        type: "section",
+        depth: 2,
+        data: { hName: "section", depth: 2 },
+        children: node.children,
+      } as MdastContent);
+    },
+  });
+  let seen: Record<string, unknown> = {};
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node) {
+      seen = { depth: (node as { depth?: number }).depth, data: node.data };
+    },
+  });
+  markdownToHtml("hi", { mdastPlugins: [create, inspect] });
+  expect(seen.depth).toBeUndefined();
+  expect(seen.data).toEqual({ hName: "section", depth: 2 });
+});
+
+test("a custom node can be mutated from the custom visitor", () => {
+  // The node handed to `custom` goes straight back into the mutation API,
+  // without a cast — the type-level half of this test is the compile.
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "sec", data: { hName: "sec" }, children: node.children });
+    },
+  });
+  const mutate = defineMdastPlugin({
+    name: "mutate",
+    custom(node, ctx) {
+      if (node.type !== "sec") return;
+      ctx.setProperty(node, "data", { hName: "aside" });
+      ctx.appendChild(node, { type: "text", value: "!" });
+    },
+  });
+  const { html } = markdownToHtml("hey", { mdastPlugins: [create, mutate] });
+  expect(html).toContain("<aside>hey!</aside>");
+});
+
+test("a custom node can wrap the node it was reached from", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "sec", data: { hName: "sec" }, children: node.children });
+    },
+  });
+  const rewrap = defineMdastPlugin({
+    name: "rewrap",
+    custom(node, ctx) {
+      if (node.type !== "sec") return;
+      ctx.replaceNode(node, { type: "outer", data: { hName: "outer" }, children: [node] });
+    },
+  });
+  const { html } = markdownToHtml("Hello **b**", { mdastPlugins: [create, rewrap] });
+  expect(html).toContain("<outer><sec>Hello <strong>b</strong></sec></outer>");
+});
+
+test("nested custom nodes render and nest", () => {
+  const nest = defineMdastPlugin({
+    name: "nest",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, {
+        type: "outer",
+        data: { hName: "outer" },
+        children: [{ type: "inner", data: { hName: "inner" }, children: node.children }],
+      });
+    },
+  });
+  const { html } = markdownToHtml("Hello **bold**", { mdastPlugins: [nest] });
+  expect(html).toContain("<outer><inner>Hello <strong>bold</strong></inner></outer>");
+});
+
+test("a custom child's type is readable from a parent's children", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "sec", data: { hName: "sec" }, children: node.children });
+    },
+  });
+  let childTypes: string[] = [];
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    blockquote(node) {
+      childTypes = node.children.map((child) => child.type);
+    },
+  });
+  markdownToHtml("> hello\n", { mdastPlugins: [create, inspect] });
+  expect(childTypes).toEqual(["sec"]);
 });

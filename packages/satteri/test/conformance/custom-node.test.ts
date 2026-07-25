@@ -17,8 +17,8 @@ import type { MdastNode } from "../../src/types.js";
 // into satteri, and assert the HTML matches — so the mainline paths stay
 // observably identical to remark rather than to hand-written expectations.
 //
-// Satteri-only behaviors with no remark equivalent (the reserved `"custom"`
-// type string, dropping an empty `value`) stay as unit tests in the sibling
+// Behaviors that are satteri's own call (the reserved `"custom"` type string,
+// an empty or children-shadowed `value`) stay as unit tests in the sibling
 // `test/custom-node.test.ts`.
 
 function referenceHtml(md: string, transform: (tree: MdastRoot) => void): string {
@@ -140,7 +140,7 @@ describe("custom node rendering conformance vs remark-rehype", () => {
   });
 
   test("leaf value with special characters is escaped identically", () => {
-    return assertMatches("placeholder", "paragraph", () => leaf("a < b & c > d \" e"));
+    return assertMatches("placeholder", "paragraph", () => leaf('a < b & c > d " e'));
   });
 
   test("custom parent preserves GFM content inside it (table)", () => {
