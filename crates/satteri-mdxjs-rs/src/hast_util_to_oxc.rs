@@ -345,9 +345,10 @@ fn raw_html_in_mdx_error(context: &Context<'_>, node_id: u32) -> message::Messag
             Raw HTML comes from HTML in plain Markdown input, or from a plugin \
             returning an `html` node (`{ type: \"html\", value: ... }`), and has \
             no JSX representation. Enable `features: { rawHtml: true }` to parse \
-            the HTML into elements (a plugin can instead return \
-            `{ raw: ..., mdxExpressions: false }`), or use the HTML output where \
-            raw HTML is emitted verbatim."
+            the HTML into elements, or use the HTML output where raw HTML is \
+            emitted verbatim. Under MDX only, a plugin can also return \
+            `{ raw: ..., mdxExpressions: false }` so the HTML is parsed as JSX; \
+            in plain Markdown that re-parses as an `html` node and fails again."
             .into(),
         place: crate::oxc_utils::u32_to_point(
             node_span(context.view, node_id).start,

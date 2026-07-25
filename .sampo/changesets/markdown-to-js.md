@@ -11,3 +11,5 @@ import { markdownToJs } from "satteri";
 
 const { code } = markdownToJs("Hello {world}");
 ```
+
+HTML in the source needs `features: { rawHtml: true }`, since raw HTML has no JSX equivalent.

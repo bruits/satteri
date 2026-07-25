@@ -68,7 +68,7 @@ type MdastVisitorResult =
   | void; // keep node, apply ctx mutations
 ```
 
-To inject HTML, return `{ raw: "<span>…</span>", mdxExpressions: false }` rather than an mdast `html` node (`{ type: "html", value }`) — the latter renders in Markdown but throws under MDX. See [Return value semantics](#return-value-semantics).
+To inject HTML, return `{ raw: "<span>…</span>", mdxExpressions: false }` rather than an mdast `html` node (`{ type: "html", value }`) — the latter renders under `markdownToHtml` but throws under `mdxToJs`. Under `markdownToJs` neither form compiles, because the injected string re-parses as plain Markdown and HTML has no JSX representation there; enable [`features: { rawHtml: true }`](/docs/entry-points/#reparsing-raw-html-rawhtml) to have it parsed into real elements. See [Return value semantics](#return-value-semantics).
 
 ### Supported visitor keys
 
@@ -119,7 +119,7 @@ Keys without a feature note are always available. Feature-gated keys only fire w
 | `mdxTextExpression`  | MDX entry        |
 | `mdxjsEsm`           | MDX entry        |
 
-MDX visitor keys only fire when the document is compiled via the MDX entry point (`mdxToJs` or `.mdx` imports), not from `markdownToHtml`.
+MDX visitor keys only fire when the document is compiled via the MDX entry point (`mdxToJs` or `.mdx` imports), not from `markdownToHtml` or `markdownToJs` — those parse MDX syntax as ordinary Markdown text, so the nodes never exist.
 
 ### Custom nodes
 
@@ -363,11 +363,11 @@ For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, 
 
 `{ raw }` takes a string and re-parses it as Markdown, splicing the result in place of the node.
 
-The `mdxExpressions` option (default `true`) controls how MDX curly braces in the string are treated. With the default, `{…}` is a live MDX expression. Set `mdxExpressions: false` to keep `{` and `}` as **literal text** — necessary when you inject generated HTML whose braces are not expressions, e.g. a Mermaid decision node `C{JWT valid?}` or KaTeX/Shiki output. In plain Markdown output the option has no effect (there are no MDX expressions), so `{ raw }` and `{ raw, mdxExpressions: false }` are identical there.
+The `mdxExpressions` option (default `true`) controls how MDX curly braces in the string are treated. With the default, `{…}` is a live MDX expression. Set `mdxExpressions: false` to keep `{` and `}` as **literal text** — necessary when you inject generated HTML whose braces are not expressions, e.g. a Mermaid decision node `C{JWT valid?}` or KaTeX/Shiki output. When the source is plain Markdown (`markdownToHtml`, `markdownToJs`) the option has no effect — the spliced string re-parses as Markdown, where there are no MDX expressions — so `{ raw }` and `{ raw, mdxExpressions: false }` are identical there.
 
 ## Async plugins
 
-Any visitor may return a `Promise`. Sync and async visitors can be mixed freely. If any visitor in the pipeline is async, `markdownToHtml` and `mdxToJs` return a `Promise`; otherwise they return synchronously.
+Any visitor may return a `Promise`. Sync and async visitors can be mixed freely. If any visitor in the pipeline is async, `markdownToHtml`, `mdxToJs`, and `markdownToJs` return a `Promise`; otherwise they return synchronously.
 
 For performance, prefer sync visitors where you can: awaiting per match adds up, especially for a visitor that matches many nodes.
 

@@ -483,12 +483,13 @@ export interface CompileOptions {
 }
 
 /**
- * MDX-only compile options.
+ * JS/JSX output options.
  *
- * These are the fields specific to MDX compilation, separate from the shared
- * pipeline options in {@link CompileOptions}. Useful for wrappers (Vite/Rollup
- * plugins, framework integrations) that want to expose MDX-specific knobs
- * without re-exposing the shared pipeline fields.
+ * These are the fields that shape the compiled JavaScript, separate from the
+ * shared pipeline options in {@link CompileOptions}. Both {@link mdxToJs} and
+ * {@link markdownToJs} accept them. Useful for wrappers (Vite/Rollup plugins,
+ * framework integrations) that want to expose the codegen knobs without
+ * re-exposing the shared pipeline fields.
  */
 export interface MdxOnlyOptions {
   optimizeStatic?: OptimizeStaticConfig;
@@ -584,7 +585,7 @@ export interface MarkdownToJsResult {
 }
 
 // Type helpers: detect whether any visitor in any plugin returns a Promise.
-// Used to narrow `markdownToHtml`/`mdxToJs` to a sync return when every plugin
+// Used to narrow the compile entry points to a sync return when every plugin
 // is sync, while keeping the union when at least one visitor is async.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
