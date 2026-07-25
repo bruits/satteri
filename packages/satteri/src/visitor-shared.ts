@@ -19,6 +19,9 @@ export interface PluginOptions {
 
 const EMPTY_BYTES = new Uint8Array(0);
 
+/** Arena id of the document root — node 0 in every tree. */
+export const ROOT_NODE_ID = 0;
+
 export function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
 }

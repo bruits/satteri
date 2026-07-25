@@ -352,6 +352,156 @@ describe("mdast lifecycle hooks", () => {
     });
     expect(seen).toEqual(["heading", "paragraph"]);
   });
+
+  test("after swaps the whole document for a new root", () => {
+    const { html } = markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        {
+          name: "swap",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, {
+              type: "root",
+              children: [{ type: "paragraph", children: [{ type: "text", value: "swapped" }] }],
+            });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("<p>swapped</p>\n");
+  });
+
+  test("before swaps the whole document for a new root", () => {
+    const { html } = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        {
+          name: "swap",
+          before(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("<hr>\n");
+  });
+
+  test("the root can be replaced on an empty document", () => {
+    const { html } = markdownToHtml("", {
+      mdastPlugins: [
+        {
+          name: "swap",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, {
+              type: "root",
+              children: [{ type: "paragraph", children: [{ type: "text", value: "from empty" }] }],
+            });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("<p>from empty</p>\n");
+  });
+
+  test("a replacement root keeps the original children it reuses", () => {
+    const { html } = markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        {
+          name: "swap",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, {
+              type: "root",
+              children: [{ type: "thematicBreak" }, ...root.children],
+            });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("<hr>\n<h1>Hi</h1>\n<p>World</p>\n");
+  });
+
+  test("replacing the root with an empty root empties the document", () => {
+    const { html } = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        {
+          name: "swap",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, { type: "root", children: [] });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("");
+  });
+
+  test("a later plugin sees the root a previous plugin's after replaced", () => {
+    let seen: string[] = [];
+    markdownToHtml("# Hi", {
+      mdastPlugins: [
+        {
+          name: "swap",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] });
+          },
+        },
+        {
+          name: "observe",
+          after(root: MdastRoot) {
+            seen = root.children.map((c) => c.type);
+          },
+        },
+      ],
+    });
+    expect(seen).toEqual(["thematicBreak"]);
+  });
+
+  test("a replacement root can prepend an ESM export ahead of the document", () => {
+    const { code } = mdxToJs("# Hi", {
+      mdastPlugins: [
+        {
+          name: "toc",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, {
+              type: "root",
+              children: [
+                { type: "mdxjsEsm", value: "export const toc = [];" } as unknown as MdastNode,
+                ...root.children,
+              ],
+            });
+          },
+        },
+      ],
+    }) as { code: string };
+    expect(code).toContain("export const toc = []");
+    expect(code).toContain('"h1"');
+  });
+
+  test("a replacement root with _keepChildren keeps the document's children", () => {
+    const { html } = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        {
+          name: "swap",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, { type: "root", _keepChildren: true } as unknown as MdastRoot);
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("<h1>Hi</h1>\n");
+  });
+
+  test("a root is still unencodable as content for any other node", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          {
+            name: "bad",
+            heading(node: MdastNode, ctx: MdastVisitorContext) {
+              ctx.replaceNode(node, { type: "root", children: [] });
+            },
+          },
+        ],
+      }),
+    ).toThrow(/cannot encode replacement content of type "root"/);
+  });
 });
 
 describe("hast lifecycle hooks", () => {
@@ -558,5 +708,111 @@ describe("hast lifecycle hooks", () => {
     });
     expect(html).toContain("<h2>New</h2>");
     expect(html).not.toContain("<h1>");
+  });
+
+  test("after swaps the whole document for a new root", () => {
+    const { html } = markdownToHtml("# Hi\n\nWorld", {
+      hastPlugins: [
+        {
+          name: "swap",
+          after(root: HastRoot, ctx: HastVisitorContext) {
+            ctx.replaceNode(root, {
+              type: "root",
+              children: [
+                {
+                  type: "element",
+                  tagName: "main",
+                  properties: {},
+                  children: [{ type: "text", value: "swapped" }],
+                } as Element,
+              ],
+            });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("<main>swapped</main>\n");
+  });
+
+  test("before replaces the root on an empty document", () => {
+    const { html } = markdownToHtml("", {
+      hastPlugins: [
+        {
+          name: "swap",
+          before(root: HastRoot, ctx: HastVisitorContext) {
+            ctx.replaceNode(root, {
+              type: "root",
+              children: [
+                {
+                  type: "element",
+                  tagName: "p",
+                  properties: {},
+                  children: [{ type: "text", value: "from empty" }],
+                } as Element,
+              ],
+            });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("<p>from empty</p>\n");
+  });
+
+  test("a replacement root keeps the original children it reuses", () => {
+    const { html } = markdownToHtml("# Hi", {
+      hastPlugins: [
+        {
+          name: "swap",
+          after(root: HastRoot, ctx: HastVisitorContext) {
+            ctx.replaceNode(root, {
+              type: "root",
+              children: [
+                ...root.children,
+                {
+                  type: "element",
+                  tagName: "footer",
+                  properties: {},
+                  children: [{ type: "text", value: "tail" }],
+                } as Element,
+              ],
+            });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toContain("<h1>Hi</h1>");
+    expect(html).toContain("<footer>tail</footer>");
+  });
+
+  test("replacing the root with an empty root empties the document", () => {
+    const { html } = markdownToHtml("# Hi", {
+      hastPlugins: [
+        {
+          name: "swap",
+          after(root: HastRoot, ctx: HastVisitorContext) {
+            ctx.replaceNode(root, { type: "root", children: [] });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("");
+  });
+
+  test("a root is still unencodable as content for any other node", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        hastPlugins: [
+          {
+            name: "bad",
+            element: {
+              filter: ["h1"],
+              visit(node: Element, ctx: HastVisitorContext) {
+                ctx.replaceNode(node, { type: "root", children: [] });
+              },
+            },
+          },
+        ],
+      }),
+    ).toThrow(/cannot encode replacement content of type "root"/);
   });
 });
