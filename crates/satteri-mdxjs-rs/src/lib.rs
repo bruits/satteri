@@ -180,6 +180,7 @@ pub fn compile_hast_arena(
         options.optimize_static.as_ref(),
         options.element_attribute_name_case,
         options.style_property_name_case,
+        options.drop_raw_html,
     )?;
     mdx_plugin_recma_document(&mut program, options, Some(&location), &allocator)?;
     mdx_plugin_recma_jsx_rewrite(

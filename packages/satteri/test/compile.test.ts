@@ -1666,12 +1666,35 @@ describe("markdownToJs", () => {
     expect(js).toContain("Body");
   });
 
-  test("raw HTML throws without rawHtml and compiles with it", () => {
-    expect(() => markdownToJs("a <b>bold</b> word")).toThrow(/rawHtml/);
+  test("raw HTML is dropped by default, keeping the inner text", () => {
+    const { code: js } = markdownToJs("a <b>bold</b> word");
+    expect(js).toContain("bold");
+    expect(js).not.toContain('b: "b"');
+    expect(js).not.toContain("<b>");
+  });
 
+  test("an HTML comment does not stop the compile", () => {
+    const { code: js } = markdownToJs("<!-- prettier-ignore -->\n\nkept");
+    expect(js).toContain("kept");
+    expect(js).not.toContain("prettier-ignore");
+  });
+
+  test("raw HTML becomes real elements with rawHtml", () => {
     const { code: js } = markdownToJs("a <b>bold</b> word", { features: { rawHtml: true } });
     expect(js).toContain('b: "b"');
     expect(js).toContain("bold");
+  });
+
+  test("an mdast html node from a plugin is dropped too, unlike under mdxToJs", () => {
+    const injectHtml = defineMdastPlugin({
+      name: "inject-html",
+      paragraph() {
+        return { type: "html" as const, value: "<b>x</b>" } as MdastNode;
+      },
+    });
+
+    expect(() => markdownToJs("p", { mdastPlugins: [injectHtml] })).not.toThrow();
+    expect(() => mdxToJs("p", { mdastPlugins: [injectHtml] })).toThrow(/raw/);
   });
 
   test("MDAST plugin affects output", () => {

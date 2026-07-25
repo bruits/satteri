@@ -123,6 +123,8 @@ struct Context<'a> {
     pre_parsed_esm: FxHashMap<u32, Program<'a>>,
     element_attribute_name_case: ElementAttributeNameCase,
     style_property_name_case: StylePropertyNameCase,
+    /// See [`crate::Options::drop_raw_html`].
+    drop_raw_html: bool,
 }
 
 /// Compile a HAST into OXC's ES AST.
@@ -136,6 +138,7 @@ pub fn hast_util_to_oxc<'a>(
     optimize_static: Option<&OptimizeStaticConfig>,
     element_attribute_name_case: ElementAttributeNameCase,
     style_property_name_case: StylePropertyNameCase,
+    drop_raw_html: bool,
 ) -> Result<MdxProgram<'a>, message::Message> {
     let (effective_optimize_static, pre_parsed_esm) =
         prepare_component_overrides(view, allocator, location, optimize_static)?;
@@ -151,6 +154,7 @@ pub fn hast_util_to_oxc<'a>(
         pre_parsed_esm,
         element_attribute_name_case,
         style_property_name_case,
+        drop_raw_html,
     };
     let expr = match one(&mut context, 0, explicit_jsxs)? {
         Some(JSXChild::Fragment(x)) => Some(Expression::JSXFragment(x)),
@@ -323,10 +327,18 @@ fn one<'a>(
         Some(HastNodeType::Root) => transform_root(context, node_id, explicit_jsxs),
         Some(HastNodeType::Element) => transform_element(context, node_id, explicit_jsxs),
         Some(HastNodeType::Text) => Ok(transform_text(context, node_id)),
-        // `raw` is opaque HTML with no JSX representation, so error rather than
-        // silently escape it as text. (`optimize_static` collapses raw into an
-        // HTML injection upstream, so this arm only fires on the plain path.)
-        Some(HastNodeType::Raw) => Err(raw_html_in_mdx_error(context, node_id)),
+        // `raw` is opaque HTML with no JSX representation. Plain Markdown drops
+        // it like `remark-rehype` does; MDX errors, since raw can only get there
+        // via a plugin returning an `html` node. Never escaped as visible text.
+        // (`optimize_static` collapses raw into an HTML injection upstream, so
+        // this arm only fires on the plain path.)
+        Some(HastNodeType::Raw) => {
+            if context.drop_raw_html {
+                Ok(None)
+            } else {
+                Err(raw_html_in_mdx_error(context, node_id))
+            }
+        }
         Some(HastNodeType::Comment) => Ok(Some(transform_comment(context, node_id))),
         Some(HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement) => {
             transform_mdx_jsx_element(context, node_id, explicit_jsxs)
@@ -341,14 +353,12 @@ fn one<'a>(
 
 fn raw_html_in_mdx_error(context: &Context<'_>, node_id: u32) -> message::Message {
     message::Message {
-        reason: "Cannot compile a `raw` node (raw HTML) to JSX output. \
-            Raw HTML comes from HTML in plain Markdown input, or from a plugin \
-            returning an `html` node (`{ type: \"html\", value: ... }`), and has \
-            no JSX representation. Enable `features: { rawHtml: true }` to parse \
-            the HTML into elements, or use the HTML output where raw HTML is \
-            emitted verbatim. Under MDX only, a plugin can also return \
-            `{ raw: ..., mdxExpressions: false }` so the HTML is parsed as JSX; \
-            in plain Markdown that re-parses as an `html` node and fails again."
+        reason: "Cannot compile a `raw` node (raw HTML) to MDX/JSX output. \
+            A plugin returned an `html` node (`{ type: \"html\", value: ... }`), \
+            which cannot be represented as JSX. Return \
+            `{ raw: ..., mdxExpressions: false }` instead so the HTML is parsed \
+            into JSX, or enable `features: { rawHtml: true }` to parse it into \
+            elements."
             .into(),
         place: crate::oxc_utils::u32_to_point(
             node_span(context.view, node_id).start,

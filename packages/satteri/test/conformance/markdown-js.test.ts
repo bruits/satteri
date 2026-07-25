@@ -1,10 +1,6 @@
-import { describe, test, expect } from "vitest";
+import { describe, test } from "vitest";
 import { createElement } from "react";
-import { evaluate as mdxEvaluate } from "@mdx-js/mdx";
-import { renderToStaticMarkup } from "react-dom/server";
-import * as runtime from "react/jsx-runtime";
 import { assertMarkdownJsConformance } from "./helpers.js";
-import { markdownToJs } from "../../src/index.js";
 
 describe("markdownToJs conformance: MDX expression syntax stays literal", () => {
   test("flow expression position", async () => {
@@ -122,20 +118,60 @@ describe("markdownToJs conformance: ESM syntax stays literal", () => {
   });
 });
 
-describe("markdownToJs conformance: JSX-like input is raw HTML", () => {
-  // Intentional divergence in default mode: the reference silently strips
-  // unknown raw HTML (keeping inner text), satteri refuses to compile it.
-  // Pin both so a change on either side is noticed.
-  test("default mode: reference strips raw HTML, satteri throws", async () => {
-    const input = "a <b>bold</b> word";
-    const { default: MdxComponent } = (await mdxEvaluate(input, {
-      ...(runtime as object),
-      format: "md",
-    } as Parameters<typeof mdxEvaluate>[1])) as { default: React.FC };
-    expect(renderToStaticMarkup(createElement(MdxComponent))).toBe("<p>a bold word</p>");
-    expect(() => markdownToJs(input)).toThrow(/rawHtml/);
+// Raw HTML has no JSX representation, so by default it is dropped and only the
+// inner text survives — what `remark-rehype` does without `allowDangerousHtml`.
+// These run the reference undisturbed (no rehype-raw), so they pin satteri to it.
+describe("markdownToJs conformance: raw HTML is dropped by default", () => {
+  test("inline element", async () => {
+    await assertMarkdownJsConformance("a <b>bold</b> word");
   });
 
+  test("standalone html comment", async () => {
+    await assertMarkdownJsConformance("<!-- prettier-ignore -->");
+  });
+
+  test("html comment between paragraphs", async () => {
+    await assertMarkdownJsConformance("text\n\n<!-- note -->\n\nmore");
+  });
+
+  test("inline html comment", async () => {
+    await assertMarkdownJsConformance("a <!-- inline --> b");
+  });
+
+  test("inline element with attributes", async () => {
+    await assertMarkdownJsConformance('<span class="x">y</span>');
+  });
+
+  test("void element without slash", async () => {
+    await assertMarkdownJsConformance("line<br>break");
+  });
+
+  test("semantic inline element", async () => {
+    await assertMarkdownJsConformance("Press <kbd>Ctrl</kbd>");
+  });
+
+  test("block-level html wrapping markdown", async () => {
+    await assertMarkdownJsConformance("<div>\n\n*em*\n\n</div>");
+  });
+
+  test("block-level html wrapping html", async () => {
+    await assertMarkdownJsConformance("<div>\n  <p>hi</p>\n</div>");
+  });
+
+  test("details and summary", async () => {
+    await assertMarkdownJsConformance("<details><summary>more</summary>body</details>");
+  });
+
+  test("component-cased tag", async () => {
+    await assertMarkdownJsConformance("<MyComponent />");
+  });
+
+  test("document that is only html", async () => {
+    await assertMarkdownJsConformance("<div></div>");
+  });
+});
+
+describe("markdownToJs conformance: JSX-like input is raw HTML", () => {
   test("inline element", async () => {
     await assertMarkdownJsConformance("a <b>bold</b> word", { rawHtml: true });
   });

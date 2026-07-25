@@ -68,7 +68,7 @@ type MdastVisitorResult =
   | void; // keep node, apply ctx mutations
 ```
 
-To inject HTML, return `{ raw: "<span>…</span>", mdxExpressions: false }` rather than an mdast `html` node (`{ type: "html", value }`) — the latter renders under `markdownToHtml` but throws under `mdxToJs`. Under `markdownToJs` neither form compiles, because the injected string re-parses as plain Markdown and HTML has no JSX representation there; enable [`features: { rawHtml: true }`](/docs/entry-points/#reparsing-raw-html-rawhtml) to have it parsed into real elements. See [Return value semantics](#return-value-semantics).
+To inject HTML, return `{ raw: "<span>…</span>", mdxExpressions: false }` rather than an mdast `html` node (`{ type: "html", value }`) — the latter renders under `markdownToHtml` but throws under `mdxToJs`. Under `markdownToJs` neither form survives: HTML has no JSX representation there, so it is dropped along with any HTML the document itself contains. Enable [`features: { rawHtml: true }`](/docs/entry-points/#reparsing-raw-html-rawhtml) to have injected HTML parsed into real elements. See [Return value semantics](#return-value-semantics).
 
 ### Supported visitor keys
 

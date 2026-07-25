@@ -329,6 +329,14 @@ pub struct Options {
     /// on plain (rehype-produced) elements (default:
     /// [`StylePropertyNameCase::Dom`]).
     pub style_property_name_case: StylePropertyNameCase,
+
+    /// Drop `raw` nodes instead of erroring on them (default: `false`).
+    ///
+    /// Raw HTML has no JSX representation. Plain-Markdown sources set this to
+    /// match `remark-rehype`, which drops HTML unless `allowDangerousHtml` is
+    /// on. MDX sources leave it `false`: raw there can only come from a plugin
+    /// returning an `html` node, which is a mistake worth reporting.
+    pub drop_raw_html: bool,
 }
 
 /// Output format for MDX compilation.
@@ -388,6 +396,7 @@ impl Default for Options {
             output_format: OutputFormat::default(),
             element_attribute_name_case: ElementAttributeNameCase::default(),
             style_property_name_case: StylePropertyNameCase::default(),
+            drop_raw_html: false,
         }
     }
 }
