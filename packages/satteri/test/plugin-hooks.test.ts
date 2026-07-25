@@ -355,4 +355,114 @@ describe("hast lifecycle hooks", () => {
     });
     expect(seen).toBe("seeded");
   });
+
+  test("after fires exactly once on a non-empty document, with children", () => {
+    let calls = 0;
+    let childTags: string[] = [];
+    markdownToHtml("# Hi\n\nWorld", {
+      hastPlugins: [
+        {
+          name: "after-counter",
+          after(root: HastRoot) {
+            calls++;
+            childTags = root.children
+              .filter((c): c is Element => c.type === "element")
+              .map((c) => c.tagName);
+          },
+        },
+      ],
+    });
+    expect(calls).toBe(1);
+    expect(childTags).toEqual(["h1", "p"]);
+  });
+
+  test("async before settles before element visitors dispatch", async () => {
+    let seen: unknown;
+    await markdownToHtml("# Hi", {
+      hastPlugins: [
+        {
+          name: "async-seed",
+          async before(_root: HastRoot, ctx: HastVisitorContext) {
+            await Promise.resolve();
+            ctx.data.flag = "seeded";
+          },
+          element: {
+            filter: ["h1"],
+            visit(_node: Element, ctx: HastVisitorContext) {
+              seen = ctx.data.flag;
+            },
+          },
+        },
+      ],
+    });
+    expect(seen).toBe("seeded");
+  });
+
+  test("after fires after async element visitors settle", async () => {
+    const visited: string[] = [];
+    let seenAtAfter: string[] = [];
+    await markdownToHtml("# One\n\n## Two", {
+      hastPlugins: [
+        {
+          name: "async-order",
+          element: {
+            filter: ["h1", "h2"],
+            async visit(node: Element) {
+              await Promise.resolve();
+              visited.push(node.tagName);
+            },
+          },
+          after() {
+            seenAtAfter = [...visited];
+          },
+        },
+      ],
+    });
+    expect(seenAtAfter).toEqual(["h1", "h2"]);
+  });
+
+  test("async after mutations apply", async () => {
+    const { html } = await markdownToHtml("", {
+      hastPlugins: [
+        {
+          name: "async-after",
+          async after(root: HastRoot, ctx: HastVisitorContext) {
+            await Promise.resolve();
+            ctx.appendChild(root, {
+              type: "element",
+              tagName: "footer",
+              properties: {},
+              children: [{ type: "text", value: "late" }],
+            } as Element);
+          },
+        },
+      ],
+    });
+    expect(html).toContain("<footer>late</footer>");
+  });
+
+  test("async visitor replacements apply when hooks are present", async () => {
+    const { html } = await markdownToHtml("# Old", {
+      hastPlugins: [
+        {
+          name: "async-replace",
+          before() {},
+          element: {
+            filter: ["h1"],
+            async visit() {
+              await Promise.resolve();
+              return {
+                type: "element",
+                tagName: "h2",
+                properties: {},
+                children: [{ type: "text", value: "New" }],
+              } as Element;
+            },
+          },
+        },
+      ],
+    });
+    expect(html).toContain("<h2>New</h2>");
+    expect(html).not.toContain("<h1>");
+  });
 });
