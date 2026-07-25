@@ -55,22 +55,43 @@ const FALLBACK_DESCRIPTORS = stubDescriptors([]);
  * forward to the materialized node (first read snapshots the arena via
  * `materializeOne`, which enforces the handle epoch). Spread/identity rules
  * are enforced by `nid()` (authoritative doc in hast-visitor.ts).
+ *
+ * A user-defined node's `type` is the one exception: it lives in the arena,
+ * not the tag, so it joins the lazy fields rather than making every sibling
+ * list snapshot the arena up front.
  */
 export class MdastChildStub {
   _resolver: MdastResolver;
   _id: number;
-  type: string;
+  type!: string;
 
   constructor(resolver: MdastResolver, id: number, nodeType: number) {
     this._resolver = resolver;
     this._id = id;
-    // A user-defined node's public `type` isn't derivable from the tag alone;
-    // read it off the materialized node (which folds the stored `name` into
-    // `type`). Every other type maps straight from the tag.
-    this.type =
-      nodeType === MDAST_CUSTOM
-        ? (resolver.materializeOne(id) as { type: string }).type
-        : (TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`);
+    if (nodeType === MDAST_CUSTOM) {
+      installLazyCustomType(this);
+    } else {
+      this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
+    }
     installStubDescriptors(this, MDAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
   }
+}
+
+/** `type` as a self-replacing accessor: the materialized node folds the stored
+ *  name into `type`. Enumerable so a spread copy still carries it. */
+function installLazyCustomType(stub: MdastChildStub): void {
+  Object.defineProperty(stub, "type", {
+    get(this: MdastChildStub): string {
+      const value = (this._resolver.materializeOne(this._id) as { type: string }).type;
+      Object.defineProperty(this, "type", {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      return value;
+    },
+    enumerable: true,
+    configurable: true,
+  });
 }
