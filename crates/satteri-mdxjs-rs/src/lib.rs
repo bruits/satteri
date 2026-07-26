@@ -151,14 +151,21 @@ pub fn compile_with_convert_options(
     if let Some((offset, msg)) = mdx_errors.first() {
         return Err(parse_error_to_message(value, *offset, msg));
     }
-    let hast_arena =
+    let mut hast_arena =
         satteri_ast::hast::mdast_arena_to_hast_arena_with_options(&arena, convert_options);
+    // The conversion doesn't carry the flag over, and `compile_hast_arena`
+    // reads it to decide how raw HTML is handled.
+    hast_arena.mdx = parse_options.contains(satteri_pulldown_cmark::Options::ENABLE_MDX);
     compile_hast_arena(&hast_arena, options)
 }
 
 /// Compile a HAST arena directly to JavaScript.
 ///
 /// The arena can be mutated before calling (e.g. `simplify_plain_mdx_nodes`).
+///
+/// `arena.mdx` selects how raw HTML is handled: MDX arenas error on it, plain
+/// Markdown ones drop it like `remark-rehype` does. Callers building a HAST
+/// arena by hand must set the flag to match the source they parsed.
 ///
 /// # Errors
 ///
@@ -180,7 +187,6 @@ pub fn compile_hast_arena(
         options.optimize_static.as_ref(),
         options.element_attribute_name_case,
         options.style_property_name_case,
-        options.drop_raw_html,
     )?;
     mdx_plugin_recma_document(&mut program, options, Some(&location), &allocator)?;
     mdx_plugin_recma_jsx_rewrite(

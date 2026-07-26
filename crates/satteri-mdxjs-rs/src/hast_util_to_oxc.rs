@@ -123,8 +123,6 @@ struct Context<'a> {
     pre_parsed_esm: FxHashMap<u32, Program<'a>>,
     element_attribute_name_case: ElementAttributeNameCase,
     style_property_name_case: StylePropertyNameCase,
-    /// See [`crate::Options::drop_raw_html`].
-    drop_raw_html: bool,
 }
 
 /// Compile a HAST into OXC's ES AST.
@@ -138,7 +136,6 @@ pub fn hast_util_to_oxc<'a>(
     optimize_static: Option<&OptimizeStaticConfig>,
     element_attribute_name_case: ElementAttributeNameCase,
     style_property_name_case: StylePropertyNameCase,
-    drop_raw_html: bool,
 ) -> Result<MdxProgram<'a>, message::Message> {
     let (effective_optimize_static, pre_parsed_esm) =
         prepare_component_overrides(view, allocator, location, optimize_static)?;
@@ -154,7 +151,6 @@ pub fn hast_util_to_oxc<'a>(
         pre_parsed_esm,
         element_attribute_name_case,
         style_property_name_case,
-        drop_raw_html,
     };
     let expr = match one(&mut context, 0, explicit_jsxs)? {
         Some(JSXChild::Fragment(x)) => Some(Expression::JSXFragment(x)),
@@ -333,10 +329,10 @@ fn one<'a>(
         // (`optimize_static` collapses raw into an HTML injection upstream, so
         // this arm only fires on the plain path.)
         Some(HastNodeType::Raw) => {
-            if context.drop_raw_html {
-                Ok(None)
-            } else {
+            if context.view.mdx {
                 Err(raw_html_in_mdx_error(context, node_id))
+            } else {
+                Ok(None)
             }
         }
         Some(HastNodeType::Comment) => Ok(Some(transform_comment(context, node_id))),

@@ -274,13 +274,8 @@ fn js_convert_options_to_rust(
 }
 
 #[cfg(feature = "mdx")]
-/// `mdx` says which entry point the document came from; it only picks how raw
-/// HTML is handled, so every call site has to state it rather than defaulting.
-fn js_options_to_rust(opts: Option<JsMdxOptions>, mdx: bool) -> satteri_mdxjs::Options {
-    let mut options = satteri_mdxjs::Options {
-        drop_raw_html: !mdx,
-        ..satteri_mdxjs::Options::default()
-    };
+fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
+    let mut options = satteri_mdxjs::Options::default();
     if let Some(js) = opts {
         if let Some(config) = js.optimize_static {
             options.optimize_static = Some(satteri_mdxjs::OptimizeStaticConfig {
@@ -351,7 +346,7 @@ pub fn compile_mdx(
     features: Option<JsFeatures>,
     convert_options: Option<JsConvertOptions>,
 ) -> Result<String> {
-    let opts = js_options_to_rust(options, true);
+    let opts = js_options_to_rust(options);
     let parse_opts = features_to_options(features, true);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     satteri_mdxjs::compile_with_convert_options(&source, &opts, parse_opts, &convert_opts)
@@ -934,8 +929,9 @@ pub fn apply_mdast_commands_and_convert_and_compile(
         &convert_opts,
         acquire_hast_arena(),
     );
+    hast_arena.mdx = mdx;
     release_mdast_arena(mutated);
-    let mdx_opts = js_options_to_rust(options, mdx);
+    let mdx_opts = js_options_to_rust(options);
     let ignore = mdx_opts
         .optimize_static
         .as_ref()
@@ -1143,7 +1139,6 @@ pub fn apply_commands_and_compile_handle(
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    let mdx = arena.mdx;
     let owned = std::mem::replace(
         &mut *arena,
         satteri_arena::Arena::<Hast>::new(String::new()),
@@ -1151,7 +1146,7 @@ pub fn apply_commands_and_compile_handle(
     let (mut new_arena, dropped) =
         satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
             .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
-    let mdx_opts = js_options_to_rust(options, mdx);
+    let mdx_opts = js_options_to_rust(options);
     let ignore = mdx_opts
         .optimize_static
         .as_ref()
@@ -1251,7 +1246,8 @@ fn to_js_fast_impl(
     let hast_reuse = acquire_hast_arena();
     let mut hast =
         satteri_ast::hast::mdast_arena_to_hast_arena_into(&mdast, &convert_opts, hast_reuse);
-    let mdx_opts = js_options_to_rust(options, mdx);
+    hast.mdx = mdx;
+    let mdx_opts = js_options_to_rust(options);
 
     let ignore = mdx_opts
         .optimize_static
@@ -1308,7 +1304,7 @@ pub fn compile_handle(handle: &HastHandle, options: Option<JsMdxOptions>) -> Res
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    let opts = js_options_to_rust(options, arena.mdx);
+    let opts = js_options_to_rust(options);
 
     // Simplify plain MDX JSX elements (lowercase, no attrs) into HAST elements
     // so they can be collapsed by optimizeStatic.

@@ -1,5 +1,5 @@
 ---
-cargo/satteri-mdxjs: minor
+cargo/satteri-mdxjs: patch
 cargo/satteri-napi: minor
 npm/satteri: minor
 ---
