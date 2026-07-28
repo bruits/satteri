@@ -166,6 +166,46 @@ test("custom parent node carries no spurious value field", () => {
   expect(hasValueKey).toBe(false);
 });
 
+test("custom parent node carries an empty children array", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "section", children: [] });
+    },
+  });
+  let seenChildren: unknown = "UNSET";
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node) {
+      seenChildren = node.children;
+    },
+  });
+  markdownToHtml("placeholder", { mdastPlugins: [create, inspect] });
+  expect(seenChildren).toEqual([]);
+});
+
+test("custom parent node with `data.h*` carries an empty children array", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, {
+        type: "section",
+        value: "text",
+        data: { hName: "aside" },
+      });
+    },
+  });
+  let seenChildren: unknown = "UNSET";
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node) {
+      seenChildren = node.children;
+    },
+  });
+  markdownToHtml("placeholder", { mdastPlugins: [create, inspect] });
+  expect(seenChildren).toEqual([]);
+});
+
 test("a node whose type is literally 'custom' round-trips its type", () => {
   // `"custom"` is the internal tag's own public name; a plugin may still pick
   // it as a user-defined type, and it must survive rather than emptying out.

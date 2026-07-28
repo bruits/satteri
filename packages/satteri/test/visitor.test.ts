@@ -749,6 +749,19 @@ test("containerDirective visitor fires and exposes name + attributes", () => {
   expect(seen[0]!.attributes.class).toBe("note");
 });
 
+test("empty containerDirective visitor exposes empty children", () => {
+  const { handle, source } = setupDirective(":::tip\n:::\n");
+  let children: unknown;
+  const plugin = defineMdastPlugin({
+    name: "read-empty-container-directive-children",
+    containerDirective(node) {
+      children = [...node.children];
+    },
+  });
+  visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
+  expect(children).toEqual([]);
+});
+
 test("containerDirective with [label] exposes directiveLabel marker on first child", () => {
   const { handle, source } = setupDirective(":::warning[Heads up]\ncontent\n:::\n");
   let labelChildHadMarker = false;

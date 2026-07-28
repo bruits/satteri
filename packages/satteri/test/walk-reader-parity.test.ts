@@ -349,3 +349,19 @@ test("P2: a false-valued element property reads the same from walk and reader pa
   expect(input.properties.checked).toBe(false);
   expect(walkChecked).toBe(false);
 });
+
+test("empty parent exposes children on the walk path, matching the reader", () => {
+  const { walked, materialized } = walkAndReader("<Component />", "mdxJsxFlowElement", true);
+  expect(walked).toHaveLength(1);
+  expect(materialized).toHaveLength(1);
+  expect(walked[0]!.children).toEqual([]);
+  expect(walked[0]!.children).toEqual(materialized[0]!.children);
+});
+
+test("leaf node omits children on the walk path, matching the reader", () => {
+  const { walked, materialized } = walkAndReader("test", "text");
+  expect(walked).toHaveLength(1);
+  expect(materialized).toHaveLength(1);
+  expect("children" in walked[0]!).toBe(false);
+  expect("children" in materialized[0]!).toBe(false);
+});
