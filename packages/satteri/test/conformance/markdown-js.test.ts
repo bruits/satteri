@@ -118,9 +118,9 @@ describe("markdownToJs conformance: ESM syntax stays literal", () => {
   });
 });
 
-// Raw HTML has no JSX representation, so by default it is dropped and only the
-// inner text survives — what `remark-rehype` does without `allowDangerousHtml`.
-// These run the reference undisturbed (no rehype-raw), so they pin satteri to it.
+// Raw HTML has no JSX representation, so by default it is dropped — what
+// `remark-rehype` does without `allowDangerousHtml`. These run the reference
+// undisturbed (no rehype-raw), so they pin satteri to it.
 describe("markdownToJs conformance: raw HTML is dropped by default", () => {
   test("inline element", async () => {
     await assertMarkdownJsConformance("a <b>bold</b> word");

@@ -323,11 +323,10 @@ fn one<'a>(
         Some(HastNodeType::Root) => transform_root(context, node_id, explicit_jsxs),
         Some(HastNodeType::Element) => transform_element(context, node_id, explicit_jsxs),
         Some(HastNodeType::Text) => Ok(transform_text(context, node_id)),
-        // `raw` is opaque HTML with no JSX representation. Plain Markdown drops
-        // it like `remark-rehype` does; MDX errors, since raw can only get there
-        // via a plugin returning an `html` node. Never escaped as visible text.
-        // (`optimize_static` collapses raw into an HTML injection upstream, so
-        // this arm only fires on the plain path.)
+        // `raw` is opaque HTML with no JSX representation: plain Markdown drops
+        // it, MDX errors since raw there can only come from a plugin returning
+        // an `html` node. (`optimize_static` collapses raw into an HTML
+        // injection upstream, so this arm only fires on the plain path.)
         Some(HastNodeType::Raw) => {
             if context.view.mdx {
                 Err(raw_html_in_mdx_error(context, node_id))

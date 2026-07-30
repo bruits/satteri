@@ -52,7 +52,7 @@ import { markdownToJs } from "satteri";
 const { code } = markdownToJs("# Hello\n\n{not an expression}");
 ```
 
-HTML in the source has no JSX representation, so by default it is dropped and only its inner text survives — the same thing `remark-rehype` does without `allowDangerousHtml`. `Press <kbd>Ctrl</kbd>` compiles to `Press Ctrl`. Enable [`features: { rawHtml: true }`](#reparsing-raw-html-rawhtml) to parse the HTML into real elements and keep it.
+HTML in the source has no JSX representation, so by default it is dropped: `Press <kbd>Ctrl</kbd>` compiles to `Press Ctrl`. Enable [`features: { rawHtml: true }`](#reparsing-raw-html-rawhtml) to parse the HTML into real elements and keep it.
 
 This is the one place `markdownToJs` and `markdownToHtml` differ on the same input: HTML output can re-emit raw HTML verbatim, JSX output cannot.
 

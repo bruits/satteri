@@ -164,8 +164,8 @@ pub fn compile_with_convert_options(
 /// The arena can be mutated before calling (e.g. `simplify_plain_mdx_nodes`).
 ///
 /// `arena.mdx` selects how raw HTML is handled: MDX arenas error on it, plain
-/// Markdown ones drop it like `remark-rehype` does. Callers building a HAST
-/// arena by hand must set the flag to match the source they parsed.
+/// Markdown ones drop it. Callers building a HAST arena by hand must set the
+/// flag to match the source they parsed.
 ///
 /// # Errors
 ///

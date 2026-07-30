@@ -12,4 +12,4 @@ import { markdownToJs } from "satteri";
 const { code } = markdownToJs("Hello {world}");
 ```
 
-HTML in the source is dropped, matching remark. Pass `features: { rawHtml: true }` to parse it into real elements instead.
+HTML in the source is dropped. Pass `features: { rawHtml: true }` to parse it into real elements instead.

@@ -790,9 +790,8 @@ export function mdxToJs(
 /**
  * Compile plain Markdown to a JavaScript module: like {@link mdxToJs}, but
  * without MDX syntax — `{...}` expressions, JSX tags, and `import`/`export`
- * lines are ordinary Markdown. HTML has no JSX representation, so it is
- * dropped and only its inner text survives, matching `remark-rehype`; enable
- * `features: { rawHtml: true }` to parse it into real elements instead.
+ * lines are ordinary Markdown. HTML has no JSX representation and is dropped;
+ * enable `features: { rawHtml: true }` to parse it into real elements instead.
  */
 export function markdownToJs<O extends MarkdownToJsOptions>(
   source: string,
