@@ -145,11 +145,9 @@ export interface HastVisitorContext {
   /**
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
    * children `parentNode` declares are kept after it, so a `div` with an anchor
-   * child wraps a heading as `div > [heading, anchor]`. `parentNode` must be a
-   * node type that can hold children (an element or MDX JSX element), or a
-   * `{ rawHtml }` string that parses to exactly one element. Either way the
-   * element must not be a void one (`img`, `br`, …), since a void tag renders
-   * without children and would drop the wrapped node.
+   * child wraps a heading as `div > [heading, anchor]`. `parentNode` is an
+   * element, an MDX JSX element, or `{ rawHtml }` parsing to exactly one
+   * element — never a void element, whose children would not render.
    */
   wrapNode(node: Readonly<HastNode>, parentNode: HastParentContent | RawHtmlHastContent): void;
   prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
@@ -212,25 +210,21 @@ const requireNid = makeRequireNid(nid);
  *  a `raw` node type, so it needs no raw/rawHtml escape hatch. */
 export type HastContent = HastNode;
 
-/** A `wrapNode` wrapper: a node type that can hold children. Leaves (`text`,
- *  `comment`, `raw`, …) have no slot for the wrapped node, so they cannot wrap. */
+/** A `wrapNode` wrapper: node types that can hold children. */
 export type HastParentContent = Exclude<Extract<HastNode, { children: unknown[] }>, HastRoot>;
 
-/** Raw HTML `wrapNode` wrapper: parsed as an HTML fragment in Rust when the
- *  command applies; must yield exactly one non-void element, which becomes the
- *  wrapper. A fragment that can't wrap fails the apply with the reason. */
+/** Raw HTML `wrapNode` wrapper: parsed at apply time (not call time); must
+ *  yield exactly one non-void element, which becomes the wrapper. */
 export interface RawHtmlHastContent {
   rawHtml: string;
 }
 
-/** HAST node types that can hold children. `wrapNode` allowlist — an
- *  unlisted (new or leaf) type fails loud instead of silently mis-wrapping. */
+/** `wrapNode` allowlist: an unlisted type fails loud instead of silently
+ *  mis-wrapping. */
 const HAST_PARENT_TYPES = ["element", "mdxJsxFlowElement", "mdxJsxTextElement"] as const;
 const HAST_PARENT_TYPE_SET = new Set<string>(HAST_PARENT_TYPES);
 
-/** Fails to compile if the allowlist and {@link HastParentContent} drift apart,
- *  in either direction — a new parent-capable hast type must be listed, and a
- *  listed type must really be parent-capable. */
+/** Compile error if the allowlist and {@link HastParentContent} drift apart. */
 type AssertNever<T extends never> = T;
 type _EveryHastParentIsListed = AssertNever<
   Exclude<HastParentContent["type"], (typeof HAST_PARENT_TYPES)[number]>
@@ -239,8 +233,7 @@ type _EveryListedTypeIsAParent = AssertNever<
   Exclude<(typeof HAST_PARENT_TYPES)[number], HastParentContent["type"]>
 >;
 
-/** Reject wrappers with no place for the wrapped node (leaves) — the patch
- *  engine would degrade them into sibling inserts or drop the node. */
+/** A leaf wrapper would make the patch engine drop or displace the wrapped node. */
 function assertHastWrapParent(parentNode: HastContent): void {
   const type = (parentNode as { type?: unknown }).type;
   if (typeof type === "string" && HAST_PARENT_TYPE_SET.has(type)) return;

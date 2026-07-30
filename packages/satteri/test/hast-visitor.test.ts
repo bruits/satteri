@@ -341,8 +341,6 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain('<div><h1>Hello</h1><a href="#hello">#</a></div>');
   });
 
-  // The wrapper must be a single element: anything else has no defined slot
-  // for the wrapped node, so the apply fails with the reason.
   test("context.wrapNode() rejects rawHtml that is not exactly one element", () => {
     for (const rawHtml of ["just text", "<i></i><b></b>", ""]) {
       const { handle, source } = setup("# Hello");
@@ -361,8 +359,6 @@ describe("visitHastHandle - mutations", () => {
     }
   });
 
-  // A void wrapper's children never render, which would silently drop the
-  // wrapped node at output time.
   test("context.wrapNode() rejects a void element as rawHtml wrapper", () => {
     const { handle, source } = setup("# Hello");
     const plugin = {
@@ -377,8 +373,6 @@ describe("visitHastHandle - mutations", () => {
     expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(/void element/);
   });
 
-  // Same rule as the rawHtml wrapper: a void tag renders without children, so
-  // the wrapped node would never reach the output.
   test("context.wrapNode() rejects a void element node as the wrapper", () => {
     for (const tagName of ["img", "br"]) {
       const { handle, source } = setup("# Hello");
@@ -397,8 +391,7 @@ describe("visitHastHandle - mutations", () => {
     }
   });
 
-  // Runtime companion to the compile-time parity check in hast-visitor.ts:
-  // every parent-capable type is accepted by the wrapNode allowlist.
+  // Runtime companion to the compile-time parity check in hast-visitor.ts.
   test("context.wrapNode() accepts every parent-capable HAST type", () => {
     const wrappers: HastParentContent[] = [
       { type: "element", tagName: "div", properties: {}, children: [] },
@@ -444,8 +437,7 @@ describe("visitHastHandle - mutations", () => {
     expect(wrapped?.type === "element" && wrapped.tagName).toBe("h1");
   });
 
-  // Regression (issue #182): a leaf wrapper (raw/text) has no slot for the
-  // wrapped node — it used to silently drop or displace it.
+  // Regression #182: a leaf wrapper silently dropped or displaced the node.
   test("context.wrapNode() rejects a leaf node as the wrapper", () => {
     const { handle, source } = setup("# Hello");
     const plugin = {

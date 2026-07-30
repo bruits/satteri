@@ -1077,11 +1077,9 @@ fn replay_hast_opstream(
     replay_opstream::<HastFieldCollector>(ops, builder, original_len, anchor)
 }
 
-/// Returns (arena, keep_children) for a HAST sub-tree payload. Payloads are
-/// `PAYLOAD_OPSTREAM` (declarative-compiled), plus — for wrap only —
-/// `PAYLOAD_RAW`, parsed as an HTML fragment into the wrapper element. Other
-/// ops take real hast nodes (`raw` covers opaque HTML), so raw stays rejected
-/// there.
+/// Returns (arena, keep_children) for a HAST sub-tree payload: an op-stream,
+/// or — wrap only — `PAYLOAD_RAW` parsed as an HTML fragment. Other ops don't
+/// need raw: the `raw` node type covers opaque HTML.
 fn read_hast_payload(
     reader: &mut BufReader<'_>,
     builder: &mut ArenaBuilder<Hast>,
@@ -1101,8 +1099,8 @@ fn read_hast_payload(
             ))
         }
         PAYLOAD_RAW if for_wrap => {
-            // The flags byte (RAW_LITERAL_BRACES) is an MDX parsing concern;
-            // HAST fragment parsing has no expressions, so it is ignored.
+            // Flags (RAW_LITERAL_BRACES) are an MDX concern; HTML parsing has
+            // no expressions to escape.
             let _flags = reader.read_u8()?;
             let len = reader.read_u32()? as usize;
             let raw = reader.read_str(len)?;
@@ -1125,9 +1123,8 @@ fn hast_wrap_arena_from_html(_raw: &str) -> Result<Arena<Hast>, CommandError> {
     ))
 }
 
-/// A void wrapper renders as a lone tag, so the wrapped node would never reach
-/// the output. The `{rawHtml}` parser rejects these at parse time; element
-/// payloads carry their tag too, so the same rule applies here.
+/// A void wrapper would drop the wrapped node at render. `{rawHtml}` payloads
+/// are rejected at parse time; this covers op-stream element payloads.
 fn reject_void_wrap_parent(
     parent_tree: &PatchContent<Hast>,
     grafted: &Arena<Hast>,
@@ -2315,7 +2312,6 @@ mod tests {
         b.finish()
     }
 
-    /// Push a `PAYLOAD_RAW` structural command (cmd, anchor, flags, string).
     fn push_raw_command(buf: &mut Vec<u8>, cmd: u8, node_id: u32, raw: &str) {
         buf.push(cmd);
         push_u32(buf, node_id);
@@ -2325,8 +2321,6 @@ mod tests {
         buf.extend_from_slice(raw.as_bytes());
     }
 
-    /// A HAST wrap with a `{rawHtml}` payload parses the fragment into the
-    /// wrapper element: root > section > div.
     #[cfg(feature = "from-html")]
     #[test]
     fn hast_wrap_with_raw_html_payload() {
@@ -2348,8 +2342,6 @@ mod tests {
         );
     }
 
-    /// A `{rawHtml}` wrap payload that isn't a single element errors instead
-    /// of silently mis-wrapping.
     #[cfg(feature = "from-html")]
     #[test]
     fn hast_wrap_with_invalid_raw_html_errors() {
@@ -2361,8 +2353,7 @@ mod tests {
         assert!(matches!(err, CommandError::InvalidWrapHtml(_)), "{err:?}");
     }
 
-    /// Push a wrap command whose payload is an op-stream for a single element
-    /// with `tag` — the shape a `{type: "element"}` wrapper compiles to.
+    /// The op-stream shape a `{type: "element"}` wrapper compiles to.
     fn push_element_wrap_command(buf: &mut Vec<u8>, node_id: u32, tag: &str) {
         let mut ops = Vec::new();
         ops.push(OP_OPEN);
@@ -2377,8 +2368,6 @@ mod tests {
         buf.extend_from_slice(&ops);
     }
 
-    /// A void element wrapper renders without children, so it is rejected the
-    /// same way a `{rawHtml}` void wrapper is — the wrapped node would vanish.
     #[test]
     fn hast_wrap_with_void_element_payload_errors() {
         let arena = build_hast_element(&[]);
@@ -2392,7 +2381,6 @@ mod tests {
         );
     }
 
-    /// The void check leaves ordinary element wrappers alone.
     #[test]
     fn hast_wrap_with_element_payload_wraps() {
         let arena = build_hast_element(&[]);
@@ -2413,7 +2401,6 @@ mod tests {
         );
     }
 
-    /// Raw payloads stay rejected for every HAST command except wrap.
     #[test]
     fn hast_raw_payload_rejected_outside_wrap() {
         let arena = build_hast_element(&[]);

@@ -304,8 +304,7 @@ test("context.wrapNode() wraps a node in a parent", () => {
   expect(html).toMatch(/<blockquote>.*<h1>/s);
 });
 
-// Regression (issue #182): an html leaf as the wrapper used to silently drop
-// or displace the wrapped node instead of wrapping it.
+// Regression #182: a leaf wrapper silently dropped or displaced the node.
 test("context.wrapNode() rejects a leaf node as the wrapper", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
@@ -322,8 +321,8 @@ test("context.wrapNode() rejects a leaf node as the wrapper", () => {
   expect(html).toMatch(/<h1>Hello<\/h1>/);
 });
 
-// Regression (issue #182): a raw payload used to wrap in the parse root,
-// placing the parsed content after the node instead of around it.
+// Regression #182: a raw payload wrapped in the parse root, landing the
+// parsed content after the node.
 test("context.wrapNode() rejects raw content as the wrapper", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
@@ -340,8 +339,6 @@ test("context.wrapNode() rejects raw content as the wrapper", () => {
   expect(html).toMatch(/<h1>Hello<\/h1>/);
 });
 
-// A parent-shaped custom node is a valid wrapper: it renders as an element
-// through data.hName with the wrapped node inside.
 test("context.wrapNode() accepts a user-defined parent node", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
@@ -355,8 +352,6 @@ test("context.wrapNode() accepts a user-defined parent node", () => {
   expect(html).toContain('<aside class="callout"><h1>Hello</h1></aside>');
 });
 
-// The plain shape issue #182 asked for: a custom wrapper with no hName still
-// renders as a <div> around the node.
 test("context.wrapNode() wraps a node in a bare user-defined parent", () => {
   const html = visitAndRender("# Hello", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {
@@ -366,9 +361,8 @@ test("context.wrapNode() wraps a node in a bare user-defined parent", () => {
   expect(html).toContain("<div><h1>Hello</h1></div>");
 });
 
-// Hand-written lists rather than the materializer's LEAF_TYPES the check reads,
-// so a type misclassified for wrapping surfaces here instead of as a dropped
-// node at render time.
+// Lists are hand-written on purpose — independent of the LEAF_TYPES the check
+// reads, so a misclassified type surfaces here.
 test("context.wrapNode() accepts built-in parents and rejects built-in leaves", () => {
   const parents: MdastParentContent[] = [
     { type: "paragraph", children: [] },

@@ -679,8 +679,8 @@ fn apply_patches_impl<K: ArenaKind>(
                 return Err(CommandError::WrapOnRemovedNode(*node_id));
             }
             // A ROOT-typed wrapper only arises from a parsed raw payload;
-            // treating it as the wrapper would silently degrade the wrap
-            // into sibling insertion (the root serializes transparently).
+            // treating it as the wrapper silently degrades the wrap into
+            // sibling insertion.
             Patch::Wrap { parent_tree, .. }
                 if match parent_tree {
                     PatchContent::Tree(t) => {
@@ -1958,9 +1958,7 @@ mod tests {
         );
     }
 
-    /// A root-wrapped wrap payload (the shape a parsed raw string produces)
-    /// is rejected up front instead of silently wrapping in a transparent
-    /// root and pushing the parsed content after the anchor.
+    /// A root-wrapped payload is the shape a parsed raw string produces.
     #[test]
     fn wrap_with_root_payload_is_rejected() {
         let orig = build_hello_world();

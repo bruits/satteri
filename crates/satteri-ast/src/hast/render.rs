@@ -210,8 +210,7 @@ pub(crate) fn render_node_inner<'cb>(
     }
 }
 
-/// A void element renders as a single tag, so any children it is given never
-/// reach the output.
+/// Void elements render as a single tag; any children never reach the output.
 pub fn is_void_element(tag: &str) -> bool {
     matches!(
         tag,

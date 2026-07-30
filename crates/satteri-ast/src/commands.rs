@@ -56,12 +56,11 @@ pub enum CommandError {
     /// A structurally valid but re-entrant patch shape (e.g. a payload ref
     /// naming its own anchor's ancestor) that in-place application rejects.
     UnsupportedPatchShape(&'static str),
-    /// `wrapNode` was given `{rawHtml}` content that doesn't yield a usable
-    /// wrapper; the message says why (not a single element, void element, or
-    /// a build without HTML parsing).
+    /// A `wrapNode` `{rawHtml}` payload with no usable wrapper; the string
+    /// says why.
     InvalidWrapHtml(String),
-    /// `wrapNode` was given a void element as the wrapper, which renders
-    /// without children and would drop the wrapped node. Holds the tag name.
+    /// A void element (the tag) as the wrapper would render without children,
+    /// dropping the wrapped node.
     VoidWrapParent(String),
 }
 
