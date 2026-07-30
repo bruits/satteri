@@ -269,8 +269,8 @@ export class MdastVisitorContext {
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
-   * The document root takes a `root` and nothing else, swapping the whole
-   * document; it is the only place a `root` is accepted as content.
+   * The document root takes a `root` and nothing else — the one place a
+   * `root` is accepted as content.
    */
   replaceNode(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode");
@@ -293,8 +293,6 @@ export class MdastVisitorContext {
       }
       return;
     }
-    // The root is the one node a `root` may replace, and an id comparison
-    // keeps the swap off the per-node encoder.
     if (id === ROOT_NODE_ID) {
       emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode));
       return;
@@ -419,7 +417,6 @@ type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
   context: MdastVisitorContext,
 ) => MdastVisitorResult | Promise<MdastVisitorResult>;
 
-/** Unlike visitors, return values are ignored — hooks mutate via `context`. */
 type MdastHookFn = (
   root: Readonly<MdastRoot>,
   context: MdastVisitorContext,
@@ -428,16 +425,11 @@ type MdastHookFn = (
 export interface MdastPluginInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
-  /**
-   * Runs once per document — even an empty one — before any of the plugin's
-   * visitors; awaited before they dispatch when async.
-   */
+  /** Runs once per document — an empty one included — before the plugin's
+   *  visitors, awaited when async. */
   before?: MdastHookFn;
-  /**
-   * Runs once per document — even an empty one — after all of the plugin's
-   * visitors have settled, so it can emit output built from state they
-   * collected.
-   */
+  /** Runs once per document — an empty one included — after the plugin's
+   *  visitors have settled, awaited when async. */
   after?: MdastHookFn;
   paragraph?: MdastVisitorFn<Paragraph>;
   heading?: MdastVisitorFn<Heading>;
@@ -541,10 +533,8 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
   }
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
   if (typeof plugin.before === "function" || typeof plugin.after === "function") {
-    // Node 0 always exists, so this matches exactly once per document, empty
-    // ones included. Dispatch keys off it being the *only* root subscription;
-    // fail loudly here if `root` ever becomes subscribable, rather than with a
-    // bare TypeError deep in the visitor loop.
+    // Node 0 always exists, so subscribing by type fires exactly once per
+    // document. Dispatch also assumes this is the only root subscription.
     if (process.env.NODE_ENV !== "production" && subs.some((s) => s.nodeType === MDAST_ROOT)) {
       throw new Error("satteri: `root` is subscribable, which breaks plugin hook dispatch");
     }
@@ -783,8 +773,7 @@ function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: u
   });
 }
 
-/** Swap the whole document: a `root` payload lands on node 0 instead of a
- *  sibling slot. Kept off the per-node encoder, which rejects a `root`. */
+/** Separate from the per-node encoder, which rejects a `root` payload. */
 function emitMdastRootReplace(buffer: CommandBuffer, root: MdastContent): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
     emitMdastRootOp(buffer, root as unknown as Record<string, unknown>),
@@ -1060,9 +1049,8 @@ export function visitMdastHandle(
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  // `root` is not a subscribable visitor key, so a root match can only come
-  // from the hook subscription at index subs.length, and pre-order puts it
-  // first. `buildMdastSubscriptions` guards that invariant in dev.
+  // `root` is not a subscribable visitor key, so a sub index past the
+  // visitors can only be the hook subscription — and pre-order puts it first.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
     return visitMdastHandleWithHooks(
       handle,
@@ -1104,10 +1092,8 @@ type DeferredMdastVisit = {
   originalNode: MdastNode;
 };
 
-/** Dispatch matched nodes to visitor functions from `startIndex` on (the hook
- *  pass skips the leading root match). Returns null when every visitor was
- *  sync, else the ones still pending. Top-level rather than a closure over the
- *  caller's locals — capture measurably slowed per-node dispatch. */
+/** Top-level rather than a closure over the caller's locals — capture
+ *  measurably slowed per-node dispatch. */
 function dispatchMdastMatches(
   matchView: DataView,
   matchBuf: Uint8Array,
@@ -1149,7 +1135,6 @@ function dispatchMdastMatches(
   return deferred;
 }
 
-/** Settle the async visitors, then apply their results in match order. */
 function applyDeferredMdastResults(
   deferred: DeferredMdastVisit[],
   returnBuffer: CommandBuffer,
@@ -1165,8 +1150,7 @@ function applyDeferredMdastResults(
   });
 }
 
-/** Match 0 must be the hook root (caller-checked). Cold by design — see the
- *  call site. */
+/** Match 0 must be the hook root — the caller checks it, this does not. */
 function visitMdastHandleWithHooks(
   handle: MdastHandle,
   plugin: MdastPluginInstance,
