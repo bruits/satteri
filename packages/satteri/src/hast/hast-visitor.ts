@@ -70,6 +70,7 @@ import {
   mergeAndReset,
   type PluginOptions,
   ROOT_NODE_ID,
+  requireRootReplacement,
   unencodableContentError,
 } from "../visitor-shared.js";
 import {
@@ -139,8 +140,8 @@ export interface HastVisitorContext {
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
-   * Passing the document root a `root` swaps the whole document — the only
-   * place a `root` is accepted as content.
+   * The document root takes a `root` and nothing else, swapping the whole
+   * document; it is the only place a `root` is accepted as content.
    */
   replaceNode(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -279,8 +280,7 @@ function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node:
 }
 
 /** Swap the whole document: a `root` payload lands on node 0 instead of a
- *  sibling slot. Only a hook can hold the root, so this and its encoder stay
- *  out of the per-node path entirely. */
+ *  sibling slot. Kept off the per-node encoder, which rejects a `root`. */
 function emitHastRootReplace(buffer: CommandBuffer, root: HastContent): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
     emitHastRootOp(buffer, root as unknown as Record<string, unknown>),
@@ -407,8 +407,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
       if (previous === undefined) {
         // Replacing with nothing drops the node, like removeNode.
         this.removeNode(node);
-      } else if (id === ROOT_NODE_ID && (previous as { type?: string }).type === "root") {
-        emitHastRootReplace(this.#commandBuffer, previous);
+      } else if (id === ROOT_NODE_ID) {
+        emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous));
       } else {
         emitHastTree(this.#commandBuffer, "replace", id, previous);
       }
@@ -416,10 +416,10 @@ class HastVisitorContextImpl implements HastVisitorContext {
       this.#pendingNodes.delete(id);
       return;
     }
-    // The root is the one node a `root` may replace, and only a hook can hold
-    // it — an id comparison keeps the swap off the per-node encoder.
-    if (id === ROOT_NODE_ID && (newNode as { type?: string }).type === "root") {
-      emitHastRootReplace(this.#commandBuffer, newNode);
+    // The root is the one node a `root` may replace, and an id comparison
+    // keeps the swap off the per-node encoder.
+    if (id === ROOT_NODE_ID) {
+      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode));
       return;
     }
     emitHastTree(this.#commandBuffer, "replace", id, newNode);

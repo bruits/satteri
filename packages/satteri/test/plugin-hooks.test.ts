@@ -3,7 +3,7 @@ import { markdownToHtml, mdxToJs } from "../src/compile.js";
 import type { MdastVisitorContext } from "../src/mdast/mdast-visitor.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { MdastNode } from "../src/types.js";
-import type { Root as MdastRoot } from "mdast";
+import type { Root as MdastRoot, Heading } from "mdast";
 import type { Root as HastRoot, Element } from "hast";
 
 describe("mdast lifecycle hooks", () => {
@@ -295,7 +295,7 @@ describe("mdast lifecycle hooks", () => {
       mdastPlugins: [
         {
           name: "both",
-          heading(node: MdastNode, ctx: MdastVisitorContext) {
+          heading(node: Heading, ctx: MdastVisitorContext) {
             ctx.setProperty(node, "depth", 3);
           },
           after(root: MdastRoot, ctx: MdastVisitorContext) {
@@ -501,6 +501,137 @@ describe("mdast lifecycle hooks", () => {
         ],
       }),
     ).toThrow(/cannot encode replacement content of type "root"/);
+  });
+
+  test("replacing the root with a non-root node is rejected", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          {
+            name: "bad",
+            after(root: MdastRoot, ctx: MdastVisitorContext) {
+              ctx.replaceNode(root, {
+                type: "paragraph",
+                children: [{ type: "text", value: "p" }],
+              });
+            },
+          },
+        ],
+      }),
+    ).toThrow(/replaceNode on the document root takes a `root`, not "paragraph"/);
+  });
+
+  test("replacing the root with a non-root array tail is rejected", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          {
+            name: "bad",
+            after(root: MdastRoot, ctx: MdastVisitorContext) {
+              ctx.replaceNode(root, [{ type: "thematicBreak" }]);
+            },
+          },
+        ],
+      }),
+    ).toThrow(/replaceNode on the document root takes a `root`/);
+  });
+
+  test("a visitor reaching the root via parent() cannot replace it with a non-root", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          {
+            name: "bad",
+            heading(node: Heading, ctx: MdastVisitorContext) {
+              ctx.replaceNode(ctx.parent(node), { type: "thematicBreak" });
+            },
+          },
+        ],
+      }),
+    ).toThrow(/replaceNode on the document root takes a `root`/);
+  });
+
+  test("a later plugin's hooks survive every root mutation", () => {
+    const mutate: Record<string, (root: MdastRoot, ctx: MdastVisitorContext) => void> = {
+      replace: (root, ctx) =>
+        ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] }),
+      wrap: (root, ctx) => ctx.wrapNode(root, { type: "blockquote", children: [] }),
+      remove: (root, ctx) => ctx.removeNode(root),
+      setChildren: (root, ctx) => ctx.setProperty(root, "children", [{ type: "thematicBreak" }]),
+      append: (root, ctx) => ctx.appendChild(root, { type: "thematicBreak" }),
+    };
+    for (const [name, fn] of Object.entries(mutate)) {
+      const seen: string[] = [];
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          { name: "mutate", after: fn },
+          { name: "observe", after: (root: MdastRoot) => void seen.push(root.type) },
+        ],
+      });
+      expect(seen, name).toEqual(["root"]);
+    }
+  });
+
+  test("wrapNode wraps the root, and still rejects a leaf wrapper", () => {
+    const { html } = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        {
+          name: "wrap",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.wrapNode(root, { type: "blockquote", children: [] });
+          },
+        },
+      ],
+    }) as { html: string };
+    expect(html).toBe("<blockquote>\n<h1>Hi</h1>\n</blockquote>\n");
+
+    expect(() =>
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          {
+            name: "wrap-leaf",
+            after(root: MdastRoot, ctx: MdastVisitorContext) {
+              ctx.wrapNode(root, { type: "thematicBreak" } as never);
+            },
+          },
+        ],
+      }),
+    ).toThrow(/"thematicBreak" nodes cannot hold children/);
+  });
+
+  test("the sibling operations throw on the root", () => {
+    for (const op of ["insertBefore", "insertAfter"] as const) {
+      expect(() =>
+        markdownToHtml("# Hi", {
+          mdastPlugins: [
+            {
+              name: op,
+              after(root: MdastRoot, ctx: MdastVisitorContext) {
+                ctx[op](root, { type: "thematicBreak" });
+              },
+            },
+          ],
+        }),
+      ).toThrow(/sibling insert on root/);
+    }
+  });
+
+  test("the child operations work on the root", () => {
+    const run = (after: (root: MdastRoot, ctx: MdastVisitorContext) => void) =>
+      (
+        markdownToHtml("# Hi\n\nWorld", { mdastPlugins: [{ name: "child", after }] }) as {
+          html: string;
+        }
+      ).html;
+
+    expect(run((root, ctx) => ctx.prependChild(root, { type: "thematicBreak" }))).toBe(
+      "<hr>\n<h1>Hi</h1>\n<p>World</p>\n",
+    );
+    expect(run((root, ctx) => ctx.insertChildAt(root, 1, { type: "thematicBreak" }))).toBe(
+      "<h1>Hi</h1>\n<hr>\n<p>World</p>\n",
+    );
+    expect(run((root, ctx) => ctx.removeChildAt(root, 0))).toBe("<p>World</p>\n");
+    expect(run((root, ctx) => ctx.removeNode(root))).toBe("");
   });
 });
 
@@ -814,5 +945,78 @@ describe("hast lifecycle hooks", () => {
         ],
       }),
     ).toThrow(/cannot encode replacement content of type "root"/);
+  });
+
+  test("replacing the root with a non-root node is rejected", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        hastPlugins: [
+          {
+            name: "bad",
+            after(root: HastRoot, ctx: HastVisitorContext) {
+              ctx.replaceNode(root, {
+                type: "element",
+                tagName: "section",
+                properties: {},
+                children: [],
+              });
+            },
+          },
+        ],
+      }),
+    ).toThrow(/replaceNode on the document root takes a `root`, not "element"/);
+  });
+
+  test("an mdast root swap does not strand the hast hooks", () => {
+    const seen: string[] = [];
+    const { html } = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        {
+          name: "swap",
+          after(root: MdastRoot, ctx: MdastVisitorContext) {
+            ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] });
+          },
+        },
+      ],
+      hastPlugins: [{ name: "observe", after: (root: HastRoot) => void seen.push(root.type) }],
+    }) as { html: string };
+    expect(seen).toEqual(["root"]);
+    expect(html).toBe("<hr>\n");
+  });
+
+  test("wrapNode wraps the root, and still rejects a void wrapper", () => {
+    const wrap = (tagName: string) =>
+      (
+        markdownToHtml("# Hi", {
+          hastPlugins: [
+            {
+              name: "wrap",
+              after(root: HastRoot, ctx: HastVisitorContext) {
+                ctx.wrapNode(root, { type: "element", tagName, properties: {}, children: [] });
+              },
+            },
+          ],
+        }) as { html: string }
+      ).html;
+
+    expect(wrap("div")).toBe("<div><h1>Hi</h1></div>\n");
+    expect(() => wrap("br")).toThrow(/<br> is a void element/);
+  });
+
+  test("the sibling operations throw on the root", () => {
+    for (const op of ["insertBefore", "insertAfter"] as const) {
+      expect(() =>
+        markdownToHtml("# Hi", {
+          hastPlugins: [
+            {
+              name: op,
+              after(root: HastRoot, ctx: HastVisitorContext) {
+                ctx[op](root, { type: "element", tagName: "hr", properties: {}, children: [] });
+              },
+            },
+          ],
+        }),
+      ).toThrow(/sibling insert on root/);
+    }
   });
 });

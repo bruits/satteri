@@ -298,7 +298,7 @@ const toc = () => {
 
 The child operations — `appendChild`, `prependChild`, `insertChildAt`, `removeChildAt` — work on the root as they do on any node, as do `removeNode`, `setProperty` and `wrapNode`. The sibling ones do not: the root has no siblings, so `insertBefore` and `insertAfter` throw on it.
 
-`replaceNode` works on the root too, and it is how a hook swaps the whole document for a tree it built itself. The root is the one place a `root` node is accepted as content; children taken from the old root are reused as they are, rather than rebuilt:
+`replaceNode` works on the root too, and it is how a hook swaps the whole document for a tree it built itself. The root is the one place a `root` node is accepted as content — and the only content it accepts, since a document headed by anything else stops firing hooks. Children taken from the old root are reused as they are, rather than rebuilt:
 
 ```js
 after(root, ctx) {
