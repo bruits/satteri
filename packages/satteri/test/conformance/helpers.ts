@@ -1,5 +1,8 @@
-import { evaluate as mdxEvaluate } from "@mdx-js/mdx";
-import type { EvaluateOptions as MdxEvaluateOptions } from "@mdx-js/mdx";
+import { compile as mdxCompile, evaluate as mdxEvaluate } from "@mdx-js/mdx";
+import type {
+  CompileOptions as MdxCompileOptions,
+  EvaluateOptions as MdxEvaluateOptions,
+} from "@mdx-js/mdx";
 import {
   evaluate as satteriEvaluate,
   defineHastPlugin,
@@ -9,7 +12,7 @@ import {
   markdownToHtml,
   mdxToJs,
 } from "../../src/index.js";
-import type { Features, EvaluateOptions } from "../../src/index.js";
+import type { Features, EvaluateOptions, MarkdownToJsOptions, HastNode } from "../../src/index.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import * as runtime from "react/jsx-runtime";
@@ -450,6 +453,9 @@ export function satteriHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
+// Collapses whitespace around tags, so it also hides whitespace-only text
+// nodes next to an element — including the newlines the mdast→hast table
+// handler inserts, which JSX strips on the reference side but satteri keeps.
 function normalizeHtml(html: string): string {
   return html.replace(/>\s+</g, "><").replace(/\s+</g, "<").replace(/>\s+/g, ">").trim();
 }
@@ -486,21 +492,73 @@ export interface MarkdownJsConformanceOptions {
   rawHtml?: boolean;
   /** Enable frontmatter on both sides. */
   frontmatter?: boolean;
+  /** Enable math on both sides: satteri `features.math`, reference remark-math. */
+  math?: boolean;
+  /**
+   * Install the {@link rewriteRawToCode} plugin on both pipelines. Pins the
+   * point at which raw HTML is dropped: it must still be in the tree while
+   * hast/rehype plugins run, so only what they leave behind disappears.
+   */
+  rewriteRaw?: boolean;
 }
+
+/** Replace every `raw` node with a `<code>` element holding its verbatim text,
+ *  so a raw node the plugin saw shows up in the rendered output instead of
+ *  being dropped. Written twice, once per pipeline's plugin API. */
+const rewriteRawToCode = {
+  reference: () => (tree: Nodes) => {
+    const walk = (node: Nodes): void => {
+      if (!("children" in node)) return;
+      node.children = node.children.map((child) => {
+        walk(child as Nodes);
+        return child.type === "raw"
+          ? ({
+              type: "element",
+              tagName: "code",
+              properties: {},
+              children: [{ type: "text", value: child.value }],
+            } as Nodes)
+          : child;
+      }) as typeof node.children;
+    };
+    walk(tree);
+  },
+  satteri: defineHastPlugin({
+    name: "rewrite-raw-to-code",
+    raw(node) {
+      return {
+        type: "element",
+        tagName: "code",
+        properties: {},
+        children: [{ type: "text", value: node.value }],
+      } as HastNode;
+    },
+  }),
+};
 
 export async function assertMarkdownJsConformance(
   input: string,
   options: MarkdownJsConformanceOptions = {},
 ): Promise<void> {
-  const { components = {}, rawHtml = false, frontmatter = false } = options;
+  const {
+    components = {},
+    rawHtml = false,
+    frontmatter = false,
+    math = false,
+    rewriteRaw = false,
+  } = options;
 
   const remarkPlugins: unknown[] = [remarkGfm];
   if (frontmatter) remarkPlugins.push([remarkFrontmatter, ["yaml", "toml"]]);
+  if (math) remarkPlugins.push(remarkMath);
+  const rehypePlugins: unknown[] = [];
+  if (rawHtml) rehypePlugins.push(rehypeRaw);
+  if (rewriteRaw) rehypePlugins.push(rewriteRawToCode.reference);
   const { default: MdxComponent } = (await mdxEvaluate(input, {
     ...mdxRuntime,
     format: "md",
     remarkPlugins: remarkPlugins as MdxEvaluateOptions["remarkPlugins"],
-    rehypePlugins: rawHtml ? [rehypeRaw] : [],
+    rehypePlugins: rehypePlugins as MdxEvaluateOptions["rehypePlugins"],
   })) as { default: Function };
   const mdxHtml = renderToStaticMarkup(
     createElement(MdxComponent as React.FC<Record<string, unknown>>, { components }),
@@ -508,7 +566,8 @@ export async function assertMarkdownJsConformance(
 
   const { code } = markdownToJs(input, {
     outputFormat: "function-body",
-    features: { frontmatter, math: false, rawHtml },
+    features: { frontmatter, math, rawHtml },
+    hastPlugins: rewriteRaw ? [rewriteRawToCode.satteri] : [],
   });
   const { default: SatComponent } = new Function(code)(satteriRuntime) as { default: Function };
   const satHtml = renderToStaticMarkup(
@@ -516,6 +575,119 @@ export async function assertMarkdownJsConformance(
   );
 
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
+}
+
+/** The parts of a compiled ES module that the JS-output options govern: the
+ *  pragma comments, what it imports, what it exports, and which runtime pieces
+ *  it uses. */
+interface ModuleEnvelope {
+  pragmas: string[];
+  imports: string[];
+  defaultExport: string | null;
+  markers: string[];
+}
+
+// Substrings whose presence the two compilers must agree on. Deliberately not
+// a formatting comparison: satteri emits `Object.assign` where @mdx-js/mdx
+// spreads, and pretty-prints differently.
+const ENVELOPE_MARKERS = [
+  "_createMdxContent",
+  "MDXContent",
+  "MDXLayout",
+  "_provideComponents",
+  "_missingMdxReference",
+  "props.components",
+  "_Fragment",
+  "_jsx",
+  "_jsxs",
+  "_jsxDEV",
+  "React.createElement",
+];
+
+function moduleEnvelope(code: string): ModuleEnvelope {
+  const imports: string[] = [];
+  const importRe = /import\s+(?:([\w$]+)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s*"([^"]+)"/g;
+  for (const match of code.matchAll(importRe)) {
+    const names: string[] = [];
+    if (match[1]) names.push(`default as ${match[1]}`);
+    if (match[2])
+      names.push(
+        ...match[2]
+          .split(",")
+          .map((name) => name.trim().replace(/\s+/g, " "))
+          .filter(Boolean),
+      );
+    imports.push(`${match[3]}: ${names.sort().join(", ")}`);
+  }
+  const defaultExport = /export default (?:function\s+)?([\w$]+)/.exec(code);
+  return {
+    pragmas: [...code.matchAll(/\/\*(@jsx[A-Za-z]*\s[^*]*)\*\//g)].map((match) => match[1]!.trim()),
+    imports: imports.sort(),
+    defaultExport: defaultExport ? defaultExport[1]! : null,
+    markers: ENVELOPE_MARKERS.filter((marker) =>
+      new RegExp(`${marker.replaceAll(".", "\\.")}\\b`).test(code),
+    ),
+  };
+}
+
+/**
+ * Compare the compiled ES module's envelope against @mdx-js/mdx `format: "md"`
+ * for the same options. Covers the JS-output options that shape the module
+ * rather than the rendered tree — `outputFormat: "program"`, the JSX runtime
+ * selection, `development`, and `providerImportSource` — which the
+ * evaluate-and-render comparison cannot see.
+ */
+export async function assertMarkdownJsModuleConformance(
+  input: string,
+  options: MarkdownToJsOptions & { frontmatter?: boolean } = {},
+): Promise<void> {
+  const { frontmatter = false, features, ...jsOptions } = options;
+  const remarkPlugins: unknown[] = [remarkGfm];
+  if (frontmatter) remarkPlugins.push([remarkFrontmatter, ["yaml", "toml"]]);
+
+  const expected = moduleEnvelope(
+    String(
+      await mdxCompile(input, {
+        format: "md",
+        remarkPlugins: remarkPlugins as MdxCompileOptions["remarkPlugins"],
+        ...(jsOptions as MdxCompileOptions),
+      }),
+    ),
+  );
+  const { code } = markdownToJs(input, {
+    ...jsOptions,
+    features: { frontmatter, math: false, ...features },
+  });
+  expect(moduleEnvelope(code)).toEqual(expected);
+}
+
+/**
+ * Compare the `__source` metadata `development: true` attaches to every JSX
+ * call — one `line:column` per element, in source order — against @mdx-js/mdx
+ * `format: "md"`. Elements converted from Markdown must be positioned too, not
+ * just author-written JSX.
+ */
+export async function assertMarkdownJsDevPositionConformance(input: string): Promise<void> {
+  const positions = (code: string): string[] =>
+    [...code.matchAll(/lineNumber: (\d+),\s*columnNumber: (\d+)/g)].map(
+      (match) => `${match[1]}:${match[2]}`,
+    );
+
+  const expected = positions(
+    String(
+      await mdxCompile(input, {
+        format: "md",
+        development: true,
+        remarkPlugins: [remarkGfm] as MdxCompileOptions["remarkPlugins"],
+      }),
+    ),
+  );
+  const { code } = markdownToJs(input, {
+    development: true,
+    features: { frontmatter: false, math: false },
+  });
+  expect(expected.length).toBeGreaterThan(0);
+  expect(positions(code)).toEqual(expected);
 }
 
 // Like `assertMdxConformance`, but with math enabled on both pipelines

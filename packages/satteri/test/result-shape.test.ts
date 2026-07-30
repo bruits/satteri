@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { markdownToHtml, mdxToJs } from "../src/compile.js";
+import { markdownToHtml, markdownToJs, mdxToJs } from "../src/compile.js";
 import { defineMdastPlugin, defineHastPlugin } from "../src/plugin.js";
 
 describe("result.data", () => {
@@ -66,6 +66,33 @@ describe("result.data", () => {
     });
     const out = mdxToJs("hello", { mdastPlugins: [plugin] });
     expect(out.data).toEqual({ fromMdx: true });
+  });
+
+  it("is also present on markdownToJs result", () => {
+    const plugin = defineHastPlugin({
+      name: "writer",
+      element: {
+        filter: ["p"],
+        visit(_node, ctx) {
+          ctx.data.fromMarkdown = true;
+        },
+      },
+    });
+    const out = markdownToJs("hello", { hastPlugins: [plugin] });
+    expect(out.data).toEqual({ fromMarkdown: true });
+  });
+
+  it("seeds markdownToJs from the data option and reads mutations back", () => {
+    const plugin = defineMdastPlugin({
+      name: "reader-writer",
+      paragraph(_node, ctx) {
+        ctx.data.seen = ctx.data.seed;
+      },
+    });
+    const data = { seed: "in" };
+    const out = markdownToJs("hello", { data, mdastPlugins: [plugin] });
+    expect(out.data).toBe(data);
+    expect(out.data).toEqual({ seed: "in", seen: "in" });
   });
 
   it("is an empty object when ctx.data is touched but no key is written", () => {

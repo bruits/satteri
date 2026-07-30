@@ -1,5 +1,5 @@
 import { test, expect } from "vitest";
-import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
+import { markdownToHtml, markdownToJs, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 
 // `rawHtml` is applied during MDAST→HAST conversion, so every pipeline — the
 // no-plugin fast path, the MDAST-plugin fused tail, and the full
@@ -64,6 +64,54 @@ test("rawHtml off leaves raw HTML verbatim on every path", () => {
   const { html } = sync(markdownToHtml(src, { mdastPlugins: [noopMdast] }));
   expect(html).toContain('class="a  b"');
   expect(html).not.toContain("<tbody>");
+});
+
+// The JS path adds a wrinkle: without the reparse, raw HTML has no JSX
+// representation and is dropped, so the reparse is the only way it survives.
+function expectReparsedJs(code: string) {
+  expect(code).toContain('className: "a b"');
+  expect(code).toContain('tbody: "tbody"');
+  expect(code).toContain('strong: "strong"');
+}
+
+test("markdownToJs applies rawHtml on the fast path", () => {
+  const { code } = markdownToJs(src, { features: { rawHtml: true } });
+  expectReparsedJs(code);
+});
+
+test("markdownToJs applies rawHtml on the mdast-plugin path", () => {
+  const { code } = markdownToJs(src, {
+    features: { rawHtml: true },
+    mdastPlugins: [noopMdast],
+  });
+  expectReparsedJs(code);
+});
+
+test("markdownToJs hast plugins see reparsed elements on the mdast+hast path", () => {
+  const { code } = markdownToJs(src, {
+    features: { rawHtml: true },
+    mdastPlugins: [noopMdast],
+    hastPlugins: [divToSection],
+  });
+  expect(code).toContain('section: "section"');
+  expect(code).toContain('className: "a b"');
+  expect(code).toContain('tbody: "tbody"');
+});
+
+test("markdownToJs drops raw HTML on every path when rawHtml is off", () => {
+  for (const options of [
+    {},
+    { mdastPlugins: [noopMdast] },
+    { hastPlugins: [divToSection] },
+    { mdastPlugins: [noopMdast], hastPlugins: [divToSection] },
+  ]) {
+    const { code } = markdownToJs(src, options);
+    expect(code).not.toContain("<div");
+    expect(code).not.toContain("<table");
+    expect(code).not.toContain('tbody: "tbody"');
+    // The Markdown inside the raw block still compiles.
+    expect(code).toContain('strong: "strong"');
+  }
 });
 
 test("plugin-spliced raw HTML is reparsed too", () => {

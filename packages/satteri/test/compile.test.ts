@@ -10,6 +10,7 @@ import {
   defineMdastPlugin,
   defineHastPlugin,
 } from "../src/index.js";
+import type { MarkdownToJsOptions } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { MdastNode } from "../src/types.js";
@@ -1732,6 +1733,229 @@ describe("markdownToJs", () => {
     const { code: js } = markdownToJs("Hello {x}", { hastPlugins: [addClass] });
     expect(js).toContain('class: "prose"');
     expect(js).toContain('"Hello {x}"');
+  });
+
+  // The four pipelines (fast path, MDAST fused tail, HAST plugins, both) each
+  // build the HAST arena differently, and every one of them has to extract
+  // frontmatter and mark the arena as plain Markdown so raw HTML is dropped.
+  describe("every pipeline path", () => {
+    const src = "---\ntitle: T\n---\n\npara <b>x</b>\n";
+    const noopMdast = defineMdastPlugin({ name: "noop-mdast", paragraph() {} });
+    const noopHast = defineHastPlugin({
+      name: "noop-hast",
+      element: { filter: ["p"], visit() {} },
+    });
+    const mutatingHast = defineHastPlugin({
+      name: "mutating-hast",
+      element: {
+        filter: ["p"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "data-seen", "1");
+        },
+      },
+    });
+    const paths: Array<[string, MarkdownToJsOptions]> = [
+      ["fast path", {}],
+      ["mdast plugins only", { mdastPlugins: [noopMdast] }],
+      ["hast plugins only", { hastPlugins: [noopHast] }],
+      ["hast plugins with mutations", { hastPlugins: [mutatingHast] }],
+      ["both plugin kinds", { mdastPlugins: [noopMdast], hastPlugins: [mutatingHast] }],
+    ];
+
+    for (const [name, options] of paths) {
+      test(`${name}: returns frontmatter and drops raw HTML`, () => {
+        const { code: js, frontmatter } = markdownToJs(src, options);
+        expect(frontmatter).toEqual({ kind: "yaml", value: "title: T" });
+        expect(js).toContain("para");
+        expect(js).not.toContain('b: "b"');
+        expect(js).not.toContain("<b>");
+      });
+
+      test(`${name}: applies rawHtml`, () => {
+        const { code: js } = markdownToJs("a <b>x</b>", {
+          ...options,
+          features: { rawHtml: true },
+        });
+        expect(js).toContain('b: "b"');
+      });
+    }
+  });
+
+  describe("raw HTML and plugins", () => {
+    test("a hast plugin sees raw nodes before they are dropped", () => {
+      const seen: string[] = [];
+      const spy = defineHastPlugin({
+        name: "spy",
+        raw(node) {
+          seen.push(node.value);
+        },
+      });
+      markdownToJs("a <b>x</b>", { hastPlugins: [spy] });
+      expect(seen).toEqual(["<b>", "</b>"]);
+    });
+
+    test("a hast plugin can replace a raw node with an element", () => {
+      const rewrite = defineHastPlugin({
+        name: "rewrite-raw",
+        raw(node) {
+          return {
+            type: "element" as const,
+            tagName: "code",
+            properties: {},
+            children: [{ type: "text" as const, value: node.value }],
+          } as HastNode;
+        },
+      });
+      const { code: js } = markdownToJs("a <b>x</b>", { hastPlugins: [rewrite] });
+      expect(js).toContain('code: "code"');
+      expect(js).toContain('"<b>"');
+    });
+
+    test("a raw node a hast plugin returns is dropped like any other", () => {
+      const inject = defineHastPlugin({
+        name: "inject-raw",
+        element: {
+          filter: ["p"],
+          visit() {
+            return { type: "raw" as const, value: "<b>bold</b>" } as HastNode;
+          },
+        },
+      });
+      const { code: js } = markdownToJs("p", { hastPlugins: [inject] });
+      expect(js).not.toContain("bold");
+    });
+
+    test("an mdast plugin's { raw } insertion keeps only its text", () => {
+      const inject = defineMdastPlugin({
+        name: "inject-raw",
+        paragraph() {
+          return { raw: "<b>bold</b>", mdxExpressions: false };
+        },
+      });
+      const { code: js } = markdownToJs("p", { mdastPlugins: [inject] });
+      expect(js).toContain("bold");
+      expect(js).not.toContain('b: "b"');
+    });
+
+    test("an mdast plugin's { raw } insertion becomes elements with rawHtml", () => {
+      const inject = defineMdastPlugin({
+        name: "inject-raw",
+        paragraph() {
+          return { raw: "<b>bold</b>", mdxExpressions: false };
+        },
+      });
+      const { code: js } = markdownToJs("p", {
+        mdastPlugins: [inject],
+        features: { rawHtml: true },
+      });
+      expect(js).toContain('b: "b"');
+    });
+
+    test("the mdxToJs error points at both escape hatches", () => {
+      const injectHtml = defineMdastPlugin({
+        name: "inject-html",
+        paragraph() {
+          return { type: "html" as const, value: "<b>x</b>" } as MdastNode;
+        },
+      });
+      expect(() => mdxToJs("p", { mdastPlugins: [injectHtml] })).toThrow(/rawHtml/);
+      expect(() => mdxToJs("p", { mdastPlugins: [injectHtml] })).toThrow(/mdxExpressions/);
+    });
+
+    test("optimizeStatic injects raw HTML verbatim instead of dropping it", () => {
+      // Collapsing a static subtree serializes it back to HTML, so raw HTML
+      // rides along in the injected string rather than being dropped.
+      const { code: js } = markdownToJs("a <b>bold</b> word", {
+        optimizeStatic: { component: "Fragment", prop: "set:html" },
+      });
+      expect(js).toContain('"set:html": "<p>a <b>bold</b> word</p>"');
+    });
+  });
+
+  // The JS-output options are shared with `mdxToJs` but reach the plain-Markdown
+  // path through its own NAPI entry point.
+  describe("JS output options", () => {
+    test("compiles to an ES module by default", () => {
+      const { code: js } = markdownToJs("# Hello");
+      expect(js).toContain('import { jsx as _jsx } from "react/jsx-runtime"');
+      expect(js).toContain("export default MDXContent;");
+      expect(js).not.toContain("arguments[0]");
+    });
+
+    test("outputFormat: 'function-body' reads the runtime from arguments[0]", () => {
+      const { code: js } = markdownToJs("# Hello", { outputFormat: "function-body" });
+      expect(js).toContain("arguments[0]");
+      expect(js).not.toContain("import {");
+      expect(js).not.toContain("export default");
+    });
+
+    test("jsxImportSource selects the runtime module", () => {
+      const { code: js } = markdownToJs("# Hello", { jsxImportSource: "preact" });
+      expect(js).toContain('from "preact/jsx-runtime"');
+    });
+
+    test("jsxRuntime: 'classic' emits createElement calls", () => {
+      const { code: js } = markdownToJs("# Hello", { jsxRuntime: "classic" });
+      expect(js).toContain('import React from "react"');
+      expect(js).toContain("React.createElement");
+    });
+
+    test("providerImportSource pulls components from the provider", () => {
+      const { code: js } = markdownToJs("# Hello", { providerImportSource: "@mdx-js/react" });
+      expect(js).toContain(
+        'import { useMDXComponents as _provideComponents } from "@mdx-js/react"',
+      );
+      expect(js).toContain("_provideComponents()");
+    });
+
+    test("development uses the dev runtime and positions each element", () => {
+      const { code: js } = markdownToJs("# Hello\n\nWorld", { development: true });
+      expect(js).toContain('from "react/jsx-dev-runtime"');
+      expect(js).toContain("_jsxDEV");
+      expect(js).toContain('fileName: "<source.js>"');
+      // Markdown-derived elements are positioned, not just author-written JSX.
+      expect(js).toContain("lineNumber: 1");
+      expect(js).toContain("lineNumber: 3");
+    });
+
+    test("jsx: true keeps JSX and names the runtime in pragma comments", () => {
+      // The comments are the only place a downstream JSX transform can read
+      // the runtime from, since the output itself no longer mentions it.
+      const { code: js } = markdownToJs("# Hello", { jsx: true, jsxImportSource: "preact" });
+      expect(js).toContain("<_components.h1>");
+      expect(js).not.toContain("_jsx(");
+      expect(js.startsWith("/*@jsxRuntime automatic*/\n/*@jsxImportSource preact*/\n")).toBe(true);
+    });
+
+    test("pragma comments are left out once the JSX is compiled away", () => {
+      const { code: js } = markdownToJs("# Hello", { jsxImportSource: "preact" });
+      expect(js).not.toContain("@jsxRuntime");
+      expect(js).toContain('from "preact/jsx-runtime"');
+    });
+
+    test("elementAttributeNameCase: 'html' emits HTML attribute names", () => {
+      const { code: js } = markdownToJs("```js\nconsole.log(1);\n```\n", {
+        elementAttributeNameCase: "html",
+      });
+      expect(js).toContain('class: "language-js"');
+      expect(js).not.toContain("className:");
+    });
+
+    test("stylePropertyNameCase: 'css' keeps kebab-case keys", () => {
+      const { code: js } = markdownToJs("| a | b |\n|:--|--:|\n| c | d |\n", {
+        stylePropertyNameCase: "css",
+      });
+      expect(js).toContain('"text-align": "right"');
+      expect(js).not.toContain("textAlign:");
+    });
+
+    test("optimizeStatic collapses a static subtree", () => {
+      const { code: js } = markdownToJs("# Hello\n\nWorld", {
+        optimizeStatic: { component: "Fragment", prop: "set:html" },
+      });
+      expect(js).toContain("set:html");
+      expect(js).not.toContain('h1: "h1"');
+    });
   });
 });
 

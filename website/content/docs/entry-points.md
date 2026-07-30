@@ -54,7 +54,9 @@ const { code } = markdownToJs("# Hello\n\n{not an expression}");
 
 HTML in the source has no JSX representation, so by default it is dropped: `Press <kbd>Ctrl</kbd>` compiles to `Press Ctrl`. Enable [`features: { rawHtml: true }`](#reparsing-raw-html-rawhtml) to parse the HTML into real elements and keep it.
 
-This is the one place `markdownToJs` and `markdownToHtml` differ on the same input: HTML output can re-emit raw HTML verbatim, JSX output cannot.
+Dropping happens last, when the JSX is generated, so a HAST plugin still sees the `raw` nodes and can replace them with something that does compile. Only what a plugin leaves behind disappears.
+
+This is the one place `markdownToJs` and `markdownToHtml` differ on the same input: HTML output can re-emit raw HTML verbatim, JSX output cannot — except under [`optimizeStatic`](/docs/options/#optimizestatic), where a collapsed subtree is serialized back to an HTML string and any raw HTML in it rides along.
 
 ## Result shape
 

@@ -1,6 +1,10 @@
 import { describe, test } from "vitest";
 import { createElement } from "react";
-import { assertMarkdownJsConformance } from "./helpers.js";
+import {
+  assertMarkdownJsConformance,
+  assertMarkdownJsDevPositionConformance,
+  assertMarkdownJsModuleConformance,
+} from "./helpers.js";
 
 describe("markdownToJs conformance: MDX expression syntax stays literal", () => {
   test("flow expression position", async () => {
@@ -317,7 +321,7 @@ describe("markdownToJs conformance: core Markdown", () => {
 
 describe("markdownToJs conformance: text survives JS codegen escaping", () => {
   test("double and single quotes", async () => {
-    await assertMarkdownJsConformance("She said \"hi\" and it's fine");
+    await assertMarkdownJsConformance('She said "hi" and it\'s fine');
   });
 
   test("backslashes in text", async () => {
@@ -352,6 +356,142 @@ describe("markdownToJs conformance: frontmatter", () => {
 
   test("delimiters mid-document are not frontmatter", async () => {
     await assertMarkdownJsConformance("text\n\n---\ntitle: x\n---", { frontmatter: true });
+  });
+});
+
+// The evaluate-and-render comparison above only sees the rendered tree. These
+// compare the compiled module itself, which is what the JS-output options
+// shape: `outputFormat`, the JSX runtime selection, `development`, and
+// `providerImportSource`.
+describe("markdownToJs conformance: compiled module envelope", () => {
+  const src = "# Head\n\ntext with a [link](https://e.com)\n";
+
+  test("program output", async () => {
+    await assertMarkdownJsModuleConformance(src);
+  });
+
+  test("jsxImportSource", async () => {
+    await assertMarkdownJsModuleConformance(src, { jsxImportSource: "preact" });
+  });
+
+  test("classic runtime", async () => {
+    await assertMarkdownJsModuleConformance(src, { jsxRuntime: "classic" });
+  });
+
+  test("classic runtime with custom pragmas", async () => {
+    await assertMarkdownJsModuleConformance(src, {
+      jsxRuntime: "classic",
+      pragma: "h",
+      pragmaFrag: "Fragment",
+      pragmaImportSource: "preact",
+    });
+  });
+
+  test("development imports the dev runtime", async () => {
+    await assertMarkdownJsModuleConformance(src, { development: true });
+  });
+
+  test("providerImportSource", async () => {
+    await assertMarkdownJsModuleConformance(src, { providerImportSource: "@mdx-js/react" });
+  });
+
+  test("document with frontmatter", async () => {
+    await assertMarkdownJsModuleConformance("---\ntitle: x\n---\n\n# Body", { frontmatter: true });
+  });
+
+  test("document that compiles to nothing", async () => {
+    await assertMarkdownJsModuleConformance("<!-- only a comment -->");
+  });
+
+  // Kept JSX still has to name its runtime, since nothing in the output does.
+  test("jsx: true carries the automatic runtime pragmas", async () => {
+    await assertMarkdownJsModuleConformance(src, { jsx: true });
+  });
+
+  test("jsx: true with a custom import source", async () => {
+    await assertMarkdownJsModuleConformance(src, { jsx: true, jsxImportSource: "preact" });
+  });
+
+  test("jsx: true with the classic runtime", async () => {
+    await assertMarkdownJsModuleConformance(src, { jsx: true, jsxRuntime: "classic" });
+  });
+
+  test("jsx: true with custom pragmas", async () => {
+    await assertMarkdownJsModuleConformance(src, {
+      jsx: true,
+      jsxRuntime: "classic",
+      pragma: "h",
+      pragmaFrag: "Fragment",
+      pragmaImportSource: "preact",
+    });
+  });
+});
+
+// `development: true` attaches a `__source` to every JSX call.
+describe("markdownToJs conformance: development positions", () => {
+  test("headings and paragraphs", async () => {
+    await assertMarkdownJsDevPositionConformance("# Head\n\ntext\n");
+  });
+
+  test("inline elements inside a paragraph", async () => {
+    await assertMarkdownJsDevPositionConformance("para with *em* and `code`\n");
+  });
+
+  test("nested block structures", async () => {
+    await assertMarkdownJsDevPositionConformance("> quote\n\n- a\n- b\n");
+  });
+
+  test("table", async () => {
+    await assertMarkdownJsDevPositionConformance("| a |\n|---|\n| 1 |\n");
+  });
+
+  test("indented content", async () => {
+    await assertMarkdownJsDevPositionConformance("  # indented\n\n    code block\n");
+  });
+});
+
+// `features.math` against remark-math. Both sides render math as `<code>`/
+// `<pre>` with the language classes; no KaTeX is involved.
+describe("markdownToJs conformance: math", () => {
+  test("inline math", async () => {
+    await assertMarkdownJsConformance("mass $E = mc^2$ here", { math: true });
+  });
+
+  test("display math", async () => {
+    await assertMarkdownJsConformance("$$\na + b\n$$", { math: true });
+  });
+
+  test("braces inside math stay math, not an expression", async () => {
+    await assertMarkdownJsConformance("$\\frac{a}{b}$", { math: true });
+  });
+
+  test("dollar signs with math off stay text", async () => {
+    await assertMarkdownJsConformance("cost $5 and $6");
+  });
+});
+
+// Raw HTML is dropped at the end of the pipeline, not at parse time, so plugins
+// still see `raw` nodes and can turn them into something renderable — the same
+// ordering @mdx-js/mdx gets by removing raw only after its rehype plugins.
+describe("markdownToJs conformance: plugins see raw HTML before it is dropped", () => {
+  test("inline element", async () => {
+    await assertMarkdownJsConformance("a <b>bold</b> word", { rewriteRaw: true });
+  });
+
+  test("block-level html", async () => {
+    await assertMarkdownJsConformance("<div>\n\n*em*\n\n</div>", { rewriteRaw: true });
+  });
+
+  test("html comment", async () => {
+    await assertMarkdownJsConformance("text\n\n<!-- note -->\n\nmore", { rewriteRaw: true });
+  });
+
+  test("html in a heading", async () => {
+    await assertMarkdownJsConformance("# a <b>c</b>", { rewriteRaw: true });
+  });
+
+  test("nothing to rewrite when rawHtml already parsed it", async () => {
+    await assertMarkdownJsConformance("a <b>bold</b> word", { rawHtml: true, rewriteRaw: true });
   });
 });
 
