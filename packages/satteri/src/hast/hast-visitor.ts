@@ -145,9 +145,11 @@ export interface HastVisitorContext {
   /**
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
    * children `parentNode` declares are kept after it, so a `div` with an anchor
-   * child wraps a heading as `div > [heading, anchor]`.
+   * child wraps a heading as `div > [heading, anchor]`. `parentNode` must be a
+   * node type that can hold children (an element or MDX JSX element), or a
+   * `{ rawHtml }` string that parses to exactly one non-void element.
    */
-  wrapNode(node: Readonly<HastNode>, parentNode: HastContent): void;
+  wrapNode(node: Readonly<HastNode>, parentNode: HastParentContent | RawHtmlHastContent): void;
   prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   appendChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -207,6 +209,33 @@ const requireNid = makeRequireNid(nid);
 /** New content for a HAST structural mutation. Unlike [`MdastContent`], HAST has
  *  a `raw` node type, so it needs no raw/rawHtml escape hatch. */
 export type HastContent = HastNode;
+
+/** A `wrapNode` wrapper: a node type that can hold children. Leaves (`text`,
+ *  `comment`, `raw`, …) have no slot for the wrapped node, so they cannot wrap. */
+export type HastParentContent = Exclude<Extract<HastNode, { children: unknown[] }>, HastRoot>;
+
+/** Raw HTML `wrapNode` wrapper: parsed as an HTML fragment in Rust when the
+ *  command applies; must yield exactly one non-void element, which becomes the
+ *  wrapper. A fragment that can't wrap fails the apply with the reason. */
+export interface RawHtmlHastContent {
+  rawHtml: string;
+}
+
+/** HAST node types that can hold children. `wrapNode` allowlist — an
+ *  unlisted (new or leaf) type fails loud instead of silently mis-wrapping. */
+const HAST_PARENT_TYPES = new Set<string>(["element", "mdxJsxFlowElement", "mdxJsxTextElement"]);
+
+/** Reject wrappers with no place for the wrapped node (leaves) — the patch
+ *  engine would degrade them into sibling inserts or drop the node. */
+function assertHastWrapParent(parentNode: HastContent): void {
+  const type = (parentNode as { type?: unknown }).type;
+  if (typeof type === "string" && HAST_PARENT_TYPES.has(type)) return;
+  throw new Error(
+    `wrapNode: "${String(type)}" nodes cannot hold children, so they cannot wrap a node. ` +
+      'Wrap in an element instead, e.g. { type: "element", tagName: "div", properties: {}, children: [] } ' +
+      'or { rawHtml: "<div></div>" }.',
+  );
+}
 
 function hastReusedId(node: unknown): number | undefined {
   if (node === null || typeof node !== "object") return undefined;
@@ -369,9 +398,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
     for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertAfter", id, n);
   }
 
-  wrapNode(node: HastNode, parentNode: HastContent): void {
+  wrapNode(node: HastNode, parentNode: HastParentContent | RawHtmlHastContent): void {
     const id = requireNid(node, "wrapNode");
-    emitHastTree(this.#commandBuffer, "wrapNode", id, parentNode);
+    if (typeof (parentNode as RawHtmlHastContent).rawHtml === "string") {
+      this.#commandBuffer.wrapNode(id, parentNode as RawHtmlHastContent);
+      return;
+    }
+    assertHastWrapParent(parentNode as HastContent);
+    emitHastTree(this.#commandBuffer, "wrapNode", id, parentNode as HastContent);
   }
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {

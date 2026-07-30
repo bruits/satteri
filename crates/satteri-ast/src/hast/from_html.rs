@@ -20,7 +20,7 @@ use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
     encode_element_data,
 };
-use crate::hast::render::render_node_inner;
+use crate::hast::render::{is_void_element, render_node_inner};
 use crate::hast::HastNodeType;
 #[cfg(feature = "mdx")]
 use crate::mdast::codec::{
@@ -724,6 +724,38 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
     builder.finish()
 }
 
+/// Parse an HTML fragment into a wrap-payload arena: the fragment's single
+/// element becomes node 0, the shape `Patch::Wrap` takes as the wrapper.
+/// Whitespace-only text around the element is ignored; anything else —
+/// no element, extra top-level nodes, or a void element (whose children
+/// never render) — errors with the reason, so a wrapper that cannot hold
+/// the wrapped node is rejected instead of silently dropping it.
+pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
+    let (nodes, roots, _) = parse_fragment_nodes(html, None);
+    let mut wrapper: Option<usize> = None;
+    for &r in &roots {
+        match &nodes[r].data {
+            NodeData::Text { contents } if contents.trim().is_empty() => {}
+            NodeData::Element { name, .. } if wrapper.is_none() => {
+                if is_void_element(&name.local) {
+                    return Err(format!(
+                        "is a void element (<{}>), which cannot hold the wrapped node",
+                        name.local
+                    ));
+                }
+                wrapper = Some(r);
+            }
+            _ => return Err("must parse to exactly one element".to_string()),
+        }
+    }
+    let Some(wrapper) = wrapper else {
+        return Err("must parse to exactly one element".to_string());
+    };
+    let mut builder = ArenaBuilder::<Hast>::new(String::new());
+    emit(&nodes, &[wrapper], &mut builder, None, &[], &[]);
+    Ok(builder.finish())
+}
+
 /// Reparse the raw HTML embedded in a HAST arena into real HAST nodes.
 ///
 /// The whole tree is rendered back to HTML (raw nodes verbatim) and reparsed
@@ -1335,5 +1367,53 @@ mod tests {
             reparsed.get_str(decode_text_data(reparsed.get_type_data(comment))),
             "oops "
         );
+    }
+
+    /// A single element becomes node 0 of the wrap arena, with its attributes
+    /// and declared children intact; surrounding whitespace is tolerated.
+    #[test]
+    fn wrap_arena_single_element() {
+        let arena = html_fragment_to_wrap_arena("  <div class=\"x\"><a href=\"#\">#</a></div>\n")
+            .expect("single element must parse");
+        assert_eq!(arena.get_node(0).node_type, HastNodeType::Element as u8);
+        assert_eq!(
+            arena.get_str(decode_element_tag(arena.get_type_data(0))),
+            "div"
+        );
+        let children = arena.get_children(0);
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            arena.get_str(decode_element_tag(arena.get_type_data(children[0]))),
+            "a"
+        );
+    }
+
+    /// Table parts survive as wrappers thanks to the template-context
+    /// fragment parse (document parsing would foster-parent them away).
+    #[test]
+    fn wrap_arena_accepts_table_parts() {
+        let arena = html_fragment_to_wrap_arena("<tr></tr>").expect("tr must parse");
+        assert_eq!(
+            arena.get_str(decode_element_tag(arena.get_type_data(0))),
+            "tr"
+        );
+    }
+
+    /// Anything but exactly one element is rejected: bare text, multiple
+    /// top-level nodes, comments, empty input.
+    #[test]
+    fn wrap_arena_rejects_non_single_element() {
+        for html in ["hello", "<i></i><b></b>", "<!--x--><div></div>", "", "   "] {
+            let err = html_fragment_to_wrap_arena(html).expect_err(html);
+            assert!(err.contains("exactly one element"), "{html}: {err}");
+        }
+    }
+
+    /// A void wrapper's children never render, so the wrapped node would be
+    /// silently dropped — rejected instead.
+    #[test]
+    fn wrap_arena_rejects_void_elements() {
+        let err = html_fragment_to_wrap_arena("<img src=\"x.png\">").expect_err("void");
+        assert!(err.contains("void element"), "{err}");
     }
 }

@@ -327,6 +327,20 @@ declare module "satteri" {
 
 `wrapNode` places the wrapped node as `parentNode`'s **first** child. If `parentNode` declares its own children, they are kept after it. Wrapping a heading in a `<div>` that holds an anchor link yields `<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position instead, return a replacement from the visitor.
 
+`parentNode` must be a node type that can hold children — a HAST element, an MDX JSX element, an MDAST container like `blockquote`, or a [custom node](#custom-nodes) declaring a `children` array. Leaf nodes (`html`, `text`, …) and leaf-shaped custom nodes have no slot for the wrapped node, so `wrapNode` rejects them.
+
+In a HAST plugin, `wrapNode` also accepts a raw HTML string. It is parsed as an HTML fragment and must yield exactly one non-void element, which becomes the wrapper (its own children are kept after the wrapped node):
+
+```ts
+ctx.wrapNode(node, { rawHtml: '<div class="callout"></div>' });
+```
+
+In an MDAST plugin there is no element node to parse into, so raw strings are rejected there. To surround an MDAST node with raw HTML tags, replace it with the tag halves around itself instead:
+
+```ts
+ctx.replaceNode(node, [{ type: "html", value: "<div>" }, node, { type: "html", value: "</div>" }]);
+```
+
 `replaceNode`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and `insertChildAt` each accept either a single node or an array of nodes. An array is inserted in order at the target position, so `replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. Passing `replaceNode` an empty array removes the node.
 
 For MDAST, `key` must be a field of the node type and `value` must match that field's type. For HAST, `key` is a `string` and `value` is `unknown`.

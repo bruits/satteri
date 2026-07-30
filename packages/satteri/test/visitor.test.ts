@@ -303,6 +303,69 @@ test("context.wrapNode() wraps a node in a parent", () => {
   expect(html).toMatch(/<blockquote>.*<h1>/s);
 });
 
+// Regression (issue #182): an html leaf as the wrapper used to silently drop
+// or displace the wrapped node instead of wrapping it.
+test("context.wrapNode() rejects a leaf node as the wrapper", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node: MdastNode, ctx: MdastVisitorContext) {
+      expect(() =>
+        // @ts-expect-error html is a leaf, not a wrapNode parent
+        ctx.wrapNode(node, { type: "html", value: "<div></div>" }),
+      ).toThrow(/cannot hold children/);
+      expect(() =>
+        // @ts-expect-error text is a leaf, not a wrapNode parent
+        ctx.wrapNode(node, { type: "text", value: "x" }),
+      ).toThrow(/cannot hold children/);
+    },
+  });
+  expect(html).toMatch(/<h1>Hello<\/h1>/);
+});
+
+// Regression (issue #182): a raw payload used to wrap in the parse root,
+// placing the parsed content after the node instead of around it.
+test("context.wrapNode() rejects raw content as the wrapper", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node: MdastNode, ctx: MdastVisitorContext) {
+      expect(() =>
+        // @ts-expect-error raw content is not a wrapNode parent
+        ctx.wrapNode(node, { rawHtml: "<div></div>" }),
+      ).toThrow(/raw content cannot wrap/);
+      expect(() =>
+        // @ts-expect-error raw content is not a wrapNode parent
+        ctx.wrapNode(node, { raw: "> quoted" }),
+      ).toThrow(/raw content cannot wrap/);
+    },
+  });
+  expect(html).toMatch(/<h1>Hello<\/h1>/);
+});
+
+// A parent-shaped custom node is a valid wrapper: it renders as an element
+// through data.hName with the wrapped node inside.
+test("context.wrapNode() accepts a user-defined parent node", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node: MdastNode, ctx: MdastVisitorContext) {
+      ctx.wrapNode(node, {
+        type: "callout",
+        data: { hName: "aside", hProperties: { className: ["callout"] } },
+        children: [],
+      });
+    },
+  });
+  expect(html).toContain('<aside class="callout"><h1>Hello</h1></aside>');
+});
+
+test("context.wrapNode() rejects a leaf-shaped custom wrapper", () => {
+  const html = visitAndRender("# Hello\n\nWorld", {
+    heading(node: MdastNode, ctx: MdastVisitorContext) {
+      expect(() =>
+        // @ts-expect-error a custom wrapper must declare a children array
+        ctx.wrapNode(node, { type: "marker", value: "x" }),
+      ).toThrow(/children array/);
+    },
+  });
+  expect(html).toMatch(/<h1>Hello<\/h1>/);
+});
+
 test("context.replaceNode() replaces a node via context method", () => {
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node: MdastNode, ctx: MdastVisitorContext) {

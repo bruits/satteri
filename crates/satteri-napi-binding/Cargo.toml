@@ -28,7 +28,7 @@ mdx = [
 ]
 # HTML -> HAST parsing via html5ever. Included in the full (default) build like
 # `mdx`; dropped from `--no-default-features` (lite) builds to keep them small.
-from-html = ["satteri-ast/from-html"]
+from-html = ["satteri-ast/from-html", "satteri-plugin-api/from-html"]
 
 [build-dependencies]
 napi-build = "2"

@@ -15,3 +15,6 @@ serde_json = { workspace = true }
 [features]
 default = ["mdx"]
 mdx = ["satteri-ast/mdx"]
+# HTML fragment parsing for HAST `wrapNode` `{rawHtml}` payloads; without it
+# those payloads error at apply time.
+from-html = ["satteri-ast/from-html"]

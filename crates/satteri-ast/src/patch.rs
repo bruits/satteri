@@ -678,6 +678,21 @@ fn apply_patches_impl<K: ArenaKind>(
             Patch::Wrap { node_id, .. } if plans[node_id].deleted => {
                 return Err(CommandError::WrapOnRemovedNode(*node_id));
             }
+            // A ROOT-typed wrapper only arises from a parsed raw payload;
+            // treating it as the wrapper would silently degrade the wrap
+            // into sibling insertion (the root serializes transparently).
+            Patch::Wrap { parent_tree, .. }
+                if match parent_tree {
+                    PatchContent::Tree(t) => {
+                        !t.is_empty() && t.get_node(0).node_type == K::ROOT_TAG
+                    }
+                    PatchContent::Grafted(roots) => roots
+                        .first()
+                        .is_some_and(|&r| arena.get_node(r).node_type == K::ROOT_TAG),
+                } =>
+            {
+                return Err(unsupported("wrap parent is a document root"));
+            }
             Patch::PrependChild { node_id, .. } | Patch::AppendChild { node_id, .. }
                 if plans[node_id].deleted =>
             {
@@ -1941,6 +1956,31 @@ mod tests {
             rebuilt.get_node(h1_id).node_type,
             HastNodeType::Element as u8
         );
+    }
+
+    /// A root-wrapped wrap payload (the shape a parsed raw string produces)
+    /// is rejected up front instead of silently wrapping in a transparent
+    /// root and pushing the parsed content after the anchor.
+    #[test]
+    fn wrap_with_root_payload_is_rejected() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+
+        let mut wb = ArenaBuilder::<Mdast>::new(String::new());
+        wb.open_node(MdastNodeType::Root as u8);
+        wb.open_node(MdastNodeType::Html as u8);
+        wb.close_node();
+        wb.close_node();
+        let payload = wb.finish();
+
+        let patches = vec![Patch::Wrap {
+            node_id: heading_id,
+            parent_tree: PatchContent::Tree(payload),
+        }];
+        match rebuild(&orig, &patches) {
+            Err(CommandError::UnsupportedPatchShape(_)) => {}
+            other => panic!("expected UnsupportedPatchShape, got {other:?}"),
+        }
     }
 
     /// Build a single-node arena rooted at `node_type`, with no data and no

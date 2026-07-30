@@ -210,7 +210,7 @@ pub(crate) fn render_node_inner<'cb>(
     }
 }
 
-fn is_void_element(tag: &str) -> bool {
+pub(crate) fn is_void_element(tag: &str) -> bool {
     matches!(
         tag,
         "area"

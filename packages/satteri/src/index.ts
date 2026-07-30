@@ -37,6 +37,8 @@ export type {
   HastVisitorContext,
   HastFilteredVisitor,
   HastContent,
+  HastParentContent,
+  RawHtmlHastContent,
   EstreeProgram,
 } from "./hast/hast-visitor.js";
 
@@ -75,6 +77,7 @@ export type {
   MdastVisitorContext,
   MdastContent,
   MdastTarget,
+  MdastParentContent,
 } from "./mdast/mdast-visitor.js";
 export {
   visitHastHandle,

@@ -123,6 +123,13 @@ export type MdastContent = MdastNode | Custom | RawMdastContent | RawHtmlMdastCo
  *  reached through the `custom` visitor can be passed straight back in. */
 export type MdastTarget = MdastNode | Custom;
 
+/** A `wrapNode` wrapper: a node type that can hold children — a built-in
+ *  parent, or a user-defined node declaring a children array. Leaves and raw
+ *  strings have no slot for the wrapped node, so they cannot wrap. */
+export type MdastParentContent =
+  | Exclude<Extract<MdastNode, { children: unknown[] }>, MdastRoot>
+  | (Custom & { children: NonNullable<Custom["children"]> });
+
 export interface MdastDiagnostic {
   message: string;
   nodeId?: number | undefined;
@@ -216,10 +223,13 @@ export class MdastVisitorContext {
 
   /**
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
-   * children `parentNode` declares are kept after it.
+   * children `parentNode` declares are kept after it. `parentNode` must be a
+   * node type that can hold children; to surround a node with raw HTML tags,
+   * use `replaceNode(node, [openTag, node, closeTag])` instead.
    */
-  wrapNode(node: Readonly<MdastTarget>, parentNode: MdastContent): void {
+  wrapNode(node: Readonly<MdastTarget>, parentNode: MdastParentContent): void {
     const id = requireNid(node as MdastNode, "wrapNode");
+    assertMdastWrapParent(parentNode);
     emitMdastTree(this.#commandBuffer, "wrapNode", id, parentNode);
   }
 
@@ -868,6 +878,40 @@ function emitMdastTree(
     emitMdastOp(buffer, content, true, forReplace),
   );
   if (!ok) throw unencodableContentError(content);
+}
+
+/** Reject wrappers with no place for the wrapped node — the patch engine
+ *  would degrade them into sibling inserts or drop the node. Built-in leaves
+ *  come from the materializer's `LEAF_TYPES`; a user-defined wrapper must be
+ *  parent-shaped (declare a children array) so it renders as an element
+ *  rather than a text leaf. */
+function assertMdastWrapParent(parentNode: MdastContent): void {
+  const sandwich =
+    'replaceNode(node, [{ type: "html", value: "<div>" }, node, { type: "html", value: "</div>" }])';
+  if (isRawMdastContent(parentNode)) {
+    throw new Error(
+      "wrapNode: raw content cannot wrap a node. Pass a parent node such as " +
+        `{ type: "blockquote", children: [] }, surround the node with tags: ${sandwich}, ` +
+        "or wrap at the HAST phase, where wrapNode accepts { rawHtml }.",
+    );
+  }
+  const type = (parentNode as { type?: unknown }).type;
+  const tag = typeof type === "string" ? NAME_TO_TYPE[type] : undefined;
+  if (tag === undefined) {
+    // User-defined custom node: any string type is valid content, so only the
+    // declared shape distinguishes a parent from a text leaf.
+    if (Array.isArray((parentNode as Custom).children)) return;
+    throw new Error(
+      `wrapNode: a user-defined "${String(type)}" wrapper must declare a children array — ` +
+        "a leaf-shaped custom node renders as text and cannot hold the wrapped node.",
+    );
+  }
+  if (!LEAF_TYPES.has(tag)) return;
+  throw new Error(
+    `wrapNode: "${String(type)}" nodes cannot hold children, so they cannot wrap a node. ` +
+      `Surround the node with tags instead: ${sandwich}, or wrap at the HAST phase, ` +
+      "where wrapNode accepts elements and { rawHtml }.",
+  );
 }
 
 /** MDAST node types whose `value` Rust can set in place via setProperty. A

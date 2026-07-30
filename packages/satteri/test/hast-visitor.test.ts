@@ -309,6 +309,99 @@ describe("visitHastHandle - mutations", () => {
     );
   });
 
+  test("context.wrapNode() accepts a rawHtml wrapper, parsed to an element", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.wrapNode(node, { rawHtml: '<div class="callout"></div>' });
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain('<div class="callout"><h1>Hello</h1></div>');
+  });
+
+  test("context.wrapNode() keeps a rawHtml wrapper's own children after the wrapped node", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.wrapNode(node, { rawHtml: '<div><a href="#hello">#</a></div>' });
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain('<div><h1>Hello</h1><a href="#hello">#</a></div>');
+  });
+
+  // The wrapper must be a single element: anything else has no defined slot
+  // for the wrapped node, so the apply fails with the reason.
+  test("context.wrapNode() rejects rawHtml that is not exactly one element", () => {
+    for (const rawHtml of ["just text", "<i></i><b></b>", ""]) {
+      const { handle, source } = setup("# Hello");
+      const plugin = {
+        element: {
+          filter: ["h1"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            ctx.wrapNode(node, { rawHtml });
+          },
+        },
+      };
+      const subs = resolveSubscriptions(plugin);
+      expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(
+        /exactly one element/,
+      );
+    }
+  });
+
+  // A void wrapper's children never render, which would silently drop the
+  // wrapped node at output time.
+  test("context.wrapNode() rejects a void element as rawHtml wrapper", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.wrapNode(node, { rawHtml: '<img src="x.png">' });
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(/void element/);
+  });
+
+  // Regression (issue #182): a leaf wrapper (raw/text) has no slot for the
+  // wrapped node — it used to silently drop or displace it.
+  test("context.wrapNode() rejects a leaf node as the wrapper", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          expect(() =>
+            // @ts-expect-error raw is a leaf, not a wrapNode parent
+            ctx.wrapNode(node, { type: "raw", value: "<div></div>" }),
+          ).toThrow(/cannot hold children/);
+          expect(() =>
+            // @ts-expect-error text is a leaf, not a wrapNode parent
+            ctx.wrapNode(node, { type: "text", value: "x" }),
+          ).toThrow(/cannot hold children/);
+        },
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain("<h1>Hello</h1>");
+  });
+
   test("context.appendChild() adds a child to an element", () => {
     const { handle, source } = setup("# Hello");
     const plugin = {

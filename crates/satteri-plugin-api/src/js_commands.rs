@@ -1076,28 +1076,52 @@ fn replay_hast_opstream(
     replay_opstream::<HastFieldCollector>(ops, builder, original_len, anchor)
 }
 
-/// Returns (arena, keep_children) for a HAST sub-tree payload. Only
-/// `PAYLOAD_OPSTREAM` (declarative-compiled) is accepted — HAST has no source
-/// grammar, so raw markdown / HTML are not, and there is no JSON path.
+/// Returns (arena, keep_children) for a HAST sub-tree payload. Payloads are
+/// `PAYLOAD_OPSTREAM` (declarative-compiled), plus — for wrap only —
+/// `PAYLOAD_RAW`, parsed as an HTML fragment into the wrapper element. Other
+/// ops take real hast nodes (`raw` covers opaque HTML), so raw stays rejected
+/// there.
 fn read_hast_payload(
     reader: &mut BufReader<'_>,
     builder: &mut ArenaBuilder<Hast>,
     original_len: u32,
     anchor: u32,
+    for_wrap: bool,
 ) -> Result<(PatchContent<Hast>, bool), CommandError> {
     let payload_type = reader.read_u8()?;
-    let len = reader.read_u32()? as usize;
 
     match payload_type {
         PAYLOAD_OPSTREAM => {
+            let len = reader.read_u32()? as usize;
             let ops = reader.read_bytes(len)?;
             Ok((
                 PatchContent::Grafted(replay_hast_opstream(ops, builder, original_len, anchor)?),
                 false,
             ))
         }
+        PAYLOAD_RAW if for_wrap => {
+            // The flags byte (RAW_LITERAL_BRACES) is an MDX parsing concern;
+            // HAST fragment parsing has no expressions, so it is ignored.
+            let _flags = reader.read_u8()?;
+            let len = reader.read_u32()? as usize;
+            let raw = reader.read_str(len)?;
+            Ok((PatchContent::Tree(hast_wrap_arena_from_html(raw)?), false))
+        }
         other => Err(CommandError::UnknownPayloadType(other)),
     }
+}
+
+#[cfg(feature = "from-html")]
+fn hast_wrap_arena_from_html(raw: &str) -> Result<Arena<Hast>, CommandError> {
+    satteri_ast::hast::html_fragment_to_wrap_arena(raw).map_err(CommandError::InvalidWrapHtml)
+}
+
+/// Erroring beats silently mis-wrapping when the parser was compiled out.
+#[cfg(not(feature = "from-html"))]
+fn hast_wrap_arena_from_html(_raw: &str) -> Result<Arena<Hast>, CommandError> {
+    Err(CommandError::InvalidWrapHtml(
+        "requires HTML parsing, which this build omits (from-html feature)".to_string(),
+    ))
 }
 
 /// Apply a command buffer to an MDAST arena. Set-property mutations are
@@ -1400,21 +1424,21 @@ pub fn apply_hast_commands_lenient(
             CMD_INSERT_BEFORE => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, _) =
-                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
             CMD_INSERT_AFTER => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, _) =
-                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
             CMD_PREPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (child_tree, _) =
-                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1424,7 +1448,7 @@ pub fn apply_hast_commands_lenient(
             CMD_APPEND_CHILD => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (child_tree, _) =
-                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1434,7 +1458,7 @@ pub fn apply_hast_commands_lenient(
             CMD_WRAP => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (parent_tree, _) =
-                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id, true)?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -1444,7 +1468,7 @@ pub fn apply_hast_commands_lenient(
             CMD_REPLACE => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_tree, keep_children) =
-                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -1455,7 +1479,7 @@ pub fn apply_hast_commands_lenient(
             CMD_SET_CHILDREN => {
                 let node_id = reader.read_anchor(original_len)?;
                 let (new_children, _) =
-                    read_hast_payload(&mut reader, &mut builder, original_len, node_id)?;
+                    read_hast_payload(&mut reader, &mut builder, original_len, node_id, false)?;
                 patches.push(Patch::SetChildren {
                     node_id,
                     new_children,
@@ -2262,5 +2286,67 @@ mod tests {
         b.close_node();
         b.close_node();
         b.finish()
+    }
+
+    /// Push a `PAYLOAD_RAW` structural command (cmd, anchor, flags, string).
+    fn push_raw_command(buf: &mut Vec<u8>, cmd: u8, node_id: u32, raw: &str) {
+        buf.push(cmd);
+        push_u32(buf, node_id);
+        buf.push(PAYLOAD_RAW);
+        buf.push(0); // flags
+        push_u32(buf, raw.len() as u32);
+        buf.extend_from_slice(raw.as_bytes());
+    }
+
+    /// A HAST wrap with a `{rawHtml}` payload parses the fragment into the
+    /// wrapper element: root > section > div.
+    #[cfg(feature = "from-html")]
+    #[test]
+    fn hast_wrap_with_raw_html_payload() {
+        use satteri_ast::hast::codec::decode_element_tag;
+
+        let arena = build_hast_element(&[]);
+        let mut buf = Vec::new();
+        push_raw_command(&mut buf, CMD_WRAP, 1, "<section class=\"wrap\"></section>");
+
+        let result = apply_hast_commands(arena, &buf).unwrap();
+        let section = result.get_children(0)[0];
+        assert_eq!(
+            result.get_str(decode_element_tag(result.get_type_data(section))),
+            "section"
+        );
+        let wrapped = result.get_children(section);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(
+            result.get_str(decode_element_tag(result.get_type_data(wrapped[0]))),
+            "div"
+        );
+    }
+
+    /// A `{rawHtml}` wrap payload that isn't a single element errors instead
+    /// of silently mis-wrapping.
+    #[cfg(feature = "from-html")]
+    #[test]
+    fn hast_wrap_with_invalid_raw_html_errors() {
+        let arena = build_hast_element(&[]);
+        let mut buf = Vec::new();
+        push_raw_command(&mut buf, CMD_WRAP, 1, "just text");
+
+        let err = apply_hast_commands(arena, &buf).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidWrapHtml(_)), "{err:?}");
+    }
+
+    /// Raw payloads stay rejected for every HAST command except wrap.
+    #[test]
+    fn hast_raw_payload_rejected_outside_wrap() {
+        let arena = build_hast_element(&[]);
+        let mut buf = Vec::new();
+        push_raw_command(&mut buf, CMD_INSERT_BEFORE, 1, "<span></span>");
+
+        let err = apply_hast_commands(arena, &buf).unwrap_err();
+        assert!(
+            matches!(err, CommandError::UnknownPayloadType(p) if p == PAYLOAD_RAW),
+            "{err:?}"
+        );
     }
 }
