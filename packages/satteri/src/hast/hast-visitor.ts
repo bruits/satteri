@@ -140,8 +140,8 @@ export interface HastVisitorContext {
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
-   * The document root takes a `root` and nothing else, swapping the whole
-   * document; it is the only place a `root` is accepted as content.
+   * The document root takes a `root` and nothing else — the one place a
+   * `root` is accepted as content.
    */
   replaceNode(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -279,8 +279,7 @@ function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node:
   if (!ok) throw unencodableContentError(node);
 }
 
-/** Swap the whole document: a `root` payload lands on node 0 instead of a
- *  sibling slot. Kept off the per-node encoder, which rejects a `root`. */
+/** Separate from the per-node encoder, which rejects a `root` payload. */
 function emitHastRootReplace(buffer: CommandBuffer, root: HastContent): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
     emitHastRootOp(buffer, root as unknown as Record<string, unknown>),
@@ -416,8 +415,6 @@ class HastVisitorContextImpl implements HastVisitorContext {
       this.#pendingNodes.delete(id);
       return;
     }
-    // The root is the one node a `root` may replace, and an id comparison
-    // keeps the swap off the per-node encoder.
     if (id === ROOT_NODE_ID) {
       emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode));
       return;
@@ -588,22 +585,16 @@ type HastVisitorFn<N extends HastNode = HastNode> = (
   ctx: HastVisitorContext,
 ) => HastNode | void | Promise<HastNode | void>;
 
-/** Unlike visitors, return values are ignored — hooks mutate via `ctx`. */
 type HastHookFn = (root: Readonly<HastRoot>, ctx: HastVisitorContext) => void | Promise<void>;
 
 export interface HastVisitorInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
-  /**
-   * Runs once per document — even an empty one — before any of the plugin's
-   * visitors; awaited before they dispatch when async.
-   */
+  /** Runs once per document — an empty one included — before the plugin's
+   *  visitors, awaited when async. */
   before?: HastHookFn;
-  /**
-   * Runs once per document — even an empty one — after all of the plugin's
-   * visitors have settled, so it can emit output built from state they
-   * collected.
-   */
+  /** Runs once per document — an empty one included — after the plugin's
+   *  visitors have settled, awaited when async. */
   after?: HastHookFn;
   // Element-like nodes: filtered by tag/component name (single or array)
   element?: HastFilteredVisitor<Element> | HastFilteredVisitor<Element>[];
@@ -687,10 +678,8 @@ function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
 
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
   if (typeof plugin.before === "function" || typeof plugin.after === "function") {
-    // Node 0 always exists, so this matches exactly once per document, empty
-    // ones included. Dispatch keys off it being the *only* root subscription;
-    // fail loudly here if `root` ever becomes subscribable, rather than with a
-    // bare TypeError deep in the visitor loop.
+    // Node 0 always exists, so subscribing by type fires exactly once per
+    // document. Dispatch also assumes this is the only root subscription.
     if (process.env.NODE_ENV !== "production" && subs.some((s) => s.nodeType === HAST_ROOT)) {
       throw new Error("satteri: `root` is subscribable, which breaks plugin hook dispatch");
     }
@@ -1065,12 +1054,12 @@ function readMatchedNode(
       data,
     );
   }
-  // Fallback (root, doctype): minimal node carrying whatever prelude data we found
+  // Fallback: root and doctype.
   const base: Record<string, unknown> = { type: TYPE_NAMES[nodeType] ?? `unknown(${nodeType})` };
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   if (nodeType === HAST_ROOT) {
-    // Hooks receive the root even when empty; real children keep spreads working.
+    // `...root.children` has to work in a hook, empty document included.
     if (childCount > 0) {
       makeLazyChildren(base, view, buf, childIdsPos, childTypesPos, childCount, resolver);
     } else {
@@ -1182,12 +1171,7 @@ function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   );
 }
 
-/**
- * Dispatch matched nodes from a binary match buffer to visitor functions,
- * starting at `startIndex` (the caller skips a leading hook-root match).
- * Returns null if all sync, or an array of deferred promises if any visitor
- * was async.
- */
+/** Returns null if every visitor was sync, else the ones still pending. */
 function dispatchMatches(
   wire: WalkWire,
   matchCount: number,
@@ -1273,9 +1257,8 @@ export function visitHastHandleCollect(
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
 
-  // `root` is not a subscribable visitor key, so a root match can only come
-  // from the hook subscription at index subs.length, and pre-order puts it
-  // first. `buildSubscriptions` guards that invariant in dev.
+  // `root` is not a subscribable visitor key, so a sub index past the
+  // visitors can only be the hook subscription — and pre-order puts it first.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
     return visitHastHandleWithHooks(plugin, subs, ctx, returnBuffer, wire, matchCount);
   }
@@ -1291,7 +1274,6 @@ export function visitHastHandleCollect(
   return collectCommands(returnBuffer, ctx);
 }
 
-/** Settle the async visitors, then apply their replacements in match order. */
 function applyDeferredHastResults(
   deferred: { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[],
   returnBuffer: CommandBuffer,
@@ -1309,8 +1291,7 @@ function applyDeferredHastResults(
   });
 }
 
-/** Match 0 must be the hook root (caller-checked). Cold by design — see the
- *  call site. */
+/** Match 0 must be the hook root — the caller checks it, this does not. */
 function visitHastHandleWithHooks(
   plugin: HastVisitorInstance,
   subs: ResolvedSubscription[],

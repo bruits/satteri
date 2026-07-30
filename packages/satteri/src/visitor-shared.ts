@@ -19,12 +19,11 @@ export interface PluginOptions {
 
 const EMPTY_BYTES = new Uint8Array(0);
 
-/** Arena id of the document root — node 0 in every tree. */
 export const ROOT_NODE_ID = 0;
 
-/** Node 0 must stay a `root`: hooks subscribe to it by node type, so a
- *  document left headed by anything else silently stops firing them — in this
- *  phase and every later one. */
+/** Hooks subscribe to node 0 by node type, so a document left headed by
+ *  anything but a `root` silently stops firing them — in this phase and every
+ *  later one. */
 export function requireRootReplacement<T>(content: T): T {
   const type = (content as { type?: unknown } | null)?.type;
   if (type === "root") return content;
