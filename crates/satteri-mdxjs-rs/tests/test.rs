@@ -96,7 +96,9 @@ fn jsx() -> Result<(), satteri_arena::mdx_types::Message> {
             jsx: true,
             ..Default::default()
         }, MDX_OPTS)?,
-        "function _createMdxContent(props) {
+        "/*@jsxRuntime automatic*/
+/*@jsxImportSource react*/
+function _createMdxContent(props) {
     return <></>;
 }
 function MDXContent(props = {}) {
@@ -106,6 +108,72 @@ function MDXContent(props = {}) {
 export default MDXContent;
 ",
         "should support `options.jsx: true`",
+    );
+
+    Ok(())
+}
+
+#[test]
+fn jsx_pragma_comments() -> Result<(), satteri_arena::mdx_types::Message> {
+    // Kept JSX carries the runtime choice in comments, the only place a
+    // downstream transform can still read it from.
+    let automatic = compile(
+        "# hi",
+        &Options {
+            jsx: true,
+            jsx_import_source: Some("preact".into()),
+            ..Default::default()
+        },
+        MDX_OPTS,
+    )?;
+    assert!(
+        automatic.starts_with("/*@jsxRuntime automatic*/\n/*@jsxImportSource preact*/\n"),
+        "automatic runtime pragmas missing:\n{automatic}"
+    );
+
+    let classic = compile(
+        "# hi",
+        &Options {
+            jsx: true,
+            jsx_runtime: Some(JsxRuntime::Classic),
+            pragma: Some("h".into()),
+            pragma_frag: Some("Fragment".into()),
+            pragma_import_source: Some("preact".into()),
+            ..Default::default()
+        },
+        MDX_OPTS,
+    )?;
+    assert!(
+        classic.starts_with("/*@jsxRuntime classic*/\n/*@jsx h*/\n/*@jsxFrag Fragment*/\n"),
+        "classic runtime pragmas missing:\n{classic}"
+    );
+
+    // Compiling the JSX away resolves the runtime here, so the comments would
+    // only be noise.
+    let compiled = compile("# hi", &Options::default(), MDX_OPTS)?;
+    assert!(
+        !compiled.contains("@jsxRuntime"),
+        "pragmas leaked into compiled output:\n{compiled}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn development_source_for_markdown_elements() -> Result<(), satteri_arena::mdx_types::Message> {
+    // Elements converted from Markdown get a line/column too, not just
+    // author-written JSX.
+    let out = compile(
+        "# Head\n\ntext\n",
+        &Options {
+            development: true,
+            ..Default::default()
+        },
+        MDX_OPTS,
+    )?;
+    assert!(
+        out.contains("lineNumber: 1") && out.contains("lineNumber: 3"),
+        "markdown-derived elements should carry positions:\n{out}"
     );
 
     Ok(())
@@ -1504,5 +1572,55 @@ fn heading_attribute_custom_id_setext() -> Result<(), satteri_arena::mdx_types::
         js.contains("_jsx(_components.h1, {\n        id: \"custom-id\","),
         "id prop missing in compiled JS: {js}"
     );
+    Ok(())
+}
+
+#[test]
+fn plain_markdown_drops_raw_html() -> Result<(), satteri_arena::mdx_types::Message> {
+    // Raw HTML has no JSX representation. A plain-Markdown arena drops it
+    // rather than erroring, which is what the MDX parser's absence of `raw`
+    // nodes lets the MDX arena treat as a hard error instead.
+    let plain = compile(
+        "a <b>bold</b> word\n",
+        &Options::default(),
+        satteri_pulldown_cmark::DEFAULT_OPTIONS,
+    )?;
+    assert!(
+        !plain.contains("<b>") && !plain.contains("\"b\""),
+        "raw HTML reached the plain-Markdown output:\n{plain}"
+    );
+    assert!(
+        plain.contains("bold"),
+        "text inside the raw HTML was lost:\n{plain}"
+    );
+
+    // The same source parsed as MDX is JSX, never a `raw` node.
+    let mdx = compile("a <b>bold</b> word\n", &Options::default(), MDX_OPTS)?;
+    assert!(
+        mdx.contains("_jsx(\"b\""),
+        "MDX should read the same source as JSX:\n{mdx}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn plain_markdown_keeps_mdx_syntax_literal() -> Result<(), satteri_arena::mdx_types::Message> {
+    // Expressions and ESM lines are ordinary text without `ENABLE_MDX`, so
+    // they must survive as string children instead of becoming code.
+    let out = compile(
+        "Hello {name}\n\nimport x from \"y\"\n",
+        &Options::default(),
+        satteri_pulldown_cmark::DEFAULT_OPTIONS,
+    )?;
+    assert!(
+        out.contains("\"Hello {name}\"") && out.contains("import x from"),
+        "MDX syntax should stay literal text:\n{out}"
+    );
+    assert!(
+        !out.contains("import x from \"y\";"),
+        "ESM line became a real import:\n{out}"
+    );
+
     Ok(())
 }

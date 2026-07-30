@@ -659,8 +659,20 @@ fn transform_element<'a>(
         )));
     }
 
+    // Carry the source span so development `__source` gets a line/column.
+    // `explicit_jsxs` is keyed by span, so on the off chance an MDX element
+    // nested inside covers the identical range, stay span-less rather than be
+    // mistaken for author-written JSX. Children are transformed above, so any
+    // such descendant is already recorded.
+    let span = node_span(context.view, node_id);
+    let span = if explicit_jsxs.contains(&span) {
+        SPAN
+    } else {
+        span
+    };
+
     Ok(Some(JSXChild::Element(OxcBox::new_in(
-        create_element(alloc, tag_name, attrs, children, SPAN),
+        create_element(alloc, tag_name, attrs, children, span),
         alloc,
     ))))
 }
@@ -941,8 +953,10 @@ fn transform_root<'a>(
 
     let nodes = OxcVec::from_iter_in(nodes, alloc);
 
+    // The wrapping fragment spans the whole document, so development
+    // `__source` points at its start like any other element's.
     Ok(Some(JSXChild::Fragment(OxcBox::new_in(
-        create_fragment(alloc, nodes, SPAN),
+        create_fragment(alloc, nodes, node_span(context.view, node_id)),
         alloc,
     ))))
 }

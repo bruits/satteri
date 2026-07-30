@@ -90,3 +90,5 @@ The remaining MDX options control the generated JavaScript and are named after t
 | `outputFormat`             | `"program" \| "function-body"` | `"program"`             | `program` emits an ES module; `function-body` emits a body for `new Function()` / `evaluate`. |
 | `elementAttributeNameCase` | `"react" \| "html"`            | `"react"`               | Casing for attributes on rehype-produced elements.                                            |
 | `stylePropertyNameCase`    | `"dom" \| "css"`               | `"dom"`                 | Casing for keys in parsed `style` objects.                                                    |
+
+With `jsx: true` the output opens with `/*@jsxRuntime …*/` pragma comments, so whichever transform compiles the JSX later picks up the runtime settings above.

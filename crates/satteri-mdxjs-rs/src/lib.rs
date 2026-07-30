@@ -199,7 +199,34 @@ pub fn compile_hast_arena(
     if options.output_format == OutputFormat::FunctionBody {
         transform_program_to_function_body(&mut program, &allocator);
     }
-    Ok(serialize(&program.program))
+    let mut code = jsx_pragma_comments(options);
+    code.push_str(&serialize(&program.program));
+    Ok(code)
+}
+
+/// Leading pragma comments naming the JSX runtime and where it comes from.
+/// Only emitted when the JSX is kept: a downstream transform reads them to
+/// resolve the runtime, and compiling the JSX away here already resolved it.
+fn jsx_pragma_comments(options: &Options) -> String {
+    if !options.jsx {
+        return String::new();
+    }
+    let mut out = String::new();
+    match options.jsx_runtime.unwrap_or_default() {
+        JsxRuntime::Automatic => {
+            out.push_str("/*@jsxRuntime automatic*/\n/*@jsxImportSource ");
+            out.push_str(options.jsx_import_source.as_deref().unwrap_or("react"));
+            out.push_str("*/\n");
+        }
+        JsxRuntime::Classic => {
+            out.push_str("/*@jsxRuntime classic*/\n/*@jsx ");
+            out.push_str(options.pragma.as_deref().unwrap_or("React.createElement"));
+            out.push_str("*/\n/*@jsxFrag ");
+            out.push_str(options.pragma_frag.as_deref().unwrap_or("React.Fragment"));
+            out.push_str("*/\n");
+        }
+    }
+    out
 }
 
 fn transform_program_to_function_body<'a>(program: &mut MdxProgram<'a>, allocator: &'a Allocator) {
