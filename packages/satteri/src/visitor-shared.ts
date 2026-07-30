@@ -22,6 +22,20 @@ const EMPTY_BYTES = new Uint8Array(0);
 /** Arena id of the document root — node 0 in every tree. */
 export const ROOT_NODE_ID = 0;
 
+/** Node 0 must stay a `root`: hooks subscribe to it by node type, so a
+ *  document left headed by anything else silently stops firing them — in this
+ *  phase and every later one. */
+export function requireRootReplacement<T>(content: T): T {
+  const type = (content as { type?: unknown } | null)?.type;
+  if (type === "root") return content;
+  throw new Error(
+    `satteri: replaceNode on the document root takes a \`root\`${
+      typeof type === "string" ? `, not "${type}"` : ""
+    }. Pass { type: "root", children: [...] } to swap the document, ` +
+      'or setProperty(root, "children", [...]) to swap only its children.',
+  );
+}
+
 export function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
 }
