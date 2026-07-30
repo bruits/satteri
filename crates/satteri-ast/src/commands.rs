@@ -60,6 +60,9 @@ pub enum CommandError {
     /// wrapper; the message says why (not a single element, void element, or
     /// a build without HTML parsing).
     InvalidWrapHtml(String),
+    /// `wrapNode` was given a void element as the wrapper, which renders
+    /// without children and would drop the wrapped node. Holds the tag name.
+    VoidWrapParent(String),
 }
 
 impl std::fmt::Display for CommandError {
@@ -124,6 +127,10 @@ impl std::fmt::Display for CommandError {
             Self::InvalidWrapHtml(reason) => {
                 write!(f, "wrapNode: {{rawHtml}} wrapper {reason}")
             }
+            Self::VoidWrapParent(tag) => write!(
+                f,
+                "wrapNode: <{tag}> is a void element, which cannot hold the wrapped node"
+            ),
         }
     }
 }

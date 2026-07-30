@@ -3,6 +3,7 @@ import {
   visitMdastHandle,
   resolveMdastSubscriptions,
   type MdastHandle,
+  type MdastParentContent,
   type MdastVisitorContext,
 } from "../src/mdast/mdast-visitor.js";
 import type { HastHandle } from "../src/hast/hast-visitor.js";
@@ -352,6 +353,70 @@ test("context.wrapNode() accepts a user-defined parent node", () => {
     },
   });
   expect(html).toContain('<aside class="callout"><h1>Hello</h1></aside>');
+});
+
+// The plain shape issue #182 asked for: a custom wrapper with no hName still
+// renders as a <div> around the node.
+test("context.wrapNode() wraps a node in a bare user-defined parent", () => {
+  const html = visitAndRender("# Hello", {
+    heading(node: MdastNode, ctx: MdastVisitorContext) {
+      ctx.wrapNode(node, { type: "wrapper", children: [] });
+    },
+  });
+  expect(html).toContain("<div><h1>Hello</h1></div>");
+});
+
+// Hand-written lists rather than the materializer's LEAF_TYPES the check reads,
+// so a type misclassified for wrapping surfaces here instead of as a dropped
+// node at render time.
+test("context.wrapNode() accepts built-in parents and rejects built-in leaves", () => {
+  const parents: MdastParentContent[] = [
+    { type: "paragraph", children: [] },
+    { type: "heading", depth: 2, children: [] },
+    { type: "blockquote", children: [] },
+    { type: "list", children: [] },
+    { type: "listItem", children: [] },
+    { type: "table", children: [] },
+    { type: "tableRow", children: [] },
+    { type: "tableCell", children: [] },
+    { type: "emphasis", children: [] },
+    { type: "strong", children: [] },
+    { type: "delete", children: [] },
+    { type: "link", url: "#", children: [] },
+    { type: "footnoteDefinition", identifier: "a", children: [] },
+    { type: "containerDirective", name: "note", children: [] },
+    { type: "descriptionList", children: [] },
+    { type: "superscript", children: [] },
+  ];
+  const leaves = [
+    "thematicBreak",
+    "html",
+    "code",
+    "definition",
+    "text",
+    "inlineCode",
+    "break",
+    "image",
+    "imageReference",
+    "footnoteReference",
+    "yaml",
+    "toml",
+    "math",
+    "inlineMath",
+  ];
+  visitAndRender("# Hello", {
+    heading(node: MdastNode, ctx: MdastVisitorContext) {
+      for (const parent of parents) {
+        expect(() => ctx.wrapNode(node, parent), parent.type).not.toThrow();
+      }
+      for (const type of leaves) {
+        expect(
+          () => ctx.wrapNode(node, { type, value: "" } as unknown as MdastParentContent),
+          type,
+        ).toThrow(/cannot hold children/);
+      }
+    },
+  });
 });
 
 test("context.wrapNode() rejects a leaf-shaped custom wrapper", () => {

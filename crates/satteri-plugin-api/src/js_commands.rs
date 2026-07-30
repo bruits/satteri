@@ -22,7 +22,8 @@
 
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
 use satteri_ast::commands::CommandError;
-use satteri_ast::hast::HastNodeType;
+use satteri_ast::hast::codec::decode_element_tag;
+use satteri_ast::hast::{is_void_element, HastNodeType};
 use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::patch::{Patch, PatchContent, REF_NODE_TYPE};
@@ -1124,6 +1125,31 @@ fn hast_wrap_arena_from_html(_raw: &str) -> Result<Arena<Hast>, CommandError> {
     ))
 }
 
+/// A void wrapper renders as a lone tag, so the wrapped node would never reach
+/// the output. The `{rawHtml}` parser rejects these at parse time; element
+/// payloads carry their tag too, so the same rule applies here.
+fn reject_void_wrap_parent(
+    parent_tree: &PatchContent<Hast>,
+    grafted: &Arena<Hast>,
+) -> Result<(), CommandError> {
+    let (source, wrapper) = match parent_tree {
+        PatchContent::Tree(tree) if !tree.is_empty() => (tree, 0),
+        PatchContent::Grafted(roots) => match roots.first() {
+            Some(&root) => (grafted, root),
+            None => return Ok(()),
+        },
+        PatchContent::Tree(_) => return Ok(()),
+    };
+    if source.get_node(wrapper).node_type != HastNodeType::Element as u8 {
+        return Ok(());
+    }
+    let tag = source.get_str(decode_element_tag(source.get_type_data(wrapper)));
+    if is_void_element(tag) {
+        return Err(CommandError::VoidWrapParent(tag.to_string()));
+    }
+    Ok(())
+}
+
 /// Apply a command buffer to an MDAST arena. Set-property mutations are
 /// applied in-place; structural mutations are collected as `Patch<Mdast>`
 /// objects and applied in place via `apply_patches_in_place`.
@@ -1459,6 +1485,7 @@ pub fn apply_hast_commands_lenient(
                 let node_id = reader.read_anchor(original_len)?;
                 let (parent_tree, _) =
                     read_hast_payload(&mut reader, &mut builder, original_len, node_id, true)?;
+                reject_void_wrap_parent(&parent_tree, builder.arena_mut())?;
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -2303,8 +2330,6 @@ mod tests {
     #[cfg(feature = "from-html")]
     #[test]
     fn hast_wrap_with_raw_html_payload() {
-        use satteri_ast::hast::codec::decode_element_tag;
-
         let arena = build_hast_element(&[]);
         let mut buf = Vec::new();
         push_raw_command(&mut buf, CMD_WRAP, 1, "<section class=\"wrap\"></section>");
@@ -2334,6 +2359,58 @@ mod tests {
 
         let err = apply_hast_commands(arena, &buf).unwrap_err();
         assert!(matches!(err, CommandError::InvalidWrapHtml(_)), "{err:?}");
+    }
+
+    /// Push a wrap command whose payload is an op-stream for a single element
+    /// with `tag` — the shape a `{type: "element"}` wrapper compiles to.
+    fn push_element_wrap_command(buf: &mut Vec<u8>, node_id: u32, tag: &str) {
+        let mut ops = Vec::new();
+        ops.push(OP_OPEN);
+        ops.push(HastNodeType::Element as u8);
+        op_str(&mut ops, OF_TAGNAME, tag);
+        ops.push(OP_CLOSE);
+
+        buf.push(CMD_WRAP);
+        push_u32(buf, node_id);
+        buf.push(PAYLOAD_OPSTREAM);
+        push_u32(buf, ops.len() as u32);
+        buf.extend_from_slice(&ops);
+    }
+
+    /// A void element wrapper renders without children, so it is rejected the
+    /// same way a `{rawHtml}` void wrapper is — the wrapped node would vanish.
+    #[test]
+    fn hast_wrap_with_void_element_payload_errors() {
+        let arena = build_hast_element(&[]);
+        let mut buf = Vec::new();
+        push_element_wrap_command(&mut buf, 1, "img");
+
+        let err = apply_hast_commands(arena, &buf).unwrap_err();
+        assert!(
+            matches!(&err, CommandError::VoidWrapParent(tag) if tag == "img"),
+            "{err:?}"
+        );
+    }
+
+    /// The void check leaves ordinary element wrappers alone.
+    #[test]
+    fn hast_wrap_with_element_payload_wraps() {
+        let arena = build_hast_element(&[]);
+        let mut buf = Vec::new();
+        push_element_wrap_command(&mut buf, 1, "section");
+
+        let result = apply_hast_commands(arena, &buf).unwrap();
+        let section = result.get_children(0)[0];
+        assert_eq!(
+            result.get_str(decode_element_tag(result.get_type_data(section))),
+            "section"
+        );
+        let wrapped = result.get_children(section);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(
+            result.get_str(decode_element_tag(result.get_type_data(wrapped[0]))),
+            "div"
+        );
     }
 
     /// Raw payloads stay rejected for every HAST command except wrap.

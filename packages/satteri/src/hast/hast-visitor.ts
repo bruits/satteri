@@ -147,7 +147,9 @@ export interface HastVisitorContext {
    * children `parentNode` declares are kept after it, so a `div` with an anchor
    * child wraps a heading as `div > [heading, anchor]`. `parentNode` must be a
    * node type that can hold children (an element or MDX JSX element), or a
-   * `{ rawHtml }` string that parses to exactly one non-void element.
+   * `{ rawHtml }` string that parses to exactly one element. Either way the
+   * element must not be a void one (`img`, `br`, …), since a void tag renders
+   * without children and would drop the wrapped node.
    */
   wrapNode(node: Readonly<HastNode>, parentNode: HastParentContent | RawHtmlHastContent): void;
   prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
@@ -223,13 +225,25 @@ export interface RawHtmlHastContent {
 
 /** HAST node types that can hold children. `wrapNode` allowlist — an
  *  unlisted (new or leaf) type fails loud instead of silently mis-wrapping. */
-const HAST_PARENT_TYPES = new Set<string>(["element", "mdxJsxFlowElement", "mdxJsxTextElement"]);
+const HAST_PARENT_TYPES = ["element", "mdxJsxFlowElement", "mdxJsxTextElement"] as const;
+const HAST_PARENT_TYPE_SET = new Set<string>(HAST_PARENT_TYPES);
+
+/** Fails to compile if the allowlist and {@link HastParentContent} drift apart,
+ *  in either direction — a new parent-capable hast type must be listed, and a
+ *  listed type must really be parent-capable. */
+type AssertNever<T extends never> = T;
+type _EveryHastParentIsListed = AssertNever<
+  Exclude<HastParentContent["type"], (typeof HAST_PARENT_TYPES)[number]>
+>;
+type _EveryListedTypeIsAParent = AssertNever<
+  Exclude<(typeof HAST_PARENT_TYPES)[number], HastParentContent["type"]>
+>;
 
 /** Reject wrappers with no place for the wrapped node (leaves) — the patch
  *  engine would degrade them into sibling inserts or drop the node. */
 function assertHastWrapParent(parentNode: HastContent): void {
   const type = (parentNode as { type?: unknown }).type;
-  if (typeof type === "string" && HAST_PARENT_TYPES.has(type)) return;
+  if (typeof type === "string" && HAST_PARENT_TYPE_SET.has(type)) return;
   throw new Error(
     `wrapNode: "${String(type)}" nodes cannot hold children, so they cannot wrap a node. ` +
       'Wrap in an element instead, e.g. { type: "element", tagName: "div", properties: {}, children: [] } ' +

@@ -13,7 +13,7 @@ import { defineHastPlugin } from "../src/plugin.js";
 import { dropHandle } from "../src/index.js";
 import { collect } from "./fixtures.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
-import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
+import type { HastParentContent, HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { Element, ElementContent, Text } from "hast";
 import type { Position } from "unist";
 
@@ -375,6 +375,73 @@ describe("visitHastHandle - mutations", () => {
     };
     const subs = resolveSubscriptions(plugin);
     expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(/void element/);
+  });
+
+  // Same rule as the rawHtml wrapper: a void tag renders without children, so
+  // the wrapped node would never reach the output.
+  test("context.wrapNode() rejects a void element node as the wrapper", () => {
+    for (const tagName of ["img", "br"]) {
+      const { handle, source } = setup("# Hello");
+      const plugin = {
+        element: {
+          filter: ["h1"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            ctx.wrapNode(node, { type: "element", tagName, properties: {}, children: [] });
+          },
+        },
+      };
+      const subs = resolveSubscriptions(plugin);
+      expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(
+        /void element/,
+      );
+    }
+  });
+
+  // Runtime companion to the compile-time parity check in hast-visitor.ts:
+  // every parent-capable type is accepted by the wrapNode allowlist.
+  test("context.wrapNode() accepts every parent-capable HAST type", () => {
+    const wrappers: HastParentContent[] = [
+      { type: "element", tagName: "div", properties: {}, children: [] },
+      { type: "mdxJsxFlowElement", name: "Box", attributes: [], children: [] },
+      { type: "mdxJsxTextElement", name: "Badge", attributes: [], children: [] },
+    ];
+    for (const wrapper of wrappers) {
+      const { handle, source } = setup("# Hello");
+      const plugin = {
+        element: {
+          filter: ["h1"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            expect(() => ctx.wrapNode(node, wrapper)).not.toThrow();
+          },
+        },
+      };
+      visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    }
+  });
+
+  test("context.wrapNode() wraps a node in an MDX JSX element", () => {
+    const handle = createMdxHastHandle("# Hello\n");
+    const source = getHandleSource(handle);
+    const plugin = {
+      element: {
+        filter: ["h1"],
+        visit(node: HastNode, ctx: HastVisitorContext) {
+          ctx.wrapNode(node, {
+            type: "mdxJsxFlowElement",
+            name: "Callout",
+            attributes: [],
+            children: [],
+          });
+        },
+      },
+    };
+    visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
+    const tree = materializeHastTree(new HastReader(serializeHandle(handle)));
+    const jsx = findHastNode(tree, "mdxJsxFlowElement");
+    if (jsx?.type !== "mdxJsxFlowElement") throw new Error("expected mdxJsxFlowElement");
+    expect(jsx.name).toBe("Callout");
+    const wrapped = jsx.children[0];
+    expect(wrapped?.type === "element" && wrapped.tagName).toBe("h1");
   });
 
   // Regression (issue #182): a leaf wrapper (raw/text) has no slot for the
