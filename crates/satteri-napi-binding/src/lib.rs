@@ -1214,9 +1214,8 @@ pub struct MdxJsOneShot {
     pub dropped_transforms: u32,
 }
 
-/// Shared body of the `*ToJsFast` exports: parse → MDAST → HAST → JS, plus
-/// frontmatter extraction, in a single NAPI roundtrip. `mdx` picks the parser;
-/// plain parses never produce MDX errors, so the error check is MDX-only.
+/// Shared body of the `*ToJsFast` exports. `mdx` picks the parser; plain parses
+/// never produce MDX errors, so the check below is a no-op for them.
 #[cfg(feature = "mdx")]
 fn to_js_fast_impl(
     env: Env,
@@ -1281,9 +1280,8 @@ pub fn mdx_to_js_fast(
     to_js_fast_impl(env, &source, features, options, convert_options, true)
 }
 
-/// Plain-Markdown variant of [`mdx_to_js_fast`]: MDX expression/JSX/ESM syntax
-/// is treated as literal Markdown text. Used by `markdownToJs` when the caller
-/// didn't configure any plugins.
+/// Plain-Markdown variant of [`mdx_to_js_fast`]: MDX syntax stays literal text.
+/// Used by `markdownToJs` when the caller didn't configure any plugins.
 #[cfg(feature = "mdx")]
 #[napi]
 pub fn markdown_to_js_fast(

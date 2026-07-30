@@ -323,10 +323,9 @@ fn one<'a>(
         Some(HastNodeType::Root) => transform_root(context, node_id, explicit_jsxs),
         Some(HastNodeType::Element) => transform_element(context, node_id, explicit_jsxs),
         Some(HastNodeType::Text) => Ok(transform_text(context, node_id)),
-        // `raw` is opaque HTML with no JSX representation: plain Markdown drops
-        // it, MDX errors since raw there can only come from a plugin returning
-        // an `html` node. (`optimize_static` collapses raw into an HTML
-        // injection upstream, so this arm only fires on the plain path.)
+        // No JSX representation. Under MDX a `raw` node can only come from a
+        // plugin, so it errors there. `optimize_static` collapses raw into
+        // injected HTML earlier, so this arm only fires without it.
         Some(HastNodeType::Raw) => {
             if context.view.mdx {
                 Err(raw_html_in_mdx_error(context, node_id))
@@ -659,11 +658,9 @@ fn transform_element<'a>(
         )));
     }
 
-    // Carry the source span so development `__source` gets a line/column.
-    // `explicit_jsxs` is keyed by span, so on the off chance an MDX element
-    // nested inside covers the identical range, stay span-less rather than be
-    // mistaken for author-written JSX. Children are transformed above, so any
-    // such descendant is already recorded.
+    // The span feeds development `__source`. `explicit_jsxs` is keyed by span,
+    // so an MDX descendant covering the identical range would make this element
+    // read as author-written JSX; children are already transformed by here.
     let span = node_span(context.view, node_id);
     let span = if explicit_jsxs.contains(&span) {
         SPAN
@@ -953,8 +950,6 @@ fn transform_root<'a>(
 
     let nodes = OxcVec::from_iter_in(nodes, alloc);
 
-    // The wrapping fragment spans the whole document, so development
-    // `__source` points at its start like any other element's.
     Ok(Some(JSXChild::Fragment(OxcBox::new_in(
         create_fragment(alloc, nodes, node_span(context.view, node_id)),
         alloc,

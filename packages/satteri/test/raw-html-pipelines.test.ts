@@ -66,8 +66,8 @@ test("rawHtml off leaves raw HTML verbatim on every path", () => {
   expect(html).not.toContain("<tbody>");
 });
 
-// The JS path adds a wrinkle: without the reparse, raw HTML has no JSX
-// representation and is dropped, so the reparse is the only way it survives.
+// In JS output raw HTML has no representation at all, so the reparse is the only
+// way it survives — unlike HTML output, which keeps it verbatim.
 function expectReparsedJs(code: string) {
   expect(code).toContain('className: "a b"');
   expect(code).toContain('tbody: "tbody"');

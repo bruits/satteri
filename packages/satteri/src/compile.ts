@@ -483,13 +483,9 @@ export interface CompileOptions {
 }
 
 /**
- * JS/JSX output options.
- *
- * These are the fields that shape the compiled JavaScript, separate from the
- * shared pipeline options in {@link CompileOptions}. Both {@link mdxToJs} and
- * {@link markdownToJs} accept them. Useful for wrappers (Vite/Rollup plugins,
- * framework integrations) that want to expose the codegen knobs without
- * re-exposing the shared pipeline fields.
+ * JS/JSX output options, accepted by both {@link mdxToJs} and
+ * {@link markdownToJs}. Exported on its own so wrappers can expose the codegen
+ * knobs without the shared pipeline fields.
  */
 export interface MdxOnlyOptions {
   optimizeStatic?: OptimizeStaticConfig;
@@ -540,10 +536,6 @@ export interface MdxOnlyOptions {
 
 export interface MdxCompileOptions extends CompileOptions, MdxOnlyOptions {}
 
-/**
- * Options for {@link markdownToJs}. The {@link MdxOnlyOptions} fields all
- * concern the compiled JS/JSX output, so they apply to Markdown input too.
- */
 export interface MarkdownToJsOptions extends CompileOptions, MdxOnlyOptions {}
 
 /** Frontmatter block extracted from the parsed Markdown/MDX source. */
@@ -804,8 +796,7 @@ export function markdownToJs(
   return toJsImpl(source, options, false);
 }
 
-/** Shared body of {@link mdxToJs} and {@link markdownToJs}; `mdx` picks the
- *  parser, the compile pipeline is identical from MDAST on. */
+/** `mdx` picks the parser; the pipeline is identical from MDAST on. */
 function toJsImpl(
   source: string,
   options: MdxCompileOptions,

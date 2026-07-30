@@ -1649,7 +1649,6 @@ describe("markdownToJs", () => {
     const { code: js } = markdownToJs(source);
     expect(js).toContain('"Hello {xxx} world"');
 
-    // Contrast: the MDX pipeline reads `{xxx}` as a live expression.
     const { code: mdxJs } = mdxToJs(source);
     expect(mdxJs).not.toContain('"Hello {xxx} world"');
     expect(mdxJs).toContain("xxx");
@@ -1735,9 +1734,8 @@ describe("markdownToJs", () => {
     expect(js).toContain('"Hello {x}"');
   });
 
-  // The four pipelines (fast path, MDAST fused tail, HAST plugins, both) each
-  // build the HAST arena differently, and every one of them has to extract
-  // frontmatter and mark the arena as plain Markdown so raw HTML is dropped.
+  // Each path builds the HAST arena differently inside, and all of them have to
+  // extract frontmatter and mark the arena as plain Markdown.
   describe("every pipeline path", () => {
     const src = "---\ntitle: T\n---\n\npara <b>x</b>\n";
     const noopMdast = defineMdastPlugin({ name: "noop-mdast", paragraph() {} });
@@ -1863,8 +1861,7 @@ describe("markdownToJs", () => {
     });
 
     test("optimizeStatic injects raw HTML verbatim instead of dropping it", () => {
-      // Collapsing a static subtree serializes it back to HTML, so raw HTML
-      // rides along in the injected string rather than being dropped.
+      // Collapsing serializes the subtree back to HTML, so raw HTML rides along.
       const { code: js } = markdownToJs("a <b>bold</b> word", {
         optimizeStatic: { component: "Fragment", prop: "set:html" },
       });
@@ -1872,8 +1869,7 @@ describe("markdownToJs", () => {
     });
   });
 
-  // The JS-output options are shared with `mdxToJs` but reach the plain-Markdown
-  // path through its own NAPI entry point.
+  // Shared with `mdxToJs`, but reached through a separate NAPI entry point.
   describe("JS output options", () => {
     test("compiles to an ES module by default", () => {
       const { code: js } = markdownToJs("# Hello");
@@ -1913,14 +1909,11 @@ describe("markdownToJs", () => {
       expect(js).toContain('from "react/jsx-dev-runtime"');
       expect(js).toContain("_jsxDEV");
       expect(js).toContain('fileName: "<source.js>"');
-      // Markdown-derived elements are positioned, not just author-written JSX.
       expect(js).toContain("lineNumber: 1");
       expect(js).toContain("lineNumber: 3");
     });
 
     test("jsx: true keeps JSX and names the runtime in pragma comments", () => {
-      // The comments are the only place a downstream JSX transform can read
-      // the runtime from, since the output itself no longer mentions it.
       const { code: js } = markdownToJs("# Hello", { jsx: true, jsxImportSource: "preact" });
       expect(js).toContain("<_components.h1>");
       expect(js).not.toContain("_jsx(");

@@ -122,9 +122,7 @@ describe("markdownToJs conformance: ESM syntax stays literal", () => {
   });
 });
 
-// Raw HTML has no JSX representation, so by default it is dropped — what
-// `remark-rehype` does without `allowDangerousHtml`. These run the reference
-// undisturbed (no rehype-raw), so they pin satteri to it.
+// The reference drops it too, with no rehype-raw installed.
 describe("markdownToJs conformance: raw HTML is dropped by default", () => {
   test("inline element", async () => {
     await assertMarkdownJsConformance("a <b>bold</b> word");
@@ -359,10 +357,8 @@ describe("markdownToJs conformance: frontmatter", () => {
   });
 });
 
-// The evaluate-and-render comparison above only sees the rendered tree. These
-// compare the compiled module itself, which is what the JS-output options
-// shape: `outputFormat`, the JSX runtime selection, `development`, and
-// `providerImportSource`.
+// The comparisons above only see the rendered tree; these see the module the
+// JS-output options actually shape.
 describe("markdownToJs conformance: compiled module envelope", () => {
   const src = "# Head\n\ntext with a [link](https://e.com)\n";
 
@@ -403,7 +399,6 @@ describe("markdownToJs conformance: compiled module envelope", () => {
     await assertMarkdownJsModuleConformance("<!-- only a comment -->");
   });
 
-  // Kept JSX still has to name its runtime, since nothing in the output does.
   test("jsx: true carries the automatic runtime pragmas", async () => {
     await assertMarkdownJsModuleConformance(src, { jsx: true });
   });
@@ -427,7 +422,6 @@ describe("markdownToJs conformance: compiled module envelope", () => {
   });
 });
 
-// `development: true` attaches a `__source` to every JSX call.
 describe("markdownToJs conformance: development positions", () => {
   test("headings and paragraphs", async () => {
     await assertMarkdownJsDevPositionConformance("# Head\n\ntext\n");
@@ -450,8 +444,7 @@ describe("markdownToJs conformance: development positions", () => {
   });
 });
 
-// `features.math` against remark-math. Both sides render math as `<code>`/
-// `<pre>` with the language classes; no KaTeX is involved.
+// No KaTeX on either side: math renders as `<code>`/`<pre>` with a language class.
 describe("markdownToJs conformance: math", () => {
   test("inline math", async () => {
     await assertMarkdownJsConformance("mass $E = mc^2$ here", { math: true });
@@ -470,9 +463,9 @@ describe("markdownToJs conformance: math", () => {
   });
 });
 
-// Raw HTML is dropped at the end of the pipeline, not at parse time, so plugins
-// still see `raw` nodes and can turn them into something renderable — the same
-// ordering @mdx-js/mdx gets by removing raw only after its rehype plugins.
+// Raw HTML is dropped after the plugins run, not at parse time, so a plugin can
+// still turn a `raw` node into something renderable. @mdx-js/mdx orders it the
+// same way.
 describe("markdownToJs conformance: plugins see raw HTML before it is dropped", () => {
   test("inline element", async () => {
     await assertMarkdownJsConformance("a <b>bold</b> word", { rewriteRaw: true });

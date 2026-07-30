@@ -115,8 +115,6 @@ export default MDXContent;
 
 #[test]
 fn jsx_pragma_comments() -> Result<(), satteri_arena::mdx_types::Message> {
-    // Kept JSX carries the runtime choice in comments, the only place a
-    // downstream transform can still read it from.
     let automatic = compile(
         "# hi",
         &Options {
@@ -148,8 +146,6 @@ fn jsx_pragma_comments() -> Result<(), satteri_arena::mdx_types::Message> {
         "classic runtime pragmas missing:\n{classic}"
     );
 
-    // Compiling the JSX away resolves the runtime here, so the comments would
-    // only be noise.
     let compiled = compile("# hi", &Options::default(), MDX_OPTS)?;
     assert!(
         !compiled.contains("@jsxRuntime"),
@@ -161,8 +157,6 @@ fn jsx_pragma_comments() -> Result<(), satteri_arena::mdx_types::Message> {
 
 #[test]
 fn development_source_for_markdown_elements() -> Result<(), satteri_arena::mdx_types::Message> {
-    // Elements converted from Markdown get a line/column too, not just
-    // author-written JSX.
     let out = compile(
         "# Head\n\ntext\n",
         &Options {
@@ -1577,9 +1571,6 @@ fn heading_attribute_custom_id_setext() -> Result<(), satteri_arena::mdx_types::
 
 #[test]
 fn plain_markdown_drops_raw_html() -> Result<(), satteri_arena::mdx_types::Message> {
-    // Raw HTML has no JSX representation. A plain-Markdown arena drops it
-    // rather than erroring, which is what the MDX parser's absence of `raw`
-    // nodes lets the MDX arena treat as a hard error instead.
     let plain = compile(
         "a <b>bold</b> word\n",
         &Options::default(),
@@ -1594,7 +1585,6 @@ fn plain_markdown_drops_raw_html() -> Result<(), satteri_arena::mdx_types::Messa
         "text inside the raw HTML was lost:\n{plain}"
     );
 
-    // The same source parsed as MDX is JSX, never a `raw` node.
     let mdx = compile("a <b>bold</b> word\n", &Options::default(), MDX_OPTS)?;
     assert!(
         mdx.contains("_jsx(\"b\""),
@@ -1606,8 +1596,6 @@ fn plain_markdown_drops_raw_html() -> Result<(), satteri_arena::mdx_types::Messa
 
 #[test]
 fn plain_markdown_keeps_mdx_syntax_literal() -> Result<(), satteri_arena::mdx_types::Message> {
-    // Expressions and ESM lines are ordinary text without `ENABLE_MDX`, so
-    // they must survive as string children instead of becoming code.
     let out = compile(
         "Hello {name}\n\nimport x from \"y\"\n",
         &Options::default(),

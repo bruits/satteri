@@ -453,9 +453,9 @@ export function satteriHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
-// Collapses whitespace around tags, so it also hides whitespace-only text
-// nodes next to an element — including the newlines the mdast→hast table
-// handler inserts, which JSX strips on the reference side but satteri keeps.
+// Collapsing whitespace around tags also hides whitespace-only text nodes next
+// to an element, such as a table's row newlines: JSX strips those, satteri keeps
+// them.
 function normalizeHtml(html: string): string {
   return html.replace(/>\s+</g, "><").replace(/\s+</g, "<").replace(/>\s+/g, ">").trim();
 }
@@ -481,30 +481,19 @@ export async function assertMdxConformance(
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }
 
-// Reference for `markdownToJs` is @mdx-js/mdx with `format: "md"` — the
-// ecosystem's plain-Markdown compile mode. Both sides evaluate to a component
-// and render through react-dom/server, so string escaping is identical and
-// only structural differences survive the comparison. GFM is on for both to
-// match satteri's default.
+// Reference is @mdx-js/mdx with `format: "md"`. Both sides evaluate to a
+// component and render through react-dom/server, so escaping is identical and
+// only structural differences survive.
 export interface MarkdownJsConformanceOptions {
   components?: Record<string, unknown>;
-  /** Reparse raw HTML into elements: satteri `features.rawHtml`, reference rehype-raw. */
   rawHtml?: boolean;
-  /** Enable frontmatter on both sides. */
   frontmatter?: boolean;
-  /** Enable math on both sides: satteri `features.math`, reference remark-math. */
   math?: boolean;
-  /**
-   * Install the {@link rewriteRawToCode} plugin on both pipelines. Pins the
-   * point at which raw HTML is dropped: it must still be in the tree while
-   * hast/rehype plugins run, so only what they leave behind disappears.
-   */
+  /** Pins when raw HTML is dropped: only what the plugins leave behind goes. */
   rewriteRaw?: boolean;
 }
 
-/** Replace every `raw` node with a `<code>` element holding its verbatim text,
- *  so a raw node the plugin saw shows up in the rendered output instead of
- *  being dropped. Written twice, once per pipeline's plugin API. */
+/** Makes a `raw` node show up in the render instead of being dropped. */
 const rewriteRawToCode = {
   reference: () => (tree: Nodes) => {
     const walk = (node: Nodes): void => {
@@ -577,9 +566,6 @@ export async function assertMarkdownJsConformance(
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }
 
-/** The parts of a compiled ES module that the JS-output options govern: the
- *  pragma comments, what it imports, what it exports, and which runtime pieces
- *  it uses. */
 interface ModuleEnvelope {
   pragmas: string[];
   imports: string[];
@@ -587,9 +573,8 @@ interface ModuleEnvelope {
   markers: string[];
 }
 
-// Substrings whose presence the two compilers must agree on. Deliberately not
-// a formatting comparison: satteri emits `Object.assign` where @mdx-js/mdx
-// spreads, and pretty-prints differently.
+// Presence-only, not a text comparison: satteri emits `Object.assign` where
+// @mdx-js/mdx spreads, and pretty-prints differently.
 const ENVELOPE_MARKERS = [
   "_createMdxContent",
   "MDXContent",
@@ -631,11 +616,9 @@ function moduleEnvelope(code: string): ModuleEnvelope {
 }
 
 /**
- * Compare the compiled ES module's envelope against @mdx-js/mdx `format: "md"`
- * for the same options. Covers the JS-output options that shape the module
- * rather than the rendered tree — `outputFormat: "program"`, the JSX runtime
- * selection, `development`, and `providerImportSource` — which the
- * evaluate-and-render comparison cannot see.
+ * Compare the compiled module's envelope against @mdx-js/mdx `format: "md"`.
+ * Covers the options that shape the module rather than the rendered tree, which
+ * the evaluate-and-render comparison cannot see.
  */
 export async function assertMarkdownJsModuleConformance(
   input: string,
@@ -662,10 +645,8 @@ export async function assertMarkdownJsModuleConformance(
 }
 
 /**
- * Compare the `__source` metadata `development: true` attaches to every JSX
- * call — one `line:column` per element, in source order — against @mdx-js/mdx
- * `format: "md"`. Elements converted from Markdown must be positioned too, not
- * just author-written JSX.
+ * Compare the `__source` metadata against @mdx-js/mdx `format: "md"`: one
+ * `line:column` per JSX call, in source order.
  */
 export async function assertMarkdownJsDevPositionConformance(input: string): Promise<void> {
   const positions = (code: string): string[] =>
