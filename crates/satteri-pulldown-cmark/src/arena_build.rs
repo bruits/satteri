@@ -3,7 +3,7 @@
 
 use alloc::borrow::Cow;
 
-use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
+use satteri_arena::{line_ending_iter, Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
 use satteri_ast::mdast::{
     encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
     CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
@@ -502,9 +502,7 @@ fn parse_inner(
                                     let end = child_node.start_offset as usize;
                                     if start <= end && end <= source_bytes.len() {
                                         let gap = &source_bytes[start..end];
-                                        if crate::scanners::line_ending_iter(gap).take(2).count()
-                                            >= 2
-                                        {
+                                        if line_ending_iter(gap).take(2).count() >= 2 {
                                             found = true;
                                             break;
                                         }
@@ -615,9 +613,7 @@ fn parse_inner(
                                     let end = child_node.start_offset as usize;
                                     if start <= end && end <= source_bytes.len() {
                                         let gap = &source_bytes[start..end];
-                                        if crate::scanners::line_ending_iter(gap).take(2).count()
-                                            >= 2
-                                        {
+                                        if line_ending_iter(gap).take(2).count() >= 2 {
                                             found = true;
                                             break;
                                         }

@@ -4,6 +4,7 @@
 use alloc::{string::String, vec::Vec};
 use core::{cmp::max, ops::Range};
 
+use satteri_arena::line_ending_iter;
 use unicase::UniCase;
 
 #[cfg(feature = "mdx")]
@@ -1660,33 +1661,39 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if next_start <= prev_end {
                 return false;
             }
-            // Allow exactly one newline (the def's line terminator)
+            // Allow exactly one line ending (the def's line terminator)
             // plus any amount of leading whitespace on the next line.
             // Indented-code can't interrupt the def's still-open
             // paragraph, so even 4+ space indents are valid paragraph
             // continuations and qualify for chain-back.
-            let mut newlines = 0;
-            for &b in &bytes[prev_end..next_start] {
-                if b == b'\n' {
-                    if newlines > 0 {
+            let gap = &bytes[prev_end..next_start];
+            let mut line_endings = 0;
+            let mut i = 0;
+            while i < gap.len() {
+                let b = gap[i];
+                if b == b'\n' || b == b'\r' {
+                    if line_endings > 0 {
                         return false;
                     }
-                    newlines += 1;
-                } else if b == b'\r' {
-                    if newlines > 0 {
-                        return false;
-                    }
+                    line_endings += 1;
+                    // A CRLF terminates one line, not two.
+                    i += if b == b'\r' && gap.get(i + 1) == Some(&b'\n') {
+                        2
+                    } else {
+                        1
+                    };
                 } else if b == b' ' || b == b'\t' {
-                    if newlines == 0 {
+                    if line_endings == 0 {
                         return false;
                     }
                     // OK: whitespace after the line break is the
                     // next line's leading indent.
+                    i += 1;
                 } else {
                     return false;
                 }
             }
-            newlines == 1
+            line_endings == 1
         };
         let original_start = self.tree[node_ix].item.start;
         // Don't chain back when the heading's *first* content line is

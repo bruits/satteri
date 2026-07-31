@@ -581,6 +581,18 @@ describe("MDAST conformance: standalone CR block structure", () => {
     assertMdastConformance("[foo]: /url\r\r[foo]\r");
   });
 
+  test("setext heading directly after a definition inherits its start", () => {
+    assertMdastConformance("[foo]: /url\rtitle\r=====\r");
+  });
+
+  test("setext heading after a run of definitions", () => {
+    assertMdastConformance("[a]: /a\r[b]: /b\r  title\r=====\r");
+  });
+
+  test("blank line between a definition and a setext heading breaks the chain", () => {
+    assertMdastConformance("[foo]: /url\r\rtitle\r=====\r");
+  });
+
   test("hard line break before a lone CR", () => {
     assertMdastConformance("a  \rb");
   });

@@ -210,7 +210,7 @@ impl LineIndexCursor<'_, '_> {
 /// Byte index of the last byte of every line ending in `bytes`. CommonMark
 /// counts `\n`, `\r` and `\r\n` alike, so the `\r` of a CRLF is skipped and
 /// the pair is reported once, at its `\n`.
-fn line_ending_iter(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
+pub fn line_ending_iter(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
     memchr::memchr2_iter(b'\n', b'\r', bytes)
         .filter(move |&i| bytes[i] == b'\n' || bytes.get(i + 1) != Some(&b'\n'))
 }
@@ -296,6 +296,17 @@ mod tests {
         assert_eq!(c.offset_to_line_col(3), (2, 1)); // b
         assert_eq!(c.offset_to_line_col(5), (3, 1)); // c
         assert_eq!(c.offset_to_line_col(7), (4, 1)); // d
+    }
+
+    #[test]
+    fn line_ending_iter_counts_crlf_once() {
+        let collect = |s: &[u8]| line_ending_iter(s).collect::<Vec<_>>();
+        assert_eq!(collect(b"a\nb\nc"), [1, 3]);
+        assert_eq!(collect(b"a\rb\rc"), [1, 3]);
+        assert_eq!(collect(b"a\r\nb\r\nc"), [2, 5]);
+        assert_eq!(collect(b"a\r\rb"), [1, 2]);
+        assert_eq!(collect(b"a\n\rb"), [1, 2]);
+        assert!(collect(b"abc").is_empty());
     }
 
     #[test]

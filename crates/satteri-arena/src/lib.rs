@@ -20,5 +20,5 @@ pub use arena::{Arena, TypeDataWriter};
 pub use builder::ArenaBuilder;
 pub use codec::{decode_string_ref_data, encode_string_ref_data};
 pub use kind::{ArenaKind, Hast, Mdast};
-pub use line_index::{LineIndex, LineIndexCursor};
+pub use line_index::{line_ending_iter, LineIndex, LineIndexCursor};
 pub use node::{ArenaNode, StringRef, NODE_STRUCT_SIZE};

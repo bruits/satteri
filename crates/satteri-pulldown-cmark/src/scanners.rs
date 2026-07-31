@@ -590,14 +590,6 @@ pub(crate) fn scan_nextline(bytes: &[u8]) -> usize {
     }
 }
 
-/// Byte index of the last byte of every line ending in `bytes`. `\n`, `\r` and
-/// `\r\n` all end a line, so the `\r` of a CRLF is skipped and the pair is
-/// reported once, at its `\n`.
-pub(crate) fn line_ending_iter(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
-    memchr::memchr2_iter(b'\n', b'\r', bytes)
-        .filter(move |&i| bytes[i] == b'\n' || bytes.get(i + 1) != Some(&b'\n'))
-}
-
 // return: end byte for closing code fence, or None
 // if the line is not a closing code fence
 pub(crate) fn scan_closing_code_fence(
@@ -1440,8 +1432,8 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
     }
 }
 
-/// Index of the next `\`, `&` or `\r` at or after `from`, or `bytes.len()`
-/// when there is none (which ends `unescape`'s scan loop).
+/// Index of the next `\` or `&` at or after `from`, or `bytes.len()` when
+/// there is none (which ends `unescape`'s scan loop).
 #[inline]
 fn next_unescape_candidate(bytes: &[u8], from: usize) -> usize {
     match memchr::memchr2(b'\\', b'&', &bytes[from..]) {
@@ -1792,17 +1784,6 @@ mod test {
         assert_eq!(scan_nextline(b""), 0);
         // A `\r` last in the slice has no `\n` to pair with.
         assert_eq!(scan_nextline(b"abc\r"), 4);
-    }
-
-    #[test]
-    fn line_ending_iter_counts_crlf_once() {
-        let collect = |s: &[u8]| line_ending_iter(s).collect::<Vec<_>>();
-        assert_eq!(collect(b"a\nb\nc"), [1, 3]);
-        assert_eq!(collect(b"a\rb\rc"), [1, 3]);
-        assert_eq!(collect(b"a\r\nb\r\nc"), [2, 5]);
-        assert_eq!(collect(b"a\r\rb"), [1, 2]);
-        assert_eq!(collect(b"a\n\rb"), [1, 2]);
-        assert!(collect(b"abc").is_empty());
     }
 
     #[test]
