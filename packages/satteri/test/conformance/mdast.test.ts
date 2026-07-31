@@ -538,6 +538,58 @@ describe("MDAST conformance: standalone CR positions", () => {
   });
 });
 
+// Block structure was decided by scanning for `\n` only, so a document whose
+// line endings are all lone `\r` was read as a single line.
+describe("MDAST conformance: standalone CR block structure", () => {
+  test("blank line between list items makes the list loose", () => {
+    assertMdastConformance("- a\r\r- b");
+  });
+
+  test("fenced code block", () => {
+    assertMdastConformance("```js\rcode\r```\r");
+  });
+
+  test("fenced code block left open", () => {
+    assertMdastConformance("```js\rcode\r");
+  });
+
+  test("indented code block strips continuation indentation", () => {
+    assertMdastConformance("    a\r    b\r");
+  });
+
+  test("HTML block ends at a blank line", () => {
+    assertMdastConformance("<div>\ra\r\rb\r");
+  });
+
+  test("setext heading underline", () => {
+    assertMdastConformance("title\r=====\r");
+  });
+
+  test("thematic break between paragraphs", () => {
+    assertMdastConformance("a\r***\rb");
+  });
+
+  test("nested list indentation", () => {
+    assertMdastConformance("- a\r  - b\r    - c\r");
+  });
+
+  test("block quote with a lazy continuation line", () => {
+    assertMdastConformance("> a\rb\r\rc");
+  });
+
+  test("link reference definition followed by a use", () => {
+    assertMdastConformance("[foo]: /url\r\r[foo]\r");
+  });
+
+  test("hard line break before a lone CR", () => {
+    assertMdastConformance("a  \rb");
+  });
+
+  test("table", () => {
+    assertMdastConformance("| a | b |\r| - | - |\r| 1 | 2 |\r");
+  });
+});
+
 describe("MDAST conformance: closing code fence whitespace", () => {
   // Regression: CommonMark/remark allow tabs as well as spaces after the
   // closing fence. Satteri previously only consumed spaces, leaving the

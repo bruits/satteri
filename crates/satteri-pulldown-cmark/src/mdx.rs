@@ -1,5 +1,3 @@
-use memchr::memchr;
-
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{BigIntLiteral, NumericLiteral};
 use oxc_ast_visit::Visit;
@@ -907,12 +905,9 @@ fn scan_mdx_expression_end_inner(
     None
 }
 
-/// Scan to the end of a line, returning offset past the newline.
+/// Scan to the end of a line, returning offset past the line ending.
 fn scan_to_line_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let eol = memchr(b'\n', &bytes[start..])
-        .map(|i| start + i + 1)
-        .unwrap_or(bytes.len());
-    Some(eol)
+    Some(start + crate::scanners::scan_nextline(&bytes[start..]))
 }
 
 /// Scan a JSX tag from `<` to `>` or `/>`, returning the byte offset

@@ -488,7 +488,7 @@ fn parse_inner(
                         }
                         let is_spread = *item_spread || {
                             // Loose-list detection: a blank line between
-                            // consecutive children means two newlines in the
+                            // consecutive children means two line endings in the
                             // source gap. Counted on byte offsets, not lines, because
                             // skip-positions mode leaves `start_line` zero but
                             // offsets are always recorded.
@@ -502,7 +502,9 @@ fn parse_inner(
                                     let end = child_node.start_offset as usize;
                                     if start <= end && end <= source_bytes.len() {
                                         let gap = &source_bytes[start..end];
-                                        if memchr::memchr_iter(b'\n', gap).take(2).count() >= 2 {
+                                        if crate::scanners::line_ending_iter(gap).take(2).count()
+                                            >= 2
+                                        {
                                             found = true;
                                             break;
                                         }
@@ -613,7 +615,9 @@ fn parse_inner(
                                     let end = child_node.start_offset as usize;
                                     if start <= end && end <= source_bytes.len() {
                                         let gap = &source_bytes[start..end];
-                                        if memchr::memchr_iter(b'\n', gap).take(2).count() >= 2 {
+                                        if crate::scanners::line_ending_iter(gap).take(2).count()
+                                            >= 2
+                                        {
                                             found = true;
                                             break;
                                         }

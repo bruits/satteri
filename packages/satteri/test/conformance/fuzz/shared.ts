@@ -201,7 +201,7 @@ export const markdownBlock = fc.oneof(
   { weight: 1, arbitrary: htmlBlock },
 );
 
-const MD_SIGNIFICANT_CHARS = "# *_~`[]()!<>|-\\{}@^+=$:/ \t\n".split("");
+const MD_SIGNIFICANT_CHARS = "# *_~`[]()!<>|-\\{}@^+=$:/ \t\n\r".split("");
 const ALNUM = "abcdefghijklmnopqrstuvwxyz 0123456789".split("");
 
 // Spec-seeded arbitraries

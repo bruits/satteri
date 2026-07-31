@@ -6,4 +6,4 @@ cargo/satteri-napi: patch
 npm/satteri: patch
 ---
 
-Fixed `position` line and column numbers in documents containing standalone carriage returns (`\r`); other standalone-`\r` parsing is unchanged.
+Fixed documents that use standalone carriage returns (`\r`) as line endings parsing differently from documents that use `\n`.

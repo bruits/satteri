@@ -23,7 +23,7 @@
 use alloc::{string::String, vec::Vec};
 use core::char;
 
-use memchr::memchr;
+use memchr::{memchr, memchr2};
 
 pub(crate) use crate::puncttable::{is_ascii_punctuation, is_punctuation};
 use crate::{
@@ -582,7 +582,20 @@ pub(crate) fn scan_blank_line(bytes: &[u8]) -> Option<usize> {
 }
 
 pub(crate) fn scan_nextline(bytes: &[u8]) -> usize {
-    memchr(b'\n', bytes).map_or(bytes.len(), |x| x + 1)
+    match memchr2(b'\n', b'\r', bytes) {
+        // A CRLF is one line ending, so step past both bytes.
+        Some(i) if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') => i + 2,
+        Some(i) => i + 1,
+        None => bytes.len(),
+    }
+}
+
+/// Byte index of the last byte of every line ending in `bytes`. `\n`, `\r` and
+/// `\r\n` all end a line, so the `\r` of a CRLF is skipped and the pair is
+/// reported once, at its `\n`.
+pub(crate) fn line_ending_iter(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
+    memchr::memchr2_iter(b'\n', b'\r', bytes)
+        .filter(move |&i| bytes[i] == b'\n' || bytes.get(i + 1) != Some(&b'\n'))
 }
 
 // return: end byte for closing code fence, or None
@@ -1415,6 +1428,12 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
             },
             [b'\r', ..] => {
                 result.push_str(&input[mark..i]);
+                // The `\r` of a CRLF is dropped because its `\n` already stands
+                // for the pair; a lone `\r` is itself a line ending, so it
+                // becomes one instead of disappearing.
+                if bytes.get(i + 1) != Some(&b'\n') {
+                    result.push('\n');
+                }
                 i += 1;
                 mark = i;
             }
@@ -1774,6 +1793,39 @@ pub(crate) fn scan_inline_html_processing(
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn scan_nextline_line_endings() {
+        assert_eq!(scan_nextline(b"abc\ndef"), 4);
+        assert_eq!(scan_nextline(b"abc\rdef"), 4);
+        assert_eq!(scan_nextline(b"abc\r\ndef"), 5);
+        assert_eq!(scan_nextline(b"abc"), 3);
+        assert_eq!(scan_nextline(b""), 0);
+        // A `\r` last in the slice has no `\n` to pair with.
+        assert_eq!(scan_nextline(b"abc\r"), 4);
+    }
+
+    #[test]
+    fn line_ending_iter_counts_crlf_once() {
+        let collect = |s: &[u8]| line_ending_iter(s).collect::<Vec<_>>();
+        assert_eq!(collect(b"a\nb\nc"), [1, 3]);
+        assert_eq!(collect(b"a\rb\rc"), [1, 3]);
+        assert_eq!(collect(b"a\r\nb\r\nc"), [2, 5]);
+        assert_eq!(collect(b"a\r\rb"), [1, 2]);
+        assert_eq!(collect(b"a\n\rb"), [1, 2]);
+        assert!(collect(b"abc").is_empty());
+    }
+
+    #[test]
+    fn unescape_lone_cr_becomes_a_line_ending() {
+        // The `\r` of a CRLF drops out because its `\n` stands for the pair.
+        assert_eq!(unescape("a\r\nb", false).as_ref(), "a\nb");
+        assert_eq!(unescape("a\rb", false).as_ref(), "a\nb");
+        assert_eq!(unescape("\r", false).as_ref(), "\n");
+        assert_eq!(unescape("a\r\rb", false).as_ref(), "a\n\nb");
+        assert_eq!(unescape("a\nb", false).as_ref(), "a\nb");
+    }
+
     #[test]
     fn overflow_list() {
         assert!(

@@ -436,13 +436,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // A term may sit at most one blank line from its
                         // definition (pandoc / mdast-util-definition-list); two+
                         // disconnect it. `item.end` includes the paragraph's
-                        // trailing newline, so the gap to the marker holds 0
-                        // newlines when tight, 1 when loose, 2+ when disconnected.
+                        // trailing line ending, so the gap to the marker holds 0
+                        // line endings when tight, 1 when loose, 2+ when disconnected.
                         ItemBody::Paragraph | ItemBody::TightParagraph => {
                             let gap_start = item.end.min(container_start);
-                            bytes[gap_start..container_start]
-                                .iter()
-                                .filter(|&&b| b == b'\n')
+                            line_ending_iter(&bytes[gap_start..container_start])
+                                .take(2)
                                 .count()
                                 <= 1
                         }
@@ -895,10 +894,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     }
                                     let chunk_start = pos;
                                     while pos < bytes.len() {
-                                        let eol = memchr::memchr(b'\n', &bytes[pos..])
-                                            .map(|i| pos + i + 1)
-                                            .unwrap_or(bytes.len());
-                                        pos = eol;
+                                        pos += scan_nextline(&bytes[pos..]);
                                         if pos < bytes.len()
                                             && (bytes[pos] == b'\n' || bytes[pos] == b'\r')
                                         {
@@ -1701,9 +1697,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // token — so the heading no longer inherits the def's start.
         // Other content-line shapes (plain text, `*`, `+`, …) leave the
         // paragraph token intact and the chain-back applies.
-        let first_line_end = bytes[original_start..ix]
-            .iter()
-            .position(|&b| b == b'\n')
+        let first_line_end = memchr::memchr2(b'\n', b'\r', &bytes[original_start..ix])
             .map(|p| original_start + p)
             .unwrap_or(ix);
         let first_line = &bytes[original_start..first_line_end];
