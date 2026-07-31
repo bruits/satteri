@@ -3454,10 +3454,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         linebuf.as_mut().unwrap()
                     };
                     linebuf.push_str(&text[linestart..bytecount]);
-                    linebuf.push('\n'); // normalize line breaks
-                                        // skip line break
+                    // The title's line endings are content, kept byte for byte.
+                    linebuf.push(c as char);
                     bytecount += 1;
                     if c == b'\r' && bytes.get(bytecount) == Some(&b'\n') {
+                        linebuf.push('\n');
                         bytecount += 1;
                     }
                     let mut line_start = LineStart::new(&bytes[bytecount..]);

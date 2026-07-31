@@ -1312,8 +1312,8 @@ fn convert_node(
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
                 let value = view.get_str(string_ref);
-                if value.contains('\n') {
-                    let normalized = value.replace('\n', " ");
+                if value.contains(['\n', '\r']) {
+                    let normalized = code_span_line_endings_to_spaces(value);
                     let text_id = add_text_node(builder, &normalized);
                     copy_position_to(text_id, node_id, view, builder);
                 } else {
@@ -1787,6 +1787,21 @@ fn convert_node(
             convert_children(node_id, view, builder, ctx);
         }
     }
+}
+
+/// Each line ending in a code span renders as one space, so a `\r\n` collapses
+/// to a single space rather than two.
+fn code_span_line_endings_to_spaces(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(i) = rest.find(['\r', '\n']) {
+        out.push_str(&rest[..i]);
+        out.push(' ');
+        let after = &rest[i..];
+        rest = after.strip_prefix("\r\n").unwrap_or(&after[1..]);
+    }
+    out.push_str(rest);
+    out
 }
 
 fn convert_children(
@@ -2692,5 +2707,16 @@ mod hast_convert_tests {
         set_data(&mut mdast, para_id, r#"{"someOther":"value"}"#);
         let html = hast_arena_to_html(&mdast_arena_to_hast_arena(&mdast));
         assert!(html.contains("<p>Hi</p>"), "got {html}");
+    }
+
+    #[test]
+    fn code_span_line_endings_render_as_one_space() {
+        let f = super::code_span_line_endings_to_spaces;
+        assert_eq!(f("a\r\nb"), "a b");
+        assert_eq!(f("a\rb"), "a b");
+        assert_eq!(f("a\nb"), "a b");
+        assert_eq!(f("a\r\n\r\nb"), "a  b");
+        assert_eq!(f("\r\n"), " ");
+        assert_eq!(f("ab"), "ab");
     }
 }

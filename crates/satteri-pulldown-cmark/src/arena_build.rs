@@ -885,9 +885,13 @@ fn parse_inner(
                             buf.push_str(&cow);
                         }
                         ItemBody::SoftBreak | ItemBody::HardBreak(_) => {
-                            // Remark preserves the newline in alt text rather
-                            // than collapsing it to a space.
-                            buf.push('\n');
+                            // Alt text keeps the break rather than collapsing it
+                            // to a space, and keeps the source's own line ending.
+                            let s = &source[item.start..item.end];
+                            match s.find(['\r', '\n']) {
+                                Some(eol) => buf.push_str(&s[eol..]),
+                                None => buf.push('\n'),
+                            }
                         }
                         ItemBody::SynthesizeText(cow_ix) => {
                             let cow = inner.allocs.take_cow(*cow_ix);

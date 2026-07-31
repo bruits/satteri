@@ -2033,7 +2033,11 @@ impl<'input> ParserInner<'input> {
                 if let Some(node_ix) = scan_nodes_to_ix(&self.tree, node, i + 1) {
                     if self.tree[node_ix].item.start > i {
                         title.push_str(&text[mark..i]);
-                        title.push('\n');
+                        // The title's line endings are content, kept byte for byte.
+                        title.push(c as char);
+                        if c == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                            title.push('\n');
+                        }
                         i = self.tree[node_ix].item.start;
                         mark = i;
                         continue;
@@ -2216,10 +2220,13 @@ impl<'input> ParserInner<'input> {
             let c = spanned_bytes[ix];
             if c == b'\r' || c == b'\n' {
                 let buf = buf.get_or_insert_with(|| String::with_capacity(spanned_bytes.len()));
+                // The span's own line endings are content and are kept byte for
+                // byte; only the container prefix below is stripped.
                 buf.push_str(&spanned_text[start_ix..ix]);
-                buf.push('\n');
+                buf.push(c as char);
                 ix += 1;
                 if c == b'\r' && spanned_bytes.get(ix) == Some(&b'\n') {
+                    buf.push('\n');
                     ix += 1;
                 }
                 // Use the full source bytes from this position (not just
@@ -2259,29 +2266,41 @@ impl<'input> ParserInner<'input> {
             }
         }
 
-        let (opening, closing, all_spaces) = {
+        // One leading and one trailing space or line ending is stripped when
+        // both are present. A CRLF is a single line ending, so it goes as a pair.
+        let (lead, trail, all_spaces) = {
             let s = if let Some(buf) = &mut buf {
                 buf.push_str(&spanned_text[start_ix..]);
                 &buf[..]
             } else {
                 spanned_text
             };
+            let lead = if s.starts_with("\r\n") {
+                2
+            } else {
+                usize::from(matches!(s.as_bytes().first(), Some(b' ' | b'\n' | b'\r')))
+            };
+            let trail = if s.ends_with("\r\n") {
+                2
+            } else {
+                usize::from(matches!(s.as_bytes().last(), Some(b' ' | b'\n' | b'\r')))
+            };
             (
-                matches!(s.as_bytes().first(), Some(b' ' | b'\n')),
-                matches!(s.as_bytes().last(), Some(b' ' | b'\n')),
-                s.bytes().all(|b| b == b' ' || b == b'\n'),
+                lead,
+                trail,
+                s.bytes().all(|b| matches!(b, b' ' | b'\n' | b'\r')),
             )
         };
 
-        let cow: CowStr<'input> = if !all_spaces && opening && closing {
+        let cow: CowStr<'input> = if !all_spaces && lead > 0 && trail > 0 {
             if let Some(mut buf) = buf {
                 if !buf.is_empty() {
-                    buf.remove(0);
-                    buf.pop();
+                    buf.truncate(buf.len() - trail);
+                    buf.replace_range(..lead, "");
                 }
                 buf.into()
             } else {
-                spanned_text[1..(spanned_text.len() - 1).max(1)].into()
+                spanned_text[lead..(spanned_text.len() - trail).max(lead)].into()
             }
         } else if let Some(buf) = buf {
             buf.into()

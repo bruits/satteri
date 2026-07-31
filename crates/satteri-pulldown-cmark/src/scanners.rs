@@ -1392,9 +1392,9 @@ fn scan_attribute_value(
 pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> CowStr<'a> {
     let input = input.into();
     let bytes = input.as_bytes();
-    // Only `\`, `&` and `\r` can trigger a rewrite. Skip straight to the first
-    // one; if there is none the input is returned untouched without allocating.
-    let Some(first) = memchr::memchr3(b'\\', b'&', b'\r', bytes) else {
+    // Only `\` and `&` can trigger a rewrite. Skip straight to the first one;
+    // if there is none the input is returned untouched without allocating.
+    let Some(first) = memchr::memchr2(b'\\', b'&', bytes) else {
         return input;
     };
     let mut result = String::new();
@@ -1426,17 +1426,6 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
                 }
                 _ => i = next_unescape_candidate(bytes, i + 1),
             },
-            [b'\r', ..] => {
-                result.push_str(&input[mark..i]);
-                // The `\r` of a CRLF is dropped because its `\n` already stands
-                // for the pair; a lone `\r` is itself a line ending, so it
-                // becomes one instead of disappearing.
-                if bytes.get(i + 1) != Some(&b'\n') {
-                    result.push('\n');
-                }
-                i += 1;
-                mark = i;
-            }
             // This byte isn't an escape (a candidate that didn't pan out, or a
             // plain byte landed on after a rewrite). Jump to the next candidate
             // rather than walking one byte at a time.
@@ -1455,7 +1444,7 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
 /// when there is none (which ends `unescape`'s scan loop).
 #[inline]
 fn next_unescape_candidate(bytes: &[u8], from: usize) -> usize {
-    match memchr::memchr3(b'\\', b'&', b'\r', &bytes[from..]) {
+    match memchr::memchr2(b'\\', b'&', &bytes[from..]) {
         Some(rel) => from + rel,
         None => bytes.len(),
     }
@@ -1817,13 +1806,15 @@ mod test {
     }
 
     #[test]
-    fn unescape_lone_cr_becomes_a_line_ending() {
-        // The `\r` of a CRLF drops out because its `\n` stands for the pair.
-        assert_eq!(unescape("a\r\nb", false).as_ref(), "a\nb");
-        assert_eq!(unescape("a\rb", false).as_ref(), "a\nb");
-        assert_eq!(unescape("\r", false).as_ref(), "\n");
-        assert_eq!(unescape("a\r\rb", false).as_ref(), "a\n\nb");
+    fn unescape_preserves_line_endings() {
+        // Line endings are content here; only escapes and entities are rewritten.
+        assert_eq!(unescape("a\r\nb", false).as_ref(), "a\r\nb");
+        assert_eq!(unescape("a\rb", false).as_ref(), "a\rb");
+        assert_eq!(unescape("\r", false).as_ref(), "\r");
+        assert_eq!(unescape("a\r\rb", false).as_ref(), "a\r\rb");
         assert_eq!(unescape("a\nb", false).as_ref(), "a\nb");
+        assert_eq!(unescape("a\r\n\\*b", false).as_ref(), "a\r\n*b");
+        assert_eq!(unescape("a\r&amp;b", false).as_ref(), "a\r&b");
     }
 
     #[test]

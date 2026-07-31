@@ -590,6 +590,58 @@ describe("MDAST conformance: standalone CR block structure", () => {
   });
 });
 
+// Values carry the document's own line endings byte for byte; only the
+// matching `identifier` of a definition is normalized.
+describe("MDAST conformance: line endings inside values", () => {
+  const FLAVORS: [string, string][] = [
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+    ["CR", "\r"],
+  ];
+
+  for (const [name, eol] of FLAVORS) {
+    describe(name, () => {
+      const md = (tpl: string) => tpl.split("EOL").join(eol);
+
+      test("inline code span", () => {
+        assertMdastConformance(md("`fooEOLbar`EOL"));
+      });
+
+      test("inline code span stripped of one leading and trailing line ending", () => {
+        assertMdastConformance(md("``EOLfooEOLbar  EOLbazEOL``EOL"));
+      });
+
+      test("inline code span holding only a line ending", () => {
+        assertMdastConformance(md("`EOL`EOL"));
+      });
+
+      test("definition title", () => {
+        assertMdastConformance(md("[foo]: /url 'tEOLt2'EOLEOL[foo]EOL"));
+      });
+
+      test("definition title in parentheses", () => {
+        assertMdastConformance(md("[foo]: /url (tEOLt2)EOLEOL[foo]EOL"));
+      });
+
+      test("definition label", () => {
+        assertMdastConformance(md("[EOLfooEOL]: /urlEOLbarEOL"));
+      });
+
+      test("definition label with indented continuation", () => {
+        assertMdastConformance(md("[FooEOL  bar]: /urlEOLEOL[Baz][Foo bar]EOL"));
+      });
+
+      test("inline link title", () => {
+        assertMdastConformance(md("[a](/u 'tEOLt2')EOL"));
+      });
+
+      test("code block value", () => {
+        assertMdastConformance(md("    aEOL    bEOL"));
+      });
+    });
+  }
+});
+
 describe("MDAST conformance: closing code fence whitespace", () => {
   // Regression: CommonMark/remark allow tabs as well as spaces after the
   // closing fence. Satteri previously only consumed spaces, leaving the
