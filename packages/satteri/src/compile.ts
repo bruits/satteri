@@ -604,10 +604,29 @@ type FieldIsAsync<V> = V extends AnyFn
 type AnyVisitorAsync<P> = {
   [K in keyof P]-?: FieldIsAsync<NonNullable<P[K]>>;
 }[keyof P];
-type IsPluginAsync<P> = true extends AnyVisitorAsync<P> ? true : false;
+// Distributes over P: `true extends AnyVisitorAsync<P>` alone would not, since
+// the checked type is `true` rather than P. Without distribution a list of
+// plugins with differing visitor keys collapses to `keyof` their intersection,
+// hiding the async visitor and typing a mixed list as sync.
+type IsPluginAsync<P> = P extends unknown
+  ? true extends AnyVisitorAsync<P>
+    ? true
+    : false
+  : never;
 // Nested entries are flattened first so a bundle's plugins are inspected too.
-type ResolveInput<P> =
-  P extends ReadonlyArray<infer Item> ? ResolveInput<Item> : P extends () => infer D ? D : P;
+// Depth-capped because `PluginEntry` is recursive: an uncapped walk never
+// terminates on a value typed as the alias itself (a forwarded plugin list),
+// which TS reports as "type instantiation is excessively deep".
+type ResolveInput<P, D extends readonly unknown[] = [0, 0, 0, 0, 0, 0, 0, 0]> = D extends readonly [
+  unknown,
+  ...infer Rest,
+]
+  ? P extends ReadonlyArray<infer Item>
+    ? ResolveInput<Item, Rest>
+    : P extends () => infer Def
+      ? Def
+      : P
+  : never;
 type AnyInputAsync<Ps> =
   Ps extends ReadonlyArray<infer P>
     ? true extends IsPluginAsync<ResolveInput<P>>

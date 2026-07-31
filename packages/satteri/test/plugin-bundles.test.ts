@@ -25,6 +25,14 @@ function recordHast(order: string[], name: string) {
   });
 }
 
+const asyncBundled = defineMdastPlugin({
+  name: "async-bundled",
+  async code() {
+    await new Promise((r) => setTimeout(r, 1));
+    return { rawHtml: "<pre>done</pre>" };
+  },
+});
+
 describe("nested plugin lists", () => {
   test("a bundle runs in its own order at the bundle's position (mdast)", () => {
     const order: string[] = [];
@@ -141,18 +149,23 @@ describe("nested plugin lists", () => {
   });
 
   test("an async plugin inside a bundle still narrows the result to a Promise", async () => {
-    const asyncPlugin = defineMdastPlugin({
-      name: "async-bundled",
-      async code() {
-        await new Promise((r) => setTimeout(r, 1));
-        return { rawHtml: "<pre>done</pre>" };
-      },
-    });
-
     const result: Promise<MarkdownToHtmlResult> = markdownToHtml("```\nhi\n```", {
-      mdastPlugins: [[asyncPlugin]],
+      mdastPlugins: [[asyncBundled]],
     });
 
     expect((await result).html).toContain("done");
+  });
+
+  // The narrowing is asserted at compile time in `src/compile.ts` (tests are not
+  // typechecked); this covers the runtime half.
+  test("a bundle mixing sync and async plugins returns a Promise", async () => {
+    const order: string[] = [];
+    const result: Promise<MarkdownToHtmlResult> = markdownToHtml("# T\n\n```\nhi\n```", {
+      mdastPlugins: [[recordMdast(order, "sync"), asyncBundled]],
+    });
+
+    expect(result).toBeInstanceOf(Promise);
+    expect((await result).html).toContain("done");
+    expect(order).toEqual(["sync"]);
   });
 });
