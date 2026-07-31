@@ -1957,7 +1957,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         {
                             if !has_unbalanced_bracket_from(bytes, paragraph_floor, ix)
                                 && !is_inside_code_span(bytes, ix)
-                                && !is_inside_link_destination(bytes, ix)
+                                && enclosing_link_destination_end(bytes, ix)
+                                    .is_none_or(|close| email_end <= close)
                             {
                                 let link_ix = self.allocs.allocate_link(
                                     LinkType::Email,
@@ -4804,7 +4805,7 @@ fn is_inside_gfm_autolink_url(bytes: &[u8], pos: usize) -> bool {
         let prefix_match = bracket_depth == 0
             && matches!(b, b'h' | b'H' | b'w' | b'W')
             && crate::post_passes::match_autolink_scheme(bytes, i).is_some();
-        if prefix_match && !is_inside_link_destination(bytes, i) {
+        if prefix_match && enclosing_link_destination_end(bytes, i).is_none() {
             if let Some((_, raw_end, _, _, _)) =
                 crate::post_passes::scan_autolink_literal(bytes, i, false)
             {
@@ -4940,10 +4941,6 @@ fn try_emit_gfm_autolink<'a>(
     if has_unbalanced_bracket_from(bytes, paragraph_start, ix) {
         return None;
     }
-    // Link/image destination precedence.
-    if is_inside_link_destination(bytes, ix) {
-        return None;
-    }
     // Code span precedence.
     if is_inside_code_span(bytes, ix) {
         return None;
@@ -4966,6 +4963,9 @@ fn try_emit_gfm_autolink<'a>(
             let (start, _raw_end, end, full_url, fnr_only) =
                 scan_autolink_literal(bytes, ix, ix == paragraph_start)?;
             if fnr_only {
+                return None;
+            }
+            if !fits_in_link_destination(bytes, ix, end) {
                 return None;
             }
             let link_type = LinkType::Autolink;
@@ -5012,6 +5012,9 @@ fn try_emit_gfm_autolink<'a>(
                 return None;
             }
             if email_start < paragraph_start {
+                return None;
+            }
+            if !fits_in_link_destination(bytes, ix, email_end) {
                 return None;
             }
             // Construct-path rejection when an active backslash escape
@@ -5134,21 +5137,24 @@ fn is_escaped(bytes: &[u8], pos: usize) -> bool {
         == 1
 }
 
-/// True when `pos` sits inside an inline link destination `[label](DEST`
-/// whose closing `)` actually exists — i.e. the link parse will succeed.
-/// In that case micromark's labelEnd resolver consumes the destination
-/// bytes before any text-context construct sees them, so the autolink
-/// construct must defer.
+/// Whether an autolink ending at `end` may be emitted at `pos`.
 ///
-/// When the would-be destination has no valid closer (e.g. unmatched
-/// brackets, runs to EOF without `)`), micromark's labelEnd attempt
-/// fails and the destination bytes fall back to text context — the
-/// autolink construct *should* fire there.
+/// A `[label](DEST)` around `pos` is only a *candidate*: whether the bracket
+/// pair resolves depends on definitions further down the document and on
+/// openers an inner link deactivates, neither of which the first pass knows
+/// yet. Emit anyway — the second pass drops the nodes covering a destination
+/// whose link does resolve. That rescue only reaches nodes inside the
+/// candidate, so an autolink running past the closing `)` (which would
+/// swallow bytes the link still needs) has to be left to the post-pass.
+fn fits_in_link_destination(bytes: &[u8], pos: usize, end: usize) -> bool {
+    enclosing_link_destination_end(bytes, pos).is_none_or(|close| end <= close)
+}
+
 /// Does the line starting at `pos` open a block-level construct that would
 /// break paragraph continuation? Conservative: only matches markers that
 /// can't appear mid-paragraph (fenced code, ATX heading, blockquote, list
-/// marker, thematic break). Used by `is_inside_link_destination` to decide
-/// whether `[…]` can span across the line.
+/// marker, thematic break). Used by `enclosing_link_destination_end` to
+/// decide whether `[…]` can span across the line.
 fn line_starts_block(bytes: &[u8], pos: usize) -> bool {
     let mut i = pos;
     // Skip up to 3 cols of leading space (≥4 would be indented code, but
@@ -5202,9 +5208,12 @@ fn line_starts_block(bytes: &[u8], pos: usize) -> bool {
     }
 }
 
-fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
+/// Offset of the `)` closing the inline link destination `[label](DEST` that
+/// `pos` sits inside, or `None` when there's no valid closer (unmatched
+/// brackets, runs to EOF without `)`) and so no link can form at all.
+fn enclosing_link_destination_end(bytes: &[u8], pos: usize) -> Option<usize> {
     if pos < 2 {
-        return false;
+        return None;
     }
     // Fast reject: the walkback stops at the first newline, so a `(`
     // outside the current source line can't reach `pos`. If there's none
@@ -5212,9 +5221,7 @@ fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
     let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
         .map(|i| i + 1)
         .unwrap_or(0);
-    if memchr::memchr(b'(', &bytes[line_start..pos]).is_none() {
-        return false;
-    }
+    memchr::memchr(b'(', &bytes[line_start..pos])?;
     let mut paren_close_excess: i32 = 0;
     let mut paren_start: Option<usize> = None;
     let mut i = pos;
@@ -5222,7 +5229,7 @@ fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
         i -= 1;
         let b = bytes[i];
         if matches!(b, b'\n' | b'\r') {
-            return false;
+            return None;
         }
         if i > 0 && bytes[i - 1] == b'\\' {
             let mut bs = 0;
@@ -5244,15 +5251,13 @@ fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
                     paren_start = Some(i);
                     break;
                 } else {
-                    return false;
+                    return None;
                 }
             }
             _ => {}
         }
     }
-    let Some(paren_start) = paren_start else {
-        return false;
-    };
+    let paren_start = paren_start?;
     // Verify the `]` immediately before `(` has a matching `[` within the
     // same paragraph. A `]` without an opener in the same paragraph can't
     // form a link. CommonMark allows `[…]` to span multiple lines, but a
@@ -5308,7 +5313,7 @@ fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
             }
         }
         if !matched {
-            return false;
+            return None;
         }
     }
     // Destination = non-whitespace run with balanced unescaped parens.
@@ -5338,12 +5343,12 @@ fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
         j += 1;
     }
     if depth != 0 {
-        return false;
+        return None;
     }
     while j < bytes.len() && matches!(bytes[j], b' ' | b'\t') {
         j += 1;
     }
-    j < bytes.len() && bytes[j] == b')'
+    (bytes.get(j) == Some(&b')')).then_some(j)
 }
 
 fn has_unbalanced_bracket_in_paragraph(bytes: &[u8], pos: usize) -> bool {

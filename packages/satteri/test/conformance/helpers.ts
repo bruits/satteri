@@ -401,14 +401,6 @@ function stripPositions(node: AnyNode): AnyNode {
  * positions legitimately diverge even though trees are structurally identical
  * — e.g. remark's post-transform GFM autolink nodes carry no position while
  * ours do. */
-export function assertExtMdastConformanceNoPosition(md: string, extensions: ExtensionSet[]): void {
-  const proc = buildMdastProcessor(extensions);
-  const features = featuresToSatteri(extensions);
-  const expected = stripPositions(serialize(proc.parse(md)));
-  const actual = stripPositions(serialize(markdownToMdast(md, { features })));
-  expect(actual).toEqual(expected);
-}
-
 export function assertExtHastConformance(md: string, extensions: ExtensionSet[]): void {
   const proc = buildHastProcessor(extensions);
   const features = featuresToSatteri(extensions);

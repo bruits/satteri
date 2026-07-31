@@ -7,7 +7,6 @@ import { describe, test } from "vitest";
 import {
   assertHtmlConformance,
   assertExtMdastConformance,
-  assertExtMdastConformanceNoPosition,
   assertMdastConformance,
 } from "./helpers.js";
 
@@ -57,12 +56,63 @@ describe("MDAST conformance: GFM autolink-literal trim-back split", () => {
     // From docs/src/content/docs/de/guides/cms/index.mdx inside `:::tip`:
     // `Hello [label(https://host/path), rest` — remark emits the trimmed-back
     // `),` as its own text node when an earlier unclosed `[` is present.
-    // Position-stripped: remark's post-transform autolink nodes don't carry
-    // a position for the synthesized link, while ours do.
-    assertExtMdastConformanceNoPosition(
+    // Both engines take the find-and-replace path here, so the synthesized
+    // link is position-less on both sides — compared with positions.
+    assertExtMdastConformance(
       "Hello [von der Community gepflegte Integrationen(https://astro.build/integrations/?search=cms), um.",
       [],
     );
+  });
+});
+
+// The first pass can't know whether `](…)` really is a link destination —
+// that depends on definitions further down the document and on openers a
+// resolved inner link deactivates. It emits the autolink construct anyway
+// and lets the second pass drop it when the bracket pair does resolve, so
+// the surviving nodes keep their source positions instead of falling back
+// to the position-less find-and-replace pass.
+describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (#187)", () => {
+  test("inner shortcut reference deactivates the opener", () => {
+    assertExtMdastConformance("[[x]](https://x.y)\n\n[x]: /", []);
+  });
+
+  test("the eslint/markdown `no-bare-urls` case", () => {
+    assertExtMdastConformance(
+      "[link that [is-a-valid] link](https://example.com)\n\n[is-a-valid]: https://example.com\n",
+      [],
+    );
+  });
+
+  test("inner inline link deactivates the opener", () => {
+    assertExtMdastConformance("[[a](/b)](https://x.y)", []);
+    assertExtMdastConformance("[x [y](/z) w](https://q.r)", []);
+  });
+
+  test("full reference consumes the `]`, so `(…)` stays text", () => {
+    assertExtMdastConformance("[foo][bar](https://x.y)\n\n[bar]: /\n", []);
+  });
+
+  test("www, email and bare-scheme triggers in the same position", () => {
+    assertExtMdastConformance("[[x]](www.x.y)\n\n[x]: /", []);
+    assertExtMdastConformance("[[x]](a@b.co)\n\n[x]: /", []);
+    assertExtMdastConformance("[[x]](https://x.y) and www.z.w\n\n[x]: /", []);
+  });
+
+  test("control: the bracket pair does resolve, so no autolink survives", () => {
+    assertExtMdastConformance("[a](https://x.y)", []);
+    assertExtMdastConformance("[a](www.x.y)", []);
+    assertExtMdastConformance("[a](a@b.co)", []);
+    assertExtMdastConformance("![a](https://x.y)", []);
+    assertExtMdastConformance("[a](https://x.y)y", []);
+    assertExtMdastConformance("[a](https://x.y)_y_", []);
+    assertExtMdastConformance("[a](https://x.y 'ti')", []);
+  });
+
+  test("control: ordinary autolinks keep their positions", () => {
+    assertExtMdastConformance("www.x.y", []);
+    assertExtMdastConformance("https://x.y", []);
+    assertExtMdastConformance("a@b.com", []);
+    assertExtMdastConformance("see https://x.y/p, and www.z.w.", []);
   });
 });
 

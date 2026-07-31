@@ -109,6 +109,24 @@ test("C3: walk-path position matches the reader for every matched node", () => {
   }
 });
 
+test("C3: GFM autolink positions match the reader, present or absent (#187)", () => {
+  // First doc: the inner `[x]` reference resolves, so `](url)` stays text and
+  // the URL autolinks *with* a position. Second doc: the unclosed `[` sends
+  // the URL down the position-less find-and-replace fallback. Both shapes
+  // have to read the same from the walk and reader paths.
+  const docs = ["[[x]](https://x.y)\n\n[x]: /", "a [b(https://x.y), c"];
+  for (const md of docs) {
+    for (const type of ["link", "text"] as const) {
+      const { walked, materialized } = walkAndReader(md, type);
+      expect(walked.length).toBe(materialized.length);
+      expect(walked.length).toBeGreaterThan(0);
+      for (let i = 0; i < walked.length; i++) {
+        expect(walked[i]!.position).toEqual(materialized[i]!.position);
+      }
+    }
+  }
+});
+
 // C1 — mdast context structural methods preserve passed-through node identity
 
 test("C1: ctx.replaceNode preserves a passed-through child's identity (nested transforms, one pass)", () => {
