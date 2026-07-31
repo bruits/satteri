@@ -97,6 +97,60 @@ describe("nested plugin lists", () => {
     expect(calls).toBe(2);
   });
 
+  test("a factory may return a bundle, flattened in place", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [
+        recordMdast(order, "a"),
+        () => [recordMdast(order, "b"), [recordMdast(order, "c")]],
+        recordMdast(order, "d"),
+      ],
+    });
+
+    expect(order).toEqual(["a", "b", "c", "d"]);
+  });
+
+  // The point of allowing it: plugins in one bundle can share state that resets
+  // per document, which an array of separate factories cannot express.
+  test("a factory returning a bundle gives its plugins shared per-compile state", () => {
+    const snapshots: string[][] = [];
+    const preset = () => {
+      const headings: string[] = [];
+      return [
+        defineMdastPlugin({
+          name: "collect",
+          heading(node) {
+            const child = node.children[0];
+            if (child?.type === "text") headings.push(child.value);
+          },
+        }),
+        defineMdastPlugin({
+          name: "report",
+          paragraph() {
+            snapshots.push([...headings]);
+          },
+        }),
+      ];
+    };
+
+    markdownToHtml("# One\n\npara", { mdastPlugins: [preset] });
+    markdownToHtml("# Two\n\npara", { mdastPlugins: [preset] });
+
+    expect(snapshots).toEqual([["One"], ["Two"]]);
+  });
+
+  test("a factory that returns itself is rejected, naming the option", () => {
+    const cyclic = (): unknown[] => [cyclic];
+
+    expect(() => markdownToHtml("# T", { mdastPlugins: [cyclic as never] })).toThrowError(
+      /^mdastPlugins: plugin factory nesting is too deep/,
+    );
+    expect(() => markdownToHtml("# T", { hastPlugins: [cyclic as never] })).toThrowError(
+      /^hastPlugins: plugin factory nesting is too deep/,
+    );
+  });
+
   test("mutations from a bundled plugin are applied", () => {
     const removeHeadings = defineMdastPlugin({
       name: "remove-headings",

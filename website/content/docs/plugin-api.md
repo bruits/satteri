@@ -39,7 +39,7 @@ Factories are called once per invocation, so closures reset between documents.
 An entry may also be an array of entries, at any depth, so a package can export a bundle of plugins that is passed straight through:
 
 ```ts
-type MdastPluginEntry = MdastPluginInput | readonly MdastPluginEntry[];
+type MdastPluginEntry = MdastPluginDefinition | (() => MdastPluginEntry) | readonly MdastPluginEntry[];
 type MdastPluginList = readonly MdastPluginEntry[];
 ```
 
@@ -50,6 +50,19 @@ markdownToHtml(source, { mdastPlugins: [typography, myPlugin] });
 ```
 
 The bundle's plugins run in their own order, at the bundle's position — the list above is equivalent to spreading `typography` in place. `HastPluginEntry` and `HastPluginList` are the HAST-side equivalents.
+
+A factory may return a bundle as well as a single plugin. That is how a preset gives its plugins state that is shared between them but still reset per document:
+
+```js
+const headingAnchors = () => {
+  const slugs = new Set(); // one set per compile, shared by both plugins below
+  return [collectSlugs(slugs), linkSlugs(slugs)];
+};
+
+markdownToHtml(source, { mdastPlugins: [headingAnchors] });
+```
+
+A factory that returns itself, directly or through a bundle, throws rather than recursing.
 
 ### Source positions
 
