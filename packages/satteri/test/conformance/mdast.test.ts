@@ -497,6 +497,47 @@ describe("MDAST conformance: softbreak preserves CRLF", () => {
   });
 });
 
+// CommonMark counts `\n`, `\r` and `\r\n` alike as line endings. The line
+// table was built by scanning for `\n` only, so a lone `\r` left every later
+// node on the previous line (offsets were unaffected).
+describe("MDAST conformance: standalone CR positions", () => {
+  test("paragraph across a lone CR", () => {
+    assertMdastConformance("a\rb");
+  });
+
+  test("lone CR inside a link destination", () => {
+    assertMdastConformance("[Mercury](\rmercury)");
+  });
+
+  test("mixed CR, CRLF and LF in one document", () => {
+    assertMdastConformance("a\r\nb\rc\nd");
+  });
+
+  test("CR at document start", () => {
+    assertMdastConformance("\ra");
+  });
+
+  test("CR at document end", () => {
+    assertMdastConformance("a\r");
+  });
+
+  test("consecutive CRs separate blocks", () => {
+    assertMdastConformance("a\r\rb");
+  });
+
+  test("lone CR across block structures", () => {
+    assertMdastConformance("# h\rp\r\n- x\r  y");
+  });
+
+  test("lone CR in a blockquote", () => {
+    assertMdastConformance("> q\rq2");
+  });
+
+  test("lone CR with multibyte characters", () => {
+    assertMdastConformance("❤️a\r😀b\rc");
+  });
+});
+
 describe("MDAST conformance: closing code fence whitespace", () => {
   // Regression: CommonMark/remark allow tabs as well as spaces after the
   // closing fence. Satteri previously only consumed spaces, leaving the

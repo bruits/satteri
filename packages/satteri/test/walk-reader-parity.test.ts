@@ -93,9 +93,13 @@ test("C3: walk-path position matches the reader for every matched node", () => {
   // The second doc leads with multibyte characters (❤️/CJK/astral 😀): the
   // walk path used to serialize raw byte offsets while the reader converted
   // to UTF-16 code units, so positions diverged after any multibyte char.
+  // The third doc mixes lone-CR line endings with multibyte characters: the
+  // walk path's UTF-16 cache is keyed on (line, column), so it only agrees
+  // with the reader if both paths split lines on `\r` the same way.
   const docs = [
     "# Heading\n\nA paragraph with **bold** and a [link](/x).",
     "# ❤️你好\n\n😀 A paragraph with **bold** and a [link](/x).",
+    "# ❤️Heading\r\r😀 A paragraph with **bold** and a [link](/x).\rTail 你好.",
   ];
   for (const md of docs) {
     for (const type of ["heading", "paragraph", "text", "strong", "link"] as const) {

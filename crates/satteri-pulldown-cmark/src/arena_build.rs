@@ -2420,11 +2420,14 @@ fn encode_heading_h_properties(attrs: &HeadingAttributes<'_>) -> Option<Vec<u8>>
 fn byte_offset_to_line_col(source: &str, offset: usize) -> String {
     let mut line = 1usize;
     let mut col = 1usize;
+    let bytes = source.as_bytes();
     for (i, ch) in source.char_indices() {
         if i >= offset {
             break;
         }
-        if ch == '\n' {
+        // `\r`, `\n` and `\r\n` all end a line; the `\r` of a CRLF is left to
+        // the `\n` so the pair counts once.
+        if ch == '\n' || (ch == '\r' && bytes.get(i + 1) != Some(&b'\n')) {
             line += 1;
             col = 1;
         } else {
