@@ -1,5 +1,11 @@
 import { describe, test, expect } from "vitest";
-import { markdownToHtml, mdxToJs, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
+import {
+  markdownToHtml,
+  markdownToJs,
+  mdxToJs,
+  defineMdastPlugin,
+  defineHastPlugin,
+} from "../src/index.js";
 import type { MarkdownToHtmlResult } from "../src/index.js";
 
 /** Records its name on each heading, making run order observable. */
@@ -195,6 +201,85 @@ describe("nested plugin lists", () => {
     expect(code).not.toContain("Gone");
     expect(code).toContain("Kept");
     expect(order).toEqual(["first", "remove", "hast"]);
+  });
+
+  test("bundles work in markdownToJs", () => {
+    const order: string[] = [];
+    const removeHeadings = defineMdastPlugin({
+      name: "remove-headings",
+      heading(node, ctx) {
+        order.push("remove");
+        ctx.removeNode(node);
+      },
+    });
+
+    const { code } = markdownToJs("# Gone\n\nKept", {
+      mdastPlugins: [[recordMdast(order, "first"), removeHeadings]],
+      hastPlugins: [[recordHast(order, "hast")]],
+    });
+
+    expect(code).not.toContain("Gone");
+    expect(code).toContain("Kept");
+    expect(order).toEqual(["first", "remove", "hast"]);
+  });
+
+  // markdownToJs shares its pipeline with mdxToJs but parses as Markdown, so
+  // the bundle has to survive the non-MDX branch too.
+  test("a bundled plugin sees Markdown, not MDX, in markdownToJs", () => {
+    const seen: string[] = [];
+    const collect = defineMdastPlugin({
+      name: "collect-text",
+      text(node) {
+        seen.push(node.value);
+      },
+    });
+
+    const { code } = markdownToJs("{not an expression}", { mdastPlugins: [[collect]] });
+
+    expect(seen).toEqual(["{not an expression}"]);
+    expect(code).toContain("not an expression");
+  });
+
+  // Ordering across a bundle boundary has to hold for custom nodes too: the
+  // second plugin only sees the node because the first one already ran.
+  test("a bundled plugin sees the custom node an earlier one in the bundle created", () => {
+    const seen: string[] = [];
+    const create = defineMdastPlugin({
+      name: "create-section",
+      paragraph(node, ctx) {
+        ctx.replaceNode(node, {
+          type: "section",
+          data: { hName: "section" },
+          children: node.children,
+        });
+      },
+    });
+    const observe = defineMdastPlugin({
+      name: "observe-section",
+      custom(node, ctx) {
+        seen.push(node.type);
+        ctx.setProperty(node, "data", { hName: "aside" });
+      },
+    });
+
+    const { html } = markdownToHtml("hi", { mdastPlugins: [[create, observe]] });
+
+    expect(seen).toEqual(["section"]);
+    expect(html).toContain("<aside>");
+  });
+
+  test("wrapNode from inside a bundle wraps with a parent node", () => {
+    const wrap = defineMdastPlugin({
+      name: "wrap-heading",
+      heading(node, ctx) {
+        ctx.wrapNode(node, { type: "blockquote", children: [] });
+      },
+    });
+
+    const { html } = markdownToHtml("# Title", { mdastPlugins: [[wrap]] });
+
+    expect(html).toContain("<blockquote>");
+    expect(html).toContain("<h1>Title</h1>");
   });
 
   test("an async plugin inside a bundle still narrows the result to a Promise", async () => {
