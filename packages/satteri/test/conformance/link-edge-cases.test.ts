@@ -3,12 +3,16 @@
 // Each case here is the remark-authoritative shape; if these start failing,
 // it means satteri drifted away from remark, not that remark changed.
 
-import { describe, test } from "vitest";
+import { describe, test, expect } from "vitest";
 import {
   assertHtmlConformance,
   assertExtMdastConformance,
   assertMdastConformance,
+  assertMdastConformanceNoPosition,
+  referenceMdast,
+  satteriMdast,
 } from "./helpers.js";
+import type { Link, Paragraph, Root } from "mdast";
 
 describe("HTML conformance: malformed reference definitions fall back to paragraphs", () => {
   test("blank line inside refdef label — bare URL autolinks in trailing paragraph", () => {
@@ -113,6 +117,24 @@ describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (
     assertExtMdastConformance("https://x.y", []);
     assertExtMdastConformance("a@b.com", []);
     assertExtMdastConformance("see https://x.y/p, and www.z.w.", []);
+  });
+
+  test("residual: an autolink overrunning the candidate `)` stays position-less", () => {
+    // The one shape optimistic emission can't reach: `https://x.y)x` overruns
+    // the `)`, and the second pass only drops nodes *inside* the destination —
+    // an overrunning node would outlive the drop carrying a stale URL. So this
+    // still falls back to the position-less find-and-replace pass. Long-standing
+    // behavior, pinned here so a future change to it is visible.
+    const md = "[[x]](https://x.y)x\n\n[x]: /";
+    assertMdastConformanceNoPosition(md);
+    const findLink = (tree: unknown) => {
+      const paragraph = (tree as Root).children[0] as Paragraph;
+      return paragraph.children.find((child) => child.type === "link") as Link;
+    };
+    const actual = findLink(satteriMdast(md));
+    expect(actual.position).toBeUndefined();
+    expect(actual.children[0]!.position).toBeUndefined();
+    expect(findLink(referenceMdast(md)).position).toBeDefined();
   });
 });
 

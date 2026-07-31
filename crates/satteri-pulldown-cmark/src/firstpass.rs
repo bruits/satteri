@@ -1957,8 +1957,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         {
                             if !has_unbalanced_bracket_from(bytes, paragraph_floor, ix)
                                 && !is_inside_code_span(bytes, ix)
-                                && enclosing_link_destination_end(bytes, ix)
-                                    .is_none_or(|close| email_end <= close)
+                                && fits_in_link_destination(bytes, ix, email_end)
                             {
                                 let link_ix = self.allocs.allocate_link(
                                     LinkType::Email,
