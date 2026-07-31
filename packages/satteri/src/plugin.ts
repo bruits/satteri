@@ -17,13 +17,12 @@ export type MdastPluginInput = MdastPluginDefinition | (() => MdastPluginDefinit
  */
 export type HastPluginInput = HastPluginDefinition | (() => HastPluginDefinition);
 
-/** A plugin input, or a nested list of them, at any depth. */
 type PluginEntry<D> = D | (() => D) | readonly PluginEntry<D>[];
 
-/** Entry accepted by `mdastPlugins`: a plugin input, or a bundle of them. */
+/** Entry accepted by `mdastPlugins`. */
 export type MdastPluginEntry = PluginEntry<MdastPluginDefinition>;
 
-/** Entry accepted by `hastPlugins`: a plugin input, or a bundle of them. */
+/** Entry accepted by `hastPlugins`. */
 export type HastPluginEntry = PluginEntry<HastPluginDefinition>;
 
 /** Value accepted by the `mdastPlugins` option. */
@@ -32,9 +31,9 @@ export type MdastPluginList = readonly MdastPluginEntry[];
 /** Value accepted by the `hastPlugins` option. */
 export type HastPluginList = readonly HastPluginEntry[];
 
-/** Flatten nested plugin lists and resolve factories, in order, so a bundle's
- *  plugins run where the bundle sits. The one place a plugin option becomes
- *  the definition array the pipeline runs. */
+/** The one place a plugin option becomes the definition array the pipeline
+ *  runs. Factories resolve here and nowhere else, so each is called once per
+ *  compile no matter how deeply it is nested. */
 export function normalizePlugins<D>(entries: readonly PluginEntry<D>[]): D[] {
   const out: D[] = [];
   const walk = (list: readonly PluginEntry<D>[]): void => {

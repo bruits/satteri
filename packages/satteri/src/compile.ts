@@ -462,13 +462,10 @@ export interface Features {
 }
 
 export interface CompileOptions {
-  /**
-   * MDAST plugins, in run order. An entry may be a nested array, letting a
-   * package export a bundle that is passed through as-is; its plugins run in
-   * their own order at the bundle's position.
-   */
+  /** MDAST plugins, in run order. A nested array runs its own plugins, in
+   *  their own order, at the array's position. */
   mdastPlugins?: MdastPluginList;
-  /** HAST plugins, in run order. Nests the same way as `mdastPlugins`. */
+  /** HAST plugins, in run order. Nests like `mdastPlugins`. */
   hastPlugins?: HastPluginList;
   features?: Features;
   /**
@@ -604,19 +601,18 @@ type FieldIsAsync<V> = V extends AnyFn
 type AnyVisitorAsync<P> = {
   [K in keyof P]-?: FieldIsAsync<NonNullable<P[K]>>;
 }[keyof P];
-// Distributes over P: `true extends AnyVisitorAsync<P>` alone would not, since
-// the checked type is `true` rather than P. Without distribution a list of
-// plugins with differing visitor keys collapses to `keyof` their intersection,
-// hiding the async visitor and typing a mixed list as sync.
+// `P extends unknown` forces distribution; `true extends AnyVisitorAsync<P>`
+// alone would not, since the checked type is `true` rather than P. Undistributed,
+// a union of plugins with differing visitor keys collapses to their common keys
+// and the async visitor goes unseen.
 type IsPluginAsync<P> = P extends unknown
   ? true extends AnyVisitorAsync<P>
     ? true
     : false
   : never;
-// Nested entries are flattened first so a bundle's plugins are inspected too.
 // Depth-capped because `PluginEntry` is recursive: an uncapped walk never
-// terminates on a value typed as the alias itself (a forwarded plugin list),
-// which TS reports as "type instantiation is excessively deep".
+// terminates on a value typed as the alias itself, which TS rejects outright as
+// "type instantiation is excessively deep".
 type ResolveInput<P, D extends readonly unknown[] = [0, 0, 0, 0, 0, 0, 0, 0]> = D extends readonly [
   unknown,
   ...infer Rest,

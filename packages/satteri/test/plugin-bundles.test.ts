@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import { markdownToHtml, mdxToJs, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 import type { MarkdownToHtmlResult } from "../src/index.js";
 
-/** Records its own name when it visits a heading, so plugin order is observable. */
+/** Records its name on each heading, making run order observable. */
 function recordMdast(order: string[], name: string) {
   return defineMdastPlugin({
     name,
@@ -88,12 +88,7 @@ describe("nested plugin lists", () => {
     let calls = 0;
     const factory = () => {
       calls++;
-      return defineMdastPlugin({
-        name: "counted",
-        heading() {
-          // observe only
-        },
-      });
+      return defineMdastPlugin({ name: "counted", heading() {} });
     };
 
     markdownToHtml("# A", { mdastPlugins: [[factory]] });
@@ -156,8 +151,6 @@ describe("nested plugin lists", () => {
     expect((await result).html).toContain("done");
   });
 
-  // The narrowing is asserted at compile time in `src/compile.ts` (tests are not
-  // typechecked); this covers the runtime half.
   test("a bundle mixing sync and async plugins returns a Promise", async () => {
     const order: string[] = [];
     const result: Promise<MarkdownToHtmlResult> = markdownToHtml("# T\n\n```\nhi\n```", {
