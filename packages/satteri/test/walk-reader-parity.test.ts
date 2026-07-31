@@ -93,9 +93,11 @@ test("C3: walk-path position matches the reader for every matched node", () => {
   // The second doc leads with multibyte characters (❤️/CJK/astral 😀): the
   // walk path used to serialize raw byte offsets while the reader converted
   // to UTF-16 code units, so positions diverged after any multibyte char.
-  // The third doc mixes lone-CR line endings with multibyte characters: the
-  // walk path's UTF-16 cache is keyed on (line, column), so it only agrees
-  // with the reader if both paths split lines on `\r` the same way.
+  // The third doc adds lone-CR endings as parity input only. It cannot guard
+  // the line-ending split itself: both `utf16_offset_at` and
+  // `byte_to_utf16_offset` sum to the same UTF-16 length whatever the split,
+  // so the two paths agree even when the split is wrong. `line_index.rs`
+  // covers that.
   const docs = [
     "# Heading\n\nA paragraph with **bold** and a [link](/x).",
     "# ❤️你好\n\n😀 A paragraph with **bold** and a [link](/x).",
