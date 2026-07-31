@@ -5,8 +5,8 @@ import type {
   CompileOptions,
   Features,
   Frontmatter,
-  HastPluginInput,
-  MdastPluginInput,
+  HastPluginList,
+  MdastPluginList,
   MdxCompileOptions,
   MdxOnlyOptions,
 } from "satteri";
@@ -38,9 +38,9 @@ export interface VitePluginSatteriOptions {
   mdx?: boolean | MdxOptions;
 
   /** MDAST plugins applied before HAST conversion. Shared across .md and .mdx. */
-  mdastPlugins?: MdastPluginInput[];
+  mdastPlugins?: MdastPluginList;
   /** HAST plugins applied before rendering / MDX compile. Shared across .md and .mdx. */
-  hastPlugins?: HastPluginInput[];
+  hastPlugins?: HastPluginList;
   /** Parser feature toggles (gfm, frontmatter, math, …). Shared across .md and .mdx. */
   features?: Features;
 }

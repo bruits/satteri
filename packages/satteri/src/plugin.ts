@@ -6,16 +6,46 @@ export type MdastPluginDefinition = MdastPluginInstance & { name: string };
 export type HastPluginDefinition = HastVisitorInstance & { name: string };
 
 /**
- * Entry accepted by `mdastPlugins`: a definition reused across documents,
- * or a factory called once per compile so closures reset per document.
+ * A definition reused across documents, or a factory called once per compile
+ * so closures reset per document.
  */
 export type MdastPluginInput = MdastPluginDefinition | (() => MdastPluginDefinition);
 
 /**
- * Entry accepted by `hastPlugins`: a definition reused across documents,
- * or a factory called once per compile so closures reset per document.
+ * A definition reused across documents, or a factory called once per compile
+ * so closures reset per document.
  */
 export type HastPluginInput = HastPluginDefinition | (() => HastPluginDefinition);
+
+/** A plugin input, or a nested list of them, at any depth. */
+type PluginEntry<D> = D | (() => D) | readonly PluginEntry<D>[];
+
+/** Entry accepted by `mdastPlugins`: a plugin input, or a bundle of them. */
+export type MdastPluginEntry = PluginEntry<MdastPluginDefinition>;
+
+/** Entry accepted by `hastPlugins`: a plugin input, or a bundle of them. */
+export type HastPluginEntry = PluginEntry<HastPluginDefinition>;
+
+/** Value accepted by the `mdastPlugins` option. */
+export type MdastPluginList = readonly MdastPluginEntry[];
+
+/** Value accepted by the `hastPlugins` option. */
+export type HastPluginList = readonly HastPluginEntry[];
+
+/** Flatten nested plugin lists and resolve factories, in order, so a bundle's
+ *  plugins run where the bundle sits. The one place a plugin option becomes
+ *  the definition array the pipeline runs. */
+export function normalizePlugins<D>(entries: readonly PluginEntry<D>[]): D[] {
+  const out: D[] = [];
+  const walk = (list: readonly PluginEntry<D>[]): void => {
+    for (const entry of list) {
+      if (Array.isArray(entry)) walk(entry as readonly PluginEntry<D>[]);
+      else out.push(typeof entry === "function" ? (entry as () => D)() : (entry as D));
+    }
+  };
+  walk(entries);
+  return out;
+}
 
 // Generic so the inferred plugin type preserves each visitor's *actual* return
 // type. That lets the compile entry points distinguish sync plugins from async

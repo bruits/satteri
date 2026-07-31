@@ -36,6 +36,21 @@ type HastPluginInput = HastPluginDefinition | (() => HastPluginDefinition);
 
 Factories are called once per invocation, so closures reset between documents.
 
+An entry may also be an array of entries, at any depth, so a package can export a bundle of plugins that is passed straight through:
+
+```ts
+type MdastPluginEntry = MdastPluginInput | readonly MdastPluginEntry[];
+type MdastPluginList = readonly MdastPluginEntry[];
+```
+
+```js
+import { typography } from "some-package"; // an array of plugins
+
+markdownToHtml(source, { mdastPlugins: [typography, myPlugin] });
+```
+
+The bundle's plugins run in their own order, at the bundle's position — the list above is equivalent to spreading `typography` in place. `HastPluginEntry` and `HastPluginList` are the HAST-side equivalents.
+
 ### Source positions
 
 Visitors read `node.position` (the `{ start, end }` source range) only when the plugin opts in with `options: { position: true }`. Tracking positions adds a measurable parsing cost (~15% of parse), so it is off by default. `node.position` is `undefined` unless some plugin in the pipeline requests it.
