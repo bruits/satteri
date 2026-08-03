@@ -427,8 +427,8 @@ const ENTITY_RE = /^&(?:#[Xx][0-9A-Fa-f]{1,6}|#\d{1,7}|[A-Za-z][A-Za-z0-9]{0,31}
 
 /**
  * Undo the transforms that sit between raw source and a text node's value:
- * character references, backslash escapes, CRLF normalization, and the block
- * prefix stripped from a continuation line. Written independently of the
+ * character references, backslash escapes, line-ending normalization, and the
+ * block prefix stripped from a continuation line. Written independently of the
  * parser's own alignment so a symmetric bug can't cancel out.
  */
 function decodeRawSlice(raw: string, value: string): string {
@@ -456,13 +456,12 @@ function decodeRawSlice(raw: string, value: string): string {
         i = j;
         continue;
       }
-    } else if (c === "\r" && raw[i + 1] === "\n") {
-      out += "\n";
-      i += 2;
-      continue;
-    } else if (c === "\n") {
-      out += "\n";
-      i += 1;
+    } else if (c === "\n" || c === "\r") {
+      // All three line endings behave alike, and both conventions for them are
+      // in use: a `text` keeps the raw ending, an `inlineCode` normalizes it.
+      const ending = c === "\r" && raw[i + 1] === "\n" ? "\r\n" : c;
+      out += value.startsWith(ending, out.length) ? ending : "\n";
+      i += ending.length;
       // Only a *block* prefix is stripped; the same characters can be content
       // on a continuation line, so stop as soon as the value agrees.
       while (

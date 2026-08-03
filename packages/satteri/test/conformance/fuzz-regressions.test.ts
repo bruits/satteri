@@ -8,6 +8,7 @@ import {
   assertExtHastConformance,
   satteriMdast,
   referenceMdast,
+  assertSliceInvariantEverywhere,
 } from "./helpers.js";
 
 // Each case below was discovered by fuzz runs in test/conformance/fuzz/ and
@@ -2266,5 +2267,30 @@ describe("fuzz regressions: inline code after a link destination with CJK trail"
     // Sanity: the fix must not regress micromark's bare-URL behavior, which
     // *does* treat CJK as part of the URL when there's no enclosing link.
     assertMdastConformance("use http://x，foo");
+  });
+});
+
+describe("fuzz regressions: the slice invariant across every line ending", () => {
+  // Not a parser bug — `decodeRawSlice` in the conformance helper only knew
+  // `\n`, so it never undid the continuation indent a lone `\r` or a `\r\n`
+  // strips, and every such document looked like a bad position.
+  const cases = [
+    "{\r a",
+    "a\r\t$",
+    "#-\r\n\\$",
+    "q\r [Foo]\n[foo]: /url\n> bar\n",
+    "p\r\tfoo\tbaz\t\tbim\n",
+  ];
+  for (const input of cases) {
+    test(`positions decode back for ${JSON.stringify(input)}`, () => {
+      assertSliceInvariantEverywhere(satteriMdast(input), input);
+    });
+  }
+
+  // Offsets are right for all of these; line and column are not, because a
+  // lone `\r` doesn't advance the line counter yet. Pre-existing, and out of
+  // scope here — the CR line-ending work is what closes it.
+  test.fails("a lone `\\r` advances line and column", () => {
+    assertMdastConformance("{\r a");
   });
 });

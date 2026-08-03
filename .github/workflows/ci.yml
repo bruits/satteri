@@ -101,9 +101,15 @@ jobs:
         run: pnpm run build:binary:native:debug
         working-directory: packages/satteri
 
+      # The fuzz properties in this suite seed from the clock by default, which
+      # is what we want locally — every run explores somewhere new. In CI that
+      # only makes a red build unreproducible, so pin a seed here; the `fuzz`
+      # job below is where the volume and the seed spread live.
       - name: Test
         run: pnpm test
         working-directory: packages/satteri
+        env:
+          FUZZ_SEED: 42
 
   fuzz:
     name: Fuzz (seed ${{ matrix.seed }})
