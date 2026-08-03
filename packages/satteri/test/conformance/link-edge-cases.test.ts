@@ -111,9 +111,12 @@ describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (
     assertExtMdastConformance("see https://x.y/p, and www.z.w.", []);
   });
 
-  test("residual: an autolink overrunning the candidate `)` stays position-less", () => {
+  test("residual: an autolink overrunning the candidate `)` takes the wrong path", () => {
     // Known gap, pinned so a change to it is visible: the autolink overruns
-    // the `)`, and the second pass can only splice nodes inside the destination.
+    // the `)`, so the first pass declines it and the find-and-replace pass
+    // picks it up instead. The reference tokenizes it as a construct.
+    // Positions now agree in *presence* — both paths supply them — so what
+    // still differs is which pass fired, and with it the URL.
     const md = "[[x]](https://x.y)x\n\n[x]: /";
     assertMdastConformanceNoPosition(md);
     const findLink = (tree: unknown) => {
@@ -121,8 +124,11 @@ describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (
       return paragraph.children.find((child) => child.type === "link") as Link;
     };
     const actual = findLink(satteriMdast(md));
-    expect(actual.position).toBeUndefined();
-    expect(actual.children[0]!.position).toBeUndefined();
+    expect(actual.position).toBeDefined();
+    // Whatever path it took, the span must still slice back to its own text.
+    expect(md.slice(actual.position!.start.offset, actual.position!.end.offset)).toBe(
+      (actual.children[0] as { value: string }).value,
+    );
     expect(findLink(referenceMdast(md)).position).toBeDefined();
   });
 });

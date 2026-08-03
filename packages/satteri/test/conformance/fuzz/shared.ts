@@ -32,6 +32,8 @@ import {
   satteriMathMdast,
   satteriMathHast,
   satteriMathHtml,
+  reconcileFnrPositions,
+  assertSliceInvariantEverywhere,
 } from "../helpers.js";
 
 const { remarkMarkAndUnravel } = await import(
@@ -1356,6 +1358,16 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
       expected,
       actual: `INTERNAL_ERROR: ${actualError}`,
     };
+  }
+  // Deliberate divergence: find-and-replace autolinks carry positions here and
+  // none in remark. Each extra position is verified against the source and
+  // then removed, so a *wrong* one throws out of this function and fails the
+  // run instead of being written off as an expected divergence.
+  if (!HTML_LEVELS.has(level)) {
+    // mdast only: a hast `text` inside `<code>` inherits the code span's span,
+    // delimiters included, so it never decodes back to its own value.
+    if (!HAST_LIKE_LEVELS.has(level)) assertSliceInvariantEverywhere(actual, input);
+    reconcileFnrPositions(actual, expected, input);
   }
   try {
     expect(actual).toEqual(expected);

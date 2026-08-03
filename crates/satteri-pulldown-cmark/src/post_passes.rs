@@ -775,9 +775,18 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
 /// source positions); this pass picks up URL/email patterns that survived
 /// in plain Text nodes — typically because the construct path didn't fire
 /// (e.g. preceded by a digit, inside a previously-failed `<...>` autolink,
-/// across container prefixes). All Links emitted here are position-less,
-/// matching `findAndReplace`'s behavior.
-pub(crate) fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>, source_bytes: &[u8]) {
+/// across container prefixes).
+///
+/// Deliberate divergence: `findAndReplace` runs over the built tree with no
+/// offset mapping in hand, so remark emits no positions here. We map the
+/// decoded offsets back to raw source and report them; see `divergences.md`.
+/// `cursor` is `None` in skip-positions mode, where no map is built at all.
+pub(crate) fn gfm_autolink_literal_pass(
+    arena: &mut Arena<Mdast>,
+    source_bytes: &[u8],
+    options: crate::Options,
+    mut cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
+) {
     let len = arena.len() as u32;
     let mut candidates: Vec<u32> = Vec::new();
     let text_ty = MdastNodeType::Text as u8;
@@ -837,8 +846,13 @@ pub(crate) fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>, source_bytes: 
             candidates.push(id);
         }
     }
+    // Smart punctuation rewrites text values with no matching recogniser in
+    // `build_raw_map`, so a failed reconstruction is expected there rather
+    // than a sign that a transform was missed.
+    let strict =
+        !(options.has_smart_quotes() || options.has_smart_dashes() || options.has_smart_ellipses());
     for node_id in candidates {
-        split_text_with_autolinks_fnr(arena, node_id, source_bytes);
+        split_text_with_autolinks_fnr(arena, node_id, source_bytes, cursor.as_deref_mut(), strict);
     }
 }
 
@@ -982,12 +996,268 @@ fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usiz
     Some((s, e, format!("mailto:{addr}"), e))
 }
 
-/// FNR-style scan over a Text node's bytes. Emits position-less Links for
-/// each match; left-over text becomes plain Text nodes between/around them.
+/// One aligned run between a Text node's decoded value and its raw source.
+///
+/// `d_len == r_len` is a 1:1 run, splittable at any interior offset. Anything
+/// else is atomic — a character reference, a backslash escape, a CRLF, or a
+/// stripped continuation prefix (`d_len == 0`) — and has no interior decoded
+/// offset that can be named in raw space.
+#[derive(Clone, Copy)]
+struct Seg {
+    d_start: u32,
+    d_len: u32,
+    r_start: u32,
+    r_len: u32,
+}
+
+impl Seg {
+    #[inline]
+    fn is_one_to_one(&self) -> bool {
+        self.d_len == self.r_len && self.d_len > 0
+    }
+}
+
+/// Maps offsets in a Text node's decoded value back to the raw source the
+/// value was built from. `Segments` is ascending and gapless in decoded space.
+enum RawMap {
+    /// The decoded value is byte-identical to its raw span. No allocation.
+    Identity {
+        r_start: u32,
+    },
+    Segments(Vec<Seg>),
+}
+
+impl RawMap {
+    /// The segment producing decoded byte `d`. Zero-width segments produce no
+    /// decoded byte, so they are skipped by construction.
+    fn seg_containing(segs: &[Seg], d: usize) -> Option<&Seg> {
+        segs.iter()
+            .find(|s| (s.d_start as usize) <= d && d < (s.d_start + s.d_len) as usize)
+    }
+
+    /// Raw offset where the decoded byte at `d` starts being produced.
+    fn raw_start_of(&self, d: usize) -> Option<usize> {
+        match self {
+            RawMap::Identity { r_start } => Some(*r_start as usize + d),
+            RawMap::Segments(segs) => match Self::seg_containing(segs, d) {
+                Some(s) if s.is_one_to_one() => {
+                    Some((s.r_start as usize) + (d - s.d_start as usize))
+                }
+                // An atomic run is included whole or not at all.
+                Some(s) if d == s.d_start as usize => Some(s.r_start as usize),
+                Some(_) => None,
+                // Past the last decoded byte: the end of the raw span.
+                None => segs.last().map(|s| (s.r_start + s.r_len) as usize),
+            },
+        }
+    }
+
+    /// Raw offset just past the production of the decoded byte at `d - 1`.
+    fn raw_end_of(&self, d: usize) -> Option<usize> {
+        match self {
+            RawMap::Identity { r_start } => Some(*r_start as usize + d),
+            RawMap::Segments(segs) => {
+                let Some(prev) = d.checked_sub(1) else {
+                    return segs.first().map(|s| s.r_start as usize);
+                };
+                match Self::seg_containing(segs, prev) {
+                    Some(s) if s.is_one_to_one() => {
+                        Some((s.r_start as usize) + (d - s.d_start as usize))
+                    }
+                    Some(s) if d == (s.d_start + s.d_len) as usize => {
+                        Some((s.r_start + s.r_len) as usize)
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+
+/// Align a Text node's decoded value with the raw source it came from, so the
+/// find-and-replace pass can report source spans for the nodes it emits.
+///
+/// The walk is transform-directed — at each raw offset it asks *which
+/// transform applies*, never *do the bytes differ*. Mismatch-directed
+/// alignment desynchronises immediately: raw `&amp;` decodes to `&`, whose
+/// first byte matches, so a greedy 1:1 match would consume the `&` and then
+/// choke on `amp;`.
+///
+/// Returns `None` when the walk can't reconstruct the value exactly — an
+/// unlisted transform, or an upstream span that was already wrong. Callers
+/// then report no position at all, which is honest and matches remark; a
+/// guessed position would silently mis-slice the source for every consumer.
+fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> Option<RawMap> {
+    if r_start > r_end || r_end > source.len() {
+        return None;
+    }
+    let raw = &source[r_start..r_end];
+    let dec = decoded.as_bytes();
+    if raw == dec {
+        return Some(RawMap::Identity {
+            r_start: r_start as u32,
+        });
+    }
+
+    let mut segs: Vec<Seg> = Vec::new();
+    let push_atomic = |segs: &mut Vec<Seg>, r: usize, r_len: usize, d: usize, d_len: usize| {
+        segs.push(Seg {
+            d_start: d as u32,
+            d_len: d_len as u32,
+            r_start: (r_start + r) as u32,
+            r_len: r_len as u32,
+        });
+    };
+    let extend_one_to_one = |segs: &mut Vec<Seg>, r: usize, d: usize| {
+        if let Some(last) = segs.last_mut() {
+            if last.is_one_to_one()
+                && (last.d_start + last.d_len) as usize == d
+                && (last.r_start + last.r_len) as usize == r_start + r
+            {
+                last.d_len += 1;
+                last.r_len += 1;
+                return;
+            }
+        }
+        segs.push(Seg {
+            d_start: d as u32,
+            d_len: 1,
+            r_start: (r_start + r) as u32,
+            r_len: 1,
+        });
+    };
+
+    let mut r = 0usize;
+    let mut d = 0usize;
+    while r < raw.len() {
+        match raw[r] {
+            b'&' => {
+                let (len, value) = crate::scanners::scan_entity(&raw[r..]);
+                if let Some(value) = value {
+                    if dec[d..].starts_with(value.as_bytes()) {
+                        push_atomic(&mut segs, r, len, d, value.len());
+                        r += len;
+                        d += value.len();
+                        continue;
+                    }
+                }
+            }
+            b'\\' => {
+                if let Some(&next) = raw.get(r + 1) {
+                    if next.is_ascii_punctuation() && dec.get(d) == Some(&next) {
+                        push_atomic(&mut segs, r, 2, d, 1);
+                        r += 2;
+                        d += 1;
+                        continue;
+                    }
+                }
+            }
+            b'\r' if raw.get(r + 1) == Some(&b'\n') && dec.get(d) == Some(&b'\n') => {
+                push_atomic(&mut segs, r, 2, d, 1);
+                r += 2;
+                d += 1;
+                continue;
+            }
+            b'\n' if dec.get(d) == Some(&b'\n') => {
+                extend_one_to_one(&mut segs, r, d);
+                r += 1;
+                d += 1;
+                // A continuation line's block prefix (`> `, list indentation)
+                // is raw bytes with no decoded output. Content can never start
+                // with one: leading whitespace is stripped, and a leading `>`
+                // would have opened a blockquote instead.
+                let prefix_start = r;
+                while r < raw.len()
+                    && matches!(raw[r], b' ' | b'\t' | b'>')
+                    && dec.get(d) != Some(&raw[r])
+                {
+                    r += 1;
+                }
+                if r > prefix_start {
+                    segs.push(Seg {
+                        d_start: d as u32,
+                        d_len: 0,
+                        r_start: (r_start + prefix_start) as u32,
+                        r_len: (r - prefix_start) as u32,
+                    });
+                }
+                continue;
+            }
+            b' ' | b'\t' if dec.get(d) != Some(&raw[r]) => {
+                // Whitespace at the end of a line is dropped from the value.
+                let run_start = r;
+                while r < raw.len() && matches!(raw[r], b' ' | b'\t') {
+                    r += 1;
+                }
+                if !matches!(raw.get(r), Some(b'\n') | Some(b'\r')) {
+                    return None;
+                }
+                segs.push(Seg {
+                    d_start: d as u32,
+                    d_len: 0,
+                    r_start: (r_start + run_start) as u32,
+                    r_len: (r - run_start) as u32,
+                });
+                continue;
+            }
+            0 => {
+                // CommonMark replaces NUL with the replacement character.
+                const REPLACEMENT: &str = "\u{FFFD}";
+                if dec[d..].starts_with(REPLACEMENT.as_bytes()) {
+                    push_atomic(&mut segs, r, 1, d, REPLACEMENT.len());
+                    r += 1;
+                    d += REPLACEMENT.len();
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        if dec.get(d) != Some(&raw[r]) {
+            return None;
+        }
+        extend_one_to_one(&mut segs, r, d);
+        r += 1;
+        d += 1;
+    }
+    if d != dec.len() {
+        return None;
+    }
+    Some(RawMap::Segments(segs))
+}
+
+/// Source span and line/column pair for the decoded range `d_lo..d_hi`.
+///
+/// Line and column are not optional: the JS-visible `position.*.offset` is
+/// computed from them further down the pipeline, so a node carrying a byte
+/// offset with a zero line would serialize garbage.
+fn pos_for(
+    map: &RawMap,
+    cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
+    d_lo: usize,
+    d_hi: usize,
+) -> Option<(u32, u32, u32, u32, u32, u32)> {
+    let so = map.raw_start_of(d_lo)? as u32;
+    let eo = map.raw_end_of(d_hi)? as u32;
+    if eo < so {
+        return None;
+    }
+    let (sl, sc) = cursor.offset_to_line_col(so);
+    let (el, ec) = cursor.offset_to_line_col(eo);
+    Some((so, eo, sl, sc, el, ec))
+}
+
+/// FNR-style scan over a Text node's bytes. Emits Links for each match;
+/// left-over text becomes plain Text nodes between/around them.
 /// `findUrl` returns `[link, text(trail)]` when splitUrl strips trailing
 /// chars — `findAndReplace` then inserts those as adjacent siblings,
 /// keeping the trail distinct from the surrounding text. Mirror that.
-fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_bytes: &[u8]) {
+fn split_text_with_autolinks_fnr(
+    arena: &mut Arena<Mdast>,
+    text_id: u32,
+    source_bytes: &[u8],
+    cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
+    strict: bool,
+) {
     let data = arena.get_type_data(text_id);
     if data.is_empty() {
         return;
@@ -1024,15 +1294,24 @@ fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_
     let text = borrowed_text.to_string();
     let bytes = text.as_bytes();
 
-    // Per `mdast-util-gfm-autolink-literal`'s `findAndReplace`, links
-    // emitted here are intentionally position-less — even though they
-    // span a known source range, the F&R transform doesn't carry source
-    // offsets. We mirror that to match REF exactly on inputs where the
-    // construct-level autolink tokenizer didn't fire (e.g. autolinks
-    // preceded by `[`). Don't emit positions on the new nodes.
-    let _ = source_bytes;
-    let pos_for =
-        |_chunk_lo: usize, _chunk_hi: usize| -> Option<(u32, u32, u32, u32, u32, u32)> { None };
+    // Built only now, after the no-match return above: a text node full of
+    // `w`/`h`/`@` that autolinks nothing must not pay for the alignment.
+    let node = arena.get_node(text_id);
+    let (r_start, r_end) = (node.start_offset as usize, node.end_offset as usize);
+    let map = cursor
+        .as_ref()
+        .and_then(|_| build_raw_map(source_bytes, r_start, r_end, &text));
+    if cursor.is_some() && map.is_none() {
+        debug_assert!(
+            !strict,
+            "build_raw_map failed to reconstruct a text value from its source span"
+        );
+    }
+    let mut cursor = cursor;
+    let mut pos_for = |lo: usize, hi: usize| -> Option<(u32, u32, u32, u32, u32, u32)> {
+        let map = map.as_ref()?;
+        pos_for(map, cursor.as_deref_mut()?, lo, hi)
+    };
 
     let mut new_children: Vec<u32> = Vec::new();
     let mut cursor = 0usize;
@@ -1225,5 +1504,68 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
             }
         }
         arena.replace_node_with_children(id, &promoted);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_raw_map, RawMap};
+
+    fn map(source: &str, decoded: &str) -> RawMap {
+        build_raw_map(source.as_bytes(), 0, source.len(), decoded).expect("map should build")
+    }
+
+    #[test]
+    fn raw_map_identity_is_allocation_free() {
+        assert!(matches!(
+            map("www.x.y", "www.x.y"),
+            RawMap::Identity { r_start: 0 }
+        ));
+    }
+
+    #[test]
+    fn raw_map_spans_a_character_reference_whole() {
+        // `a&amp;b` decodes to `a&b`; the reference occupies raw 1..6.
+        let m = map("a&amp;b", "a&b");
+        assert_eq!(m.raw_start_of(0), Some(0));
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(2), Some(6));
+        assert_eq!(m.raw_end_of(3), Some(7));
+    }
+
+    #[test]
+    fn raw_map_atomic_interior_has_no_position() {
+        // `&fjlig;` decodes to two characters, so a boundary between them
+        // names no raw offset: the reference can't be split.
+        let m = map("&fjlig;", "fj");
+        assert_eq!(m.raw_start_of(0), Some(0));
+        assert_eq!(m.raw_end_of(2), Some(7));
+        assert_eq!(m.raw_start_of(1), None);
+        assert_eq!(m.raw_end_of(1), None);
+    }
+
+    #[test]
+    fn raw_map_excludes_a_continuation_prefix() {
+        // The `> ` opening line 2 produces nothing, so it belongs to neither
+        // the text before it nor the match after it.
+        let m = map("a\n> b", "a\nb");
+        assert_eq!(m.raw_end_of(2), Some(2));
+        assert_eq!(m.raw_start_of(2), Some(4));
+    }
+
+    #[test]
+    fn raw_map_handles_escapes_and_line_endings() {
+        let m = map("a\\_b\r\nc", "a_b\nc");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(2), Some(3));
+        assert_eq!(m.raw_start_of(4), Some(6));
+    }
+
+    #[test]
+    fn raw_map_refuses_to_guess() {
+        // Nothing produces `z` from this source, so no position is reported
+        // rather than a wrong one.
+        assert!(build_raw_map(b"a&amp;b", 0, 7, "a&z").is_none());
+        assert!(build_raw_map(b"abc", 0, 3, "abcd").is_none());
     }
 }

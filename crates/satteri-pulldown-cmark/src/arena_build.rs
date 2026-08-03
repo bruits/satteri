@@ -2014,7 +2014,12 @@ fn parse_inner(
             && (memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
                 || memchr::memchr2(b'H', b'W', source_bytes).is_some())
         {
-            crate::post_passes::gfm_autolink_literal_pass(&mut arena, source_bytes);
+            crate::post_passes::gfm_autolink_literal_pass(
+                &mut arena,
+                source_bytes,
+                options,
+                track_positions.then_some(&mut cursor),
+            );
         }
     }
 

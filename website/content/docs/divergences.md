@@ -40,6 +40,21 @@ A bare URL or email only becomes a link when the character before it is whitespa
 
 The divergence covers exactly the astral characters in `\p{P}` ∪ `\p{S}` — `𐄁` (U+10101), `😀` (U+1F600), `𝛛` (U+1D6DB) and the like. Astral characters outside that set are rejected by both parsers, for different reasons: `🯰` (U+1FBF0) is a digit, so the correct rule turns it down too.
 
+### Positions on find-and-replace autolinks
+
+GFM autolink literals reach the tree by two different routes. remark tokenizes most of them, but the ones a bracket blocks are picked up afterwards by `mdast-util-gfm-autolink-literal`, which walks the built tree over decoded text with no offset mapping in hand — so it emits no `position`, on the link, its text child, or the text nodes it splits off around them. Sätteri reports the exact source span each of those came from.
+
+```markdown
+[www.example.com
+```
+
+| Parser                        | Output                                     |
+| ----------------------------- | ------------------------------------------ |
+| `remark-parse` + `remark-gfm` | link with no `position`                    |
+| Sätteri                       | link with `position` spanning `www.example.com` |
+
+The absence is architectural rather than intended, and nothing reads a missing `position` as anything but "no source available", so supplying it only adds information. Values are untouched: the URL still comes from the decoded text (`[www.example.com/&amp;b` links to `http://www.example.com/&b` on both sides) while the position covers the raw `&amp;`. Where a span cannot be named exactly — a match boundary falling inside a character reference that decodes to more than one character — Sätteri reports no position rather than an approximate one.
+
 ## Rendering
 
 ### Code block `data.lang`

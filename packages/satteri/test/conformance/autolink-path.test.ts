@@ -1,5 +1,11 @@
 import { describe, test, expect } from "vitest";
-import { assertDebugBinary, referenceMdast, satteriMdast, satteriMdastDebug } from "./helpers.js";
+import {
+  assertDebugBinary,
+  assertSliceInvariantEverywhere,
+  referenceMdast,
+  satteriMdast,
+  satteriMdastDebug,
+} from "./helpers.js";
 
 // GFM autolink literals reach the tree by two different routes, and which one
 // fires is observable: micromark's tokenizer produces a `link` node with a
@@ -211,6 +217,14 @@ describe("GFM autolink path selection", () => {
     // with no knobs set is the ordinary parse.
     for (const input of PROBE_INPUTS) {
       expect(satteriMdastDebug(input, {})).toEqual(satteriMdast(input));
+    }
+  });
+
+  test("every reported span slices back to its source", () => {
+    // Both paths position their nodes now, so the probe can check something it
+    // could not before: that the spans are right, whichever path produced them.
+    for (const input of PROBE_INPUTS) {
+      assertSliceInvariantEverywhere(satteriMdast(input), input);
     }
   });
 
