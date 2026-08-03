@@ -2170,10 +2170,10 @@ describe("fuzz known-fails: complex structural divergences (md)", () => {
   });
 
   // `` `[)4p$[g`https://foo.bar.`baz>` `` — first backtick run opens a
-  // code span whose contents include `https://foo.bar.`. REF pairs the
-  // backticks differently from Sätteri here; downstream `baz>` ends up
-  // in different text nodes.
-  test.fails("code span pairing with autolink-like body", () => {
+  // code span whose contents include `https://foo.bar.`. Used to pair the
+  // backticks differently from REF, because the bracket walk the autolink
+  // construct gated on counted the `[`s inside the code span.
+  test("code span pairing with autolink-like body", () => {
     assertMdastConformance("`[)4p$[g`https://foo.bar.`baz>`\n");
   });
 

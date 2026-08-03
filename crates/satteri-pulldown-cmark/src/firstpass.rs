@@ -2002,7 +2002,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             scan_email_forward_from_atext(bytes, ix, begin_text, paragraph_floor)
                         {
                             if email_start >= last_candidate_end
-                                && !has_unbalanced_bracket_from(bytes, paragraph_floor, ix)
                                 && !is_inside_code_span(bytes, ix)
                                 && fits_in_link_destination(bytes, ix, email_end)
                             {
@@ -4993,11 +4992,6 @@ fn detect_gfm_autolink(
         _ => return None,
     }
 
-    // previousUnbalanced: suppress when an unclosed `[`/`![` precedes the
-    // trigger in this paragraph.
-    if has_unbalanced_bracket_from(bytes, paragraph_start, ix) {
-        return None;
-    }
     // Code span precedence.
     if is_inside_code_span(bytes, ix) {
         return None;
