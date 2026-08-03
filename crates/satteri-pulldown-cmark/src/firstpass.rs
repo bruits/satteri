@@ -2001,9 +2001,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         if let Some((email_start, email_end, full_url)) =
                             scan_email_forward_from_atext(bytes, ix, begin_text, paragraph_floor)
                         {
-                            if email_start >= last_candidate_end
-                                && fits_in_link_destination(bytes, ix, email_end)
-                            {
+                            if email_start >= last_candidate_end {
                                 let d = AutolinkDetection {
                                     start: email_start,
                                     end: email_end,
@@ -5028,9 +5026,6 @@ fn detect_gfm_autolink(
             if email_start < paragraph_start {
                 return None;
             }
-            if !fits_in_link_destination(bytes, ix, email_end) {
-                return None;
-            }
             // Construct-path rejection when an active backslash escape
             // directly precedes the local-part. micromark sees `\X` as one
             // escape token whose char is `X`; since `X` is punctuation
@@ -5059,14 +5054,6 @@ fn detect_gfm_autolink(
         }
         _ => None,
     }
-}
-
-/// Whether an autolink spanning `pos..end` may be emitted inside a
-/// `[label](DEST)` candidate. If the link does resolve, the second pass
-/// splices out the nodes the destination covers — but it cannot splice one
-/// that overruns the `)`.
-fn fits_in_link_destination(bytes: &[u8], pos: usize, end: usize) -> bool {
-    enclosing_link_destination_end(bytes, pos).is_none_or(|close| end <= close)
 }
 
 /// Does the line starting at `pos` open a block construct that would break
