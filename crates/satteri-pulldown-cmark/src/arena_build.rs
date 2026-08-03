@@ -880,7 +880,7 @@ fn parse_inner(
                             let cow = inner.allocs.take_cow(*cow_ix);
                             buf.push_str(&cow);
                         }
-                        ItemBody::SoftBreak | ItemBody::HardBreak(_) => {
+                        ItemBody::SoftBreak => {
                             // Alt text keeps the break rather than collapsing it
                             // to a space, and keeps the source's own line ending.
                             let s = &source[item.start..item.end];
@@ -889,6 +889,9 @@ fn parse_inner(
                                 None => buf.push('\n'),
                             }
                         }
+                        // A hard break carries no visible content, so it adds
+                        // nothing to the alt text.
+                        ItemBody::HardBreak(_) => {}
                         ItemBody::SynthesizeText(cow_ix) => {
                             let cow = inner.allocs.take_cow(*cow_ix);
                             buf.push_str(&cow);

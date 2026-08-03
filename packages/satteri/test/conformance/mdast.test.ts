@@ -157,6 +157,67 @@ describe("MDAST conformance: images", () => {
   });
 });
 
+// A hard break inside an image label carries no visible content, so it adds
+// nothing to the flattened alt text; a soft break contributes the source's own
+// line ending.
+describe("MDAST conformance: line breaks in image alt text", () => {
+  test("backslash hard break", () => {
+    assertMdastConformance("![a\\\nb](c.png)");
+  });
+
+  test("backslash hard break with CRLF", () => {
+    assertMdastConformance("![a\\\r\nb](c.png)");
+  });
+
+  test("backslash hard break with a lone CR", () => {
+    assertMdastConformance("![a\\\rb](c.png)");
+  });
+
+  test("repeated backslash hard breaks", () => {
+    assertMdastConformance("![a\\\nb\\\nc](c.png)");
+  });
+
+  test("trailing-space hard break", () => {
+    assertMdastConformance("![a  \nb](c.png)");
+  });
+
+  test("trailing-space hard break with CRLF", () => {
+    assertMdastConformance("![a  \r\nb](c.png)");
+  });
+
+  test("trailing-space hard break with a lone CR", () => {
+    assertMdastConformance("![a  \rb](c.png)");
+  });
+
+  test("soft break", () => {
+    assertMdastConformance("![a\nb](c.png)");
+  });
+
+  test("soft break with CRLF", () => {
+    assertMdastConformance("![a\r\nb](c.png)");
+  });
+
+  test("soft break with a lone CR", () => {
+    assertMdastConformance("![a\rb](c.png)");
+  });
+
+  test("inline code in the label", () => {
+    assertMdastConformance("![a`x`b](c.png)");
+  });
+
+  test("emphasis in the label", () => {
+    assertMdastConformance("![a*x*b](c.png)");
+  });
+
+  test("hard break in a reference image label", () => {
+    assertMdastConformance("![a\\\nb][d]\n\n[d]: /u");
+  });
+
+  test("hard break in a collapsed reference image label", () => {
+    assertMdastConformance("![a\\\nb][]\n\n[a\\\nb]: /u");
+  });
+});
+
 describe("MDAST conformance: edge cases", () => {
   test("empty input", () => {
     assertMdastConformance("");
