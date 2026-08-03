@@ -7,6 +7,7 @@
     "!crates/*/README.md",
     "!crates/*/readme.md",
     "node_modules",
+    "packages/satteri/bench/fixtures",
     "satteri_napi.*",
     "packages/satteri/index.d.ts",
     "packages/satteri/browser.js",
