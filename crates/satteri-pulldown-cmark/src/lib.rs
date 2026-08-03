@@ -104,7 +104,8 @@ use core::fmt::Display;
 pub use crate::arena_build::MDX_OPTIONS;
 pub use crate::{
     arena_build::{
-        parse, parse_into, parse_no_positions, parse_no_positions_into, DEFAULT_OPTIONS,
+        parse, parse_into, parse_into_with_debug, parse_no_positions, parse_no_positions_into,
+        DebugParseOptions, DEFAULT_OPTIONS,
     },
     parse::{
         BrokenLink, BrokenLinkCallback, DefaultParserCallbacks, OffsetIter, Parser,

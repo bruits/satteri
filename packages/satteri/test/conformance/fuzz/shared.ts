@@ -609,6 +609,9 @@ export const autolinkDocument = fc
       "code",
       "para2",
       "img",
+      "dest",
+      "destUnresolved",
+      "destReference",
     ),
   )
   .map(([line, ctx]) => {
@@ -629,12 +632,24 @@ export const autolinkDocument = fc
         return `text\n${line}\n`;
       case "img":
         return `![${line}](/i)\n`;
+      // Link destinations. The trigger only reaches the tokenizer when the
+      // surrounding bracket pair fails to resolve, so the three contexts below
+      // differ by whether it resolves: `dest` always does, `destUnresolved`
+      // never does (the inner `[x]` makes the outer opener inactive), and
+      // `destReference` fails the resource match and falls back to the
+      // definition.
+      case "dest":
+        return `[a](${line})x\n`;
+      case "destUnresolved":
+        return `[[x]](${line})x\n\n[x]: /\n`;
+      case "destReference":
+        return `[a][b](${line})x\n\n[b]: /\n`;
       default:
         return line + "\n";
     }
   });
 
-export const autolinkChaos = makeChaos("./:@~_-wWhHtTpP><&;()");
+export const autolinkChaos = makeChaos("./:@~_-wWhHtTpP><&;()[]");
 
 // MDX arbitraries
 

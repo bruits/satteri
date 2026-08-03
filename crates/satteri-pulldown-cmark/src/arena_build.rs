@@ -45,12 +45,38 @@ pub const DEFAULT_OPTIONS: Options = Options::from_bits_truncate(
 pub const MDX_OPTIONS: Options =
     Options::from_bits_truncate(DEFAULT_OPTIONS.bits() | Options::ENABLE_MDX.bits());
 
+/// Parse knobs that exist only in debug builds, for harnesses that need to
+/// observe an intermediate state the public API doesn't expose. Every field is
+/// compiled out in release, so a release parse can't take a different path.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DebugParseOptions {
+    /// Skip the GFM autolink find-and-replace post-pass. The conformance
+    /// path-selection probe parses twice — with and without it — to tell which
+    /// pass produced a given `link` node.
+    #[cfg(debug_assertions)]
+    pub skip_fnr_autolink: bool,
+}
+
+impl DebugParseOptions {
+    #[inline]
+    fn skip_fnr_autolink(self) -> bool {
+        #[cfg(debug_assertions)]
+        {
+            self.skip_fnr_autolink
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            false
+        }
+    }
+}
+
 /// Parse markdown source into an Arena.
 ///
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
 pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, None)
+    parse_inner(source, options, true, None, DebugParseOptions::default())
 }
 
 /// Skip-positions variant: leaves per-node line/column fields at the zero
@@ -58,7 +84,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
 /// the cp-offset post-pass. Byte offsets are still filled. Use when the
 /// consumer (HTML/JS codegen) never reads positions.
 pub fn parse_no_positions(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, None)
+    parse_inner(source, options, false, None, DebugParseOptions::default())
 }
 
 /// Same as `parse_no_positions` but recycles a caller-pooled arena (via
@@ -69,7 +95,13 @@ pub fn parse_no_positions_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, Some(reuse))
+    parse_inner(
+        source,
+        options,
+        false,
+        Some(reuse),
+        DebugParseOptions::default(),
+    )
 }
 
 /// Same as [`parse`] but recycles a caller-pooled arena; see [`parse_no_positions_into`].
@@ -78,7 +110,26 @@ pub fn parse_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, Some(reuse))
+    parse_inner(
+        source,
+        options,
+        true,
+        Some(reuse),
+        DebugParseOptions::default(),
+    )
+}
+
+/// Same as [`parse_into`] / [`parse_no_positions_into`] but with the debug-only
+/// knobs in [`DebugParseOptions`] applied. Identical to those in release builds,
+/// where every knob is compiled out.
+pub fn parse_into_with_debug(
+    source: &str,
+    options: Options,
+    track_positions: bool,
+    reuse: Arena<Mdast>,
+    debug: DebugParseOptions,
+) -> (Arena<Mdast>, Vec<(usize, String)>) {
+    parse_inner(source, options, track_positions, Some(reuse), debug)
 }
 
 fn parse_inner(
@@ -86,6 +137,7 @@ fn parse_inner(
     options: Options,
     track_positions: bool,
     reuse: Option<Arena<Mdast>>,
+    debug: DebugParseOptions,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
     // feature set. Expand it into the granular flags the parser checks so
@@ -1958,8 +2010,9 @@ fn parse_inner(
         }
         // Triggers are case-insensitive (`HTTP://`, `WWW.`), so check the
         // uppercase variants too.
-        if memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
-            || memchr::memchr2(b'H', b'W', source_bytes).is_some()
+        if !debug.skip_fnr_autolink()
+            && (memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
+                || memchr::memchr2(b'H', b'W', source_bytes).is_some())
         {
             crate::post_passes::gfm_autolink_literal_pass(&mut arena, source_bytes);
         }

@@ -5,14 +5,20 @@ import type {
 } from "@mdx-js/mdx";
 import {
   evaluate as satteriEvaluate,
+  createMdastHandle,
   defineHastPlugin,
+  dropHandle,
   markdownToJs,
   markdownToMdast,
   markdownToHast,
   markdownToHtml,
+  materializeMdastTree,
+  MdastReader,
   mdxToJs,
+  serializeHandle,
 } from "../../src/index.js";
 import type { Features, EvaluateOptions, MarkdownToJsOptions, HastNode } from "../../src/index.js";
+import type { JsDebugParseOptions } from "../../index.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import * as runtime from "react/jsx-runtime";
@@ -167,6 +173,35 @@ export function referenceHast(md: string): unknown {
 
 export function satteriMdast(md: string): unknown {
   return serialize(markdownToMdast(md, { features: BASE_FEATURES }));
+}
+
+/**
+ * Parse with the debug-build-only knobs of `createMdastHandle`. Release
+ * binaries ignore them and return an ordinary parse, so anything reading the
+ * result as a signal must call `assertDebugBinary()` first.
+ */
+export function satteriMdastDebug(md: string, debugOptions: JsDebugParseOptions): unknown {
+  const handle = createMdastHandle(md, { frontmatter: false, math: false }, true, debugOptions);
+  try {
+    return serialize(materializeMdastTree(new MdastReader(serializeHandle(handle))));
+  } finally {
+    dropHandle(handle);
+  }
+}
+
+/**
+ * Throw unless the binding under test honours `skipFnrAutolink`. `[www.a.com`
+ * is a find-and-replace-only autolink, so with the pass skipped the `link`
+ * must be gone; a release binary keeps it and would make every path
+ * classification read as `construct`.
+ */
+export function assertDebugBinary(): void {
+  const skipped = JSON.stringify(satteriMdastDebug("[www.a.com", { skipFnrAutolink: true }));
+  if (skipped.includes('"link"')) {
+    throw new Error(
+      "satteri binding ignores skipFnrAutolink — build it with `pnpm build:binary:native:debug`",
+    );
+  }
 }
 
 export function satteriHast(md: string): unknown {

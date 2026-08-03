@@ -493,12 +493,19 @@ fn parse_mdast_pooled(
     mdx: bool,
     track_positions: bool,
 ) -> Result<satteri_arena::Arena<Mdast>> {
+    parse_mdast_pooled_with_debug(source, opts, mdx, track_positions, Default::default())
+}
+
+fn parse_mdast_pooled_with_debug(
+    source: &str,
+    opts: satteri_pulldown_cmark::Options,
+    mdx: bool,
+    track_positions: bool,
+    debug: satteri_pulldown_cmark::DebugParseOptions,
+) -> Result<satteri_arena::Arena<Mdast>> {
     let reuse = acquire_mdast_arena();
-    let (mut mdast, mdx_errors) = if track_positions {
-        satteri_pulldown_cmark::parse_into(source, opts, reuse)
-    } else {
-        satteri_pulldown_cmark::parse_no_positions_into(source, opts, reuse)
-    };
+    let (mut mdast, mdx_errors) =
+        satteri_pulldown_cmark::parse_into_with_debug(source, opts, track_positions, reuse, debug);
     #[cfg(feature = "mdx")]
     if mdx {
         if let Some((offset, msg)) = mdx_errors.first() {
@@ -545,19 +552,52 @@ fn create_hast_handle_impl(
     Ok((External::new(Mutex::new(hast)), frontmatter))
 }
 
+/// Debug-build-only parse knobs, for conformance harnesses that need to observe
+/// an intermediate state the normal pipeline doesn't expose. Every knob is
+/// ignored by release builds, where the underlying flags are compiled out.
+#[napi(object)]
+pub struct JsDebugParseOptions {
+    /// Skip the GFM autolink find-and-replace post-pass, leaving only the
+    /// links the first-pass construct scanner produced.
+    pub skip_fnr_autolink: Option<bool>,
+}
+
+fn js_debug_options_to_rust(
+    opts: Option<JsDebugParseOptions>,
+) -> satteri_pulldown_cmark::DebugParseOptions {
+    #[allow(unused_mut)]
+    let mut out = satteri_pulldown_cmark::DebugParseOptions::default();
+    #[cfg(debug_assertions)]
+    if let Some(js) = opts {
+        out.skip_fnr_autolink = js.skip_fnr_autolink.unwrap_or(false);
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = opts;
+    out
+}
+
 /// Parse markdown source into an MDAST arena handle.
 ///
 /// `track_positions` (default `true`) controls whether `position` is recorded
 /// on nodes. The plugin pipeline passes `false` when no plugin reads positions,
 /// skipping the `LineIndex` build + per-node line/column lookups (~15% of parse).
+///
+/// `debug_options` is honoured by debug builds only; see [`JsDebugParseOptions`].
 #[napi]
 pub fn create_mdast_handle(
     source: String,
     features: Option<JsFeatures>,
     track_positions: Option<bool>,
+    debug_options: Option<JsDebugParseOptions>,
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, false);
-    let mut arena = parse_mdast_pooled(&source, opts, false, track_positions.unwrap_or(true))?;
+    let mut arena = parse_mdast_pooled_with_debug(
+        &source,
+        opts,
+        false,
+        track_positions.unwrap_or(true),
+        js_debug_options_to_rust(debug_options),
+    )?;
     arena.mdx = false;
     Ok(External::new(Mutex::new(arena)))
 }
