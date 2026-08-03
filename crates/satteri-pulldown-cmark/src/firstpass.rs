@@ -2510,15 +2510,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         .peek_up()
                         .map(|ix| self.tree[ix].item.start)
                         .unwrap_or(start);
-                    let detection = detect_gfm_autolink(
-                        bytes,
-                        ix,
-                        byte,
-                        paragraph_floor,
-                        begin_text,
-                        self.options,
-                    )
-                    .filter(|d| d.start >= last_candidate_end);
+                    let detection =
+                        detect_gfm_autolink(bytes, ix, byte, paragraph_floor, begin_text)
+                            .filter(|d| d.start >= last_candidate_end);
                     if let Some(d) = detection {
                         let (cand_start, cand_end) = (d.start, d.end);
                         last_candidate_end = cand_end;
@@ -4976,7 +4970,6 @@ fn detect_gfm_autolink(
     byte: u8,
     paragraph_start: usize,
     begin_text: usize,
-    options: Options,
 ) -> Option<AutolinkDetection> {
     // Fast structural reject: every `h`/`H`/`w`/`W`/`@` in prose fires this
     // path, but only a tiny fraction can actually start an autolink. The
@@ -4993,11 +4986,6 @@ fn detect_gfm_autolink(
             }
         }
         _ => return None,
-    }
-
-    // MDX JSX tag precedence (only matters when MDX is enabled).
-    if options.contains(Options::ENABLE_MDX) && is_inside_open_inline_jsx_tag(bytes, ix) {
-        return None;
     }
 
     match byte {
