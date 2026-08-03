@@ -2014,7 +2014,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                         .unwrap_or(full_url),
                                 };
                                 last_candidate_end = email_end;
-                                if defer_autolink_decision(bytes, paragraph_floor, ix) {
+                                if defer_autolink_decision(bytes, paragraph_floor, ix, self.options)
+                                {
                                     // Deferred: emit the marker and fall
                                     // through to the attention handling. If
                                     // the marker fires it splices the
@@ -2521,7 +2522,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     if let Some(d) = detection {
                         let (cand_start, cand_end) = (d.start, d.end);
                         last_candidate_end = cand_end;
-                        if defer_autolink_decision(bytes, paragraph_floor, ix) {
+                        if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
                             // A bracket opener may still be open at the
                             // trigger, so the decision belongs to
                             // `handle_inline_pass1`. Leave `begin_text` at the
@@ -4941,11 +4942,14 @@ fn is_email_local_char(b: u8) -> bool {
 /// It has to whenever an earlier byte in the block could open something that
 /// ends up owning the trigger's bytes: `[` for a bracket opener still on
 /// `link_stack`, `<` for a pointed autolink or inline HTML, `` ` `` for a code
-/// span. With none of those present the candidate is guaranteed to fire and no
-/// other construct can claim it, which keeps the eager path — and its
-/// `ContinueAndSkip` over the URL — exactly as it was for ordinary prose.
-fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize) -> bool {
-    memchr::memchr3(b'[', b'<', b'`', &bytes[block_start..pos]).is_some()
+/// span, `$` for a math span. With none of those present the candidate is
+/// guaranteed to fire and no other construct can claim it, which keeps the
+/// eager path — and its `ContinueAndSkip` over the URL — exactly as it was for
+/// ordinary prose.
+fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize, options: Options) -> bool {
+    let before = &bytes[block_start..pos];
+    memchr::memchr3(b'[', b'<', b'`', before).is_some()
+        || (options.has_math() && memchr::memchr(b'$', before).is_some())
 }
 
 /// A GFM autolink literal the scanner accepted at a trigger byte, before
@@ -4991,10 +4995,6 @@ fn detect_gfm_autolink(
         _ => return None,
     }
 
-    // Math span precedence (only matters when math is enabled).
-    if options.has_math() && is_inside_math_span(bytes, ix) {
-        return None;
-    }
     // MDX JSX tag precedence (only matters when MDX is enabled).
     if options.contains(Options::ENABLE_MDX) && is_inside_open_inline_jsx_tag(bytes, ix) {
         return None;
