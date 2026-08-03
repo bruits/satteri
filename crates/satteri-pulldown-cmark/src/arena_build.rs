@@ -328,7 +328,7 @@ fn parse_inner(
                         }
                     }
                     // Code block close: write accumulated content.
-                    ItemBody::FencedCodeBlock(_) | ItemBody::IndentCodeBlock(_) => {
+                    ItemBody::FencedCodeBlock(..) | ItemBody::IndentCodeBlock(_) => {
                         if let Some(mut content) = code_block_buf.take() {
                             // Drop the trailing line terminator (remark keeps
                             // CRLF inside the value but strips the one right
@@ -1043,14 +1043,14 @@ fn parse_inner(
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
                     }
-                    ItemBody::FencedCodeBlock(cow_ix) => {
+                    ItemBody::FencedCodeBlock(cow_ix, lang_len) => {
                         let info_cow = inner.allocs.take_cow(cow_ix);
                         let info_str = info_cow.as_ref();
-                        let (lang_str, meta_str) = match info_str.split_once(char::is_whitespace) {
-                            // Keep trailing whitespace in meta to match remark/mdast.
-                            Some((l, m)) => (l, m.trim_start()),
-                            None => (info_str, ""),
-                        };
+                        // The boundary was taken on raw source; whitespace a
+                        // character reference decodes to stays in the language.
+                        let split = (lang_len as usize).min(info_str.len());
+                        let (lang_str, meta_str) = info_str.split_at(split);
+                        let meta_str = meta_str.trim_start();
                         let lang_ref = if lang_str.is_empty() {
                             StringRef::empty()
                         } else {
@@ -1510,8 +1510,7 @@ fn parse_inner(
 
                     // A blocked autolink marker leaves a zero-width `Text`
                     // behind, and an empty text node is never wanted. The
-                    // backslash-escaped form is not empty — it reaches back
-                    // over the `\` below — so only the plain one is skipped.
+                    // escaped form is not empty: it reaches back over the `\`.
                     ItemBody::Text {
                         backslash_escaped: false,
                     } if item.start == item.end => {
@@ -1941,10 +1940,9 @@ fn parse_inner(
                         inner.tree.next_sibling(cur_ix);
                     }
 
-                    // An autolink candidate marker is zero-width and inert:
-                    // `handle_inline_pass1` either fires or unlinks it, and
-                    // every construct that consumes an item range drops the
-                    // markers inside it. One arriving here means a range
+                    // `handle_inline_pass1` either fires or unlinks every
+                    // marker, and constructs that consume an item range drop
+                    // the markers inside it. One arriving here means a range
                     // escaped resolution.
                     ItemBody::MaybeAutolink(..) => {
                         debug_assert!(false, "unresolved autolink marker reached arena_build");
@@ -2029,10 +2027,9 @@ fn parse_inner(
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
         // Triggers are case-insensitive (`HTTP://`, `WWW.`), so check the
-        // uppercase variants too. The pass matches on decoded text, where a
-        // character reference can supply the trigger the raw bytes lack
-        // (`&#104;ttp://x.y`), so an `&` anywhere keeps the door open; only
-        // then does the per-node scan pay for the decoded check.
+        // uppercase variants too. `&` counts as a trigger as well: the pass
+        // matches decoded text, where a character reference can supply a
+        // trigger the raw bytes lack (`&#104;ttp://x.y`).
         if !debug.skip_fnr_autolink()
             && (memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
                 || memchr::memchr3(b'H', b'W', b'&', source_bytes).is_some())

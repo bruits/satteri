@@ -113,7 +113,10 @@ pub(crate) enum ItemBody {
     TightParagraph,
     Rule,
     Heading(HeadingLevel, Option<HeadingIndex>), // heading level
-    FencedCodeBlock(CowIndex),
+    // Second field: byte length of the `lang` part within the decoded info
+    // string. The split is taken on raw source, so a character reference that
+    // decodes to whitespace does not move it.
+    FencedCodeBlock(CowIndex, u32),
     MathBlock(CowIndex), // meta string (info after $$)
     // bool: true = lazy/no-extend (block was opened as a single-line
     // synthetic split, e.g. after an empty list item closed via blank
@@ -1168,20 +1171,16 @@ impl<'input> ParserInner<'input> {
                     }
                 }
                 ItemBody::MaybeAutolink(cand_ix) => {
-                    // micromark gates its literal-autolink construct on
-                    // `previousUnbalanced`: a bracket opener that is still
-                    // open blocks it. Resolved openers are replaced and
-                    // failed ones are marked, so what survives that walk is
-                    // exactly what is still on this stack.
+                    // An unresolved bracket opener blocks the construct.
+                    // Resolved openers are replaced and failed ones marked, so
+                    // the stack holds exactly what is still open.
                     let next = self.tree[cur_ix].next;
                     if !self.link_stack.is_empty() {
-                        // Blocked. The bytes stay ordinary text and the
-                        // find-and-replace post-pass may still claim them, as
-                        // it does in remark. The marker becomes a zero-width
-                        // `Text` rather than being unlinked: the emphasis
-                        // resolver addresses the first node after a delimiter
-                        // run by arena index, so removing a node from the
-                        // sibling chain would hand it whatever came next.
+                        // Blocked; the find-and-replace post-pass may still
+                        // claim the bytes. Zero-width `Text` rather than an
+                        // unlink: the emphasis resolver addresses the node
+                        // after a delimiter run by arena index, so dropping one
+                        // from the chain would hand it whatever came next.
                         self.tree[cur_ix].item.body = ItemBody::Text {
                             backslash_escaped: false,
                         };
@@ -2886,8 +2885,7 @@ struct LinkStack {
 }
 
 impl LinkStack {
-    /// micromark's `previousUnbalanced`: whether any bracket opener before
-    /// this point is still unresolved and unmarked.
+    /// Whether any bracket opener before this point is still unresolved.
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
@@ -3600,7 +3598,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::MathBlock(cow_ix) => {
             Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
         }
-        ItemBody::FencedCodeBlock(cow_ix) => {
+        ItemBody::FencedCodeBlock(cow_ix, _) => {
             Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
         }
         ItemBody::IndentCodeBlock(..) => Tag::CodeBlock(CodeBlockKind::Indented),

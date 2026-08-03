@@ -1745,8 +1745,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         Some(ix + n)
     }
 
-    /// Commit a detected autolink as a `Link` node, the way the first pass
-    /// always has. Only sound when the candidate is guaranteed to fire.
+    /// Commit a detected autolink as a `Link` node. Only sound when the
+    /// candidate is guaranteed to fire.
     fn append_autolink_link(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
         let link_ix = self
             .allocs
@@ -1767,9 +1767,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree[link_node_ix].child = Some(text_child);
     }
 
-    /// Record a detected autolink as a zero-width marker. Zero width is what
-    /// makes detection observationally inert: no byte's tokenization changes,
-    /// so the candidate can still be dropped without anything to undo.
+    /// Record a detected autolink as a zero-width marker. Zero width keeps
+    /// detection inert: no byte's tokenization changes, so the candidate can
+    /// still be dropped with nothing to undo.
     fn append_autolink_marker(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
         let link = self
             .allocs
@@ -1811,9 +1811,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // (e.g. an inline GFM autolink Link whose URL ended in `\`).
         // Used by the `\n` hardbreak check to skip those `\`s.
         let mut last_inline_emission_end: usize = start;
-        // End offset of the last GFM autolink candidate detected on this
-        // line. Deferred candidates don't skip their own bytes, so this is
-        // what stops a trigger inside one URL from starting a second.
+        // End offset of the last autolink candidate detected on this line.
+        // Deferred candidates don't skip their own bytes, so this is what
+        // stops a trigger inside one URL from starting a second.
         let mut last_candidate_end: usize = start;
 
         let (final_ix, brk) = iterate_special_bytes(self.lookup_table, bytes, start, |ix, byte| {
@@ -1969,9 +1969,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         LoopInstruction::ContinueAndSkip(1)
                     } else if bytes[ix + 1] == b'<' {
                         // The `<` still gets its marker: a deferred autolink
-                        // candidate may turn out to end on this `\`, in which
-                        // case the link owns the escape and the inline HTML
-                        // opens after all.
+                        // candidate may end on this `\`, in which case the link
+                        // owns the escape and the inline HTML opens after all.
                         self.tree.append(Item {
                             start: ix + 1,
                             end: ix + 2,
@@ -1994,18 +1993,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     }
                 }
                 c @ b'*' | c @ b'_' | c @ b'~' | c @ b'^' => {
-                    // GFM precedence: at `_` (an email-local atext char),
-                    // try the email-literal construct first. micromark's
-                    // text registry binds `_` to `emailAutolink` and walks
-                    // forward through atext to find `@`. If a valid email
-                    // tokenizes here, it wins over the attentionSequence —
-                    // skipping the MaybeEmphasis emission keeps `_-_@…`
-                    // from forming an emphasis pair that hides the email.
+                    // GFM precedence: `_` is an email-local atext char, so an
+                    // email literal starting here wins over the attention
+                    // sequence — skipping the MaybeEmphasis emission keeps
+                    // `_-_@…` from forming a pair that hides the email.
                     if c == b'_' && self.options.contains(Options::ENABLE_GFM) {
-                        // Run the cheap structural scan first — most `_`
-                        // in prose can't reach an `@` through atext chars
-                        // and we want to bail before paying for the
-                        // paragraph-scan predicates.
+                        // Cheap structural scan first: most `_` in prose can't
+                        // reach an `@` through atext chars.
                         let paragraph_floor = self
                             .tree
                             .peek_up()
@@ -2027,13 +2021,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 last_candidate_end = email_end;
                                 if defer_autolink_decision(bytes, paragraph_floor, ix, self.options)
                                 {
-                                    // Deferred: emit the marker and fall
-                                    // through to the attention handling. If
-                                    // the marker fires it splices the
-                                    // delimiters away; if it is blocked they
-                                    // are what micromark would have produced,
-                                    // since the email construct is gated on
-                                    // the same predicate.
+                                    // Fall through to the attention handling: a
+                                    // marker that fires splices those
+                                    // delimiters away, and one that is blocked
+                                    // wanted them all along.
                                     self.append_autolink_marker(d, begin_text, backslash_escaped);
                                     if email_start > begin_text {
                                         backslash_escaped = false;
@@ -2481,21 +2472,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     LoopInstruction::ContinueAndSkip(0)
                 }
                 b'h' | b'H' | b'w' | b'W' | b'@' if self.options.contains(Options::ENABLE_GFM) => {
-                    // GFM literal autolink: protocol/www/email. Detected
-                    // during inline tokenization so the candidate's extent is
-                    // known before bracket/image resolution runs. Mirrors
-                    // micromark's text-context construct — see
-                    // node_modules/.../micromark-extension-gfm-autolink-literal.
+                    // GFM literal autolink: protocol/www/email, detected during
+                    // inline tokenization so the candidate's extent is known
+                    // before bracket/image resolution runs. Only the construct
+                    // path lands here; `gfm_autolink_literal_pass` is the
+                    // backstop for everything else.
                     //
-                    // Only the *construct* path is detected here. The
-                    // mdast-util find-and-replace fallback is left to
-                    // gfm_autolink_literal_pass, which still runs as a
-                    // backstop.
-                    // For multi-line paragraphs, `start` is the current
-                    // *line* start. The actual paragraph bounds come from
-                    // the Paragraph item on the spine — use that as the
-                    // `has_unbalanced_bracket` floor so a `[` on an
-                    // earlier paragraph line is still seen.
+                    // For multi-line paragraphs `start` is the current *line*
+                    // start, so take the floor from the Paragraph item on the
+                    // spine — a `[` on an earlier line still has to count.
                     let paragraph_floor = self
                         .tree
                         .peek_up()
@@ -2524,11 +2509,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             begin_text = cand_end;
                             last_inline_emission_end = cand_end;
                             backslash_escaped = false;
-                            // Skip the URL bytes so subsequent special-byte
-                            // callbacks don't re-trigger on `[`, `!`, etc.
-                            // inside it. ContinueAndSkip(N) advances ix by N
-                            // then +1, so landing at `end` wants
-                            // N = end - ix - 1.
+                            // Skip the URL bytes so later callbacks don't
+                            // re-trigger on `[`, `!`, etc. inside it.
+                            // ContinueAndSkip(N) advances by N then +1.
                             LoopInstruction::ContinueAndSkip(cand_end.saturating_sub(ix + 1))
                         }
                     } else {
@@ -2888,11 +2871,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Strip only the line terminator (\n, \r, \r\n) — remark/mdast preserves
         // trailing spaces in the fence info string so they end up in `meta`.
         let info_end = ix - scan_rev_while(&bytes[info_start..ix], |b| b == b'\n' || b == b'\r');
-        let info_string = unescape(&self.text[info_start..info_end], self.tree.is_in_table());
+        // The info string splits into language and metadata at the first raw
+        // space or tab, before character references are decoded, so one that
+        // decodes to whitespace stays inside the language.
+        let raw_info = &self.text[info_start..info_end];
+        let raw_lang_end = raw_info.find([' ', '\t']).map_or(raw_info.len(), |ix| ix);
+        let in_table = self.tree.is_in_table();
+        let lang_len = unescape(&raw_info[..raw_lang_end], in_table).len() as u32;
+        let info_string = unescape(raw_info, in_table);
         self.tree.append(Item {
             start: start_ix,
             end: 0, // will get set later
-            body: ItemBody::FencedCodeBlock(self.allocs.allocate_cow(info_string)),
+            body: ItemBody::FencedCodeBlock(self.allocs.allocate_cow(info_string), lang_len),
         });
         self.tree.push();
         loop {
@@ -4785,8 +4775,7 @@ fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
 /// Walk forward from `start_ix` (an atext-class char like `_`) through
 /// `+`/`-`/`.`/`_`/alphanumeric to find an `@`, then check whether an
 /// email autolink tokenizes exactly at `start_ix..`. Returns `(start, end,
-/// "mailto:..")` on success. Mirrors micromark's `emailAutolink` construct
-/// when bound to atext start chars.
+/// "mailto:..")` on success.
 fn scan_email_forward_from_atext(
     bytes: &[u8],
     underscore_ix: usize,
@@ -4824,13 +4813,11 @@ fn is_email_local_char(b: u8) -> bool {
 /// True when a candidate at `pos` has to go through `handle_inline_pass1`
 /// rather than being committed on the spot.
 ///
-/// It has to whenever an earlier byte in the block could open something that
-/// ends up owning the trigger's bytes: `[` for a bracket opener still on
+/// It does whenever an earlier byte in the block could open something that ends
+/// up owning the trigger's bytes: `[` for a bracket opener still on
 /// `link_stack`, `<` for a pointed autolink or inline HTML, `` ` `` for a code
-/// span, `$` for a math span. With none of those present the candidate is
-/// guaranteed to fire and no other construct can claim it, which keeps the
-/// eager path — and its `ContinueAndSkip` over the URL — exactly as it was for
-/// ordinary prose.
+/// span, `$` for a math span. With none of those present nothing else can claim
+/// the candidate, so it is committed eagerly and its URL bytes skipped.
 fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize, options: Options) -> bool {
     let before = &bytes[block_start..pos];
     memchr::memchr3(b'[', b'<', b'`', before).is_some()
@@ -4847,9 +4834,7 @@ struct AutolinkDetection {
 }
 
 /// GFM autolink-literal construct, dispatched during inline tokenization
-/// from `parse_line`'s callback on `h`/`H`/`w`/`W`/`@` triggers. Mirrors
-/// micromark's text-context construct (see
-/// `node_modules/.../micromark-extension-gfm-autolink-literal/dev/lib/syntax.js`).
+/// from `parse_line`'s callback on `h`/`H`/`w`/`W`/`@` triggers.
 ///
 /// Detection only. Whether the candidate becomes a `Link` here or a
 /// `MaybeAutolink` marker for `handle_inline_pass1` to decide is the
@@ -4862,10 +4847,8 @@ fn detect_gfm_autolink(
     paragraph_start: usize,
     begin_text: usize,
 ) -> Option<AutolinkDetection> {
-    // Fast structural reject: every `h`/`H`/`w`/`W`/`@` in prose fires this
-    // path, but only a tiny fraction can actually start an autolink. The
-    // precedence predicates below each cost O(paragraph) to evaluate, so
-    // bail out on the cheap byte-level check first.
+    // Fast structural reject: every `h`/`H`/`w`/`W`/`@` in prose reaches this
+    // path, but only a tiny fraction can start an autolink.
     match byte {
         b'h' | b'H' | b'w' | b'W' => {
             crate::post_passes::match_autolink_scheme(bytes, ix)?;
@@ -4881,10 +4864,8 @@ fn detect_gfm_autolink(
 
     match byte {
         b'h' | b'H' | b'w' | b'W' => {
-            // previousProtocol / previousWww are checked inside
-            // `scan_autolink_literal` (loose check: prev not ASCII
-            // alphabetic). `fnr_only=false` means the *construct* path
-            // accepted — exactly the case the inline tokenizer fires on.
+            // `fnr_only` means only the find-and-replace fallback would accept,
+            // which is the post-pass's job rather than this construct's.
             let (start, _raw_end, end, full_url, fnr_only) =
                 scan_autolink_literal(bytes, ix, ix == paragraph_start)?;
             if fnr_only {
@@ -4898,16 +4879,10 @@ fn detect_gfm_autolink(
             })
         }
         b'@' => {
-            // Email walks backward from `@` for atext, so the emitted
-            // Link's start may be BEFORE `ix`. micromark fires its email
-            // construct FORWARD from the first atext char (not backward
-            // from `@`), so when an atext char (e.g. `_`) is shared with
-            // another text construct (attentionSequence here) micromark's
-            // construct ordering decides which wins. We can't replicate
-            // that cleanly mid-iteration; if the walkback would cross
-            // back over an already-emitted Maybe* item, defer to the
-            // post-pass (which sees the resolved/flat text and runs
-            // find-and-replace if the construct rejected it).
+            // The walkback for the local part can start the link before `ix`.
+            // If it would cross an already-emitted Maybe* item, that item's
+            // construct owns the bytes — leave the email to the post-pass,
+            // which sees the flattened text.
             let (email_start, email_end, full_url, retry_needed) =
                 scan_email_autolink(bytes, ix, true)?;
             if retry_needed {
@@ -4919,13 +4894,9 @@ fn detect_gfm_autolink(
             if email_start < paragraph_start {
                 return None;
             }
-            // Construct-path rejection when an active backslash escape
-            // directly precedes the local-part. micromark sees `\X` as one
-            // escape token whose char is `X`; since `X` is punctuation
-            // (atext for `+`/`-`/`.`/`_`), `previousEmail` rejects.
-            // `scan_email_autolink` only checks raw `bytes[start-1] != '/'`
-            // so it misses this case. Let the post-pass emit the
-            // position-less FNR fallback.
+            // A live backslash escape directly before the local part blocks the
+            // construct: the escape and its char are one token, so there is no
+            // boundary. `scan_email_autolink` only rejects a preceding `/`.
             if email_start > 0
                 && bytes[email_start - 1] == b'\\'
                 && is_ascii_punctuation(bytes[email_start])
@@ -5986,7 +5957,7 @@ pub(crate) fn mdast_position_end(
     }
     let is_math = matches!(item.body, ItemBody::MathBlock(_));
     let math_at_eof = is_math && end as usize >= source.len();
-    let is_fenced = matches!(item.body, ItemBody::FencedCodeBlock(_));
+    let is_fenced = matches!(item.body, ItemBody::FencedCodeBlock(..));
     let fenced_at_eof = is_fenced && end as usize >= source.len();
     let parent_is_bq = matches!(parent_body, Some(ItemBody::BlockQuote(_)));
     let parent_is_listitem = matches!(parent_body, Some(ItemBody::ListItem(..)));

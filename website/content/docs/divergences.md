@@ -27,7 +27,7 @@ When `remark-frontmatter` sees `---` or `+++` at line 1 and can't find a matchin
 
 ### Astral characters before a GFM autolink
 
-A bare URL or email only becomes a link when the character before it is whitespace, punctuation, or the start of the text. `mdast-util-gfm-autolink-literal` (2.0.1) reads that character with `charCodeAt`, which returns a single UTF-16 code unit, so a character outside the Basic Multilingual Plane is inspected as a lone surrogate — neither whitespace nor punctuation — and rejected whatever it actually is. Sätteri classifies the whole code point.
+A bare URL or email only becomes a link when the character before it is whitespace, punctuation, or the start of the text. `remark-gfm` inspects that character one UTF-16 code unit at a time, so a character outside the Basic Multilingual Plane never counts as punctuation and blocks the link. Sätteri classifies the whole code point.
 
 ```markdown
 😀www.example.com
@@ -38,11 +38,11 @@ A bare URL or email only becomes a link when the character before it is whitespa
 | `remark-parse` + `remark-gfm` | text (`😀www.example.com`)                    |
 | Sätteri                       | text (`😀`) + link (`http://www.example.com`) |
 
-The divergence covers exactly the astral characters in `\p{P}` ∪ `\p{S}` — `𐄁` (U+10101), `😀` (U+1F600), `𝛛` (U+1D6DB) and the like. Astral characters outside that set are rejected by both parsers, for different reasons: `🯰` (U+1FBF0) is a digit, so the correct rule turns it down too.
+This only affects astral punctuation and symbols — `𐄁` (U+10101), `😀` (U+1F600), `𝛛` (U+1D6DB) and the like. Astral characters that aren't punctuation, such as the digit `🯰` (U+1FBF0), block the link on both sides.
 
-### Positions on find-and-replace autolinks
+### Missing positions on GFM autolinks
 
-GFM autolink literals reach the tree by two different routes. remark tokenizes most of them, but the ones a bracket blocks are picked up afterwards by `mdast-util-gfm-autolink-literal`, which walks the built tree over decoded text with no offset mapping in hand — so it emits no `position`, on the link, its text child, or the text nodes it splits off around them. Sätteri reports the exact source span each of those came from.
+`remark-gfm` emits some GFM autolinks — the ones a preceding `[` keeps it from tokenizing — with no `position` at all, on the link, its text child, or the text nodes around it. Sätteri reports the source span for every autolink.
 
 ```markdown
 [www.example.com
@@ -53,18 +53,7 @@ GFM autolink literals reach the tree by two different routes. remark tokenizes m
 | `remark-parse` + `remark-gfm` | link with no `position`                         |
 | Sätteri                       | link with `position` spanning `www.example.com` |
 
-The absence is architectural rather than intended, and nothing reads a missing `position` as anything but "no source available", so supplying it only adds information. Values are untouched: the URL still comes from the decoded text (`[www.example.com/&amp;b` links to `http://www.example.com/&b` on both sides) while the position covers the raw `&amp;`. Where a span cannot be named exactly — a match boundary falling inside a character reference that decodes to more than one character — Sätteri reports no position rather than an approximate one.
-
-### Whitespace from a character reference in a fence info string
-
-A fenced code block's info string is split into the language and the metadata at the first whitespace. Sätteri decodes character references before splitting, so whitespace one of them produces separates the two; `remark-parse` splits the raw text, leaving the reference inside the language. For a fence opened with ` ```&Tab;x `:
-
-| Parser         | Output                      |
-| -------------- | --------------------------- |
-| `remark-parse` | `lang: "\tx"`, `meta: null` |
-| Sätteri        | `lang: null`, `meta: "x"`   |
-
-A language made only of whitespace renders as a meaningless `class="language-"`, so Sätteri treats the decoded info string as authoritative.
+URLs are unchanged: `[www.example.com/&amp;b` links to `http://www.example.com/&b` on both sides, and the position covers the raw `&amp;`. When a match starts or ends inside a character reference that decodes to more than one character, no exact span exists, and Sätteri reports no position rather than an approximate one.
 
 ## Rendering
 

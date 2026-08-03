@@ -538,13 +538,12 @@ const AL_TRAIL = fc.constantFrom(
   "&amp;",
   "&copy;",
   "&notreal",
-  // A numeric reference is not the `&` + alphanumerics + `;` shape the URL
-  // trims whole, so only its `;` is trailing punctuation and the URL ends
+  // Numeric references: only the `;` is trailing punctuation, so the URL ends
   // mid-reference.
   "&#104;",
   "&#x68;",
-  // A URL ending on a backslash: on the deferred path the escape and the
-  // link fight over the byte after it.
+  // A URL ending on a backslash: the escape and the link both want the byte
+  // after it.
   "\\,",
   "\\<a>",
   "?!",
@@ -643,12 +642,8 @@ export const autolinkDocument = fc
         return `text\n${line}\n`;
       case "img":
         return `![${line}](/i)\n`;
-      // Link destinations. The trigger only reaches the tokenizer when the
-      // surrounding bracket pair fails to resolve, so the three contexts below
-      // differ by whether it resolves: `dest` always does, `destUnresolved`
-      // never does (the inner `[x]` makes the outer opener inactive), and
-      // `destReference` fails the resource match and falls back to the
-      // definition.
+      // A destination only reaches the autolink tokenizer when the surrounding
+      // bracket pair fails to resolve, so these three cover both outcomes.
       case "dest":
         return `[a](${line})x\n`;
       case "destUnresolved":
@@ -1276,6 +1271,59 @@ function isAlignAttributeDivergence(
   return a === e;
 }
 
+// Intentional divergence: Sätteri splits a fence info string into language and
+// metadata after decoding character references; remark splits the raw text and
+// leaves the reference inside the language. Only clears diffs confined to the
+// language/metadata fields of a fence that carries such a reference.
+const INFO_STRING_WHITESPACE_ENTITY =
+  /^ {0,3}(?:`{3,}|~{3,})[^\n]*?&(?:Tab|NewLine|#0*(?:9|10|13|32)|#[xX]0*(?:9|[aAdD]|20));/m;
+
+// Key order differs between the two pipelines, so compare on sorted keys.
+function stripFenceInfo(node: unknown): unknown {
+  if (typeof node !== "object" || node === null) return node;
+  if (Array.isArray(node)) return node.map(stripFenceInfo);
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(node as Record<string, unknown>).sort()) {
+    if (k === "lang" || k === "meta") continue;
+    const v = (node as Record<string, unknown>)[k];
+    if (k === "properties" && v && typeof v === "object") {
+      const props: Record<string, unknown> = {};
+      for (const pk of Object.keys(v as Record<string, unknown>).sort()) {
+        if (pk !== "className") props[pk] = (v as Record<string, unknown>)[pk];
+      }
+      out[k] = props;
+      continue;
+    }
+    const stripped = stripFenceInfo(v);
+    // `data` holding nothing but the info string disappears entirely on the
+    // reference side, so an emptied one must not count as a difference.
+    if (
+      k === "data" &&
+      stripped &&
+      typeof stripped === "object" &&
+      Object.keys(stripped as Record<string, unknown>).length === 0
+    ) {
+      continue;
+    }
+    out[k] = stripped;
+  }
+  return out;
+}
+
+function isFenceInfoEntityDivergence(
+  input: string,
+  _level: FuzzLevel,
+  actual: unknown,
+  expected: unknown,
+): boolean {
+  if (!INFO_STRING_WHITESPACE_ENTITY.test(input)) return false;
+  if (typeof actual === "string" || typeof expected === "string") {
+    const strip = (h: unknown) => String(h).replace(/ class="language-[^"]*"/g, "");
+    return strip(actual) === strip(expected);
+  }
+  return JSON.stringify(stripFenceInfo(actual)) === JSON.stringify(stripFenceInfo(expected));
+}
+
 const HAST_LIKE_LEVELS = new Set<FuzzLevel>(["hast", "mdx-hast", "math-hast", "fm-hast"]);
 
 function normalizeAlignProps(node: unknown): unknown {
@@ -1369,9 +1417,8 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
     };
   }
   // Deliberate divergence: find-and-replace autolinks carry positions here and
-  // none in remark. Each extra position is verified against the source and
-  // then removed, so a *wrong* one throws out of this function and fails the
-  // run instead of being written off as an expected divergence.
+  // none in remark. Verify each extra position against the source before
+  // dropping it, so a wrong one throws rather than passing as expected.
   if (!HTML_LEVELS.has(level)) {
     // mdast only: a hast `text` inside `<code>` inherits the code span's span,
     // delimiters included, so it never decodes back to its own value.
@@ -1399,6 +1446,9 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
       return null;
     }
     if (isAlignAttributeDivergence(input, level, actual, expected)) {
+      return null;
+    }
+    if (isFenceInfoEntityDivergence(input, level, actual, expected)) {
       return null;
     }
     return { input, level, source, kind: classifyKind(level, actual, expected), expected, actual };

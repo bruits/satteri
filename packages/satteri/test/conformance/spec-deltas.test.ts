@@ -194,19 +194,42 @@ describe("GFM strikethrough: remark flanking rule", () => {
   });
 });
 
-// Intended divergence, not a conformance gap: remark splits a fence info
-// string into language and metadata before decoding character references, so
-// whitespace one of them produces lands inside the language. See
-// website/content/docs/divergences.md.
-describe("Fence info strings: whitespace from a character reference", () => {
-  test("a reference that decodes to whitespace separates lang from meta", () => {
-    const code = (md: string) => (satteriMdast(md) as { children: Code[] }).children[0]!;
-    expect(code("```&Tab;\n```\n")).toMatchObject({ lang: null, meta: null });
-    expect(code("```&#9;\n```\n")).toMatchObject({ lang: null, meta: null });
-    expect(code("```&Tab;x\n```\n")).toMatchObject({ lang: null, meta: "x" });
-    // A reference that decodes to a non-whitespace character still belongs to
-    // the language, and an undecoded info string is untouched.
-    expect(code("```&amp;\n```\n")).toMatchObject({ lang: "&", meta: null });
-    expect(code("```rust title=x\n```\n")).toMatchObject({ lang: "rust", meta: "title=x" });
+// A fence info string splits into language and metadata at the first *raw*
+// space or tab, so a character reference that decodes to whitespace stays
+// inside the language and only the rendered class drops what follows it.
+describe("Fence info strings: character references", () => {
+  const code = (md: string) => (satteriMdast(md) as { children: Code[] }).children[0]!;
+
+  test("a reference decoding to whitespace stays in the language", () => {
+    for (const ref of ["&Tab;", "&#9;", "&#32;", "&#10;", "&#13;", "&NewLine;"]) {
+      const md = `\`\`\` a${ref}aa\n x\n\`\`\`\n`;
+      assertMdastConformance(md);
+      assertHtmlConformance(md);
+    }
+    expect(code("``` a&#9;aa\n```\n")).toMatchObject({ lang: "a\taa", meta: null });
+  });
+
+  test("a reference decoding to non-whitespace behaves like ordinary text", () => {
+    for (const md of ["``` f&ouml;&ouml;\n x\n```\n", "``` &amp;\n x\n```\n"]) {
+      assertMdastConformance(md);
+      assertHtmlConformance(md);
+    }
+    expect(code("``` f&ouml;&ouml;\n```\n")).toMatchObject({ lang: "föö", meta: null });
+  });
+
+  test("references mixed with a raw separator split at the raw one", () => {
+    for (const md of [
+      "``` a&#9;aa b\n x\n```\n",
+      "``` &#32;a b\n x\n```\n",
+      "``` js&#x20;python&#x9;ruby\n x\n```\n",
+      "``` rust title=x\n x\n```\n",
+      "``` a\\ b\n x\n```\n",
+    ]) {
+      assertMdastConformance(md);
+      assertHtmlConformance(md);
+    }
+    expect(code("``` a&#9;aa b\n```\n")).toMatchObject({ lang: "a\taa", meta: "b" });
+    // A leading reference leaves no first word, so the class is bare.
+    expect(code("``` &#32;a b\n```\n")).toMatchObject({ lang: " a", meta: "b" });
   });
 });
