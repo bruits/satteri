@@ -4981,20 +4981,6 @@ fn detect_gfm_autolink(
     match byte {
         b'h' | b'H' | b'w' | b'W' => {
             crate::post_passes::match_autolink_scheme(bytes, ix)?;
-            // Pointed-autolink precedence: when an *unescaped* `<`
-            // immediately precedes AND a `>` closer exists before line
-            // end / whitespace, the CommonMark autolink construct will
-            // claim these bytes during MaybeHtml resolution. Cheap, so
-            // run before the paragraph-scan predicates.
-            if ix > 0 && bytes[ix - 1] == b'<' && !is_escaped(bytes, ix - 1) {
-                let has_close = bytes[ix..]
-                    .iter()
-                    .take_while(|&&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'<'))
-                    .any(|&b| b == b'>');
-                if has_close {
-                    return None;
-                }
-            }
         }
         b'@' => {
             // Email requires at least one atext char immediately before @.
