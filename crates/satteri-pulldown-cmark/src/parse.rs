@@ -1199,6 +1199,19 @@ impl<'input> ParserInner<'input> {
                     if let Some(node_after_ix) = node_after {
                         let orig_start = self.tree[node_after_ix].item.start;
                         let new_start = max(orig_start, cand.end);
+                        // The first pass had to classify the line ending
+                        // before knowing whether this candidate fires. A `\`
+                        // it read as a hard-break marker turns out to be the
+                        // last byte of the URL, so the break is an ordinary
+                        // line ending after all.
+                        if orig_start < cand.end
+                            && matches!(
+                                self.tree[node_after_ix].item.body,
+                                ItemBody::HardBreak(true)
+                            )
+                        {
+                            self.tree[node_after_ix].item.body = ItemBody::SoftBreak;
+                        }
                         self.tree[node_after_ix].item.start = new_start;
                         // Same reasoning as the inline-link splice: once the
                         // link has claimed the bytes the escape was attached

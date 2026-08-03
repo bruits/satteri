@@ -12,7 +12,7 @@ use crate::{
     linklabel::{scan_link_label_rest, LinkLabel},
     parse::{
         scan_containers, Allocations, AutolinkCandidate, DirectiveAttrData, FootnoteDef,
-        HeadingAttributes, HtmlScanGuard, Item, ItemBody, LinkDef, LINK_MAX_NESTED_PARENS,
+        HeadingAttributes, Item, ItemBody, LinkDef, LINK_MAX_NESTED_PARENS,
     },
     post_passes::{scan_autolink_literal, scan_email_autolink},
     scanners::*,
@@ -2016,7 +2016,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                         .unwrap_or(full_url),
                                 };
                                 last_candidate_end = email_end;
-                                if bracket_before(bytes, paragraph_floor, ix) {
+                                if defer_autolink_decision(bytes, paragraph_floor, ix) {
                                     // Deferred: emit the marker and fall
                                     // through to the attention handling. If
                                     // the marker fires it splices the
@@ -2512,7 +2512,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         .map(|ix| self.tree[ix].item.start)
                         .unwrap_or(start);
                     let detection = detect_gfm_autolink(
-                        self.text,
                         bytes,
                         ix,
                         byte,
@@ -2524,7 +2523,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     if let Some(d) = detection {
                         let (cand_start, cand_end) = (d.start, d.end);
                         last_candidate_end = cand_end;
-                        if bracket_before(bytes, paragraph_floor, ix) {
+                        if defer_autolink_decision(bytes, paragraph_floor, ix) {
                             // A bracket opener may still be open at the
                             // trigger, so the decision belongs to
                             // `handle_inline_pass1`. Leave `begin_text` at the
@@ -4938,13 +4937,17 @@ fn is_email_local_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'_')
 }
 
-/// True if a `[` sits before `pos` in this block. Both `MaybeLinkOpen` and
-/// `MaybeImage` need one, so without it `link_stack` is provably empty when
-/// `handle_inline_pass1` reaches `pos` and a candidate there must fire. That
-/// is the common case, and it keeps the eager path — and its `ContinueAndSkip`
-/// over the URL — exactly as it was.
-fn bracket_before(bytes: &[u8], block_start: usize, pos: usize) -> bool {
-    memchr::memchr(b'[', &bytes[block_start..pos]).is_some()
+/// True when a candidate at `pos` has to go through `handle_inline_pass1`
+/// rather than being committed on the spot.
+///
+/// It has to whenever an earlier byte in the block could open something that
+/// ends up owning the trigger's bytes: `[` for a bracket opener still on
+/// `link_stack`, `<` for a pointed autolink or inline HTML. With none of
+/// those present the candidate is guaranteed to fire and no other construct
+/// can claim it, which keeps the eager path — and its `ContinueAndSkip` over
+/// the URL — exactly as it was for ordinary prose.
+fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize) -> bool {
+    memchr::memchr2(b'[', b'<', &bytes[block_start..pos]).is_some()
 }
 
 /// A GFM autolink literal the scanner accepted at a trigger byte, before
@@ -4966,7 +4969,6 @@ struct AutolinkDetection {
 /// caller's call — it depends on whether a bracket opener could still be
 /// open at the trigger, which this function has no way to know.
 fn detect_gfm_autolink(
-    text: &str,
     bytes: &[u8],
     ix: usize,
     byte: u8,
@@ -4991,15 +4993,6 @@ fn detect_gfm_autolink(
         _ => return None,
     }
 
-    // Angle-construct precedence: a trigger sitting inside a `<…>` that the
-    // MaybeHtml second pass resolves (a pointed autolink `<scheme:…>` /
-    // `<addr@host>`, or an inline HTML tag/comment) is owned by that
-    // construct. The narrow flush-against-`<` check above only catches the
-    // autolink form when the trigger abuts the `<`; this covers triggers
-    // mid-construct (`<https://www.x/y>`, `<img alt=www.x>`). (issue #93)
-    if is_inside_angle_construct(text, ix) {
-        return None;
-    }
     // previousUnbalanced: suppress when an unclosed `[`/`![` precedes the
     // trigger in this paragraph.
     if has_unbalanced_bracket_from(bytes, paragraph_start, ix) {
@@ -5092,84 +5085,6 @@ fn detect_gfm_autolink(
         }
         _ => None,
     }
-}
-
-/// True when a literal-autolink trigger at `pos` sits inside a single-line
-/// CommonMark `<…>` construct whose closing `>` follows `pos`: a pointed
-/// autolink (`<scheme:…>` / `<addr@host>`) or an inline HTML tag/comment.
-///
-/// The first pass resolves GFM literal autolinks eagerly, before the
-/// MaybeHtml second pass resolves these `<…>` constructs. When a trigger is
-/// inside one, the eager link overlaps the construct the second pass then
-/// claims: its span gets clamped forward while its URL/content stay stale,
-/// and the bytes it consumed (often a trailing `>\` hard break) are lost.
-/// Deferring here lets MaybeHtml own those bytes, matching reference
-/// behavior for both `<https://www.x/y>` and `<img alt=www.x>` (issue #93).
-///
-/// Resolves constructs left to right from the line start, exactly as the
-/// second pass does, and reports whether one spans `pos`. Scanning forward
-/// and skipping each resolved construct wholesale (rather than walking back
-/// to the nearest `<`) keeps us correct when a `>` sits inside a construct
-/// body (a quoted attribute value or a comment), where it is not a closer.
-/// Only single-line constructs are detected, which is where the overlap
-/// manifests in practice.
-fn is_inside_angle_construct(text: &str, pos: usize) -> bool {
-    let bytes = text.as_bytes();
-    let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos]).map_or(0, |nl| nl + 1);
-    // Fast reject: a single-line `<…>` construct spanning `pos` must open at a
-    // `<` at or before `pos` on this line. With none, there's nothing to defer
-    // to. memchr is much cheaper than the construct-resolving walk below, and
-    // this is the common case for an autolink trigger (cf. `is_inside_code_span`).
-    if memchr::memchr(b'<', &bytes[line_start..=pos]).is_none() {
-        return false;
-    }
-
-    let mut j = line_start;
-    while j <= pos {
-        if bytes[j] == b'<' && !is_escaped(bytes, j) {
-            // Mirror the MaybeHtml resolution order: autolink, then HTML.
-            if let Some(end) = scan_autolink(text, j + 1)
-                .map(|(end, _, _)| end)
-                .or_else(|| resolves_as_inline_html(bytes, j))
-            {
-                if end > pos {
-                    return true;
-                }
-                // Construct ends at/before `pos`; skip the bytes it owns and
-                // keep resolving after it (a `>` it contains is not a closer).
-                j = end;
-                continue;
-            }
-        }
-        j += 1;
-    }
-    false
-}
-
-/// Resolve a single-line inline HTML construct opening at the `<` at `lt`,
-/// returning the byte offset just past its closing `>`. Mirrors the
-/// MaybeHtml second pass (`Parser::scan_inline_html`) with a throwaway scan
-/// guard (no cross-call memoization here) and no newline handler, since only
-/// single-line constructs are relevant to [`is_inside_angle_construct`].
-fn resolves_as_inline_html(bytes: &[u8], lt: usize) -> Option<usize> {
-    let mut guard = HtmlScanGuard::default();
-    match *bytes.get(lt + 1)? {
-        b'!' => scan_inline_html_comment(bytes, lt + 2, &mut guard),
-        b'?' => scan_inline_html_processing(bytes, lt + 2, &mut guard),
-        _ => scan_html_block_inner(&bytes[lt..], None).map(|(_, end)| end + lt),
-    }
-}
-
-/// True when the byte at `pos` is backslash-escaped: an odd run of `\`
-/// immediately precedes it.
-fn is_escaped(bytes: &[u8], pos: usize) -> bool {
-    bytes[..pos]
-        .iter()
-        .rev()
-        .take_while(|&&b| b == b'\\')
-        .count()
-        % 2
-        == 1
 }
 
 /// Whether an autolink spanning `pos..end` may be emitted inside a
