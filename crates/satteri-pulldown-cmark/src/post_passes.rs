@@ -21,6 +21,8 @@ use satteri_arena::decode_string_ref_data;
 use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
 use satteri_ast::mdast::{codec::LinkData, MdastNodeType};
 
+use crate::puncttable::is_punctuation;
+
 #[cfg(feature = "mdx")]
 pub(crate) const MDX_EXPLICIT_JSX_DATA: &[u8] = b"{\"_mdxExplicitJsx\":true}";
 
@@ -246,21 +248,10 @@ pub(crate) fn scan_autolink_literal(
         if !prev_loose_ok {
             return None;
         }
-        let prev_strict_ok = if prev < 0x80 {
-            prev.is_ascii_whitespace() || prev.is_ascii_punctuation()
-        } else {
-            // Find-and-replace's `previous` accepts ws/punct/EOF in Unicode
-            // sense. Cyrillic letters are alphabetic, not punctuation, so
-            // they fail strict — but pass loose, leaving the construct path.
-            match core::str::from_utf8(&bytes[ix.saturating_sub(4)..ix]) {
-                Ok(s) => {
-                    let c = s.chars().last().unwrap_or(' ');
-                    c.is_whitespace() || !c.is_alphanumeric()
-                }
-                Err(_) => true,
-            }
-        };
-        !prev_strict_ok
+        // Find-and-replace's `previous` accepts whitespace, punctuation or
+        // start-of-string. Cyrillic letters are alphabetic, not punctuation,
+        // so they fail strict — but pass loose, leaving the construct path.
+        !fnr_previous_ok(bytes, ix)
     } else {
         false
     };
@@ -851,26 +842,41 @@ pub(crate) fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>, source_bytes: 
     }
 }
 
-/// `previous()` in `mdast-util-gfm-autolink-literal`: prev char must be
-/// whitespace, punctuation, or start-of-string. Stricter than the
-/// construct's `previousProtocol` (`!alphabetic`), since digits and
-/// non-ASCII letters fail.
-fn fnr_prev_ok(bytes: &[u8], ix: usize) -> bool {
+/// The scalar before `ix`, or `None` at the start of the input. Walks back
+/// over UTF-8 continuation bytes rather than decoding a fixed-width window,
+/// which would split a character and answer for the wrong one.
+fn preceding_char(bytes: &[u8], ix: usize) -> Option<char> {
     if ix == 0 {
-        return true;
+        return None;
     }
     let prev = bytes[ix - 1];
     if prev < 0x80 {
-        return prev.is_ascii_whitespace() || prev.is_ascii_punctuation();
+        return Some(prev as char);
     }
-    // Decode the last char to apply Unicode whitespace/punctuation rules
-    // (matches the `\s` / `\p{P}` / `\p{S}` lookbehind in the regex).
-    match core::str::from_utf8(&bytes[ix.saturating_sub(4)..ix]) {
-        Ok(s) => {
-            let c = s.chars().last().unwrap_or(' ');
-            c.is_whitespace() || !c.is_alphanumeric()
-        }
-        Err(_) => true,
+    let mut start = ix - 1;
+    while start > 0 && bytes[start] & 0xC0 == 0x80 {
+        start -= 1;
+    }
+    core::str::from_utf8(&bytes[start..ix])
+        .ok()?
+        .chars()
+        .next_back()
+}
+
+/// `previous()` in `mdast-util-gfm-autolink-literal`: the character before a
+/// match must be whitespace, punctuation, or start-of-string. Stricter than
+/// the construct's `previousProtocol` (`!alphabetic`), since digits and
+/// non-ASCII letters fail.
+///
+/// Deliberate divergence: remark reads a single UTF-16 code unit, so an astral
+/// character is inspected as a lone surrogate — neither whitespace nor
+/// punctuation — and always rejected. We classify the whole scalar, so astral
+/// punctuation and symbols are accepted. See `divergences.md`.
+pub(crate) fn fnr_previous_ok(bytes: &[u8], ix: usize) -> bool {
+    match preceding_char(bytes, ix) {
+        None => true,
+        // `\s` in JavaScript also covers U+FEFF, which isn't `White_Space`.
+        Some(c) => c.is_whitespace() || c == '\u{FEFF}' || is_punctuation(c),
     }
 }
 
@@ -884,7 +890,7 @@ fn fnr_prev_ok(bytes: &[u8], ix: usize) -> bool {
 fn fnr_find_url(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)> {
     let (proto_len, is_www) = match_autolink_scheme(bytes, ix)?;
     let s = ix;
-    if !fnr_prev_ok(bytes, s) {
+    if !fnr_previous_ok(bytes, s) {
         return None;
     }
     // Regex group 2, the domain, is `[-.\w]+` (alphanumeric, `.`, `_`, `-`).
@@ -966,7 +972,7 @@ fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usiz
     // links `.a@x`, not `_.a@x`. If no boundary precedes the `@`, there's no
     // match (this is also what keeps `пo\+@…`, whose `+` came from a source
     // escape that blocks the construct, from linking).
-    while s < ix && !fnr_prev_ok(bytes, s) {
+    while s < ix && !fnr_previous_ok(bytes, s) {
         s += 1;
     }
     if s >= ix {

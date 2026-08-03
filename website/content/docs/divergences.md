@@ -25,6 +25,21 @@ When `remark-frontmatter` sees `---` or `+++` at line 1 and can't find a matchin
 | `remark-parse` + `remark-frontmatter` | thematicBreak + paragraph(`- this …`) |
 | Sätteri (with frontmatter feature on) | thematicBreak + list                  |
 
+### Astral characters before a GFM autolink
+
+A bare URL or email only becomes a link when the character before it is whitespace, punctuation, or the start of the text. `mdast-util-gfm-autolink-literal` (2.0.1) reads that character with `charCodeAt`, which returns a single UTF-16 code unit, so a character outside the Basic Multilingual Plane is inspected as a lone surrogate — neither whitespace nor punctuation — and rejected whatever it actually is. Sätteri classifies the whole code point.
+
+```markdown
+😀www.example.com
+```
+
+| Parser                        | Output                                        |
+| ----------------------------- | --------------------------------------------- |
+| `remark-parse` + `remark-gfm` | text (`😀www.example.com`)                    |
+| Sätteri                       | text (`😀`) + link (`http://www.example.com`) |
+
+The divergence covers exactly the astral characters in `\p{P}` ∪ `\p{S}` — `𐄁` (U+10101), `😀` (U+1F600), `𝛛` (U+1D6DB) and the like. Astral characters outside that set are rejected by both parsers, for different reasons: `🯰` (U+1FBF0) is a digit, so the correct rule turns it down too.
+
 ## Rendering
 
 ### Code block `data.lang`

@@ -107,6 +107,100 @@ const PROBE_INPUTS = [
   "_www.x.y_",
 ];
 
+/** The single path a lone trigger takes, or `none` when it produces no link. */
+function satteriPath(input: string): PathKind | "none" {
+  return satteriPaths(input)[0] ?? "none";
+}
+
+// Three different preceding-character rules decide whether a trigger fires,
+// and they disagree with each other. `previousWww` takes a fixed whitelist,
+// `previousProtocol` rejects only ASCII letters, and `previousEmail` rejects
+// `/` and atext; whatever they block falls through to find-and-replace's
+// `previous()`, which wants whitespace or punctuation. Pinned as a table
+// because the interesting cells are the ones where two rules disagree.
+const TRIGGERS = ["www.x.y", "http://x.y", "a@b.cd"] as const;
+const PRECEDING_RULES: Array<{
+  prefix: string;
+  name: string;
+  paths: [PathKind | "none", PathKind | "none", PathKind | "none"];
+}> = [
+  { prefix: "", name: "start of document", paths: ["construct", "construct", "construct"] },
+  { prefix: " ", name: "space", paths: ["construct", "construct", "construct"] },
+  { prefix: "(", name: "`(`", paths: ["construct", "construct", "construct"] },
+  { prefix: "*", name: "`*`", paths: ["construct", "construct", "construct"] },
+  { prefix: "_", name: "`_`", paths: ["construct", "construct", "construct"] },
+  { prefix: "]", name: "`]`", paths: ["construct", "construct", "construct"] },
+  { prefix: "~", name: "`~`", paths: ["construct", "construct", "construct"] },
+  { prefix: "[", name: "`[`", paths: ["fnr", "fnr", "fnr"] },
+  { prefix: ".", name: "`.`", paths: ["fnr", "construct", "construct"] },
+  { prefix: "/", name: "`/`", paths: ["fnr", "construct", "none"] },
+  { prefix: "+", name: "`+`", paths: ["fnr", "construct", "construct"] },
+  { prefix: ")", name: "`)`", paths: ["fnr", "construct", "construct"] },
+  { prefix: "!", name: "`!`", paths: ["fnr", "construct", "construct"] },
+  { prefix: ":", name: "`:`", paths: ["fnr", "construct", "construct"] },
+  { prefix: "¥", name: "BMP symbol", paths: ["fnr", "construct", "construct"] },
+  { prefix: "→", name: "BMP math symbol", paths: ["fnr", "construct", "construct"] },
+  { prefix: "a", name: "ASCII letter", paths: ["none", "none", "construct"] },
+  { prefix: "5", name: "ASCII digit", paths: ["none", "construct", "construct"] },
+  { prefix: "é", name: "BMP letter", paths: ["none", "construct", "construct"] },
+  { prefix: "你", name: "CJK letter", paths: ["none", "construct", "construct"] },
+  { prefix: "你好", name: "two CJK letters", paths: ["none", "construct", "construct"] },
+  { prefix: "​", name: "zero-width space (Cf)", paths: ["none", "construct", "construct"] },
+  // U+FEFF is not `White_Space`, but JavaScript's `\s` matches it, so
+  // find-and-replace treats it as a boundary. Prefixed with a letter to keep
+  // the document's own leading-BOM handling out of it.
+  { prefix: "a﻿", name: "byte order mark", paths: ["fnr", "construct", "construct"] },
+];
+
+describe("GFM autolink preceding-character rules", () => {
+  test.each(PRECEDING_RULES)("$name", ({ prefix, paths }) => {
+    for (const [ix, trigger] of TRIGGERS.entries()) {
+      expect(satteriPath(prefix + trigger), `${JSON.stringify(prefix + trigger)}`).toBe(paths[ix]);
+      expect(referencePaths(prefix + trigger)[0] ?? "none").toBe(paths[ix]);
+    }
+  });
+});
+
+// Deliberate divergence, measured against remark-parse@11 + remark-gfm@4
+// (mdast-util-gfm-autolink-literal@2.0.1). Its `previous()` reads
+// `charCodeAt(index - 1)` — one UTF-16 code unit — so an astral character is
+// inspected as a lone surrogate and rejected whatever it is. Sätteri
+// classifies the whole scalar, so astral punctuation and symbols are accepted.
+// See website/content/docs/divergences.md. If remark ever fixes `previous()`
+// these two sides converge and this test is the one to retire.
+describe("divergence: astral characters before a GFM autolink", () => {
+  const ASTRAL_PUNCTUATION_OR_SYMBOL = [
+    { prefix: "\u{10101}", name: "U+10101 AEGEAN WORD SEPARATOR DOT (Po)" },
+    { prefix: "\u{1F600}", name: "U+1F600 GRINNING FACE (So)" },
+    { prefix: "\u{1D6DB}", name: "U+1D6DB MATHEMATICAL BOLD PARTIAL DIFFERENTIAL (Sm)" },
+  ];
+
+  test.each(ASTRAL_PUNCTUATION_OR_SYMBOL)("$name starts an autolink", ({ prefix }) => {
+    // Unbracketed, only `www.` shows it: the other two triggers take the
+    // construct path, whose own rules never consult `previous()`.
+    expect(satteriPath(`${prefix}www.x.y`)).toBe("fnr");
+    expect(referencePaths(`${prefix}www.x.y`)).toEqual([]);
+    // Behind an unclosed `[` the construct is blocked, so all three triggers
+    // fall through to the rule that differs.
+    for (const trigger of TRIGGERS) {
+      expect(satteriPath(`[${prefix}${trigger}`)).toBe("fnr");
+      expect(referencePaths(`[${prefix}${trigger}`)).toEqual([]);
+    }
+  });
+
+  test("control: an astral character that is neither punctuation nor a symbol", () => {
+    // U+1FBF0 SEGMENTED DIGIT ZERO is `Nd`. Both sides reject it, for
+    // different reasons, so it must not move when remark's bug is fixed.
+    const prefix = "\u{1FBF0}";
+    expect(satteriPath(`${prefix}www.x.y`)).toBe("none");
+    expect(referencePaths(`${prefix}www.x.y`)).toEqual([]);
+    for (const trigger of TRIGGERS) {
+      expect(satteriPath(`[${prefix}${trigger}`)).toBe("none");
+      expect(referencePaths(`[${prefix}${trigger}`)).toEqual([]);
+    }
+  });
+});
+
 describe("GFM autolink path selection", () => {
   test("the probe measures the parser, not a release binary", () => {
     assertDebugBinary();
