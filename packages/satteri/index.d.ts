@@ -95,10 +95,8 @@ export declare function createHastHandleWithFrontmatter(source: string, features
  * `track_positions` (default `true`) controls whether `position` is recorded
  * on nodes. The plugin pipeline passes `false` when no plugin reads positions,
  * skipping the `LineIndex` build + per-node line/column lookups (~15% of parse).
- *
- * `debug_options` is honoured by debug builds only; see [`JsDebugParseOptions`].
  */
-export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null, trackPositions?: boolean | undefined | null, debugOptions?: JsDebugParseOptions | undefined | null): MdastHandle
+export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null, trackPositions?: boolean | undefined | null): MdastHandle
 
 /** Parse MDX source and convert to HAST. Returns an opaque handle. */
 export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
@@ -155,18 +153,6 @@ export interface JsConvertOptions {
    * false. Only effective in builds with the `from-html` feature.
    */
   rawHtml?: boolean
-}
-
-/**
- * Debug-build-only parse knobs for conformance harnesses. Release builds
- * ignore every knob; the underlying flags are compiled out.
- */
-export interface JsDebugParseOptions {
-  /**
-   * Skip the GFM autolink find-and-replace post-pass, leaving only the
-   * links the first-pass construct scanner produced.
-   */
-  skipFnrAutolink?: boolean
 }
 
 /** Feature toggles for the Markdown/MDX parser, passed from JavaScript. */

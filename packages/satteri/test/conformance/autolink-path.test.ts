@@ -4,7 +4,7 @@ import {
   assertSliceInvariantEverywhere,
   referenceMdast,
   satteriMdast,
-  satteriMdastDebug,
+  satteriMdastSkippingFnrAutolink,
 } from "./helpers.js";
 
 // GFM autolink literals reach the tree by two routes, and the routes disagree
@@ -44,7 +44,7 @@ function referencePaths(input: string): PathKind[] {
 
 /** Sätteri: a `link` that survives with the find-and-replace pass off is a construct link. */
 function satteriPaths(input: string): PathKind[] {
-  const withoutFnr = collectLinks(satteriMdastDebug(input, { skipFnrAutolink: true })).map(linkKey);
+  const withoutFnr = collectLinks(satteriMdastSkippingFnrAutolink(input)).map(linkKey);
   return collectLinks(satteriMdast(input)).map((link) => {
     const ix = withoutFnr.indexOf(linkKey(link));
     if (ix === -1) return "fnr";
@@ -192,11 +192,10 @@ describe("GFM autolink path selection", () => {
     assertDebugBinary();
   });
 
-  test("skipFnrAutolink is a pure pass-skip", () => {
-    // The differential signal holds only while a knob-less debug parse is the
-    // ordinary parse.
-    for (const input of PROBE_INPUTS) {
-      expect(satteriMdastDebug(input, {})).toEqual(satteriMdast(input));
+  test("skipping the pass changes nothing that has no autolink", () => {
+    // The differential signal holds only while the skip is the sole difference.
+    for (const input of ["[a](/b) x", "`[` x", "# [a", "text **bold** and `code`"]) {
+      expect(satteriMdastSkippingFnrAutolink(input)).toEqual(satteriMdast(input));
     }
   });
 

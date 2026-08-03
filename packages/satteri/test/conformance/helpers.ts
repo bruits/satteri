@@ -18,7 +18,6 @@ import {
   serializeHandle,
 } from "../../src/index.js";
 import type { Features, EvaluateOptions, MarkdownToJsOptions, HastNode } from "../../src/index.js";
-import type { JsDebugParseOptions } from "../../index.js";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import * as runtime from "react/jsx-runtime";
@@ -34,6 +33,9 @@ import rehypeRaw from "rehype-raw";
 import rehypeStringify from "rehype-stringify";
 import type { Nodes } from "hast";
 import { expect } from "vitest";
+import { readdirSync } from "node:fs";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const mdxRuntime = runtime as unknown as Pick<MdxEvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 const satteriRuntime = runtime as unknown as Pick<EvaluateOptions, "Fragment" | "jsx" | "jsxs">;
@@ -175,13 +177,32 @@ export function satteriMdast(md: string): unknown {
   return serialize(markdownToMdast(md, { features: BASE_FEATURES }));
 }
 
-/**
- * Parse with the debug-build-only knobs of `createMdastHandle`. Release
- * binaries ignore them and return an ordinary parse, so anything reading the
- * result as a signal must call `assertDebugBinary()` first.
- */
-export function satteriMdastDebug(md: string, debugOptions: JsDebugParseOptions): unknown {
-  const handle = createMdastHandle(md, { frontmatter: false, math: false }, true, debugOptions);
+// The debug entry point is kept out of the published types and out of the
+// binding's re-exports, so it is reachable only straight off the addon.
+type MdastHandleRef = Parameters<typeof dropHandle>[0];
+
+let debugParse: ((md: string, features: Features) => MdastHandleRef) | undefined;
+function loadDebugParse(): typeof debugParse {
+  if (debugParse) return debugParse;
+  const pkgRoot = new URL("../../", import.meta.url);
+  const addon = readdirSync(pkgRoot).find((f) => /^satteri_napi\..*\.node$/.test(f));
+  if (!addon) return undefined;
+  const native = createRequire(import.meta.url)(fileURLToPath(new URL(addon, pkgRoot)));
+  debugParse = (native as Record<string, unknown>).createMdastHandleSkippingFnrAutolink as
+    | typeof debugParse
+    | undefined;
+  return debugParse;
+}
+
+/** Parse with the find-and-replace autolink pass skipped. Debug builds only. */
+export function satteriMdastSkippingFnrAutolink(md: string): unknown {
+  const parse = loadDebugParse();
+  if (!parse) {
+    throw new Error(
+      "satteri binding has no debug entry point — build it with `pnpm build:binary:native:debug`",
+    );
+  }
+  const handle = parse(md, { frontmatter: false, math: false });
   try {
     return serialize(materializeMdastTree(new MdastReader(serializeHandle(handle))));
   } finally {
@@ -190,17 +211,14 @@ export function satteriMdastDebug(md: string, debugOptions: JsDebugParseOptions)
 }
 
 /**
- * Throw unless the binding under test honours `skipFnrAutolink`. `[www.a.com`
- * is a find-and-replace-only autolink, so with the pass skipped the `link`
- * must be gone; a release binary keeps it and would make every path
- * classification read as `construct`.
+ * Throw unless the binding under test skips the pass. `[www.a.com` is a
+ * find-and-replace-only autolink, so with the pass skipped the `link` must be
+ * gone; otherwise every path classification would read as `construct`.
  */
 export function assertDebugBinary(): void {
-  const skipped = JSON.stringify(satteriMdastDebug("[www.a.com", { skipFnrAutolink: true }));
+  const skipped = JSON.stringify(satteriMdastSkippingFnrAutolink("[www.a.com"));
   if (skipped.includes('"link"')) {
-    throw new Error(
-      "satteri binding ignores skipFnrAutolink — build it with `pnpm build:binary:native:debug`",
-    );
+    throw new Error("satteri binding did not skip the find-and-replace autolink pass");
   }
 }
 

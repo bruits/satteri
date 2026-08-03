@@ -552,51 +552,37 @@ fn create_hast_handle_impl(
     Ok((External::new(Mutex::new(hast)), frontmatter))
 }
 
-/// Debug-build-only parse knobs for conformance harnesses. Release builds
-/// ignore every knob; the underlying flags are compiled out.
-#[napi(object)]
-pub struct JsDebugParseOptions {
-    /// Skip the GFM autolink find-and-replace post-pass, leaving only the
-    /// links the first-pass construct scanner produced.
-    pub skip_fnr_autolink: Option<bool>,
-}
-
-fn js_debug_options_to_rust(
-    opts: Option<JsDebugParseOptions>,
-) -> satteri_pulldown_cmark::DebugParseOptions {
-    #[allow(unused_mut)]
-    let mut out = satteri_pulldown_cmark::DebugParseOptions::default();
-    #[cfg(debug_assertions)]
-    if let Some(js) = opts {
-        out.skip_fnr_autolink = js.skip_fnr_autolink.unwrap_or(false);
-    }
-    #[cfg(not(debug_assertions))]
-    let _ = opts;
-    out
-}
-
 /// Parse markdown source into an MDAST arena handle.
 ///
 /// `track_positions` (default `true`) controls whether `position` is recorded
 /// on nodes. The plugin pipeline passes `false` when no plugin reads positions,
 /// skipping the `LineIndex` build + per-node line/column lookups (~15% of parse).
-///
-/// `debug_options` is honoured by debug builds only; see [`JsDebugParseOptions`].
 #[napi]
 pub fn create_mdast_handle(
     source: String,
     features: Option<JsFeatures>,
     track_positions: Option<bool>,
-    debug_options: Option<JsDebugParseOptions>,
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, false);
-    let mut arena = parse_mdast_pooled_with_debug(
-        &source,
-        opts,
-        false,
-        track_positions.unwrap_or(true),
-        js_debug_options_to_rust(debug_options),
-    )?;
+    let mut arena = parse_mdast_pooled(&source, opts, false, track_positions.unwrap_or(true))?;
+    arena.mdx = false;
+    Ok(External::new(Mutex::new(arena)))
+}
+
+/// Parse with the find-and-replace autolink post-pass skipped, so the
+/// conformance probe can tell which pass produced a link. Absent from release
+/// builds and from the published types; not part of the public API.
+#[cfg(debug_assertions)]
+#[napi(skip_typescript)]
+pub fn create_mdast_handle_skipping_fnr_autolink(
+    source: String,
+    features: Option<JsFeatures>,
+) -> Result<MdastHandle> {
+    let opts = features_to_options(features, false);
+    let debug = satteri_pulldown_cmark::DebugParseOptions {
+        skip_fnr_autolink: true,
+    };
+    let mut arena = parse_mdast_pooled_with_debug(&source, opts, false, true, debug)?;
     arena.mdx = false;
     Ok(External::new(Mutex::new(arena)))
 }
