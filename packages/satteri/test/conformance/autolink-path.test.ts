@@ -241,12 +241,9 @@ describe("GFM autolink path selection", () => {
       }
     }
 
-    // Recorded baseline: 4 of 34 inputs mismatch, all of one family —
-    // autolinks that overrun a `)` closing a destination the parser never
-    // resolved. Kept as a ceiling so the count can only go down.
-    expect(mismatches.length).toBeLessThanOrEqual(4);
-    expect
-      .soft(mismatches, `${mismatches.length} of ${PROBE_INPUTS.length} inputs take the wrong path`)
-      .toEqual([]);
+    expect(
+      mismatches,
+      `${mismatches.length} of ${PROBE_INPUTS.length} inputs take the wrong path`,
+    ).toEqual([]);
   });
 });

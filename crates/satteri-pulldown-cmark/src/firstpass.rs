@@ -4999,9 +4999,6 @@ fn detect_gfm_autolink(
             if fnr_only {
                 return None;
             }
-            if !fits_in_link_destination(bytes, ix, end) {
-                return None;
-            }
             Some(AutolinkDetection {
                 start,
                 end,
