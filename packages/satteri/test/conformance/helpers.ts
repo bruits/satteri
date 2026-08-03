@@ -415,7 +415,7 @@ const entityCache = new Map<string, string>();
 function decodeEntity(raw: string): string | undefined {
   let decoded = entityCache.get(raw);
   if (decoded === undefined) {
-    const paragraph = (mdastProcessor.parse(raw).children as AnyNode[])[0] as AnyNode | undefined;
+    const paragraph = (mdastProcessor.parse(raw).children as unknown as AnyNode[])[0];
     const first = (paragraph?.children as AnyNode[] | undefined)?.[0];
     decoded = first && first.type === "text" ? String(first.value) : raw;
     entityCache.set(raw, decoded);
