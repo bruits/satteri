@@ -83,6 +83,21 @@ fn a_blocked_marker_keeps_its_place_in_the_sibling_chain() {
     );
 }
 
+/// A marker sitting exactly where the link before it ends must survive that
+/// link's splice. `[a]()` puts the two offsets on top of each other, which is
+/// the only way a zero-width node lands on a splice boundary.
+#[test]
+fn a_marker_at_a_links_end_offset_survives_the_splice() {
+    assert_eq!(
+        html("[a]()https://x.y/z"),
+        "<p><a href=\"\">a</a><a href=\"https://x.y/z\">https://x.y/z</a></p>\n"
+    );
+    assert_eq!(
+        html("[a]()www.x.y/z"),
+        "<p><a href=\"\">a</a><a href=\"http://www.x.y/z\">www.x.y/z</a></p>\n"
+    );
+}
+
 /// A firing candidate discards whatever the URL bytes tokenized into, and an
 /// orphaned closer falls back to literal text.
 #[test]

@@ -2748,7 +2748,11 @@ fn scan_nodes_to_ix(
     ix: usize,
 ) -> Option<TreeIndex> {
     while let Some(node_ix) = node {
-        if tree[node_ix].item.end <= ix {
+        let item = tree[node_ix].item;
+        // `end <= ix` alone would also skip a zero-width node *at* `ix` — an
+        // autolink marker, say — and every caller uses the result as the
+        // splice's tail, so skipping it drops it from the tree entirely.
+        if item.end <= ix && item.start < ix {
             node = tree[node_ix].next;
         } else {
             break;
