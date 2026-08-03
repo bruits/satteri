@@ -552,9 +552,8 @@ fn create_hast_handle_impl(
     Ok((External::new(Mutex::new(hast)), frontmatter))
 }
 
-/// Debug-build-only parse knobs, for conformance harnesses that need to observe
-/// an intermediate state the normal pipeline doesn't expose. Every knob is
-/// ignored by release builds, where the underlying flags are compiled out.
+/// Debug-build-only parse knobs for conformance harnesses. Release builds
+/// ignore every knob; the underlying flags are compiled out.
 #[napi(object)]
 pub struct JsDebugParseOptions {
     /// Skip the GFM autolink find-and-replace post-pass, leaving only the

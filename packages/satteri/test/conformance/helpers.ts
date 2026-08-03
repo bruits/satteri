@@ -392,14 +392,10 @@ export function satteriFmHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
-// Deliberate divergence: nodes produced by the GFM autolink find-and-replace
-// path carry source positions in Sätteri and none in remark, because
-// `findAndReplace` runs over decoded values with no offset mapping in hand.
-//
-// Stripping positions before comparing would hide every other position bug in
-// the tree, which is most of what these comparisons are for. Instead each extra
-// position is *verified* against the source and only then removed, so a wrong
-// one fails here rather than being absorbed.
+// Deliberate divergence: find-and-replace autolinks carry source positions in
+// Sätteri and none in remark. Stripping positions before comparing would hide
+// every other position bug in the tree, so each extra position is verified
+// against the source and only then removed.
 
 interface PositionedNode {
   type: string;

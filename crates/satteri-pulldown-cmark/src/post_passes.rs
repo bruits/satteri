@@ -248,9 +248,9 @@ pub(crate) fn scan_autolink_literal(
         if !prev_loose_ok {
             return None;
         }
-        // Find-and-replace's `previous` accepts whitespace, punctuation or
-        // start-of-string. Cyrillic letters are alphabetic, not punctuation,
-        // so they fail strict — but pass loose, leaving the construct path.
+        // The fallback pass wants a stricter boundary: Cyrillic letters are
+        // alphabetic, not punctuation, so they fail it while passing loose —
+        // which leaves the match to the construct path.
         !fnr_previous_ok(bytes, ix)
     } else {
         false
@@ -768,18 +768,14 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
     }
 }
 
-/// Find-and-replace fallback for GFM autolink literals — the mdast-tree
-/// transform equivalent of `mdast-util-gfm-autolink-literal`'s
-/// `transformGfmAutolinkLiterals`. The inline construct in `firstpass.rs`
-/// handles the common case (URL bytes consumed during tokenization with
-/// source positions); this pass picks up URL/email patterns that survived
-/// in plain Text nodes — typically because the construct path didn't fire
-/// (e.g. preceded by a digit, inside a previously-failed `<...>` autolink,
-/// across container prefixes).
+/// Tree-level fallback for GFM autolink literals. The inline construct in
+/// `firstpass.rs` handles the common case; this pass picks up URL/email
+/// patterns that survived in plain Text nodes because the construct didn't
+/// fire (preceded by a digit, inside a failed `<...>` autolink, across
+/// container prefixes).
 ///
-/// Deliberate divergence: `findAndReplace` runs over the built tree with no
-/// offset mapping in hand, so remark emits no positions here. We map the
-/// decoded offsets back to raw source and report them; see `divergences.md`.
+/// Links emitted here carry positions, recovered by mapping decoded offsets
+/// back to raw source — a deliberate divergence, see `divergences.md`.
 /// `cursor` is `None` in skip-positions mode, where no map is built at all.
 pub(crate) fn gfm_autolink_literal_pass(
     arena: &mut Arena<Mdast>,
@@ -846,9 +842,8 @@ pub(crate) fn gfm_autolink_literal_pass(
             candidates.push(id);
         }
     }
-    // Smart punctuation rewrites text values with no matching recogniser in
-    // `build_raw_map`, so a failed reconstruction is expected there rather
-    // than a sign that a transform was missed.
+    // Smart punctuation rewrites text values in ways `build_raw_map` has no
+    // recogniser for, so a failed reconstruction is expected there.
     let strict =
         !(options.has_smart_quotes() || options.has_smart_dashes() || options.has_smart_ellipses());
     for node_id in candidates {
@@ -877,15 +872,12 @@ fn preceding_char(bytes: &[u8], ix: usize) -> Option<char> {
         .next_back()
 }
 
-/// `previous()` in `mdast-util-gfm-autolink-literal`: the character before a
-/// match must be whitespace, punctuation, or start-of-string. Stricter than
-/// the construct's `previousProtocol` (`!alphabetic`), since digits and
-/// non-ASCII letters fail.
+/// Boundary rule for the fallback pass: the character before a match must be
+/// whitespace, punctuation, or start-of-string. Stricter than the construct's,
+/// which rejects only alphabetic, so digits and non-ASCII letters fail here.
 ///
-/// Deliberate divergence: remark reads a single UTF-16 code unit, so an astral
-/// character is inspected as a lone surrogate — neither whitespace nor
-/// punctuation — and always rejected. We classify the whole scalar, so astral
-/// punctuation and symbols are accepted. See `divergences.md`.
+/// Classifying the whole scalar accepts astral punctuation and symbols — a
+/// deliberate divergence, see `divergences.md`.
 pub(crate) fn fnr_previous_ok(bytes: &[u8], ix: usize) -> bool {
     match preceding_char(bytes, ix) {
         None => true,
@@ -1077,16 +1069,14 @@ impl RawMap {
 /// Align a Text node's decoded value with the raw source it came from, so the
 /// find-and-replace pass can report source spans for the nodes it emits.
 ///
-/// The walk is transform-directed — at each raw offset it asks *which
-/// transform applies*, never *do the bytes differ*. Mismatch-directed
-/// alignment desynchronises immediately: raw `&amp;` decodes to `&`, whose
-/// first byte matches, so a greedy 1:1 match would consume the `&` and then
-/// choke on `amp;`.
+/// The walk is transform-directed: at each raw offset it asks *which transform
+/// applies*, never *do the bytes differ*. Raw `&amp;` decodes to `&`, whose
+/// first byte matches, so a mismatch-directed alignment would consume it and
+/// then choke on `amp;`.
 ///
 /// Returns `None` when the walk can't reconstruct the value exactly — an
-/// unlisted transform, or an upstream span that was already wrong. Callers
-/// then report no position at all, which is honest and matches remark; a
-/// guessed position would silently mis-slice the source for every consumer.
+/// unlisted transform, or an upstream span that was already wrong. Callers then
+/// report no position rather than a guessed one that mis-slices the source.
 fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> Option<RawMap> {
     if r_start > r_end || r_end > source.len() {
         return None;
@@ -1246,11 +1236,10 @@ fn pos_for(
     Some((so, eo, sl, sc, el, ec))
 }
 
-/// FNR-style scan over a Text node's bytes. Emits Links for each match;
-/// left-over text becomes plain Text nodes between/around them.
-/// `findUrl` returns `[link, text(trail)]` when splitUrl strips trailing
-/// chars — `findAndReplace` then inserts those as adjacent siblings,
-/// keeping the trail distinct from the surrounding text. Mirror that.
+/// Fallback scan over a Text node's bytes. Emits Links for each match;
+/// left-over text becomes plain Text nodes between/around them. Trailing
+/// characters stripped off a match become their own sibling Text node, kept
+/// distinct from the text around it.
 fn split_text_with_autolinks_fnr(
     arena: &mut Arena<Mdast>,
     text_id: u32,

@@ -25,8 +25,7 @@ import type { MdastNode } from "../src/types.js";
 
 const MARKDOWN = readFileSync(new URL("./fixtures/markdown.md", import.meta.url), "utf8");
 const MDX = readFileSync(new URL("./fixtures/document.mdx", import.meta.url), "utf8");
-// `markdown.md` has no live autolink trigger, so neither the first-pass
-// scanner nor the find-and-replace post-pass shows up in any other benchmark.
+// Autolink-heavy Markdown; `markdown.md` has no autolink triggers.
 const AUTOLINKS = readFileSync(new URL("./fixtures/autolinks.md", import.meta.url), "utf8");
 
 const noopHastPlugin = defineHastPlugin({
@@ -240,8 +239,6 @@ describe("markdownToMdast", () => {
     markdownToMdast(MARKDOWN);
   });
 
-  // Bare triggers, triggers inside resolved and unresolved link destinations,
-  // and trigger-bearing prose that autolinks nothing.
   bench("autolinks", () => {
     markdownToMdast(AUTOLINKS);
   });

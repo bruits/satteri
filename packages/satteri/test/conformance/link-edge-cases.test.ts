@@ -110,10 +110,8 @@ describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (
   });
 
   test("an autolink overrunning the candidate `)` takes the construct path", () => {
-    // `[x]` resolves as a reference link, which leaves the outer `[` closed
-    // but unmatched, so `(https://x.y)x` is never a destination and the
-    // autolink runs straight through the `)`. Used to fall back to
-    // find-and-replace, which produced a different URL.
+    // `[x]` resolves as a reference link, leaving the outer `[` unmatched, so
+    // `(https://x.y)x` is never a destination and the URL runs past the `)`.
     const md = "[[x]](https://x.y)x\n\n[x]: /";
     assertMdastConformance(md);
     const findLink = (tree: unknown) => {
@@ -399,14 +397,13 @@ describe("HTML conformance: GFM autolink fuzz regressions", () => {
   });
 });
 
-// The deferred autolink path: a `[`, backtick, `<` or `$` earlier in the block
-// makes the first pass emit a marker instead of committing the link, so the
-// candidate's bytes keep tokenizing as ordinary inline content and the splice
-// at decision time has to reconcile whatever that produced.
+// A `[`, backtick, `<` or `$` earlier in the block defers the autolink, so its
+// bytes also tokenize as ordinary inline content and the two have to be
+// reconciled once the link is committed.
 describe("MDAST conformance: deferred GFM autolink splice", () => {
   test("a character reference the URL ends inside leaves its raw residue", () => {
     // The `;` is trailing punctuation, so the URL stops one byte short of the
-    // reference's end; what is left must stay literal source, not decode.
+    // reference's end and the residue must stay literal, not decode.
     assertMdastConformance("[a] http://x.y&#104;");
     assertMdastConformance("[a] http://x.y&#x68;");
     assertMdastConformance("[a] www.x.y&#0;");
@@ -439,20 +436,17 @@ describe("MDAST conformance: deferred GFM autolink splice", () => {
     assertMdastConformance("[a http://x.y\\&amp;");
   });
 
-  // Same shape as the inline-HTML case above, for the constructs whose trigger
-  // byte the escape still swallows before the link can claim the `\`. Only
-  // `<` is repaired so far, because only `MaybeHtml` carries the escape flag
-  // through to the decision; `MaybeEmphasis` and a character reference emit no
-  // item at all, so there is nothing left for the splice to re-open. Fixing
-  // these means deferring the escape itself, not patching the splice again.
+  // Same shape as the inline-HTML case above, but only `<` is repaired: the
+  // other constructs leave nothing behind for the splice to re-open, so fixing
+  // them means deferring the escape itself.
   test.fails("emphasis after a URL-ending backslash is swallowed", () => {
-    // Expected: text(`<`) + emphasis(link + `_`) + text(`~\t>`).
-    // Actual: the closing `_` never becomes a delimiter, so no emphasis forms.
+    // Wanted: text(`<`) + emphasis(link + `_`) + text(`~\t>`); the closing `_`
+    // never becomes a delimiter.
     assertMdastConformance("<_HTTPS://a.b:-&;\\_~\t>");
   });
 
   test.fails("a character reference after a URL-ending backslash is swallowed", () => {
-    // Expected: link(`www.a.b\`) + text(`&`). Actual: text(`&amp;`) literal.
+    // Wanted: link(`www.a.b\`) + text(`&`); the `&amp;` stays literal.
     assertMdastConformance("[a] www.a.b\\&amp;");
   });
 

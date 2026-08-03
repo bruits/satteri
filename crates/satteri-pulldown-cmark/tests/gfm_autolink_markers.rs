@@ -1,16 +1,14 @@
 //! Marker lifetime for deferred GFM autolink candidates.
 //!
-//! A candidate detected behind a `[` becomes a zero-width `MaybeAutolink`
-//! item that `handle_inline_pass1` must resolve — by firing it or by
-//! unlinking it — before `arena_build` runs. Constructs that consume an item
-//! range (code spans, inline HTML, math, JSX, a resolved link destination)
-//! drop any marker inside it, which is the second half of the invariant.
+//! A candidate detected behind a `[` becomes a zero-width `MaybeAutolink` item
+//! that `handle_inline_pass1` must resolve — by firing it or unlinking it —
+//! before `arena_build` runs, and any construct that consumes an item range
+//! drops the markers inside it.
 //!
-//! `arena_build` carries a `debug_assert` for a marker that reaches it, so
-//! every input here is really two assertions: the expected HTML, and no
-//! marker escaping. Detection-time guards currently keep most of these
-//! shapes from producing a marker at all; the cases stay so that removing
-//! those guards is measured against them.
+//! `arena_build` carries a `debug_assert` for a marker that reaches it, so each
+//! input asserts twice: the expected HTML, and no marker escaping. Several of
+//! these shapes never produce a marker today; they stay so that loosening a
+//! detection-time guard is measured against them.
 
 use satteri_pulldown_cmark::{parse, Options};
 
@@ -57,7 +55,6 @@ fn a_marker_never_reaches_the_arena() {
 
 /// A blocked candidate leaves its bytes as ordinary text, so the delimiters
 /// inside it tokenize normally — the point of not skipping the URL bytes.
-/// Expectations measured against remark-parse@11 + remark-gfm@4.
 #[test]
 fn a_blocked_candidate_leaves_its_bytes_to_other_constructs() {
     assert_eq!(

@@ -1,11 +1,9 @@
-// Deliberate divergence: nodes produced by the GFM autolink find-and-replace
-// path carry source positions in Sätteri and none in remark, whose
-// `findAndReplace` transform runs over decoded values with no offset mapping
-// available. See website/content/docs/divergences.md.
+// Deliberate divergence (see website/content/docs/divergences.md): nodes from
+// the GFM autolink find-and-replace path carry source positions here and none
+// in remark, whose transform runs over decoded values.
 //
-// A wrong position is strictly worse than the absent one it replaces — absence
-// is honest, wrongness silently mis-slices the source for everything
-// downstream — so these assert the *exact* span, never merely that one exists.
+// A wrong position is worse than an absent one — it silently mis-slices the
+// source downstream — so these assert the exact span, not merely that one exists.
 
 import { describe, test, expect } from "vitest";
 import {
@@ -86,8 +84,7 @@ describe("find-and-replace autolink positions", () => {
   });
 
   test("3. a match starting at a character reference starts at the `&`", () => {
-    // The trigger `h` *is* the reference's output, so the raw source of this
-    // link genuinely begins at the `&`.
+    // The trigger `h` is the reference's output, so the raw source begins at `&`.
     const md = "[&#104;ttp://x.y";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -162,10 +159,8 @@ describe("find-and-replace autolink positions", () => {
   });
 
   test("8. a multi-character reference is included whole or not at all", () => {
-    // `&fjlig;` decodes to two characters. It sits inside the match here, so
-    // the span covers it; a boundary landing *between* its two characters has
-    // no raw offset to name and yields no position at all — see the
-    // `raw_map_atomic_interior_has_no_position` unit test in post_passes.rs.
+    // `&fjlig;` decodes to two characters, so a boundary between them has no
+    // raw offset to name; here it sits inside the match and the span covers it.
     const md = "[www.a.com/&fjlig;b";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([

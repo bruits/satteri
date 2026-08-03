@@ -9,9 +9,6 @@ import {
   FUZZ_TIMEOUT_MS,
 } from "./shared.js";
 
-// Runs at `FUZZ_RUNS` (default 200) against `FUZZ_SEED`. CI pins seeds 1-5 at
-// 20000; this suite is verified clean at 50000 for each of those seeds, which
-// is the bar a change to the autolink paths should clear before landing.
 describe("fuzz: GFM autolink conformance", () => {
   test(
     "collect and report autolink issues",
@@ -42,9 +39,8 @@ describe("fuzz: GFM autolink conformance", () => {
         writeFileSync(issuesPath, report + "\n");
       }
 
-      // Positions are part of the contract here: which pass produced an
-      // autolink is observable through them, so a position-only difference is
-      // a path-selection bug rather than a cosmetic one.
+      // Position-only issues count here: which pass produced an autolink is
+      // observable through its position, so a difference means the wrong path ran.
       const inputs = unique.map((i) => JSON.stringify(i.input));
       expect
         .soft(unique, `Found ${unique.length} autolink conformance issue(s):\n${inputs.join("\n")}`)

@@ -4,9 +4,7 @@
 /// Run with: `cargo bench -p satteri-bench`
 const MARKDOWN: &str = include_str!("../fixtures/markdown.md");
 
-/// Autolink-heavy Markdown. `markdown.md` has no live autolink trigger, so
-/// neither the first-pass scanner nor the find-and-replace post-pass shows up
-/// in any other benchmark here.
+/// Autolink-heavy Markdown; `markdown.md` has no autolink triggers.
 const AUTOLINKS: &str = include_str!("../fixtures/autolinks.md");
 
 /// A short MDX snippet representative of real-world usage.
@@ -96,17 +94,14 @@ fn parse_no_positions(bencher: divan::Bencher) {
     bencher.bench(|| satteri_pulldown_cmark::parse_no_positions(MARKDOWN, opts));
 }
 
-/// Parse autolink-heavy Markdown: bare triggers, triggers inside resolved and
-/// unresolved link destinations, and trigger-bearing prose that autolinks
-/// nothing.
+/// Parse the autolink fixture into an Arena.
 #[divan::bench]
 fn parse_autolinks(bencher: divan::Bencher) {
     let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
     bencher.bench(|| satteri_pulldown_cmark::parse(AUTOLINKS, opts));
 }
 
-/// Same fixture without position tracking, where the find-and-replace pass
-/// does its matching but records no source spans.
+/// Parse the autolink fixture without position tracking.
 #[divan::bench]
 fn parse_autolinks_no_positions(bencher: divan::Bencher) {
     let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;

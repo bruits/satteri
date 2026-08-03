@@ -7,25 +7,10 @@ import {
   satteriMdastDebug,
 } from "./helpers.js";
 
-// GFM autolink literals reach the tree by two different routes, and which one
-// fires is observable: micromark's tokenizer produces a `link` node with a
-// position, while `mdast-util-gfm-autolink-literal`'s find-and-replace
-// transform produces one without. Matching remark's *output* is not enough —
-// the two routes disagree on URLs (raw vs decoded), on which domains they
-// accept, and on how far a link may run — so this probe pins the route itself.
-//
-// Reference side: position presence is the signal, and stays valid because
-// remark isn't being modified.
-//
-// Sätteri side: a differential parse. Each input is parsed twice, once
-// normally and once with the find-and-replace post-pass skipped; a `link` that
-// survives the second parse came from the first-pass construct scanner. That
-// is exact rather than inferential, and it keeps working once Sätteri gives
-// find-and-replace nodes positions of their own.
-
-// The table below is exhaustive for the routes both parsers can take, and the
-// probe asserts an empty mismatch list: every case has to agree on the route,
-// not merely on the rendered output.
+// GFM autolink literals reach the tree by two routes, and the routes disagree
+// on URL decoding, on which domains they accept, and on how far a link may
+// run. Matching rendered output is therefore not enough — this probe pins
+// which route each input takes.
 
 type PathKind = "construct" | "fnr";
 
@@ -68,11 +53,9 @@ function satteriPaths(input: string): PathKind[] {
   });
 }
 
-// Drawn from micromark's own semantics: every shape where the three opener
-// states (still open / closed-and-failed / closed-and-resolved) differ, every
-// construct that can swallow a bracket before the trigger sees it, and the
-// three preceding-character rules (`previousWww`, `previousProtocol`,
-// `previousEmail`, each with its own accept set).
+// Every shape where the three opener states (still open / closed-and-failed /
+// closed-and-resolved) differ, every construct that can swallow a bracket
+// before the trigger sees it, and each preceding-character rule.
 const PROBE_INPUTS = [
   // Bracket-opener states.
   "[a](/b) www.x.y",
@@ -122,12 +105,10 @@ function satteriPath(input: string): PathKind | "none" {
   return satteriPaths(input)[0] ?? "none";
 }
 
-// Three different preceding-character rules decide whether a trigger fires,
-// and they disagree with each other. `previousWww` takes a fixed whitelist,
-// `previousProtocol` rejects only ASCII letters, and `previousEmail` rejects
-// `/` and atext; whatever they block falls through to find-and-replace's
-// `previous()`, which wants whitespace or punctuation. Pinned as a table
-// because the interesting cells are the ones where two rules disagree.
+// Each trigger has its own preceding-character rule and they disagree, so the
+// interesting cells are the ones where two of them differ. What the construct
+// path blocks falls through to find-and-replace, which wants whitespace or
+// punctuation.
 const TRIGGERS = ["www.x.y", "http://x.y", "a@b.cd"] as const;
 const PRECEDING_RULES: Array<{
   prefix: string;
@@ -171,13 +152,10 @@ describe("GFM autolink preceding-character rules", () => {
   });
 });
 
-// Deliberate divergence, measured against remark-parse@11 + remark-gfm@4
-// (mdast-util-gfm-autolink-literal@2.0.1). Its `previous()` reads
-// `charCodeAt(index - 1)` — one UTF-16 code unit — so an astral character is
-// inspected as a lone surrogate and rejected whatever it is. Sätteri
-// classifies the whole scalar, so astral punctuation and symbols are accepted.
-// See website/content/docs/divergences.md. If remark ever fixes `previous()`
-// these two sides converge and this test is the one to retire.
+// Deliberate divergence: remark inspects the preceding character as a single
+// UTF-16 code unit, so an astral one is judged as a lone surrogate and always
+// rejected. Sätteri classifies the whole scalar and accepts astral
+// punctuation and symbols. See website/content/docs/divergences.md.
 describe("divergence: astral characters before a GFM autolink", () => {
   const ASTRAL_PUNCTUATION_OR_SYMBOL = [
     { prefix: "\u{10101}", name: "U+10101 AEGEAN WORD SEPARATOR DOT (Po)" },
@@ -186,8 +164,7 @@ describe("divergence: astral characters before a GFM autolink", () => {
   ];
 
   test.each(ASTRAL_PUNCTUATION_OR_SYMBOL)("$name starts an autolink", ({ prefix }) => {
-    // Unbracketed, only `www.` shows it: the other two triggers take the
-    // construct path, whose own rules never consult `previous()`.
+    // Unbracketed, only `www.` shows it: the other two take the construct path.
     expect(satteriPath(`${prefix}www.x.y`)).toBe("fnr");
     expect(referencePaths(`${prefix}www.x.y`)).toEqual([]);
     // Behind an unclosed `[` the construct is blocked, so all three triggers
@@ -199,8 +176,7 @@ describe("divergence: astral characters before a GFM autolink", () => {
   });
 
   test("control: an astral character that is neither punctuation nor a symbol", () => {
-    // U+1FBF0 SEGMENTED DIGIT ZERO is `Nd`. Both sides reject it, for
-    // different reasons, so it must not move when remark's bug is fixed.
+    // `Nd`, so both sides reject it — for different reasons, which is the point.
     const prefix = "\u{1FBF0}";
     expect(satteriPath(`${prefix}www.x.y`)).toBe("none");
     expect(referencePaths(`${prefix}www.x.y`)).toEqual([]);
@@ -217,16 +193,14 @@ describe("GFM autolink path selection", () => {
   });
 
   test("skipFnrAutolink is a pure pass-skip", () => {
-    // The differential signal is only trustworthy while the debug entry point
-    // with no knobs set is the ordinary parse.
+    // The differential signal holds only while a knob-less debug parse is the
+    // ordinary parse.
     for (const input of PROBE_INPUTS) {
       expect(satteriMdastDebug(input, {})).toEqual(satteriMdast(input));
     }
   });
 
   test("every reported span slices back to its source", () => {
-    // Both paths position their nodes now, so the probe can check something it
-    // could not before: that the spans are right, whichever path produced them.
     for (const input of PROBE_INPUTS) {
       assertSliceInvariantEverywhere(satteriMdast(input), input);
     }
