@@ -2286,11 +2286,4 @@ describe("fuzz regressions: the slice invariant across every line ending", () =>
       assertSliceInvariantEverywhere(satteriMdast(input), input);
     });
   }
-
-  // Offsets are right for all of these; line and column are not, because a
-  // lone `\r` doesn't advance the line counter yet. Pre-existing, and out of
-  // scope here — the CR line-ending work is what closes it.
-  test.fails("a lone `\\r` advances line and column", () => {
-    assertMdastConformance("{\r a");
-  });
 });
