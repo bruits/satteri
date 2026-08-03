@@ -72,6 +72,11 @@ pub(crate) enum ItemBody {
     // bool indicates whether or not the preceding section could be a reference
     MaybeLinkClose(bool),
     MaybeImage,
+    /// Zero-width marker at the offset a GFM autolink literal would start at,
+    /// carrying an index into `Allocations::autolink_candidates`. The first
+    /// pass only detects; `handle_inline_pass1` decides, where the real
+    /// bracket-resolution state is known. Never survives into `arena_build`.
+    MaybeAutolink(AutolinkCandidateIndex),
 
     // These are inline items after resolution.
     Emphasis,
@@ -170,6 +175,7 @@ impl ItemBody {
                 | MaybeLinkOpen
                 | MaybeLinkClose(..)
                 | MaybeImage
+                | MaybeAutolink(..)
         )
     }
     pub(crate) fn is_block_level(&self) -> bool {
@@ -187,6 +193,7 @@ impl ItemBody {
                 | MaybeLinkOpen
                 | MaybeLinkClose(..)
                 | MaybeImage
+                | MaybeAutolink(..)
                 | Emphasis
                 | Strong
                 | Strikethrough
@@ -1147,6 +1154,62 @@ impl<'input> ParserInner<'input> {
                             self.tree[cur_ix].item.body = ItemBody::Text {
                                 backslash_escaped: preceded_by_backslash,
                             };
+                        }
+                    }
+                }
+                ItemBody::MaybeAutolink(cand_ix) => {
+                    // micromark gates its literal-autolink construct on
+                    // `previousUnbalanced`: a bracket opener that is still
+                    // open blocks it. Resolved openers are replaced and
+                    // failed ones are marked, so what survives that walk is
+                    // exactly what is still on this stack.
+                    let next = self.tree[cur_ix].next;
+                    if !self.link_stack.is_empty() {
+                        // Blocked. Drop the marker and leave the bytes as
+                        // ordinary text; the find-and-replace post-pass may
+                        // still claim them, as it does in remark. Unlinking
+                        // rather than converting to text keeps a zero-width
+                        // node out of the arena.
+                        if let Some(prev_ix) = prev {
+                            self.tree[prev_ix].next = next;
+                        } else if let Some(parent_ix) = self.tree.peek_up() {
+                            self.tree[parent_ix].child = next;
+                        }
+                        cur = next;
+                        continue;
+                    }
+                    // Fire. Reusing the marker node as the `Link` keeps the
+                    // preceding sibling's `next` pointer valid.
+                    let cand = self.allocs[cand_ix];
+                    let node_after = scan_nodes_to_ix(&self.tree, next, cand.end);
+                    let text_child = self.tree.create_node(Item {
+                        start: cand.start,
+                        end: cand.end,
+                        body: ItemBody::Text {
+                            backslash_escaped: false,
+                        },
+                    });
+                    self.tree[cur_ix].item = Item {
+                        start: cand.start,
+                        end: cand.end,
+                        body: ItemBody::Link(cand.link),
+                    };
+                    self.tree[cur_ix].child = Some(text_child);
+                    self.tree[cur_ix].next = node_after;
+                    if let Some(node_after_ix) = node_after {
+                        let orig_start = self.tree[node_after_ix].item.start;
+                        let new_start = max(orig_start, cand.end);
+                        self.tree[node_after_ix].item.start = new_start;
+                        // Same reasoning as the inline-link splice: once the
+                        // link has claimed the bytes the escape was attached
+                        // to, the flag must not extend the text node's span
+                        // back over them.
+                        if new_start > orig_start {
+                            if let ItemBody::Text { backslash_escaped } =
+                                &mut self.tree[node_after_ix].item.body
+                            {
+                                *backslash_escaped = false;
+                            }
                         }
                     }
                 }
@@ -2777,6 +2840,12 @@ struct LinkStack {
 }
 
 impl LinkStack {
+    /// micromark's `previousUnbalanced`: whether any bracket opener before
+    /// this point is still unresolved and unmarked.
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     fn push(&mut self, el: LinkStackEl) {
         self.inner.push(el);
     }
@@ -2920,6 +2989,22 @@ pub(crate) struct JsxElementIndex(usize);
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) struct DirectiveIndex(usize);
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct AutolinkCandidateIndex(usize);
+
+/// A GFM autolink literal the first pass found but did not commit to. The
+/// `Link` is allocated up front so firing is a body swap; candidates that
+/// never fire leave an unreferenced entry behind, which nothing reads.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct AutolinkCandidate {
+    /// Source offset the `Link` node would begin at. Can precede the trigger,
+    /// since the email scan walks back over the local part.
+    pub start: usize,
+    /// Source offset just past the `Link` node.
+    pub end: usize,
+    pub link: LinkIndex,
+}
+
 /// A parsed JSX attribute.
 #[cfg(feature = "mdx")]
 #[derive(Debug, Clone)]
@@ -3003,6 +3088,7 @@ pub(crate) struct Allocations<'a> {
     #[cfg(feature = "mdx")]
     jsx_elements: Vec<JsxElementData<'a>>,
     directives: Vec<DirectiveAttrData<'a>>,
+    autolink_candidates: Vec<AutolinkCandidate>,
 }
 
 /// Used by the heading attributes extension.
@@ -3063,7 +3149,17 @@ impl<'a> Allocations<'a> {
             #[cfg(feature = "mdx")]
             jsx_elements: Vec::new(),
             directives: Vec::new(),
+            autolink_candidates: Vec::new(),
         }
+    }
+
+    pub fn allocate_autolink_candidate(
+        &mut self,
+        candidate: AutolinkCandidate,
+    ) -> AutolinkCandidateIndex {
+        let ix = self.autolink_candidates.len();
+        self.autolink_candidates.push(candidate);
+        AutolinkCandidateIndex(ix)
     }
 
     pub fn allocate_cow(&mut self, cow: CowStr<'a>) -> CowIndex {
@@ -3170,6 +3266,14 @@ impl<'a> Index<LinkIndex> for Allocations<'a> {
 
     fn index(&self, ix: LinkIndex) -> &Self::Output {
         self.links.index(ix.0)
+    }
+}
+
+impl<'a> Index<AutolinkCandidateIndex> for Allocations<'a> {
+    type Output = AutolinkCandidate;
+
+    fn index(&self, ix: AutolinkCandidateIndex) -> &Self::Output {
+        self.autolink_candidates.index(ix.0)
     }
 }
 

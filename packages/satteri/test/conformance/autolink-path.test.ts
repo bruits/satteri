@@ -241,12 +241,12 @@ describe("GFM autolink path selection", () => {
       }
     }
 
-    // Recorded baseline: 10 of 34 inputs mismatch, in two families. Six count
-    // brackets over raw bytes, so a `[` or `]` that belongs to a code span,
-    // inline HTML or a pointed autolink is miscounted; four are autolinks that
-    // overrun a `)` closing a destination the parser never resolved. Kept as a
-    // ceiling so the count can only go down.
-    expect(mismatches.length).toBeLessThanOrEqual(10);
+    // Recorded baseline: 7 of 34 inputs mismatch, in two families. Three count
+    // brackets over raw bytes, so a `[` belonging to a code span or inline
+    // HTML is miscounted as an opener; four are autolinks that overrun a `)`
+    // closing a destination the parser never resolved. Kept as a ceiling so
+    // the count can only go down.
+    expect(mismatches.length).toBeLessThanOrEqual(7);
     expect
       .soft(mismatches, `${mismatches.length} of ${PROBE_INPUTS.length} inputs take the wrong path`)
       .toEqual([]);

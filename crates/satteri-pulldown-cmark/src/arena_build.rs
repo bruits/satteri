@@ -1931,6 +1931,16 @@ fn parse_inner(
                         inner.tree.next_sibling(cur_ix);
                     }
 
+                    // An autolink candidate marker is zero-width and inert:
+                    // `handle_inline_pass1` either fires or unlinks it, and
+                    // every construct that consumes an item range drops the
+                    // markers inside it. One arriving here means a range
+                    // escaped resolution.
+                    ItemBody::MaybeAutolink(..) => {
+                        debug_assert!(false, "unresolved autolink marker reached arena_build");
+                        inner.tree.next_sibling(cur_ix);
+                    }
+
                     // Skip these silently.
                     ItemBody::Root => {
                         inner.tree.push();
