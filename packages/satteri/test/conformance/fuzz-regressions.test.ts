@@ -2154,9 +2154,10 @@ describe("fuzz regressions: GFM autolink fires during inline tokenization, not a
 // Frequency note: each case surfaces ≤1× per 200k iterations.
 describe("fuzz known-fails: complex structural divergences (md)", () => {
   // `*>ss)1.  foo` → REF treats the entire first line as paragraph text;
-  // Sätteri opens a list+blockquote+list-item stack first, which derails
-  // the subsequent indented `\`\`\`` fence + code block + `> bam` nesting.
-  test.fails("list/bq/code-fence/autolink cascade", () => {
+  // Sätteri used to open a list+blockquote+list-item stack first, which
+  // derailed the subsequent indented `\`\`\`` fence + code block + `> bam`
+  // nesting.
+  test("list/bq/code-fence/autolink cascade", () => {
     assertMdastConformance(
       "*>ss)1.  foo\n\n    ```\n <https://ex   bar\n    ```\n\n    baz\n\n    > bam\n",
     );

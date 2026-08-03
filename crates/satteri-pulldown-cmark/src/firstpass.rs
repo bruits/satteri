@@ -2002,7 +2002,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             scan_email_forward_from_atext(bytes, ix, begin_text, paragraph_floor)
                         {
                             if email_start >= last_candidate_end
-                                && !is_inside_code_span(bytes, ix)
                                 && fits_in_link_destination(bytes, ix, email_end)
                             {
                                 let d = AutolinkDetection {
@@ -4941,12 +4940,12 @@ fn is_email_local_char(b: u8) -> bool {
 ///
 /// It has to whenever an earlier byte in the block could open something that
 /// ends up owning the trigger's bytes: `[` for a bracket opener still on
-/// `link_stack`, `<` for a pointed autolink or inline HTML. With none of
-/// those present the candidate is guaranteed to fire and no other construct
-/// can claim it, which keeps the eager path — and its `ContinueAndSkip` over
-/// the URL — exactly as it was for ordinary prose.
+/// `link_stack`, `<` for a pointed autolink or inline HTML, `` ` `` for a code
+/// span. With none of those present the candidate is guaranteed to fire and no
+/// other construct can claim it, which keeps the eager path — and its
+/// `ContinueAndSkip` over the URL — exactly as it was for ordinary prose.
 fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize) -> bool {
-    memchr::memchr2(b'[', b'<', &bytes[block_start..pos]).is_some()
+    memchr::memchr3(b'[', b'<', b'`', &bytes[block_start..pos]).is_some()
 }
 
 /// A GFM autolink literal the scanner accepted at a trigger byte, before
@@ -4992,10 +4991,6 @@ fn detect_gfm_autolink(
         _ => return None,
     }
 
-    // Code span precedence.
-    if is_inside_code_span(bytes, ix) {
-        return None;
-    }
     // Math span precedence (only matters when math is enabled).
     if options.has_math() && is_inside_math_span(bytes, ix) {
         return None;
