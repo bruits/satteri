@@ -1,10 +1,12 @@
-import { describe, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   assertExtHastConformance,
   assertHastConformance,
   assertHtmlConformance,
   assertMdastConformance,
+  satteriMdast,
 } from "./helpers.js";
+import type { Code } from "mdast";
 
 describe("CommonMark spec deltas: HTML blocks with following content", () => {
   test("spec 148: HTML block in table cell with following paragraph", () => {
@@ -189,5 +191,22 @@ describe("Emphasis: remark vs cmark divergences", () => {
 describe("GFM strikethrough: remark flanking rule", () => {
   test("`~~!~~` against intraword punctuation stays literal", () => {
     assertHtmlConformance("Here I strike out an exclamation point~~!~~.\n");
+  });
+});
+
+// Intended divergence, not a conformance gap: remark splits a fence info
+// string into language and metadata before decoding character references, so
+// whitespace one of them produces lands inside the language. See
+// website/content/docs/divergences.md.
+describe("Fence info strings: whitespace from a character reference", () => {
+  test("a reference that decodes to whitespace separates lang from meta", () => {
+    const code = (md: string) => (satteriMdast(md) as { children: Code[] }).children[0]!;
+    expect(code("```&Tab;\n```\n")).toMatchObject({ lang: null, meta: null });
+    expect(code("```&#9;\n```\n")).toMatchObject({ lang: null, meta: null });
+    expect(code("```&Tab;x\n```\n")).toMatchObject({ lang: null, meta: "x" });
+    // A reference that decodes to a non-whitespace character still belongs to
+    // the language, and an undecoded info string is untouched.
+    expect(code("```&amp;\n```\n")).toMatchObject({ lang: "&", meta: null });
+    expect(code("```rust title=x\n```\n")).toMatchObject({ lang: "rust", meta: "title=x" });
   });
 });

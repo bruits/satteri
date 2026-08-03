@@ -535,6 +535,10 @@ function stripVerifiedSubtree(
   label: string,
 ): void {
   if (!actual || !expected) return;
+  // A `link` carries no `value`, so the slice invariant can only bounds-check
+  // it. Its span still has to sit correctly among its siblings, or a wrong
+  // position would be deleted here unexamined.
+  assertSpanSet(actual, label);
   if (actual.position) {
     assertSliceInvariant(actual, input, label);
     delete actual.position;

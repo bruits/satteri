@@ -538,6 +538,15 @@ const AL_TRAIL = fc.constantFrom(
   "&amp;",
   "&copy;",
   "&notreal",
+  // A numeric reference is not the `&` + alphanumerics + `;` shape the URL
+  // trims whole, so only its `;` is trailing punctuation and the URL ends
+  // mid-reference.
+  "&#104;",
+  "&#x68;",
+  // A URL ending on a backslash: on the deferred path the escape and the
+  // link fight over the byte after it.
+  "\\,",
+  "\\<a>",
   "?!",
   "*_~",
   '">',

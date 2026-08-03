@@ -87,17 +87,33 @@ describe("find-and-replace autolink positions", () => {
 
   test("3. a match starting at a character reference starts at the `&`", () => {
     // The trigger `h` *is* the reference's output, so the raw source of this
-    // link genuinely begins at the `&`. (The trailing `www.z.q` is only there
-    // to put a literal trigger byte in the source: the pass is gated on one.)
-    const md = "[&#104;ttp://x.y and www.z.q";
+    // link genuinely begins at the `&`.
+    const md = "[&#104;ttp://x.y";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
       ["text", "[", "["],
       ["link", "http://x.y", "&#104;ttp://x.y"],
       ["text", "http://x.y", "&#104;ttp://x.y"],
-      ["text", " and ", " and "],
-      ["link", "http://www.z.q", "www.z.q"],
-      ["text", "www.z.q", "www.z.q"],
+    ]);
+  });
+
+  test("3b. a `www` trigger supplied by a character reference", () => {
+    const md = "[&#119;ww.x.y";
+    expectReferenceTakesFnr(md);
+    expect(spans(md)).toEqual([
+      ["text", "[", "["],
+      ["link", "http://www.x.y", "&#119;ww.x.y"],
+      ["text", "www.x.y", "&#119;ww.x.y"],
+    ]);
+  });
+
+  test("3c. an `@` trigger supplied by a character reference", () => {
+    const md = "[a&#64;b.com";
+    expectReferenceTakesFnr(md);
+    expect(spans(md)).toEqual([
+      ["text", "[", "["],
+      ["link", "mailto:a@b.com", "a&#64;b.com"],
+      ["text", "a@b.com", "a&#64;b.com"],
     ]);
   });
 

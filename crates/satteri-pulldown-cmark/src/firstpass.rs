@@ -1967,6 +1967,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         begin_text = ix + 1;
                         backslash_escaped = false;
                         LoopInstruction::ContinueAndSkip(1)
+                    } else if bytes[ix + 1] == b'<' {
+                        // The `<` still gets its marker: a deferred autolink
+                        // candidate may turn out to end on this `\`, in which
+                        // case the link owns the escape and the inline HTML
+                        // opens after all.
+                        self.tree.append(Item {
+                            start: ix + 1,
+                            end: ix + 2,
+                            body: ItemBody::MaybeHtml(true),
+                        });
+                        begin_text = ix + 2;
+                        backslash_escaped = false;
+                        LoopInstruction::ContinueAndSkip(1)
                     } else if bytes[ix + 1] == b'$' && self.options.has_math() {
                         // In math context, \$ should still produce a MaybeMath
                         // delimiter so it can close a math span. The backslash
@@ -2276,7 +2289,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     self.tree.append(Item {
                         start: ix,
                         end: ix + 1,
-                        body: ItemBody::MaybeHtml,
+                        body: ItemBody::MaybeHtml(false),
                     });
                     begin_text = ix + 1;
                     LoopInstruction::ContinueAndSkip(0)

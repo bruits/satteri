@@ -1890,7 +1890,7 @@ fn parse_inner(
                     | ItemBody::MaybeMath(..)
                     | ItemBody::MaybeSmartQuote(..)
                     | ItemBody::MaybeCode(..)
-                    | ItemBody::MaybeHtml
+                    | ItemBody::MaybeHtml(..)
                     | ItemBody::MaybeLinkOpen
                     | ItemBody::MaybeLinkClose(..)
                     | ItemBody::MaybeImage => {
@@ -2029,10 +2029,13 @@ fn parse_inner(
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
         // Triggers are case-insensitive (`HTTP://`, `WWW.`), so check the
-        // uppercase variants too.
+        // uppercase variants too. The pass matches on decoded text, where a
+        // character reference can supply the trigger the raw bytes lack
+        // (`&#104;ttp://x.y`), so an `&` anywhere keeps the door open; only
+        // then does the per-node scan pay for the decoded check.
         if !debug.skip_fnr_autolink()
             && (memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
-                || memchr::memchr2(b'H', b'W', source_bytes).is_some())
+                || memchr::memchr3(b'H', b'W', b'&', source_bytes).is_some())
         {
             crate::post_passes::gfm_autolink_literal_pass(
                 &mut arena,

@@ -67,7 +67,7 @@ pub(crate) enum ItemBody {
     // quote byte, can_open, can_close
     MaybeSmartQuote(u8, bool, bool),
     MaybeCode(usize, bool), // number of backticks, preceded by backslash
-    MaybeHtml,
+    MaybeHtml(bool),        // preceded by backslash
     MaybeLinkOpen,
     // bool indicates whether or not the preceding section could be a reference
     MaybeLinkClose(bool),
@@ -171,7 +171,7 @@ impl ItemBody {
                 | MaybeMath(..)
                 | MaybeSmartQuote(..)
                 | MaybeCode(..)
-                | MaybeHtml
+                | MaybeHtml(..)
                 | MaybeLinkOpen
                 | MaybeLinkClose(..)
                 | MaybeImage
@@ -189,7 +189,7 @@ impl ItemBody {
                 | MaybeMath(..)
                 | MaybeSmartQuote(..)
                 | MaybeCode(..)
-                | MaybeHtml
+                | MaybeHtml(..)
                 | MaybeLinkOpen
                 | MaybeLinkClose(..)
                 | MaybeImage
@@ -661,7 +661,17 @@ impl<'input> ParserInner<'input> {
 
         while let Some(mut cur_ix) = cur {
             match self.tree[cur_ix].item.body {
-                ItemBody::MaybeHtml => {
+                ItemBody::MaybeHtml(preceded_by_backslash) => {
+                    if preceded_by_backslash {
+                        // The escape stands: nothing cleared the flag, so the
+                        // `<` is literal and its span reaches back over the `\`.
+                        self.tree[cur_ix].item.body = ItemBody::Text {
+                            backslash_escaped: true,
+                        };
+                        prev = cur;
+                        cur = self.tree[cur_ix].next;
+                        continue;
+                    }
                     // MDX inline JSX: check before HTML
                     #[cfg(feature = "mdx")]
                     if self.options.contains(Options::ENABLE_MDX) {
@@ -1213,16 +1223,34 @@ impl<'input> ParserInner<'input> {
                         {
                             self.tree[node_after_ix].item.body = ItemBody::SoftBreak;
                         }
+                        // An item that carries its own content ignores the
+                        // clamp below, so a character reference the URL ends
+                        // in the middle of would keep emitting its decoded
+                        // value. Whatever is left of it is literal source.
+                        if orig_start < cand.end
+                            && matches!(
+                                self.tree[node_after_ix].item.body,
+                                ItemBody::SynthesizeText(..)
+                            )
+                        {
+                            self.tree[node_after_ix].item.body = ItemBody::Text {
+                                backslash_escaped: false,
+                            };
+                        }
                         self.tree[node_after_ix].item.start = new_start;
-                        // Same reasoning as the inline-link splice: once the
-                        // link has claimed the bytes the escape was attached
-                        // to, the flag must not extend the text node's span
-                        // back over them.
-                        if new_start > orig_start {
-                            if let ItemBody::Text { backslash_escaped } =
-                                &mut self.tree[node_after_ix].item.body
-                            {
-                                *backslash_escaped = false;
+                        // The `\` an escape flag refers to sits one byte
+                        // before the item carrying it, so the link owns that
+                        // byte whenever the item starts no later than the URL
+                        // ends. A surviving flag would stretch the successor's
+                        // span back over it; on a `<` it would also keep the
+                        // inline HTML from opening.
+                        if orig_start <= cand.end {
+                            match &mut self.tree[node_after_ix].item.body {
+                                ItemBody::Text { backslash_escaped }
+                                | ItemBody::MaybeHtml(backslash_escaped) => {
+                                    *backslash_escaped = false;
+                                }
+                                _ => {}
                             }
                         }
                     }

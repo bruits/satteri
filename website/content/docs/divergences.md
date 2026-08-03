@@ -48,12 +48,23 @@ GFM autolink literals reach the tree by two different routes. remark tokenizes m
 [www.example.com
 ```
 
-| Parser                        | Output                                     |
-| ----------------------------- | ------------------------------------------ |
-| `remark-parse` + `remark-gfm` | link with no `position`                    |
+| Parser                        | Output                                          |
+| ----------------------------- | ----------------------------------------------- |
+| `remark-parse` + `remark-gfm` | link with no `position`                         |
 | Sätteri                       | link with `position` spanning `www.example.com` |
 
 The absence is architectural rather than intended, and nothing reads a missing `position` as anything but "no source available", so supplying it only adds information. Values are untouched: the URL still comes from the decoded text (`[www.example.com/&amp;b` links to `http://www.example.com/&b` on both sides) while the position covers the raw `&amp;`. Where a span cannot be named exactly — a match boundary falling inside a character reference that decodes to more than one character — Sätteri reports no position rather than an approximate one.
+
+### Whitespace from a character reference in a fence info string
+
+A fenced code block's info string is split into the language and the metadata at the first whitespace. Sätteri decodes character references before splitting, so whitespace one of them produces separates the two; `remark-parse` splits the raw text, leaving the reference inside the language. For a fence opened with ` ```&Tab;x `:
+
+| Parser         | Output                      |
+| -------------- | --------------------------- |
+| `remark-parse` | `lang: "\tx"`, `meta: null` |
+| Sätteri        | `lang: null`, `meta: "x"`   |
+
+A language made only of whitespace renders as a meaningless `class="language-"`, so Sätteri treats the decoded info string as authoritative.
 
 ## Rendering
 

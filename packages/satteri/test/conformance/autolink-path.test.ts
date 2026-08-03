@@ -23,6 +23,10 @@ import {
 // is exact rather than inferential, and it keeps working once Sätteri gives
 // find-and-replace nodes positions of their own.
 
+// The table below is exhaustive for the routes both parsers can take, and the
+// probe asserts an empty mismatch list: every case has to agree on the route,
+// not merely on the rendered output.
+
 type PathKind = "construct" | "fnr";
 
 interface AnyNode {

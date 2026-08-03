@@ -8,7 +8,6 @@ import {
   assertHtmlConformance,
   assertExtMdastConformance,
   assertMdastConformance,
-  referenceMdast,
   satteriMdast,
 } from "./helpers.js";
 import type { Link, Paragraph, Root } from "mdast";
@@ -397,5 +396,75 @@ describe("HTML conformance: GFM autolink fuzz regressions", () => {
   test("control: emphasis still pairs normally without an email/url", () => {
     assertHtmlConformance("a _b_ c *d* e\n");
     assertHtmlConformance("intra_word_underscore stays text\n");
+  });
+});
+
+// The deferred autolink path: a `[`, backtick, `<` or `$` earlier in the block
+// makes the first pass emit a marker instead of committing the link, so the
+// candidate's bytes keep tokenizing as ordinary inline content and the splice
+// at decision time has to reconcile whatever that produced.
+describe("MDAST conformance: deferred GFM autolink splice", () => {
+  test("a character reference the URL ends inside leaves its raw residue", () => {
+    // The `;` is trailing punctuation, so the URL stops one byte short of the
+    // reference's end; what is left must stay literal source, not decode.
+    assertMdastConformance("[a] http://x.y&#104;");
+    assertMdastConformance("[a] http://x.y&#x68;");
+    assertMdastConformance("[a] www.x.y&#0;");
+    assertMdastConformance("[a] http://x.y%&#104;");
+    assertMdastConformance("`x` http://x.y&#104;");
+    assertMdastConformance("<b> www.x.y&#104;");
+  });
+
+  test("a URL ending on a backslash does not lend it to the next node", () => {
+    assertMdastConformance("[a] www.x.y\\_~");
+    assertMdastConformance("`x` www.x.y\\_~");
+    assertMdastConformance("[a] http://x.y\\*b*");
+  });
+
+  test("inline HTML still opens after a URL ending on a backslash", () => {
+    assertMdastConformance("[a] http://x.y\\<a>x");
+    assertMdastConformance("[a] http://x.y\\<!-- c -->");
+    assertMdastConformance("[a] http://x.y\\<em>i</em>");
+    assertMdastConformance("`x` http://x.y\\<a>x");
+    // Blocked instead of fired: the escape stands and the `<` stays literal.
+    assertMdastConformance("[a http://x.y\\<a>x");
+  });
+
+  test("constructs that survive a URL-ending backslash today", () => {
+    assertMdastConformance("`x` www.a.b\\*em* rest");
+    assertMdastConformance("[a] www.a.b\\`code`");
+    assertMdastConformance("[a] www.x.y\\,");
+    // Blocked: the escape stands and the candidate stays ordinary text.
+    assertMdastConformance("[a www.a.b\\*em* rest");
+    assertMdastConformance("[a http://x.y\\&amp;");
+  });
+
+  // Same shape as the inline-HTML case above, for the constructs whose trigger
+  // byte the escape still swallows before the link can claim the `\`. Only
+  // `<` is repaired so far, because only `MaybeHtml` carries the escape flag
+  // through to the decision; `MaybeEmphasis` and a character reference emit no
+  // item at all, so there is nothing left for the splice to re-open. Fixing
+  // these means deferring the escape itself, not patching the splice again.
+  test.fails("emphasis after a URL-ending backslash is swallowed", () => {
+    // Expected: text(`<`) + emphasis(link + `_`) + text(`~\t>`).
+    // Actual: the closing `_` never becomes a delimiter, so no emphasis forms.
+    assertMdastConformance("<_HTTPS://a.b:-&;\\_~\t>");
+  });
+
+  test.fails("a character reference after a URL-ending backslash is swallowed", () => {
+    // Expected: link(`www.a.b\`) + text(`&`). Actual: text(`&amp;`) literal.
+    assertMdastConformance("[a] www.a.b\\&amp;");
+  });
+
+  test("an escaped `<` outside any autolink is unaffected", () => {
+    assertMdastConformance("a \\<b> c");
+    assertMdastConformance("\\<em>not html\\</em>");
+  });
+
+  test("an entity-triggered link and an entity-ended one in the same block", () => {
+    // The first link exists only because the trigger is decoded; the second
+    // fires on the construct path and stops inside a reference.
+    assertMdastConformance("[&#104;ttp://a.b and http://c.d&#104;");
+    assertMdastConformance("`x` &#104;ttp://a.b and http://c.d&#104;");
   });
 });
