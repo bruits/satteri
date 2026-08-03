@@ -67,6 +67,22 @@ fn a_blocked_candidate_leaves_its_bytes_to_other_constructs() {
     assert_eq!(html("[a `www.x.y` b"), "<p>[a <code>www.x.y</code> b</p>\n");
 }
 
+/// A blocked marker stays in the sibling chain as a zero-width text node.
+/// The emphasis resolver takes the node after a delimiter run to be the span's
+/// first child by arena index, so a marker removed from the chain would leave
+/// that index pointing past the span's real content.
+#[test]
+fn a_blocked_marker_keeps_its_place_in_the_sibling_chain() {
+    assert_eq!(
+        html("[~www.foo.bar~](/x)"),
+        "<p><a href=\"/x\"><del>www.foo.bar</del></a></p>\n"
+    );
+    assert_eq!(
+        html("[*www.foo.bar*](/x)"),
+        "<p><a href=\"/x\"><em>www.foo.bar</em></a></p>\n"
+    );
+}
+
 /// A firing candidate discards whatever the URL bytes tokenized into, and an
 /// orphaned closer falls back to literal text.
 #[test]

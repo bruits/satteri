@@ -1508,6 +1508,16 @@ fn parse_inner(
                         inner.tree.push();
                     }
 
+                    // A blocked autolink marker leaves a zero-width `Text`
+                    // behind, and an empty text node is never wanted. The
+                    // backslash-escaped form is not empty — it reaches back
+                    // over the `\` below — so only the plain one is skipped.
+                    ItemBody::Text {
+                        backslash_escaped: false,
+                    } if item.start == item.end => {
+                        inner.tree.next_sibling(cur_ix);
+                    }
+
                     ItemBody::Text { backslash_escaped } => {
                         let text_value: &str = &source[item.start..item.end];
 

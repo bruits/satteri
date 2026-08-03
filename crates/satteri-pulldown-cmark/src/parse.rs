@@ -1165,16 +1165,17 @@ impl<'input> ParserInner<'input> {
                     // exactly what is still on this stack.
                     let next = self.tree[cur_ix].next;
                     if !self.link_stack.is_empty() {
-                        // Blocked. Drop the marker and leave the bytes as
-                        // ordinary text; the find-and-replace post-pass may
-                        // still claim them, as it does in remark. Unlinking
-                        // rather than converting to text keeps a zero-width
-                        // node out of the arena.
-                        if let Some(prev_ix) = prev {
-                            self.tree[prev_ix].next = next;
-                        } else if let Some(parent_ix) = self.tree.peek_up() {
-                            self.tree[parent_ix].child = next;
-                        }
+                        // Blocked. The bytes stay ordinary text and the
+                        // find-and-replace post-pass may still claim them, as
+                        // it does in remark. The marker becomes a zero-width
+                        // `Text` rather than being unlinked: the emphasis
+                        // resolver addresses the first node after a delimiter
+                        // run by arena index, so removing a node from the
+                        // sibling chain would hand it whatever came next.
+                        self.tree[cur_ix].item.body = ItemBody::Text {
+                            backslash_escaped: false,
+                        };
+                        prev = cur;
                         cur = next;
                         continue;
                     }
