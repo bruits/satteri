@@ -1276,6 +1276,61 @@ function isAlignAttributeDivergence(
   return a === e;
 }
 
+// Intentional divergence: Sätteri splits a fence info string into language and
+// metadata after decoding character references, so whitespace one of them
+// produces separates the two; remark splits the raw text and leaves the
+// reference inside the language. See website/content/docs/divergences.md.
+// Scoped to inputs whose fence opener actually carries such a reference, and
+// only clears a diff that is confined to the language/metadata fields.
+const INFO_STRING_WHITESPACE_ENTITY =
+  /^ {0,3}(?:`{3,}|~{3,})[^\n]*?&(?:Tab|NewLine|#0*(?:9|10|13|32)|#[xX]0*(?:9|[aAdD]|20));/m;
+
+// Key order differs between the two pipelines, so compare on sorted keys.
+function stripFenceInfo(node: unknown): unknown {
+  if (typeof node !== "object" || node === null) return node;
+  if (Array.isArray(node)) return node.map(stripFenceInfo);
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(node as Record<string, unknown>).sort()) {
+    if (k === "lang" || k === "meta") continue;
+    const v = (node as Record<string, unknown>)[k];
+    if (k === "properties" && v && typeof v === "object") {
+      const props: Record<string, unknown> = {};
+      for (const pk of Object.keys(v as Record<string, unknown>).sort()) {
+        if (pk !== "className") props[pk] = (v as Record<string, unknown>)[pk];
+      }
+      out[k] = props;
+      continue;
+    }
+    const stripped = stripFenceInfo(v);
+    // `data` holding nothing but the info string disappears entirely on the
+    // reference side, so an emptied one must not count as a difference.
+    if (
+      k === "data" &&
+      stripped &&
+      typeof stripped === "object" &&
+      Object.keys(stripped as Record<string, unknown>).length === 0
+    ) {
+      continue;
+    }
+    out[k] = stripped;
+  }
+  return out;
+}
+
+function isFenceInfoEntityDivergence(
+  input: string,
+  _level: FuzzLevel,
+  actual: unknown,
+  expected: unknown,
+): boolean {
+  if (!INFO_STRING_WHITESPACE_ENTITY.test(input)) return false;
+  if (typeof actual === "string" || typeof expected === "string") {
+    const strip = (h: unknown) => String(h).replace(/ class="language-[^"]*"/g, "");
+    return strip(actual) === strip(expected);
+  }
+  return JSON.stringify(stripFenceInfo(actual)) === JSON.stringify(stripFenceInfo(expected));
+}
+
 const HAST_LIKE_LEVELS = new Set<FuzzLevel>(["hast", "mdx-hast", "math-hast", "fm-hast"]);
 
 function normalizeAlignProps(node: unknown): unknown {
@@ -1399,6 +1454,9 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
       return null;
     }
     if (isAlignAttributeDivergence(input, level, actual, expected)) {
+      return null;
+    }
+    if (isFenceInfoEntityDivergence(input, level, actual, expected)) {
       return null;
     }
     return { input, level, source, kind: classifyKind(level, actual, expected), expected, actual };
