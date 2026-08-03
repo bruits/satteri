@@ -397,10 +397,6 @@ function stripPositions(node: AnyNode): AnyNode {
   return out;
 }
 
-/** Like `assertExtMdastConformance` but ignores `position`. Use this when
- * positions legitimately diverge even though trees are structurally identical
- * — e.g. remark's post-transform GFM autolink nodes carry no position while
- * ours do. */
 export function assertExtHastConformance(md: string, extensions: ExtensionSet[]): void {
   const proc = buildHastProcessor(extensions);
   const features = featuresToSatteri(extensions);

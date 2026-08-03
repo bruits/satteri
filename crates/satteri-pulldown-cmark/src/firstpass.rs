@@ -5136,24 +5136,17 @@ fn is_escaped(bytes: &[u8], pos: usize) -> bool {
         == 1
 }
 
-/// Whether an autolink ending at `end` may be emitted at `pos`.
-///
-/// A `[label](DEST)` around `pos` is only a *candidate*: whether the bracket
-/// pair resolves depends on definitions further down the document and on
-/// openers an inner link deactivates, neither of which the first pass knows
-/// yet. Emit anyway — the second pass drops the nodes covering a destination
-/// whose link does resolve. That rescue only reaches nodes inside the
-/// candidate, so an autolink running past the closing `)` (which would
-/// swallow bytes the link still needs) has to be left to the post-pass.
+/// Whether an autolink spanning `pos..end` may be emitted inside a
+/// `[label](DEST)` candidate. If the link does resolve, the second pass
+/// splices out the nodes the destination covers — but it cannot splice one
+/// that overruns the `)`.
 fn fits_in_link_destination(bytes: &[u8], pos: usize, end: usize) -> bool {
     enclosing_link_destination_end(bytes, pos).is_none_or(|close| end <= close)
 }
 
-/// Does the line starting at `pos` open a block-level construct that would
-/// break paragraph continuation? Conservative: only matches markers that
-/// can't appear mid-paragraph (fenced code, ATX heading, blockquote, list
-/// marker, thematic break). Used by `enclosing_link_destination_end` to
-/// decide whether `[…]` can span across the line.
+/// Does the line starting at `pos` open a block construct that would break
+/// paragraph continuation? Conservative: only markers that can't appear
+/// mid-paragraph.
 fn line_starts_block(bytes: &[u8], pos: usize) -> bool {
     let mut i = pos;
     // Skip up to 3 cols of leading space (≥4 would be indented code, but
@@ -5207,9 +5200,8 @@ fn line_starts_block(bytes: &[u8], pos: usize) -> bool {
     }
 }
 
-/// Offset of the `)` closing the inline link destination `[label](DEST` that
-/// `pos` sits inside, or `None` when there's no valid closer (unmatched
-/// brackets, runs to EOF without `)`) and so no link can form at all.
+/// Offset of the `)` closing the inline link destination `[label](DEST`
+/// around `pos`, or `None` when nothing there can close as one.
 fn enclosing_link_destination_end(bytes: &[u8], pos: usize) -> Option<usize> {
     if pos < 2 {
         return None;

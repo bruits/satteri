@@ -60,8 +60,6 @@ describe("MDAST conformance: GFM autolink-literal trim-back split", () => {
     // From docs/src/content/docs/de/guides/cms/index.mdx inside `:::tip`:
     // `Hello [label(https://host/path), rest` — remark emits the trimmed-back
     // `),` as its own text node when an earlier unclosed `[` is present.
-    // Both engines take the find-and-replace path here, so the synthesized
-    // link is position-less on both sides — compared with positions.
     assertExtMdastConformance(
       "Hello [von der Community gepflegte Integrationen(https://astro.build/integrations/?search=cms), um.",
       [],
@@ -69,12 +67,6 @@ describe("MDAST conformance: GFM autolink-literal trim-back split", () => {
   });
 });
 
-// The first pass can't know whether `](…)` really is a link destination —
-// that depends on definitions further down the document and on openers a
-// resolved inner link deactivates. It emits the autolink construct anyway
-// and lets the second pass drop it when the bracket pair does resolve, so
-// the surviving nodes keep their source positions instead of falling back
-// to the position-less find-and-replace pass.
 describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (#187)", () => {
   test("inner shortcut reference deactivates the opener", () => {
     assertExtMdastConformance("[[x]](https://x.y)\n\n[x]: /", []);
@@ -120,11 +112,8 @@ describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (
   });
 
   test("residual: an autolink overrunning the candidate `)` stays position-less", () => {
-    // The one shape optimistic emission can't reach: `https://x.y)x` overruns
-    // the `)`, and the second pass only drops nodes *inside* the destination —
-    // an overrunning node would outlive the drop carrying a stale URL. So this
-    // still falls back to the position-less find-and-replace pass. Long-standing
-    // behavior, pinned here so a future change to it is visible.
+    // Known gap, pinned so a change to it is visible: the autolink overruns
+    // the `)`, and the second pass can only splice nodes inside the destination.
     const md = "[[x]](https://x.y)x\n\n[x]: /";
     assertMdastConformanceNoPosition(md);
     const findLink = (tree: unknown) => {

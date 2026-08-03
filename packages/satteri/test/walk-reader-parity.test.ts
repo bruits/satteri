@@ -110,10 +110,8 @@ test("C3: walk-path position matches the reader for every matched node", () => {
 });
 
 test("C3: GFM autolink positions match the reader, present or absent (#187)", () => {
-  // First doc: the inner `[x]` reference resolves, so `](url)` stays text and
-  // the URL autolinks *with* a position. Second doc: the unclosed `[` sends
-  // the URL down the position-less find-and-replace fallback. Both shapes
-  // have to read the same from the walk and reader paths.
+  // The first doc's autolink carries a position; the unclosed `[` in the
+  // second sends it down the position-less fallback.
   const docs = ["[[x]](https://x.y)\n\n[x]: /", "a [b(https://x.y), c"];
   for (const md of docs) {
     for (const type of ["link", "text"] as const) {
