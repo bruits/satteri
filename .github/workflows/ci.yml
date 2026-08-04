@@ -97,6 +97,10 @@ jobs:
         run: pnpm run build:ts
         working-directory: packages/satteri
 
+      - name: Typecheck
+        run: pnpm run typecheck
+        working-directory: packages/satteri
+
       - name: Build NAPI binding
         run: pnpm run build:binary:native:debug
         working-directory: packages/satteri

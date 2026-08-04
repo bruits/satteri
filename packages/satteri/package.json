@@ -43,6 +43,7 @@
     "build:binary:native:debug": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir . --platform --esm",
     "postbuild:binary:native:debug": "node patch-binding.js",
     "build:ts": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
     "build": "pnpm build:ts && pnpm build:binary:native",
     "build:wasm": "pnpm build:ts && pnpm build:binary:wasm",
     "artifacts": "napi create-npm-dirs && napi artifacts",
