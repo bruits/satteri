@@ -62,7 +62,6 @@ const headingAnchors = () => {
 markdownToHtml(source, { mdastPlugins: [headingAnchors] });
 ```
 
-A factory that returns itself, directly or through a bundle, throws rather than recursing.
 
 ### Source positions
 
