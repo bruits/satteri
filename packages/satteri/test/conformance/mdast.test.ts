@@ -567,3 +567,38 @@ describe("MDAST conformance: fuzz regressions", () => {
     assertMdastConformance("\\ `_@_b__=");
   });
 });
+
+// CommonMark strips only spaces and tabs from the end of a line, and a BOM is
+// ordinary content; satteri drops all three from the text node's value.
+describe("MDAST conformance: control and format characters at a text-node edge", () => {
+  test.fails("trailing VT ends a paragraph", () => {
+    assertMdastConformance("abc\u{b}\n");
+  });
+
+  test.fails("trailing FF ends a paragraph", () => {
+    assertMdastConformance("abc\u{c}\n");
+  });
+
+  test.fails("trailing VT after an inline construct is its own text node", () => {
+    assertMdastConformance("*a*\u{b}\n");
+    assertMdastConformance("`c`\u{b}\n");
+  });
+
+  test.fails("a BOM opening a text node is kept", () => {
+    assertMdastConformance("*a*\u{feff}x\n");
+    assertMdastConformance("user@example.com\u{feff}\n");
+  });
+});
+
+describe("MDAST conformance: table cell starting with an escaped pipe", () => {
+  // The cell's text span should cover the raw `\|`; satteri starts it at the
+  // `|`, which is the one place its spans don't cover the escape.
+  test.fails("leading `\\|` in a cell", () => {
+    assertMdastConformance("| a |\n| - |\n| \\|abc |\n");
+  });
+
+  test("an escape that is neither leading nor a pipe is unaffected", () => {
+    assertMdastConformance("| a |\n| - |\n| abc\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| \\*abc |\n");
+  });
+});
