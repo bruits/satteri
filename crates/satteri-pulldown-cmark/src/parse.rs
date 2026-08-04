@@ -1449,7 +1449,27 @@ impl<'input> ParserInner<'input> {
                                     };
                                     self.tree[reference_close_node].item.body =
                                         ItemBody::MaybeLinkClose(false);
-                                    let next_node = self.tree[reference_close_node].next;
+                                    // The label scan walks raw source, so it can
+                                    // stop inside a wider item (an MDX expression
+                                    // holding a `]`). The label owns up to
+                                    // `end_ix`; the rest is literal text, and
+                                    // without this it would belong to no node.
+                                    let close_end = self.tree[reference_close_node].item.end;
+                                    let next_node = if close_end > end_ix {
+                                        self.tree[reference_close_node].item.end = end_ix;
+                                        let tail = self.tree.create_node(Item {
+                                            start: end_ix,
+                                            end: close_end,
+                                            body: ItemBody::Text {
+                                                backslash_escaped: false,
+                                            },
+                                        });
+                                        self.tree[tail].next = self.tree[reference_close_node].next;
+                                        self.tree[reference_close_node].next = Some(tail);
+                                        Some(tail)
+                                    } else {
+                                        self.tree[reference_close_node].next
+                                    };
 
                                     (next_node, LinkType::Reference)
                                 }

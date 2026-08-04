@@ -392,3 +392,41 @@ describe("MDX nested deep-indent lists", () => {
     assertMdastConformance("7. outer\n\n          - a\n          - b\n          - c\n");
   });
 });
+
+// A reference label is scanned over raw source, so it can stop on a `]` that
+// sits inside an expression — the expression loses to the label, and the bytes
+// past the label's `]` are literal text. remark resolves them the same way;
+// they used to belong to no node at all here and vanished from the output.
+describe("MDX expression holding the `]` that ends a reference label", () => {
+  test("full reference", () => {
+    assertMdastConformance('[a][{"]"}]\n\n[{"]: /u\n');
+  });
+
+  test("image reference", () => {
+    assertMdastConformance('![a][{"]"}]\n\n[{"]: /u\n');
+  });
+
+  test("the expression's own quoting does not matter", () => {
+    assertMdastConformance("[a][{`]`}]\n\n[{`]: /u\n");
+    assertMdastConformance('[a][{"]" + "]"}]\n\n[{"]: /u\n');
+  });
+
+  test("with content around it", () => {
+    assertMdastConformance('x [a][{"]"}] y\n\n[{"]: /u\n');
+    assertMdastConformance('[a][{"]"}][b]\n\n[{"]: /u\n\n[b]: /v\n');
+    assertMdastConformance('[a][{"]"}]\n\n[{"]: /u "t"\n');
+  });
+
+  test("in every container", () => {
+    assertMdastConformance('> [a][{"]"}]\n\n[{"]: /u\n');
+    assertMdastConformance('- [a][{"]"}]\n\n[{"]: /u\n');
+    assertMdastConformance('# [a][{"]"}]\n\n[{"]: /u\n');
+  });
+
+  // Controls: the expression survives whole when no label ends inside it.
+  test("an expression the label does not cut keeps its node", () => {
+    assertMdastConformance('[{"]"}][a]\n\n[a]: /u\n');
+    assertMdastConformance('[a][{"x"}]\n\n[{"x"}]: /u\n');
+    assertMdastConformance('x {"]"} y\n');
+  });
+});
