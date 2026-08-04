@@ -101,8 +101,6 @@ jobs:
         run: pnpm run build:binary:native:debug
         working-directory: packages/satteri
 
-      # Fuzz properties seed from the clock, so a failure here isn't
-      # reproducible; their finds are pinned in fuzz-regressions.test.ts.
       - name: Test
         run: pnpm test
         working-directory: packages/satteri
