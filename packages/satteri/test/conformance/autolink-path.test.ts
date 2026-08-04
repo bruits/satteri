@@ -1,24 +1,22 @@
 import { describe, test, expect } from "vitest";
 import {
-  assertDebugBinary,
+  assertMdastConformance,
   assertSliceInvariantEverywhere,
   referenceMdast,
   satteriMdast,
-  satteriMdastSkippingFnrAutolink,
 } from "./helpers.js";
 
-// GFM autolink literals reach the tree by two routes, and the routes disagree
-// on URL decoding, on which domains they accept, and on how far a link may
-// run. Matching rendered output is therefore not enough — this probe pins
-// which route each input takes.
+// Telling satteri's two autolink routes apart needs parser internals, so that
+// half of the probe is `autolink_path_probe` in `crates/satteri-pulldown-cmark`.
+// These tables are the shared contract: here they pin remark's classification,
+// there satteri's.
 
-type PathKind = "construct" | "fnr";
+type PathKind = "construct" | "fnr" | "none";
 
 interface AnyNode {
   type: string;
-  url?: string;
   children?: AnyNode[];
-  position?: { start: { offset: number }; end: { offset: number } };
+  position?: unknown;
 }
 
 function collectLinks(tree: unknown): AnyNode[] {
@@ -31,89 +29,70 @@ function collectLinks(tree: unknown): AnyNode[] {
   return out;
 }
 
-function linkKey(node: AnyNode): string {
-  const start = node.position ? node.position.start.offset : "-";
-  const end = node.position ? node.position.end.offset : "-";
-  return `${node.url ?? ""}\0${start}\0${end}`;
-}
-
 /** remark: a positioned `link` came from micromark, a bare one from findAndReplace. */
 function referencePaths(input: string): PathKind[] {
   return collectLinks(referenceMdast(input)).map((link) => (link.position ? "construct" : "fnr"));
 }
 
-/** Sätteri: a `link` that survives with the find-and-replace pass off is a construct link. */
-function satteriPaths(input: string): PathKind[] {
-  const withoutFnr = collectLinks(satteriMdastSkippingFnrAutolink(input)).map(linkKey);
-  return collectLinks(satteriMdast(input)).map((link) => {
-    const ix = withoutFnr.indexOf(linkKey(link));
-    if (ix === -1) return "fnr";
-    withoutFnr.splice(ix, 1);
-    return "construct";
-  });
+function referencePath(input: string): PathKind {
+  return referencePaths(input)[0] ?? "none";
 }
 
-// Every shape where the three opener states (still open / closed-and-failed /
-// closed-and-resolved) differ, every construct that can swallow a bracket
-// before the trigger sees it, and each preceding-character rule.
-const PROBE_INPUTS = [
+// Every shape where the three opener states (still open, closed-and-failed,
+// closed-and-resolved) differ, plus every construct that can swallow a bracket
+// before the trigger sees it.
+const PROBE_INPUTS: Array<[string, PathKind[]]> = [
   // Bracket-opener states.
-  "[a](/b) www.x.y",
-  "[a [b](/c) www.x.y",
-  "[a] www.x.y",
-  "![a] www.x.y",
-  "[a www.x.y",
-  "[a\nwww.x.y",
-  "[a\n\nwww.x.y",
-  "# [a www.x.y",
+  ["[a](/b) www.x.y", ["construct", "construct"]],
+  ["[a [b](/c) www.x.y", ["construct", "fnr"]],
+  ["[a] www.x.y", ["construct"]],
+  ["![a] www.x.y", ["construct"]],
+  ["[a www.x.y", ["fnr"]],
+  ["[a\nwww.x.y", ["fnr"]],
+  ["[a\n\nwww.x.y", ["construct"]],
+  ["# [a www.x.y", ["fnr"]],
   // Brackets consumed by an enclosing construct before the trigger.
-  "[a `]` www.x.y",
-  "`[` www.x.y",
-  "[a ``]`` www.x.y",
-  "``[`` www.x.y",
-  "<span a='['> www.x.y",
-  "[a <http://q.r/]> www.x.y",
+  ["[a `]` www.x.y", ["fnr"]],
+  ["`[` www.x.y", ["construct"]],
+  ["[a ``]`` www.x.y", ["fnr"]],
+  ["``[`` www.x.y", ["construct"]],
+  ["<span a='['> www.x.y", ["construct"]],
+  ["[a <http://q.r/]> www.x.y", ["construct", "fnr"]],
   // A trigger inside a link destination the parser has already resolved.
-  "[a](https://x.y)x",
-  "[a](www.x.y)x",
+  ["[a](https://x.y)x", ["construct"]],
+  ["[a](www.x.y)x", ["construct"]],
   // …and inside one it never resolves, so the trigger sees ordinary bytes.
-  "[[x]](https://x.y)x\n\n[x]: /",
-  "[[x]](www.a.com)y\n\n[x]: /",
-  "[foo][bar](https://x.y)x\n\n[bar]: /",
-  "[[a](/b)](https://x.y)x",
+  ["[[x]](https://x.y)x\n\n[x]: /", ["construct"]],
+  ["[[x]](www.a.com)y\n\n[x]: /", ["construct"]],
+  ["[foo][bar](https://x.y)x\n\n[bar]: /", ["construct"]],
+  ["[[a](/b)](https://x.y)x", ["construct", "construct"]],
   // Unclosed or non-resolving brackets around a trigger.
-  "[www.a.com",
-  "[www.a.com]",
-  "[www.a.com](",
-  "![www.a.com",
-  "[foo][www.a.com]",
-  "[https://a.com](",
+  ["[www.a.com", ["fnr"]],
+  ["[www.a.com]", ["fnr"]],
+  ["[www.a.com](", ["fnr"]],
+  ["![www.a.com", ["fnr"]],
+  ["[foo][www.a.com]", ["fnr"]],
+  ["[https://a.com](", ["fnr"]],
   // Preceding-character rules. `www.` takes a fixed whitelist, `http://`
   // rejects only ASCII letters, and email rejects `/` and atext.
-  "www.x.y",
-  ".www.x.y",
-  ".http://x.y",
-  "awww.x.y",
-  "5http://x.y",
-  "/a@b.cd",
-  "(www.x.y)",
-  "_www.x.y_",
+  ["www.x.y", ["construct"]],
+  [".www.x.y", ["fnr"]],
+  [".http://x.y", ["construct"]],
+  ["awww.x.y", []],
+  ["5http://x.y", ["construct"]],
+  ["/a@b.cd", []],
+  ["(www.x.y)", ["construct"]],
+  ["_www.x.y_", ["construct"]],
 ];
 
-/** The single path a lone trigger takes, or `none` when it produces no link. */
-function satteriPath(input: string): PathKind | "none" {
-  return satteriPaths(input)[0] ?? "none";
-}
-
-// Each trigger has its own preceding-character rule and they disagree, so the
-// interesting cells are the ones where two of them differ. What the construct
-// path blocks falls through to find-and-replace, which wants whitespace or
-// punctuation.
+// The three triggers have disagreeing preceding-character rules, and what the
+// construct path blocks falls through to find-and-replace, which wants
+// whitespace or punctuation.
 const TRIGGERS = ["www.x.y", "http://x.y", "a@b.cd"] as const;
 const PRECEDING_RULES: Array<{
   prefix: string;
   name: string;
-  paths: [PathKind | "none", PathKind | "none", PathKind | "none"];
+  paths: [PathKind, PathKind, PathKind];
 }> = [
   { prefix: "", name: "start of document", paths: ["construct", "construct", "construct"] },
   { prefix: " ", name: "space", paths: ["construct", "construct", "construct"] },
@@ -137,90 +116,57 @@ const PRECEDING_RULES: Array<{
   { prefix: "你", name: "CJK letter", paths: ["none", "construct", "construct"] },
   { prefix: "你好", name: "two CJK letters", paths: ["none", "construct", "construct"] },
   { prefix: "​", name: "zero-width space (Cf)", paths: ["none", "construct", "construct"] },
-  // U+FEFF is not `White_Space`, but JavaScript's `\s` matches it, so
-  // find-and-replace treats it as a boundary. Prefixed with a letter to keep
-  // the document's own leading-BOM handling out of it.
+  // U+FEFF is not `White_Space`, yet find-and-replace takes it as a boundary.
+  // Prefixed with a letter to keep leading-BOM handling out of it.
   { prefix: "a﻿", name: "byte order mark", paths: ["fnr", "construct", "construct"] },
 ];
 
 describe("GFM autolink preceding-character rules", () => {
   test.each(PRECEDING_RULES)("$name", ({ prefix, paths }) => {
     for (const [ix, trigger] of TRIGGERS.entries()) {
-      expect(satteriPath(prefix + trigger), `${JSON.stringify(prefix + trigger)}`).toBe(paths[ix]);
-      expect(referencePaths(prefix + trigger)[0] ?? "none").toBe(paths[ix]);
+      expect(referencePath(prefix + trigger), JSON.stringify(prefix + trigger)).toBe(paths[ix]);
     }
   });
 });
 
-// Deliberate divergence: remark inspects the preceding character as a single
-// UTF-16 code unit, so an astral one is judged as a lone surrogate and always
-// rejected. Sätteri classifies the whole scalar and accepts astral
-// punctuation and symbols. See website/content/docs/divergences.md.
+// Deliberate divergence: remark reads the preceding character as one UTF-16
+// code unit, so an astral one is a lone surrogate and always rejected; satteri
+// classifies the whole scalar. See website/content/docs/divergences.md.
 describe("divergence: astral characters before a GFM autolink", () => {
-  const ASTRAL_PUNCTUATION_OR_SYMBOL = [
+  const ASTRAL = [
     { prefix: "\u{10101}", name: "U+10101 AEGEAN WORD SEPARATOR DOT (Po)" },
     { prefix: "\u{1F600}", name: "U+1F600 GRINNING FACE (So)" },
     { prefix: "\u{1D6DB}", name: "U+1D6DB MATHEMATICAL BOLD PARTIAL DIFFERENTIAL (Sm)" },
+    // `Nd`, so both sides reject it — for different reasons, which is the point.
+    { prefix: "\u{1FBF0}", name: "U+1FBF0 SEGMENTED DIGIT ZERO (Nd)" },
   ];
 
-  test.each(ASTRAL_PUNCTUATION_OR_SYMBOL)("$name starts an autolink", ({ prefix }) => {
-    // Unbracketed, only `www.` shows it: the other two take the construct path.
-    expect(satteriPath(`${prefix}www.x.y`)).toBe("fnr");
-    expect(referencePaths(`${prefix}www.x.y`)).toEqual([]);
-    // Behind an unclosed `[` the construct is blocked, so all three triggers
-    // fall through to the rule that differs.
-    for (const trigger of TRIGGERS) {
-      expect(satteriPath(`[${prefix}${trigger}`)).toBe("fnr");
-      expect(referencePaths(`[${prefix}${trigger}`)).toEqual([]);
-    }
-  });
-
-  test("control: an astral character that is neither punctuation nor a symbol", () => {
-    // `Nd`, so both sides reject it — for different reasons, which is the point.
-    const prefix = "\u{1FBF0}";
-    expect(satteriPath(`${prefix}www.x.y`)).toBe("none");
+  test.each(ASTRAL)("$name starts nothing in remark", ({ prefix }) => {
     expect(referencePaths(`${prefix}www.x.y`)).toEqual([]);
     for (const trigger of TRIGGERS) {
-      expect(satteriPath(`[${prefix}${trigger}`)).toBe("none");
       expect(referencePaths(`[${prefix}${trigger}`)).toEqual([]);
     }
   });
 });
 
 describe("GFM autolink path selection", () => {
-  test("the probe measures the parser, not a release binary", () => {
-    assertDebugBinary();
-  });
+  test("each input takes the expected path in remark", () => {
+    const mismatches = PROBE_INPUTS.filter(
+      ([input, expected]) => JSON.stringify(referencePaths(input)) !== JSON.stringify(expected),
+    ).map(([input, expected]) => `${JSON.stringify(input)} want [${expected}]`);
 
-  test("skipping the pass changes nothing that has no autolink", () => {
-    // The differential signal holds only while the skip is the sole difference.
-    for (const input of ["[a](/b) x", "`[` x", "# [a", "text **bold** and `code`"]) {
-      expect(satteriMdastSkippingFnrAutolink(input)).toEqual(satteriMdast(input));
-    }
+    expect(mismatches).toEqual([]);
   });
 
   test("every reported span slices back to its source", () => {
-    for (const input of PROBE_INPUTS) {
+    for (const [input] of PROBE_INPUTS) {
       assertSliceInvariantEverywhere(satteriMdast(input), input);
     }
   });
 
-  test("each autolink takes the same path as in remark", () => {
-    assertDebugBinary();
-    const mismatches: string[] = [];
-    for (const input of PROBE_INPUTS) {
-      const expected = referencePaths(input);
-      const actual = satteriPaths(input);
-      if (JSON.stringify(expected) !== JSON.stringify(actual)) {
-        mismatches.push(
-          `${JSON.stringify(input)}  ref=[${expected.join(",")}] sat=[${actual.join(",")}]`,
-        );
-      }
+  test("each input's tree matches remark", () => {
+    for (const [input] of PROBE_INPUTS) {
+      assertMdastConformance(input);
     }
-
-    expect(
-      mismatches,
-      `${mismatches.length} of ${PROBE_INPUTS.length} inputs take the wrong path`,
-    ).toEqual([]);
   });
 });

@@ -493,19 +493,12 @@ fn parse_mdast_pooled(
     mdx: bool,
     track_positions: bool,
 ) -> Result<satteri_arena::Arena<Mdast>> {
-    parse_mdast_pooled_with_debug(source, opts, mdx, track_positions, Default::default())
-}
-
-fn parse_mdast_pooled_with_debug(
-    source: &str,
-    opts: satteri_pulldown_cmark::Options,
-    mdx: bool,
-    track_positions: bool,
-    debug: satteri_pulldown_cmark::DebugParseOptions,
-) -> Result<satteri_arena::Arena<Mdast>> {
     let reuse = acquire_mdast_arena();
-    let (mut mdast, mdx_errors) =
-        satteri_pulldown_cmark::parse_into_with_debug(source, opts, track_positions, reuse, debug);
+    let (mut mdast, mdx_errors) = if track_positions {
+        satteri_pulldown_cmark::parse_into(source, opts, reuse)
+    } else {
+        satteri_pulldown_cmark::parse_no_positions_into(source, opts, reuse)
+    };
     #[cfg(feature = "mdx")]
     if mdx {
         if let Some((offset, msg)) = mdx_errors.first() {
@@ -565,24 +558,6 @@ pub fn create_mdast_handle(
 ) -> Result<MdastHandle> {
     let opts = features_to_options(features, false);
     let mut arena = parse_mdast_pooled(&source, opts, false, track_positions.unwrap_or(true))?;
-    arena.mdx = false;
-    Ok(External::new(Mutex::new(arena)))
-}
-
-/// Parse with the find-and-replace autolink post-pass skipped, so the
-/// conformance probe can tell which pass produced a link. Absent from release
-/// builds and from the published types; not part of the public API.
-#[cfg(debug_assertions)]
-#[napi(skip_typescript)]
-pub fn create_mdast_handle_skipping_fnr_autolink(
-    source: String,
-    features: Option<JsFeatures>,
-) -> Result<MdastHandle> {
-    let opts = features_to_options(features, false);
-    let debug = satteri_pulldown_cmark::DebugParseOptions {
-        skip_fnr_autolink: true,
-    };
-    let mut arena = parse_mdast_pooled_with_debug(&source, opts, false, true, debug)?;
     arena.mdx = false;
     Ok(External::new(Mutex::new(arena)))
 }

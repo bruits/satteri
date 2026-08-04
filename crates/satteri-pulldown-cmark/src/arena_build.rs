@@ -45,38 +45,12 @@ pub const DEFAULT_OPTIONS: Options = Options::from_bits_truncate(
 pub const MDX_OPTIONS: Options =
     Options::from_bits_truncate(DEFAULT_OPTIONS.bits() | Options::ENABLE_MDX.bits());
 
-/// Parse knobs that exist only in debug builds, for harnesses that need to
-/// observe an intermediate state the public API doesn't expose. Every field is
-/// compiled out in release, so a release parse can't take a different path.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct DebugParseOptions {
-    /// Skip the GFM autolink find-and-replace post-pass. The conformance
-    /// path-selection probe parses twice — with and without it — to tell which
-    /// pass produced a given `link` node.
-    #[cfg(debug_assertions)]
-    pub skip_fnr_autolink: bool,
-}
-
-impl DebugParseOptions {
-    #[inline]
-    fn skip_fnr_autolink(self) -> bool {
-        #[cfg(debug_assertions)]
-        {
-            self.skip_fnr_autolink
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            false
-        }
-    }
-}
-
 /// Parse markdown source into an Arena.
 ///
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
 pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, None, DebugParseOptions::default())
+    parse_inner(source, options, true, None, false)
 }
 
 /// Skip-positions variant: leaves per-node line/column fields at the zero
@@ -84,7 +58,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
 /// the cp-offset post-pass. Byte offsets are still filled. Use when the
 /// consumer (HTML/JS codegen) never reads positions.
 pub fn parse_no_positions(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, None, DebugParseOptions::default())
+    parse_inner(source, options, false, None, false)
 }
 
 /// Same as `parse_no_positions` but recycles a caller-pooled arena (via
@@ -95,13 +69,7 @@ pub fn parse_no_positions_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(
-        source,
-        options,
-        false,
-        Some(reuse),
-        DebugParseOptions::default(),
-    )
+    parse_inner(source, options, false, Some(reuse), false)
 }
 
 /// Same as [`parse`] but recycles a caller-pooled arena; see [`parse_no_positions_into`].
@@ -110,34 +78,17 @@ pub fn parse_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(
-        source,
-        options,
-        true,
-        Some(reuse),
-        DebugParseOptions::default(),
-    )
+    parse_inner(source, options, true, Some(reuse), false)
 }
 
-/// Same as [`parse_into`] / [`parse_no_positions_into`] but with the debug-only
-/// knobs in [`DebugParseOptions`] applied. Identical to those in release builds,
-/// where every knob is compiled out.
-pub fn parse_into_with_debug(
-    source: &str,
-    options: Options,
-    track_positions: bool,
-    reuse: Arena<Mdast>,
-    debug: DebugParseOptions,
-) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, track_positions, Some(reuse), debug)
-}
-
+/// `skip_fnr_autolink` is the path-selection probe's lever: every entry point
+/// above passes `false`, so only `#[cfg(test)]` code can turn it on.
 fn parse_inner(
     source: &str,
     options: Options,
     track_positions: bool,
     reuse: Option<Arena<Mdast>>,
-    debug: DebugParseOptions,
+    skip_fnr_autolink: bool,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
     // feature set. Expand it into the granular flags the parser checks so
@@ -1508,8 +1459,7 @@ fn parse_inner(
                         inner.tree.push();
                     }
 
-                    // A blocked autolink marker leaves a zero-width `Text`
-                    // behind, and an empty text node is never wanted. The
+                    // A blocked autolink marker leaves a zero-width `Text`. The
                     // escaped form is not empty: it reaches back over the `\`.
                     ItemBody::Text {
                         backslash_escaped: false,
@@ -1940,10 +1890,8 @@ fn parse_inner(
                         inner.tree.next_sibling(cur_ix);
                     }
 
-                    // `handle_inline_pass1` either fires or unlinks every
-                    // marker, and constructs that consume an item range drop
-                    // the markers inside it. One arriving here means a range
-                    // escaped resolution.
+                    // `handle_inline_pass1` fires or unlinks every marker, and a
+                    // consumed item range drops the markers inside it.
                     ItemBody::MaybeAutolink(..) => {
                         debug_assert!(false, "unresolved autolink marker reached arena_build");
                         inner.tree.next_sibling(cur_ix);
@@ -2027,10 +1975,9 @@ fn parse_inner(
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
         // Triggers are case-insensitive (`HTTP://`, `WWW.`), so check the
-        // uppercase variants too. `&` counts as a trigger as well: the pass
-        // matches decoded text, where a character reference can supply a
-        // trigger the raw bytes lack (`&#104;ttp://x.y`).
-        if !debug.skip_fnr_autolink()
+        // uppercase variants too, and `&`: the pass matches decoded text, where
+        // a reference can supply a trigger the raw bytes lack (`&#104;ttp://x.y`).
+        if !skip_fnr_autolink
             && (memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
                 || memchr::memchr3(b'H', b'W', b'&', source_bytes).is_some())
         {
@@ -2549,4 +2496,221 @@ fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<
         .collect();
 
     encode_mdx_jsx_element_data(name_ref, &attr_tuples, true)
+}
+
+/// Which of the two autolink routes produced each link. They disagree on
+/// decoding, accepted domains, and link extent, so rendered-output conformance
+/// can't pin the choice. Expected values are remark's classification;
+/// `test/conformance/autolink-path.test.ts` holds remark to the same tables.
+#[cfg(test)]
+mod autolink_path_probe {
+    use super::{parse_inner, Arena, Mdast, MdastNodeType, Options};
+    use satteri_ast::mdast::decode_link_data;
+
+    /// The JS conformance features: GFM, no frontmatter, no math.
+    const PROBE_OPTIONS: Options = Options::from_bits_truncate(
+        Options::ENABLE_GFM.bits()
+            | Options::ENABLE_TABLES.bits()
+            | Options::ENABLE_STRIKETHROUGH.bits()
+            | Options::ENABLE_TASKLISTS.bits()
+            | Options::ENABLE_FOOTNOTES.bits(),
+    );
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Path {
+        Construct,
+        Fnr,
+        None,
+    }
+    use Path::{Construct as C, Fnr as F, None as N};
+
+    /// Unique per link within a parse, so it survives the diff between parses.
+    type LinkKey = (u32, u32, String);
+
+    fn links(source: &str, skip_fnr_autolink: bool) -> Vec<LinkKey> {
+        let (arena, _) = parse_inner(source, PROBE_OPTIONS, true, None, skip_fnr_autolink);
+        let mut out = Vec::new();
+        if !arena.is_empty() {
+            collect(&arena, 0, &mut out);
+        }
+        out
+    }
+
+    fn collect(arena: &Arena<Mdast>, id: u32, out: &mut Vec<LinkKey>) {
+        let node = arena.get_node(id);
+        if matches!(
+            MdastNodeType::from_u8(node.node_type),
+            Some(MdastNodeType::Link)
+        ) {
+            let url = decode_link_data(arena.get_type_data(id)).url;
+            out.push((
+                node.start_offset,
+                node.end_offset,
+                arena.get_str(url).to_string(),
+            ));
+        }
+        let start = node.children_start as usize;
+        for i in start..start + node.children_count as usize {
+            collect(arena, arena.children[i], out);
+        }
+    }
+
+    /// Every link in document order, by route.
+    fn paths(source: &str) -> Vec<Path> {
+        let mut construct = links(source, true);
+        links(source, false)
+            .into_iter()
+            .map(|link| match construct.iter().position(|c| *c == link) {
+                Some(ix) => {
+                    construct.remove(ix);
+                    C
+                }
+                None => F,
+            })
+            .collect()
+    }
+
+    /// The single path a lone trigger takes.
+    fn path(source: &str) -> Path {
+        paths(source).first().copied().unwrap_or(N)
+    }
+
+    /// Every shape where the three opener states (still open, closed-and-failed,
+    /// closed-and-resolved) differ, plus every construct that can swallow a
+    /// bracket before the trigger sees it.
+    #[test]
+    fn each_autolink_takes_the_same_path_as_in_remark() {
+        let cases: &[(&str, &[Path])] = &[
+            // Bracket-opener states.
+            ("[a](/b) www.x.y", &[C, C]),
+            ("[a [b](/c) www.x.y", &[C, F]),
+            ("[a] www.x.y", &[C]),
+            ("![a] www.x.y", &[C]),
+            ("[a www.x.y", &[F]),
+            ("[a\nwww.x.y", &[F]),
+            ("[a\n\nwww.x.y", &[C]),
+            ("# [a www.x.y", &[F]),
+            // Brackets consumed by an enclosing construct before the trigger.
+            ("[a `]` www.x.y", &[F]),
+            ("`[` www.x.y", &[C]),
+            ("[a ``]`` www.x.y", &[F]),
+            ("``[`` www.x.y", &[C]),
+            ("<span a='['> www.x.y", &[C]),
+            ("[a <http://q.r/]> www.x.y", &[C, F]),
+            // A trigger inside a link destination the parser has already resolved.
+            ("[a](https://x.y)x", &[C]),
+            ("[a](www.x.y)x", &[C]),
+            // …and inside one it never resolves, so the trigger sees ordinary bytes.
+            ("[[x]](https://x.y)x\n\n[x]: /", &[C]),
+            ("[[x]](www.a.com)y\n\n[x]: /", &[C]),
+            ("[foo][bar](https://x.y)x\n\n[bar]: /", &[C]),
+            ("[[a](/b)](https://x.y)x", &[C, C]),
+            // Unclosed or non-resolving brackets around a trigger.
+            ("[www.a.com", &[F]),
+            ("[www.a.com]", &[F]),
+            ("[www.a.com](", &[F]),
+            ("![www.a.com", &[F]),
+            ("[foo][www.a.com]", &[F]),
+            ("[https://a.com](", &[F]),
+            // Preceding-character rules. `www.` takes a fixed whitelist,
+            // `http://` rejects only ASCII letters, and email rejects `/` and atext.
+            ("www.x.y", &[C]),
+            (".www.x.y", &[F]),
+            (".http://x.y", &[C]),
+            ("awww.x.y", &[]),
+            ("5http://x.y", &[C]),
+            ("/a@b.cd", &[]),
+            ("(www.x.y)", &[C]),
+            ("_www.x.y_", &[C]),
+        ];
+
+        assert_eq!(cases.len(), 34, "the probe lost inputs");
+        let mismatches: Vec<String> = cases
+            .iter()
+            .filter(|(input, expected)| paths(input) != **expected)
+            .map(|(input, expected)| format!("{input:?} want {expected:?} got {:?}", paths(input)))
+            .collect();
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    /// The three triggers have disagreeing preceding-character rules, and what
+    /// the construct path blocks falls through to find-and-replace, which wants
+    /// whitespace or punctuation.
+    #[test]
+    fn a_preceding_character_selects_the_path_per_trigger() {
+        const TRIGGERS: [&str; 3] = ["www.x.y", "http://x.y", "a@b.cd"];
+        let rules: &[(&str, [Path; 3])] = &[
+            ("", [C, C, C]),
+            (" ", [C, C, C]),
+            ("(", [C, C, C]),
+            ("*", [C, C, C]),
+            ("_", [C, C, C]),
+            ("]", [C, C, C]),
+            ("~", [C, C, C]),
+            ("[", [F, F, F]),
+            (".", [F, C, C]),
+            ("/", [F, C, N]),
+            ("+", [F, C, C]),
+            (")", [F, C, C]),
+            ("!", [F, C, C]),
+            (":", [F, C, C]),
+            ("¥", [F, C, C]),
+            ("→", [F, C, C]),
+            ("a", [N, N, C]),
+            ("5", [N, C, C]),
+            ("é", [N, C, C]),
+            ("你", [N, C, C]),
+            ("你好", [N, C, C]),
+            ("\u{200b}", [N, C, C]),
+            // U+FEFF is not `White_Space`, yet find-and-replace takes it as a
+            // boundary. Prefixed with a letter to keep leading-BOM handling out.
+            ("a\u{feff}", [F, C, C]),
+        ];
+
+        for (prefix, expected) in rules {
+            for (trigger, want) in TRIGGERS.iter().zip(expected) {
+                let input = format!("{prefix}{trigger}");
+                assert_eq!(path(&input), *want, "{input:?}");
+            }
+        }
+    }
+
+    /// Deliberate divergence: the preceding character is classified as a whole
+    /// scalar, so astral punctuation and symbols open an autolink.
+    /// See website/content/docs/divergences.md.
+    #[test]
+    fn an_astral_punctuation_or_symbol_starts_an_autolink() {
+        for prefix in ["\u{10101}", "\u{1f600}", "\u{1d6db}"] {
+            // Unbracketed, only `www.` shows it: the other two take the construct path.
+            assert_eq!(path(&format!("{prefix}www.x.y")), F);
+            // An unclosed `[` blocks the construct, so all three fall through.
+            for trigger in ["www.x.y", "http://x.y", "a@b.cd"] {
+                assert_eq!(path(&format!("[{prefix}{trigger}")), F, "{trigger}");
+            }
+        }
+    }
+
+    /// `Nd`: the control for the divergence above.
+    #[test]
+    fn an_astral_digit_starts_nothing() {
+        let prefix = "\u{1fbf0}";
+        assert_eq!(path(&format!("{prefix}www.x.y")), N);
+        for trigger in ["www.x.y", "http://x.y", "a@b.cd"] {
+            assert_eq!(path(&format!("[{prefix}{trigger}")), N, "{trigger}");
+        }
+    }
+
+    /// The differential signal holds only while the skip is the sole difference.
+    #[test]
+    fn skipping_the_pass_changes_nothing_that_has_no_autolink() {
+        for input in ["[a](/b) x", "`[` x", "# [a", "text **bold** and `code`"] {
+            let (skipped, _) = parse_inner(input, PROBE_OPTIONS, true, None, true);
+            let (full, _) = parse_inner(input, PROBE_OPTIONS, true, None, false);
+            assert_eq!(
+                satteri_ast::mdast_to_html(&skipped),
+                satteri_ast::mdast_to_html(&full),
+                "{input:?}"
+            );
+        }
+    }
 }

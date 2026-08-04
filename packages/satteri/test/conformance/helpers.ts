@@ -5,17 +5,12 @@ import type {
 } from "@mdx-js/mdx";
 import {
   evaluate as satteriEvaluate,
-  createMdastHandle,
   defineHastPlugin,
-  dropHandle,
   markdownToJs,
   markdownToMdast,
   markdownToHast,
   markdownToHtml,
-  materializeMdastTree,
-  MdastReader,
   mdxToJs,
-  serializeHandle,
 } from "../../src/index.js";
 import type { Features, EvaluateOptions, MarkdownToJsOptions, HastNode } from "../../src/index.js";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -33,9 +28,6 @@ import rehypeRaw from "rehype-raw";
 import rehypeStringify from "rehype-stringify";
 import type { Nodes } from "hast";
 import { expect } from "vitest";
-import { readdirSync } from "node:fs";
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 
 const mdxRuntime = runtime as unknown as Pick<MdxEvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 const satteriRuntime = runtime as unknown as Pick<EvaluateOptions, "Fragment" | "jsx" | "jsxs">;
@@ -175,51 +167,6 @@ export function referenceHast(md: string): unknown {
 
 export function satteriMdast(md: string): unknown {
   return serialize(markdownToMdast(md, { features: BASE_FEATURES }));
-}
-
-// The debug entry point is kept out of the published types and out of the
-// binding's re-exports, so it is reachable only straight off the addon.
-type MdastHandleRef = Parameters<typeof dropHandle>[0];
-
-let debugParse: ((md: string, features: Features) => MdastHandleRef) | undefined;
-function loadDebugParse(): typeof debugParse {
-  if (debugParse) return debugParse;
-  const pkgRoot = new URL("../../", import.meta.url);
-  const addon = readdirSync(pkgRoot).find((f) => /^satteri_napi\..*\.node$/.test(f));
-  if (!addon) return undefined;
-  const native = createRequire(import.meta.url)(fileURLToPath(new URL(addon, pkgRoot)));
-  debugParse = (native as Record<string, unknown>).createMdastHandleSkippingFnrAutolink as
-    | typeof debugParse
-    | undefined;
-  return debugParse;
-}
-
-/** Parse with the find-and-replace autolink pass skipped. Debug builds only. */
-export function satteriMdastSkippingFnrAutolink(md: string): unknown {
-  const parse = loadDebugParse();
-  if (!parse) {
-    throw new Error(
-      "satteri binding has no debug entry point — build it with `pnpm build:binary:native:debug`",
-    );
-  }
-  const handle = parse(md, { frontmatter: false, math: false });
-  try {
-    return serialize(materializeMdastTree(new MdastReader(serializeHandle(handle))));
-  } finally {
-    dropHandle(handle);
-  }
-}
-
-/**
- * Throw unless the binding under test skips the pass. `[www.a.com` is a
- * find-and-replace-only autolink, so with the pass skipped the `link` must be
- * gone; otherwise every path classification would read as `construct`.
- */
-export function assertDebugBinary(): void {
-  const skipped = JSON.stringify(satteriMdastSkippingFnrAutolink("[www.a.com"));
-  if (skipped.includes('"link"')) {
-    throw new Error("satteri binding did not skip the find-and-replace autolink pass");
-  }
 }
 
 export function satteriHast(md: string): unknown {
@@ -410,10 +357,9 @@ export function satteriFmHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
-// Deliberate divergence: find-and-replace autolinks carry source positions in
-// Sätteri and none in remark. Stripping positions before comparing would hide
-// every other position bug in the tree, so each extra position is verified
-// against the source and only then removed.
+// Find-and-replace autolinks carry source positions here and none in remark.
+// Dropping positions wholesale would hide every other position bug, so each
+// extra one is verified against the source before being removed.
 
 interface PositionedNode {
   type: string;
@@ -440,10 +386,8 @@ function decodeEntity(raw: string): string | undefined {
 const ENTITY_RE = /^&(?:#[Xx][0-9A-Fa-f]{1,6}|#\d{1,7}|[A-Za-z][A-Za-z0-9]{0,31});/;
 
 /**
- * Undo the transforms that sit between raw source and a text node's value:
- * character references, backslash escapes, line-ending normalization, and the
- * block prefix stripped from a continuation line. Written independently of the
- * parser's own alignment so a symmetric bug can't cancel out.
+ * Undo the transforms between raw source and a text node's value. Written
+ * independently of the parser's own alignment so a symmetric bug can't cancel out.
  */
 function decodeRawSlice(raw: string, value: string): string {
   let out = "";
@@ -463,7 +407,6 @@ function decodeRawSlice(raw: string, value: string): string {
       i += 2;
       continue;
     } else if (c === " " || c === "\t") {
-      // Whitespace at the end of a line is dropped from the value.
       let j = i;
       while (j < raw.length && (raw[j] === " " || raw[j] === "\t")) j += 1;
       if (raw[j] === "\n" || raw[j] === "\r") {
@@ -471,13 +414,13 @@ function decodeRawSlice(raw: string, value: string): string {
         continue;
       }
     } else if (c === "\n" || c === "\r") {
-      // All three line endings behave alike, and both conventions for them are
-      // in use: a `text` keeps the raw ending, an `inlineCode` normalizes it.
+      // Both conventions are in use: a `text` keeps the raw line ending, an
+      // `inlineCode` normalizes it.
       const ending = c === "\r" && raw[i + 1] === "\n" ? "\r\n" : c;
       out += value.startsWith(ending, out.length) ? ending : "\n";
       i += ending.length;
-      // Only a *block* prefix is stripped; the same characters can be content
-      // on a continuation line, so stop as soon as the value agrees.
+      // The same characters can be content, so stop stripping the block prefix
+      // as soon as the value agrees.
       while (
         i < raw.length &&
         (raw[i] === " " || raw[i] === "\t" || raw[i] === ">") &&
@@ -500,9 +443,8 @@ function assertSliceInvariant(node: PositionedNode, input: string, label: string
   expect(end.offset, `${label}: end before start`).toBeGreaterThanOrEqual(start.offset);
   expect(end.offset, `${label}: end offset out of range`).toBeLessThanOrEqual(input.length);
   if (typeof node.value === "string") {
-    // Either convention is fine, but the span has to be exact under one of
-    // them: the construct path slices raw source into the value, while the
-    // find-and-replace path works from the decoded text.
+    // The span must be exact under one convention or the other: the construct
+    // path slices raw source into the value, find-and-replace decodes it.
     const slice = input.slice(start.offset, end.offset);
     if (slice !== node.value) {
       expect(
@@ -540,7 +482,6 @@ function isAutolinkNode(node: PositionedNode): boolean {
   return node.type === "link" || (node.type === "element" && node.tagName === "a");
 }
 
-/** Verify and drop every position in a subtree the reference left position-less. */
 function stripVerifiedSubtree(
   actual: PositionedNode | undefined,
   expected: PositionedNode | undefined,
@@ -548,9 +489,8 @@ function stripVerifiedSubtree(
   label: string,
 ): void {
   if (!actual || !expected) return;
-  // A `link` carries no `value`, so the slice invariant can only bounds-check
-  // it. Its span still has to sit correctly among its siblings, or a wrong
-  // position would be deleted here unexamined.
+  // A `link` has no `value`, so the slice invariant only bounds-checks it;
+  // sibling ordering is the rest of the check before the position is deleted.
   assertSpanSet(actual, label);
   if (actual.position) {
     assertSliceInvariant(actual, input, label);
@@ -562,11 +502,8 @@ function stripVerifiedSubtree(
   }
 }
 
-/**
- * Slicing the source by any `link` or `text` node's offsets must reproduce the
- * raw text that produced it — the invariant that keeps a supplied position from
- * being worse than the absent one it replaces.
- */
+/** The slice invariant on every `link` and `text`: a wrong position is worse
+ * than the absent one it replaces. */
 export function assertSliceInvariantEverywhere(tree: unknown, input: string): void {
   const walk = (node: PositionedNode, label: string): void => {
     if (node.position && (node.type === "link" || node.type === "text")) {
@@ -586,8 +523,8 @@ export function reconcileFnrPositions(actual: unknown, expected: unknown, input:
     const expectedChildren = e.children;
     if (!Array.isArray(actualChildren) || !Array.isArray(expectedChildren)) return;
     if (actualChildren.length !== expectedChildren.length) return;
-    // Scoped to the exact shape `findAndReplace` produces: a parent holding a
-    // position-less link. A stray position anywhere else still fails.
+    // Scoped to the shape `findAndReplace` produces — a parent holding a
+    // position-less link — so a stray position anywhere else still fails.
     const inFnrScope = expectedChildren.some((c) => isAutolinkNode(c) && !c.position);
     if (inFnrScope) assertSpanSet(a, label);
     for (const [ix, expectedChild] of expectedChildren.entries()) {
