@@ -96,6 +96,7 @@ const PROBE_INPUTS: Array<[string, PathKind[]]> = [
   ["/a@b.cd", []],
   ["(www.x.y)", ["construct"]],
   ["_www.x.y_", ["construct"]],
+  ["x\u{85}www.x.y", []],
 ];
 
 // The three triggers have disagreeing preceding-character rules, and what the
@@ -132,6 +133,8 @@ const PRECEDING_RULES: Array<{
   // U+FEFF is not `White_Space`, yet find-and-replace takes it as a boundary.
   // Prefixed with a letter to keep leading-BOM handling out of it.
   { prefix: "a﻿", name: "byte order mark", paths: ["fnr", "construct", "construct"] },
+  // U+0085 is `White_Space`, but find-and-replace does not take it as a boundary.
+  { prefix: "\u{85}", name: "next line", paths: ["none", "construct", "construct"] },
 ];
 
 describe("GFM autolink preceding-character rules", () => {

@@ -2636,9 +2636,10 @@ mod autolink_path_probe {
             ("/a@b.cd", &[]),
             ("(www.x.y)", &[C]),
             ("_www.x.y_", &[C]),
+            ("x\u{85}www.x.y", &[]),
         ];
 
-        assert_eq!(cases.len(), 43, "the probe lost inputs");
+        assert_eq!(cases.len(), 44, "the probe lost inputs");
         let mismatches: Vec<String> = cases
             .iter()
             .filter(|(input, expected)| paths(input) != **expected)
@@ -2679,6 +2680,9 @@ mod autolink_path_probe {
             // U+FEFF is not `White_Space`, yet find-and-replace takes it as a
             // boundary. Prefixed with a letter to keep leading-BOM handling out.
             ("a\u{feff}", [F, C, C]),
+            // U+0085 is `White_Space`, but find-and-replace does not take it
+            // as a boundary.
+            ("\u{85}", [N, C, C]),
         ];
 
         for (prefix, expected) in rules {

@@ -901,8 +901,7 @@ fn preceding_char(bytes: &[u8], ix: usize) -> Option<char> {
 pub(crate) fn fnr_previous_ok(bytes: &[u8], ix: usize) -> bool {
     match preceding_char(bytes, ix) {
         None => true,
-        // U+FEFF isn't `White_Space`, but counts as a boundary here.
-        Some(c) => c.is_whitespace() || c == '\u{FEFF}' || is_punctuation(c),
+        Some(c) => is_autolink_whitespace(c) || is_punctuation(c),
     }
 }
 
