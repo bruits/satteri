@@ -891,7 +891,7 @@ describe("MDAST conformance: control and format characters at a text-node edge",
   });
 });
 
-describe("MDAST conformance: table cell starting with an escaped pipe", () => {
+describe("MDAST conformance: table cell with an escaped pipe", () => {
   test("leading `\\|` in a cell", () => {
     assertMdastConformance("| a |\n| - |\n| \\|abc |\n");
     assertMdastConformance("| a |\n| - |\n| \\| |\n");
@@ -909,6 +909,14 @@ describe("MDAST conformance: table cell starting with an escaped pipe", () => {
   test("a leading `\\|` followed by an inline construct", () => {
     assertMdastConformance("| a |\n| - |\n| \\|*e* |\n");
     assertMdastConformance("| a |\n| - |\n| \\|`c` |\n");
+  });
+
+  test("a text node that starts on `\\|` after an inline construct", () => {
+    assertMdastConformance("| a |\n| - |\n| *x*\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| `c`\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| user@example.com\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| **b**\\|\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| [t](u)\\|z |\n");
   });
 
   test("an escape that is neither leading nor a pipe is unaffected", () => {
