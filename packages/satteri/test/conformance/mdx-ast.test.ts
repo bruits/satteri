@@ -429,6 +429,37 @@ describe("MDX expression holding the `]` that ends a reference label", () => {
     assertMdastConformance('[a][{"x"}]\n\n[{"x"}]: /u\n');
     assertMdastConformance('x {"]"} y\n');
   });
+
+  // The tree comparison above drops positions, so the span is pinned here.
+  test("the tail spans exactly the bytes past the label", () => {
+    const md = '[a][{"]"}]\n\n[{"]: /u\n';
+    const tree = mdxToMdast(md) as { children: Array<{ children: AnyNode[] }> };
+    expect(tree.children[0].children[1]).toEqual({
+      type: "text",
+      value: '"}]',
+      position: {
+        start: { line: 1, column: 8, offset: 7 },
+        end: { line: 1, column: 11, offset: 10 },
+      },
+    });
+  });
+
+  // The tail is emitted as literal text, so inline markup inside it is never
+  // tokenized. Pre-fix those bytes were dropped outright, so this is the
+  // remaining half of the class rather than a regression.
+  describe("divergence: markup in the tail stays literal", () => {
+    test.fails("emphasis", () => {
+      assertMdastConformance('[a][{"]*x*"}]\n\n[{"]: /u\n');
+    });
+
+    test.fails("inline code", () => {
+      assertMdastConformance('[a][{"]`c`"}]\n\n[{"]: /u\n');
+    });
+
+    test.fails("character reference", () => {
+      assertMdastConformance('[a][{"]&amp;"}]\n\n[{"]: /u\n');
+    });
+  });
 });
 
 // Found by `fuzz/mdx.test.ts` at seed 3. A `//` line comment ends at any line
