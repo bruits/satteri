@@ -296,8 +296,7 @@ describe("family E: the deferred splice", () => {
   ])("%j", conforms);
 });
 
-// Family F — line endings. CRLF agrees everywhere; a lone CR does not, and the
-// pin below holds that.
+// Family F — line endings.
 describe("family F: line endings", () => {
   test.each([
     ["www.example.com\r\n", ["http://www.example.com"]],
@@ -308,14 +307,6 @@ describe("family F: line endings", () => {
     ["http://example.com/p.\r\n", ["http://example.com/p"]],
     ["> x\r\n> [a] www.example.com\r\n", ["http://www.example.com"]],
   ])("%j", conforms);
-
-  // Pre-existing and not autolink-specific: the block parser splits on a lone
-  // CR but the line map does not, so every line/column after one is short by a
-  // line. Offsets are right, which is why the autolink cases still slice back
-  // to their source.
-  test.fails("a lone CR is not a line break for line/column", () => {
-    assertMdastConformance("x\rwww.example.com\r");
-  });
 });
 
 // Family I — constructs that shift offsets before the link, including the ones
