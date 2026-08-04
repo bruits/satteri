@@ -90,6 +90,76 @@ describe("nested plugin lists", () => {
     expect(result.html).toContain("<h1>Title</h1>");
   });
 
+  test("null, undefined and false entries are skipped", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [null, recordMdast(order, "a"), undefined, false, recordMdast(order, "b")],
+    });
+
+    expect(order).toEqual(["a", "b"]);
+  });
+
+  test("skip entries are skipped inside a nested bundle", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [[null, recordMdast(order, "a")], [[false, recordMdast(order, "b")]]],
+    });
+
+    expect(order).toEqual(["a", "b"]);
+  });
+
+  test("an inline condition can drop a plugin from the list", () => {
+    const order: string[] = [];
+    const enabled = false;
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [enabled && recordMdast(order, "off"), recordMdast(order, "on")],
+    });
+
+    expect(order).toEqual(["on"]);
+  });
+
+  test("a factory may return a skip value instead of a plugin", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [() => null, recordMdast(order, "a"), () => undefined, () => false],
+    });
+
+    expect(order).toEqual(["a"]);
+  });
+
+  test("a factory returning a skip value drops the whole bundle it would have returned", () => {
+    const order: string[] = [];
+    const preset = (enabled: boolean) => () =>
+      enabled ? [recordMdast(order, "a"), recordMdast(order, "b")] : null;
+
+    markdownToHtml("# Title", { mdastPlugins: [preset(false), preset(true)] });
+
+    expect(order).toEqual(["a", "b"]);
+  });
+
+  test("a list of only skip values compiles as if no plugins were passed", () => {
+    const result = markdownToHtml("# Title", {
+      mdastPlugins: [null, undefined, false, [null], () => null],
+      hastPlugins: [false, () => undefined],
+    });
+
+    expect(result.html).toContain("<h1>Title</h1>");
+  });
+
+  test("hast entries accept skip values too", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      hastPlugins: [null, recordHast(order, "a"), false, () => null],
+    });
+
+    expect(order).toEqual(["a"]);
+  });
+
   test("factories inside a bundle are invoked once per compile", () => {
     let calls = 0;
     const factory = () => {

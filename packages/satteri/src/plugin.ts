@@ -17,7 +17,13 @@ export type MdastPluginInput = MdastPluginDefinition | (() => MdastPluginDefinit
  */
 export type HastPluginInput = HastPluginDefinition | (() => HastPluginDefinition);
 
-type PluginEntry<D> = D | (() => PluginEntry<D>) | readonly PluginEntry<D>[];
+type PluginEntry<D> =
+  | D
+  | (() => PluginEntry<D>)
+  | readonly PluginEntry<D>[]
+  | null
+  | undefined
+  | false;
 
 /** Entry accepted by `mdastPlugins`. */
 export type MdastPluginEntry = PluginEntry<MdastPluginDefinition>;
@@ -42,6 +48,9 @@ const MAX_FACTORY_DEPTH = 10;
 export function normalizePlugins<D>(entries: readonly PluginEntry<D>[], option: string): D[] {
   const out: D[] = [];
   const walk = (entry: PluginEntry<D>, factoryDepth: number): void => {
+    // Only these three, not every falsy value, so a stray `0` or `""` still
+    // reaches the push below and surfaces as a bad plugin rather than vanishing.
+    if (entry === null || entry === undefined || entry === false) return;
     if (Array.isArray(entry)) {
       for (const item of entry as readonly PluginEntry<D>[]) walk(item, factoryDepth);
       return;
