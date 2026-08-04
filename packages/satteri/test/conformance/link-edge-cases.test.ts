@@ -530,8 +530,9 @@ describe("MDAST conformance: unicode whitespace ends a GFM autolink literal", ()
     }
   });
 
-  test.fails("a U+FEFF ending the URL is dropped from the text after it", () => {
-    // The link's extent is right; the drop is general, not autolink-specific.
+  test("a U+FEFF ending the URL stays in the text after it", () => {
     assertMdastConformance("www.example.com/a\u{feff}b\n");
+    assertMdastConformance("https://example.com\u{feff}\n");
+    assertMdastConformance("user@example.com\u{feff}x\n");
   });
 });
