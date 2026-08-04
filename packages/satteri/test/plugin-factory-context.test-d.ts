@@ -86,6 +86,23 @@ markdownToHtml("x", {
   ],
 });
 
+// Readonly from the start: relaxing it later is additive, adding it is not.
+markdownToHtml("x", {
+  mdastPlugins: [
+    (ctx: PluginFactoryContext) => {
+      // @ts-expect-error - fileURL is readonly
+      ctx.fileURL = undefined;
+      // @ts-expect-error - sourceFormat is readonly
+      ctx.sourceFormat = "mdx";
+      // @ts-expect-error - source is readonly
+      ctx.source = "";
+      // @ts-expect-error - data is readonly
+      ctx.data = {};
+      return syncMdast;
+    },
+  ],
+});
+
 // A factory may take no parameter at all.
 markdownToHtml("x", { mdastPlugins: [() => syncMdast] });
 

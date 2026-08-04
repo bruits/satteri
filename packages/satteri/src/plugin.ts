@@ -11,13 +11,13 @@ import type { Data, SourceFormat } from "./types.js";
  */
 export interface PluginFactoryContext {
   /** The `fileURL` compile option, or `undefined` when none was given. */
-  fileURL: URL | undefined;
+  readonly fileURL: URL | undefined;
   /** Which kind of document is being compiled. */
-  sourceFormat: SourceFormat;
+  readonly sourceFormat: SourceFormat;
   /** The unparsed source. Intended for cheap checks, not for parsing Markdown. */
-  source: string;
+  readonly source: string;
   /** The document-level data bag, before any plugin has run. */
-  data: Data;
+  readonly data: Data;
 }
 
 export type MdastPluginDefinition = MdastPluginInstance & { name: string };
@@ -77,8 +77,8 @@ export function normalizePlugins<D>(
   const out: D[] = [];
   let ctx: PluginFactoryContext | undefined;
   const walk = (entry: PluginEntry<D>, factoryDepth: number): void => {
-    // Only these three, not every falsy value, so a stray `0` or `""` still
-    // reaches the push below and surfaces as a bad plugin rather than vanishing.
+    // Only these three, not every falsy value: a stray `0` or `""` is a
+    // mistake, so it reaches the push below and fails rather than vanishing.
     if (entry === null || entry === undefined || entry === false) return;
     if (Array.isArray(entry)) {
       for (const item of entry as readonly PluginEntry<D>[]) walk(item, factoryDepth);

@@ -147,7 +147,7 @@ describe("nested plugin lists", () => {
       hastPlugins: [false, () => undefined],
     });
 
-    expect(result.html).toContain("<h1>Title</h1>");
+    expect(result.html).toBe(markdownToHtml("# Title").html);
   });
 
   test("hast entries accept skip values too", () => {

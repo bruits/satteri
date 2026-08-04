@@ -207,7 +207,9 @@ describe("plugin factory context", () => {
     markdownToHtml("# Title", { mdastPlugins: [wantsPositions, observer] });
     expect(positions[0]).toBeDefined();
 
-    markdownToHtml("# Title", { mdastPlugins: [() => null, observer] });
+    markdownToHtml("# Title", {
+      mdastPlugins: [(ctx) => (ctx.sourceFormat === "mdx" ? wantsPositions : null), observer],
+    });
     expect(positions[1]).toBeUndefined();
   });
 

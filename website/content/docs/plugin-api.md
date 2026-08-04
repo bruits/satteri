@@ -74,10 +74,10 @@ A factory is handed a context describing the document about to be compiled, and 
 
 ```ts
 interface PluginFactoryContext {
-  fileURL: URL | undefined;
-  sourceFormat: "markdown" | "mdx";
-  source: string;
-  data: Data;
+  readonly fileURL: URL | undefined;
+  readonly sourceFormat: "markdown" | "mdx";
+  readonly source: string;
+  readonly data: Data;
 }
 ```
 
@@ -448,6 +448,8 @@ The `mdxExpressions` option (default `true`) controls how MDX curly braces in th
 ## Async plugins
 
 Any visitor may return a `Promise`. Sync and async visitors can be mixed freely. If any visitor in the pipeline is async, `markdownToHtml`, `mdxToJs`, and `markdownToJs` return a `Promise`; otherwise they return synchronously.
+
+The return type is decided from the plugins the types can see, so a factory that may return an async plugin types the compile as a `Promise` even on a document where it skips and the result comes back synchronously — `await` the result rather than calling `.then()` on it.
 
 For performance, prefer sync visitors where you can: awaiting per match adds up, especially for a visitor that matches many nodes.
 
