@@ -1591,6 +1591,18 @@ impl<'input> ParserInner<'input> {
                                     }
 
                                     self.tree[tos.node].item.end = end;
+                                    // No `max(orig_start, end)` clamp here,
+                                    // unlike the inline-link splice: `end - 1`
+                                    // is always the label's `]`, and the only
+                                    // zero-width items are autolink markers,
+                                    // which never sit on one. So the successor
+                                    // cannot start before `end`.
+                                    debug_assert!(
+                                        node_after_link.is_none_or(|node_after_ix| {
+                                            self.tree[node_after_ix].item.start >= end
+                                        }),
+                                        "reference splice must not overrun its successor",
+                                    );
 
                                     // set up cur so next node will be node_after_link
                                     cur = Some(tos.node);
