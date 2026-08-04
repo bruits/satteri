@@ -175,6 +175,7 @@ impl ItemBody {
         matches!(
             *self,
             MaybeEmphasis(..)
+                | MaybeEmphasisEscaped(..)
                 | MaybeMath(..)
                 | MaybeSmartQuote(..)
                 | MaybeCode(..)
@@ -193,6 +194,7 @@ impl ItemBody {
         matches!(
             *self,
             MaybeEmphasis(..)
+                | MaybeEmphasisEscaped(..)
                 | MaybeMath(..)
                 | MaybeSmartQuote(..)
                 | MaybeCode(..)

@@ -1843,6 +1843,7 @@ fn parse_inner(
 
                     // Unresolved inline markers, should have been resolved by handle_inline.
                     ItemBody::MaybeEmphasis(..)
+                    | ItemBody::MaybeEmphasisEscaped(..)
                     | ItemBody::MaybeMath(..)
                     | ItemBody::MaybeSmartQuote(..)
                     | ItemBody::MaybeCode(..)
