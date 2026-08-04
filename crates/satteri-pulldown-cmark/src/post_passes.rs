@@ -776,9 +776,6 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
 /// patterns that survived in plain Text nodes because the construct didn't
 /// fire (preceded by a digit, inside a failed `<...>` autolink, across
 /// container prefixes).
-///
-/// Positions are recovered by mapping decoded offsets back to raw source, a
-/// deliberate divergence — see `divergences.md`.
 pub(crate) fn gfm_autolink_literal_pass(
     arena: &mut Arena<Mdast>,
     source_bytes: &[u8],
