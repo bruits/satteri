@@ -4898,8 +4898,9 @@ fn escaped_delim_run(
 }
 
 /// An email literal starting at the same offset as a `www.` literal, which
-/// GFM resolves in the email construct's favour. `www_end` bounds the search
-/// to bytes the www candidate already claims, keeping this amortised O(1).
+/// GFM resolves in the email construct's favour. `www_end` bounds the search to
+/// the www span, which the committed path skips outright and the deferred path
+/// was already rescanning.
 fn detect_email_inside_www(
     bytes: &[u8],
     ix: usize,
@@ -4915,28 +4916,34 @@ fn detect_email_inside_www(
     let at_ix = ix + memchr::memchr(b'@', &bytes[ix..www_end])?;
     let (email_start, email_end, full_url, retry_needed) =
         crate::post_passes::scan_email_autolink(bytes, at_ix, true)?;
-    // A local part reaching back past the trigger is the `_` hook's.
-    if retry_needed || email_start != ix {
+    // Opening past the trigger is the `@` hook's; opening before it needs an
+    // atext predecessor, and `_` is the only one a www literal takes.
+    if email_start != ix {
         return None;
     }
-    if email_start < begin_text || email_start < paragraph_start {
-        return None;
-    }
-    if email_start > 0
-        && bytes[email_start - 1] == b'\\'
-        && is_ascii_punctuation(bytes[email_start])
-    {
-        return None;
-    }
+    debug_assert!(
+        !retry_needed,
+        "a `/` predecessor would have failed the www literal first"
+    );
+    debug_assert!(
+        email_start >= begin_text && email_start >= paragraph_start,
+        "the trigger is inside the current text run"
+    );
     Some(AutolinkDetection {
         start: email_start,
         end: email_end,
         link_type: LinkType::Email,
-        url: full_url
-            .strip_prefix("mailto:")
-            .map(str::to_owned)
-            .unwrap_or(full_url),
+        url: email_addr(full_url),
     })
+}
+
+/// `scan_email_autolink` returns `mailto:<addr>`; arena_build's Email-link path
+/// prepends `mailto:` again, so strip it here.
+fn email_addr(full_url: String) -> String {
+    full_url
+        .strip_prefix("mailto:")
+        .map(str::to_owned)
+        .unwrap_or(full_url)
 }
 
 /// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
@@ -4973,7 +4980,6 @@ fn detect_gfm_autolink(
             }
             // GFM registers the email construct ahead of www at the same
             // offset, so an `@` the www span would swallow wins instead.
-            // Bounded by that span, which the caller skips either way.
             if is_www {
                 if let Some(email) =
                     detect_email_inside_www(bytes, ix, end, paragraph_start, begin_text)
@@ -5012,17 +5018,11 @@ fn detect_gfm_autolink(
             {
                 return None;
             }
-            // `scan_email_autolink` returns `mailto:<addr>`; arena_build's
-            // Email-link path will prepend `mailto:` again, so strip here.
-            let email_addr = full_url
-                .strip_prefix("mailto:")
-                .map(str::to_owned)
-                .unwrap_or(full_url);
             Some(AutolinkDetection {
                 start: email_start,
                 end: email_end,
                 link_type: LinkType::Email,
-                url: email_addr,
+                url: email_addr(full_url),
             })
         }
         _ => None,
