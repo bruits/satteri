@@ -433,14 +433,27 @@ describe("MDX expression holding the `]` that ends a reference label", () => {
   // The tree comparison above drops positions, so the span is pinned here.
   test("the tail spans exactly the bytes past the label", () => {
     const md = '[a][{"]"}]\n\n[{"]: /u\n';
-    const tree = mdxToMdast(md) as { children: Array<{ children: AnyNode[] }> };
-    expect(tree.children[0].children[1]).toEqual({
+    const tree = mdxToMdast(md) as unknown as { children: Array<{ children: AnyNode[] }> };
+    expect(tree.children[0]?.children[1]).toEqual({
       type: "text",
       value: '"}]',
       position: {
         start: { line: 1, column: 8, offset: 7 },
         end: { line: 1, column: 11, offset: 10 },
       },
+    });
+  });
+
+  // Pre-existing: the expression is handed to oxc before reference resolution
+  // takes its `]`, so a diagnostic outlives the node it was about. The tree the
+  // arena builds is correct; only the error is spurious.
+  describe("divergence: an expression the label cuts still reports its error", () => {
+    test.fails("an expression that does not parse on its own", () => {
+      assertMdastConformance("[a][{x]}]\n\n[{x]: /u\n");
+    });
+
+    test.fails("a nested expression the label cuts", () => {
+      assertMdastConformance('[a][{f({"]"})}]\n\n[{f({"]: /u\n');
     });
   });
 
