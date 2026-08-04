@@ -94,14 +94,12 @@ fn parse_no_positions(bencher: divan::Bencher) {
     bencher.bench(|| satteri_pulldown_cmark::parse_no_positions(MARKDOWN, opts));
 }
 
-/// Parse the autolink fixture into an Arena.
 #[divan::bench]
 fn parse_autolinks(bencher: divan::Bencher) {
     let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
     bencher.bench(|| satteri_pulldown_cmark::parse(AUTOLINKS, opts));
 }
 
-/// Parse the autolink fixture without position tracking.
 #[divan::bench]
 fn parse_autolinks_no_positions(bencher: divan::Bencher) {
     let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
@@ -118,7 +116,6 @@ fn full_pipeline_to_html(bencher: divan::Bencher) {
     });
 }
 
-/// Full pipeline over the autolink fixture.
 #[divan::bench]
 fn full_pipeline_to_html_autolinks(bencher: divan::Bencher) {
     let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;

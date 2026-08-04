@@ -248,9 +248,6 @@ pub(crate) fn scan_autolink_literal(
         if !prev_loose_ok {
             return None;
         }
-        // The fallback pass wants a stricter boundary: Cyrillic letters are
-        // alphabetic, not punctuation, so they fail it while passing loose —
-        // which leaves the match to the construct path.
         !fnr_previous_ok(bytes, ix)
     } else {
         false
@@ -774,9 +771,8 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
 /// fire (preceded by a digit, inside a failed `<...>` autolink, across
 /// container prefixes).
 ///
-/// Links emitted here carry positions, recovered by mapping decoded offsets
-/// back to raw source — a deliberate divergence, see `divergences.md`.
-/// `cursor` is `None` in skip-positions mode, where no map is built at all.
+/// Positions are recovered by mapping decoded offsets back to raw source, a
+/// deliberate divergence — see `divergences.md`.
 pub(crate) fn gfm_autolink_literal_pass(
     arena: &mut Arena<Mdast>,
     source_bytes: &[u8],
@@ -842,8 +838,8 @@ pub(crate) fn gfm_autolink_literal_pass(
             candidates.push(id);
         }
     }
-    // Smart punctuation rewrites text values in ways `build_raw_map` has no
-    // recogniser for, so a failed reconstruction is expected there.
+    // Smart punctuation rewrites text values in ways `build_raw_map` can't
+    // reverse, so a failed reconstruction is expected there.
     let strict =
         !(options.has_smart_quotes() || options.has_smart_dashes() || options.has_smart_ellipses());
     for node_id in candidates {
@@ -851,9 +847,7 @@ pub(crate) fn gfm_autolink_literal_pass(
     }
 }
 
-/// The scalar before `ix`, or `None` at the start of the input. Walks back
-/// over UTF-8 continuation bytes rather than decoding a fixed-width window,
-/// which would split a character and answer for the wrong one.
+/// The scalar before `ix`, or `None` at the start of the input.
 fn preceding_char(bytes: &[u8], ix: usize) -> Option<char> {
     if ix == 0 {
         return None;
@@ -872,16 +866,15 @@ fn preceding_char(bytes: &[u8], ix: usize) -> Option<char> {
         .next_back()
 }
 
-/// Boundary rule for the fallback pass: the character before a match must be
-/// whitespace, punctuation, or start-of-string. Stricter than the construct's,
-/// which rejects only alphabetic, so digits and non-ASCII letters fail here.
+/// Boundary rule for the fallback pass. Stricter than the construct's, which
+/// rejects only alphabetic, so digits and non-ASCII letters fail here.
 ///
-/// Classifying the whole scalar accepts astral punctuation and symbols — a
-/// deliberate divergence, see `divergences.md`.
+/// Classifying the whole scalar accepts astral punctuation and symbols, a
+/// deliberate divergence — see `divergences.md`.
 pub(crate) fn fnr_previous_ok(bytes: &[u8], ix: usize) -> bool {
     match preceding_char(bytes, ix) {
         None => true,
-        // `\s` in JavaScript also covers U+FEFF, which isn't `White_Space`.
+        // U+FEFF isn't `White_Space`, but counts as a boundary here.
         Some(c) => c.is_whitespace() || c == '\u{FEFF}' || is_punctuation(c),
     }
 }
@@ -990,10 +983,9 @@ fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usiz
 
 /// One aligned run between a Text node's decoded value and its raw source.
 ///
-/// `d_len == r_len` is a 1:1 run, splittable at any interior offset. Anything
-/// else is atomic — a character reference, a backslash escape, a CRLF, or a
-/// stripped continuation prefix (`d_len == 0`) — and has no interior decoded
-/// offset that can be named in raw space.
+/// A 1:1 run splits at any interior offset; anything else (character
+/// reference, escape, CRLF, stripped prefix) is atomic, and its interior
+/// names no raw offset.
 #[derive(Clone, Copy)]
 struct Seg {
     d_start: u32,
@@ -1020,8 +1012,7 @@ enum RawMap {
 }
 
 impl RawMap {
-    /// The segment producing decoded byte `d`. Zero-width segments produce no
-    /// decoded byte, so they are skipped by construction.
+    /// The segment producing decoded byte `d`; zero-width segments never match.
     fn seg_containing(segs: &[Seg], d: usize) -> Option<&Seg> {
         segs.iter()
             .find(|s| (s.d_start as usize) <= d && d < (s.d_start + s.d_len) as usize)
@@ -1066,16 +1057,13 @@ impl RawMap {
     }
 }
 
-/// Align a Text node's decoded value with the raw source it came from, so the
-/// find-and-replace pass can report source spans for the nodes it emits.
+/// Align a Text node's decoded value with the raw source it came from.
 ///
-/// The walk is transform-directed: at each raw offset it asks *which transform
-/// applies*, never *do the bytes differ*. Raw `&amp;` decodes to `&`, whose
-/// first byte matches, so a mismatch-directed alignment would consume it and
-/// then choke on `amp;`.
+/// At each raw offset the walk asks which transform applies, never whether the
+/// bytes differ: raw `&amp;` starts with the byte it decodes to, so a
+/// mismatch-directed walk would consume it and then choke on `amp;`.
 ///
-/// Returns `None` when the walk can't reconstruct the value exactly — an
-/// unlisted transform, or an upstream span that was already wrong. Callers then
+/// Returns `None` when the value can't be reconstructed exactly; callers then
 /// report no position rather than a guessed one that mis-slices the source.
 fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> Option<RawMap> {
     if r_start > r_end || r_end > source.len() {
@@ -1152,10 +1140,10 @@ fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> 
                 extend_one_to_one(&mut segs, r, d);
                 r += 1;
                 d += 1;
-                // A continuation line's block prefix (`> `, list indentation)
-                // is raw bytes with no decoded output. Content can never start
-                // with one: leading whitespace is stripped, and a leading `>`
-                // would have opened a blockquote instead.
+                // A continuation line's block prefix (`> `, indentation)
+                // produces no decoded bytes. Content can't start with one:
+                // leading whitespace is stripped and a leading `>` would have
+                // opened a blockquote.
                 let prefix_start = r;
                 while r < raw.len()
                     && matches!(raw[r], b' ' | b'\t' | b'>')
@@ -1217,9 +1205,8 @@ fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> 
 
 /// Source span and line/column pair for the decoded range `d_lo..d_hi`.
 ///
-/// Line and column are not optional: the JS-visible `position.*.offset` is
-/// computed from them further down the pipeline, so a node carrying a byte
-/// offset with a zero line would serialize garbage.
+/// Line and column aren't optional: the exposed `position.*.offset` is derived
+/// from them downstream, so a zero line would serialize garbage.
 fn pos_for(
     map: &RawMap,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
@@ -1236,10 +1223,9 @@ fn pos_for(
     Some((so, eo, sl, sc, el, ec))
 }
 
-/// Fallback scan over a Text node's bytes. Emits Links for each match;
-/// left-over text becomes plain Text nodes between/around them. Trailing
-/// characters stripped off a match become their own sibling Text node, kept
-/// distinct from the text around it.
+/// Fallback scan over a Text node's bytes: each match becomes a Link, and
+/// everything left over — including characters stripped off a match's tail —
+/// becomes a sibling Text node.
 fn split_text_with_autolinks_fnr(
     arena: &mut Arena<Mdast>,
     text_id: u32,
@@ -1283,8 +1269,8 @@ fn split_text_with_autolinks_fnr(
     let text = borrowed_text.to_string();
     let bytes = text.as_bytes();
 
-    // Built only now, after the no-match return above: a text node full of
-    // `w`/`h`/`@` that autolinks nothing must not pay for the alignment.
+    // Built only after the no-match return: text full of `w`/`h`/`@` that
+    // autolinks nothing shouldn't pay for the alignment.
     let node = arena.get_node(text_id);
     let (r_start, r_end) = (node.start_offset as usize, node.end_offset as usize);
     let map = cursor
@@ -1514,7 +1500,7 @@ mod tests {
 
     #[test]
     fn raw_map_spans_a_character_reference_whole() {
-        // `a&amp;b` decodes to `a&b`; the reference occupies raw 1..6.
+        // The reference occupies raw 1..6.
         let m = map("a&amp;b", "a&b");
         assert_eq!(m.raw_start_of(0), Some(0));
         assert_eq!(m.raw_start_of(1), Some(1));
@@ -1524,8 +1510,8 @@ mod tests {
 
     #[test]
     fn raw_map_atomic_interior_has_no_position() {
-        // `&fjlig;` decodes to two characters, so a boundary between them
-        // names no raw offset: the reference can't be split.
+        // `&fjlig;` decodes to two characters; the boundary between them
+        // names no raw offset.
         let m = map("&fjlig;", "fj");
         assert_eq!(m.raw_start_of(0), Some(0));
         assert_eq!(m.raw_end_of(2), Some(7));
@@ -1535,8 +1521,7 @@ mod tests {
 
     #[test]
     fn raw_map_excludes_a_continuation_prefix() {
-        // The `> ` opening line 2 produces nothing, so it belongs to neither
-        // the text before it nor the match after it.
+        // The `> ` produces nothing, so it belongs to neither side.
         let m = map("a\n> b", "a\nb");
         assert_eq!(m.raw_end_of(2), Some(2));
         assert_eq!(m.raw_start_of(2), Some(4));
@@ -1552,8 +1537,6 @@ mod tests {
 
     #[test]
     fn raw_map_refuses_to_guess() {
-        // Nothing produces `z` from this source, so no position is reported
-        // rather than a wrong one.
         assert!(build_raw_map(b"a&amp;b", 0, 7, "a&z").is_none());
         assert!(build_raw_map(b"abc", 0, 3, "abcd").is_none());
     }

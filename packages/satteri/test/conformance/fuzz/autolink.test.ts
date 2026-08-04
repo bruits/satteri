@@ -39,8 +39,8 @@ describe("fuzz: GFM autolink conformance", () => {
         writeFileSync(issuesPath, report + "\n");
       }
 
-      // Position-only issues count here: which pass produced an autolink is
-      // observable through its position, so a difference means the wrong path ran.
+      // Position-only issues count: an autolink's position reveals which pass
+      // produced it, so a difference means the wrong path ran.
       const inputs = unique.map((i) => JSON.stringify(i.input));
       expect
         .soft(unique, `Found ${unique.length} autolink conformance issue(s):\n${inputs.join("\n")}`)

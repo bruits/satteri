@@ -1745,8 +1745,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         Some(ix + n)
     }
 
-    /// Commit a detected autolink as a `Link` node. Only sound when the
-    /// candidate is guaranteed to fire.
+    /// Commit a detected autolink. Only sound when nothing can still block it.
     fn append_autolink_link(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
         let link_ix = self
             .allocs
@@ -1767,9 +1766,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree[link_node_ix].child = Some(text_child);
     }
 
-    /// Record a detected autolink as a zero-width marker. Zero width keeps
-    /// detection inert: no byte's tokenization changes, so the candidate can
-    /// still be dropped with nothing to undo.
+    /// Record a detected autolink as a zero-width marker: no byte's
+    /// tokenization changes, so the candidate can still be dropped.
     fn append_autolink_marker(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
         let link = self
             .allocs
@@ -1811,7 +1809,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // (e.g. an inline GFM autolink Link whose URL ended in `\`).
         // Used by the `\n` hardbreak check to skip those `\`s.
         let mut last_inline_emission_end: usize = start;
-        // End offset of the last autolink candidate detected on this line.
         // Deferred candidates don't skip their own bytes, so this is what
         // stops a trigger inside one URL from starting a second.
         let mut last_candidate_end: usize = start;
@@ -1968,9 +1965,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         backslash_escaped = false;
                         LoopInstruction::ContinueAndSkip(1)
                     } else if bytes[ix + 1] == b'<' {
-                        // The `<` still gets its marker: a deferred autolink
-                        // candidate may end on this `\`, in which case the link
-                        // owns the escape and the inline HTML opens after all.
+                        // Still emit the marker: a deferred autolink may end on
+                        // this `\`, in which case the link owns it and the
+                        // inline HTML opens after all.
                         self.tree.append(Item {
                             start: ix + 1,
                             end: ix + 2,
@@ -1993,13 +1990,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     }
                 }
                 c @ b'*' | c @ b'_' | c @ b'~' | c @ b'^' => {
-                    // GFM precedence: `_` is an email-local atext char, so an
-                    // email literal starting here wins over the attention
-                    // sequence — skipping the MaybeEmphasis emission keeps
-                    // `_-_@…` from forming a pair that hides the email.
+                    // GFM precedence: an email literal starting at this `_`
+                    // wins over the attention sequence — skipping MaybeEmphasis
+                    // keeps `_-_@…` from forming a pair that hides the email.
                     if c == b'_' && self.options.contains(Options::ENABLE_GFM) {
-                        // Cheap structural scan first: most `_` in prose can't
-                        // reach an `@` through atext chars.
                         let paragraph_floor = self
                             .tree
                             .peek_up()
@@ -2021,10 +2015,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 last_candidate_end = email_end;
                                 if defer_autolink_decision(bytes, paragraph_floor, ix, self.options)
                                 {
-                                    // Fall through to the attention handling: a
+                                    // Fall through to attention handling: a
                                     // marker that fires splices those
-                                    // delimiters away, and one that is blocked
-                                    // wanted them all along.
+                                    // delimiters away, and a blocked one
+                                    // wanted them.
                                     self.append_autolink_marker(d, begin_text, backslash_escaped);
                                     if email_start > begin_text {
                                         backslash_escaped = false;
@@ -2472,15 +2466,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     LoopInstruction::ContinueAndSkip(0)
                 }
                 b'h' | b'H' | b'w' | b'W' | b'@' if self.options.contains(Options::ENABLE_GFM) => {
-                    // GFM literal autolink: protocol/www/email, detected during
-                    // inline tokenization so the candidate's extent is known
-                    // before bracket/image resolution runs. Only the construct
-                    // path lands here; `gfm_autolink_literal_pass` is the
-                    // backstop for everything else.
+                    // GFM literal autolink. Only the construct path lands here;
+                    // `gfm_autolink_literal_pass` is the backstop for the rest.
                     //
-                    // For multi-line paragraphs `start` is the current *line*
-                    // start, so take the floor from the Paragraph item on the
-                    // spine — a `[` on an earlier line still has to count.
+                    // `start` is the current *line* start, so take the floor
+                    // from the Paragraph on the spine — a `[` on an earlier
+                    // line still has to count.
                     let paragraph_floor = self
                         .tree
                         .peek_up()
@@ -2493,11 +2484,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         let (cand_start, cand_end) = (d.start, d.end);
                         last_candidate_end = cand_end;
                         if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
-                            // A bracket opener may still be open at the
-                            // trigger, so the decision belongs to
-                            // `handle_inline_pass1`. Leave `begin_text` at the
-                            // candidate's start: its bytes stay ordinary text
-                            // unless the marker fires.
+                            // Leave `begin_text` at the candidate's start: its
+                            // bytes stay ordinary text unless the marker fires.
                             self.append_autolink_marker(d, begin_text, backslash_escaped);
                             if cand_start > begin_text {
                                 backslash_escaped = false;
@@ -2510,8 +2498,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             last_inline_emission_end = cand_end;
                             backslash_escaped = false;
                             // Skip the URL bytes so later callbacks don't
-                            // re-trigger on `[`, `!`, etc. inside it.
-                            // ContinueAndSkip(N) advances by N then +1.
+                            // re-trigger inside it; ContinueAndSkip(N) advances
+                            // by N then +1.
                             LoopInstruction::ContinueAndSkip(cand_end.saturating_sub(ix + 1))
                         }
                     } else {
@@ -2871,9 +2859,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Strip only the line terminator (\n, \r, \r\n) — remark/mdast preserves
         // trailing spaces in the fence info string so they end up in `meta`.
         let info_end = ix - scan_rev_while(&bytes[info_start..ix], |b| b == b'\n' || b == b'\r');
-        // The info string splits into language and metadata at the first raw
-        // space or tab, before character references are decoded, so one that
-        // decodes to whitespace stays inside the language.
+        // The lang/meta split is taken on raw source, so a character reference
+        // decoding to whitespace stays inside the language.
         let raw_info = &self.text[info_start..info_end];
         let raw_lang_end = raw_info.find([' ', '\t']).map_or(raw_info.len(), |ix| ix);
         let in_table = self.tree.is_in_table();
@@ -4810,22 +4797,20 @@ fn is_email_local_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'_')
 }
 
-/// True when a candidate at `pos` has to go through `handle_inline_pass1`
-/// rather than being committed on the spot.
+/// True when a candidate at `pos` must go through `handle_inline_pass1`
+/// instead of being committed on the spot.
 ///
-/// It does whenever an earlier byte in the block could open something that ends
-/// up owning the trigger's bytes: `[` for a bracket opener still on
-/// `link_stack`, `<` for a pointed autolink or inline HTML, `` ` `` for a code
-/// span, `$` for a math span. With none of those present nothing else can claim
-/// the candidate, so it is committed eagerly and its URL bytes skipped.
+/// True whenever an earlier byte in the block could open a construct that ends
+/// up owning the trigger's bytes: `[` a bracket opener, `<` a pointed autolink
+/// or inline HTML, `` ` `` a code span, `$` a math span.
 fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize, options: Options) -> bool {
     let before = &bytes[block_start..pos];
     memchr::memchr3(b'[', b'<', b'`', before).is_some()
         || (options.has_math() && memchr::memchr(b'$', before).is_some())
 }
 
-/// A GFM autolink literal the scanner accepted at a trigger byte, before
-/// anything has been committed to the tree.
+/// A GFM autolink literal the scanner accepted, before anything is committed
+/// to the tree.
 struct AutolinkDetection {
     start: usize,
     end: usize,
@@ -4833,13 +4818,9 @@ struct AutolinkDetection {
     url: String,
 }
 
-/// GFM autolink-literal construct, dispatched during inline tokenization
-/// from `parse_line`'s callback on `h`/`H`/`w`/`W`/`@` triggers.
-///
-/// Detection only. Whether the candidate becomes a `Link` here or a
-/// `MaybeAutolink` marker for `handle_inline_pass1` to decide is the
-/// caller's call — it depends on whether a bracket opener could still be
-/// open at the trigger, which this function has no way to know.
+/// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
+/// only — committing or deferring is the caller's call, since it turns on
+/// state this function cannot see.
 fn detect_gfm_autolink(
     bytes: &[u8],
     ix: usize,
@@ -4847,8 +4828,7 @@ fn detect_gfm_autolink(
     paragraph_start: usize,
     begin_text: usize,
 ) -> Option<AutolinkDetection> {
-    // Fast structural reject: every `h`/`H`/`w`/`W`/`@` in prose reaches this
-    // path, but only a tiny fraction can start an autolink.
+    // Cheap reject first: most triggers in prose can't start an autolink.
     match byte {
         b'h' | b'H' | b'w' | b'W' => {
             crate::post_passes::match_autolink_scheme(bytes, ix)?;
@@ -4864,8 +4844,8 @@ fn detect_gfm_autolink(
 
     match byte {
         b'h' | b'H' | b'w' | b'W' => {
-            // `fnr_only` means only the find-and-replace fallback would accept,
-            // which is the post-pass's job rather than this construct's.
+            // `fnr_only`: only the find-and-replace fallback would accept,
+            // which is the post-pass's job.
             let (start, _raw_end, end, full_url, fnr_only) =
                 scan_autolink_literal(bytes, ix, ix == paragraph_start)?;
             if fnr_only {
@@ -4879,10 +4859,9 @@ fn detect_gfm_autolink(
             })
         }
         b'@' => {
-            // The walkback for the local part can start the link before `ix`.
-            // If it would cross an already-emitted Maybe* item, that item's
-            // construct owns the bytes — leave the email to the post-pass,
-            // which sees the flattened text.
+            // The local-part walkback can start the link before `ix`. If it
+            // would cross an already-emitted Maybe* item, that construct owns
+            // the bytes — leave the email to the post-pass.
             let (email_start, email_end, full_url, retry_needed) =
                 scan_email_autolink(bytes, ix, true)?;
             if retry_needed {

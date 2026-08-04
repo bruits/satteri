@@ -538,12 +538,10 @@ const AL_TRAIL = fc.constantFrom(
   "&amp;",
   "&copy;",
   "&notreal",
-  // Numeric references: only the `;` is trailing punctuation, so the URL ends
-  // mid-reference.
+  // Only the `;` is trailing punctuation, so the URL ends mid-reference.
   "&#104;",
   "&#x68;",
-  // A URL ending on a backslash: the escape and the link both want the byte
-  // after it.
+  // The escape and the link both want the byte after a URL-ending backslash.
   "\\,",
   "\\<a>",
   "?!",
@@ -642,8 +640,8 @@ export const autolinkDocument = fc
         return `text\n${line}\n`;
       case "img":
         return `![${line}](/i)\n`;
-      // A destination only reaches the autolink tokenizer when the surrounding
-      // bracket pair fails to resolve, so these three cover both outcomes.
+      // A destination reaches the autolink tokenizer only when the bracket pair
+      // fails to resolve; these cover both outcomes.
       case "dest":
         return `[a](${line})x\n`;
       case "destUnresolved":
@@ -1362,12 +1360,11 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
       actual: `INTERNAL_ERROR: ${actualError}`,
     };
   }
-  // Deliberate divergence: find-and-replace autolinks carry positions here and
-  // none in remark. Verify each extra position against the source before
-  // dropping it, so a wrong one throws rather than passing as expected.
+  // Extra find-and-replace positions are verified before being dropped, so a
+  // wrong one throws instead of passing as expected.
   if (!HTML_LEVELS.has(level)) {
-    // mdast only: a hast `text` inside `<code>` inherits the code span's span,
-    // delimiters included, so it never decodes back to its own value.
+    // A hast `text` inside `<code>` inherits the code span's span, delimiters
+    // included, so it never decodes back to its own value.
     if (!HAST_LIKE_LEVELS.has(level)) assertSliceInvariantEverywhere(actual, input);
     reconcileFnrPositions(actual, expected, input);
   }

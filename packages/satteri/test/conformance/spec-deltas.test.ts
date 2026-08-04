@@ -194,9 +194,8 @@ describe("GFM strikethrough: remark flanking rule", () => {
   });
 });
 
-// A fence info string splits into language and metadata at the first *raw*
-// space or tab, so a character reference that decodes to whitespace stays
-// inside the language and only the rendered class drops what follows it.
+// A fence info string splits at the first *raw* space or tab, so a character
+// reference that decodes to whitespace stays inside the language.
 describe("Fence info strings: character references", () => {
   const code = (md: string) => (satteriMdast(md) as { children: Code[] }).children[0]!;
 
@@ -229,7 +228,6 @@ describe("Fence info strings: character references", () => {
       assertHtmlConformance(md);
     }
     expect(code("``` a&#9;aa b\n```\n")).toMatchObject({ lang: "a\taa", meta: "b" });
-    // A leading reference leaves no first word, so the class is bare.
     expect(code("``` &#32;a b\n```\n")).toMatchObject({ lang: " a", meta: "b" });
   });
 });

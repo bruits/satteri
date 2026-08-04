@@ -6,9 +6,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts"],
-    // The fuzz properties are a local discovery tool: they seed from the clock,
-    // so in CI they turn an unrelated red build into an unreproducible one.
-    // Anything they find gets pinned in fuzz-regressions.test.ts, which stays.
+    // Fuzz properties seed from the clock, so a CI failure isn't reproducible;
+    // their finds are pinned in fuzz-regressions.test.ts instead.
     exclude: [
       ...configDefaults.exclude,
       ...(process.env.SKIP_FUZZ ? ["test/conformance/fuzz/**"] : []),

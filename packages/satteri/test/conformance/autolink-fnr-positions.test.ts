@@ -1,9 +1,6 @@
-// Deliberate divergence (see website/content/docs/divergences.md): nodes from
-// the GFM autolink find-and-replace path carry source positions here and none
-// in remark, whose transform runs over decoded values.
-//
-// A wrong position is worse than an absent one — it silently mis-slices the
-// source downstream — so these assert the exact span, not merely that one exists.
+// Deliberate divergence (see website/content/docs/divergences.md): find-and-replace
+// autolinks carry source positions here and none in remark. A wrong position is
+// worse than an absent one, so these assert the exact span.
 
 import { describe, test, expect } from "vitest";
 import {
@@ -154,13 +151,12 @@ describe("find-and-replace autolink positions", () => {
       ["text", "www.x.y", "www.x.y"],
     ]);
     const link = firstLink(satteriMdast(md));
-    // Starts after the `> `, not at the line ending.
     expect(link.position!.start).toEqual({ line: 2, column: 3, offset: 7 });
   });
 
   test("8. a multi-character reference is included whole or not at all", () => {
-    // `&fjlig;` decodes to two characters, so a boundary between them has no
-    // raw offset to name; here it sits inside the match and the span covers it.
+    // `&fjlig;` decodes to two characters, so a boundary inside it has no raw
+    // offset to name; here it falls within the match.
     const md = "[www.a.com/&fjlig;b";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([

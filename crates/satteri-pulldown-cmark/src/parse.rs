@@ -72,10 +72,9 @@ pub(crate) enum ItemBody {
     // bool indicates whether or not the preceding section could be a reference
     MaybeLinkClose(bool),
     MaybeImage,
-    /// Zero-width marker at the offset a GFM autolink literal would start at,
-    /// carrying an index into `Allocations::autolink_candidates`. The first
-    /// pass only detects; `handle_inline_pass1` decides, where the real
-    /// bracket-resolution state is known. Never survives into `arena_build`.
+    /// Zero-width marker where a GFM autolink literal would start. Firing is
+    /// decided in `handle_inline_pass1`, where bracket-resolution state is
+    /// known; it never survives into `arena_build`.
     MaybeAutolink(AutolinkCandidateIndex),
 
     // These are inline items after resolution.
@@ -113,9 +112,9 @@ pub(crate) enum ItemBody {
     TightParagraph,
     Rule,
     Heading(HeadingLevel, Option<HeadingIndex>), // heading level
-    // Second field: byte length of the `lang` part within the decoded info
-    // string. The split is taken on raw source, so a character reference that
-    // decodes to whitespace does not move it.
+    // u32: byte length of the `lang` part within the decoded info string. The
+    // split is taken on raw source, so a character reference decoding to
+    // whitespace does not move it.
     FencedCodeBlock(CowIndex, u32),
     MathBlock(CowIndex), // meta string (info after $$)
     // bool: true = lazy/no-extend (block was opened as a single-line
@@ -666,8 +665,7 @@ impl<'input> ParserInner<'input> {
             match self.tree[cur_ix].item.body {
                 ItemBody::MaybeHtml(preceded_by_backslash) => {
                     if preceded_by_backslash {
-                        // The escape stands: nothing cleared the flag, so the
-                        // `<` is literal and its span reaches back over the `\`.
+                        // No autolink claimed the `\`, so the `<` is literal.
                         self.tree[cur_ix].item.body = ItemBody::Text {
                             backslash_escaped: true,
                         };
@@ -1171,16 +1169,13 @@ impl<'input> ParserInner<'input> {
                     }
                 }
                 ItemBody::MaybeAutolink(cand_ix) => {
-                    // An unresolved bracket opener blocks the construct.
-                    // Resolved openers are replaced and failed ones marked, so
-                    // the stack holds exactly what is still open.
+                    // An unresolved bracket opener blocks the construct, and
+                    // the stack holds exactly those.
                     let next = self.tree[cur_ix].next;
                     if !self.link_stack.is_empty() {
-                        // Blocked; the find-and-replace post-pass may still
-                        // claim the bytes. Zero-width `Text` rather than an
-                        // unlink: the emphasis resolver addresses the node
-                        // after a delimiter run by arena index, so dropping one
-                        // from the chain would hand it whatever came next.
+                        // Zero-width `Text` rather than an unlink: the emphasis
+                        // resolver addresses nodes by arena index, so dropping
+                        // one from the chain would hand it whatever came next.
                         self.tree[cur_ix].item.body = ItemBody::Text {
                             backslash_escaped: false,
                         };
@@ -1188,8 +1183,8 @@ impl<'input> ParserInner<'input> {
                         cur = next;
                         continue;
                     }
-                    // Fire. Reusing the marker node as the `Link` keeps the
-                    // preceding sibling's `next` pointer valid.
+                    // Reusing the marker node as the `Link` keeps the preceding
+                    // sibling's `next` pointer valid.
                     let cand = self.allocs[cand_ix];
                     let node_after = scan_nodes_to_ix(&self.tree, next, cand.end);
                     let text_child = self.tree.create_node(Item {
@@ -1209,11 +1204,8 @@ impl<'input> ParserInner<'input> {
                     if let Some(node_after_ix) = node_after {
                         let orig_start = self.tree[node_after_ix].item.start;
                         let new_start = max(orig_start, cand.end);
-                        // The first pass had to classify the line ending
-                        // before knowing whether this candidate fires. A `\`
-                        // it read as a hard-break marker turns out to be the
-                        // last byte of the URL, so the break is an ordinary
-                        // line ending after all.
+                        // A `\` the first pass read as a hard-break marker
+                        // turns out to be the URL's last byte.
                         if orig_start < cand.end
                             && matches!(
                                 self.tree[node_after_ix].item.body,
@@ -1222,10 +1214,9 @@ impl<'input> ParserInner<'input> {
                         {
                             self.tree[node_after_ix].item.body = ItemBody::SoftBreak;
                         }
-                        // An item that carries its own content ignores the
-                        // clamp below, so a character reference the URL ends
-                        // in the middle of would keep emitting its decoded
-                        // value. Whatever is left of it is literal source.
+                        // The clamp below can't trim an item that carries its
+                        // own content: a character reference the URL ends
+                        // inside would still emit its decoded value.
                         if orig_start < cand.end
                             && matches!(
                                 self.tree[node_after_ix].item.body,
@@ -1237,12 +1228,10 @@ impl<'input> ParserInner<'input> {
                             };
                         }
                         self.tree[node_after_ix].item.start = new_start;
-                        // The `\` an escape flag refers to sits one byte
-                        // before the item carrying it, so the link owns that
-                        // byte whenever the item starts no later than the URL
-                        // ends. A surviving flag would stretch the successor's
-                        // span back over it; on a `<` it would also keep the
-                        // inline HTML from opening.
+                        // The `\` a flag refers to sits one byte before its
+                        // item, so the link owns it here. A surviving flag
+                        // would stretch the successor's span back over it, and
+                        // on a `<` keep the inline HTML from opening.
                         if orig_start <= cand.end {
                             match &mut self.tree[node_after_ix].item.body {
                                 ItemBody::Text { backslash_escaped }
@@ -2776,9 +2765,8 @@ fn scan_nodes_to_ix(
 ) -> Option<TreeIndex> {
     while let Some(node_ix) = node {
         let item = tree[node_ix].item;
-        // `end <= ix` alone would also skip a zero-width node *at* `ix` — an
-        // autolink marker, say — and every caller uses the result as the
-        // splice's tail, so skipping it drops it from the tree entirely.
+        // A zero-width node *at* `ix` must not be skipped: callers splice the
+        // result back in as the tail, so skipping drops it from the tree.
         if item.end <= ix && item.start < ix {
             node = tree[node_ix].next;
         } else {
@@ -2885,7 +2873,6 @@ struct LinkStack {
 }
 
 impl LinkStack {
-    /// Whether any bracket opener before this point is still unresolved.
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
@@ -3037,14 +3024,12 @@ pub(crate) struct DirectiveIndex(usize);
 pub(crate) struct AutolinkCandidateIndex(usize);
 
 /// A GFM autolink literal the first pass found but did not commit to. The
-/// `Link` is allocated up front so firing is a body swap; candidates that
-/// never fire leave an unreferenced entry behind, which nothing reads.
+/// `Link` is allocated up front so firing is only a body swap.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct AutolinkCandidate {
-    /// Source offset the `Link` node would begin at. Can precede the trigger,
-    /// since the email scan walks back over the local part.
+    /// Precedes the trigger byte when the email scan walks back over the local
+    /// part.
     pub start: usize,
-    /// Source offset just past the `Link` node.
     pub end: usize,
     pub link: LinkIndex,
 }

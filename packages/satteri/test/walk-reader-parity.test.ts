@@ -110,8 +110,8 @@ test("C3: walk-path position matches the reader for every matched node", () => {
 });
 
 test("C3: GFM autolink positions match the reader, present or absent (#187)", () => {
-  // The first doc's autolink carries a position; the unclosed `[` in the
-  // second sends it down the position-less fallback.
+  // The first doc's autolink carries a position; the unclosed `[` in the second
+  // sends it down the position-less path.
   const docs = ["[[x]](https://x.y)\n\n[x]: /", "a [b(https://x.y), c"];
   for (const md of docs) {
     for (const type of ["link", "text"] as const) {

@@ -1241,9 +1241,8 @@ fn convert_node(
             }
             let code_id = if code_data.lang.len > 0 {
                 let lang = view.get_str(code_data.lang);
-                // A reference that decodes to whitespace leaves the language
-                // holding more than one word; only the first names a language,
-                // and a leading one means there is no first word at all.
+                // A character reference can decode to whitespace, so only the
+                // first word of the info string names the language.
                 let class_val = format!(
                     "language-{}",
                     lang.split(char::is_whitespace).next().unwrap_or("")

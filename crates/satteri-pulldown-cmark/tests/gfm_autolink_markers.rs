@@ -1,14 +1,5 @@
-//! Marker lifetime for deferred GFM autolink candidates.
-//!
-//! A candidate detected behind a `[` becomes a zero-width `MaybeAutolink` item
-//! that `handle_inline_pass1` must resolve — by firing it or unlinking it —
-//! before `arena_build` runs, and any construct that consumes an item range
-//! drops the markers inside it.
-//!
-//! `arena_build` carries a `debug_assert` for a marker that reaches it, so each
-//! input asserts twice: the expected HTML, and no marker escaping. Several of
-//! these shapes never produce a marker today; they stay so that loosening a
-//! detection-time guard is measured against them.
+//! A deferred autolink marker must never reach `arena_build`; a `debug_assert`
+//! there panics if one does, so rendering under a debug build is the check.
 
 use satteri_pulldown_cmark::{parse, Options};
 
@@ -17,44 +8,31 @@ fn html(input: &str) -> String {
     satteri_ast::mdast_to_html(&arena)
 }
 
-/// Every shape where a candidate sits inside something that owns its bytes.
-/// The leading `[` is what makes the first pass defer rather than commit.
+/// The leading `[` is what makes the candidate defer rather than commit.
 #[test]
 fn a_marker_never_reaches_the_arena() {
     for input in [
-        // Consumed by a code span.
         "[a] `www.x.y` b",
         "[a] ``www.x.y`` b",
         "[a] `http://x.y` b",
-        // Consumed by inline HTML.
         "[a] <span title=www.x.y> b",
         "[a] <!-- www.x.y --> b",
-        // Consumed by a pointed autolink.
         "[a] <http://x.y/z> b",
         "[a] <q@x.y> b",
-        // Consumed by a math span.
         "[a] $www.x.y$ b",
-        // Consumed by a link destination that resolves.
         "[a] [b](www.x.y) c",
         "[a] [b](http://x.y/z) c",
         "[a] ![b](www.x.y) c",
-        // Consumed by a link label that resolves.
         "[a] [www.x.y](/u) c",
         "[a] [q@x.y](/u) c",
-        // Reference links, whose splice takes a different route.
         "[a] [www.x.y][r] c\n\n[r]: /u",
         "[a] [www.x.y] c\n\n[www.x.y]: /u",
-        // The candidate is the whole label of an image.
         "[a] ![www.x.y](/u) c",
     ] {
-        // Both assertions live in `html`: the debug build panics on an
-        // escaped marker, and a non-empty render proves the block survived.
         assert!(!html(input).is_empty(), "no output for {input:?}");
     }
 }
 
-/// A blocked candidate leaves its bytes as ordinary text, so the delimiters
-/// inside it tokenize normally — the point of not skipping the URL bytes.
 #[test]
 fn a_blocked_candidate_leaves_its_bytes_to_other_constructs() {
     assert_eq!(
@@ -64,10 +42,8 @@ fn a_blocked_candidate_leaves_its_bytes_to_other_constructs() {
     assert_eq!(html("[a `www.x.y` b"), "<p>[a <code>www.x.y</code> b</p>\n");
 }
 
-/// A blocked marker stays in the sibling chain as a zero-width text node.
-/// The emphasis resolver takes the node after a delimiter run to be the span's
-/// first child by arena index, so a marker removed from the chain would leave
-/// that index pointing past the span's real content.
+/// The emphasis resolver takes a span's first child by arena index, so a
+/// marker dropped from the chain would push that index past the real content.
 #[test]
 fn a_blocked_marker_keeps_its_place_in_the_sibling_chain() {
     assert_eq!(
@@ -80,9 +56,8 @@ fn a_blocked_marker_keeps_its_place_in_the_sibling_chain() {
     );
 }
 
-/// A marker sitting exactly where the link before it ends must survive that
-/// link's splice. `[a]()` puts the two offsets on top of each other, which is
-/// the only way a zero-width node lands on a splice boundary.
+/// An empty destination is the only shape that lands a zero-width marker
+/// exactly on the preceding link's splice boundary.
 #[test]
 fn a_marker_at_a_links_end_offset_survives_the_splice() {
     assert_eq!(
@@ -95,8 +70,6 @@ fn a_marker_at_a_links_end_offset_survives_the_splice() {
     );
 }
 
-/// A firing candidate discards whatever the URL bytes tokenized into, and an
-/// orphaned closer falls back to literal text.
 #[test]
 fn a_firing_candidate_splices_away_interior_delimiters() {
     assert_eq!(

@@ -398,8 +398,7 @@ describe("HTML conformance: GFM autolink fuzz regressions", () => {
 });
 
 // A `[`, backtick, `<` or `$` earlier in the block defers the autolink, so its
-// bytes also tokenize as ordinary inline content and the two have to be
-// reconciled once the link is committed.
+// bytes also tokenize as ordinary inline content and have to be reconciled.
 describe("MDAST conformance: deferred GFM autolink splice", () => {
   test("a character reference the URL ends inside leaves its raw residue", () => {
     // The `;` is trailing punctuation, so the URL stops one byte short of the
@@ -436,9 +435,8 @@ describe("MDAST conformance: deferred GFM autolink splice", () => {
     assertMdastConformance("[a http://x.y\\&amp;");
   });
 
-  // Same shape as the inline-HTML case above, but only `<` is repaired: the
-  // other constructs leave nothing behind for the splice to re-open, so fixing
-  // them means deferring the escape itself.
+  // Only `<` is repaired: the other constructs leave nothing for the splice to
+  // re-open, so fixing them means deferring the escape itself.
   test.fails("emphasis after a URL-ending backslash is swallowed", () => {
     // Wanted: text(`<`) + emphasis(link + `_`) + text(`~\t>`); the closing `_`
     // never becomes a delimiter.

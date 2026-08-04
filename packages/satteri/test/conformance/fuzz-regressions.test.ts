@@ -2155,7 +2155,7 @@ describe("fuzz regressions: GFM autolink fires during inline tokenization, not a
 // Frequency note: each case surfaces ≤1× per 200k iterations.
 describe("fuzz known-fails: complex structural divergences (md)", () => {
   // `*>ss)1.  foo` is paragraph text, not a list+blockquote+list-item stack;
-  // the indented fence, code block and `> bam` nesting below depend on that.
+  // the indented fence and `> bam` nesting below depend on that.
   test("list/bq/code-fence/autolink cascade", () => {
     assertMdastConformance(
       "*>ss)1.  foo\n\n    ```\n <https://ex   bar\n    ```\n\n    baz\n\n    > bam\n",
@@ -2169,8 +2169,7 @@ describe("fuzz known-fails: complex structural divergences (md)", () => {
     assertMdastConformance("[\\\n](3*foo)\n");
   });
 
-  // `` `[)4p$[g`https://foo.bar.`baz>` `` — the first backtick run opens a code
-  // span holding `https://foo.bar.`; the `[`s inside it must not gate autolinks.
+  // The `[`s inside the code span `` `https://foo.bar.` `` must not gate autolinks.
   test("code span pairing with autolink-like body", () => {
     assertMdastConformance("`[)4p$[g`https://foo.bar.`baz>`\n");
   });
