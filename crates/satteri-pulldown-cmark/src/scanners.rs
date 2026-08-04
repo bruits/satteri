@@ -455,7 +455,7 @@ impl<'a> LineStart<'a> {
         if !self
             .bytes
             .get(self.ix)
-            .map(|&b| is_ascii_whitespace(b))
+            .map(|&b| is_space_tab_or_eol(b))
             .unwrap_or(false)
         {
             *self = save;
@@ -492,6 +492,10 @@ pub(crate) fn is_definition_list_marker(bytes: &[u8]) -> bool {
 /// feed is content wherever it appears.
 pub(crate) fn is_space_or_tab(c: u8) -> bool {
     c == b' ' || c == b'\t'
+}
+
+pub(crate) fn is_space_tab_or_eol(c: u8) -> bool {
+    is_space_or_tab(c) || c == b'\r' || c == b'\n'
 }
 
 fn is_ascii_alpha(c: u8) -> bool {
@@ -738,7 +742,7 @@ pub(crate) fn scan_hrule(bytes: &[u8]) -> Result<usize, usize> {
 /// Returns number of bytes in prefix and level.
 pub(crate) fn scan_atx_heading(data: &[u8]) -> Option<HeadingLevel> {
     let level = scan_ch_repeat(data, b'#');
-    if data.get(level).copied().is_none_or(is_ascii_whitespace) {
+    if data.get(level).copied().is_none_or(is_space_tab_or_eol) {
         HeadingLevel::try_from(level).ok()
     } else {
         None
@@ -1247,7 +1251,7 @@ fn scan_whitespace_with_newline_handler(
     buffer_ix: &mut usize,
 ) -> Option<usize> {
     while i < data.len() {
-        if !is_ascii_whitespace(data[i]) {
+        if !is_space_tab_or_eol(data[i]) {
             return Some(i);
         }
         if let Some(eol_bytes) = scan_eol(&data[i..]) {
@@ -1282,7 +1286,7 @@ fn scan_whitespace_with_newline_handler_without_buffer(
     newline_handler: NewlineHandler<'_>,
 ) -> Option<usize> {
     while i < data.len() {
-        if !is_ascii_whitespace(data[i]) {
+        if !is_space_tab_or_eol(data[i]) {
             return Some(i);
         }
         if let Some(eol_bytes) = scan_eol(&data[i..]) {

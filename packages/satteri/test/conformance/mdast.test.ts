@@ -866,6 +866,29 @@ describe("MDAST conformance: control and format characters at a text-node edge",
     assertMdastConformance("- [\u{b}] a\n");
     assertMdastConformance("```js\u{b}x\n```\n");
   });
+
+  test("a VT does not open an ATX heading", () => {
+    assertMdastConformance("#\u{b}h\n");
+    assertMdastConformance("#\u{b}\n");
+    assertMdastConformance("###\u{c}h\n");
+  });
+
+  test("a VT does not close a task list marker", () => {
+    assertMdastConformance("- [ ]\u{b} a\n");
+    assertMdastConformance("- [x]\u{c} a\n");
+  });
+
+  test("a VT in a label is part of the identifier", () => {
+    assertMdastConformance("[\u{b}a]: /x\n\n[a]\n");
+    assertMdastConformance("[a\u{b}]: /x\n\n[a]\n");
+    assertMdastConformance("a[^1\u{b}]\n\n[^1]: n\n");
+    assertMdastConformance("a[^1]\n\n[^1\u{b}]: n\n");
+  });
+
+  test("a VT does not separate HTML attributes", () => {
+    assertMdastConformance('<a href\u{b}="/x">l</a>\n');
+    assertMdastConformance('<a href=\u{b}"/x">l</a>\n');
+  });
 });
 
 describe("MDAST conformance: table cell starting with an escaped pipe", () => {
