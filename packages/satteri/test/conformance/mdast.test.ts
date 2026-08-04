@@ -786,25 +786,76 @@ describe("MDAST conformance: fuzz regressions", () => {
   });
 });
 
-// CommonMark strips only spaces and tabs from the end of a line, and a BOM is
-// ordinary content; satteri drops all three from the text node's value.
+// CommonMark strips only spaces and tabs from the end of a line, so VT and FF
+// are content wherever they appear.
 describe("MDAST conformance: control and format characters at a text-node edge", () => {
-  test.fails("trailing VT ends a paragraph", () => {
+  test("trailing VT ends a paragraph", () => {
     assertMdastConformance("abc\u{b}\n");
+    assertMdastConformance("abc\u{b}\u{b}\n");
+    assertMdastConformance("abc\u{b}\r\n");
   });
 
-  test.fails("trailing FF ends a paragraph", () => {
+  test("trailing FF ends a paragraph", () => {
     assertMdastConformance("abc\u{c}\n");
   });
 
-  test.fails("trailing VT after an inline construct is its own text node", () => {
+  test("trailing VT after an inline construct is its own text node", () => {
     assertMdastConformance("*a*\u{b}\n");
     assertMdastConformance("`c`\u{b}\n");
+    assertMdastConformance("[a](/x)\u{b}\n");
+    assertMdastConformance("<https://a.com>\u{b}\n");
+  });
+
+  test("trailing VT at end of input", () => {
+    assertMdastConformance("abc\u{b}");
+    assertMdastConformance("abc\u{c}");
+  });
+
+  test("VT and FF mid-line are content", () => {
+    assertMdastConformance("a\u{b}b\n");
+    assertMdastConformance("a\u{c}b\n");
+    assertMdastConformance("*a\u{b}*\n");
+  });
+
+  test("only the spaces and tabs around a VT are stripped", () => {
+    assertMdastConformance("abc \u{b} \n");
+    assertMdastConformance("abc\t\u{b}\t\n");
+    // Two trailing spaces after the VT still make a hard break.
+    assertMdastConformance("abc\u{b}  \ndef\n");
+  });
+
+  test("trailing VT ends a soft-broken line", () => {
+    assertMdastConformance("abc\u{b}\ndef\n");
+    assertMdastConformance("a\\\u{b}\nb\n");
+  });
+
+  test("trailing VT inside a container", () => {
+    assertMdastConformance("> q\u{b}\n");
+    assertMdastConformance("- i\u{b}\n");
+    assertMdastConformance("| a |\n| - |\n| x\u{b} |\n");
+    assertMdastConformance("h\u{b}\n===\n");
+  });
+
+  test("VT in a code block is content", () => {
+    assertMdastConformance("```\nx\u{b}\n```\n");
+    assertMdastConformance("    code\u{b}\n");
   });
 
   test.fails("a BOM opening a text node is kept", () => {
     assertMdastConformance("*a*\u{feff}x\n");
     assertMdastConformance("user@example.com\u{feff}\n");
+  });
+
+  // Block-level classification still counts VT and FF as whitespace, so a line
+  // holding only one is blank and one ending a definition doesn't break it.
+  test.fails("a line of only VT or FF is a paragraph", () => {
+    assertMdastConformance("\u{b}\n");
+    assertMdastConformance("\u{c}\n");
+    assertMdastConformance("  \u{b}  \n");
+  });
+
+  test.fails("a VT after a definition destination makes it a paragraph", () => {
+    assertMdastConformance("[a]: /x\u{b}\n\n[a]\n");
   });
 });
 

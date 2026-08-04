@@ -1623,10 +1623,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         last_line_start = next_line_start + line_start.bytes_scanned();
                     }
                 }
-                let trailing_ws = scan_rev_while(
-                    &bytes[last_line_start..content_end],
-                    is_ascii_whitespace_no_nl,
-                );
+                let trailing_ws =
+                    scan_rev_while(&bytes[last_line_start..content_end], is_space_or_tab);
                 content_end - trailing_ws
             };
 
@@ -1928,8 +1926,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         );
                     }
 
-                    let trailing_whitespace =
-                        scan_rev_while(&bytes[..ix], is_ascii_whitespace_no_nl);
+                    let trailing_whitespace = scan_rev_while(&bytes[..ix], is_space_or_tab);
                     self.tree
                         .append_text(begin_text, ix - trailing_whitespace, backslash_escaped);
                     backslash_escaped = false;
@@ -2514,8 +2511,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         });
 
         if brk.is_none() {
-            let trailing_whitespace =
-                scan_rev_while(&bytes[begin_text..final_ix], is_ascii_whitespace_no_nl);
+            let trailing_whitespace = scan_rev_while(&bytes[begin_text..final_ix], is_space_or_tab);
             // need to close text at eof
             self.tree.append_text(
                 begin_text,

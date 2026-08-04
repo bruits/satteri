@@ -492,6 +492,12 @@ pub(crate) fn is_ascii_whitespace_no_nl(c: u8) -> bool {
     c == b'\t' || c == 0x0b || c == 0x0c || c == b' '
 }
 
+/// The whitespace stripped from the end of a line: only spaces and tabs, so
+/// vertical tab and form feed stay in the text as content.
+pub(crate) fn is_space_or_tab(c: u8) -> bool {
+    c == b' ' || c == b'\t'
+}
+
 fn is_ascii_alpha(c: u8) -> bool {
     c.is_ascii_alphabetic()
 }
