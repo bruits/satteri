@@ -1809,9 +1809,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // (e.g. an inline GFM autolink Link whose URL ended in `\`).
         // Used by the `\n` hardbreak check to skip those `\`s.
         let mut last_inline_emission_end: usize = start;
-        // Deferred candidates don't skip their own bytes, so this is what
-        // stops a trigger inside one URL from starting a second.
-        let mut last_candidate_end: usize = start;
+        // Lowest start a further candidate may take: a committed candidate owns
+        // its bytes, a deferred one only rules out a retry at the same start.
+        let mut candidate_floor: usize = start;
 
         let (final_ix, brk) = iterate_special_bytes(self.lookup_table, bytes, start, |ix, byte| {
             match byte {
@@ -2002,7 +2002,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         if let Some((email_start, email_end, full_url)) =
                             scan_email_forward_from_atext(bytes, ix, begin_text, paragraph_floor)
                         {
-                            if email_start >= last_candidate_end {
+                            if email_start >= candidate_floor {
                                 let d = AutolinkDetection {
                                     start: email_start,
                                     end: email_end,
@@ -2012,9 +2012,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                         .map(str::to_owned)
                                         .unwrap_or(full_url),
                                 };
-                                last_candidate_end = email_end;
                                 if defer_autolink_decision(bytes, paragraph_floor, ix, self.options)
                                 {
+                                    candidate_floor = email_start + 1;
                                     // Fall through to attention handling: a
                                     // marker that fires splices those
                                     // delimiters away, and a blocked one
@@ -2025,6 +2025,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     }
                                     begin_text = email_start;
                                 } else {
+                                    candidate_floor = email_end;
                                     self.append_autolink_link(d, begin_text, backslash_escaped);
                                     backslash_escaped = false;
                                     begin_text = email_end;
@@ -2479,11 +2480,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         .unwrap_or(start);
                     let detection =
                         detect_gfm_autolink(bytes, ix, byte, paragraph_floor, begin_text)
-                            .filter(|d| d.start >= last_candidate_end);
+                            .filter(|d| d.start >= candidate_floor);
                     if let Some(d) = detection {
                         let (cand_start, cand_end) = (d.start, d.end);
-                        last_candidate_end = cand_end;
                         if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
+                            candidate_floor = cand_start + 1;
                             // Leave `begin_text` at the candidate's start: its
                             // bytes stay ordinary text unless the marker fires.
                             self.append_autolink_marker(d, begin_text, backslash_escaped);
@@ -2493,6 +2494,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             begin_text = cand_start;
                             LoopInstruction::ContinueAndSkip(0)
                         } else {
+                            candidate_floor = cand_end;
                             self.append_autolink_link(d, begin_text, backslash_escaped);
                             begin_text = cand_end;
                             last_inline_emission_end = cand_end;

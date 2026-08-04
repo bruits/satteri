@@ -461,6 +461,25 @@ describe("MDAST conformance: deferred GFM autolink splice", () => {
   });
 });
 
+describe("MDAST conformance: a closed `[…]` unblocks a later autolink trigger", () => {
+  test("wherever the paragraph lives", () => {
+    for (const md of [
+      "> [www.a.com]www.b.com",
+      "- [www.a.com]www.b.com",
+      "# [www.a.com]www.b.com",
+      "| a |\n| - |\n| [www.a.com]www.b.com |",
+      "a[^1]\n\n[^1]: [www.a.com]www.b.com",
+    ]) {
+      assertMdastConformance(md);
+    }
+  });
+
+  test("the trailing-punctuation trim applies to the second URL", () => {
+    assertMdastConformance("[www.a.com]www.b.com/p.");
+    assertMdastConformance("[www.a.com].u@b.com");
+  });
+});
+
 describe("MDAST conformance: unicode whitespace ends a GFM autolink literal", () => {
   const SPACES = [
     0x00a0,

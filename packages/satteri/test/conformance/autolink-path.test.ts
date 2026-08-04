@@ -73,6 +73,19 @@ const PROBE_INPUTS: Array<[string, PathKind[]]> = [
   ["![www.a.com", ["fnr"]],
   ["[foo][www.a.com]", ["fnr"]],
   ["[https://a.com](", ["fnr"]],
+  // A `]` balances its opener even when nothing resolves, so a trigger past
+  // it is no longer blocked and the URL before it can't run on.
+  ["[www.a.com]www.b.com", ["fnr", "construct"]],
+  ["[www.a.com]]www.b.com", ["fnr", "construct"]],
+  ["[www.a.com]http://b.com", ["fnr", "construct"]],
+  ["[www.a.com]u@b.com", ["fnr", "construct"]],
+  ["[www.a.com]_u@b.com", ["fnr", "construct"]],
+  ["[http://a.com]www.b.com", ["fnr", "construct"]],
+  ["a[www.a.com]www.b.com", ["fnr", "construct"]],
+  // The opener is still unbalanced, so both triggers stay blocked.
+  ["[[www.a.com]www.b.com", ["fnr"]],
+  // No opener at all: `]` is an ordinary URL byte.
+  ["www.a.com]www.b.com", ["construct"]],
   // Preceding-character rules. `www.` takes a fixed whitelist, `http://`
   // rejects only ASCII letters, and email rejects `/` and atext.
   ["www.x.y", ["construct"]],

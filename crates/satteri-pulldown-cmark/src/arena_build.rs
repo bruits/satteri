@@ -2612,6 +2612,20 @@ mod autolink_path_probe {
             ("![www.a.com", &[F]),
             ("[foo][www.a.com]", &[F]),
             ("[https://a.com](", &[F]),
+            // A `]` balances its opener even when nothing resolves, so a
+            // trigger past it is no longer blocked and the URL before it
+            // can't run on.
+            ("[www.a.com]www.b.com", &[F, C]),
+            ("[www.a.com]]www.b.com", &[F, C]),
+            ("[www.a.com]http://b.com", &[F, C]),
+            ("[www.a.com]u@b.com", &[F, C]),
+            ("[www.a.com]_u@b.com", &[F, C]),
+            ("[http://a.com]www.b.com", &[F, C]),
+            ("a[www.a.com]www.b.com", &[F, C]),
+            // The opener is still unbalanced, so both triggers stay blocked.
+            ("[[www.a.com]www.b.com", &[F]),
+            // No opener at all: `]` is an ordinary URL byte.
+            ("www.a.com]www.b.com", &[C]),
             // Preceding-character rules. `www.` takes a fixed whitelist,
             // `http://` rejects only ASCII letters, and email rejects `/` and atext.
             ("www.x.y", &[C]),
@@ -2624,7 +2638,7 @@ mod autolink_path_probe {
             ("_www.x.y_", &[C]),
         ];
 
-        assert_eq!(cases.len(), 34, "the probe lost inputs");
+        assert_eq!(cases.len(), 43, "the probe lost inputs");
         let mismatches: Vec<String> = cases
             .iter()
             .filter(|(input, expected)| paths(input) != **expected)
