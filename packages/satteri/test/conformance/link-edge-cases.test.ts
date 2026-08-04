@@ -460,3 +460,39 @@ describe("MDAST conformance: deferred GFM autolink splice", () => {
     assertMdastConformance("`x` &#104;ttp://a.b and http://c.d&#104;");
   });
 });
+
+describe("MDAST conformance: unicode whitespace ends a GFM autolink literal", () => {
+  const SPACES = [
+    0x00a0,
+    0x1680,
+    ...Array.from({ length: 11 }, (_, i) => 0x2000 + i),
+    0x2028,
+    0x2029,
+    0x202f,
+    0x205f,
+    0x3000,
+  ].map((cp) => String.fromCodePoint(cp));
+
+  test("it ends the URL wherever it lands", () => {
+    for (const ws of SPACES) {
+      assertMdastConformance(`www.exa${ws}mple.com\n`);
+      assertMdastConformance(`www.example.com${ws}b\n`);
+      assertMdastConformance(`www.example.com/a${ws}b\n`);
+      assertMdastConformance(`http://example.com/a${ws}b\n`);
+      assertMdastConformance(`www.example.com${ws}\n`);
+    }
+  });
+
+  // `Cf` but not whitespace, so the URL runs straight through them.
+  test("a format character stays inside the URL", () => {
+    for (const cf of [0x180e, 0x200b, 0x2060].map((cp) => String.fromCodePoint(cp))) {
+      assertMdastConformance(`www.exa${cf}mple.com\n`);
+      assertMdastConformance(`www.example.com/a${cf}b\n`);
+    }
+  });
+
+  test.fails("a U+FEFF ending the URL is dropped from the text after it", () => {
+    // The link's extent is right; the drop is general, not autolink-specific.
+    assertMdastConformance("www.example.com/a\u{feff}b\n");
+  });
+});

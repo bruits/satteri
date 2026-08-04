@@ -283,7 +283,13 @@ pub(crate) fn scan_autolink_literal(
     let mut end = ix + proto_len;
     while end < bytes.len() {
         let b = bytes[end];
-        if b <= b' ' || b == 0x7F || b == b'<' {
+        if !b.is_ascii_graphic() {
+            // One range test leaves the hot path: control, space, DEL, or a
+            // scalar that has to be decoded before it can be judged.
+            if b < 0x80 || char_at(bytes, end).is_some_and(is_autolink_whitespace) {
+                break;
+            }
+        } else if b == b'<' {
             break;
         }
         if b == b']' {
@@ -845,6 +851,27 @@ pub(crate) fn gfm_autolink_literal_pass(
     for node_id in candidates {
         split_text_with_autolinks_fnr(arena, node_id, source_bytes, cursor.as_deref_mut(), strict);
     }
+}
+
+/// The whitespace class autolinks use: `White_Space` less U+0085, plus U+FEFF.
+#[inline]
+fn is_autolink_whitespace(c: char) -> bool {
+    (c.is_whitespace() && c != '\u{85}') || c == '\u{FEFF}'
+}
+
+/// The scalar starting at `ix`.
+fn char_at(bytes: &[u8], ix: usize) -> Option<char> {
+    let rest = bytes.get(ix..)?;
+    let width = match *rest.first()? {
+        b if b < 0x80 => 1,
+        b if b >> 5 == 0b110 => 2,
+        b if b >> 4 == 0b1110 => 3,
+        _ => 4,
+    };
+    core::str::from_utf8(rest.get(..width)?)
+        .ok()?
+        .chars()
+        .next()
 }
 
 /// The scalar before `ix`, or `None` at the start of the input.
