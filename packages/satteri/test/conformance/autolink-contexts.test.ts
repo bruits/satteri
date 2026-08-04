@@ -471,3 +471,20 @@ describe("family D: paragraph start in a task list item (documented divergence)"
     assertMdastConformance("- [ ] plain text\n");
   });
 });
+
+// The deferred path reaches the same construct-ordering decision through
+// `candidate_floor` rather than through the committed path's skip, and the
+// block containers each re-enter the scanner at a content start.
+describe("email and `www` triggering at the same offset, per container", () => {
+  test.each([
+    "[a] www.x.ya@b.cd",
+    "`c` www.x.ya@b.cd",
+    "<b> www.x.ya@b.cd",
+    "[a](b) www.x.ya@b.cd",
+    "# www.x.ya@b.cd",
+    "> www.x.ya@b.cd",
+    "- www.x.ya@b.cd",
+    "| a |\n| - |\n| www.x.ya@b.cd |",
+    "[^1]: www.x.ya@b.cd\n\n[^1]",
+  ])("%j", assertMdastConformance);
+});

@@ -4819,6 +4819,48 @@ struct AutolinkDetection {
     url: String,
 }
 
+/// An email literal starting at the same offset as a `www.` literal, which
+/// GFM resolves in the email construct's favour. `www_end` bounds the search
+/// to bytes the www candidate already claims, keeping this amortised O(1).
+fn detect_email_inside_www(
+    bytes: &[u8],
+    ix: usize,
+    www_end: usize,
+    paragraph_start: usize,
+    begin_text: usize,
+) -> Option<AutolinkDetection> {
+    // `_` is the one atext byte that can precede a www literal, and the
+    // attention arm's own email hook already owns that case.
+    if ix > 0 && bytes[ix - 1] == b'_' {
+        return None;
+    }
+    let at_ix = ix + memchr::memchr(b'@', &bytes[ix..www_end])?;
+    let (email_start, email_end, full_url, retry_needed) =
+        crate::post_passes::scan_email_autolink(bytes, at_ix, true)?;
+    // A local part reaching back past the trigger is the `_` hook's.
+    if retry_needed || email_start != ix {
+        return None;
+    }
+    if email_start < begin_text || email_start < paragraph_start {
+        return None;
+    }
+    if email_start > 0
+        && bytes[email_start - 1] == b'\\'
+        && is_ascii_punctuation(bytes[email_start])
+    {
+        return None;
+    }
+    Some(AutolinkDetection {
+        start: email_start,
+        end: email_end,
+        link_type: LinkType::Email,
+        url: full_url
+            .strip_prefix("mailto:")
+            .map(str::to_owned)
+            .unwrap_or(full_url),
+    })
+}
+
 /// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
 /// only — committing or deferring is the caller's call, since it turns on
 /// state this function cannot see.
@@ -4830,18 +4872,17 @@ fn detect_gfm_autolink(
     begin_text: usize,
 ) -> Option<AutolinkDetection> {
     // Cheap reject first: most triggers in prose can't start an autolink.
-    match byte {
-        b'h' | b'H' | b'w' | b'W' => {
-            crate::post_passes::match_autolink_scheme(bytes, ix)?;
-        }
+    let is_www = match byte {
+        b'h' | b'H' | b'w' | b'W' => crate::post_passes::match_autolink_scheme(bytes, ix)?.1,
         b'@' => {
             // Email requires at least one atext char immediately before @.
             if ix == 0 || !is_email_local_char(bytes[ix - 1]) {
                 return None;
             }
+            false
         }
         _ => return None,
-    }
+    };
 
     match byte {
         b'h' | b'H' | b'w' | b'W' => {
@@ -4851,6 +4892,16 @@ fn detect_gfm_autolink(
                 scan_autolink_literal(bytes, ix, ix == paragraph_start)?;
             if fnr_only {
                 return None;
+            }
+            // GFM registers the email construct ahead of www at the same
+            // offset, so an `@` the www span would swallow wins instead.
+            // Bounded by that span, which the caller skips either way.
+            if is_www {
+                if let Some(email) =
+                    detect_email_inside_www(bytes, ix, end, paragraph_start, begin_text)
+                {
+                    return Some(email);
+                }
             }
             Some(AutolinkDetection {
                 start,

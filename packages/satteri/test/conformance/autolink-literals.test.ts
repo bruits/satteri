@@ -444,3 +444,44 @@ describe("family J: unicode whitespace as terminator and boundary", () => {
     ["[a x\u{feff}www.example.com\n", ["http://www.example.com"]],
   ])("%j", conforms);
 });
+
+// GFM registers the email construct ahead of `www` at the same offset, so an
+// email whose local part opens with `www.` beats the www literal that could
+// start there. The rows below are the whole family: every failing shape the
+// differential sweep found was one of these local parts under one of the
+// preceding characters `www` itself accepts.
+describe("family M: email and `www` triggering at the same offset", () => {
+  test.each([
+    ["www.x.ya@b.cd\n", ["mailto:www.x.ya@b.cd"]],
+    // The extent shrinks too, not just the scheme: `/p` stays text.
+    ["www.x.ya@b.cd/p\n", ["mailto:www.x.ya@b.cd"]],
+    ["WWW.x@b.cd\n", ["mailto:WWW.x@b.cd"]],
+    ["wWw.x@b.cd\n", ["mailto:wWw.x@b.cd"]],
+    ["www.@b.cd\n", ["mailto:www.@b.cd"]],
+    ["www.-@b.cd\n", ["mailto:www.-@b.cd"]],
+    ["www.1@b.cd\n", ["mailto:www.1@b.cd"]],
+    ["www.a.b.c@d.ef\n", ["mailto:www.a.b.c@d.ef"]],
+    // The email construct fails on its own terms here, so `www` still wins.
+    ["www.x.ya@b\n", ["http://www.x.ya@b"]],
+    // `_` is trailing punctuation, so the www URL trims it — and the email
+    // domain it would have ended on is rejected for not ending alphabetic.
+    ["www.x.ya@b.cd_\n", ["http://www.x.ya@b.cd"]],
+    // The domain scan rejects outright, so no span is skipped and the `@`
+    // hook picks it up unaided.
+    ["www.a_b@c.de\n", ["mailto:www.a_b@c.de"]],
+    ["_www.x.ya@b.cd\n", ["mailto:_www.x.ya@b.cd"]],
+    // An atext run from `h` stops at `:`, so a protocol literal and an email
+    // can never open at the same offset.
+    ["http://x.ya@b.cd\n", ["http://x.ya@b.cd"]],
+    ["https://x.ya@b.cd\n", ["https://x.ya@b.cd"]],
+    // The characters `www` accepts as a predecessor.
+    ["(www.x.ya@b.cd)\n", ["mailto:www.x.ya@b.cd"]],
+    ["*www.x.ya@b.cd*\n", ["mailto:www.x.ya@b.cd"]],
+    ["~www.x.ya@b.cd~\n", ["mailto:www.x.ya@b.cd"]],
+    ["]www.x.ya@b.cd\n", ["mailto:www.x.ya@b.cd"]],
+    ["x www.x.ya@b.cd\n", ["mailto:www.x.ya@b.cd"]],
+    // Not predecessors `www` accepts, so only the `@` hook can fire.
+    ["a.www.x.ya@b.cd\n", ["mailto:a.www.x.ya@b.cd"]],
+    ["1www.x.ya@b.cd\n", ["mailto:1www.x.ya@b.cd"]],
+  ])("%j", conforms);
+});
