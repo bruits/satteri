@@ -2052,7 +2052,7 @@ impl<'input> ParserInner<'input> {
         ix += 1;
 
         let scan_separator = |ix: &mut usize| {
-            *ix += scan_while(&underlying.as_bytes()[*ix..], is_ascii_whitespace_no_nl);
+            *ix += scan_while(&underlying.as_bytes()[*ix..], is_space_or_tab);
             if let Some(bl) = scan_eol(&underlying.as_bytes()[*ix..]) {
                 *ix += bl;
                 *ix += skip_container_prefixes(
@@ -2061,7 +2061,7 @@ impl<'input> ParserInner<'input> {
                     self.options,
                 );
             }
-            *ix += scan_while(&underlying.as_bytes()[*ix..], is_ascii_whitespace_no_nl);
+            *ix += scan_while(&underlying.as_bytes()[*ix..], is_space_or_tab);
         };
 
         scan_separator(&mut ix);

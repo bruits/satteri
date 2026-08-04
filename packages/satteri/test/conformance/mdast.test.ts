@@ -786,8 +786,8 @@ describe("MDAST conformance: fuzz regressions", () => {
   });
 });
 
-// CommonMark strips only spaces and tabs from the end of a line, so VT and FF
-// are content wherever they appear.
+// Only spaces and tabs make up block structure and line-end padding, so VT and
+// FF are content wherever they appear.
 describe("MDAST conformance: control and format characters at a text-node edge", () => {
   test("trailing VT ends a paragraph", () => {
     assertMdastConformance("abc\u{b}\n");
@@ -846,16 +846,25 @@ describe("MDAST conformance: control and format characters at a text-node edge",
     assertMdastConformance("user@example.com\u{feff}\n");
   });
 
-  // Block-level classification still counts VT and FF as whitespace, so a line
-  // holding only one is blank and one ending a definition doesn't break it.
-  test.fails("a line of only VT or FF is a paragraph", () => {
+  test("a line of only VT or FF is a paragraph, not a blank line", () => {
     assertMdastConformance("\u{b}\n");
     assertMdastConformance("\u{c}\n");
     assertMdastConformance("  \u{b}  \n");
+    assertMdastConformance("a\n\u{b}\nb\n");
+    assertMdastConformance("- a\n\u{b}\n- b\n");
+    assertMdastConformance("```\na\n\u{b}\nb\n```\n");
   });
 
-  test.fails("a VT after a definition destination makes it a paragraph", () => {
+  test("a VT after a definition destination makes it a paragraph", () => {
     assertMdastConformance("[a]: /x\u{b}\n\n[a]\n");
+    assertMdastConformance('[a]: /x "t"\u{b}\n\n[a]\n');
+  });
+
+  test("a VT does not stand in for the space a block marker needs", () => {
+    assertMdastConformance("-\u{b}a\n");
+    assertMdastConformance(">\u{b}a\n");
+    assertMdastConformance("- [\u{b}] a\n");
+    assertMdastConformance("```js\u{b}x\n```\n");
   });
 });
 

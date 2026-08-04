@@ -435,7 +435,7 @@ impl<'a> LineStart<'a> {
             return None;
         }
         let is_checked = match self.bytes.get(self.ix) {
-            Some(&c) if is_ascii_whitespace_no_nl(c) => {
+            Some(&c) if is_space_or_tab(c) => {
                 self.ix += 1;
                 false
             }
@@ -488,12 +488,8 @@ pub(crate) fn is_definition_list_marker(bytes: &[u8]) -> bool {
         && matches!(bytes.get(1), None | Some(&(b' ' | b'\t' | b'\r' | b'\n')))
 }
 
-pub(crate) fn is_ascii_whitespace_no_nl(c: u8) -> bool {
-    c == b'\t' || c == 0x0b || c == 0x0c || c == b' '
-}
-
-/// The whitespace stripped from the end of a line: only spaces and tabs, so
-/// vertical tab and form feed stay in the text as content.
+/// Block structure is made of spaces and tabs only, so a vertical tab or form
+/// feed is content wherever it appears.
 pub(crate) fn is_space_or_tab(c: u8) -> bool {
     c == b' ' || c == b'\t'
 }
@@ -562,10 +558,8 @@ pub(crate) fn scan_ch_repeat(data: &[u8], c: u8) -> usize {
     scan_while(data, |x| x == c)
 }
 
-// Note: this scans ASCII whitespace only, for Unicode whitespace use
-// a different function.
-pub(crate) fn scan_whitespace_no_nl(data: &[u8]) -> usize {
-    scan_while(data, is_ascii_whitespace_no_nl)
+pub(crate) fn scan_space_or_tab(data: &[u8]) -> usize {
+    scan_while(data, is_space_or_tab)
 }
 
 fn scan_attr_value_chars(data: &[u8]) -> usize {
@@ -583,7 +577,7 @@ pub(crate) fn scan_eol(bytes: &[u8]) -> Option<usize> {
 }
 
 pub(crate) fn scan_blank_line(bytes: &[u8]) -> Option<usize> {
-    let i = scan_whitespace_no_nl(bytes);
+    let i = scan_space_or_tab(bytes);
     scan_eol(&bytes[i..]).map(|n| i + n)
 }
 
@@ -1525,7 +1519,7 @@ pub(crate) fn scan_html_block_inner(
         loop {
             let old_i = i;
             loop {
-                i += scan_whitespace_no_nl(&data[i..]);
+                i += scan_space_or_tab(&data[i..]);
                 if let Some(eol_bytes) = scan_eol(&data[i..]) {
                     if eol_bytes == 0 {
                         return None;
@@ -1563,7 +1557,7 @@ pub(crate) fn scan_html_block_inner(
         }
     }
 
-    i += scan_whitespace_no_nl(&data[i..]);
+    i += scan_space_or_tab(&data[i..]);
 
     if close_tag_bytes == 0 {
         i += scan_ch(&data[i..], b'/');

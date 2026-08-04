@@ -604,7 +604,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         self.finish_list(start_ix);
                         // For block directives, advance to end of line
                         let after = &bytes[content_end..];
-                        let ws = scan_whitespace_no_nl(after);
+                        let ws = scan_space_or_tab(after);
                         let line_end = content_end + ws + scan_nextline(&after[ws..]);
                         // `[label]` offsets (0/0 when no brackets) — capture
                         // before `dir_data` is moved into the allocator.
@@ -634,7 +634,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     {
                         // Verify only whitespace follows on the line
                         let remaining = &bytes[line_end..];
-                        let ws = scan_whitespace_no_nl(remaining);
+                        let ws = scan_space_or_tab(remaining);
                         let at_eol = line_end + ws >= bytes.len()
                             || bytes[line_end + ws] == b'\n'
                             || bytes[line_end + ws] == b'\r';
@@ -1193,7 +1193,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
             first_iter = false;
             let _start_ix = ix;
-            ix += scan_whitespace_no_nl(&bytes[ix..]);
+            ix += scan_space_or_tab(&bytes[ix..]);
 
             if let Some(eol_bytes) = scan_eol(&bytes[ix..]) {
                 // A line with only an opening `|` and no content (e.g. stray
@@ -2852,7 +2852,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.list_interrupted_paragraph = false;
         let bytes = self.text.as_bytes();
         let mut info_start = start_ix + n_fence_char;
-        info_start += scan_whitespace_no_nl(&bytes[info_start..]);
+        info_start += scan_space_or_tab(&bytes[info_start..]);
         // TODO: info strings are typically very short. wouldn't it be faster
         // to just do a forward scan here?
         let mut ix = info_start + scan_nextline(&bytes[info_start..]);
@@ -2952,7 +2952,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.list_interrupted_paragraph = false;
         let bytes = self.text.as_bytes();
         let mut meta_start = start_ix + n_fence_char;
-        meta_start += scan_whitespace_no_nl(&bytes[meta_start..]);
+        meta_start += scan_space_or_tab(&bytes[meta_start..]);
         let mut ix = meta_start + scan_nextline(&bytes[meta_start..]);
         // Only strip the trailing newline; preserve any trailing spaces/tabs
         // in the meta string (remark keeps them verbatim).
@@ -3235,7 +3235,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return ix + eol_bytes;
         }
         // skip leading spaces
-        let skip_spaces = scan_whitespace_no_nl(&bytes[ix..]);
+        let skip_spaces = scan_space_or_tab(&bytes[ix..]);
         ix += skip_spaces;
 
         // now handle the header text
@@ -3363,7 +3363,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.pop(start);
             }
         }
-        i += scan_whitespace_no_nl(&bytes[i..]);
+        i += scan_space_or_tab(&bytes[i..]);
         self.allocs
             .footdefs
             .0
@@ -3424,7 +3424,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     fn scan_refdef_space(&self, bytes: &[u8], mut i: usize) -> Option<(usize, usize)> {
         let mut newlines = 0;
         loop {
-            let whitespaces = scan_whitespace_no_nl(&bytes[i..]);
+            let whitespaces = scan_space_or_tab(&bytes[i..]);
             i += whitespaces;
             if let Some(eol_bytes) = scan_eol(&bytes[i..]) {
                 i += eol_bytes;
@@ -3558,7 +3558,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // remark folds trailing same-line whitespace after the URL into the
         // definition's source span even with no title. Extend the no-title
         // fallback to match.
-        let span_end = i + scan_whitespace_no_nl(&bytes[i..]);
+        let span_end = i + scan_space_or_tab(&bytes[i..]);
 
         // no title
         let mut backup = (
@@ -3595,7 +3595,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // remark folds trailing same-line whitespace after the
                 // title into the definition's source span (matches the
                 // behavior already applied above in the no-title path).
-                let span_end = i + scan_whitespace_no_nl(&bytes[i..]);
+                let span_end = i + scan_space_or_tab(&bytes[i..]);
                 backup.0 = i - start;
                 backup.1.span = span_start..span_end;
                 backup.1.title = Some(unescape(title, self.tree.is_in_table()));
@@ -3857,7 +3857,7 @@ fn count_header_cols(
         return 1;
     }
     // was first pipe preceded by whitespace? if so, subtract one
-    start += scan_whitespace_no_nl(&bytes[start..]);
+    start += scan_space_or_tab(&bytes[start..]);
     if bytes[start] == b'|' {
         pipes -= 1;
     }
