@@ -517,5 +517,13 @@ describe("family M: email and `www` triggering at the same offset", () => {
     // Not predecessors `www` accepts, so only the `@` hook can fire.
     ["a.www.x.ya@b.cd\n", ["mailto:a.www.x.ya@b.cd"]],
     ["1www.x.ya@b.cd\n", ["mailto:1www.x.ya@b.cd"]],
+    // The email ends before the www literal would have, and the bytes between
+    // the two ends go back through inline scanning as ordinary content.
+    ["www.x.ya@b.cd*em*\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd\\*\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd&amp;\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd)\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd<b>\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd`c`\n", ["mailto:www.x.ya@b.cd"]],
   ])("%j", conforms);
 });
