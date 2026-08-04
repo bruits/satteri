@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { markdownToHtml, mdxToJs } from "../../src/index.js";
+import type { MdastNode } from "../../src/types.js";
 import {
   createMdastHandle,
   getHandleSource,

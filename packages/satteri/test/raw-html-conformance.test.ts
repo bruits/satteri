@@ -146,7 +146,7 @@ describe("rawHtml conformance vs rehype-raw", () => {
   for (const { name, md } of cases) {
     test(`serialized HTML matches: ${name}`, () => {
       const ours = markdownToHast(md, { features: { rawHtml: true } });
-      expect(stringify(ours)).toBe(reference.stringify(referenceTree(md)));
+      expect(stringify(ours)).toBe(stringify(referenceTree(md)));
     });
 
     test(`hast tree matches: ${name}`, () => {
