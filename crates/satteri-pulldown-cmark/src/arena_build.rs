@@ -2659,41 +2659,42 @@ mod autolink_path_probe {
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
-    /// The three triggers have disagreeing preceding-character rules, and what
-    /// the construct path blocks falls through to find-and-replace, which wants
-    /// whitespace or punctuation.
+    /// The triggers have disagreeing preceding-character rules, and what the
+    /// construct path blocks falls through to find-and-replace, which wants
+    /// whitespace or punctuation. The fourth is a `www.` literal and an email
+    /// at the same offset, so it also pins which construct is tried first.
     #[test]
     fn a_preceding_character_selects_the_path_per_trigger() {
-        const TRIGGERS: [&str; 3] = ["www.x.y", "http://x.y", "a@b.cd"];
-        let rules: &[(&str, [Path; 3])] = &[
-            ("", [C, C, C]),
-            (" ", [C, C, C]),
-            ("(", [C, C, C]),
-            ("*", [C, C, C]),
-            ("_", [C, C, C]),
-            ("]", [C, C, C]),
-            ("~", [C, C, C]),
-            ("[", [F, F, F]),
-            (".", [F, C, C]),
-            ("/", [F, C, N]),
-            ("+", [F, C, C]),
-            (")", [F, C, C]),
-            ("!", [F, C, C]),
-            (":", [F, C, C]),
-            ("¥", [F, C, C]),
-            ("→", [F, C, C]),
-            ("a", [N, N, C]),
-            ("5", [N, C, C]),
-            ("é", [N, C, C]),
-            ("你", [N, C, C]),
-            ("你好", [N, C, C]),
-            ("\u{200b}", [N, C, C]),
+        const TRIGGERS: [&str; 4] = ["www.x.y", "http://x.y", "a@b.cd", "www.x@y.zz"];
+        let rules: &[(&str, [Path; 4])] = &[
+            ("", [C, C, C, C]),
+            (" ", [C, C, C, C]),
+            ("(", [C, C, C, C]),
+            ("*", [C, C, C, C]),
+            ("_", [C, C, C, C]),
+            ("]", [C, C, C, C]),
+            ("~", [C, C, C, C]),
+            ("[", [F, F, F, F]),
+            (".", [F, C, C, C]),
+            ("/", [F, C, N, F]),
+            ("+", [F, C, C, C]),
+            (")", [F, C, C, C]),
+            ("!", [F, C, C, C]),
+            (":", [F, C, C, C]),
+            ("¥", [F, C, C, C]),
+            ("→", [F, C, C, C]),
+            ("a", [N, N, C, C]),
+            ("5", [N, C, C, C]),
+            ("é", [N, C, C, C]),
+            ("你", [N, C, C, C]),
+            ("你好", [N, C, C, C]),
+            ("\u{200b}", [N, C, C, C]),
             // U+FEFF is not `White_Space`, yet find-and-replace takes it as a
             // boundary. Prefixed with a letter to keep leading-BOM handling out.
-            ("a\u{feff}", [F, C, C]),
+            ("a\u{feff}", [F, C, C, C]),
             // U+0085 is `White_Space`, but find-and-replace does not take it
             // as a boundary.
-            ("\u{85}", [N, C, C]),
+            ("\u{85}", [N, C, C, C]),
         ];
 
         for (prefix, expected) in rules {
