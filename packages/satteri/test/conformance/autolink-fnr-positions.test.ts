@@ -159,6 +159,16 @@ describe("find-and-replace autolink positions", () => {
     expect(link.position!.start).toEqual({ line: 2, column: 3, offset: 7 });
   });
 
+  test("7b. a lone carriage return ends the line the prefix follows", () => {
+    const md = "> [a\r> www.x.y";
+    expectReferenceTakesFnr(md);
+    expect(spans(md)).toEqual([
+      ["text", "[a\r", "[a\r"],
+      ["link", "http://www.x.y", "www.x.y"],
+      ["text", "www.x.y", "www.x.y"],
+    ]);
+  });
+
   test("8. a multi-character reference is included whole or not at all", () => {
     // `&fjlig;` decodes to two characters, so a boundary inside it has no raw
     // offset to name; here it falls within the match.
@@ -262,6 +272,14 @@ describe("smart punctuation does not cost the autolink its position", () => {
       "link",
       'http://www.a.com/a"b',
       'www.a.com/a\\"b',
+    ]);
+  });
+
+  test("a lone carriage return keeps the alignment on the rails", () => {
+    expect(smart('> "q"\r> [www.a.com/x').at(1)).toEqual([
+      "link",
+      "http://www.a.com/x",
+      "www.a.com/x",
     ]);
   });
 

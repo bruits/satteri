@@ -1203,6 +1203,27 @@ fn build_raw_map(
         });
     };
 
+    // A continuation line's block prefix (`> `, indentation) produces no
+    // decoded bytes. Content can't start with one: leading whitespace is
+    // stripped and a leading `>` would have opened a blockquote.
+    let skip_block_prefix = |segs: &mut Vec<Seg>, r: &mut usize, d: usize| {
+        let prefix_start = *r;
+        while *r < raw.len()
+            && matches!(raw[*r], b' ' | b'\t' | b'>')
+            && dec.get(d) != Some(&raw[*r])
+        {
+            *r += 1;
+        }
+        if *r > prefix_start {
+            segs.push(Seg {
+                d_start: d as u32,
+                d_len: 0,
+                r_start: (r_start + prefix_start) as u32,
+                r_len: (*r - prefix_start) as u32,
+            });
+        }
+    };
+
     // One predictable test keeps the smart arms off the hot path entirely for
     // the documents that don't enable them.
     let smart_any = smart.quotes || smart.dashes || smart.ellipses;
@@ -1235,31 +1256,14 @@ fn build_raw_map(
                 push_atomic(&mut segs, r, 2, d, 1);
                 r += 2;
                 d += 1;
+                skip_block_prefix(&mut segs, &mut r, d);
                 continue;
             }
-            b'\n' if dec.get(d) == Some(&b'\n') => {
+            b'\n' | b'\r' if dec.get(d) == Some(&raw[r]) => {
                 extend_one_to_one(&mut segs, r, d);
                 r += 1;
                 d += 1;
-                // A continuation line's block prefix (`> `, indentation)
-                // produces no decoded bytes. Content can't start with one:
-                // leading whitespace is stripped and a leading `>` would have
-                // opened a blockquote.
-                let prefix_start = r;
-                while r < raw.len()
-                    && matches!(raw[r], b' ' | b'\t' | b'>')
-                    && dec.get(d) != Some(&raw[r])
-                {
-                    r += 1;
-                }
-                if r > prefix_start {
-                    segs.push(Seg {
-                        d_start: d as u32,
-                        d_len: 0,
-                        r_start: (r_start + prefix_start) as u32,
-                        r_len: (r - prefix_start) as u32,
-                    });
-                }
+                skip_block_prefix(&mut segs, &mut r, d);
                 continue;
             }
             b' ' | b'\t' if dec.get(d) != Some(&raw[r]) => {
