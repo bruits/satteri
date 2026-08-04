@@ -1089,32 +1089,35 @@ pub(crate) struct Smart {
     pub ellipses: bool,
 }
 
-/// The em/en dash mix smart punctuation renders a run of `count` hyphens as.
-pub(crate) fn smart_dash_run(count: usize) -> String {
-    if count == 2 {
-        return "\u{2013}".to_owned();
-    }
-    if count == 3 {
-        return "\u{2014}".to_owned();
-    }
-    let (ems, ens) = match count % 6 {
+/// How many em and en dashes smart punctuation renders a run of `count`
+/// hyphens as.
+fn smart_dash_counts(count: usize) -> (usize, usize) {
+    debug_assert!(count >= 2, "a lone hyphen is not a dash run");
+    match count % 6 {
         0 | 3 => (count / 3, 0),
         2 | 4 => (0, count / 2),
         1 => (count / 3 - 1, 2),
         _ => (count / 3, 1),
-    };
-    let mut buf = String::with_capacity(3 * (ems + ens));
+    }
+}
+
+/// The em/en dash mix smart punctuation renders a run of `count` hyphens as.
+pub(crate) fn smart_dash_run(count: usize) -> String {
+    let (ems, ens) = smart_dash_counts(count);
+    let mut buf = String::with_capacity(EM_DASH.len() * (ems + ens));
     for _ in 0..ems {
-        buf.push('\u{2014}');
+        buf.push_str(EM_DASH);
     }
     for _ in 0..ens {
-        buf.push('\u{2013}');
+        buf.push_str(EN_DASH);
     }
     buf
 }
 
+const EM_DASH: &str = "\u{2014}";
+const EN_DASH: &str = "\u{2013}";
+
 /// The raw and decoded lengths of the smart-punctuation rewrite at `raw[r]`.
-#[cold]
 fn smart_seg(raw: &[u8], r: usize, dec: &[u8], d: usize, smart: Smart) -> Option<(usize, usize)> {
     const ELLIPSIS: &str = "\u{2026}";
     match raw[r] {
@@ -1129,10 +1132,14 @@ fn smart_seg(raw: &[u8], r: usize, dec: &[u8], d: usize, smart: Smart) -> Option
             if count < 2 {
                 return None;
             }
-            let run = smart_dash_run(count);
-            dec[d..]
-                .starts_with(run.as_bytes())
-                .then_some((count, run.len()))
+            let (ems, ens) = smart_dash_counts(count);
+            let mut rest = &dec[d..];
+            for (n, dash) in [(ems, EM_DASH), (ens, EN_DASH)] {
+                for _ in 0..n {
+                    rest = rest.strip_prefix(dash.as_bytes())?;
+                }
+            }
+            Some((count, EM_DASH.len() * (ems + ens)))
         }
         c @ (b'"' | b'\'') if smart.quotes => {
             let curly: [&str; 2] = if c == b'"' {
@@ -1664,6 +1671,11 @@ mod tests {
         let m = smart_map("a-----b", "a\u{2014}\u{2013}b");
         assert_eq!(m.raw_start_of(1), Some(1));
         assert_eq!(m.raw_end_of(7), Some(6));
+
+        // Seven is the branch that subtracts: em + two en, 7 raw to 9 decoded.
+        let m = smart_map("a-------b", "a\u{2014}\u{2013}\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(10), Some(8));
     }
 
     #[test]
