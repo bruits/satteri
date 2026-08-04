@@ -841,12 +841,13 @@ pub(crate) fn gfm_autolink_literal_pass(
             candidates.push(id);
         }
     }
-    // Smart punctuation rewrites text values in ways `build_raw_map` can't
-    // reverse, so a failed reconstruction is expected there.
-    let strict =
-        !(options.has_smart_quotes() || options.has_smart_dashes() || options.has_smart_ellipses());
+    let smart = Smart {
+        quotes: options.has_smart_quotes(),
+        dashes: options.has_smart_dashes(),
+        ellipses: options.has_smart_ellipses(),
+    };
     for node_id in candidates {
-        split_text_with_autolinks_fnr(arena, node_id, source_bytes, cursor.as_deref_mut(), strict);
+        split_text_with_autolinks_fnr(arena, node_id, source_bytes, cursor.as_deref_mut(), smart);
     }
 }
 
@@ -1088,7 +1089,81 @@ impl RawMap {
 ///
 /// Returns `None` when the value can't be reconstructed exactly; callers then
 /// report no position rather than a guessed one that mis-slices the source.
-fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> Option<RawMap> {
+/// Which smart-punctuation rewrites are on, so `build_raw_map` can undo them.
+#[derive(Clone, Copy)]
+pub(crate) struct Smart {
+    pub quotes: bool,
+    pub dashes: bool,
+    pub ellipses: bool,
+}
+
+/// The em/en dash mix smart punctuation renders a run of `count` hyphens as.
+pub(crate) fn smart_dash_run(count: usize) -> String {
+    if count == 2 {
+        return "\u{2013}".to_owned();
+    }
+    if count == 3 {
+        return "\u{2014}".to_owned();
+    }
+    let (ems, ens) = match count % 6 {
+        0 | 3 => (count / 3, 0),
+        2 | 4 => (0, count / 2),
+        1 => (count / 3 - 1, 2),
+        _ => (count / 3, 1),
+    };
+    let mut buf = String::with_capacity(3 * (ems + ens));
+    for _ in 0..ems {
+        buf.push('\u{2014}');
+    }
+    for _ in 0..ens {
+        buf.push('\u{2013}');
+    }
+    buf
+}
+
+/// The raw and decoded lengths of the smart-punctuation rewrite at `raw[r]`.
+#[cold]
+fn smart_seg(raw: &[u8], r: usize, dec: &[u8], d: usize, smart: Smart) -> Option<(usize, usize)> {
+    const ELLIPSIS: &str = "\u{2026}";
+    match raw[r] {
+        b'.' if smart.ellipses
+            && raw[r..].starts_with(b"...")
+            && dec[d..].starts_with(ELLIPSIS.as_bytes()) =>
+        {
+            Some((3, ELLIPSIS.len()))
+        }
+        b'-' if smart.dashes => {
+            let count = 1 + crate::scanners::scan_ch_repeat(&raw[(r + 1)..], b'-');
+            if count < 2 {
+                return None;
+            }
+            let run = smart_dash_run(count);
+            dec[d..]
+                .starts_with(run.as_bytes())
+                .then_some((count, run.len()))
+        }
+        c @ (b'"' | b'\'') if smart.quotes => {
+            let curly: [&str; 2] = if c == b'"' {
+                ["\u{201c}", "\u{201d}"]
+            } else {
+                ["\u{2018}", "\u{2019}"]
+            };
+            curly
+                .iter()
+                .find(|q| dec[d..].starts_with(q.as_bytes()))
+                .map(|q| (1, q.len()))
+        }
+        _ => None,
+    }
+}
+
+fn build_raw_map(
+    source: &[u8],
+    r_start: usize,
+    r_end: usize,
+    decoded: &str,
+    smart: Smart,
+) -> Option<RawMap> {
     if r_start > r_end || r_end > source.len() {
         return None;
     }
@@ -1128,6 +1203,9 @@ fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> 
         });
     };
 
+    // One predictable test keeps the smart arms off the hot path entirely for
+    // the documents that don't enable them.
+    let smart_any = smart.quotes || smart.dashes || smart.ellipses;
     let mut r = 0usize;
     let mut d = 0usize;
     while r < raw.len() {
@@ -1201,6 +1279,14 @@ fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> 
                 });
                 continue;
             }
+            b'.' | b'-' | b'"' | b'\'' if smart_any => {
+                if let Some((r_len, d_len)) = smart_seg(raw, r, dec, d, smart) {
+                    push_atomic(&mut segs, r, r_len, d, d_len);
+                    r += r_len;
+                    d += d_len;
+                    continue;
+                }
+            }
             0 => {
                 // CommonMark replaces NUL with the replacement character.
                 const REPLACEMENT: &str = "\u{FFFD}";
@@ -1254,7 +1340,7 @@ fn split_text_with_autolinks_fnr(
     text_id: u32,
     source_bytes: &[u8],
     cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
-    strict: bool,
+    smart: Smart,
 ) {
     let data = arena.get_type_data(text_id);
     if data.is_empty() {
@@ -1298,10 +1384,10 @@ fn split_text_with_autolinks_fnr(
     let (r_start, r_end) = (node.start_offset as usize, node.end_offset as usize);
     let map = cursor
         .as_ref()
-        .and_then(|_| build_raw_map(source_bytes, r_start, r_end, &text));
+        .and_then(|_| build_raw_map(source_bytes, r_start, r_end, &text, smart));
     if cursor.is_some() && map.is_none() {
         debug_assert!(
-            !strict,
+            false,
             "build_raw_map failed to reconstruct a text value from its source span"
         );
     }
@@ -1507,10 +1593,25 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_raw_map, RawMap};
+    use super::{build_raw_map, RawMap, Smart};
+
+    const OFF: Smart = Smart {
+        quotes: false,
+        dashes: false,
+        ellipses: false,
+    };
+    const ON: Smart = Smart {
+        quotes: true,
+        dashes: true,
+        ellipses: true,
+    };
 
     fn map(source: &str, decoded: &str) -> RawMap {
-        build_raw_map(source.as_bytes(), 0, source.len(), decoded).expect("map should build")
+        build_raw_map(source.as_bytes(), 0, source.len(), decoded, OFF).expect("map should build")
+    }
+
+    fn smart_map(source: &str, decoded: &str) -> RawMap {
+        build_raw_map(source.as_bytes(), 0, source.len(), decoded, ON).expect("map should build")
     }
 
     #[test]
@@ -1543,6 +1644,52 @@ mod tests {
     }
 
     #[test]
+    fn raw_map_spans_a_smart_dash_run_whole() {
+        // `--` occupies raw 1..3 and decodes to one 3-byte en dash.
+        let m = smart_map("a--b", "a\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(4), Some(3));
+        // Interior of the atomic run names no raw offset.
+        assert_eq!(m.raw_start_of(2), None);
+        assert_eq!(m.raw_end_of(2), None);
+    }
+
+    #[test]
+    fn raw_map_spans_a_long_dash_run_by_the_shared_formula() {
+        // Five hyphens render as em + en, so the run is 5 raw to 6 decoded.
+        let m = smart_map("a-----b", "a\u{2014}\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(7), Some(6));
+    }
+
+    #[test]
+    fn raw_map_spans_an_ellipsis_and_a_quote_whole() {
+        let m = smart_map("a...b", "a\u{2026}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(4), Some(4));
+
+        let q = smart_map("a\"b\"", "a\u{201c}b\u{201d}");
+        assert_eq!(q.raw_start_of(1), Some(1));
+        assert_eq!(q.raw_end_of(4), Some(2));
+    }
+
+    #[test]
+    fn raw_map_leaves_smart_bytes_alone_when_the_option_is_off() {
+        // The same raw text decodes to itself, so it stays the identity map.
+        assert!(matches!(map("a--b", "a--b"), RawMap::Identity { .. }));
+        // And a curled value cannot be reconstructed without the option.
+        assert!(build_raw_map("a--b".as_bytes(), 0, 4, "a\u{2013}b", OFF).is_none());
+    }
+
+    #[test]
+    fn raw_map_prefers_the_escape_over_a_smart_dash() {
+        // `\-` is an escape, so the run after it is only two hyphens.
+        let m = smart_map("\\---", "-\u{2013}");
+        assert_eq!(m.raw_end_of(1), Some(2));
+        assert_eq!(m.raw_end_of(4), Some(4));
+    }
+
+    #[test]
     fn raw_map_excludes_a_continuation_prefix() {
         // The `> ` produces nothing, so it belongs to neither side.
         let m = map("a\n> b", "a\nb");
@@ -1560,7 +1707,7 @@ mod tests {
 
     #[test]
     fn raw_map_refuses_to_guess() {
-        assert!(build_raw_map(b"a&amp;b", 0, 7, "a&z").is_none());
-        assert!(build_raw_map(b"abc", 0, 3, "abcd").is_none());
+        assert!(build_raw_map(b"a&amp;b", 0, 7, "a&z", OFF).is_none());
+        assert!(build_raw_map(b"abc", 0, 3, "abcd", OFF).is_none());
     }
 }

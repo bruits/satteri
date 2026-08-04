@@ -2441,20 +2441,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         } else if count == 3 {
                             ItemBody::SynthesizeChar('—')
                         } else {
-                            let (ems, ens) = match count % 6 {
-                                0 | 3 => (count / 3, 0),
-                                2 | 4 => (0, count / 2),
-                                1 => (count / 3 - 1, 2),
-                                _ => (count / 3, 1),
-                            };
-                            // – and — are 3 bytes each in utf8
-                            let mut buf = String::with_capacity(3 * (ems + ens));
-                            for _ in 0..ems {
-                                buf.push('—');
-                            }
-                            for _ in 0..ens {
-                                buf.push('–');
-                            }
+                            let buf = crate::post_passes::smart_dash_run(count);
                             ItemBody::SynthesizeText(self.allocs.allocate_cow(buf.into()))
                         };
 

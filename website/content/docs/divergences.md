@@ -53,7 +53,7 @@ This only affects astral punctuation and symbols — `𐄁` (U+10101), `😀` (U
 | `remark-parse` + `remark-gfm` | link with no `position`                         |
 | Sätteri                       | link with `position` spanning `www.example.com` |
 
-URLs are unchanged: `[www.example.com/&amp;b` links to `http://www.example.com/&b` on both sides, and the position covers the raw `&amp;`. When a match starts or ends inside a character reference that decodes to more than one character, no exact span exists, and Sätteri reports no position rather than an approximate one.
+URLs are unchanged: `[www.example.com/&amp;b` links to `http://www.example.com/&b` on both sides, and the position covers the raw `&amp;`. Smart punctuation works the same way: the span covers the raw `--`, `...` or `"` run the value was rendered from. When a match starts or ends inside a character reference that decodes to more than one character, no exact span exists, and Sätteri reports no position rather than an approximate one.
 
 ### Paragraph start in a task list item
 
