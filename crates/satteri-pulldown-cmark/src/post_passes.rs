@@ -1081,14 +1081,6 @@ impl RawMap {
     }
 }
 
-/// Align a Text node's decoded value with the raw source it came from.
-///
-/// At each raw offset the walk asks which transform applies, never whether the
-/// bytes differ: raw `&amp;` starts with the byte it decodes to, so a
-/// mismatch-directed walk would consume it and then choke on `amp;`.
-///
-/// Returns `None` when the value can't be reconstructed exactly; callers then
-/// report no position rather than a guessed one that mis-slices the source.
 /// Which smart-punctuation rewrites are on, so `build_raw_map` can undo them.
 #[derive(Clone, Copy)]
 pub(crate) struct Smart {
@@ -1157,6 +1149,14 @@ fn smart_seg(raw: &[u8], r: usize, dec: &[u8], d: usize, smart: Smart) -> Option
     }
 }
 
+/// Align a Text node's decoded value with the raw source it came from.
+///
+/// At each raw offset the walk asks which transform applies, never whether the
+/// bytes differ: raw `&amp;` starts with the byte it decodes to, so a
+/// mismatch-directed walk would consume it and then choke on `amp;`.
+///
+/// Returns `None` when the value can't be reconstructed exactly; callers then
+/// report no position rather than a guessed one that mis-slices the source.
 fn build_raw_map(
     source: &[u8],
     r_start: usize,
