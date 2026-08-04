@@ -860,10 +860,23 @@ describe("MDAST conformance: control and format characters at a text-node edge",
 });
 
 describe("MDAST conformance: table cell starting with an escaped pipe", () => {
-  // The cell's text span should cover the raw `\|`; satteri starts it at the
-  // `|`, which is the one place its spans don't cover the escape.
-  test.fails("leading `\\|` in a cell", () => {
+  test("leading `\\|` in a cell", () => {
     assertMdastConformance("| a |\n| - |\n| \\|abc |\n");
+    assertMdastConformance("| a |\n| - |\n| \\| |\n");
+    assertMdastConformance("| a |\n| - |\n|\\|abc|\n");
+    assertMdastConformance("| \\|h |\n| - |\n| a |\n");
+    assertMdastConformance("| a | b |\n| - | - |\n| x | \\|y |\n");
+  });
+
+  test("consecutive and repeated escaped pipes in a cell", () => {
+    assertMdastConformance("| a |\n| - |\n| \\|\\|a |\n");
+    assertMdastConformance("| a |\n| - |\n| \\|abc\\|d |\n");
+    assertMdastConformance("| a |\n| - |\n| \\|\\*x |\n");
+  });
+
+  test("a leading `\\|` followed by an inline construct", () => {
+    assertMdastConformance("| a |\n| - |\n| \\|*e* |\n");
+    assertMdastConformance("| a |\n| - |\n| \\|`c` |\n");
   });
 
   test("an escape that is neither leading nor a pipe is unaffected", () => {

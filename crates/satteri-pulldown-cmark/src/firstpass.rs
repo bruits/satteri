@@ -1960,7 +1960,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // is supposed to operate as-if backslash escaped pipes were stripped out in a
                         // separate pass.
                         begin_text = ix + 1;
-                        backslash_escaped = false;
+                        // The `\` isn't content, but the span still covers it.
+                        backslash_escaped = true;
                         LoopInstruction::ContinueAndSkip(1)
                     } else if bytes[ix + 1] == b'<' {
                         // Still emit the marker: a deferred autolink may end on
