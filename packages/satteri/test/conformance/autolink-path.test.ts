@@ -2,9 +2,12 @@ import { describe, test, expect } from "vitest";
 import {
   assertMdastConformance,
   assertSliceInvariantEverywhere,
+  conforms,
+  linkUrls,
   referenceMdast,
   satteriMdast,
 } from "./helpers.js";
+import type { UrlNode } from "./helpers.js";
 
 // Telling satteri's two autolink routes apart needs parser internals, so that
 // half of the probe is `autolink_path_probe` in `crates/satteri-pulldown-cmark`.
@@ -149,20 +152,42 @@ describe("GFM autolink preceding-character rules", () => {
 // code unit, so an astral one is a lone surrogate and always rejected; satteri
 // classifies the whole scalar. See website/content/docs/divergences.md.
 describe("divergence: astral characters before a GFM autolink", () => {
-  const ASTRAL = [
+  // The categories the classifier lets through, so satteri links and remark
+  // does not.
+  const ACCEPTED = [
     { prefix: "\u{10101}", name: "U+10101 AEGEAN WORD SEPARATOR DOT (Po)" },
     { prefix: "\u{1F600}", name: "U+1F600 GRINNING FACE (So)" },
     { prefix: "\u{1D6DB}", name: "U+1D6DB MATHEMATICAL BOLD PARTIAL DIFFERENTIAL (Sm)" },
-    // `Nd`, so both sides reject it — for different reasons, which is the point.
-    { prefix: "\u{1FBF0}", name: "U+1FBF0 SEGMENTED DIGIT ZERO (Nd)" },
+    { prefix: "\u{1F468}\u{200d}\u{1F4BB}", name: "a ZWJ sequence ending in U+1F4BB (So)" },
   ];
 
-  test.each(ASTRAL)("$name starts nothing in remark", ({ prefix }) => {
+  // `Nd`, so both sides reject it — for different reasons, which is the point.
+  const REJECTED = [{ prefix: "\u{1FBF0}", name: "U+1FBF0 SEGMENTED DIGIT ZERO (Nd)" }];
+
+  test.each([...ACCEPTED, ...REJECTED])("$name starts nothing in remark", ({ prefix }) => {
     expect(referencePaths(`${prefix}www.x.y`)).toEqual([]);
     for (const trigger of TRIGGERS) {
       expect(referencePaths(`[${prefix}${trigger}`)).toEqual([]);
     }
   });
+
+  // The span has to stop at the trigger, not swallow the character before it.
+  test.each(ACCEPTED)("$name: satteri links, starting at the trigger", ({ prefix }) => {
+    const md = `${prefix}www.example.com`;
+    expect(linkUrls(md)).toEqual(["http://www.example.com"]);
+
+    const link = collectLinks(satteriMdast(md))[0] as UrlNode;
+    const { start, end } = link.position!;
+    expect(md.slice(start.offset, end.offset)).toBe("www.example.com");
+  });
+
+  // Only the `www` trigger diverges: the other two accept the character on
+  // both sides.
+  test.each([
+    ["\u{1F600}user@example.com\n", ["mailto:user@example.com"]],
+    ["\u{1F600}http://example.com\n", ["http://example.com"]],
+    ["\u{1F600}_user@example.com\n", ["mailto:_user@example.com"]],
+  ])("%j", conforms);
 });
 
 describe("GFM autolink path selection", () => {

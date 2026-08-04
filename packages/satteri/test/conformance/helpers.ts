@@ -549,6 +549,36 @@ export function assertMdastConformance(md: string): void {
   expect(actual).toEqual(expected);
 }
 
+/** The part of an mdast node the autolink suites walk. */
+export interface UrlNode {
+  type: string;
+  url?: string;
+  children?: UrlNode[];
+  position?: { start: { offset: number }; end: { offset: number } };
+}
+
+/** Every `link` URL in document order. */
+export function collectUrls(tree: unknown): string[] {
+  const out: string[] = [];
+  const walk = (node: UrlNode): void => {
+    if (node.type === "link") out.push(String(node.url));
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(tree as UrlNode);
+  return out;
+}
+
+/** Every `link` URL satteri produces for `md`, in document order. */
+export function linkUrls(md: string): string[] {
+  return collectUrls(satteriMdast(md));
+}
+
+/** The tree matches remark, and the autolinks are the ones named. */
+export function conforms(md: string, urls: string[]): void {
+  assertMdastConformance(md);
+  expect(linkUrls(md), JSON.stringify(md)).toEqual(urls);
+}
+
 /** Like `assertMdastConformance` but strips `position` fields before
  * comparing. Useful when the structural mdast matches but offsets diverge
  * in non-load-bearing ways (e.g. EOF accounting around trailing blanks). */

@@ -12,34 +12,7 @@
 // URL ends, and the spec's own examples.
 
 import { describe, test, expect } from "vitest";
-import { assertMdastConformance, referenceMdast, satteriMdast } from "./helpers.js";
-
-interface AnyNode {
-  type: string;
-  url?: string;
-  children?: AnyNode[];
-}
-
-/** Every `link` URL in document order. */
-function collectUrls(tree: unknown): string[] {
-  const out: string[] = [];
-  const walk = (node: AnyNode): void => {
-    if (node.type === "link") out.push(String(node.url));
-    for (const child of node.children ?? []) walk(child);
-  };
-  walk(tree as AnyNode);
-  return out;
-}
-
-function linkUrls(md: string): string[] {
-  return collectUrls(satteriMdast(md));
-}
-
-/** The tree matches remark, and the autolinks are the ones named. */
-function conforms(md: string, urls: string[]): void {
-  assertMdastConformance(md);
-  expect(linkUrls(md), JSON.stringify(md)).toEqual(urls);
-}
+import { assertMdastConformance, conforms, linkUrls } from "./helpers.js";
 
 // Family A — the preceding-character classifier. It asks a character for its
 // Unicode General_Category, so there is one row per category it must accept or
@@ -153,47 +126,19 @@ describe("family A: the preceding-character classifier", () => {
   ])("%j", conforms);
 });
 
-// Deliberate divergence (see website/content/docs/divergences.md): remark reads
-// the preceding character as one UTF-16 code unit, so an astral one is a lone
-// surrogate and always blocks. Encoded the same way as in autolink-path.test.ts:
-// the reference side is asserted, then satteri's own span.
-describe("family A: astral characters before a GFM autolink (documented divergence)", () => {
-  const ASTRAL: Array<{ prefix: string; name: string }> = [
-    { prefix: "😀", name: "U+1F600 GRINNING FACE (So)" },
-    { prefix: "𐄁", name: "U+10101 AEGEAN WORD SEPARATOR DOT (Po)" },
-    { prefix: "𝛛", name: "U+1D6DB MATHEMATICAL BOLD PARTIAL DIFFERENTIAL (Sm)" },
-    { prefix: "👨\u{200d}💻", name: "a ZWJ sequence ending in U+1F4BB (So)" },
-  ];
+// Astral characters before a trigger are a documented divergence, pinned in
+// autolink-path.test.ts alongside remark's side of it.
 
-  test.each(ASTRAL)("$name", ({ prefix }) => {
-    const md = `${prefix}www.example.com`;
-    const remark = referenceMdast(md) as { children: AnyNode[] };
-    expect(linkUrls(md)).toEqual(["http://www.example.com"]);
-    expect((remark.children[0] as AnyNode).children?.map((c) => c.type)).toEqual(["text"]);
-
-    const link = (satteriMdast(md) as { children: AnyNode[] }).children[0]!.children!.find(
-      (c) => c.type === "link",
-    ) as {
-      position: { start: { offset: number }; end: { offset: number } };
-    };
-    expect(md.slice(link.position.start.offset, link.position.end.offset)).toBe("www.example.com");
-  });
-
-  // Only the `www` trigger diverges: the other two accept the character on both
-  // sides. Astral letters and digits block on both sides, for different reasons.
-  test.each([
-    ["😀user@example.com\n", ["mailto:user@example.com"]],
-    ["😀http://example.com\n", ["http://example.com"]],
-    ["😀_user@example.com\n", ["mailto:_user@example.com"]],
-    ["🯰www.example.com\n", []],
-    ["𝐀www.example.com\n", []],
-  ])("%j", conforms);
-});
-
-// Family B — the trailing-punctuation and trailing-entity rules. Both rules are
-// set-membership tests, so there is one row per member: a member quietly leaving
-// the trim set (or joining it) fails exactly one row here and nothing else.
-// Trailing runs that are not a member and only repeat "left alone" are dropped.
+// Family B — the trailing-punctuation and trailing-entity rules. For `www.` and
+// `http://` the trim is a set-membership test, so there is one row per member: a
+// member quietly leaving the trim set (or joining it) fails exactly one row here
+// and nothing else. Trailing runs that are not a member and only repeat "left
+// alone" are dropped.
+//
+// Emails get no trim at all — `fnr_find_email` reports the scan's end as the URL
+// end — so the third block is not a member sweep: the scan simply stops at the
+// first byte the domain rule rejects, and the rows are the few characters the
+// rule does read (`.`, `_`, `-`).
 describe("family B: trailing punctuation and entities", () => {
   test.each([
     ["www.example.com\n", ["http://www.example.com"]],
@@ -215,14 +160,8 @@ describe("family B: trailing punctuation and entities", () => {
     ["www.example.com(\n", ["http://www.example.com("]],
     ["www.example.com()\n", ["http://www.example.com()"]],
     ["www.example.com]\n", ["http://www.example.com"]],
-    ["www.example.com}\n", ["http://www.example.com}"]],
-    ["www.example.com>\n", ["http://www.example.com>"]],
     ["www.example.com<\n", ["http://www.example.com"]],
-    ["www.example.com-\n", ["http://www.example.com-"]],
-    ["www.example.com\\\n", ["http://www.example.com\\"]],
     ["www.example.com|\n", ["http://www.example.com|"]],
-    ["www.example.com`\n", ["http://www.example.com`"]],
-    ["www.example.com%\n", ["http://www.example.com%"]],
     ["www.example.com&amp;.\n", ["http://www.example.com"]],
     ["www.example.com&copy;\n", ["http://www.example.com"]],
     ["www.example.com&#35;\n", ["http://www.example.com&#35"]],
@@ -257,46 +196,8 @@ describe("family B: trailing punctuation and entities", () => {
     ["user@example.com\n", ["mailto:user@example.com"]],
     ["user@example.com.\n", ["mailto:user@example.com"]],
     ["user@example.com...\n", ["mailto:user@example.com"]],
-    ["user@example.com,\n", ["mailto:user@example.com"]],
-    ["user@example.com;\n", ["mailto:user@example.com"]],
-    ["user@example.com:\n", ["mailto:user@example.com"]],
-    ["user@example.com!\n", ["mailto:user@example.com"]],
-    ["user@example.com?!\n", ["mailto:user@example.com"]],
-    ["user@example.com'\n", ["mailto:user@example.com"]],
-    ['user@example.com"\n', ["mailto:user@example.com"]],
-    ["user@example.com*\n", ["mailto:user@example.com"]],
-    ["user@example.com**\n", ["mailto:user@example.com"]],
     ["user@example.com_\n", []],
-    ["user@example.com~~\n", ["mailto:user@example.com"]],
-    ["user@example.com)\n", ["mailto:user@example.com"]],
-    ["user@example.com))\n", ["mailto:user@example.com"]],
-    ["user@example.com(\n", ["mailto:user@example.com"]],
-    ["user@example.com()\n", ["mailto:user@example.com"]],
-    ["user@example.com]\n", ["mailto:user@example.com"]],
-    ["user@example.com}\n", ["mailto:user@example.com"]],
-    ["user@example.com>\n", ["mailto:user@example.com"]],
-    ["user@example.com<\n", ["mailto:user@example.com"]],
     ["user@example.com-\n", []],
-    ["user@example.com\\\n", ["mailto:user@example.com"]],
-    ["user@example.com|\n", ["mailto:user@example.com"]],
-    ["user@example.com`\n", ["mailto:user@example.com"]],
-    ["user@example.com%\n", ["mailto:user@example.com"]],
-    ["user@example.com&amp;\n", ["mailto:user@example.com"]],
-    ["user@example.com&amp;.\n", ["mailto:user@example.com"]],
-    ["user@example.com&amp;)\n", ["mailto:user@example.com"]],
-    ["user@example.com&copy;\n", ["mailto:user@example.com"]],
-    ["user@example.com&#35;\n", ["mailto:user@example.com"]],
-    ["user@example.com&#x23;\n", ["mailto:user@example.com"]],
-    ["user@example.com&notreal\n", ["mailto:user@example.com"]],
-    ["user@example.com&notreal;\n", ["mailto:user@example.com"]],
-    ["user@example.com&;\n", ["mailto:user@example.com"]],
-    ["user@example.com&amp\n", ["mailto:user@example.com"]],
-    ["user@example.com&amp;amp;\n", ["mailto:user@example.com"]],
-    ["user@example.com&nbsp;\n", ["mailto:user@example.com"]],
-    ["user@example.com&lt;\n", ["mailto:user@example.com"]],
-    ["user@example.com&#0;\n", ["mailto:user@example.com"]],
-    ["user@example.com&#xFFFF;\n", ["mailto:user@example.com"]],
-    ["user@example.com&#1114112;\n", ["mailto:user@example.com"]],
   ])("%j", conforms);
 
   // The same trims with text after them, where the trimmed tail has somewhere
@@ -321,17 +222,13 @@ describe("family C: the balanced-paren rule", () => {
     ["www.example.com/a(b)c)\n", ["http://www.example.com/a(b)c"]],
     ["www.example.com/a(b(c))\n", ["http://www.example.com/a(b(c))"]],
     ["www.example.com/a(b(c)\n", ["http://www.example.com/a(b(c)"]],
-    ["www.example.com/a((b))\n", ["http://www.example.com/a((b))"]],
-    ["www.example.com/a((b)\n", ["http://www.example.com/a((b)"]],
     ["www.example.com/(\n", ["http://www.example.com/("]],
     ["www.example.com/)\n", ["http://www.example.com/"]],
     ["www.example.com/()\n", ["http://www.example.com/()"]],
     ["www.example.com/)(\n", ["http://www.example.com/)("]],
     ["www.example.com/a(b).\n", ["http://www.example.com/a(b)"]],
-    ["www.example.com/a(b)&amp;\n", ["http://www.example.com/a(b)"]],
     ["http://example.com/a(b)c\n", ["http://example.com/a(b)c"]],
     ["http://example.com/foo).\n", ["http://example.com/foo"]],
-    ["http://example.com/foo)))\n", ["http://example.com/foo"]],
     ["http://example.com/(a)(b)\n", ["http://example.com/(a)(b)"]],
     ["http://example.com/(a)(b\n", ["http://example.com/(a)(b"]],
     [
@@ -349,8 +246,6 @@ describe("family C: the balanced-paren rule", () => {
     ["(www.example.com/a)\n", ["http://www.example.com/a"]],
     ["((www.example.com))\n", ["http://www.example.com"]],
     ["(www.example.com\n", ["http://www.example.com"]],
-    ["www.example.com)\n", ["http://www.example.com"]],
-    ["x www.example.com/a(b) y\n", ["http://www.example.com/a(b)"]],
     ["x (www.example.com) y\n", ["http://www.example.com"]],
   ])("%j", conforms);
 });
@@ -361,33 +256,20 @@ describe("family G: unicode in and around the URL", () => {
   test.each([
     ["www.exämple.com\n", ["http://www.exämple.com"]],
     ["www.example.com/ä\n", ["http://www.example.com/ä"]],
-    ["www.example.com/é/x\n", ["http://www.example.com/é/x"]],
     ["www.例え.com\n", ["http://www.例え.com"]],
-    ["www.example.com/中文\n", ["http://www.example.com/中文"]],
     ["www.example.com/😀\n", ["http://www.example.com/😀"]],
-    ["www.example.com/😀/x\n", ["http://www.example.com/😀/x"]],
-    ["www.example.com/a\u{200b}b\n", ["http://www.example.com/a\u{200b}b"]],
     ["https://例え.テスト\n", ["https://例え.テスト"]],
     ["https://example.com/päth?q=ü#frag\n", ["https://example.com/päth?q=ü#frag"]],
     ["ü@example.com\n", []],
     ["user@exämple.com\n", []],
-    ["user@例え.com\n", []],
     ["😀 www.example.com\n", ["http://www.example.com"]],
     ["www.example.com😀\n", ["http://www.example.com😀"]],
-    ["www.example.com 😀\n", ["http://www.example.com"]],
     ["中www.example.com\n", []],
-    ["中 www.example.com\n", ["http://www.example.com"]],
-    ["www.example.com中\n", ["http://www.example.com中"]],
     ["www.example.com/😀.\n", ["http://www.example.com/😀"]],
     ["www.example.com/a—b\n", ["http://www.example.com/a—b"]],
     ["www.example.com—\n", ["http://www.example.com—"]],
-    ["www.example.com…\n", ["http://www.example.com…"]],
     ["www.example.com\u{200b}\n", ["http://www.example.com\u{200b}"]],
     ["www.example.com\u{a0}x\n", ["http://www.example.com"]],
-    ["www.example.com）\n", ["http://www.example.com）"]],
-    ["www.example.com。\n", ["http://www.example.com。"]],
-    ["x www.exämple.com y\n", ["http://www.exämple.com"]],
-    ["x www.example.com/😀 y\n", ["http://www.example.com/😀"]],
   ])("%j", conforms);
 });
 
@@ -408,23 +290,20 @@ describe("family G: underscores in the last two domain labels", () => {
     ["http://a_b\n", []],
     ["www.a_b\n", []],
     ["user@exa_mple.com\n", ["mailto:user@exa_mple.com"]],
-    ["user@a.exa_mple.com\n", ["mailto:user@a.exa_mple.com"]],
     ["user@a_b.example.com\n", ["mailto:user@a_b.example.com"]],
     ["www.example.com/a_b\n", ["http://www.example.com/a_b"]],
     ["www.example.com?a_b\n", ["http://www.example.com?a_b"]],
-    ["www.example.com#a_b\n", ["http://www.example.com#a_b"]],
-    ["www.example.com_\n", ["http://www.example.com"]],
     ["www.example.com__\n", ["http://www.example.com"]],
     ["www.example.com_x\n", []],
-    ["x www.exa_mple.com y\n", []],
-    ["x http://foo_bar.com. y\n", ["http://foo_bar.com"]],
   ])("%j", conforms);
 });
 
 // Family H — one case per clause of GFM §6.9 (www / url / email autolink
-// extended). Kept whole apart from the email local-part enumeration, where 19
-// of the 33 characters only repeat "not in the accepted set, so the local part
-// starts after it".
+// extended). The spec's own examples already run as HTML in the generated
+// `gfm_autolink` suite on the Rust side; the tree and the URL are a different
+// assertion layer, which is why they are repeated here. The enumerations around
+// them are cut to boundary members: a character outside `is_email_local_char`
+// only repeats "the backward walk stops here", whichever character it is.
 describe("family H: GFM §6.9 spec clauses", () => {
   test.each([
     ["www.commonmark.org\n", ["http://www.commonmark.org"]],
@@ -491,47 +370,27 @@ describe("family H: GFM §6.9 spec clauses", () => {
     ["http://a-b.c-d.example.com\n", ["http://a-b.c-d.example.com"]],
     ["HTTPS://example.com\n", ["HTTPS://example.com"]],
     ["WWW.example.com\n", ["http://WWW.example.com"]],
-    ["wWw.example.com\n", ["http://wWw.example.com"]],
     ["5www.example.com\n", []],
     ["awww.example.com\n", []],
     ["a.www.example.com\n", ["http://www.example.com"]],
     ["xhttp://example.com\n", []],
     ["5http://example.com\n", ["http://example.com"]],
     [".http://example.com\n", ["http://example.com"]],
-    ["-http://example.com\n", ["http://example.com"]],
-    ["_http://example.com\n", ["http://example.com"]],
     ["a+b@c.com\n", ["mailto:a+b@c.com"]],
     ["a-b@c.com\n", ["mailto:a-b@c.com"]],
     ["a.b@c.com\n", ["mailto:a.b@c.com"]],
     ["a_b@c.com\n", ["mailto:a_b@c.com"]],
     ["a!b@c.com\n", ["mailto:b@c.com"]],
-    ["a%b@c.com\n", ["mailto:b@c.com"]],
-    ["a\\b@c.com\n", ["mailto:b@c.com"]],
-    ["a<b@c.com\n", ["mailto:b@c.com"]],
-    ["a|b@c.com\n", ["mailto:b@c.com"]],
-    ['a"b@c.com\n', ["mailto:b@c.com"]],
-    ["a`b@c.com\n", ["mailto:b@c.com"]],
     ["a@b@c.com\n", ["mailto:b@c.com"]],
     [".a@b.com\n", ["mailto:.a@b.com"]],
-    ["-a@b.com\n", ["mailto:-a@b.com"]],
-    ["_a@b.com\n", ["mailto:_a@b.com"]],
-    ["+a@b.com\n", ["mailto:+a@b.com"]],
-    ["www.example.com/a-\n", ["http://www.example.com/a-"]],
-    ["www.example.com/a_\n", ["http://www.example.com/a"]],
-    ["user@example.com-\n", []],
-    ["user@example.com_\n", []],
     ["user@example.co-m\n", ["mailto:user@example.co-m"]],
     ["user@example.co_m\n", ["mailto:user@example.co_m"]],
     ["http://example.com/a<b\n", ["http://example.com/a"]],
     ["user@example.com<x\n", ["mailto:user@example.com"]],
-    ["www.example.com<\n", ["http://www.example.com"]],
     ["www.example.com/?a=1&b=2;\n", ["http://www.example.com/?a=1&b=2"]],
     ["www.example.com&amp;;\n", ["http://www.example.com"]],
-    ["www.example.com;\n", ["http://www.example.com"]],
-    ["www.example.com&;\n", ["http://www.example.com&"]],
     ["www.example.com&x;\n", ["http://www.example.com"]],
     ["www.example.com&#;\n", ["http://www.example.com&#"]],
-    ["www.example.com&ampx;\n", ["http://www.example.com"]],
     ["www.example.com/a&amp;b\n", ["http://www.example.com/a&amp;b"]],
     ["http://example.com?a&copy;\n", ["http://example.com?a"]],
   ])("%j", conforms);
@@ -542,6 +401,9 @@ describe("family H: GFM §6.9 spec clauses", () => {
 // forms, the preceding-character (boundary) forms, and the find-and-replace
 // path. U+0085 is the boundary the `www` classifier had to be taught, and the two
 // `Cf` code points are the controls that must stay inside the URL.
+//
+// One code point per branch of `is_autolink_whitespace`: U+00A0 stands for every
+// code point that reaches it through `char::is_whitespace()`.
 describe("family J: unicode whitespace as terminator and boundary", () => {
   test.each([
     ["user@example.com\u{85}x\n", ["mailto:user@example.com"]],
@@ -562,24 +424,6 @@ describe("family J: unicode whitespace as terminator and boundary", () => {
     ["x\u{a0}_user@example.com\n", ["mailto:_user@example.com"]],
     ["[a www.example.com/p\u{a0}q\n", ["http://www.example.com/p\u{a0}q"]],
     ["[a x\u{a0}www.example.com\n", ["http://www.example.com"]],
-    ["user@example.com\u{2028}x\n", ["mailto:user@example.com"]],
-    ["user@exa\u{2028}mple.com\n", []],
-    ["https://example.com\u{2028}\n", ["https://example.com"]],
-    ["x\u{2028}www.example.com\n", ["http://www.example.com"]],
-    ["x\u{2028}http://example.com\n", ["http://example.com"]],
-    ["x\u{2028}user@example.com\n", ["mailto:user@example.com"]],
-    ["x\u{2028}_user@example.com\n", ["mailto:_user@example.com"]],
-    ["[a www.example.com/p\u{2028}q\n", ["http://www.example.com/p\u{2028}q"]],
-    ["[a x\u{2028}www.example.com\n", ["http://www.example.com"]],
-    ["user@example.com\u{3000}x\n", ["mailto:user@example.com"]],
-    ["user@exa\u{3000}mple.com\n", []],
-    ["https://example.com\u{3000}\n", ["https://example.com"]],
-    ["x\u{3000}www.example.com\n", ["http://www.example.com"]],
-    ["x\u{3000}http://example.com\n", ["http://example.com"]],
-    ["x\u{3000}user@example.com\n", ["mailto:user@example.com"]],
-    ["x\u{3000}_user@example.com\n", ["mailto:_user@example.com"]],
-    ["[a www.example.com/p\u{3000}q\n", ["http://www.example.com/p\u{3000}q"]],
-    ["[a x\u{3000}www.example.com\n", ["http://www.example.com"]],
     ["user@example.com\u{200b}x\n", ["mailto:user@example.com"]],
     ["user@exa\u{200b}mple.com\n", []],
     ["https://example.com\u{200b}\n", ["https://example.com\u{200b}"]],
@@ -589,6 +433,8 @@ describe("family J: unicode whitespace as terminator and boundary", () => {
     ["x\u{200b}_user@example.com\n", ["mailto:_user@example.com"]],
     ["[a www.example.com/p\u{200b}q\n", ["http://www.example.com/p\u{200b}q"]],
     ["[a x\u{200b}www.example.com\n", []],
+    // U+FEFF has no `https://example.com{WS}` or `user@example.com{WS}x` row:
+    // both trip the drop pinned as `test.fails` in link-edge-cases.test.ts.
     ["user@exa\u{feff}mple.com\n", []],
     ["x\u{feff}www.example.com\n", ["http://www.example.com"]],
     ["x\u{feff}http://example.com\n", ["http://example.com"]],

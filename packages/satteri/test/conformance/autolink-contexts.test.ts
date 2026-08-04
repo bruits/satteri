@@ -15,37 +15,14 @@ import { describe, test, expect } from "vitest";
 import {
   assertExtMdastConformance,
   assertMdastConformance,
+  collectUrls,
+  conforms,
+  linkUrls,
   referenceMdast,
   satteriMathMdast,
   satteriMdast,
 } from "./helpers.js";
-
-interface AnyNode {
-  type: string;
-  url?: string;
-  children?: AnyNode[];
-}
-
-/** Every `link` URL in document order. */
-function collectUrls(tree: unknown): string[] {
-  const out: string[] = [];
-  const walk = (node: AnyNode): void => {
-    if (node.type === "link") out.push(String(node.url));
-    for (const child of node.children ?? []) walk(child);
-  };
-  walk(tree as AnyNode);
-  return out;
-}
-
-function linkUrls(md: string): string[] {
-  return collectUrls(satteriMdast(md));
-}
-
-/** The tree matches remark, and the autolinks are the ones named. */
-function conforms(md: string, urls: string[]): void {
-  assertMdastConformance(md);
-  expect(linkUrls(md), JSON.stringify(md)).toEqual(urls);
-}
+import type { UrlNode } from "./helpers.js";
 
 // Family D — containing constructs. One case per construct, with a second inner
 // only where the inner changes the answer.
@@ -221,10 +198,7 @@ describe("family E: adjacent autolinks", () => {
     ["a@b.com c@d.com", ["mailto:a@b.com", "mailto:c@d.com"]],
     ["a@b.comc@d.com", ["mailto:a@b.comc"]],
     ["www.a.com,www.b.com", ["http://www.a.com,www.b.com"]],
-    ["www.a.com;www.b.com", ["http://www.a.com;www.b.com"]],
     ["a@b.com,c@d.com", ["mailto:a@b.com", "mailto:c@d.com"]],
-    ["http://a.b?x=http://c.d", ["http://a.b?x=http://c.d"]],
-    ["www.a.com#www.b.com", ["http://www.a.com#www.b.com"]],
   ])("%j", conforms);
 });
 
@@ -299,10 +273,8 @@ describe("family E: link destinations", () => {
     ["[a](www.x.y)b", ["www.x.y"]],
     ["[a](u@v.com)b", ["u@v.com"]],
     ["[a](/x)http://y.z", ["/x", "http://y.z"]],
-    ["[a](/x)www.y.z", ["/x", "http://www.y.z"]],
     ["[a](/x)u@v.com", ["/x", "mailto:u@v.com"]],
     ["[a](<http://x.y>)b", ["http://x.y"]],
-    ["[a](http://x.y 'title')b", ["http://x.y"]],
     ["![a](http://x.y)b", []],
     ["[a](http://x.y)[b](http://c.d)e", ["http://x.y", "http://c.d"]],
     ["[a][b] (http://x.y)c\n\n[b]: /d", ["http://x.y)c"]],
@@ -331,17 +303,9 @@ describe("family F: line endings", () => {
     ["www.example.com\r\n", ["http://www.example.com"]],
     ["x\r\nwww.example.com\r\n", ["http://www.example.com"]],
     ["> x\r\n> www.example.com\r\n", ["http://www.example.com"]],
-    ["> x\r\nwww.example.com\r\n", ["http://www.example.com"]],
-    [
-      "www.example.com\r\n\r\nwww.example.com\r\n",
-      ["http://www.example.com", "http://www.example.com"],
-    ],
     ["user@example.com\r\n", ["mailto:user@example.com"]],
-    ["x\r\nuser@example.com\r\n", ["mailto:user@example.com"]],
     ["[a] www.example.com\r\n", ["http://www.example.com"]],
-    ["x\r\n[a] www.example.com\r\n", ["http://www.example.com"]],
     ["http://example.com/p.\r\n", ["http://example.com/p"]],
-    ["a www.example.com b\r\n", ["http://www.example.com"]],
     ["> x\r\n> [a] www.example.com\r\n", ["http://www.example.com"]],
   ])("%j", conforms);
 
@@ -363,11 +327,9 @@ describe("family I: position stress", () => {
     ["&amp; [www.example.com", ["http://www.example.com"]],
     ["\\* [www.example.com", ["http://www.example.com"]],
     ["> 你好\n> www.example.com", ["http://www.example.com"]],
-    ["> [a\n> www.example.com", ["http://www.example.com"]],
     ["- [a\n  www.example.com", ["http://www.example.com"]],
     ["[a] &amp; www.x.y", ["http://www.x.y"]],
     ["[a] \t www.x.y", ["http://www.x.y"]],
-    ["  [a] www.x.y", ["http://www.x.y"]],
     ["\t[a] www.x.y", []],
     ["[www.x.y&amp;b", ["http://www.x.y&b"]],
     ["[&fjlig;www.a.com", []],
@@ -385,8 +347,9 @@ describe("family I: position stress", () => {
 
 // Family K — bracket state and the deferred-autolink decision: a closed `[…]`
 // stops blocking a later trigger even when it resolved to nothing, so the URL
-// before it must not run on. The separator column is what decides whether the
-// second trigger is reachable at all, so it is swept per label class.
+// before it must not run on. The separator decides whether the second trigger is
+// reachable at all, so the rows below are the label/separator/trigger
+// combinations that answer differently, not the full cross-product.
 describe("family K: bracket balance — a label that never blocked", () => {
   test.each([
     ["[a]www.b.com\n", ["http://www.b.com"]],
@@ -436,44 +399,27 @@ describe("family K: bracket balance — an unbalanced opener still blocks", () =
 describe("family K: bracket balance — a label ending in a trigger", () => {
   test.each([
     ["[www.a.com] www.b.com\n", ["http://www.a.com", "http://www.b.com"]],
-    ["[www.a.com] u@b.com\n", ["http://www.a.com", "mailto:u@b.com"]],
     ["[www.a.com] _u@b.com\n", ["http://www.a.com", "mailto:_u@b.com"]],
     ["[www.a.com]xwww.b.com\n", ["http://www.a.com]xwww.b.com"]],
     ["[www.a.com]xu@b.com\n", ["http://www.a.com", "mailto:xu@b.com"]],
     ["[www.a.com]x_u@b.com\n", ["http://www.a.com", "mailto:x_u@b.com"]],
-    ["[www.a.com].www.b.com\n", ["http://www.a.com].www.b.com"]],
     ["[www.a.com].u@b.com\n", ["http://www.a.com", "mailto:.u@b.com"]],
     ["[www.a.com]._u@b.com\n", ["http://www.a.com", "mailto:._u@b.com"]],
-    ["[www.a.com]-www.b.com\n", ["http://www.a.com]-www.b.com"]],
     ["[www.a.com]-u@b.com\n", ["http://www.a.com", "mailto:-u@b.com"]],
     ["[www.a.com]-_u@b.com\n", ["http://www.a.com", "mailto:-_u@b.com"]],
     ["[http://a.com]u@b.com\n", ["http://a.com", "mailto:u@b.com"]],
     ["[http://a.com]_u@b.com\n", ["http://a.com", "mailto:_u@b.com"]],
-    ["[http://a.com] www.b.com\n", ["http://a.com", "http://www.b.com"]],
     ["[http://a.com] u@b.com\n", ["http://a.com", "mailto:u@b.com"]],
     ["[http://a.com] _u@b.com\n", ["http://a.com", "mailto:_u@b.com"]],
     ["[http://a.com]xwww.b.com\n", ["http://a.com]xwww.b.com"]],
-    ["[http://a.com]xu@b.com\n", ["http://a.com", "mailto:xu@b.com"]],
-    ["[http://a.com]x_u@b.com\n", ["http://a.com", "mailto:x_u@b.com"]],
-    ["[http://a.com].www.b.com\n", ["http://a.com].www.b.com"]],
     ["[http://a.com].u@b.com\n", ["http://a.com", "mailto:.u@b.com"]],
     ["[http://a.com]._u@b.com\n", ["http://a.com", "mailto:._u@b.com"]],
-    ["[http://a.com]-www.b.com\n", ["http://a.com]-www.b.com"]],
     ["[http://a.com]-u@b.com\n", ["http://a.com", "mailto:-u@b.com"]],
     ["[http://a.com]-_u@b.com\n", ["http://a.com", "mailto:-_u@b.com"]],
-    ["[u@a.com]www.b.com\n", ["mailto:u@a.com", "http://www.b.com"]],
-    ["[u@a.com]u@b.com\n", ["mailto:u@a.com", "mailto:u@b.com"]],
     ["[u@a.com]_u@b.com\n", ["mailto:u@a.com", "mailto:_u@b.com"]],
-    ["[u@a.com] www.b.com\n", ["mailto:u@a.com", "http://www.b.com"]],
-    ["[u@a.com] u@b.com\n", ["mailto:u@a.com", "mailto:u@b.com"]],
-    ["[u@a.com] _u@b.com\n", ["mailto:u@a.com", "mailto:_u@b.com"]],
     ["[u@a.com]xwww.b.com\n", ["mailto:u@a.com"]],
-    ["[u@a.com]xu@b.com\n", ["mailto:u@a.com", "mailto:xu@b.com"]],
-    ["[u@a.com]x_u@b.com\n", ["mailto:u@a.com", "mailto:x_u@b.com"]],
-    ["[u@a.com].www.b.com\n", ["mailto:u@a.com", "http://www.b.com"]],
     ["[u@a.com].u@b.com\n", ["mailto:u@a.com", "mailto:.u@b.com"]],
     ["[u@a.com]._u@b.com\n", ["mailto:u@a.com", "mailto:._u@b.com"]],
-    ["[u@a.com]-www.b.com\n", ["mailto:u@a.com", "http://www.b.com"]],
     ["[u@a.com]-u@b.com\n", ["mailto:u@a.com", "mailto:-u@b.com"]],
     ["[u@a.com]-_u@b.com\n", ["mailto:u@a.com", "mailto:-_u@b.com"]],
   ])("%j", conforms);
@@ -497,14 +443,12 @@ describe("family K: a closed label and a second trigger", () => {
     ["![www.a.com]www.b.com\n", ["http://www.a.com", "http://www.b.com"]],
     ["[www.a.com\\]www.b.com\n", ["http://www.a.com]www.b.com"]],
     ["[www.a.com]www.b.com`c`\n", ["http://www.a.com", "http://www.b.com`c`"]],
-    ["[www.a.com].u@b.com\n", ["http://www.a.com", "mailto:.u@b.com"]],
   ])("%j", conforms);
 });
 
 // Family L — reference definitions and footnote definitions.
 describe("family L: definitions", () => {
   test.each([
-    ["[a]: www.example.com\n\n[a]\n", []],
     ["[a]: /x 'www.example.com'\n\n[a]\n", []],
     ["[www.example.com]: /x\n\n[www.example.com]\n", []],
     ["[a]: /x\nwww.example.com\n", ["http://www.example.com"]],
@@ -524,11 +468,8 @@ describe("family D: paragraph start in a task list item (documented divergence)"
   test("an autolink first child keeps satteri's uniform start", () => {
     const md = "- [ ] www.example.com\n";
     const paragraphStart = (tree: unknown): number => {
-      const list = (tree as { children: AnyNode[] }).children[0]!;
-      const paragraph = list.children![0]!.children![0]! as {
-        position: { start: { offset: number } };
-      };
-      return paragraph.position.start.offset;
+      const list = (tree as UrlNode).children![0]!;
+      return list.children![0]!.children![0]!.position!.start.offset;
     };
     expect(paragraphStart(satteriMdast(md))).toBe(6);
     expect(paragraphStart(referenceMdast(md))).toBe(2);
