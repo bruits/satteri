@@ -589,10 +589,8 @@ fn skip_string(bytes: &[u8], start: usize) -> usize {
     ix
 }
 
-/// End of a `//` line comment whose body starts at `start`, i.e. the offset of
-/// the next line ending or of end-of-input. `\n`, `\r\n` and a lone `\r` all
-/// end the line; stopping *at* the ending rather than past it leaves the
-/// caller's own CRLF pairing to run.
+/// End of a `//` line comment whose body starts at `start`. Stops *at* the line
+/// ending rather than past it, so the caller's own CRLF pairing still runs.
 fn line_comment_end(bytes: &[u8], start: usize) -> usize {
     memchr::memchr2(b'\n', b'\r', &bytes[start..]).map_or(bytes.len(), |i| start + i)
 }

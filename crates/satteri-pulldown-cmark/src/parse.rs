@@ -1452,10 +1452,11 @@ impl<'input> ParserInner<'input> {
                                     self.tree[reference_close_node].item.body =
                                         ItemBody::MaybeLinkClose(false);
                                     // The label scan walks raw source, so it can
-                                    // stop inside a wider item (an MDX expression
-                                    // holding a `]`). The label owns up to
-                                    // `end_ix`; the rest is literal text, and
-                                    // without this it would belong to no node.
+                                    // stop inside a wider item, e.g. an MDX
+                                    // expression or directive holding a `]`. The
+                                    // label owns up to `end_ix`; the rest is
+                                    // literal text, and without this it would
+                                    // belong to no node.
                                     let close_end = self.tree[reference_close_node].item.end;
                                     let next_node = if close_end > end_ix {
                                         self.tree[reference_close_node].item.end = end_ix;
@@ -1614,11 +1615,11 @@ impl<'input> ParserInner<'input> {
 
                                     self.tree[tos.node].item.end = end;
                                     // No `max(orig_start, end)` clamp here,
-                                    // unlike the inline-link splice: `end - 1`
-                                    // is always the label's `]`, and the only
-                                    // zero-width items are autolink markers,
-                                    // which never sit on one. So the successor
-                                    // cannot start before `end`.
+                                    // unlike the inline-link splice: the item at
+                                    // `end - 1` either ends the label or was
+                                    // truncated to it, and the zero-width items
+                                    // that could sit at `end` all sit on a URL
+                                    // or email byte, never a `]`.
                                     debug_assert!(
                                         node_after_link.is_none_or(|node_after_ix| {
                                             self.tree[node_after_ix].item.start >= end
