@@ -430,3 +430,19 @@ describe("MDX expression holding the `]` that ends a reference label", () => {
     assertMdastConformance('x {"]"} y\n');
   });
 });
+
+// Found by `fuzz/mdx.test.ts` at seed 3; pre-existing, unrelated to the
+// reference-label case above. A `//` line comment inside an expression is
+// terminated by a lone CR in micromark, so the `}` after it still closes the
+// expression. Sätteri's scanner runs the comment on to end of input and
+// rejects the document. `\n` and `\r\n` are both fine.
+describe("MDX expression comment ended by a lone CR", () => {
+  test.fails("the `}` after the comment still closes the expression", () => {
+    assertMdastConformance("a{//\r}");
+  });
+
+  test("control: the same shape with LF", () => {
+    assertMdastConformance("a{//\n}");
+    assertMdastConformance("a{//\r\n}");
+  });
+});
