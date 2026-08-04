@@ -36,6 +36,7 @@ export type {
   HastPluginEntry,
   MdastPluginList,
   HastPluginList,
+  PluginFactoryContext,
 } from "./plugin.js";
 
 // Visitor types (for plugin authors)
