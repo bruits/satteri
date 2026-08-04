@@ -106,6 +106,16 @@ fn parse_autolinks_no_positions(bencher: divan::Bencher) {
     bencher.bench(|| satteri_pulldown_cmark::parse_no_positions(AUTOLINKS, opts));
 }
 
+/// One paragraph of autolink candidates whose decision is deferred by the
+/// unclosed `[`, interleaved with escapes: the per-candidate bookkeeping this
+/// shape exercises is the easiest place for the first pass to go quadratic.
+#[divan::bench]
+fn parse_deferred_autolinks(bencher: divan::Bencher) {
+    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    let source = "[a] ".to_owned() + &"www.a.b x\\* ".repeat(2000);
+    bencher.bench(|| satteri_pulldown_cmark::parse(divan::black_box(source.as_str()), opts));
+}
+
 /// Full pipeline: Markdown source → Arena → HTML string.
 #[divan::bench]
 fn full_pipeline_to_html(bencher: divan::Bencher) {

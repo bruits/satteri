@@ -2505,6 +2505,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         let (cand_start, cand_end) = (d.start, d.end);
                         if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
                             candidate_floor = cand_start + 1;
+                            // The scan only moves forward, so ends behind it can
+                            // never be probed again; dropping them here keeps the
+                            // probe in the escape arm off a growing list.
+                            deferred_ends.retain(|&e| e > ix);
                             deferred_ends.push(cand_end);
                             // Leave `begin_text` at the candidate's start: its
                             // bytes stay ordinary text unless the marker fires.
