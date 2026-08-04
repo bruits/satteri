@@ -1811,6 +1811,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Lowest start a further candidate may take: a committed candidate owns
         // its bytes, a deferred one only rules out a retry at the same start.
         let mut candidate_floor: usize = start;
+        // Ends of deferred candidates still in play. Overlapping candidates are
+        // possible, so this is a set; empty in every line without one.
+        let mut deferred_ends: Vec<usize> = Vec::new();
 
         let (final_ix, brk) = iterate_special_bytes(self.lookup_table, bytes, start, |ix, byte| {
             match byte {
@@ -1982,6 +1985,37 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         begin_text = ix + 1;
                         backslash_escaped = true;
                         LoopInstruction::ContinueAndSkip(0)
+                    } else if let Some((count, fired)) = (deferred_ends.contains(&(ix + 1)))
+                        .then(|| escaped_delim_run(self.text, start, ix, mode, self.options))
+                        .flatten()
+                    {
+                        // A deferred candidate's URL ends on this `\`, so the
+                        // run after it is the link's to unblock. Emitted in the
+                        // shape the link firing wants; `MaybeEmphasisEscaped`
+                        // holds it back until the splice says so.
+                        let blocked = delim_run_flags(
+                            self.text,
+                            start,
+                            ix + 2,
+                            count - 1,
+                            mode,
+                            self.options,
+                        );
+                        self.tree.append(Item {
+                            start: ix + 1,
+                            end: ix + 2,
+                            body: ItemBody::MaybeEmphasisEscaped(count, fired.0, fired.1),
+                        });
+                        for i in 1..count {
+                            self.tree.append(Item {
+                                start: ix + 1 + i,
+                                end: ix + 2 + i,
+                                body: ItemBody::MaybeEmphasis(count - i, blocked.0, blocked.1),
+                            });
+                        }
+                        begin_text = ix + 1 + count;
+                        backslash_escaped = false;
+                        LoopInstruction::ContinueAndSkip(count)
                     } else {
                         begin_text = ix + 1;
                         backslash_escaped = true;
@@ -2484,6 +2518,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         let (cand_start, cand_end) = (d.start, d.end);
                         if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
                             candidate_floor = cand_start + 1;
+                            deferred_ends.push(cand_end);
                             // Leave `begin_text` at the candidate's start: its
                             // bytes stay ordinary text unless the marker fires.
                             self.append_autolink_marker(d, begin_text, backslash_escaped);
@@ -4817,6 +4852,58 @@ struct AutolinkDetection {
     end: usize,
     link_type: LinkType,
     url: String,
+}
+
+/// `(can_open, can_close)` for the run of `run_len` delimiters at `at`.
+fn delim_run_flags(
+    text: &str,
+    start: usize,
+    at: usize,
+    run_len: usize,
+    mode: TableParseMode,
+    options: Options,
+) -> (bool, bool) {
+    if run_len == 0 || at >= text.len() {
+        return (false, false);
+    }
+    let s = &text[start..];
+    let suffix = &text[at..];
+    (
+        delim_run_can_open(s, suffix, run_len, at - start, mode, options),
+        delim_run_can_close(s, suffix, run_len, at - start, mode, options),
+    )
+}
+
+/// A run of `~` only means anything at the lengths its extensions define.
+pub(crate) fn delim_run_is_valid(c: u8, count: usize, options: Options) -> bool {
+    c != b'~'
+        || count == 2
+        || (count == 1
+            && (options.contains(Options::ENABLE_STRIKETHROUGH)
+                || options.contains(Options::ENABLE_SUBSCRIPT)))
+}
+
+/// The delimiter run a `\` at `ix` would swallow, when the byte after it ends
+/// a deferred autolink candidate. `None` when nothing there could open or
+/// close, in which case the escape is left to stand as usual.
+fn escaped_delim_run(
+    text: &str,
+    start: usize,
+    ix: usize,
+    mode: TableParseMode,
+    options: Options,
+) -> Option<(usize, (bool, bool))> {
+    let bytes = text.as_bytes();
+    let c = *bytes.get(ix + 1)?;
+    if !matches!(c, b'*' | b'_' | b'~' | b'^') {
+        return None;
+    }
+    let count = 1 + scan_ch_repeat(&bytes[(ix + 2)..], c);
+    let fired = delim_run_flags(text, start, ix + 1, count, mode, options);
+    if (!fired.0 && !fired.1) || !delim_run_is_valid(c, count, options) {
+        return None;
+    }
+    Some((count, fired))
 }
 
 /// An email literal starting at the same offset as a `www.` literal, which
