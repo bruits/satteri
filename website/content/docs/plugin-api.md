@@ -39,7 +39,13 @@ Factories are called once per invocation, so closures reset between documents.
 An entry may also be an array of entries, at any depth, so a package can export a bundle of plugins that is passed straight through:
 
 ```ts
-type MdastPluginEntry = MdastPluginDefinition | (() => MdastPluginEntry) | readonly MdastPluginEntry[];
+type MdastPluginEntry =
+  | MdastPluginDefinition
+  | ((ctx: PluginFactoryContext) => MdastPluginEntry)
+  | readonly MdastPluginEntry[]
+  | null
+  | undefined
+  | false;
 type MdastPluginList = readonly MdastPluginEntry[];
 ```
 
@@ -62,6 +68,37 @@ const headingAnchors = () => {
 markdownToHtml(source, { mdastPlugins: [headingAnchors] });
 ```
 
+### Running a plugin only on some documents
+
+A factory is handed a context describing the document about to be compiled, and may return `null`, `undefined` or `false` to leave the plugin out for that document:
+
+```ts
+interface PluginFactoryContext {
+  fileURL: URL | undefined;
+  sourceFormat: "markdown" | "mdx";
+  source: string;
+  data: Data;
+}
+```
+
+```js
+const onlyChangelogs = (ctx) =>
+  ctx.fileURL?.pathname.endsWith("/CHANGELOG.md") ? rewriteVersions : null;
+
+markdownToHtml(source, { mdastPlugins: [onlyChangelogs, myPlugin] });
+```
+
+Only what is known before parsing is available — there is no tree and no frontmatter yet. `source` is the unparsed document, meant for cheap checks such as "does this contain a code fence at all", not for parsing Markdown by hand.
+
+Deciding here rather than inside a visitor is what makes the skip worth doing: a plugin that is never added does not register visitors, and the pipeline picks its parsing and rendering strategy from the plugins that remain. A document that gates every plugin off is compiled by the same fast path as one that was passed no plugins, and position tracking is skipped unless a plugin that actually runs asks for it.
+
+The skip values work anywhere an entry does, so a list can be assembled inline:
+
+```js
+markdownToHtml(source, { mdastPlugins: [isDev && debugPlugin, myPlugin] });
+```
+
+A factory returning a skip value drops the whole bundle it would otherwise have returned, so a preset can enable or disable itself as a unit. Factories still run once per compile even when they skip, so keep them cheap.
 
 ### Source positions
 

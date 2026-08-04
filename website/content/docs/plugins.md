@@ -118,4 +118,25 @@ The bundle's plugins keep their own order and run at the bundle's position, so t
 
 A factory can return a bundle too, which gives the plugins in it state that they share with each other but that still resets for every document.
 
+## Running a plugin only on some documents
+
+A factory receives a context describing the document about to be compiled, and can return `null` to sit this one out:
+
+```js
+const onlyChangelogs = (ctx) =>
+  ctx.fileURL?.pathname.endsWith("/CHANGELOG.md") ? rewriteVersions : null;
+
+markdownToHtml(source, { mdastPlugins: [onlyChangelogs, unwrapImages] });
+```
+
+The context carries what is known before parsing: `fileURL`, `sourceFormat` (`"markdown"` or `"mdx"`), the unparsed `source`, and the `data` bag. This is the way to gate a plugin per file — checking the same condition inside every visitor still pays for the plugin on documents it does not apply to.
+
+`null`, `undefined` and `false` are skipped anywhere an entry can appear, so conditions can go straight in the list:
+
+```js
+markdownToHtml(source, { mdastPlugins: [isDev && debugPlugin, unwrapImages] });
+```
+
+See the [plugin API reference](/docs/plugin-api/#running-a-plugin-only-on-some-documents) for the full context type.
+
 If you need to share state between visits (e.g. collecting a table of contents), close over a variable in the surrounding scope and read it back after `markdownToHtml` returns.
