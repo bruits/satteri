@@ -536,3 +536,20 @@ describe.each([
     assertMdastConformance(`export const a = 1 /*${eol}${eol}*/${eol}z${eol}`);
   });
 });
+
+// A `\` before a line ending is one JS line continuation, so the string runs on
+// to the next line. CRLF is one ending, and eating only half of it used to end
+// the string on the orphan `\n` and run the expression to end of input.
+describe.each([
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+  ["CR", "\r"],
+])("MDX expression string continued over a line ending (%s)", (_name, eol) => {
+  test("a double-quoted string keeps going", () => {
+    assertMdastConformance(`a{"x\\${eol}y"}${eol}`);
+  });
+
+  test("a single-quoted string keeps going", () => {
+    assertMdastConformance(`a{'x\\${eol}y'}${eol}`);
+  });
+});

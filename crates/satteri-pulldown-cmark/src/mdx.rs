@@ -580,6 +580,10 @@ fn skip_string(bytes: &[u8], start: usize) -> usize {
     while ix < len && bytes[ix] != quote && bytes[ix] != b'\n' && bytes[ix] != b'\r' {
         if bytes[ix] == b'\\' {
             ix += 1;
+            // A line continuation escapes the whole ending, CRLF included.
+            if bytes.get(ix) == Some(&b'\r') && bytes.get(ix + 1) == Some(&b'\n') {
+                ix += 1;
+            }
         }
         ix += 1;
     }
