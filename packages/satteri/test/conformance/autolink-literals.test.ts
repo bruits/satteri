@@ -1,0 +1,600 @@
+// Distilled from a hand-crafted GFM autolink differential matrix (3,234 cases,
+// families A–L) run against `remark-parse` + `remark-gfm`. Every case kept here is
+// one the committed suite did not already exercise, and one whose behaviour no
+// other kept case repeats: where the matrix enumerated a rule over a vocabulary,
+// only the members that sit on a boundary of that rule survive.
+//
+// Each row carries the URLs satteri must produce, so a row that stops linking —
+// or starts linking something new — fails on its own terms and not only through
+// the tree comparison.
+//
+// This half covers the scanner itself: what may precede a trigger, where the
+// URL ends, and the spec's own examples.
+
+import { describe, test, expect } from "vitest";
+import { assertMdastConformance, referenceMdast, satteriMdast } from "./helpers.js";
+
+interface AnyNode {
+  type: string;
+  url?: string;
+  children?: AnyNode[];
+}
+
+/** Every `link` URL in document order. */
+function collectUrls(tree: unknown): string[] {
+  const out: string[] = [];
+  const walk = (node: AnyNode): void => {
+    if (node.type === "link") out.push(String(node.url));
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(tree as AnyNode);
+  return out;
+}
+
+function linkUrls(md: string): string[] {
+  return collectUrls(satteriMdast(md));
+}
+
+/** The tree matches remark, and the autolinks are the ones named. */
+function conforms(md: string, urls: string[]): void {
+  assertMdastConformance(md);
+  expect(linkUrls(md), JSON.stringify(md)).toEqual(urls);
+}
+
+// Family A — the preceding-character classifier. It asks a character for its
+// Unicode General_Category, so there is one row per category it must accept or
+// reject, plus the ASCII characters that mean something else to a neighbouring
+// construct; not one row per character in the matrix. Which of the two autolink
+// paths each case takes is pinned in autolink-path.test.ts — what is pinned here
+// is the tree that comes out, for trigger kinds that file does not carry.
+const A_TRIGGERS = [
+  "www.example.com",
+  "http://example.com",
+  "user@example.com",
+  "_user@example.com",
+];
+
+// What each trigger links to when the preceding character lets it through, so a
+// row below reads as a pattern instead of four repeated URLs.
+const W = "http://www.example.com";
+const H = "http://example.com";
+const E = "mailto:user@example.com";
+const U = "mailto:_user@example.com";
+/** The trigger does not become a link at all. */
+const NO = "";
+
+const PRECEDING: Array<{ prefix: string; name: string; urls: string[] }> = [
+  { prefix: "", name: "start of document", urls: [W, H, E, U] },
+  { prefix: " ", name: "space", urls: [W, H, E, U] },
+  { prefix: "  ", name: "two spaces", urls: [W, H, E, U] },
+  { prefix: "(", name: "`(`", urls: [W, H, E, U] },
+  { prefix: "*", name: "`*`", urls: [W, H, E, U] },
+  { prefix: "_", name: "`_`", urls: [W, H, U, "mailto:__user@example.com"] },
+  { prefix: "~", name: "`~`", urls: [W, H, E, U] },
+  { prefix: "]", name: "`]`", urls: [W, H, E, U] },
+  { prefix: ">", name: "`>` (a blockquote marker here)", urls: [W, H, E, U] },
+  {
+    prefix: ".",
+    name: "`.`",
+    urls: [W, H, "mailto:.user@example.com", "mailto:._user@example.com"],
+  },
+  { prefix: ",", name: "`,`", urls: [W, H, E, U] },
+  { prefix: '"', name: '`"`', urls: [W, H, E, U] },
+  {
+    prefix: "-",
+    name: "`-`",
+    urls: [W, H, "mailto:-user@example.com", "mailto:-_user@example.com"],
+  },
+  { prefix: "|", name: "`|`", urls: [W, H, E, U] },
+  { prefix: "/", name: "`/`", urls: [W, H, NO, E] },
+  { prefix: "[", name: "`[`", urls: [W, H, E, U] },
+  { prefix: "\\", name: "`\\`", urls: [W, H, E, U] },
+  { prefix: "©", name: "So symbol", urls: [W, H, E, U] },
+  { prefix: "€", name: "Sc symbol", urls: [W, H, E, U] },
+  { prefix: "±", name: "Sm symbol", urls: [W, H, E, U] },
+  { prefix: "—", name: "Pd punctuation", urls: [W, H, E, U] },
+  { prefix: "•", name: "Po punctuation", urls: [W, H, E, U] },
+  { prefix: "。", name: "CJK Po punctuation", urls: [W, H, E, U] },
+  { prefix: "（", name: "Ps punctuation", urls: [W, H, E, U] },
+  { prefix: "\u{a0}", name: "Zs space", urls: [W, H, E, U] },
+  {
+    prefix: "5",
+    name: "Nd digit",
+    urls: [NO, H, "mailto:5user@example.com", "mailto:5_user@example.com"],
+  },
+  {
+    prefix: "a",
+    name: "ASCII letter",
+    urls: [NO, NO, "mailto:auser@example.com", "mailto:a_user@example.com"],
+  },
+  { prefix: "α", name: "Ll letter", urls: [NO, H, E, U] },
+  { prefix: "中", name: "Lo letter", urls: [NO, H, E, U] },
+  { prefix: "e\u{301}", name: "Mn combining mark", urls: [NO, H, E, U] },
+  { prefix: "\u{200b}", name: "Cf zero-width space", urls: [NO, H, E, U] },
+  { prefix: "\u{ad}", name: "Cf soft hyphen", urls: [NO, H, E, U] },
+  { prefix: "❤\u{fe0f}", name: "variation selector", urls: [NO, H, E, U] },
+  { prefix: "🯰", name: "astral Nd digit", urls: [NO, H, E, U] },
+  { prefix: "𝐀", name: "astral Lu letter", urls: [NO, H, E, U] },
+  { prefix: "𠀀", name: "astral Lo letter", urls: [NO, H, E, U] },
+];
+
+describe("family A: the preceding-character classifier", () => {
+  test.each(PRECEDING)("$name", ({ prefix, urls }) => {
+    for (const [ix, trigger] of A_TRIGGERS.entries()) {
+      const md = `${prefix}${trigger}\n`;
+      assertMdastConformance(md);
+      expect(linkUrls(md), JSON.stringify(md)).toEqual(urls[ix] === "" ? [] : [urls[ix]]);
+    }
+  });
+
+  // The trigger kinds the four-column table above does not carry.
+  test.each([
+    ["www.example.com/a/b\n", ["http://www.example.com/a/b"]],
+    ["https://example.com/a?b=c#d\n", ["https://example.com/a?b=c#d"]],
+    ["HtTp://Example.COM\n", ["HtTp://Example.COM"]],
+    ["u-s.e_r@sub.example.co.uk\n", ["mailto:u-s.e_r@sub.example.co.uk"]],
+    ["mailto:user@example.com\n", ["mailto:user@example.com"]],
+    ["xmpp:user@example.com\n", ["mailto:user@example.com"]],
+    ["(https://example.com/a?b=c#d\n", ["https://example.com/a?b=c#d"]],
+    ["(mailto:user@example.com\n", ["mailto:user@example.com"]],
+    [".mailto:user@example.com\n", ["mailto:user@example.com"]],
+    [".xmpp:user@example.com\n", ["mailto:user@example.com"]],
+  ])("%j", conforms);
+
+  // Mid-line, the same prefixes classify the same way — except these two, where
+  // the character means something else at the start of a line.
+  test.each([
+    ["x \twww.example.com\n", ["http://www.example.com"]],
+    ["x \tuser@example.com\n", ["mailto:user@example.com"]],
+    ["x \thttp://example.com\n", ["http://example.com"]],
+    ["x >www.example.com\n", ["http://www.example.com"]],
+    ["x >user@example.com\n", ["mailto:user@example.com"]],
+    ["x >http://example.com\n", ["http://example.com"]],
+  ])("%j", conforms);
+});
+
+// Deliberate divergence (see website/content/docs/divergences.md): remark reads
+// the preceding character as one UTF-16 code unit, so an astral one is a lone
+// surrogate and always blocks. Encoded the same way as in autolink-path.test.ts:
+// the reference side is asserted, then satteri's own span.
+describe("family A: astral characters before a GFM autolink (documented divergence)", () => {
+  const ASTRAL: Array<{ prefix: string; name: string }> = [
+    { prefix: "😀", name: "U+1F600 GRINNING FACE (So)" },
+    { prefix: "𐄁", name: "U+10101 AEGEAN WORD SEPARATOR DOT (Po)" },
+    { prefix: "𝛛", name: "U+1D6DB MATHEMATICAL BOLD PARTIAL DIFFERENTIAL (Sm)" },
+    { prefix: "👨\u{200d}💻", name: "a ZWJ sequence ending in U+1F4BB (So)" },
+  ];
+
+  test.each(ASTRAL)("$name", ({ prefix }) => {
+    const md = `${prefix}www.example.com`;
+    const remark = referenceMdast(md) as { children: AnyNode[] };
+    expect(linkUrls(md)).toEqual(["http://www.example.com"]);
+    expect((remark.children[0] as AnyNode).children?.map((c) => c.type)).toEqual(["text"]);
+
+    const link = (satteriMdast(md) as { children: AnyNode[] }).children[0]!.children!.find(
+      (c) => c.type === "link",
+    ) as {
+      position: { start: { offset: number }; end: { offset: number } };
+    };
+    expect(md.slice(link.position.start.offset, link.position.end.offset)).toBe("www.example.com");
+  });
+
+  // Only the `www` trigger diverges: the other two accept the character on both
+  // sides. Astral letters and digits block on both sides, for different reasons.
+  test.each([
+    ["😀user@example.com\n", ["mailto:user@example.com"]],
+    ["😀http://example.com\n", ["http://example.com"]],
+    ["😀_user@example.com\n", ["mailto:_user@example.com"]],
+    ["🯰www.example.com\n", []],
+    ["𝐀www.example.com\n", []],
+  ])("%j", conforms);
+});
+
+// Family B — the trailing-punctuation and trailing-entity rules. Both rules are
+// set-membership tests, so there is one row per member: a member quietly leaving
+// the trim set (or joining it) fails exactly one row here and nothing else.
+// Trailing runs that are not a member and only repeat "left alone" are dropped.
+describe("family B: trailing punctuation and entities", () => {
+  test.each([
+    ["www.example.com\n", ["http://www.example.com"]],
+    ["www.example.com.\n", ["http://www.example.com"]],
+    ["www.example.com...\n", ["http://www.example.com"]],
+    ["www.example.com,\n", ["http://www.example.com"]],
+    ["www.example.com;\n", ["http://www.example.com"]],
+    ["www.example.com:\n", ["http://www.example.com"]],
+    ["www.example.com!\n", ["http://www.example.com"]],
+    ["www.example.com?!\n", ["http://www.example.com"]],
+    ["www.example.com'\n", ["http://www.example.com"]],
+    ['www.example.com"\n', ["http://www.example.com"]],
+    ["www.example.com*\n", ["http://www.example.com"]],
+    ["www.example.com**\n", ["http://www.example.com"]],
+    ["www.example.com_\n", ["http://www.example.com"]],
+    ["www.example.com~~\n", ["http://www.example.com"]],
+    ["www.example.com)\n", ["http://www.example.com"]],
+    ["www.example.com))\n", ["http://www.example.com"]],
+    ["www.example.com(\n", ["http://www.example.com("]],
+    ["www.example.com()\n", ["http://www.example.com()"]],
+    ["www.example.com]\n", ["http://www.example.com"]],
+    ["www.example.com}\n", ["http://www.example.com}"]],
+    ["www.example.com>\n", ["http://www.example.com>"]],
+    ["www.example.com<\n", ["http://www.example.com"]],
+    ["www.example.com-\n", ["http://www.example.com-"]],
+    ["www.example.com\\\n", ["http://www.example.com\\"]],
+    ["www.example.com|\n", ["http://www.example.com|"]],
+    ["www.example.com`\n", ["http://www.example.com`"]],
+    ["www.example.com%\n", ["http://www.example.com%"]],
+    ["www.example.com&amp;.\n", ["http://www.example.com"]],
+    ["www.example.com&copy;\n", ["http://www.example.com"]],
+    ["www.example.com&#35;\n", ["http://www.example.com&#35"]],
+    ["www.example.com&#x23;\n", ["http://www.example.com&#x23"]],
+    ["www.example.com&notreal;\n", ["http://www.example.com"]],
+    ["www.example.com&;\n", ["http://www.example.com&"]],
+    ["www.example.com&amp\n", ["http://www.example.com&amp"]],
+    ["www.example.com&amp;amp;\n", ["http://www.example.com&amp;amp"]],
+    ["www.example.com&nbsp;\n", ["http://www.example.com"]],
+    ["www.example.com&lt;\n", ["http://www.example.com"]],
+    ["www.example.com&#0;\n", ["http://www.example.com&#0"]],
+    ["www.example.com&#xFFFF;\n", ["http://www.example.com&#xFFFF"]],
+    ["www.example.com&#1114112;\n", ["http://www.example.com&#1114112"]],
+  ])("%j", conforms);
+
+  test.each([
+    ["www.example.com/p\n", ["http://www.example.com/p"]],
+    ["www.example.com/p.\n", ["http://www.example.com/p"]],
+    ["www.example.com/p-\n", ["http://www.example.com/p-"]],
+    ["www.example.com/p_\n", ["http://www.example.com/p"]],
+    ["www.example.com/p\\\n", ["http://www.example.com/p\\"]],
+    ["www.example.com/p(\n", ["http://www.example.com/p("]],
+    ["www.example.com/p()\n", ["http://www.example.com/p()"]],
+    ["www.example.com/p)\n", ["http://www.example.com/p"]],
+    ["www.example.com/p))\n", ["http://www.example.com/p"]],
+    ["www.example.com/p&amp;\n", ["http://www.example.com/p"]],
+    ["www.example.com/p&amp;.\n", ["http://www.example.com/p"]],
+    ["www.example.com/p&amp;)\n", ["http://www.example.com/p"]],
+  ])("%j", conforms);
+
+  test.each([
+    ["user@example.com\n", ["mailto:user@example.com"]],
+    ["user@example.com.\n", ["mailto:user@example.com"]],
+    ["user@example.com...\n", ["mailto:user@example.com"]],
+    ["user@example.com,\n", ["mailto:user@example.com"]],
+    ["user@example.com;\n", ["mailto:user@example.com"]],
+    ["user@example.com:\n", ["mailto:user@example.com"]],
+    ["user@example.com!\n", ["mailto:user@example.com"]],
+    ["user@example.com?!\n", ["mailto:user@example.com"]],
+    ["user@example.com'\n", ["mailto:user@example.com"]],
+    ['user@example.com"\n', ["mailto:user@example.com"]],
+    ["user@example.com*\n", ["mailto:user@example.com"]],
+    ["user@example.com**\n", ["mailto:user@example.com"]],
+    ["user@example.com_\n", []],
+    ["user@example.com~~\n", ["mailto:user@example.com"]],
+    ["user@example.com)\n", ["mailto:user@example.com"]],
+    ["user@example.com))\n", ["mailto:user@example.com"]],
+    ["user@example.com(\n", ["mailto:user@example.com"]],
+    ["user@example.com()\n", ["mailto:user@example.com"]],
+    ["user@example.com]\n", ["mailto:user@example.com"]],
+    ["user@example.com}\n", ["mailto:user@example.com"]],
+    ["user@example.com>\n", ["mailto:user@example.com"]],
+    ["user@example.com<\n", ["mailto:user@example.com"]],
+    ["user@example.com-\n", []],
+    ["user@example.com\\\n", ["mailto:user@example.com"]],
+    ["user@example.com|\n", ["mailto:user@example.com"]],
+    ["user@example.com`\n", ["mailto:user@example.com"]],
+    ["user@example.com%\n", ["mailto:user@example.com"]],
+    ["user@example.com&amp;\n", ["mailto:user@example.com"]],
+    ["user@example.com&amp;.\n", ["mailto:user@example.com"]],
+    ["user@example.com&amp;)\n", ["mailto:user@example.com"]],
+    ["user@example.com&copy;\n", ["mailto:user@example.com"]],
+    ["user@example.com&#35;\n", ["mailto:user@example.com"]],
+    ["user@example.com&#x23;\n", ["mailto:user@example.com"]],
+    ["user@example.com&notreal\n", ["mailto:user@example.com"]],
+    ["user@example.com&notreal;\n", ["mailto:user@example.com"]],
+    ["user@example.com&;\n", ["mailto:user@example.com"]],
+    ["user@example.com&amp\n", ["mailto:user@example.com"]],
+    ["user@example.com&amp;amp;\n", ["mailto:user@example.com"]],
+    ["user@example.com&nbsp;\n", ["mailto:user@example.com"]],
+    ["user@example.com&lt;\n", ["mailto:user@example.com"]],
+    ["user@example.com&#0;\n", ["mailto:user@example.com"]],
+    ["user@example.com&#xFFFF;\n", ["mailto:user@example.com"]],
+    ["user@example.com&#1114112;\n", ["mailto:user@example.com"]],
+  ])("%j", conforms);
+
+  // The same trims with text after them, where the trimmed tail has somewhere
+  // to go.
+  test.each([
+    ["see www.example.com end\n", ["http://www.example.com"]],
+    ["see www.example.com. end\n", ["http://www.example.com"]],
+    ["see www.example.com&amp; end\n", ["http://www.example.com"]],
+    ["see www.example.com( end\n", ["http://www.example.com("]],
+    ["see www.example.com< end\n", ["http://www.example.com"]],
+    ["see www.example.com\\ end\n", ["http://www.example.com\\"]],
+    ["see www.example.com** end\n", ["http://www.example.com"]],
+    ["see www.example.com&#1114112; end\n", ["http://www.example.com&#1114112"]],
+  ])("%j", conforms);
+});
+
+// Family C — the GFM balanced-paren rule.
+describe("family C: the balanced-paren rule", () => {
+  test.each([
+    ["www.example.com/a(b\n", ["http://www.example.com/a(b"]],
+    ["www.example.com/a)b\n", ["http://www.example.com/a)b"]],
+    ["www.example.com/a(b)c)\n", ["http://www.example.com/a(b)c"]],
+    ["www.example.com/a(b(c))\n", ["http://www.example.com/a(b(c))"]],
+    ["www.example.com/a(b(c)\n", ["http://www.example.com/a(b(c)"]],
+    ["www.example.com/a((b))\n", ["http://www.example.com/a((b))"]],
+    ["www.example.com/a((b)\n", ["http://www.example.com/a((b)"]],
+    ["www.example.com/(\n", ["http://www.example.com/("]],
+    ["www.example.com/)\n", ["http://www.example.com/"]],
+    ["www.example.com/()\n", ["http://www.example.com/()"]],
+    ["www.example.com/)(\n", ["http://www.example.com/)("]],
+    ["www.example.com/a(b).\n", ["http://www.example.com/a(b)"]],
+    ["www.example.com/a(b)&amp;\n", ["http://www.example.com/a(b)"]],
+    ["http://example.com/a(b)c\n", ["http://example.com/a(b)c"]],
+    ["http://example.com/foo).\n", ["http://example.com/foo"]],
+    ["http://example.com/foo)))\n", ["http://example.com/foo"]],
+    ["http://example.com/(a)(b)\n", ["http://example.com/(a)(b)"]],
+    ["http://example.com/(a)(b\n", ["http://example.com/(a)(b"]],
+    [
+      "https://en.wikipedia.org/wiki/Ruby_(programming_language)\n",
+      ["https://en.wikipedia.org/wiki/Ruby_(programming_language)"],
+    ],
+    [
+      "https://en.wikipedia.org/wiki/Ruby_(programming_language))\n",
+      ["https://en.wikipedia.org/wiki/Ruby_(programming_language)"],
+    ],
+    [
+      "(https://en.wikipedia.org/wiki/Ruby_(programming_language))\n",
+      ["https://en.wikipedia.org/wiki/Ruby_(programming_language)"],
+    ],
+    ["(www.example.com/a)\n", ["http://www.example.com/a"]],
+    ["((www.example.com))\n", ["http://www.example.com"]],
+    ["(www.example.com\n", ["http://www.example.com"]],
+    ["www.example.com)\n", ["http://www.example.com"]],
+    ["x www.example.com/a(b) y\n", ["http://www.example.com/a(b)"]],
+    ["x (www.example.com) y\n", ["http://www.example.com"]],
+  ])("%j", conforms);
+});
+
+// Family G — unicode inside and around the URL, and the rule that an underscore
+// may not appear in either of the last two domain labels.
+describe("family G: unicode in and around the URL", () => {
+  test.each([
+    ["www.exämple.com\n", ["http://www.exämple.com"]],
+    ["www.example.com/ä\n", ["http://www.example.com/ä"]],
+    ["www.example.com/é/x\n", ["http://www.example.com/é/x"]],
+    ["www.例え.com\n", ["http://www.例え.com"]],
+    ["www.example.com/中文\n", ["http://www.example.com/中文"]],
+    ["www.example.com/😀\n", ["http://www.example.com/😀"]],
+    ["www.example.com/😀/x\n", ["http://www.example.com/😀/x"]],
+    ["www.example.com/a\u{200b}b\n", ["http://www.example.com/a\u{200b}b"]],
+    ["https://例え.テスト\n", ["https://例え.テスト"]],
+    ["https://example.com/päth?q=ü#frag\n", ["https://example.com/päth?q=ü#frag"]],
+    ["ü@example.com\n", []],
+    ["user@exämple.com\n", []],
+    ["user@例え.com\n", []],
+    ["😀 www.example.com\n", ["http://www.example.com"]],
+    ["www.example.com😀\n", ["http://www.example.com😀"]],
+    ["www.example.com 😀\n", ["http://www.example.com"]],
+    ["中www.example.com\n", []],
+    ["中 www.example.com\n", ["http://www.example.com"]],
+    ["www.example.com中\n", ["http://www.example.com中"]],
+    ["www.example.com/😀.\n", ["http://www.example.com/😀"]],
+    ["www.example.com/a—b\n", ["http://www.example.com/a—b"]],
+    ["www.example.com—\n", ["http://www.example.com—"]],
+    ["www.example.com…\n", ["http://www.example.com…"]],
+    ["www.example.com\u{200b}\n", ["http://www.example.com\u{200b}"]],
+    ["www.example.com\u{a0}x\n", ["http://www.example.com"]],
+    ["www.example.com）\n", ["http://www.example.com）"]],
+    ["www.example.com。\n", ["http://www.example.com。"]],
+    ["x www.exämple.com y\n", ["http://www.exämple.com"]],
+    ["x www.example.com/😀 y\n", ["http://www.example.com/😀"]],
+  ])("%j", conforms);
+});
+
+describe("family G: underscores in the last two domain labels", () => {
+  test.each([
+    ["www.exa_mple.com\n", []],
+    ["www.example_.com\n", []],
+    ["www.example.c_om\n", []],
+    ["www.a.exa_mple.com\n", []],
+    ["www.a_b.example.com\n", ["http://www.a_b.example.com"]],
+    ["www.a_b.c_d.example.com\n", ["http://www.a_b.c_d.example.com"]],
+    ["http://exa_mple.com\n", []],
+    ["http://a.exa_mple.com\n", []],
+    ["http://a_b.c.example.com\n", ["http://a_b.c.example.com"]],
+    ["http://foo_bar.com\n", []],
+    ["http://foo_bar.com.\n", ["http://foo_bar.com"]],
+    ["http://a.b_c\n", []],
+    ["http://a_b\n", []],
+    ["www.a_b\n", []],
+    ["user@exa_mple.com\n", ["mailto:user@exa_mple.com"]],
+    ["user@a.exa_mple.com\n", ["mailto:user@a.exa_mple.com"]],
+    ["user@a_b.example.com\n", ["mailto:user@a_b.example.com"]],
+    ["www.example.com/a_b\n", ["http://www.example.com/a_b"]],
+    ["www.example.com?a_b\n", ["http://www.example.com?a_b"]],
+    ["www.example.com#a_b\n", ["http://www.example.com#a_b"]],
+    ["www.example.com_\n", ["http://www.example.com"]],
+    ["www.example.com__\n", ["http://www.example.com"]],
+    ["www.example.com_x\n", []],
+    ["x www.exa_mple.com y\n", []],
+    ["x http://foo_bar.com. y\n", ["http://foo_bar.com"]],
+  ])("%j", conforms);
+});
+
+// Family H — one case per clause of GFM §6.9 (www / url / email autolink
+// extended). Kept whole apart from the email local-part enumeration, where 19
+// of the 33 characters only repeat "not in the accepted set, so the local part
+// starts after it".
+describe("family H: GFM §6.9 spec clauses", () => {
+  test.each([
+    ["www.commonmark.org\n", ["http://www.commonmark.org"]],
+    ["Visit www.commonmark.org/help for more information.\n", ["http://www.commonmark.org/help"]],
+    [
+      "Visit www.commonmark.org.\n\nVisit www.commonmark.org/a.b.\n",
+      ["http://www.commonmark.org", "http://www.commonmark.org/a.b"],
+    ],
+    [
+      "www.google.com/search?q=Markup+(business)\n",
+      ["http://www.google.com/search?q=Markup+(business)"],
+    ],
+    [
+      "www.google.com/search?q=Markup+(business))\n",
+      ["http://www.google.com/search?q=Markup+(business)"],
+    ],
+    [
+      "(www.google.com/search?q=Markup+(business))\n",
+      ["http://www.google.com/search?q=Markup+(business)"],
+    ],
+    [
+      "(www.google.com/search?q=Markup+(business)\n",
+      ["http://www.google.com/search?q=Markup+(business)"],
+    ],
+    ["www.google.com/search?q=(business))+ok\n", ["http://www.google.com/search?q=(business))+ok"]],
+    [
+      "www.google.com/search?q=commonmark&hl=en\n",
+      ["http://www.google.com/search?q=commonmark&hl=en"],
+    ],
+    ["www.google.com/search?q=commonmark&hl;\n", ["http://www.google.com/search?q=commonmark"]],
+    ["www.commonmark.org/he<lp\n", ["http://www.commonmark.org/he"]],
+    ["http://commonmark.org\n", ["http://commonmark.org"]],
+    [
+      "(Visit https://encrypted.google.com/search?q=Markup+(business))\n",
+      ["https://encrypted.google.com/search?q=Markup+(business)"],
+    ],
+    ["Anonymous FTP is available at ftp://foo.bar.baz.\n", []],
+    ["foo@bar.baz\n", ["mailto:foo@bar.baz"]],
+    [
+      "hello@mail+xyz.example isn't valid, but hello+xyz@mail.example is.\n",
+      ["mailto:hello+xyz@mail.example"],
+    ],
+    ["a.b-c_d@a.b\n", ["mailto:a.b-c_d@a.b"]],
+    ["a.b-c_d@a.b.\n", ["mailto:a.b-c_d@a.b"]],
+    ["a.b-c_d@a.b-\n", []],
+    ["a.b-c_d@a.b_\n", []],
+    ["user@localhost\n", []],
+    ["http://a\n", ["http://a"]],
+    ["http://.\n", []],
+    ["http://.com\n", ["http://.com"]],
+    ["www..com\n", ["http://www..com"]],
+    ["http:/example.com\n", []],
+    ["http:example.com\n", []],
+    ["://example.com\n", []],
+    ["@example.com\n", []],
+    ["user@\n", []],
+    ["user@.com\n", ["mailto:user@.com"]],
+    ["user@-.com\n", ["mailto:user@-.com"]],
+    ["user@a..b\n", []],
+    ["user@a.b..\n", ["mailto:user@a.b"]],
+    ["www.-example.com\n", ["http://www.-example.com"]],
+    ["www.example-.com\n", ["http://www.example-.com"]],
+    ["www.exam-ple.com\n", ["http://www.exam-ple.com"]],
+    ["http://a-b.c-d.example.com\n", ["http://a-b.c-d.example.com"]],
+    ["HTTPS://example.com\n", ["HTTPS://example.com"]],
+    ["WWW.example.com\n", ["http://WWW.example.com"]],
+    ["wWw.example.com\n", ["http://wWw.example.com"]],
+    ["5www.example.com\n", []],
+    ["awww.example.com\n", []],
+    ["a.www.example.com\n", ["http://www.example.com"]],
+    ["xhttp://example.com\n", []],
+    ["5http://example.com\n", ["http://example.com"]],
+    [".http://example.com\n", ["http://example.com"]],
+    ["-http://example.com\n", ["http://example.com"]],
+    ["_http://example.com\n", ["http://example.com"]],
+    ["a+b@c.com\n", ["mailto:a+b@c.com"]],
+    ["a-b@c.com\n", ["mailto:a-b@c.com"]],
+    ["a.b@c.com\n", ["mailto:a.b@c.com"]],
+    ["a_b@c.com\n", ["mailto:a_b@c.com"]],
+    ["a!b@c.com\n", ["mailto:b@c.com"]],
+    ["a%b@c.com\n", ["mailto:b@c.com"]],
+    ["a\\b@c.com\n", ["mailto:b@c.com"]],
+    ["a<b@c.com\n", ["mailto:b@c.com"]],
+    ["a|b@c.com\n", ["mailto:b@c.com"]],
+    ['a"b@c.com\n', ["mailto:b@c.com"]],
+    ["a`b@c.com\n", ["mailto:b@c.com"]],
+    ["a@b@c.com\n", ["mailto:b@c.com"]],
+    [".a@b.com\n", ["mailto:.a@b.com"]],
+    ["-a@b.com\n", ["mailto:-a@b.com"]],
+    ["_a@b.com\n", ["mailto:_a@b.com"]],
+    ["+a@b.com\n", ["mailto:+a@b.com"]],
+    ["www.example.com/a-\n", ["http://www.example.com/a-"]],
+    ["www.example.com/a_\n", ["http://www.example.com/a"]],
+    ["user@example.com-\n", []],
+    ["user@example.com_\n", []],
+    ["user@example.co-m\n", ["mailto:user@example.co-m"]],
+    ["user@example.co_m\n", ["mailto:user@example.co_m"]],
+    ["http://example.com/a<b\n", ["http://example.com/a"]],
+    ["user@example.com<x\n", ["mailto:user@example.com"]],
+    ["www.example.com<\n", ["http://www.example.com"]],
+    ["www.example.com/?a=1&b=2;\n", ["http://www.example.com/?a=1&b=2"]],
+    ["www.example.com&amp;;\n", ["http://www.example.com"]],
+    ["www.example.com;\n", ["http://www.example.com"]],
+    ["www.example.com&;\n", ["http://www.example.com&"]],
+    ["www.example.com&x;\n", ["http://www.example.com"]],
+    ["www.example.com&#;\n", ["http://www.example.com&#"]],
+    ["www.example.com&ampx;\n", ["http://www.example.com"]],
+    ["www.example.com/a&amp;b\n", ["http://www.example.com/a&amp;b"]],
+    ["http://example.com?a&copy;\n", ["http://example.com?a"]],
+  ])("%j", conforms);
+});
+
+// Family J — unicode whitespace. link-edge-cases.test.ts already covers it
+// inside a www/http URL body; these are the shapes it does not reach: the email
+// forms, the preceding-character (boundary) forms, and the find-and-replace
+// path. U+0085 is the boundary the `www` classifier had to be taught, and the two
+// `Cf` code points are the controls that must stay inside the URL.
+describe("family J: unicode whitespace as terminator and boundary", () => {
+  test.each([
+    ["user@example.com\u{85}x\n", ["mailto:user@example.com"]],
+    ["user@exa\u{85}mple.com\n", []],
+    ["https://example.com\u{85}\n", ["https://example.com\u{85}"]],
+    ["x\u{85}www.example.com\n", []],
+    ["x\u{85}http://example.com\n", ["http://example.com"]],
+    ["x\u{85}user@example.com\n", ["mailto:user@example.com"]],
+    ["x\u{85}_user@example.com\n", ["mailto:_user@example.com"]],
+    ["[a www.example.com/p\u{85}q\n", ["http://www.example.com/p\u{85}q"]],
+    ["[a x\u{85}www.example.com\n", []],
+    ["user@example.com\u{a0}x\n", ["mailto:user@example.com"]],
+    ["user@exa\u{a0}mple.com\n", []],
+    ["https://example.com\u{a0}\n", ["https://example.com"]],
+    ["x\u{a0}www.example.com\n", ["http://www.example.com"]],
+    ["x\u{a0}http://example.com\n", ["http://example.com"]],
+    ["x\u{a0}user@example.com\n", ["mailto:user@example.com"]],
+    ["x\u{a0}_user@example.com\n", ["mailto:_user@example.com"]],
+    ["[a www.example.com/p\u{a0}q\n", ["http://www.example.com/p\u{a0}q"]],
+    ["[a x\u{a0}www.example.com\n", ["http://www.example.com"]],
+    ["user@example.com\u{2028}x\n", ["mailto:user@example.com"]],
+    ["user@exa\u{2028}mple.com\n", []],
+    ["https://example.com\u{2028}\n", ["https://example.com"]],
+    ["x\u{2028}www.example.com\n", ["http://www.example.com"]],
+    ["x\u{2028}http://example.com\n", ["http://example.com"]],
+    ["x\u{2028}user@example.com\n", ["mailto:user@example.com"]],
+    ["x\u{2028}_user@example.com\n", ["mailto:_user@example.com"]],
+    ["[a www.example.com/p\u{2028}q\n", ["http://www.example.com/p\u{2028}q"]],
+    ["[a x\u{2028}www.example.com\n", ["http://www.example.com"]],
+    ["user@example.com\u{3000}x\n", ["mailto:user@example.com"]],
+    ["user@exa\u{3000}mple.com\n", []],
+    ["https://example.com\u{3000}\n", ["https://example.com"]],
+    ["x\u{3000}www.example.com\n", ["http://www.example.com"]],
+    ["x\u{3000}http://example.com\n", ["http://example.com"]],
+    ["x\u{3000}user@example.com\n", ["mailto:user@example.com"]],
+    ["x\u{3000}_user@example.com\n", ["mailto:_user@example.com"]],
+    ["[a www.example.com/p\u{3000}q\n", ["http://www.example.com/p\u{3000}q"]],
+    ["[a x\u{3000}www.example.com\n", ["http://www.example.com"]],
+    ["user@example.com\u{200b}x\n", ["mailto:user@example.com"]],
+    ["user@exa\u{200b}mple.com\n", []],
+    ["https://example.com\u{200b}\n", ["https://example.com\u{200b}"]],
+    ["x\u{200b}www.example.com\n", []],
+    ["x\u{200b}http://example.com\n", ["http://example.com"]],
+    ["x\u{200b}user@example.com\n", ["mailto:user@example.com"]],
+    ["x\u{200b}_user@example.com\n", ["mailto:_user@example.com"]],
+    ["[a www.example.com/p\u{200b}q\n", ["http://www.example.com/p\u{200b}q"]],
+    ["[a x\u{200b}www.example.com\n", []],
+    ["user@exa\u{feff}mple.com\n", []],
+    ["x\u{feff}www.example.com\n", ["http://www.example.com"]],
+    ["x\u{feff}http://example.com\n", ["http://example.com"]],
+    ["x\u{feff}user@example.com\n", ["mailto:user@example.com"]],
+    ["x\u{feff}_user@example.com\n", ["mailto:_user@example.com"]],
+    ["[a www.example.com/p\u{feff}q\n", ["http://www.example.com/p\u{feff}q"]],
+    ["[a x\u{feff}www.example.com\n", ["http://www.example.com"]],
+  ])("%j", conforms);
+});
