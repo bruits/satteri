@@ -431,18 +431,77 @@ describe("MDX expression holding the `]` that ends a reference label", () => {
   });
 });
 
-// Found by `fuzz/mdx.test.ts` at seed 3; pre-existing, unrelated to the
-// reference-label case above. A `//` line comment inside an expression is
-// terminated by a lone CR in micromark, so the `}` after it still closes the
-// expression. Sätteri's scanner runs the comment on to end of input and
-// rejects the document. `\n` and `\r\n` are both fine.
-describe("MDX expression comment ended by a lone CR", () => {
-  test.fails("the `}` after the comment still closes the expression", () => {
-    assertMdastConformance("a{//\r}");
+// Found by `fuzz/mdx.test.ts` at seed 3. A `//` line comment ends at any line
+// ending, so every case below has to behave the same for `\n`, `\r\n` and a
+// lone `\r`.
+describe.each([
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+  ["CR", "\r"],
+])("MDX expression comment ended by %s", (_name, eol) => {
+  test("the `}` after the comment still closes the expression", () => {
+    assertMdastConformance(`a{//${eol}}`);
+    assertMdastConformance(`a{//${eol}} b`);
   });
 
-  test("control: the same shape with LF", () => {
-    assertMdastConformance("a{//\n}");
-    assertMdastConformance("a{//\r\n}");
+  test("comment mid-expression", () => {
+    assertMdastConformance(`a{1 + // c${eol}2}`);
+    assertMdastConformance(`a{[1, //${eol}2]}`);
+    assertMdastConformance(`a{{x:1} //${eol}}`);
+  });
+
+  test("the comment body is not re-lexed", () => {
+    assertMdastConformance(`a{// }${eol}1}`);
+    assertMdastConformance(`a{// don't${eol}1}`);
+    assertMdastConformance(`a{// \`x${eol}1}`);
+    assertMdastConformance(`a{// /*${eol}1}`);
+    assertMdastConformance(`a{// /x/${eol}1}`);
+  });
+
+  test("comment-only body", () => {
+    assertMdastConformance(`{//${eol}}${eol}`);
+    assertMdastConformance(`{//a${eol}//b${eol}}`);
+  });
+
+  test("in JSX attributes and children", () => {
+    assertMdastConformance(`<Foo bar={//${eol}1}/>${eol}`);
+    assertMdastConformance(`<Box>{//${eol}1}</Box>${eol}`);
+  });
+
+  test("after a value that could swallow the line", () => {
+    assertMdastConformance(`a{\`t\` //${eol}}`);
+  });
+
+  // Block comments legitimately span line endings, so the same shapes must
+  // still run past one rather than stopping with the line.
+  test("block comments still span the line ending", () => {
+    assertMdastConformance(`a{/*${eol}*/}`);
+    assertMdastConformance(`a{/* x${eol}y${eol} */ 1}`);
+    assertMdastConformance(`<Foo bar={/* x${eol}*/ 1}/>${eol}`);
+  });
+
+  test("a comment in an ESM block ends with the line", () => {
+    assertMdastConformance(`import a from "b" //${eol}${eol}x${eol}`);
+    assertMdastConformance(`export const a = 1 // c${eol}${eol}x${eol}`);
+    assertMdastConformance(`import a from "b" //x${eol}import c from "d"${eol}${eol}y${eol}`);
+    assertMdastConformance(`export const a = 1 /* c${eol}*/${eol}${eol}x${eol}`);
+  });
+});
+
+// Pre-existing and unrelated to line endings — both reproduce identically for
+// `\n`, `\r\n` and `\r`. `export` followed by a line ending opens an ESM block
+// in Sätteri but not in micromark, and a block comment spanning the blank line
+// that should end the block is accepted rather than cut short.
+describe.each([
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+  ["CR", "\r"],
+])("MDX ESM block opener divergences (%s)", (_name, eol) => {
+  test.fails("`export` followed by a line ending is not an ESM block", () => {
+    assertMdastConformance(`export${eol}const a = 1${eol}${eol}x${eol}`);
+  });
+
+  test.fails("a block comment does not span the blank line ending the block", () => {
+    assertMdastConformance(`export const a = 1 /*${eol}${eol}*/${eol}z${eol}`);
   });
 });

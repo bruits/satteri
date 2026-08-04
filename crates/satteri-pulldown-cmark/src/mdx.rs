@@ -332,10 +332,7 @@ pub(crate) fn try_parse_expression_body(
     let mut has_non_ws = false;
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
-            i += 2;
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
+            i = line_comment_end(bytes, i + 2);
         } else if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
             let comment_start = i;
             i += 2;
@@ -592,6 +589,14 @@ fn skip_string(bytes: &[u8], start: usize) -> usize {
     ix
 }
 
+/// End of a `//` line comment whose body starts at `start`, i.e. the offset of
+/// the next line ending or of end-of-input. `\n`, `\r\n` and a lone `\r` all
+/// end the line; stopping *at* the ending rather than past it leaves the
+/// caller's own CRLF pairing to run.
+fn line_comment_end(bytes: &[u8], start: usize) -> usize {
+    memchr::memchr2(b'\n', b'\r', &bytes[start..]).map_or(bytes.len(), |i| start + i)
+}
+
 /// Is the byte at `ix` a line ending followed by a blank line (or EOF)?
 ///
 /// Used to cut the expression scan at block boundaries, so an unclosed `{`
@@ -833,10 +838,7 @@ fn scan_mdx_expression_end_inner(
             }
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'/' => {
                 reject_if_lazy!();
-                ix += 2;
-                while ix < bytes.len() && bytes[ix] != b'\n' {
-                    ix += 1;
-                }
+                ix = line_comment_end(bytes, ix + 2);
             }
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'*' => {
                 reject_if_lazy!();
@@ -1364,9 +1366,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                 prev_was_value = true;
             }
             b'/' if ix + 1 < len && bytes[ix + 1] == b'/' => {
-                while ix < len && bytes[ix] != b'\n' {
-                    ix += 1;
-                }
+                ix = line_comment_end(bytes, ix + 2);
             }
             b'/' if ix + 1 < len && bytes[ix + 1] == b'*' => {
                 in_block_comment = true;
@@ -1380,7 +1380,10 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                 ix = scan_regex(bytes, ix);
                 prev_was_value = true;
             }
-            b'\n' => {
+            b'\n' | b'\r' => {
+                if bytes[ix] == b'\r' && ix + 1 < len && bytes[ix + 1] == b'\n' {
+                    ix += 1;
+                }
                 ix += 1;
                 if ix >= len {
                     break;
@@ -1397,7 +1400,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                     break;
                 }
             }
-            b' ' | b'\t' | b'\r' => ix += 1,
+            b' ' | b'\t' => ix += 1,
             b')' | b']' | b'}' => {
                 prev_was_value = true;
                 ix += 1;
