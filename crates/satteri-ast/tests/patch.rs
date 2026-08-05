@@ -5,7 +5,7 @@
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::patch::{apply_patches_in_place, apply_patches_strict, Patch, PatchContent};
+use satteri_ast::patch::{Patch, PatchContent, apply_patches_in_place, apply_patches_strict};
 
 /// Compare the reachable trees of two arenas: shapes, positions, node_data.
 fn assert_skeleton_eq<K: ArenaKind>(a: &Arena<K>, b: &Arena<K>, ida: u32, idb: u32, path: &str) {
@@ -51,11 +51,7 @@ fn reachable_count<K: ArenaKind>(arena: &Arena<K>) -> usize {
             .map(|&c| walk(arena, c))
             .sum::<usize>()
     }
-    if arena.is_empty() {
-        0
-    } else {
-        walk(arena, 0)
-    }
+    if arena.is_empty() { 0 } else { walk(arena, 0) }
 }
 
 /// Strict entry matching the old `rebuild` contract: dropped patches panic.
@@ -548,7 +544,8 @@ fn list_start_survives_source_base_remap() {
     let ordered = data[4] != 0;
 
     assert_eq!(
-        start, 1,
+        start,
+        1,
         "ordered list start must round-trip as 1, not be polluted by source_base ({} bytes appended)",
         rebuilt.string_pool().len()
     );

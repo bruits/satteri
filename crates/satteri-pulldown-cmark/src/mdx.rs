@@ -2201,7 +2201,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 }
 
 use crate::{
-    parse::{scan_containers, JsxAttr, JsxElementData},
+    parse::{JsxAttr, JsxElementData, scan_containers},
     scanners::LineStart,
 };
 

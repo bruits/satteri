@@ -46,8 +46,8 @@ impl<'a> PluginContext<'a> {
 
     /// Extract all text content from a subtree (depth-first concatenation)
     pub fn extract_text(&self, node_id: u32) -> String {
-        use satteri_ast::mdast::codec::decode_string_ref_data;
         use satteri_ast::mdast::MdastNodeType;
+        use satteri_ast::mdast::codec::decode_string_ref_data;
         let node = self.arena.get_node(node_id);
         if node.node_type == MdastNodeType::Text as u8
             || node.node_type == MdastNodeType::InlineCode as u8

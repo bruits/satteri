@@ -3,14 +3,14 @@
 
 use alloc::borrow::Cow;
 
-use satteri_arena::{line_ending_iter, Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef, line_ending_iter};
 use satteri_ast::mdast::{
-    encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
     CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
     ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType, ReferenceData,
+    encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
 };
 #[cfg(feature = "mdx")]
-use satteri_ast::mdast::{encode_mdx_jsx_element_data, ExpressionData};
+use satteri_ast::mdast::{ExpressionData, encode_mdx_jsx_element_data};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
@@ -2152,11 +2152,7 @@ fn normalize_inline_html_wrap(src: &str) -> Option<String> {
         }
         out.push_str(&src[line_start..i]);
     }
-    if out == src {
-        None
-    } else {
-        Some(out)
-    }
+    if out == src { None } else { Some(out) }
 }
 
 fn reference_end(
@@ -2515,7 +2511,7 @@ fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<
 /// `test/conformance/autolink-path.test.ts` holds remark to the same tables.
 #[cfg(test)]
 mod autolink_path_probe {
-    use super::{parse_inner, Arena, Mdast, MdastNodeType, Options};
+    use super::{Arena, Mdast, MdastNodeType, Options, parse_inner};
     use satteri_ast::mdast::decode_link_data;
 
     /// The JS conformance features: GFM, no frontmatter, no math.

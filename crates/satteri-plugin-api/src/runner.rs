@@ -5,7 +5,7 @@ use crate::plugin::{NodeView, Plugin, VisitResult};
 use crate::typed_nodes::*;
 use satteri_arena::{Arena, ArenaBuilder, Mdast};
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::patch::{apply_patches_strict, Patch, PatchContent};
+use satteri_ast::patch::{Patch, PatchContent, apply_patches_strict};
 
 /// Result of running plugins against an arena.
 pub struct PluginRunResult {

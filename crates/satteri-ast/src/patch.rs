@@ -1518,11 +1518,7 @@ mod tests {
                 .map(|&c| walk(arena, c))
                 .sum::<usize>()
         }
-        if arena.is_empty() {
-            0
-        } else {
-            walk(arena, 0)
-        }
+        if arena.is_empty() { 0 } else { walk(arena, 0) }
     }
 
     /// Build the "# Hello\n\nWorld" arena for testing.

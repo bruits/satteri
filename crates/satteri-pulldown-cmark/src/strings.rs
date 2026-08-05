@@ -102,7 +102,7 @@ pub enum CowStr<'a> {
 mod serde_impl {
     use core::fmt;
 
-    use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
     use super::CowStr;
 

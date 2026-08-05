@@ -27,8 +27,8 @@ use memchr::{memchr, memchr2};
 
 pub(crate) use crate::puncttable::{is_ascii_punctuation, is_punctuation};
 use crate::{
-    entities, parse::HtmlScanGuard, strings::CowStr, Alignment, BlockQuoteKind, HeadingLevel,
-    LinkType,
+    Alignment, BlockQuoteKind, HeadingLevel, LinkType, entities, parse::HtmlScanGuard,
+    strings::CowStr,
 };
 
 type NewlineHandler<'a> = Option<&'a dyn Fn(&[u8]) -> usize>;
@@ -730,11 +730,7 @@ pub(crate) fn scan_hrule(bytes: &[u8]) -> Result<usize, usize> {
         }
         i += 1;
     }
-    if n >= 3 {
-        Ok(i)
-    } else {
-        Err(i)
-    }
+    if n >= 3 { Ok(i) } else { Err(i) }
 }
 
 /// Scan an ATX heading opening sequence.

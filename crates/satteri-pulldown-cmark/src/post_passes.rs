@@ -19,7 +19,7 @@
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
 use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
-use satteri_ast::mdast::{codec::LinkData, MdastNodeType};
+use satteri_ast::mdast::{MdastNodeType, codec::LinkData};
 
 use crate::puncttable::is_punctuation;
 
@@ -1604,7 +1604,7 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_raw_map, RawMap, Smart};
+    use super::{RawMap, Smart, build_raw_map};
 
     const OFF: Smart = Smart {
         quotes: false,

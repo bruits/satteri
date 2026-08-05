@@ -4,10 +4,10 @@
 //! a directive trails it.
 
 use satteri_arena::{Arena, Mdast, StringRef};
-use satteri_ast::mdast::codec::{decode_directive_attr, decode_directive_attr_count};
 use satteri_ast::mdast::MdastNodeType;
-use satteri_pulldown_cmark::arena_build::{parse, DEFAULT_OPTIONS};
+use satteri_ast::mdast::codec::{decode_directive_attr, decode_directive_attr_count};
 use satteri_pulldown_cmark::Options;
+use satteri_pulldown_cmark::arena_build::{DEFAULT_OPTIONS, parse};
 
 fn options() -> Options {
     DEFAULT_OPTIONS | Options::ENABLE_DIRECTIVE | Options::ENABLE_HEADING_ATTRIBUTES

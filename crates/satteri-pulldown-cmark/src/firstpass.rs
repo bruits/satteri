@@ -10,16 +10,16 @@ use unicase::UniCase;
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
 use crate::{
-    linklabel::{scan_link_label_rest, LinkLabel},
+    HeadingLevel, LinkType, MetadataBlockKind, Options,
+    linklabel::{LinkLabel, scan_link_label_rest},
     parse::{
-        scan_containers, Allocations, AutolinkCandidate, DirectiveAttrData, FootnoteDef,
-        HeadingAttributes, Item, ItemBody, LinkDef, LINK_MAX_NESTED_PARENS,
+        Allocations, AutolinkCandidate, DirectiveAttrData, FootnoteDef, HeadingAttributes, Item,
+        ItemBody, LINK_MAX_NESTED_PARENS, LinkDef, scan_containers,
     },
     post_passes::{scan_autolink_literal, scan_email_autolink},
     scanners::*,
     strings::CowStr,
     tree::{Tree, TreeIndex},
-    HeadingLevel, LinkType, MetadataBlockKind, Options,
 };
 
 pub(crate) fn run_first_pass(
@@ -3628,11 +3628,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 return Some(backup);
             }
         }
-        if newlines > 0 {
-            Some(backup)
-        } else {
-            None
-        }
+        if newlines > 0 { Some(backup) } else { None }
     }
 
     /// Checks whether we should break a paragraph on the given input.

@@ -33,13 +33,13 @@ use unicase::UniCase;
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
 use crate::{
+    Alignment, BlockQuoteKind, CodeBlockKind, DirectiveKind, Event, HeadingLevel, LinkType,
+    MetadataBlockKind, Options, Tag, TagEnd,
     firstpass::run_first_pass,
-    linklabel::{scan_link_label_rest, FootnoteLabel, LinkLabel, ReferenceLabel},
+    linklabel::{FootnoteLabel, LinkLabel, ReferenceLabel, scan_link_label_rest},
     scanners::*,
     strings::CowStr,
     tree::{Tree, TreeIndex},
-    Alignment, BlockQuoteKind, CodeBlockKind, DirectiveKind, Event, HeadingLevel, LinkType,
-    MetadataBlockKind, Options, Tag, TagEnd,
 };
 
 // Allowing arbitrary depth nested parentheses inside link destinations
@@ -3250,7 +3250,9 @@ where
     }
 
     /// Provides an iterator over all the document's reference definitions.
-    pub fn iter(&'s self) -> impl Iterator<Item = (&'s str, &'s LinkDef<'input>)> + use<'s, 'input> {
+    pub fn iter(
+        &'s self,
+    ) -> impl Iterator<Item = (&'s str, &'s LinkDef<'input>)> + use<'s, 'input> {
         self.0.iter().map(|(k, v)| (k.as_ref(), v))
     }
 }
@@ -3641,7 +3643,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::SoftBreak => return Event::SoftBreak,
         ItemBody::HardBreak(_) => return Event::HardBreak,
         ItemBody::FootnoteReference(cow_ix) => {
-            return Event::FootnoteReference(allocs.take_cow(cow_ix))
+            return Event::FootnoteReference(allocs.take_cow(cow_ix));
         }
         ItemBody::TaskListMarker(checked) => return Event::TaskListMarker(checked),
         ItemBody::Rule => return Event::Rule,
@@ -3726,7 +3728,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
                 Event::DisplayMath(allocs.take_cow(cow_ix))
             } else {
                 Event::InlineMath(allocs.take_cow(cow_ix))
-            }
+            };
         }
         ItemBody::DefinitionList(_) => Tag::DefinitionList,
         ItemBody::DefinitionListTitle => Tag::DefinitionListTitle,
@@ -3743,11 +3745,11 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         }
         #[cfg(feature = "mdx")]
         ItemBody::MdxFlowExpression(cow_ix) => {
-            return Event::MdxFlowExpression(allocs.take_cow(cow_ix))
+            return Event::MdxFlowExpression(allocs.take_cow(cow_ix));
         }
         #[cfg(feature = "mdx")]
         ItemBody::MdxTextExpression(cow_ix) => {
-            return Event::MdxTextExpression(allocs.take_cow(cow_ix))
+            return Event::MdxTextExpression(allocs.take_cow(cow_ix));
         }
         #[cfg(feature = "mdx")]
         ItemBody::MdxEsm(cow_ix) => return Event::MdxEsm(allocs.take_cow(cow_ix)),
@@ -4287,9 +4289,11 @@ text
         // Without ENABLE_MDX, none of this should be parsed as MDX.
         let events: Vec<_> = Parser::new("import foo from 'bar'\n").collect();
         // Should be a regular paragraph.
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, Event::Start(Tag::Paragraph))));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Start(Tag::Paragraph)))
+        );
     }
 
     #[cfg(feature = "mdx")]

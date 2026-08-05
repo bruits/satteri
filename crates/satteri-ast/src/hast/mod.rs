@@ -9,8 +9,8 @@ pub mod properties;
 pub mod render;
 
 pub use crate::convert::{
-    mdast_arena_to_hast_arena, mdast_arena_to_hast_arena_into,
-    mdast_arena_to_hast_arena_with_options, Backref, ConvertOptions,
+    Backref, ConvertOptions, mdast_arena_to_hast_arena, mdast_arena_to_hast_arena_into,
+    mdast_arena_to_hast_arena_with_options,
 };
 #[cfg(feature = "from-html")]
 pub use from_html::{html_fragment_to_wrap_arena, html_to_hast_arena, raw_to_hast_arena};

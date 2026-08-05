@@ -53,11 +53,7 @@ impl PropKind {
 }
 
 fn table(in_svg: bool) -> Table {
-    if in_svg {
-        SVG_TABLE
-    } else {
-        HTML_TABLE
-    }
+    if in_svg { SVG_TABLE } else { HTML_TABLE }
 }
 
 /// Lowercase `name` for a table lookup; borrows when already lowercase.
@@ -210,7 +206,7 @@ fn format_data_attribute(suffix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_property, property_to_attribute, PropKind};
+    use super::{PropKind, find_property, property_to_attribute};
 
     fn html(name: &str) -> std::borrow::Cow<'_, str> {
         property_to_attribute(name, false)

@@ -3,8 +3,8 @@
 
 use satteri_arena::{Arena, Mdast, StringRef};
 use satteri_ast::mdast::MdastNodeType;
-use satteri_pulldown_cmark::arena_build::{parse, DEFAULT_OPTIONS};
 use satteri_pulldown_cmark::Options;
+use satteri_pulldown_cmark::arena_build::{DEFAULT_OPTIONS, parse};
 
 fn dir_options() -> Options {
     DEFAULT_OPTIONS | Options::ENABLE_DIRECTIVE

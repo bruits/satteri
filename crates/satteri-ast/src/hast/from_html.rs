@@ -10,18 +10,18 @@ use std::cell::{Cell, Ref, RefCell};
 use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::{
-    parse_document, parse_fragment, tree_builder::TreeBuilderOpts, Attribute, LocalName, Namespace,
-    ParseOpts, QualName,
+    Attribute, LocalName, Namespace, ParseOpts, QualName, parse_document, parse_fragment,
+    tree_builder::TreeBuilderOpts,
 };
 use satteri_arena::{Arena, ArenaBuilder, Hast, StringRef};
-use satteri_property_info::{find_property, PropKind};
+use satteri_property_info::{PropKind, find_property};
 
+use crate::hast::HastNodeType;
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
     encode_element_data,
 };
 use crate::hast::render::{is_void_element, render_node_inner};
-use crate::hast::HastNodeType;
 #[cfg(feature = "mdx")]
 use crate::mdast::codec::{
     decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,

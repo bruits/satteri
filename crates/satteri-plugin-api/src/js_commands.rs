@@ -23,9 +23,9 @@
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
 use satteri_ast::commands::CommandError;
 use satteri_ast::hast::codec::decode_element_tag;
-use satteri_ast::hast::{is_void_element, HastNodeType};
-use satteri_ast::mdast::codec::*;
+use satteri_ast::hast::{HastNodeType, is_void_element};
 use satteri_ast::mdast::MdastNodeType;
+use satteri_ast::mdast::codec::*;
 use satteri_ast::patch::{Patch, PatchContent, REF_NODE_TYPE};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD};
@@ -33,7 +33,7 @@ use satteri_ast::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP, PROP_STRING,
 };
 
-use crate::generated::prop_slots::{mdast_prop_slot, MdastPropSlot};
+use crate::generated::prop_slots::{MdastPropSlot, mdast_prop_slot};
 use crate::generated::wire_constants::*;
 
 struct BufReader<'a> {
@@ -339,8 +339,8 @@ fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u3
 // Generated per-type arena encoder, driven by the node registry. See
 // `crates/satteri-layout-codegen`.
 use crate::generated::encode::{
-    encode_hast_tail_from_ops, encode_mdast_tail_from_ops, encode_mdast_type_data_from_ops,
-    MAX_FIXED_TYPE_DATA,
+    MAX_FIXED_TYPE_DATA, encode_hast_tail_from_ops, encode_mdast_tail_from_ops,
+    encode_mdast_type_data_from_ops,
 };
 
 pub(crate) fn alloc_opt_str<K: ArenaKind>(

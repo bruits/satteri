@@ -1,16 +1,16 @@
 //! Convert an MDAST arena to a HAST arena.
 
 use rustc_hash::FxHashMap;
-use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, StringRef, decode_string_ref_data};
 
-use crate::hast::codec::encode_element_data_into;
 use crate::hast::HastNodeType;
+use crate::hast::codec::encode_element_data_into;
 use crate::mdast::{
-    decode_code_data, decode_custom_data, decode_definition_data, decode_description_details_data,
-    decode_footnote_definition_data, decode_heading_data, decode_image_data,
-    decode_image_reference_alt, decode_link_data, decode_list_data, decode_list_item_data,
-    decode_math_data, decode_reference_data, decode_table_alignments, ColumnAlign, ListItemData,
-    MdastNodeType,
+    ColumnAlign, ListItemData, MdastNodeType, decode_code_data, decode_custom_data,
+    decode_definition_data, decode_description_details_data, decode_footnote_definition_data,
+    decode_heading_data, decode_image_data, decode_image_reference_alt, decode_link_data,
+    decode_list_data, decode_list_item_data, decode_math_data, decode_reference_data,
+    decode_table_alignments,
 };
 #[cfg(feature = "mdx")]
 use crate::mdast::{
@@ -2469,7 +2469,7 @@ mod hast_convert_tests {
         arena.set_node_data(node_id, json.as_bytes().to_vec());
     }
 
-    use crate::hast::{hast_arena_to_html, HastNodeType};
+    use crate::hast::{HastNodeType, hast_arena_to_html};
 
     fn parse_md(source: &str) -> Arena<Mdast> {
         let (arena, _) =

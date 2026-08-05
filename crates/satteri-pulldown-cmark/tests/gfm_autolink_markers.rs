@@ -1,7 +1,7 @@
 //! A deferred autolink marker must never reach `arena_build`; a `debug_assert`
 //! there panics if one does, so rendering under a debug build is the check.
 
-use satteri_pulldown_cmark::{parse, Options};
+use satteri_pulldown_cmark::{Options, parse};
 
 fn html(input: &str) -> String {
     let (arena, _) = parse(input, Options::ENABLE_GFM | Options::ENABLE_MATH);
