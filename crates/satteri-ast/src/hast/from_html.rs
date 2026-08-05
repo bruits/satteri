@@ -117,7 +117,7 @@ impl StitchRecognizer {
         claimed
             .iter()
             .enumerate()
-            .filter(|(_, &was_claimed)| !was_claimed)
+            .filter(|&(_, &was_claimed)| !was_claimed)
             .map(|(index, _)| format!("{}{}", self.prefix, index))
             .collect()
     }

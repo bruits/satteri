@@ -3250,7 +3250,7 @@ where
     }
 
     /// Provides an iterator over all the document's reference definitions.
-    pub fn iter(&'s self) -> impl Iterator<Item = (&'s str, &'s LinkDef<'input>)> {
+    pub fn iter(&'s self) -> impl Iterator<Item = (&'s str, &'s LinkDef<'input>)> + use<'s, 'input> {
         self.0.iter().map(|(k, v)| (k.as_ref(), v))
     }
 }

@@ -2088,7 +2088,7 @@ fn emit_gfm_footnotes_section(
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
+            .find(|&(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
             .map(|(i, _)| i);
 
         let total_refs = ctx

@@ -530,7 +530,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     end: after_marker_index, // will get updated later if item not empty
                     body: ItemBody::DefinitionListDefinition(indent, loose),
                 });
-                if let Some(ItemBody::DefinitionList(ref mut is_tight)) =
+                if let Some(ItemBody::DefinitionList(is_tight)) =
                     self.tree.peek_up().map(|cur| &mut self.tree[cur].item.body)
                 {
                     if self.last_line_blank {
