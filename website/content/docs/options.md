@@ -11,8 +11,8 @@ Options for Sätteri's [entry points](/docs/entry-points/). `CompileOptions` is 
 
 | Option         | Type              | Notes                                                                                         |
 | -------------- | ----------------- | --------------------------------------------------------------------------------------------- |
-| `mdastPlugins` | `MdastPluginList` | MDAST plugins, factories that return one, or arrays of either. See [Plugins](/docs/plugins/). |
-| `hastPlugins`  | `HastPluginList`  | HAST plugins, factories, or arrays of either.                                                 |
+| `mdastPlugins` | `MdastPluginList` | MDAST-stage plugins. See [What an entry can be](/docs/plugins/#what-an-entry-can-be).         |
+| `hastPlugins`  | `HastPluginList`  | HAST-stage plugins, same entry shapes as `mdastPlugins`.                                      |
 | `features`     | `Features`        | Parser extensions. See [Features](/docs/features/).                                           |
 | `fileURL`      | `URL`             | The document's URL, surfaced to plugins as `ctx.fileURL`.                                     |
 | `data`         | `Data`            | Initial [data bag](#data).                                                                    |

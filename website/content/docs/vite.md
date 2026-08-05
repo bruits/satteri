@@ -89,15 +89,7 @@ By default, the plugin compiles MDX with `development: true` in `serve` so React
 
 `MdxOptions` mirrors Sätteri's MDX options minus `outputFormat`. The plugin always emits an ES module so Vite can import it.
 
-Plugins given here apply to every Markdown and MDX file, unless a plugin opts out of one. Pass a factory instead of a definition and it is called for each file with that file's `fileURL`, `sourceFormat` and `source`; returning `null` leaves the plugin out for that file:
-
-```js
-satteri({
-  mdastPlugins: [(ctx) => (ctx.sourceFormat === "mdx" ? mdxOnlyPlugin : null)],
-});
-```
-
-See the [Plugins](/docs/plugins/) guide for how to write them.
+Plugins given here apply to every Markdown and MDX file, unless an entry opts out of one — see [What an entry can be](/docs/plugins/#what-an-entry-can-be) for how a plugin limits itself to some files, and the [Plugins](/docs/plugins/) guide for how to write them.
 
 ## TypeScript
 

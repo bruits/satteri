@@ -27,37 +27,18 @@ const plugin = defineMdastPlugin({
 
 ### Passing plugins
 
-`mdastPlugins` and `hastPlugins` accept either a plugin definition or a factory that returns one. Use a factory when the plugin closes over per-document state.
+`mdastPlugins` and `hastPlugins` take a list of entries. An entry is a definition, a factory returning one, a bundle of entries, or a skip value:
 
 ```ts
-type MdastPluginInput = MdastPluginDefinition | (() => MdastPluginDefinition);
-type HastPluginInput = HastPluginDefinition | (() => HastPluginDefinition);
-```
-
-Factories are called once per invocation, so closures reset between documents.
-
-An entry may also be an array of entries, at any depth, so a package can export a bundle of plugins that is passed straight through:
-
-```ts
-type MdastPluginEntry =
-  | MdastPluginDefinition
-  | ((ctx: PluginFactoryContext) => MdastPluginEntry)
-  | readonly MdastPluginEntry[]
-  | null
-  | undefined
-  | false;
+type MdastPluginEntry = MdastPluginDefinition | ((ctx: PluginFactoryContext) => MdastPluginEntry) | readonly MdastPluginEntry[] | null | undefined | false;
 type MdastPluginList = readonly MdastPluginEntry[];
 ```
 
-```js
-import { typography } from "some-package"; // an array of plugins
+`HastPluginEntry` and `HastPluginList` are the HAST-side equivalents. The shapes compose: a factory may return a bundle, a bundle may contain factories, and a skip value is accepted wherever an entry is.
 
-markdownToHtml(source, { mdastPlugins: [typography, myPlugin] });
-```
+**A definition** is used as-is for every document. Reach for one whenever the plugin keeps no state between compiles.
 
-The bundle's plugins run in their own order, at the bundle's position — the list above is equivalent to spreading `typography` in place. `HastPluginEntry` and `HastPluginList` are the HAST-side equivalents.
-
-A factory may return a bundle as well as a single plugin. That is how a preset gives its plugins state that is shared between them but still reset per document:
+**A factory** is a function called once per compile, so anything it closes over resets for each document. It may return a bundle as well as a single plugin, which is how a preset gives its plugins state that they share with each other but that still resets per document:
 
 ```js
 const headingAnchors = () => {
@@ -68,9 +49,23 @@ const headingAnchors = () => {
 markdownToHtml(source, { mdastPlugins: [headingAnchors] });
 ```
 
-### Running a plugin only on some documents
+**A bundle** is an array of entries, nested as deeply as you like, so a package can export a group of plugins that is passed without spreading:
 
-A factory is handed a context describing the document about to be compiled, and may return `null`, `undefined` or `false` to leave the plugin out for that document:
+```js
+import { typography } from "some-package"; // an array of plugins
+
+markdownToHtml(source, { mdastPlugins: [typography, myPlugin] });
+```
+
+The bundle's plugins run in their own order, at the bundle's position — the list above is equivalent to spreading `typography` in place.
+
+**A skip value** — `null`, `undefined` or `false` — leaves that entry out, so a condition can go straight in the list:
+
+```js
+markdownToHtml(source, { mdastPlugins: [isDev && debugPlugin, myPlugin] });
+```
+
+A factory can return a skip value too, which is how one plugin runs on some documents and not others. Every factory is handed a context describing the document about to be compiled:
 
 ```ts
 interface PluginFactoryContext {
@@ -82,23 +77,14 @@ interface PluginFactoryContext {
 ```
 
 ```js
-const onlyChangelogs = (ctx) =>
-  ctx.fileURL?.pathname.endsWith("/CHANGELOG.md") ? rewriteVersions : null;
+const onlyChangelogs = (ctx) => (ctx.fileURL?.pathname.endsWith("/CHANGELOG.md") ? rewriteVersions : null);
 
 markdownToHtml(source, { mdastPlugins: [onlyChangelogs, myPlugin] });
 ```
 
 Only what is known before parsing is available — there is no tree and no frontmatter yet. `source` is the unparsed document, meant for cheap checks such as "does this contain a code fence at all", not for parsing Markdown by hand.
 
-Deciding here rather than inside a visitor is what makes the skip worth doing: a plugin that is never added does not register visitors, and the pipeline picks its parsing and rendering strategy from the plugins that remain. A document that gates every plugin off is compiled by the same fast path as one that was passed no plugins, and position tracking is skipped unless a plugin that actually runs asks for it.
-
-The skip values work anywhere an entry does, so a list can be assembled inline:
-
-```js
-markdownToHtml(source, { mdastPlugins: [isDev && debugPlugin, myPlugin] });
-```
-
-A factory returning a skip value drops the whole bundle it would otherwise have returned, so a preset can enable or disable itself as a unit. Factories still run once per compile even when they skip, so keep them cheap.
+Skipping here rather than returning early inside a visitor is what makes it worth doing: a plugin that is never added registers no visitors, and the pipeline picks its parsing and rendering strategy from the plugins that remain. A document that skips every plugin is compiled by the same fast path as one that was passed no plugins, and position tracking is skipped unless a plugin that actually runs asks for it. A factory returning a skip value drops the whole bundle it would otherwise have returned, so a preset can enable or disable itself as a unit — but factories run once per compile even when they skip, so keep them cheap.
 
 ### Source positions
 
