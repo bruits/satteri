@@ -1192,15 +1192,14 @@ fn build_raw_map(
         });
     };
     let extend_one_to_one = |segs: &mut Vec<Seg>, r: usize, d: usize| {
-        if let Some(last) = segs.last_mut() {
-            if last.is_one_to_one()
-                && (last.d_start + last.d_len) as usize == d
-                && (last.r_start + last.r_len) as usize == r_start + r
-            {
-                last.d_len += 1;
-                last.r_len += 1;
-                return;
-            }
+        if let Some(last) = segs.last_mut()
+            && last.is_one_to_one()
+            && (last.d_start + last.d_len) as usize == d
+            && (last.r_start + last.r_len) as usize == r_start + r
+        {
+            last.d_len += 1;
+            last.r_len += 1;
+            return;
         }
         segs.push(Seg {
             d_start: d as u32,
@@ -1240,23 +1239,24 @@ fn build_raw_map(
         match raw[r] {
             b'&' => {
                 let (len, value) = crate::scanners::scan_entity(&raw[r..]);
-                if let Some(value) = value {
-                    if dec[d..].starts_with(value.as_bytes()) {
-                        push_atomic(&mut segs, r, len, d, value.len());
-                        r += len;
-                        d += value.len();
-                        continue;
-                    }
+                if let Some(value) = value
+                    && dec[d..].starts_with(value.as_bytes())
+                {
+                    push_atomic(&mut segs, r, len, d, value.len());
+                    r += len;
+                    d += value.len();
+                    continue;
                 }
             }
             b'\\' => {
-                if let Some(&next) = raw.get(r + 1) {
-                    if next.is_ascii_punctuation() && dec.get(d) == Some(&next) {
-                        push_atomic(&mut segs, r, 2, d, 1);
-                        r += 2;
-                        d += 1;
-                        continue;
-                    }
+                if let Some(&next) = raw.get(r + 1)
+                    && next.is_ascii_punctuation()
+                    && dec.get(d) == Some(&next)
+                {
+                    push_atomic(&mut segs, r, 2, d, 1);
+                    r += 2;
+                    d += 1;
+                    continue;
                 }
             }
             b'\r' if raw.get(r + 1) == Some(&b'\n') && dec.get(d) == Some(&b'\n') => {

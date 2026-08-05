@@ -202,14 +202,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             let content_probe = start_ix + line_start.bytes_scanned();
             let has_content =
                 content_probe < bytes.len() && scan_blank_line(&bytes[content_probe..]).is_none();
-            if has_content {
-                if let Some(up) = self.tree.peek_up() {
-                    if let ItemBody::ListItem(_, _) = self.tree[up].item.body {
-                        if self.tree[up].child.is_some() {
-                            self.mark_enclosing_listitem_spread();
-                        }
-                    }
-                }
+            if has_content
+                && let Some(up) = self.tree.peek_up()
+                && let ItemBody::ListItem(_, _) = self.tree[up].item.body
+                && self.tree[up].child.is_some()
+            {
+                self.mark_enclosing_listitem_spread();
             }
         }
 
@@ -532,11 +530,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 });
                 if let Some(ItemBody::DefinitionList(is_tight)) =
                     self.tree.peek_up().map(|cur| &mut self.tree[cur].item.body)
+                    && self.last_line_blank
                 {
-                    if self.last_line_blank {
-                        *is_tight = false;
-                        self.last_line_blank = false;
-                    }
+                    *is_tight = false;
+                    self.last_line_blank = false;
                 }
                 self.tree.push();
                 if let Some(n) = scan_blank_line(&bytes[after_marker_index..]) {
@@ -839,17 +836,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Metadata blocks cannot be indented, and — matching remark-frontmatter
         // — only match at the very start of the document. `doc_start` is 0
         // normally, or 3 when a UTF-8 BOM was stripped.
-        if indent == 0 && ix == self.doc_start && self.tree.spine_len() == 0 {
-            if let Some((_n, metadata_block_ch)) = scan_metadata_block(
+        if indent == 0
+            && ix == self.doc_start
+            && self.tree.spine_len() == 0
+            && let Some((_n, metadata_block_ch)) = scan_metadata_block(
                 &bytes[ix..],
                 self.options
                     .contains(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS),
                 self.options
                     .contains(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS),
-            ) {
-                self.finish_list(start_ix);
-                return self.parse_metadata_block(ix, metadata_block_ch);
-            }
+            )
+        {
+            self.finish_list(start_ix);
+            return self.parse_metadata_block(ix, metadata_block_ch);
         }
 
         // MDX blocks, must be checked before HTML blocks since JSX looks like HTML.
@@ -865,82 +864,79 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     .tree
                     .walk_spine()
                     .all(|&ix| matches!(self.tree[ix].item.body, ItemBody::List(..)));
-            if at_root_for_esm {
-                if let Some(end_ix) = scan_mdx_esm(&bytes[ix..]) {
-                    let mut final_end = end_ix;
+            if at_root_for_esm && let Some(end_ix) = scan_mdx_esm(&bytes[ix..]) {
+                let mut final_end = end_ix;
 
-                    // If the scanned ESM block is incomplete (e.g. an export
-                    // spanning a blank line), retry across blank lines using
-                    // oxc — matching the reference mdxjs behavior.
-                    let candidate = self.text[ix..ix + final_end].trim_end();
-                    if !candidate.is_empty() {
-                        use crate::mdx::EsmParseResult;
-                        let mut allocator = oxc_allocator::Allocator::default();
-                        match crate::mdx::try_parse_esm(candidate, &mut allocator) {
-                            EsmParseResult::Complete => {}
-                            EsmParseResult::Incomplete => {
-                                let mut pos = ix + final_end;
-                                loop {
-                                    let blank_start = pos;
-                                    while pos < bytes.len()
-                                        && (bytes[pos] == b'\n'
-                                            || bytes[pos] == b'\r'
-                                            || bytes[pos] == b' '
-                                            || bytes[pos] == b'\t')
+                // If the scanned ESM block is incomplete (e.g. an export
+                // spanning a blank line), retry across blank lines using
+                // oxc — matching the reference mdxjs behavior.
+                let candidate = self.text[ix..ix + final_end].trim_end();
+                if !candidate.is_empty() {
+                    use crate::mdx::EsmParseResult;
+                    let mut allocator = oxc_allocator::Allocator::default();
+                    match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                        EsmParseResult::Complete => {}
+                        EsmParseResult::Incomplete => {
+                            let mut pos = ix + final_end;
+                            loop {
+                                let blank_start = pos;
+                                while pos < bytes.len()
+                                    && (bytes[pos] == b'\n'
+                                        || bytes[pos] == b'\r'
+                                        || bytes[pos] == b' '
+                                        || bytes[pos] == b'\t')
+                                {
+                                    pos += 1;
+                                }
+                                if pos == blank_start || pos >= bytes.len() {
+                                    break;
+                                }
+                                let chunk_start = pos;
+                                while pos < bytes.len() {
+                                    pos += scan_nextline(&bytes[pos..]);
+                                    if pos < bytes.len()
+                                        && (bytes[pos] == b'\n' || bytes[pos] == b'\r')
                                     {
-                                        pos += 1;
-                                    }
-                                    if pos == blank_start || pos >= bytes.len() {
                                         break;
-                                    }
-                                    let chunk_start = pos;
-                                    while pos < bytes.len() {
-                                        pos += scan_nextline(&bytes[pos..]);
-                                        if pos < bytes.len()
-                                            && (bytes[pos] == b'\n' || bytes[pos] == b'\r')
-                                        {
-                                            break;
-                                        }
-                                    }
-                                    if pos == chunk_start {
-                                        break;
-                                    }
-                                    final_end = pos - ix;
-                                    let candidate = self.text[ix..ix + final_end].trim_end();
-                                    match crate::mdx::try_parse_esm(candidate, &mut allocator) {
-                                        EsmParseResult::Complete => break,
-                                        EsmParseResult::Incomplete => continue,
-                                        EsmParseResult::Error => break,
                                     }
                                 }
+                                if pos == chunk_start {
+                                    break;
+                                }
+                                final_end = pos - ix;
+                                let candidate = self.text[ix..ix + final_end].trim_end();
+                                match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                                    EsmParseResult::Complete => break,
+                                    EsmParseResult::Incomplete => continue,
+                                    EsmParseResult::Error => break,
+                                }
                             }
-                            EsmParseResult::Error => {}
                         }
+                        EsmParseResult::Error => {}
                     }
-
-                    self.finish_list(start_ix);
-                    return self.parse_mdx_esm(ix, ix + final_end);
                 }
+
+                self.finish_list(start_ix);
+                return self.parse_mdx_esm(ix, ix + final_end);
             }
 
             // MDX JSX flow: line starting with `<` followed by component name or fragment
-            if bytes[ix] == b'<' {
-                if let Some(end_ix) =
+            if bytes[ix] == b'<'
+                && let Some(end_ix) =
                     self.scan_mdx_flow_in_container(ix, |b, c| scan_mdx_jsx_block(b, c))
-                {
-                    self.finish_list(start_ix);
-                    let result = self.parse_mdx_jsx_flow(ix, ix + end_ix);
-                    // A blank line inside the consumed flow block means the
-                    // enclosing list item is "loose" (spread=true). remark
-                    // detects this naturally since its tokenizer reads line-
-                    // by-line; we consume the whole block atomically, so we
-                    // have to inspect the span here.
-                    if contains_blank_line(&bytes[ix..ix + end_ix]) {
-                        self.last_line_blank = true;
-                        self.mark_enclosing_listitem_spread();
-                    }
-                    return result;
+            {
+                self.finish_list(start_ix);
+                let result = self.parse_mdx_jsx_flow(ix, ix + end_ix);
+                // A blank line inside the consumed flow block means the
+                // enclosing list item is "loose" (spread=true). remark
+                // detects this naturally since its tokenizer reads line-
+                // by-line; we consume the whole block atomically, so we
+                // have to inspect the span here.
+                if contains_blank_line(&bytes[ix..ix + end_ix]) {
+                    self.last_line_blank = true;
+                    self.mark_enclosing_listitem_spread();
                 }
+                return result;
             }
 
             // MDX expression flow: line starting with `{`
@@ -1014,11 +1010,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return self.parse_fenced_code_block(ix, indent, fence_ch, n);
         }
 
-        if self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR) {
-            if let Some(n) = scan_math_fence(&bytes[ix..]) {
-                self.finish_list(start_ix);
-                return self.parse_math_block(ix, indent, n);
-            }
+        if self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR)
+            && let Some(n) = scan_math_fence(&bytes[ix..])
+        {
+            self.finish_list(start_ix);
+            return self.parse_math_block(ix, indent, n);
         }
 
         // parse refdef
@@ -1432,19 +1428,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             };
             if !is_indented {
                 let ix_new = ix + line_start.bytes_scanned();
-                if current_container {
-                    if let Some(ix_setext) =
+                if current_container
+                    && let Some(ix_setext) =
                         self.parse_setext_heading(ix_new, node_ix, trailing_backslash_pos.is_some())
-                    {
-                        if let Some(pos) = trailing_backslash_pos {
-                            self.tree.append_text(pos, pos + 1, false);
-                        }
-                        self.pop(ix_setext);
-                        if body == ItemBody::MaybeDefinitionListTitle {
-                            self.finish_list(ix);
-                        }
-                        return ix_setext;
+                {
+                    if let Some(pos) = trailing_backslash_pos {
+                        self.tree.append_text(pos, pos + 1, false);
                     }
+                    self.pop(ix_setext);
+                    if body == ItemBody::MaybeDefinitionListTitle {
+                        self.finish_list(ix);
+                    }
+                    return ix_setext;
                 }
                 // first check for non-empty lists, then for other interrupts
                 let suffix = &bytes[ix_new..];
@@ -2034,38 +2029,36 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             .unwrap_or(start);
                         if let Some((email_start, email_end, full_url)) =
                             scan_email_forward_from_atext(bytes, ix, begin_text, paragraph_floor)
+                            && email_start >= candidate_floor
                         {
-                            if email_start >= candidate_floor {
-                                let d = AutolinkDetection {
-                                    start: email_start,
-                                    end: email_end,
-                                    link_type: LinkType::Email,
-                                    url: full_url
-                                        .strip_prefix("mailto:")
-                                        .map(str::to_owned)
-                                        .unwrap_or(full_url),
-                                };
-                                if defer_autolink_decision(bytes, paragraph_floor, ix, self.options)
-                                {
-                                    candidate_floor = email_start + 1;
-                                    // Fall through to attention handling: a
-                                    // marker that fires splices those
-                                    // delimiters away, and a blocked one
-                                    // wanted them.
-                                    self.append_autolink_marker(d, begin_text, backslash_escaped);
-                                    if email_start > begin_text {
-                                        backslash_escaped = false;
-                                    }
-                                    begin_text = email_start;
-                                } else {
-                                    candidate_floor = email_end;
-                                    self.append_autolink_link(d, begin_text, backslash_escaped);
+                            let d = AutolinkDetection {
+                                start: email_start,
+                                end: email_end,
+                                link_type: LinkType::Email,
+                                url: full_url
+                                    .strip_prefix("mailto:")
+                                    .map(str::to_owned)
+                                    .unwrap_or(full_url),
+                            };
+                            if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
+                                candidate_floor = email_start + 1;
+                                // Fall through to attention handling: a
+                                // marker that fires splices those
+                                // delimiters away, and a blocked one
+                                // wanted them.
+                                self.append_autolink_marker(d, begin_text, backslash_escaped);
+                                if email_start > begin_text {
                                     backslash_escaped = false;
-                                    begin_text = email_end;
-                                    last_inline_emission_end = email_end;
-                                    let skip = email_end.saturating_sub(ix + 1);
-                                    return LoopInstruction::ContinueAndSkip(skip);
                                 }
+                                begin_text = email_start;
+                            } else {
+                                candidate_floor = email_end;
+                                self.append_autolink_link(d, begin_text, backslash_escaped);
+                                backslash_escaped = false;
+                                begin_text = email_end;
+                                last_inline_emission_end = email_end;
+                                let skip = email_end.saturating_sub(ix + 1);
+                                return LoopInstruction::ContinueAndSkip(skip);
                             }
                         }
                     }
@@ -3067,11 +3060,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if n_containers < self.tree.spine_len() {
                 break;
             }
-            if let (_, 0) = calc_indent(&bytes[ix..], 4) {
-                if let Some(n) = scan_closing_metadata_block(&bytes[ix..], metadata_block_ch) {
-                    ix += n;
-                    break;
-                }
+            if let (_, 0) = calc_indent(&bytes[ix..], 4)
+                && let Some(n) = scan_closing_metadata_block(&bytes[ix..], metadata_block_ch)
+            {
+                ix += n;
+                break;
             }
             let remaining_space = line_start.remaining_space();
             ix += line_start.bytes_scanned();
@@ -3149,20 +3142,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     /// and end current list if it's a lone, empty item
     fn finish_list(&mut self, ix: usize) {
         self.finish_empty_list_item();
-        if let Some(node_ix) = self.tree.peek_up() {
-            if let ItemBody::List(_, _, _) | ItemBody::DefinitionList(_) =
+        if let Some(node_ix) = self.tree.peek_up()
+            && let ItemBody::List(_, _, _) | ItemBody::DefinitionList(_) =
                 self.tree[node_ix].item.body
-            {
-                self.pop(ix);
-            }
+        {
+            self.pop(ix);
         }
         if self.last_line_blank {
-            if let Some(node_ix) = self.tree.peek_grandparent() {
-                if let ItemBody::List(ref mut is_tight, _, _)
+            if let Some(node_ix) = self.tree.peek_grandparent()
+                && let ItemBody::List(ref mut is_tight, _, _)
                 | ItemBody::DefinitionList(ref mut is_tight) = self.tree[node_ix].item.body
-                {
-                    *is_tight = false;
-                }
+            {
+                *is_tight = false;
             }
             self.last_line_blank = false;
         }
@@ -3179,16 +3170,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     fn finish_empty_list_item(&mut self) {
-        if let Some(begin_list_item) = self.begin_list_item {
-            if self.last_line_blank {
-                // A list item can begin with at most one blank line.
-                if let Some(node_ix) = self.tree.peek_up() {
-                    if let ItemBody::ListItem(_, _) | ItemBody::DefinitionListDefinition(..) =
-                        self.tree[node_ix].item.body
-                    {
-                        self.pop(begin_list_item);
-                    }
-                }
+        if let Some(begin_list_item) = self.begin_list_item
+            && self.last_line_blank
+        {
+            // A list item can begin with at most one blank line.
+            if let Some(node_ix) = self.tree.peek_up()
+                && let ItemBody::ListItem(_, _) | ItemBody::DefinitionListDefinition(..) =
+                    self.tree[node_ix].item.body
+            {
+                self.pop(begin_list_item);
             }
         }
         self.begin_list_item = None;
@@ -3199,14 +3189,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     fn continue_list(&mut self, start: usize, ch: u8, index: u64) {
         self.finish_empty_list_item();
         if let Some(node_ix) = self.tree.peek_up() {
-            if let ItemBody::List(ref mut is_tight, existing_ch, _) = self.tree[node_ix].item.body {
-                if existing_ch == ch {
-                    if self.last_line_blank {
-                        *is_tight = false;
-                        self.last_line_blank = false;
-                    }
-                    return;
+            if let ItemBody::List(ref mut is_tight, existing_ch, _) = self.tree[node_ix].item.body
+                && existing_ch == ch
+            {
+                if self.last_line_blank {
+                    *is_tight = false;
+                    self.last_line_blank = false;
                 }
+                return;
             }
             // TODO: this is not the best choice for end; maybe get end from last list item.
             self.finish_list(start);
@@ -3383,11 +3373,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
         i += 1;
         self.finish_list(start);
-        if let Some(node_ix) = self.tree.peek_up() {
-            if let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body {
-                // finish previous footnote if it's still open
-                self.pop(start);
-            }
+        if let Some(node_ix) = self.tree.peek_up()
+            && let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body
+        {
+            // finish previous footnote if it's still open
+            self.pop(start);
         }
         i += scan_space_or_tab(&bytes[i..]);
         self.allocs
@@ -3542,10 +3532,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
                 b'\\' => {
                     bytecount += 1;
-                    if let Some(c) = bytes.get(bytecount) {
-                        if c != &b'\r' && c != &b'\n' {
-                            bytecount += 1;
-                        }
+                    if let Some(c) = bytes.get(bytecount)
+                        && c != &b'\r'
+                        && c != &b'\n'
+                    {
+                        bytecount += 1;
                     }
                 }
                 c if c == closing_delim => {
@@ -3828,12 +3819,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let mut spans: Vec<(usize, usize)> = Vec::new();
         let mut i = header_start;
         while i < header_end {
-            if bytes[i] == b':' {
-                if let Some(end) = scan_heading_text_directive(self.text, bytes, i, header_end) {
-                    spans.push((i, end));
-                    i = end;
-                    continue;
-                }
+            if bytes[i] == b':'
+                && let Some(end) = scan_heading_text_directive(self.text, bytes, i, header_end)
+            {
+                spans.push((i, end));
+                i = end;
+                continue;
             }
             i += 1;
         }
@@ -4714,10 +4705,10 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize, has_math: bool) -> boo
             offset = i + 1;
             continue;
         }
-        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..]) {
-            if pos + len > ix {
-                return true;
-            }
+        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..])
+            && pos + len > ix
+        {
+            return true;
         }
         offset = i + 1;
     }
@@ -4772,10 +4763,10 @@ fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
             i = j + 2;
             continue;
         }
-        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[j..]) {
-            if j + len > pos {
-                return true;
-            }
+        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[j..])
+            && j + len > pos
+        {
+            return true;
         }
         i = j + 1;
     }
@@ -4976,12 +4967,11 @@ fn detect_gfm_autolink(
             }
             // GFM registers the email construct ahead of www at the same
             // offset, so an `@` the www span would swallow wins instead.
-            if is_www {
-                if let Some(email) =
+            if is_www
+                && let Some(email) =
                     detect_email_inside_www(bytes, ix, end, paragraph_start, begin_text)
-                {
-                    return Some(email);
-                }
+            {
+                return Some(email);
             }
             Some(AutolinkDetection {
                 start,
@@ -5330,21 +5320,23 @@ fn parse_directive_after_colons<'a>(
     let mut label_end = 0usize;
 
     // Label (no space allowed between name and [)
-    if pos < bytes.len() && bytes[pos] == b'[' {
-        if let Some((ls, le, consumed)) = scan_directive_label(&bytes[pos..]) {
-            label_start = pos + ls;
-            label_end = pos + le;
-            pos += consumed;
-        }
+    if pos < bytes.len()
+        && bytes[pos] == b'['
+        && let Some((ls, le, consumed)) = scan_directive_label(&bytes[pos..])
+    {
+        label_start = pos + ls;
+        label_end = pos + le;
+        pos += consumed;
     }
 
     // Attributes (no space allowed between label/name and {)
     let mut attributes = Vec::new();
-    if pos < bytes.len() && bytes[pos] == b'{' {
-        if let Some((attrs, consumed)) = scan_directive_attributes(&bytes[pos..]) {
-            attributes = attrs;
-            pos += consumed;
-        }
+    if pos < bytes.len()
+        && bytes[pos] == b'{'
+        && let Some((attrs, consumed)) = scan_directive_attributes(&bytes[pos..])
+    {
+        attributes = attrs;
+        pos += consumed;
     }
 
     Some((

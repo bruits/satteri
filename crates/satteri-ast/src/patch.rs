@@ -933,10 +933,8 @@ fn apply_patches_impl<K: ArenaKind>(
     }
     // Strict callers reject stranded patches here, before the first arena
     // mutation, so the arena survives the error untouched.
-    if strict {
-        if let Some(&anchor) = dropped_set.iter().min() {
-            return Err(CommandError::PatchOnRemovedSubtree(anchor));
-        }
+    if strict && let Some(&anchor) = dropped_set.iter().min() {
+        return Err(CommandError::PatchOnRemovedSubtree(anchor));
     }
 
     // Referring anchors wait for the target's patches and patches inside it.

@@ -2382,12 +2382,12 @@ fn convert_mdx_jsx_element(
     builder.set_data_current(&encoded);
     // Propagate `node_data` (e.g. `_mdxExplicitJsx` for source-parsed nodes,
     // or any other plugin-attached metadata) from mdast to hast.
-    if let Some(mdast_nd) = view.get_node_data(node_id) {
-        if !mdast_nd.is_empty() {
-            let id = builder.current_node_id();
-            let copy = mdast_nd.to_vec();
-            builder.arena_mut().set_node_data(id, copy);
-        }
+    if let Some(mdast_nd) = view.get_node_data(node_id)
+        && !mdast_nd.is_empty()
+    {
+        let id = builder.current_node_id();
+        let copy = mdast_nd.to_vec();
+        builder.arena_mut().set_node_data(id, copy);
     }
     copy_position(node_id, view, builder);
 

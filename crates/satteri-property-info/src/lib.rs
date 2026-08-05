@@ -111,10 +111,8 @@ pub fn property_to_attribute(name: &str, in_svg: bool) -> Cow<'_, str> {
     }
     // Schema lookup must beat the generic `data-*` fallback: `dataType` is a
     // real SVG attribute (→ `datatype`), not a custom `data-type`.
-    if in_svg {
-        if let Some(attr) = attribute_of(name, true) {
-            return Cow::Borrowed(attr);
-        }
+    if in_svg && let Some(attr) = attribute_of(name, true) {
+        return Cow::Borrowed(attr);
     }
     if let Some(rest) = strip_namespace_prefix(name, "data") {
         return Cow::Owned(format_data_attribute(rest));

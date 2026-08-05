@@ -456,20 +456,20 @@ fn parse_inner(
                         // spread computation — mirrors the regular-close
                         // arm's blockquote handling but inline here since
                         // ListItem close has its own arm. See §B.
-                        if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last() {
-                            if snap_kind == MdastNodeType::ListItem {
-                                container_jsx_snapshot.pop();
-                                while jsx_stack.len() > snap_len {
-                                    let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
-                                    let loc = byte_offset_to_line_col(source, offset as usize);
-                                    mdx_errors.push((
+                        if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last()
+                            && snap_kind == MdastNodeType::ListItem
+                        {
+                            container_jsx_snapshot.pop();
+                            while jsx_stack.len() > snap_len {
+                                let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
+                                let loc = byte_offset_to_line_col(source, offset as usize);
+                                mdx_errors.push((
                                         offset as usize,
                                         format!(
                                             "Expected a closing tag for `<{name}>` ({loc}) before the end of `listItem`"
                                         ),
                                     ));
-                                    builder.close_node();
-                                }
+                                builder.close_node();
                             }
                         }
                         let id = builder.current_node_id();
@@ -679,20 +679,19 @@ fn parse_inner(
                             ItemBody::Paragraph
                                 | ItemBody::TightParagraph
                                 | ItemBody::DirectiveLabel
-                        ) {
-                            if let Some(opened_at) = paragraph_open_depth.pop() {
-                                while builder.stack_depth() > opened_at {
-                                    if let Some((name, offset, _is_flow)) = jsx_stack.pop() {
-                                        let loc = byte_offset_to_line_col(source, offset as usize);
-                                        mdx_errors.push((
+                        ) && let Some(opened_at) = paragraph_open_depth.pop()
+                        {
+                            while builder.stack_depth() > opened_at {
+                                if let Some((name, offset, _is_flow)) = jsx_stack.pop() {
+                                    let loc = byte_offset_to_line_col(source, offset as usize);
+                                    mdx_errors.push((
                                             offset as usize,
                                             format!(
                                                 "Expected a closing tag for `<{name}>` ({loc}) before the end of `paragraph`"
                                             ),
                                         ));
-                                    }
-                                    builder.close_node();
                                 }
+                                builder.close_node();
                             }
                         }
                         // Drain unclosed JSX opens that were pushed inside a
@@ -704,27 +703,26 @@ fn parse_inner(
                             ItemBody::ListItem(..) => Some(MdastNodeType::ListItem),
                             _ => None,
                         };
-                        if let Some(kind) = container_kind_for_drain {
-                            if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last() {
-                                if snap_kind == kind {
-                                    container_jsx_snapshot.pop();
-                                    while jsx_stack.len() > snap_len {
-                                        let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
-                                        let loc = byte_offset_to_line_col(source, offset as usize);
-                                        let container_label = match kind {
-                                            MdastNodeType::Blockquote => "blockQuote",
-                                            MdastNodeType::ListItem => "listItem",
-                                            _ => "container",
-                                        };
-                                        mdx_errors.push((
+                        if let Some(kind) = container_kind_for_drain
+                            && let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last()
+                            && snap_kind == kind
+                        {
+                            container_jsx_snapshot.pop();
+                            while jsx_stack.len() > snap_len {
+                                let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
+                                let loc = byte_offset_to_line_col(source, offset as usize);
+                                let container_label = match kind {
+                                    MdastNodeType::Blockquote => "blockQuote",
+                                    MdastNodeType::ListItem => "listItem",
+                                    _ => "container",
+                                };
+                                mdx_errors.push((
                                             offset as usize,
                                             format!(
                                                 "Expected a closing tag for `<{name}>` ({loc}) before the end of `{container_label}`"
                                             ),
                                         ));
-                                        builder.close_node();
-                                    }
-                                }
+                                builder.close_node();
                             }
                         }
                         let id = builder.current_node_id();
@@ -975,13 +973,12 @@ fn parse_inner(
                         builder.set_data_current(&[depth]);
                         // Conveyed as `data.hProperties`, which the mdast->hast
                         // pass emits as `id`/`class`/custom attributes.
-                        if let Some(heading_ix) = heading_ix {
-                            if let Some(json) =
+                        if let Some(heading_ix) = heading_ix
+                            && let Some(json) =
                                 encode_heading_h_properties(&inner.allocs[heading_ix])
-                            {
-                                let heading_id = builder.current_node_id();
-                                builder.arena_mut().set_node_data(heading_id, json);
-                            }
+                        {
+                            let heading_id = builder.current_node_id();
+                            builder.arena_mut().set_node_data(heading_id, json);
                         }
                         inner.tree.push();
                     }
@@ -1724,20 +1721,19 @@ fn parse_inner(
                         let checked_val = if checked { 1 } else { 0 };
                         let depth = builder.stack_depth();
                         for i in (0..depth).rev() {
-                            if let Some(node_id) = builder.stack_node_id(i) {
-                                if builder.arena_ref().get_node(node_id).node_type
+                            if let Some(node_id) = builder.stack_node_id(i)
+                                && builder.arena_ref().get_node(node_id).node_type
                                     == MdastNodeType::ListItem as u8
-                                {
-                                    let prev = builder.arena_ref().get_type_data(node_id).to_vec();
-                                    let prev_spread = prev.get(1).copied().unwrap_or(0) != 0;
-                                    let data = ListItemData {
-                                        checked: checked_val,
-                                        spread: prev_spread,
-                                    }
-                                    .to_bytes();
-                                    builder.arena_mut().set_type_data(node_id, &data);
-                                    break;
+                            {
+                                let prev = builder.arena_ref().get_type_data(node_id).to_vec();
+                                let prev_spread = prev.get(1).copied().unwrap_or(0) != 0;
+                                let data = ListItemData {
+                                    checked: checked_val,
+                                    spread: prev_spread,
                                 }
+                                .to_bytes();
+                                builder.arena_mut().set_type_data(node_id, &data);
+                                break;
                             }
                         }
                         inner.tree.next_sibling(cur_ix);

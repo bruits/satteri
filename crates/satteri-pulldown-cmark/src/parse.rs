@@ -963,12 +963,11 @@ impl<'input> ParserInner<'input> {
                             // stale — clear it so arena_build doesn't extend
                             // the text node's source span back over bytes the
                             // link now owns. Mirrors the inline-link fix.
-                            if new_start > orig_start {
-                                if let ItemBody::Text { backslash_escaped } =
+                            if new_start > orig_start
+                                && let ItemBody::Text { backslash_escaped } =
                                     &mut self.tree[node_ix].item.body
-                                {
-                                    *backslash_escaped = false;
-                                }
+                            {
+                                *backslash_escaped = false;
                             }
                         }
                         continue;
@@ -1003,12 +1002,11 @@ impl<'input> ParserInner<'input> {
                                 // an attribute value). Clear the stale flag
                                 // so arena_build doesn't extend the trail
                                 // back over bytes the HTML now owns.
-                                if new_start > orig_start {
-                                    if let ItemBody::Text { backslash_escaped } =
+                                if new_start > orig_start
+                                    && let ItemBody::Text { backslash_escaped } =
                                         &mut self.tree[node_ix].item.body
-                                    {
-                                        *backslash_escaped = false;
-                                    }
+                                {
+                                    *backslash_escaped = false;
                                 }
                             }
                             continue;
@@ -1319,11 +1317,10 @@ impl<'input> ParserInner<'input> {
                                 matches!(self.tree[ix].item.body, ItemBody::MaybeLinkClose(..))
                             })
                             .unwrap_or(false)
+                        && let Some(node) = self.handle_wikilink(block_text, cur_ix, prev)
                     {
-                        if let Some(node) = self.handle_wikilink(block_text, cur_ix, prev) {
-                            cur = self.tree[node].next;
-                            continue;
-                        }
+                        cur = self.tree[node].next;
+                        continue;
                     }
                     if let Some(tos) = tos_link {
                         // skip rendering if already in a link, unless its an
@@ -1372,12 +1369,11 @@ impl<'input> ParserInner<'input> {
                                 // arena-build position fixup doesn't extend
                                 // the text node's source span back over
                                 // bytes already owned by the link.
-                                if new_start > orig_start {
-                                    if let ItemBody::Text { backslash_escaped } =
+                                if new_start > orig_start
+                                    && let ItemBody::Text { backslash_escaped } =
                                         &mut self.tree[next_node_ix].item.body
-                                    {
-                                        *backslash_escaped = false;
-                                    }
+                                {
+                                    *backslash_escaped = false;
                                 }
                             }
 
@@ -1397,39 +1393,37 @@ impl<'input> ParserInner<'input> {
                                 &self.text[first_bracket_start..first_bracket_end];
                             if let Some((_, ReferenceLabel::Footnote(footlabel))) =
                                 scan_link_label(&self.tree, first_bracket_text, self.options)
+                                && self.allocs.footdefs.contains(&footlabel)
                             {
-                                if self.allocs.footdefs.contains(&footlabel) {
-                                    let footref = self.allocs.allocate_cow(footlabel);
-                                    if let Some(def) = self
-                                        .allocs
-                                        .footdefs
-                                        .get_mut(self.allocs.cows[footref.0].to_owned())
-                                    {
-                                        def.use_count += 1;
-                                    }
-                                    let footnote_ix = if tos.ty == LinkStackTy::Image {
-                                        self.tree[tos.node].next = Some(cur_ix);
-                                        self.tree[tos.node].child = None;
-                                        self.tree[tos.node].item.body =
-                                            ItemBody::SynthesizeChar('!');
-                                        self.tree[cur_ix].item.start =
-                                            self.tree[tos.node].item.start + 1;
-                                        self.tree[tos.node].item.end =
-                                            self.tree[tos.node].item.start + 1;
-                                        cur_ix
-                                    } else {
-                                        tos.node
-                                    };
-                                    self.tree[footnote_ix].next = next;
-                                    self.tree[footnote_ix].child = None;
-                                    self.tree[footnote_ix].item.body =
-                                        ItemBody::FootnoteReference(footref);
-                                    self.tree[footnote_ix].item.end = first_bracket_end;
-                                    prev = Some(footnote_ix);
-                                    cur = next;
-                                    self.link_stack.clear();
-                                    continue;
+                                let footref = self.allocs.allocate_cow(footlabel);
+                                if let Some(def) = self
+                                    .allocs
+                                    .footdefs
+                                    .get_mut(self.allocs.cows[footref.0].to_owned())
+                                {
+                                    def.use_count += 1;
                                 }
+                                let footnote_ix = if tos.ty == LinkStackTy::Image {
+                                    self.tree[tos.node].next = Some(cur_ix);
+                                    self.tree[tos.node].child = None;
+                                    self.tree[tos.node].item.body = ItemBody::SynthesizeChar('!');
+                                    self.tree[cur_ix].item.start =
+                                        self.tree[tos.node].item.start + 1;
+                                    self.tree[tos.node].item.end =
+                                        self.tree[tos.node].item.start + 1;
+                                    cur_ix
+                                } else {
+                                    tos.node
+                                };
+                                self.tree[footnote_ix].next = next;
+                                self.tree[footnote_ix].child = None;
+                                self.tree[footnote_ix].item.body =
+                                    ItemBody::FootnoteReference(footref);
+                                self.tree[footnote_ix].item.end = first_bracket_end;
+                                prev = Some(footnote_ix);
+                                cur = next;
+                                self.link_stack.clear();
+                                continue;
                             }
                             // ok, so its not an inline link. maybe it is a reference
                             // to a defined link?
@@ -1580,60 +1574,58 @@ impl<'input> ParserInner<'input> {
                                     self.link_stack.clear();
                                     continue;
                                 }
-                            } else if let Some((ReferenceLabel::Link(link_label), end)) = label {
-                                if let Some((def_link_type, url, title)) = self
+                            } else if let Some((ReferenceLabel::Link(link_label), end)) = label
+                                && let Some((def_link_type, url, title)) = self
                                     .fetch_link_type_url_title(
                                         link_label,
                                         (self.tree[tos.node].item.start)..end,
                                         link_type,
                                         callbacks,
                                     )
-                                {
-                                    let link_ix =
-                                        self.allocs.allocate_link(def_link_type, url, title, id);
-                                    self.tree[tos.node].item.body = if tos.ty == LinkStackTy::Image
-                                    {
-                                        ItemBody::Image(link_ix)
-                                    } else {
-                                        ItemBody::Link(link_ix)
-                                    };
-                                    let label_node = self.tree[tos.node].next;
+                            {
+                                let link_ix =
+                                    self.allocs.allocate_link(def_link_type, url, title, id);
+                                self.tree[tos.node].item.body = if tos.ty == LinkStackTy::Image {
+                                    ItemBody::Image(link_ix)
+                                } else {
+                                    ItemBody::Link(link_ix)
+                                };
+                                let label_node = self.tree[tos.node].next;
 
-                                    // lets do some tree surgery to add the link to the tree
-                                    // 1st: skip the label node and close node
-                                    self.tree[tos.node].next = node_after_link;
+                                // lets do some tree surgery to add the link to the tree
+                                // 1st: skip the label node and close node
+                                self.tree[tos.node].next = node_after_link;
 
-                                    // then, if it exists, add the label node as a child to the link node
-                                    if label_node != cur {
-                                        self.tree[tos.node].child = label_node;
+                                // then, if it exists, add the label node as a child to the link node
+                                if label_node != cur {
+                                    self.tree[tos.node].child = label_node;
 
-                                        // finally: disconnect list of children
-                                        if let Some(prev_ix) = prev {
-                                            self.tree[prev_ix].next = None;
-                                        }
+                                    // finally: disconnect list of children
+                                    if let Some(prev_ix) = prev {
+                                        self.tree[prev_ix].next = None;
                                     }
+                                }
 
-                                    self.tree[tos.node].item.end = end;
-                                    // No `max(orig_start, end)` clamp here,
-                                    // unlike the inline-link splice: the item at
-                                    // `end - 1` either ends the label or was
-                                    // truncated to it, and the zero-width items
-                                    // that could sit at `end` all sit on a URL
-                                    // or email byte, never a `]`.
-                                    debug_assert!(
-                                        node_after_link.is_none_or(|node_after_ix| {
-                                            self.tree[node_after_ix].item.start >= end
-                                        }),
-                                        "reference splice must not overrun its successor",
-                                    );
+                                self.tree[tos.node].item.end = end;
+                                // No `max(orig_start, end)` clamp here,
+                                // unlike the inline-link splice: the item at
+                                // `end - 1` either ends the label or was
+                                // truncated to it, and the zero-width items
+                                // that could sit at `end` all sit on a URL
+                                // or email byte, never a `]`.
+                                debug_assert!(
+                                    node_after_link.is_none_or(|node_after_ix| {
+                                        self.tree[node_after_ix].item.start >= end
+                                    }),
+                                    "reference splice must not overrun its successor",
+                                );
 
-                                    // set up cur so next node will be node_after_link
-                                    cur = Some(tos.node);
-                                    cur_ix = tos.node;
+                                // set up cur so next node will be node_after_link
+                                cur = Some(tos.node);
+                                cur_ix = tos.node;
 
-                                    if tos.ty == LinkStackTy::Link {
-                                        self.disable_all_links();
-                                    }
+                                if tos.ty == LinkStackTy::Link {
+                                    self.disable_all_links();
                                 }
                             }
                         }
@@ -2232,29 +2224,28 @@ impl<'input> ParserInner<'input> {
                 return None;
             }
 
-            if c == b'\n' || c == b'\r' {
-                if let Some(node_ix) = scan_nodes_to_ix(&self.tree, node, i + 1) {
-                    if self.tree[node_ix].item.start > i {
-                        title.push_str(&text[mark..i]);
-                        // The title's line endings are content, kept byte for byte.
-                        title.push(c as char);
-                        if c == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
-                            title.push('\n');
-                        }
-                        i = self.tree[node_ix].item.start;
-                        mark = i;
-                        continue;
-                    }
+            if (c == b'\n' || c == b'\r')
+                && let Some(node_ix) = scan_nodes_to_ix(&self.tree, node, i + 1)
+                && self.tree[node_ix].item.start > i
+            {
+                title.push_str(&text[mark..i]);
+                // The title's line endings are content, kept byte for byte.
+                title.push(c as char);
+                if c == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                    title.push('\n');
                 }
+                i = self.tree[node_ix].item.start;
+                mark = i;
+                continue;
             }
-            if c == b'&' {
-                if let (n, Some(value)) = scan_entity(&bytes[i..]) {
-                    title.push_str(&text[mark..i]);
-                    title.push_str(&value);
-                    i += n;
-                    mark = i;
-                    continue;
-                }
+            if c == b'&'
+                && let (n, Some(value)) = scan_entity(&bytes[i..])
+            {
+                title.push_str(&text[mark..i]);
+                title.push_str(&value);
+                i += n;
+                mark = i;
+                continue;
             }
             if self.tree.is_in_table()
                 && c == b'\\'
@@ -2612,12 +2603,12 @@ fn skip_container_prefixes_with_remaining(
 impl Tree<Item> {
     pub(crate) fn append_text(&mut self, start: usize, end: usize, backslash_escaped: bool) {
         if end > start {
-            if let Some(ix) = self.cur() {
-                if matches!(self[ix].item.body, ItemBody::Text { .. }) && self[ix].item.end == start
-                {
-                    self[ix].item.end = end;
-                    return;
-                }
+            if let Some(ix) = self.cur()
+                && matches!(self[ix].item.body, ItemBody::Text { .. })
+                && self[ix].item.end == start
+            {
+                self[ix].item.end = end;
+                return;
             }
             self.append(Item {
                 start,

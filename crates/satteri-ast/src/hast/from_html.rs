@@ -238,12 +238,11 @@ impl TreeSink for HtmlSink {
     fn append(&self, parent: &usize, child: NodeOrText<usize>) {
         let mut nodes = self.nodes.borrow_mut();
         let parent = *parent;
-        if let NodeOrText::AppendText(text) = &child {
-            if let Some(&last) = nodes[parent].children.last() {
-                if push_text(&mut nodes, last, text) {
-                    return;
-                }
-            }
+        if let NodeOrText::AppendText(text) = &child
+            && let Some(&last) = nodes[parent].children.last()
+            && push_text(&mut nodes, last, text)
+        {
+            return;
         }
         let child = match child {
             NodeOrText::AppendText(text) => new_node(&mut nodes, NodeData::Text { contents: text }),

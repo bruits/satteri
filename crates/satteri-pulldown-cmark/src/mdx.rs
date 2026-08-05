@@ -638,13 +638,13 @@ fn check_container_after_newline(
     ix: &mut usize,
     container_check: &Option<ContainerLineCheck<'_>>,
 ) -> Option<()> {
-    if let Some(check) = container_check {
-        if *ix < bytes.len() {
-            if let Some(skip) = check(&bytes[*ix..]) {
-                *ix += skip;
-            } else {
-                return None;
-            }
+    if let Some(check) = container_check
+        && *ix < bytes.len()
+    {
+        if let Some(skip) = check(&bytes[*ix..]) {
+            *ix += skip;
+        } else {
+            return None;
         }
     }
     Some(())
@@ -659,14 +659,14 @@ fn check_container_after_newline_lazy(
     ix: &mut usize,
     container_check: &Option<ContainerLineCheck<'_>>,
 ) -> LineMode {
-    if let Some(check) = container_check {
-        if *ix < bytes.len() {
-            if let Some(skip) = check(&bytes[*ix..]) {
-                *ix += skip;
-                return LineMode::Strict;
-            }
-            return LineMode::Lazy;
+    if let Some(check) = container_check
+        && *ix < bytes.len()
+    {
+        if let Some(skip) = check(&bytes[*ix..]) {
+            *ix += skip;
+            return LineMode::Strict;
         }
+        return LineMode::Lazy;
     }
     LineMode::Strict
 }
@@ -1475,12 +1475,12 @@ pub(crate) fn scan_mdx_jsx_block(
         if pos >= bytes.len() || bytes[pos] == b'\n' || bytes[pos] == b'\r' {
             break;
         }
-        if bytes[pos] == b'<' {
-            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check, 0) {
-                pos += end;
-                last_was_jsx = true;
-                continue;
-            }
+        if bytes[pos] == b'<'
+            && let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check, 0)
+        {
+            pos += end;
+            last_was_jsx = true;
+            continue;
         }
         if bytes[pos] == b'{' {
             // Flow context: child expressions can span multiple lines —
@@ -1536,15 +1536,15 @@ pub(crate) fn scan_mdx_expression_block(
                 continue;
             }
         }
-        if bytes[ix] == b'{' {
-            if let Some(len) = scan_mdx_expression_end(&bytes[ix..], true) {
-                if !last_was_jsx {
-                    return None;
-                }
-                ix += len;
-                last_was_jsx = false;
-                continue;
+        if bytes[ix] == b'{'
+            && let Some(len) = scan_mdx_expression_end(&bytes[ix..], true)
+        {
+            if !last_was_jsx {
+                return None;
             }
+            ix += len;
+            last_was_jsx = false;
+            continue;
         }
         return None;
     }

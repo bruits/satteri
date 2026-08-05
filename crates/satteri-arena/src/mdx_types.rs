@@ -137,22 +137,22 @@ impl Location {
 
     #[must_use]
     pub fn to_point(&self, offset: usize) -> Option<Point> {
-        if let Some(end) = self.indices.last() {
-            if offset < *end {
-                let mut index = 0;
-                while index < self.indices.len() {
-                    if self.indices[index] > offset {
-                        break;
-                    }
-                    index += 1;
+        if let Some(end) = self.indices.last()
+            && offset < *end
+        {
+            let mut index = 0;
+            while index < self.indices.len() {
+                if self.indices[index] > offset {
+                    break;
                 }
-                let previous = if index > 0 {
-                    self.indices[index - 1]
-                } else {
-                    0
-                };
-                return Some(Point::new(index + 1, offset + 1 - previous, offset));
+                index += 1;
             }
+            let previous = if index > 0 {
+                self.indices[index - 1]
+            } else {
+                0
+            };
+            return Some(Point::new(index + 1, offset + 1 - previous, offset));
         }
         None
     }

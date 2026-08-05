@@ -1110,10 +1110,10 @@ pub(crate) fn scan_entity(bytes: &[u8]) -> (usize, Option<CowStr<'static>>) {
         };
     }
     end += scan_while(&bytes[end..], is_ascii_alphanumeric);
-    if bytes.get(end) == Some(&b';') {
-        if let Some(value) = entities::get_entity(&bytes[1..end]) {
-            return (end + 1, Some(value.into()));
-        }
+    if bytes.get(end) == Some(&b';')
+        && let Some(value) = entities::get_entity(&bytes[1..end])
+    {
+        return (end + 1, Some(value.into()));
     }
     (0, None)
 }
