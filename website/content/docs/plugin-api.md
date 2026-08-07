@@ -269,7 +269,7 @@ mdxFlowExpression(node) {
 
 ## Lifecycle hooks
 
-Besides visitors, both plugin kinds accept two lifecycle hooks. Each runs **exactly once per document, even an empty one**, and receives the document root plus the usual `ctx`:
+Besides visitors, both plugin kinds accept two lifecycle hooks. Each runs **exactly once per document**, whether or not any of the plugin's visitors match, and receives the document root plus the usual `ctx`:
 
 - `before(root, ctx)` runs before any of the plugin's visitors, e.g. to seed `ctx.data` or closure state they read.
 - `after(root, ctx)` runs after all of the plugin's visitors have settled (async ones included), so it can emit output built from state they collected.
@@ -286,7 +286,6 @@ const toc = () => {
       headings.push(ctx.textContent(node));
     },
     after(root, ctx) {
-      // Runs even when the document has no headings at all.
       ctx.appendChild(root, {
         type: "mdxjsEsm",
         value: `export const toc = ${JSON.stringify(headings)};`,

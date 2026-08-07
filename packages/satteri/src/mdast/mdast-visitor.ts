@@ -427,11 +427,10 @@ type MdastHookFn = (
 export interface MdastPluginInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
-  /** Runs once per document, an empty one included, before the plugin's
-   *  visitors. Awaited when async. */
+  /** Runs once per document, before the plugin's visitors. Awaited when async. */
   before?: MdastHookFn;
-  /** Runs once per document, an empty one included, after the plugin's visitors
-   *  have settled. Awaited when async. */
+  /** Runs once per document, after the plugin's visitors have settled. Awaited
+   *  when async. */
   after?: MdastHookFn;
   paragraph?: MdastVisitorFn<Paragraph>;
   heading?: MdastVisitorFn<Heading>;

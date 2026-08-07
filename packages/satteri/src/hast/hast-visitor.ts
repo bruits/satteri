@@ -592,11 +592,10 @@ type HastHookFn = (root: Readonly<HastRoot>, ctx: HastVisitorContext) => void | 
 export interface HastVisitorInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
-  /** Runs once per document, an empty one included, before the plugin's
-   *  visitors. Awaited when async. */
+  /** Runs once per document, before the plugin's visitors. Awaited when async. */
   before?: HastHookFn;
-  /** Runs once per document, an empty one included, after the plugin's visitors
-   *  have settled. Awaited when async. */
+  /** Runs once per document, after the plugin's visitors have settled. Awaited
+   *  when async. */
   after?: HastHookFn;
   // Element-like nodes: filtered by tag/component name (single or array)
   element?: HastFilteredVisitor<Element> | HastFilteredVisitor<Element>[];
@@ -1061,7 +1060,7 @@ function readMatchedNode(
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   if (nodeType === HAST_ROOT) {
-    // `...root.children` has to work in a hook, empty document included.
+    // `...root.children` has to work in a hook.
     if (childCount > 0) {
       makeLazyChildren(base, view, buf, childIdsPos, childTypesPos, childCount, resolver);
     } else {
