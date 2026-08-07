@@ -1,9 +1,8 @@
 import { describe, test, expect } from "vitest";
 import { markdownToHtml, mdxToJs } from "../src/compile.js";
-import type { MdastVisitorContext } from "../src/mdast/mdast-visitor.js";
-import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
-import type { MdastNode } from "../src/types.js";
-import type { Root as MdastRoot, Heading } from "mdast";
+import { defineMdastPlugin, defineHastPlugin } from "../src/plugin.js";
+import type { HastNode, MdastNode } from "../src/types.js";
+import type { Root as MdastRoot } from "mdast";
 import type { Root as HastRoot, Element } from "hast";
 
 describe("mdast lifecycle hooks", () => {
@@ -12,13 +11,13 @@ describe("mdast lifecycle hooks", () => {
     let seen: MdastRoot | undefined;
     markdownToHtml("", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "after-counter",
-          after(root: MdastRoot) {
+          after(root) {
             calls++;
             seen = root;
           },
-        },
+        }),
       ],
     });
     expect(calls).toBe(1);
@@ -31,13 +30,13 @@ describe("mdast lifecycle hooks", () => {
     let childTypes: string[] = [];
     markdownToHtml("# Hi\n\nWorld", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "after-counter",
-          after(root: MdastRoot) {
+          after(root) {
             calls++;
             childTypes = root.children.map((c) => c.type);
           },
-        },
+        }),
       ],
     });
     expect(calls).toBe(1);
@@ -48,7 +47,7 @@ describe("mdast lifecycle hooks", () => {
     const order: string[] = [];
     markdownToHtml("# One\n\n## Two", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "order",
           before() {
             order.push("before");
@@ -59,7 +58,7 @@ describe("mdast lifecycle hooks", () => {
           after() {
             order.push("after");
           },
-        },
+        }),
       ],
     });
     expect(order).toEqual(["before", "heading", "heading", "after"]);
@@ -69,11 +68,11 @@ describe("mdast lifecycle hooks", () => {
     const order: string[] = [];
     markdownToHtml("", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "hooks-only",
           before: () => void order.push("before"),
           after: () => void order.push("after"),
-        },
+        }),
       ],
     });
     expect(order).toEqual(["before", "after"]);
@@ -83,15 +82,15 @@ describe("mdast lifecycle hooks", () => {
     let seen: unknown;
     markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "seed",
-          before(_root: MdastRoot, ctx: MdastVisitorContext) {
+          before(_root, ctx) {
             ctx.data.flag = "seeded";
           },
-          heading(_node: MdastNode, ctx: MdastVisitorContext) {
+          heading(_node, ctx) {
             seen = ctx.data.flag;
           },
-        },
+        }),
       ],
     });
     expect(seen).toBe("seeded");
@@ -101,16 +100,16 @@ describe("mdast lifecycle hooks", () => {
     let seen: unknown;
     await markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "async-seed",
-          async before(_root: MdastRoot, ctx: MdastVisitorContext) {
+          async before(_root, ctx) {
             await Promise.resolve();
             ctx.data.flag = "seeded";
           },
-          heading(_node: MdastNode, ctx: MdastVisitorContext) {
+          heading(_node, ctx) {
             seen = ctx.data.flag;
           },
-        },
+        }),
       ],
     });
     expect(seen).toBe("seeded");
@@ -121,16 +120,16 @@ describe("mdast lifecycle hooks", () => {
     let seenAtAfter: string[] = [];
     await markdownToHtml("# One\n\n## Two", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "async-order",
-          async heading(node: MdastNode, ctx: MdastVisitorContext) {
+          async heading(node, ctx) {
             await Promise.resolve();
             headings.push(ctx.textContent(node));
           },
           after() {
             seenAtAfter = [...headings];
           },
-        },
+        }),
       ],
     });
     expect(seenAtAfter).toEqual(["One", "Two"]);
@@ -139,14 +138,14 @@ describe("mdast lifecycle hooks", () => {
   test("after injects an ESM export on an empty MDX document", () => {
     const { code } = mdxToJs("", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "toc",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.appendChild(root, { type: "mdxjsEsm", value: "export const toc = [];" });
           },
-        },
+        }),
       ],
-    }) as { code: string };
+    });
     expect(code).toContain("const toc = []");
   });
 
@@ -154,20 +153,20 @@ describe("mdast lifecycle hooks", () => {
     const headings: string[] = [];
     const { code } = mdxToJs("# One\n\n## Two", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "toc",
-          heading(node: MdastNode, ctx: MdastVisitorContext) {
+          heading(node, ctx) {
             headings.push(ctx.textContent(node));
           },
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.appendChild(root, {
               type: "mdxjsEsm",
               value: `export const toc = ${JSON.stringify(headings)};`,
             });
           },
-        },
+        }),
       ],
-    }) as { code: string };
+    });
     expect(code).toContain('"One"');
     expect(code).toContain('"Two"');
   });
@@ -175,20 +174,20 @@ describe("mdast lifecycle hooks", () => {
   test("hooks prepend an import and append an export on an empty document", () => {
     const { code } = mdxToJs("", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "inject-esm-empty",
-          before(root: MdastRoot, ctx: MdastVisitorContext) {
+          before(root, ctx) {
             ctx.prependChild(root, {
               type: "mdxjsEsm",
               value: 'import { config } from "./config.js";',
             });
           },
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.appendChild(root, { type: "mdxjsEsm", value: "export const toc = [];" });
           },
-        },
+        }),
       ],
-    }) as { code: string };
+    });
     expect(code).toContain('import { config } from "./config.js"');
     expect(code).toContain("export const toc = []");
     expect(code.indexOf("import { config }")).toBeLessThan(code.indexOf("export const toc"));
@@ -197,27 +196,26 @@ describe("mdast lifecycle hooks", () => {
   test("hooks inject an import and an export into an MDX document", () => {
     const { code } = mdxToJs("# Hi\n\n<Aside>note</Aside>", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "inject-esm",
-          before(root: MdastRoot, ctx: MdastVisitorContext) {
+          before(root, ctx) {
             ctx.prependChild(root, {
               type: "mdxjsEsm",
               value: 'import { Aside } from "./aside.js";',
             });
           },
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.appendChild(root, {
               type: "mdxjsEsm",
               value: 'export const meta = { layout: "docs" };',
             });
           },
-        },
+        }),
       ],
-    }) as { code: string };
+    });
     expect(code).toContain('import { Aside } from "./aside.js"');
     expect(code).toContain('export const meta = { layout: "docs" }');
-    // The import participates in compilation: <Aside> resolves to the imported
-    // binding instead of the missing-component fallback.
+    // The injected import participates in compilation, so <Aside> is a real binding.
     expect(code).toContain("_jsx(Aside,");
     expect(code).not.toContain("_missingMdxReference");
     expect(code.indexOf("import { Aside }")).toBeLessThan(code.indexOf("export const meta"));
@@ -226,16 +224,16 @@ describe("mdast lifecycle hooks", () => {
   test("async after mutations apply", async () => {
     const { html } = await markdownToHtml("", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "async-after",
-          async after(root: MdastRoot, ctx: MdastVisitorContext) {
+          async after(root, ctx) {
             await Promise.resolve();
             ctx.appendChild(root, {
               type: "paragraph",
               children: [{ type: "text", value: "late" }],
             });
           },
-        },
+        }),
       ],
     });
     expect(html).toContain("<p>late</p>");
@@ -244,15 +242,15 @@ describe("mdast lifecycle hooks", () => {
   test("sync visitor replacements apply when hooks are present", () => {
     const { html } = markdownToHtml("# Old", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "sync-replace",
           before() {},
-          heading(): MdastNode {
-            return { type: "paragraph", children: [{ type: "text", value: "New" }] } as MdastNode;
+          heading() {
+            return { type: "paragraph", children: [{ type: "text", value: "New" }] };
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toContain("<p>New</p>");
     expect(html).not.toContain("<h1>");
   });
@@ -260,14 +258,14 @@ describe("mdast lifecycle hooks", () => {
   test("async visitor replacements apply when hooks are present", async () => {
     const { html } = await markdownToHtml("# Old", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "async-replace",
           after() {},
-          async heading(): Promise<MdastNode> {
+          async heading() {
             await Promise.resolve();
-            return { type: "paragraph", children: [{ type: "text", value: "New" }] } as MdastNode;
+            return { type: "paragraph", children: [{ type: "text", value: "New" }] };
           },
-        },
+        }),
       ],
     });
     expect(html).toContain("<p>New</p>");
@@ -277,15 +275,15 @@ describe("mdast lifecycle hooks", () => {
   test("{ raw } visitor returns apply when hooks are present", () => {
     const { html } = markdownToHtml("# Old", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "raw-return",
           after() {},
           heading() {
             return { raw: "**bold**" };
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toContain("<strong>bold</strong>");
     expect(html).not.toContain("<h1>");
   });
@@ -293,20 +291,20 @@ describe("mdast lifecycle hooks", () => {
   test("visitor and after mutations both land in the same pass", () => {
     const { html } = markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "both",
-          heading(node: Heading, ctx: MdastVisitorContext) {
+          heading(node, ctx) {
             ctx.setProperty(node, "depth", 3);
           },
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.appendChild(root, {
               type: "paragraph",
               children: [{ type: "text", value: "tail" }],
             });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toContain("<h3>Hi</h3>");
     expect(html).toContain("<p>tail</p>");
   });
@@ -315,15 +313,15 @@ describe("mdast lifecycle hooks", () => {
     const calls: string[] = [];
     markdownToHtml("", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "a",
           before: () => void calls.push("a:before"),
           after: () => void calls.push("a:after"),
-        },
-        {
+        }),
+        defineMdastPlugin({
           name: "b",
           after: () => void calls.push("b:after"),
-        },
+        }),
       ],
     });
     expect(calls).toEqual(["a:before", "a:after", "b:after"]);
@@ -333,21 +331,21 @@ describe("mdast lifecycle hooks", () => {
     let seen: string[] = [];
     markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "a",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.appendChild(root, {
               type: "paragraph",
               children: [{ type: "text", value: "A" }],
             });
           },
-        },
-        {
+        }),
+        defineMdastPlugin({
           name: "b",
-          after(root: MdastRoot) {
+          after(root) {
             seen = root.children.map((c) => c.type);
           },
-        },
+        }),
       ],
     });
     expect(seen).toEqual(["heading", "paragraph"]);
@@ -356,79 +354,79 @@ describe("mdast lifecycle hooks", () => {
   test("after swaps the whole document for a new root", () => {
     const { html } = markdownToHtml("# Hi\n\nWorld", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "swap",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, {
               type: "root",
               children: [{ type: "paragraph", children: [{ type: "text", value: "swapped" }] }],
             });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("<p>swapped</p>\n");
   });
 
   test("before swaps the whole document for a new root", () => {
     const { html } = markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "swap",
-          before(root: MdastRoot, ctx: MdastVisitorContext) {
+          before(root, ctx) {
             ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("<hr>\n");
   });
 
   test("the root can be replaced on an empty document", () => {
     const { html } = markdownToHtml("", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "swap",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, {
               type: "root",
               children: [{ type: "paragraph", children: [{ type: "text", value: "from empty" }] }],
             });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("<p>from empty</p>\n");
   });
 
   test("a replacement root keeps the original children it reuses", () => {
     const { html } = markdownToHtml("# Hi\n\nWorld", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "swap",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, {
               type: "root",
               children: [{ type: "thematicBreak" }, ...root.children],
             });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("<hr>\n<h1>Hi</h1>\n<p>World</p>\n");
   });
 
   test("replacing the root with an empty root empties the document", () => {
     const { html } = markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "swap",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, { type: "root", children: [] });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("");
   });
 
@@ -436,18 +434,18 @@ describe("mdast lifecycle hooks", () => {
     let seen: string[] = [];
     markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "swap",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] });
           },
-        },
-        {
+        }),
+        defineMdastPlugin({
           name: "observe",
-          after(root: MdastRoot) {
+          after(root) {
             seen = root.children.map((c) => c.type);
           },
-        },
+        }),
       ],
     });
     expect(seen).toEqual(["thematicBreak"]);
@@ -456,9 +454,9 @@ describe("mdast lifecycle hooks", () => {
   test("a replacement root can prepend an ESM export ahead of the document", () => {
     const { code } = mdxToJs("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "toc",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, {
               type: "root",
               children: [
@@ -467,9 +465,9 @@ describe("mdast lifecycle hooks", () => {
               ],
             });
           },
-        },
+        }),
       ],
-    }) as { code: string };
+    });
     expect(code).toContain("export const toc = []");
     expect(code).toContain('"h1"');
   });
@@ -477,14 +475,14 @@ describe("mdast lifecycle hooks", () => {
   test("a replacement root with _keepChildren keeps the document's children", () => {
     const { html } = markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "swap",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, { type: "root", _keepChildren: true } as unknown as MdastRoot);
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("<h1>Hi</h1>\n");
   });
 
@@ -492,12 +490,12 @@ describe("mdast lifecycle hooks", () => {
     expect(() =>
       markdownToHtml("# Hi", {
         mdastPlugins: [
-          {
+          defineMdastPlugin({
             name: "bad",
-            heading(node: MdastNode, ctx: MdastVisitorContext) {
+            heading(node, ctx) {
               ctx.replaceNode(node, { type: "root", children: [] });
             },
-          },
+          }),
         ],
       }),
     ).toThrow(/cannot encode replacement content of type "root"/);
@@ -507,15 +505,15 @@ describe("mdast lifecycle hooks", () => {
     expect(() =>
       markdownToHtml("# Hi", {
         mdastPlugins: [
-          {
+          defineMdastPlugin({
             name: "bad",
-            after(root: MdastRoot, ctx: MdastVisitorContext) {
+            after(root, ctx) {
               ctx.replaceNode(root, {
                 type: "paragraph",
                 children: [{ type: "text", value: "p" }],
               });
             },
-          },
+          }),
         ],
       }),
     ).toThrow(/replaceNode on the document root takes a `root`, not "paragraph"/);
@@ -525,75 +523,207 @@ describe("mdast lifecycle hooks", () => {
     expect(() =>
       markdownToHtml("# Hi", {
         mdastPlugins: [
-          {
+          defineMdastPlugin({
             name: "bad",
-            after(root: MdastRoot, ctx: MdastVisitorContext) {
+            after(root, ctx) {
               ctx.replaceNode(root, [{ type: "thematicBreak" }]);
             },
-          },
+          }),
         ],
       }),
     ).toThrow(/replaceNode on the document root takes a `root`/);
+  });
+
+  test("replacing the root with a list of nodes is rejected before anything is queued", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          defineMdastPlugin({
+            name: "bad",
+            after(root, ctx) {
+              ctx.replaceNode(root, [
+                { type: "thematicBreak" },
+                { type: "root", children: [] } as unknown as MdastNode,
+              ]);
+            },
+          }),
+        ],
+      }),
+    ).toThrow(/replaceNode on the document root takes a `root`/);
+  });
+
+  test("a raw string replaces the whole document", () => {
+    const fromMarkdown = markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "raw-swap",
+          after: (root, ctx) => ctx.replaceNode(root, { raw: "# New\n\nfrom raw markdown" }),
+        }),
+      ],
+    });
+    expect(fromMarkdown.html).toBe("<h1>New</h1>\n<p>from raw markdown</p>\n");
+
+    const fromHtml = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "raw-html-swap",
+          after: (root, ctx) => ctx.replaceNode(root, { rawHtml: "<section>raw html</section>" }),
+        }),
+      ],
+    });
+    expect(fromHtml.html).toBe("<section>raw html</section>\n");
+  });
+
+  test("a raw root swap still leaves a root for a later plugin's hooks", () => {
+    const seen: string[] = [];
+    const { html } = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "raw-swap",
+          after: (root, ctx) => ctx.replaceNode(root, { raw: "*replaced*" }),
+        }),
+        defineMdastPlugin({ name: "observe", after: (root) => void seen.push(root.type) }),
+      ],
+    });
+    expect(seen).toEqual(["root"]);
+    expect(html).toBe("<p><em>replaced</em></p>\n");
+  });
+
+  test("a visitor reaching the root via parent() can replace it with a raw string", () => {
+    const { html } = markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "raw-via-parent",
+          heading(node, ctx) {
+            ctx.replaceNode(ctx.parent(node), { raw: "**swapped**" });
+          },
+        }),
+      ],
+    });
+    expect(html).toBe("<p><strong>swapped</strong></p>\n");
+  });
+
+  test("a hook that throws surfaces the error", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          defineMdastPlugin({
+            name: "boom",
+            before() {
+              throw new Error("before exploded");
+            },
+          }),
+        ],
+      }),
+    ).toThrow("before exploded");
+  });
+
+  test("an async hook that rejects surfaces the rejection", async () => {
+    await expect(
+      markdownToHtml("# Hi", {
+        mdastPlugins: [
+          defineMdastPlugin({
+            name: "boom",
+            async after() {
+              await Promise.resolve();
+              throw new Error("after exploded");
+            },
+          }),
+        ],
+      }),
+    ).rejects.toThrow("after exploded");
+  });
+
+  test("a factory plugin gets fresh hook state for each document", () => {
+    const collected: string[][] = [];
+    const toc = () => {
+      const headings: string[] = [];
+      return defineMdastPlugin({
+        name: "toc",
+        heading(node, ctx) {
+          headings.push(ctx.textContent(node));
+        },
+        after() {
+          collected.push([...headings]);
+        },
+      });
+    };
+
+    markdownToHtml("# One\n\n## Two", { mdastPlugins: [toc] });
+    markdownToHtml("# Three", { mdastPlugins: [toc] });
+    expect(collected).toEqual([["One", "Two"], ["Three"]]);
   });
 
   test("a visitor reaching the root via parent() cannot replace it with a non-root", () => {
     expect(() =>
       markdownToHtml("# Hi", {
         mdastPlugins: [
-          {
+          defineMdastPlugin({
             name: "bad",
-            heading(node: Heading, ctx: MdastVisitorContext) {
+            heading(node, ctx) {
               ctx.replaceNode(ctx.parent(node), { type: "thematicBreak" });
             },
-          },
+          }),
         ],
       }),
     ).toThrow(/replaceNode on the document root takes a `root`/);
   });
 
   test("a later plugin's hooks survive every root mutation", () => {
-    const mutate: Record<string, (root: MdastRoot, ctx: MdastVisitorContext) => void> = {
-      replace: (root, ctx) =>
-        ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] }),
-      wrap: (root, ctx) => ctx.wrapNode(root, { type: "blockquote", children: [] }),
-      remove: (root, ctx) => ctx.removeNode(root),
-      setChildren: (root, ctx) => ctx.setProperty(root, "children", [{ type: "thematicBreak" }]),
-      append: (root, ctx) => ctx.appendChild(root, { type: "thematicBreak" }),
-    };
-    for (const [name, fn] of Object.entries(mutate)) {
+    const mutations = [
+      defineMdastPlugin({
+        name: "replace",
+        after: (root, ctx) =>
+          ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] }),
+      }),
+      defineMdastPlugin({
+        name: "wrap",
+        after: (root, ctx) => ctx.wrapNode(root, { type: "blockquote", children: [] }),
+      }),
+      defineMdastPlugin({ name: "remove", after: (root, ctx) => ctx.removeNode(root) }),
+      defineMdastPlugin({
+        name: "setChildren",
+        after: (root, ctx) => ctx.setProperty(root, "children", [{ type: "thematicBreak" }]),
+      }),
+      defineMdastPlugin({
+        name: "append",
+        after: (root, ctx) => ctx.appendChild(root, { type: "thematicBreak" }),
+      }),
+    ];
+    for (const mutate of mutations) {
       const seen: string[] = [];
       markdownToHtml("# Hi", {
         mdastPlugins: [
-          { name: "mutate", after: fn },
-          { name: "observe", after: (root: MdastRoot) => void seen.push(root.type) },
+          mutate,
+          defineMdastPlugin({ name: "observe", after: (root) => void seen.push(root.type) }),
         ],
       });
-      expect(seen, name).toEqual(["root"]);
+      expect(seen, mutate.name).toEqual(["root"]);
     }
   });
 
   test("wrapNode wraps the root, and still rejects a leaf wrapper", () => {
     const { html } = markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "wrap",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.wrapNode(root, { type: "blockquote", children: [] });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("<blockquote>\n<h1>Hi</h1>\n</blockquote>\n");
 
     expect(() =>
       markdownToHtml("# Hi", {
         mdastPlugins: [
-          {
+          defineMdastPlugin({
             name: "wrap-leaf",
-            after(root: MdastRoot, ctx: MdastVisitorContext) {
+            after(root, ctx) {
               ctx.wrapNode(root, { type: "thematicBreak" } as never);
             },
-          },
+          }),
         ],
       }),
     ).toThrow(/"thematicBreak" nodes cannot hold children/);
@@ -604,12 +734,12 @@ describe("mdast lifecycle hooks", () => {
       expect(() =>
         markdownToHtml("# Hi", {
           mdastPlugins: [
-            {
+            defineMdastPlugin({
               name: op,
-              after(root: MdastRoot, ctx: MdastVisitorContext) {
+              after(root, ctx) {
                 ctx[op](root, { type: "thematicBreak" });
               },
-            },
+            }),
           ],
         }),
       ).toThrow(/sibling insert on root/);
@@ -617,21 +747,42 @@ describe("mdast lifecycle hooks", () => {
   });
 
   test("the child operations work on the root", () => {
-    const run = (after: (root: MdastRoot, ctx: MdastVisitorContext) => void) =>
-      (
-        markdownToHtml("# Hi\n\nWorld", { mdastPlugins: [{ name: "child", after }] }) as {
-          html: string;
-        }
-      ).html;
+    const prepended = markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "prepend",
+          after: (root, ctx) => ctx.prependChild(root, { type: "thematicBreak" }),
+        }),
+      ],
+    });
+    expect(prepended.html).toBe("<hr>\n<h1>Hi</h1>\n<p>World</p>\n");
 
-    expect(run((root, ctx) => ctx.prependChild(root, { type: "thematicBreak" }))).toBe(
-      "<hr>\n<h1>Hi</h1>\n<p>World</p>\n",
-    );
-    expect(run((root, ctx) => ctx.insertChildAt(root, 1, { type: "thematicBreak" }))).toBe(
-      "<h1>Hi</h1>\n<hr>\n<p>World</p>\n",
-    );
-    expect(run((root, ctx) => ctx.removeChildAt(root, 0))).toBe("<p>World</p>\n");
-    expect(run((root, ctx) => ctx.removeNode(root))).toBe("");
+    const inserted = markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "insert-at",
+          after: (root, ctx) => ctx.insertChildAt(root, 1, { type: "thematicBreak" }),
+        }),
+      ],
+    });
+    expect(inserted.html).toBe("<h1>Hi</h1>\n<hr>\n<p>World</p>\n");
+
+    const removedChild = markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "remove-child",
+          after: (root, ctx) => ctx.removeChildAt(root, 0),
+        }),
+      ],
+    });
+    expect(removedChild.html).toBe("<p>World</p>\n");
+
+    const removedRoot = markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        defineMdastPlugin({ name: "remove-root", after: (root, ctx) => ctx.removeNode(root) }),
+      ],
+    });
+    expect(removedRoot.html).toBe("");
   });
 });
 
@@ -641,13 +792,13 @@ describe("hast lifecycle hooks", () => {
     let seen: HastRoot | undefined;
     markdownToHtml("", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "after-counter",
-          after(root: HastRoot) {
+          after(root) {
             calls++;
             seen = root;
           },
-        },
+        }),
       ],
     });
     expect(calls).toBe(1);
@@ -659,7 +810,7 @@ describe("hast lifecycle hooks", () => {
     const order: string[] = [];
     markdownToHtml("# Hi", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "order",
           before() {
             order.push("before");
@@ -668,7 +819,7 @@ describe("hast lifecycle hooks", () => {
           after() {
             order.push("after");
           },
-        },
+        }),
       ],
     });
     expect(order).toEqual(["before", "h1", "after"]);
@@ -677,36 +828,36 @@ describe("hast lifecycle hooks", () => {
   test("after appends an element to an empty document", () => {
     const { html } = markdownToHtml("", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "footer",
-          after(root: HastRoot, ctx: HastVisitorContext) {
+          after(root, ctx) {
             ctx.appendChild(root, {
               type: "element",
               tagName: "footer",
               properties: {},
               children: [{ type: "text", value: "generated" }],
-            } as Element);
+            });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toContain("<footer>generated</footer>");
   });
 
   test("after injects an ESM export on an empty MDX document", () => {
     const { code } = mdxToJs("", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "toc",
-          after(root: HastRoot, ctx: HastVisitorContext) {
+          after(root, ctx) {
             ctx.appendChild(root, {
               type: "mdxjsEsm",
               value: "export const toc = [];",
-            } as unknown as Element);
+            } as unknown as HastNode);
           },
-        },
+        }),
       ],
-    }) as { code: string };
+    });
     expect(code).toContain("const toc = []");
   });
 
@@ -714,18 +865,18 @@ describe("hast lifecycle hooks", () => {
     let seen: unknown;
     markdownToHtml("# Hi", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "seed",
-          before(_root: HastRoot, ctx: HastVisitorContext) {
+          before(_root, ctx) {
             ctx.data.flag = "seeded";
           },
           element: {
             filter: ["h1"],
-            visit(_node: Element, ctx: HastVisitorContext) {
+            visit(_node, ctx) {
               seen = ctx.data.flag;
             },
           },
-        },
+        }),
       ],
     });
     expect(seen).toBe("seeded");
@@ -736,15 +887,15 @@ describe("hast lifecycle hooks", () => {
     let childTags: string[] = [];
     markdownToHtml("# Hi\n\nWorld", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "after-counter",
-          after(root: HastRoot) {
+          after(root) {
             calls++;
             childTags = root.children
               .filter((c): c is Element => c.type === "element")
               .map((c) => c.tagName);
           },
-        },
+        }),
       ],
     });
     expect(calls).toBe(1);
@@ -755,19 +906,19 @@ describe("hast lifecycle hooks", () => {
     let seen: unknown;
     await markdownToHtml("# Hi", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "async-seed",
-          async before(_root: HastRoot, ctx: HastVisitorContext) {
+          async before(_root, ctx) {
             await Promise.resolve();
             ctx.data.flag = "seeded";
           },
           element: {
             filter: ["h1"],
-            visit(_node: Element, ctx: HastVisitorContext) {
+            visit(_node, ctx) {
               seen = ctx.data.flag;
             },
           },
-        },
+        }),
       ],
     });
     expect(seen).toBe("seeded");
@@ -778,11 +929,11 @@ describe("hast lifecycle hooks", () => {
     let seenAtAfter: string[] = [];
     await markdownToHtml("# One\n\n## Two", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "async-order",
           element: {
             filter: ["h1", "h2"],
-            async visit(node: Element) {
+            async visit(node) {
               await Promise.resolve();
               visited.push(node.tagName);
             },
@@ -790,7 +941,7 @@ describe("hast lifecycle hooks", () => {
           after() {
             seenAtAfter = [...visited];
           },
-        },
+        }),
       ],
     });
     expect(seenAtAfter).toEqual(["h1", "h2"]);
@@ -799,18 +950,18 @@ describe("hast lifecycle hooks", () => {
   test("async after mutations apply", async () => {
     const { html } = await markdownToHtml("", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "async-after",
-          async after(root: HastRoot, ctx: HastVisitorContext) {
+          async after(root, ctx) {
             await Promise.resolve();
             ctx.appendChild(root, {
               type: "element",
               tagName: "footer",
               properties: {},
               children: [{ type: "text", value: "late" }],
-            } as Element);
+            });
           },
-        },
+        }),
       ],
     });
     expect(html).toContain("<footer>late</footer>");
@@ -819,7 +970,7 @@ describe("hast lifecycle hooks", () => {
   test("async visitor replacements apply when hooks are present", async () => {
     const { html } = await markdownToHtml("# Old", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "async-replace",
           before() {},
           element: {
@@ -831,10 +982,10 @@ describe("hast lifecycle hooks", () => {
                 tagName: "h2",
                 properties: {},
                 children: [{ type: "text", value: "New" }],
-              } as Element;
+              } satisfies Element;
             },
           },
-        },
+        }),
       ],
     });
     expect(html).toContain("<h2>New</h2>");
@@ -844,9 +995,9 @@ describe("hast lifecycle hooks", () => {
   test("after swaps the whole document for a new root", () => {
     const { html } = markdownToHtml("# Hi\n\nWorld", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "swap",
-          after(root: HastRoot, ctx: HastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, {
               type: "root",
               children: [
@@ -855,22 +1006,22 @@ describe("hast lifecycle hooks", () => {
                   tagName: "main",
                   properties: {},
                   children: [{ type: "text", value: "swapped" }],
-                } as Element,
+                },
               ],
             });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("<main>swapped</main>\n");
   });
 
   test("before replaces the root on an empty document", () => {
     const { html } = markdownToHtml("", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "swap",
-          before(root: HastRoot, ctx: HastVisitorContext) {
+          before(root, ctx) {
             ctx.replaceNode(root, {
               type: "root",
               children: [
@@ -879,22 +1030,22 @@ describe("hast lifecycle hooks", () => {
                   tagName: "p",
                   properties: {},
                   children: [{ type: "text", value: "from empty" }],
-                } as Element,
+                },
               ],
             });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("<p>from empty</p>\n");
   });
 
   test("a replacement root keeps the original children it reuses", () => {
     const { html } = markdownToHtml("# Hi", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "swap",
-          after(root: HastRoot, ctx: HastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, {
               type: "root",
               children: [
@@ -904,13 +1055,13 @@ describe("hast lifecycle hooks", () => {
                   tagName: "footer",
                   properties: {},
                   children: [{ type: "text", value: "tail" }],
-                } as Element,
+                },
               ],
             });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toContain("<h1>Hi</h1>");
     expect(html).toContain("<footer>tail</footer>");
   });
@@ -918,14 +1069,14 @@ describe("hast lifecycle hooks", () => {
   test("replacing the root with an empty root empties the document", () => {
     const { html } = markdownToHtml("# Hi", {
       hastPlugins: [
-        {
+        defineHastPlugin({
           name: "swap",
-          after(root: HastRoot, ctx: HastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, { type: "root", children: [] });
           },
-        },
+        }),
       ],
-    }) as { html: string };
+    });
     expect(html).toBe("");
   });
 
@@ -933,15 +1084,15 @@ describe("hast lifecycle hooks", () => {
     expect(() =>
       markdownToHtml("# Hi", {
         hastPlugins: [
-          {
+          defineHastPlugin({
             name: "bad",
             element: {
               filter: ["h1"],
-              visit(node: Element, ctx: HastVisitorContext) {
+              visit(node, ctx) {
                 ctx.replaceNode(node, { type: "root", children: [] });
               },
             },
-          },
+          }),
         ],
       }),
     ).toThrow(/cannot encode replacement content of type "root"/);
@@ -951,9 +1102,9 @@ describe("hast lifecycle hooks", () => {
     expect(() =>
       markdownToHtml("# Hi", {
         hastPlugins: [
-          {
+          defineHastPlugin({
             name: "bad",
-            after(root: HastRoot, ctx: HastVisitorContext) {
+            after(root, ctx) {
               ctx.replaceNode(root, {
                 type: "element",
                 tagName: "section",
@@ -961,43 +1112,89 @@ describe("hast lifecycle hooks", () => {
                 children: [],
               });
             },
-          },
+          }),
         ],
       }),
     ).toThrow(/replaceNode on the document root takes a `root`, not "element"/);
+  });
+
+  test("replacing the root with a list of nodes is rejected before anything is queued", () => {
+    expect(() =>
+      markdownToHtml("# Hi", {
+        hastPlugins: [
+          defineHastPlugin({
+            name: "bad",
+            after(root, ctx) {
+              ctx.replaceNode(root, [
+                { type: "element", tagName: "hr", properties: {}, children: [] },
+                { type: "root", children: [] },
+              ]);
+            },
+          }),
+        ],
+      }),
+    ).toThrow(/replaceNode on the document root takes a `root`/);
+  });
+
+  test("hooks fire for every hast plugin, not just the last", () => {
+    const order: string[] = [];
+    const { html } = markdownToHtml("# Hi", {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "first",
+          before: (root) => void order.push(`first:before:${root.children.length}`),
+          after(root, ctx) {
+            order.push(`first:after:${root.children.length}`);
+            ctx.appendChild(root, {
+              type: "element",
+              tagName: "footer",
+              properties: {},
+              children: [],
+            });
+          },
+        }),
+        defineHastPlugin({
+          name: "second",
+          before: (root) => void order.push(`second:before:${root.children.length}`),
+          after: () => void order.push("second:after"),
+        }),
+      ],
+    });
+    expect(order).toEqual(["first:before:1", "first:after:1", "second:before:2", "second:after"]);
+    expect(html).toContain("<footer></footer>");
   });
 
   test("an mdast root swap does not strand the hast hooks", () => {
     const seen: string[] = [];
     const { html } = markdownToHtml("# Hi", {
       mdastPlugins: [
-        {
+        defineMdastPlugin({
           name: "swap",
-          after(root: MdastRoot, ctx: MdastVisitorContext) {
+          after(root, ctx) {
             ctx.replaceNode(root, { type: "root", children: [{ type: "thematicBreak" }] });
           },
-        },
+        }),
       ],
-      hastPlugins: [{ name: "observe", after: (root: HastRoot) => void seen.push(root.type) }],
-    }) as { html: string };
+      hastPlugins: [
+        defineHastPlugin({ name: "observe", after: (root) => void seen.push(root.type) }),
+      ],
+    });
     expect(seen).toEqual(["root"]);
     expect(html).toBe("<hr>\n");
   });
 
   test("wrapNode wraps the root, and still rejects a void wrapper", () => {
     const wrap = (tagName: string) =>
-      (
-        markdownToHtml("# Hi", {
-          hastPlugins: [
-            {
-              name: "wrap",
-              after(root: HastRoot, ctx: HastVisitorContext) {
-                ctx.wrapNode(root, { type: "element", tagName, properties: {}, children: [] });
-              },
+      markdownToHtml("# Hi", {
+        hastPlugins: [
+          defineHastPlugin({
+            name: "wrap",
+            after(root, ctx) {
+              ctx.wrapNode(root, { type: "element", tagName, properties: {}, children: [] });
             },
-          ],
-        }) as { html: string }
-      ).html;
+          }),
+        ],
+      }).html;
 
     expect(wrap("div")).toBe("<div><h1>Hi</h1></div>\n");
     expect(() => wrap("br")).toThrow(/<br> is a void element/);
@@ -1008,12 +1205,12 @@ describe("hast lifecycle hooks", () => {
       expect(() =>
         markdownToHtml("# Hi", {
           hastPlugins: [
-            {
+            defineHastPlugin({
               name: op,
-              after(root: HastRoot, ctx: HastVisitorContext) {
+              after(root, ctx) {
                 ctx[op](root, { type: "element", tagName: "hr", properties: {}, children: [] });
               },
-            },
+            }),
           ],
         }),
       ).toThrow(/sibling insert on root/);

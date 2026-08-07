@@ -21,18 +21,21 @@ const EMPTY_BYTES = new Uint8Array(0);
 
 export const ROOT_NODE_ID = 0;
 
-/** Hooks subscribe to node 0 by node type, so a document left headed by
- *  anything but a `root` silently stops firing them — in this phase and every
- *  later one. */
-export function requireRootReplacement<T>(content: T): T {
+export function rootReplacementError(content: unknown): Error {
   const type = (content as { type?: unknown } | null)?.type;
-  if (type === "root") return content;
-  throw new Error(
+  return new Error(
     `satteri: replaceNode on the document root takes a \`root\`${
       typeof type === "string" ? `, not "${type}"` : ""
     }. Pass { type: "root", children: [...] } to swap the document, ` +
       'or setProperty(root, "children", [...]) to swap only its children.',
   );
+}
+
+/** Hooks subscribe to node 0 by node type, so a document left headed by anything
+ *  but a `root` silently stops firing them, in this phase and every later one. */
+export function requireRootReplacement<T>(content: T): T {
+  if ((content as { type?: unknown } | null)?.type === "root") return content;
+  throw rootReplacementError(content);
 }
 
 export function asArray<T>(value: T | T[]): T[] {

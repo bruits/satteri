@@ -71,6 +71,7 @@ import {
   type PluginOptions,
   ROOT_NODE_ID,
   requireRootReplacement,
+  rootReplacementError,
   unencodableContentError,
 } from "../visitor-shared.js";
 import {
@@ -140,8 +141,8 @@ export interface HastVisitorContext {
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
-   * The document root takes a `root` and nothing else — the one place a
-   * `root` is accepted as content.
+   * The document root takes a `root` and nothing else: the one place a `root`
+   * is accepted as content.
    */
   replaceNode(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -397,6 +398,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "replaceNode");
     if (Array.isArray(newNode)) {
+      if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // The last node carries the `replace` so refs back to the target still splice.
       let previous: HastContent | undefined;
       for (const n of newNode) {
@@ -590,11 +592,11 @@ type HastHookFn = (root: Readonly<HastRoot>, ctx: HastVisitorContext) => void | 
 export interface HastVisitorInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
-  /** Runs once per document — an empty one included — before the plugin's
-   *  visitors, awaited when async. */
+  /** Runs once per document, an empty one included, before the plugin's
+   *  visitors. Awaited when async. */
   before?: HastHookFn;
-  /** Runs once per document — an empty one included — after the plugin's
-   *  visitors have settled, awaited when async. */
+  /** Runs once per document, an empty one included, after the plugin's visitors
+   *  have settled. Awaited when async. */
   after?: HastHookFn;
   // Element-like nodes: filtered by tag/component name (single or array)
   element?: HastFilteredVisitor<Element> | HastFilteredVisitor<Element>[];
@@ -1171,7 +1173,6 @@ function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   );
 }
 
-/** Returns null if every visitor was sync, else the ones still pending. */
 function dispatchMatches(
   wire: WalkWire,
   matchCount: number,
@@ -1257,8 +1258,8 @@ export function visitHastHandleCollect(
   const matchCount = matchView.getUint32(0, true);
   const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
 
-  // `root` is not a subscribable visitor key, so a sub index past the
-  // visitors can only be the hook subscription — and pre-order puts it first.
+  // `root` is not a subscribable visitor key, so a sub index past the visitors
+  // can only be the hook subscription, and pre-order puts it first.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
     return visitHastHandleWithHooks(plugin, subs, ctx, returnBuffer, wire, matchCount);
   }
@@ -1291,7 +1292,7 @@ function applyDeferredHastResults(
   });
 }
 
-/** Match 0 must be the hook root — the caller checks it, this does not. */
+/** Match 0 must be the hook root: the caller checks it, this does not. */
 function visitHastHandleWithHooks(
   plugin: HastVisitorInstance,
   subs: ResolvedSubscription[],

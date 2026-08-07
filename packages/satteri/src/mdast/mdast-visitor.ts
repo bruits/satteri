@@ -60,6 +60,7 @@ import {
   type PluginOptions,
   ROOT_NODE_ID,
   requireRootReplacement,
+  rootReplacementError,
   unencodableContentError,
 } from "../visitor-shared.js";
 import {
@@ -269,12 +270,13 @@ export class MdastVisitorContext {
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
-   * The document root takes a `root` and nothing else — the one place a
-   * `root` is accepted as content.
+   * The document root takes a `root`, the one place a `root` is accepted as
+   * content, or a raw string, which parses to a root of its own.
    */
   replaceNode(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode");
     if (Array.isArray(newNode)) {
+      if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // The last node carries the `replace` so refs back to the target still splice.
       let previous: MdastContent | undefined;
       for (const n of newNode) {
@@ -286,14 +288,14 @@ export class MdastVisitorContext {
       if (previous === undefined) {
         // Replacing with nothing drops the node, like removeNode.
         this.removeNode(node);
-      } else if (id === ROOT_NODE_ID) {
+      } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
         emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous));
       } else {
         emitMdastTree(this.#commandBuffer, "replace", id, previous, true);
       }
       return;
     }
-    if (id === ROOT_NODE_ID) {
+    if (id === ROOT_NODE_ID && !isRawMdastContent(newNode)) {
       emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode));
       return;
     }
@@ -425,11 +427,11 @@ type MdastHookFn = (
 export interface MdastPluginInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
-  /** Runs once per document — an empty one included — before the plugin's
-   *  visitors, awaited when async. */
+  /** Runs once per document, an empty one included, before the plugin's
+   *  visitors. Awaited when async. */
   before?: MdastHookFn;
-  /** Runs once per document — an empty one included — after the plugin's
-   *  visitors have settled, awaited when async. */
+  /** Runs once per document, an empty one included, after the plugin's visitors
+   *  have settled. Awaited when async. */
   after?: MdastHookFn;
   paragraph?: MdastVisitorFn<Paragraph>;
   heading?: MdastVisitorFn<Heading>;
@@ -1049,8 +1051,8 @@ export function visitMdastHandle(
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  // `root` is not a subscribable visitor key, so a sub index past the
-  // visitors can only be the hook subscription — and pre-order puts it first.
+  // `root` is not a subscribable visitor key, so a sub index past the visitors
+  // can only be the hook subscription, and pre-order puts it first.
   if (matchCount > 0 && matchBuf[8] === subs.length) {
     return visitMdastHandleWithHooks(
       handle,
@@ -1092,8 +1094,8 @@ type DeferredMdastVisit = {
   originalNode: MdastNode;
 };
 
-/** Top-level rather than a closure over the caller's locals — capture
- *  measurably slowed per-node dispatch. */
+/** Top-level rather than a closure over the caller's locals: capture measurably
+ *  slowed per-node dispatch. */
 function dispatchMdastMatches(
   matchView: DataView,
   matchBuf: Uint8Array,
@@ -1150,7 +1152,7 @@ function applyDeferredMdastResults(
   });
 }
 
-/** Match 0 must be the hook root — the caller checks it, this does not. */
+/** Match 0 must be the hook root: the caller checks it, this does not. */
 function visitMdastHandleWithHooks(
   handle: MdastHandle,
   plugin: MdastPluginInstance,
