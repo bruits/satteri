@@ -619,9 +619,7 @@ type ResolveInput<P, D extends readonly unknown[] = [0, 0, 0, 0, 0, 0, 0, 0]> = 
 ]
   ? P extends ReadonlyArray<infer Item>
     ? ResolveInput<Item, Rest>
-    : // Must tolerate parameters: a factory taking a `PluginFactoryContext` is
-      // not assignable to `() => infer Def`, so matching on the nullary form
-      // silently drops it here and the compile narrows to a sync result.
+    : // A factory taking a ctx is not assignable to `() => infer Def`, which would drop it as sync.
       P extends (...args: never[]) => infer Def
       ? ResolveInput<Def, Rest>
       : P

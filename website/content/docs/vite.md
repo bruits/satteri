@@ -89,7 +89,7 @@ By default, the plugin compiles MDX with `development: true` in `serve` so React
 
 `MdxOptions` mirrors Sätteri's MDX options minus `outputFormat`. The plugin always emits an ES module so Vite can import it.
 
-Plugins given here apply to every Markdown and MDX file, unless an entry opts out of one — see [What an entry can be](/docs/plugins/#what-an-entry-can-be) for how a plugin limits itself to some files, and the [Plugins](/docs/plugins/) guide for how to write them.
+Plugins given here apply to every Markdown and MDX file, unless an entry opts out of one. See [What an entry can be](/docs/plugins/#what-an-entry-can-be) for how a plugin limits itself to some files, and the [Plugins](/docs/plugins/) guide for how to write them.
 
 ## TypeScript
 

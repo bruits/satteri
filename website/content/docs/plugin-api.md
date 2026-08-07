@@ -57,13 +57,15 @@ import { typography } from "some-package"; // an array of plugins
 markdownToHtml(source, { mdastPlugins: [typography, myPlugin] });
 ```
 
-The bundle's plugins run in their own order, at the bundle's position — the list above is equivalent to spreading `typography` in place.
+The bundle's plugins run in their own order, at the bundle's position, so the list above is equivalent to spreading `typography` in place.
 
-**A skip value** — `null`, `undefined` or `false` — leaves that entry out, so a condition can go straight in the list:
+**A skip value** (`null`, `undefined` or `false`) leaves that entry out, so a condition can go straight in the list:
 
 ```js
 markdownToHtml(source, { mdastPlugins: [isDev && debugPlugin, myPlugin] });
 ```
+
+Only those three are skipped. Any other value that is not a plugin, a factory or a list is rejected with an error naming the option, so a condition that yields `0` or `""` is caught rather than silently dropped.
 
 A factory can return a skip value too, which is how one plugin runs on some documents and not others. Every factory is handed a context describing the document about to be compiled:
 
@@ -82,9 +84,9 @@ const onlyChangelogs = (ctx) => (ctx.fileURL?.pathname.endsWith("/CHANGELOG.md")
 markdownToHtml(source, { mdastPlugins: [onlyChangelogs, myPlugin] });
 ```
 
-Only what is known before parsing is available — there is no tree and no frontmatter yet. `source` is the unparsed document, meant for cheap checks such as "does this contain a code fence at all", not for parsing Markdown by hand.
+Only what is known before parsing is available: there is no tree and no frontmatter yet. `source` is the unparsed document, meant for cheap checks such as "does this contain a code fence at all", not for parsing Markdown by hand. `data` is the same bag the visitors later read and write through `ctx.data`, so a factory can seed it for the plugins that run after it.
 
-Skipping here rather than returning early inside a visitor is what makes it worth doing: a plugin that is never added registers no visitors, and the pipeline picks its parsing and rendering strategy from the plugins that remain. A document that skips every plugin is compiled by the same fast path as one that was passed no plugins, and position tracking is skipped unless a plugin that actually runs asks for it. A factory returning a skip value drops the whole bundle it would otherwise have returned, so a preset can enable or disable itself as a unit — but factories run once per compile even when they skip, so keep them cheap.
+Skipping here rather than returning early inside a visitor is what makes it worth doing: a plugin that is never added registers no visitors, and the pipeline picks its parsing and rendering strategy from the plugins that remain. A document that skips every plugin is compiled by the same fast path as one that was passed no plugins, and position tracking is skipped unless a plugin that actually runs asks for it. A factory returning a skip value drops the whole bundle it would otherwise have returned, so a preset can enable or disable itself as a unit. Factories still run once per compile even when they skip, so keep them cheap.
 
 ### Source positions
 
@@ -435,7 +437,7 @@ The `mdxExpressions` option (default `true`) controls how MDX curly braces in th
 
 Any visitor may return a `Promise`. Sync and async visitors can be mixed freely. If any visitor in the pipeline is async, `markdownToHtml`, `mdxToJs`, and `markdownToJs` return a `Promise`; otherwise they return synchronously.
 
-The return type is decided from the plugins the types can see, so a factory that may return an async plugin types the compile as a `Promise` even on a document where it skips and the result comes back synchronously — `await` the result rather than calling `.then()` on it.
+The return type is decided from the plugins the types can see, so a factory that may return an async plugin types the compile as a `Promise` even on a document where it skips and the result comes back synchronously. Use `await` on the result rather than calling `.then()` on it.
 
 For performance, prefer sync visitors where you can: awaiting per match adds up, especially for a visitor that matches many nodes.
 

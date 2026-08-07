@@ -65,6 +65,21 @@ describe("plugin factory context", () => {
     expect(formats).toEqual(["markdown", "markdown", "mdx"]);
   });
 
+  // markdownToJs runs the MDX pipeline with a different parser, so it could plausibly report "mdx".
+  test("hast factories see the entry point's sourceFormat", () => {
+    const formats: string[] = [];
+    const probe = (ctx: PluginFactoryContext) => {
+      formats.push(ctx.sourceFormat);
+      return null;
+    };
+
+    markdownToHtml("# Title", { hastPlugins: [probe] });
+    markdownToJs("# Title", { hastPlugins: [probe] });
+    mdxToJs("# Title", { hastPlugins: [probe] });
+
+    expect(formats).toEqual(["markdown", "markdown", "mdx"]);
+  });
+
   test("hast factories receive the same context", () => {
     const seen: PluginFactoryContext[] = [];
     const fileURL = new URL("file:///docs/page.mdx");
@@ -226,13 +241,43 @@ describe("plugin factory context", () => {
     expect(calls).toBe(2);
   });
 
-  test("a factory that returns itself is still rejected", () => {
-    const recursive = (): unknown => recursive;
+  test("data written by a factory survives when every plugin skips", () => {
+    const data: Record<string, unknown> = {};
 
-    expect(() =>
-      markdownToHtml("# Title", {
-        mdastPlugins: [recursive as () => never],
-      }),
-    ).toThrow(/mdastPlugins: plugin factory nesting is too deep/);
+    const result = markdownToHtml("# Title", {
+      data,
+      mdastPlugins: [
+        (ctx) => {
+          ctx.data.fromFactory = true;
+          return null;
+        },
+      ],
+      hastPlugins: [() => false],
+    });
+
+    expect(result.data).toBe(data);
+    expect(result.data.fromFactory).toBe(true);
+  });
+
+  test("a factory cannot mutate the context a later factory sees", () => {
+    const seen: string[] = [];
+    const vandal = (ctx: PluginFactoryContext) => {
+      expect(() => {
+        (ctx as { source: string }).source = "tampered";
+      }).toThrow(TypeError);
+      return null;
+    };
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [
+        vandal,
+        (ctx) => {
+          seen.push(ctx.source);
+          return null;
+        },
+      ],
+    });
+
+    expect(seen).toEqual(["# Title"]);
   });
 });

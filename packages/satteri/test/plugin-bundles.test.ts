@@ -6,7 +6,7 @@ import {
   defineMdastPlugin,
   defineHastPlugin,
 } from "../src/index.js";
-import type { MarkdownToHtmlResult } from "../src/index.js";
+import type { MarkdownToHtmlResult, MdastPluginEntry } from "../src/index.js";
 
 /** Records its name on each heading, making run order observable. */
 function recordMdast(order: string[], name: string) {
@@ -224,6 +224,31 @@ describe("nested plugin lists", () => {
     );
     expect(() => markdownToHtml("# T", { hastPlugins: [cyclic as never] })).toThrowError(
       /^hastPlugins: plugin factory nesting is too deep/,
+    );
+  });
+
+  test("factories nest ten deep, and the eleventh is rejected", () => {
+    const order: string[] = [];
+    const nest = (depth: number, plugin: MdastPluginEntry): MdastPluginEntry =>
+      depth === 0 ? plugin : () => nest(depth - 1, plugin);
+
+    markdownToHtml("# T", { mdastPlugins: [nest(10, recordMdast(order, "deep"))] });
+    expect(order).toEqual(["deep"]);
+
+    expect(() =>
+      markdownToHtml("# T", { mdastPlugins: [nest(11, recordMdast(order, "too-deep"))] }),
+    ).toThrowError(/^mdastPlugins: plugin factory nesting is too deep/);
+  });
+
+  test("an entry that is neither a plugin, factory, list nor skip value is rejected", () => {
+    expect(() => markdownToHtml("# T", { mdastPlugins: [0 as never] })).toThrowError(
+      /^mdastPlugins: expected a plugin, a factory, a list, or null\/undefined\/false/,
+    );
+    expect(() => markdownToHtml("# T", { hastPlugins: ["" as never] })).toThrowError(
+      /^hastPlugins: expected a plugin, a factory, a list, or null\/undefined\/false/,
+    );
+    expect(() => markdownToHtml("# T", { mdastPlugins: [true as never] })).toThrowError(
+      /^mdastPlugins: expected a plugin/,
     );
   });
 

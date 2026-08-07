@@ -11,3 +11,5 @@ const onlyChangelogs = (ctx) =>
 
 markdownToHtml(source, { mdastPlugins: [onlyChangelogs, myPlugin] });
 ```
+
+Anything else in a plugin list now fails with an error naming the option and what it expected.
