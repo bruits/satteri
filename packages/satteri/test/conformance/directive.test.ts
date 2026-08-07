@@ -201,6 +201,12 @@ describe("Directive MDAST conformance", () => {
       );
     });
 
+    test("a reference label ending inside a directive's attributes", () => {
+      // The label scan walks raw source, so it can stop on a `]` the directive
+      // holds; the bytes past that `]` are literal text.
+      assertExtMdastConformance('[a][:x{k="]"}]\n\n[:x{k="]: /u\n', DIR);
+    });
+
     test("directive attached to preceding word with no space", () => {
       // Regression: prose like `is:inline` (an Astro attribute name written
       // bare, not in backticks) parses as text + textDirective `:inline`.

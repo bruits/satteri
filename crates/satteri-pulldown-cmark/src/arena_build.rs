@@ -3,14 +3,14 @@
 
 use alloc::borrow::Cow;
 
-use satteri_arena::{line_ending_iter, Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef, line_ending_iter};
 use satteri_ast::mdast::{
-    encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
     CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
     ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType, ReferenceData,
+    encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
 };
 #[cfg(feature = "mdx")]
-use satteri_ast::mdast::{encode_mdx_jsx_element_data, ExpressionData};
+use satteri_ast::mdast::{ExpressionData, encode_mdx_jsx_element_data};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
@@ -456,20 +456,20 @@ fn parse_inner(
                         // spread computation — mirrors the regular-close
                         // arm's blockquote handling but inline here since
                         // ListItem close has its own arm. See §B.
-                        if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last() {
-                            if snap_kind == MdastNodeType::ListItem {
-                                container_jsx_snapshot.pop();
-                                while jsx_stack.len() > snap_len {
-                                    let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
-                                    let loc = byte_offset_to_line_col(source, offset as usize);
-                                    mdx_errors.push((
+                        if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last()
+                            && snap_kind == MdastNodeType::ListItem
+                        {
+                            container_jsx_snapshot.pop();
+                            while jsx_stack.len() > snap_len {
+                                let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
+                                let loc = byte_offset_to_line_col(source, offset as usize);
+                                mdx_errors.push((
                                         offset as usize,
                                         format!(
                                             "Expected a closing tag for `<{name}>` ({loc}) before the end of `listItem`"
                                         ),
                                     ));
-                                    builder.close_node();
-                                }
+                                builder.close_node();
                             }
                         }
                         let id = builder.current_node_id();
@@ -679,20 +679,19 @@ fn parse_inner(
                             ItemBody::Paragraph
                                 | ItemBody::TightParagraph
                                 | ItemBody::DirectiveLabel
-                        ) {
-                            if let Some(opened_at) = paragraph_open_depth.pop() {
-                                while builder.stack_depth() > opened_at {
-                                    if let Some((name, offset, _is_flow)) = jsx_stack.pop() {
-                                        let loc = byte_offset_to_line_col(source, offset as usize);
-                                        mdx_errors.push((
+                        ) && let Some(opened_at) = paragraph_open_depth.pop()
+                        {
+                            while builder.stack_depth() > opened_at {
+                                if let Some((name, offset, _is_flow)) = jsx_stack.pop() {
+                                    let loc = byte_offset_to_line_col(source, offset as usize);
+                                    mdx_errors.push((
                                             offset as usize,
                                             format!(
                                                 "Expected a closing tag for `<{name}>` ({loc}) before the end of `paragraph`"
                                             ),
                                         ));
-                                    }
-                                    builder.close_node();
                                 }
+                                builder.close_node();
                             }
                         }
                         // Drain unclosed JSX opens that were pushed inside a
@@ -704,27 +703,26 @@ fn parse_inner(
                             ItemBody::ListItem(..) => Some(MdastNodeType::ListItem),
                             _ => None,
                         };
-                        if let Some(kind) = container_kind_for_drain {
-                            if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last() {
-                                if snap_kind == kind {
-                                    container_jsx_snapshot.pop();
-                                    while jsx_stack.len() > snap_len {
-                                        let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
-                                        let loc = byte_offset_to_line_col(source, offset as usize);
-                                        let container_label = match kind {
-                                            MdastNodeType::Blockquote => "blockQuote",
-                                            MdastNodeType::ListItem => "listItem",
-                                            _ => "container",
-                                        };
-                                        mdx_errors.push((
+                        if let Some(kind) = container_kind_for_drain
+                            && let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last()
+                            && snap_kind == kind
+                        {
+                            container_jsx_snapshot.pop();
+                            while jsx_stack.len() > snap_len {
+                                let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
+                                let loc = byte_offset_to_line_col(source, offset as usize);
+                                let container_label = match kind {
+                                    MdastNodeType::Blockquote => "blockQuote",
+                                    MdastNodeType::ListItem => "listItem",
+                                    _ => "container",
+                                };
+                                mdx_errors.push((
                                             offset as usize,
                                             format!(
                                                 "Expected a closing tag for `<{name}>` ({loc}) before the end of `{container_label}`"
                                             ),
                                         ));
-                                        builder.close_node();
-                                    }
-                                }
+                                builder.close_node();
                             }
                         }
                         let id = builder.current_node_id();
@@ -975,13 +973,12 @@ fn parse_inner(
                         builder.set_data_current(&[depth]);
                         // Conveyed as `data.hProperties`, which the mdast->hast
                         // pass emits as `id`/`class`/custom attributes.
-                        if let Some(heading_ix) = heading_ix {
-                            if let Some(json) =
+                        if let Some(heading_ix) = heading_ix
+                            && let Some(json) =
                                 encode_heading_h_properties(&inner.allocs[heading_ix])
-                            {
-                                let heading_id = builder.current_node_id();
-                                builder.arena_mut().set_node_data(heading_id, json);
-                            }
+                        {
+                            let heading_id = builder.current_node_id();
+                            builder.arena_mut().set_node_data(heading_id, json);
                         }
                         inner.tree.push();
                     }
@@ -1724,20 +1721,19 @@ fn parse_inner(
                         let checked_val = if checked { 1 } else { 0 };
                         let depth = builder.stack_depth();
                         for i in (0..depth).rev() {
-                            if let Some(node_id) = builder.stack_node_id(i) {
-                                if builder.arena_ref().get_node(node_id).node_type
+                            if let Some(node_id) = builder.stack_node_id(i)
+                                && builder.arena_ref().get_node(node_id).node_type
                                     == MdastNodeType::ListItem as u8
-                                {
-                                    let prev = builder.arena_ref().get_type_data(node_id).to_vec();
-                                    let prev_spread = prev.get(1).copied().unwrap_or(0) != 0;
-                                    let data = ListItemData {
-                                        checked: checked_val,
-                                        spread: prev_spread,
-                                    }
-                                    .to_bytes();
-                                    builder.arena_mut().set_type_data(node_id, &data);
-                                    break;
+                            {
+                                let prev = builder.arena_ref().get_type_data(node_id).to_vec();
+                                let prev_spread = prev.get(1).copied().unwrap_or(0) != 0;
+                                let data = ListItemData {
+                                    checked: checked_val,
+                                    spread: prev_spread,
                                 }
+                                .to_bytes();
+                                builder.arena_mut().set_type_data(node_id, &data);
+                                break;
                             }
                         }
                         inner.tree.next_sibling(cur_ix);
@@ -1843,6 +1839,7 @@ fn parse_inner(
 
                     // Unresolved inline markers, should have been resolved by handle_inline.
                     ItemBody::MaybeEmphasis(..)
+                    | ItemBody::MaybeEmphasisEscaped(..)
                     | ItemBody::MaybeMath(..)
                     | ItemBody::MaybeSmartQuote(..)
                     | ItemBody::MaybeCode(..)
@@ -2151,11 +2148,7 @@ fn normalize_inline_html_wrap(src: &str) -> Option<String> {
         }
         out.push_str(&src[line_start..i]);
     }
-    if out == src {
-        None
-    } else {
-        Some(out)
-    }
+    if out == src { None } else { Some(out) }
 }
 
 fn reference_end(
@@ -2514,7 +2507,7 @@ fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<
 /// `test/conformance/autolink-path.test.ts` holds remark to the same tables.
 #[cfg(test)]
 mod autolink_path_probe {
-    use super::{parse_inner, Arena, Mdast, MdastNodeType, Options};
+    use super::{Arena, Mdast, MdastNodeType, Options, parse_inner};
     use satteri_ast::mdast::decode_link_data;
 
     /// The JS conformance features: GFM, no frontmatter, no math.
@@ -2658,41 +2651,42 @@ mod autolink_path_probe {
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
-    /// The three triggers have disagreeing preceding-character rules, and what
-    /// the construct path blocks falls through to find-and-replace, which wants
-    /// whitespace or punctuation.
+    /// The triggers have disagreeing preceding-character rules, and what the
+    /// construct path blocks falls through to find-and-replace, which wants
+    /// whitespace or punctuation. The fourth is a `www.` literal and an email
+    /// at the same offset, so it also pins which construct is tried first.
     #[test]
     fn a_preceding_character_selects_the_path_per_trigger() {
-        const TRIGGERS: [&str; 3] = ["www.x.y", "http://x.y", "a@b.cd"];
-        let rules: &[(&str, [Path; 3])] = &[
-            ("", [C, C, C]),
-            (" ", [C, C, C]),
-            ("(", [C, C, C]),
-            ("*", [C, C, C]),
-            ("_", [C, C, C]),
-            ("]", [C, C, C]),
-            ("~", [C, C, C]),
-            ("[", [F, F, F]),
-            (".", [F, C, C]),
-            ("/", [F, C, N]),
-            ("+", [F, C, C]),
-            (")", [F, C, C]),
-            ("!", [F, C, C]),
-            (":", [F, C, C]),
-            ("¥", [F, C, C]),
-            ("→", [F, C, C]),
-            ("a", [N, N, C]),
-            ("5", [N, C, C]),
-            ("é", [N, C, C]),
-            ("你", [N, C, C]),
-            ("你好", [N, C, C]),
-            ("\u{200b}", [N, C, C]),
+        const TRIGGERS: [&str; 4] = ["www.x.y", "http://x.y", "a@b.cd", "www.x@y.zz"];
+        let rules: &[(&str, [Path; 4])] = &[
+            ("", [C, C, C, C]),
+            (" ", [C, C, C, C]),
+            ("(", [C, C, C, C]),
+            ("*", [C, C, C, C]),
+            ("_", [C, C, C, C]),
+            ("]", [C, C, C, C]),
+            ("~", [C, C, C, C]),
+            ("[", [F, F, F, F]),
+            (".", [F, C, C, C]),
+            ("/", [F, C, N, F]),
+            ("+", [F, C, C, C]),
+            (")", [F, C, C, C]),
+            ("!", [F, C, C, C]),
+            (":", [F, C, C, C]),
+            ("¥", [F, C, C, C]),
+            ("→", [F, C, C, C]),
+            ("a", [N, N, C, C]),
+            ("5", [N, C, C, C]),
+            ("é", [N, C, C, C]),
+            ("你", [N, C, C, C]),
+            ("你好", [N, C, C, C]),
+            ("\u{200b}", [N, C, C, C]),
             // U+FEFF is not `White_Space`, yet find-and-replace takes it as a
             // boundary. Prefixed with a letter to keep leading-BOM handling out.
-            ("a\u{feff}", [F, C, C]),
+            ("a\u{feff}", [F, C, C, C]),
             // U+0085 is `White_Space`, but find-and-replace does not take it
             // as a boundary.
-            ("\u{85}", [N, C, C]),
+            ("\u{85}", [N, C, C, C]),
         ];
 
         for (prefix, expected) in rules {

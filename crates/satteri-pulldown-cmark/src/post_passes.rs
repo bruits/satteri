@@ -19,7 +19,7 @@
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
 use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
-use satteri_ast::mdast::{codec::LinkData, MdastNodeType};
+use satteri_ast::mdast::{MdastNodeType, codec::LinkData};
 
 use crate::puncttable::is_punctuation;
 
@@ -841,12 +841,13 @@ pub(crate) fn gfm_autolink_literal_pass(
             candidates.push(id);
         }
     }
-    // Smart punctuation rewrites text values in ways `build_raw_map` can't
-    // reverse, so a failed reconstruction is expected there.
-    let strict =
-        !(options.has_smart_quotes() || options.has_smart_dashes() || options.has_smart_ellipses());
+    let smart = Smart {
+        quotes: options.has_smart_quotes(),
+        dashes: options.has_smart_dashes(),
+        ellipses: options.has_smart_ellipses(),
+    };
     for node_id in candidates {
-        split_text_with_autolinks_fnr(arena, node_id, source_bytes, cursor.as_deref_mut(), strict);
+        split_text_with_autolinks_fnr(arena, node_id, source_bytes, cursor.as_deref_mut(), smart);
     }
 }
 
@@ -1080,6 +1081,81 @@ impl RawMap {
     }
 }
 
+/// Which smart-punctuation rewrites are on, so `build_raw_map` can undo them.
+#[derive(Clone, Copy)]
+pub(crate) struct Smart {
+    pub quotes: bool,
+    pub dashes: bool,
+    pub ellipses: bool,
+}
+
+/// How many em and en dashes smart punctuation renders a run of `count`
+/// hyphens as.
+fn smart_dash_counts(count: usize) -> (usize, usize) {
+    debug_assert!(count >= 2, "a lone hyphen is not a dash run");
+    match count % 6 {
+        0 | 3 => (count / 3, 0),
+        2 | 4 => (0, count / 2),
+        1 => (count / 3 - 1, 2),
+        _ => (count / 3, 1),
+    }
+}
+
+/// The em/en dash mix smart punctuation renders a run of `count` hyphens as.
+pub(crate) fn smart_dash_run(count: usize) -> String {
+    let (ems, ens) = smart_dash_counts(count);
+    let mut buf = String::with_capacity(EM_DASH.len() * (ems + ens));
+    for _ in 0..ems {
+        buf.push_str(EM_DASH);
+    }
+    for _ in 0..ens {
+        buf.push_str(EN_DASH);
+    }
+    buf
+}
+
+const EM_DASH: &str = "\u{2014}";
+const EN_DASH: &str = "\u{2013}";
+
+/// The raw and decoded lengths of the smart-punctuation rewrite at `raw[r]`.
+fn smart_seg(raw: &[u8], r: usize, dec: &[u8], d: usize, smart: Smart) -> Option<(usize, usize)> {
+    const ELLIPSIS: &str = "\u{2026}";
+    match raw[r] {
+        b'.' if smart.ellipses
+            && raw[r..].starts_with(b"...")
+            && dec[d..].starts_with(ELLIPSIS.as_bytes()) =>
+        {
+            Some((3, ELLIPSIS.len()))
+        }
+        b'-' if smart.dashes => {
+            let count = 1 + crate::scanners::scan_ch_repeat(&raw[(r + 1)..], b'-');
+            if count < 2 {
+                return None;
+            }
+            let (ems, ens) = smart_dash_counts(count);
+            let mut rest = &dec[d..];
+            for (n, dash) in [(ems, EM_DASH), (ens, EN_DASH)] {
+                for _ in 0..n {
+                    rest = rest.strip_prefix(dash.as_bytes())?;
+                }
+            }
+            Some((count, EM_DASH.len() * (ems + ens)))
+        }
+        c @ (b'"' | b'\'') if smart.quotes => {
+            let curly: [&str; 2] = if c == b'"' {
+                ["\u{201c}", "\u{201d}"]
+            } else {
+                ["\u{2018}", "\u{2019}"]
+            };
+            curly
+                .iter()
+                .find(|q| dec[d..].starts_with(q.as_bytes()))
+                .map(|q| (1, q.len()))
+        }
+        _ => None,
+    }
+}
+
 /// Align a Text node's decoded value with the raw source it came from.
 ///
 /// At each raw offset the walk asks which transform applies, never whether the
@@ -1088,7 +1164,13 @@ impl RawMap {
 ///
 /// Returns `None` when the value can't be reconstructed exactly; callers then
 /// report no position rather than a guessed one that mis-slices the source.
-fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> Option<RawMap> {
+fn build_raw_map(
+    source: &[u8],
+    r_start: usize,
+    r_end: usize,
+    decoded: &str,
+    smart: Smart,
+) -> Option<RawMap> {
     if r_start > r_end || r_end > source.len() {
         return None;
     }
@@ -1110,15 +1192,14 @@ fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> 
         });
     };
     let extend_one_to_one = |segs: &mut Vec<Seg>, r: usize, d: usize| {
-        if let Some(last) = segs.last_mut() {
-            if last.is_one_to_one()
-                && (last.d_start + last.d_len) as usize == d
-                && (last.r_start + last.r_len) as usize == r_start + r
-            {
-                last.d_len += 1;
-                last.r_len += 1;
-                return;
-            }
+        if let Some(last) = segs.last_mut()
+            && last.is_one_to_one()
+            && (last.d_start + last.d_len) as usize == d
+            && (last.r_start + last.r_len) as usize == r_start + r
+        {
+            last.d_len += 1;
+            last.r_len += 1;
+            return;
         }
         segs.push(Seg {
             d_start: d as u32,
@@ -1128,60 +1209,68 @@ fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> 
         });
     };
 
+    // A continuation line's block prefix (`> `, indentation) produces no
+    // decoded bytes. Content can't start with one: leading whitespace is
+    // stripped and a leading `>` would have opened a blockquote.
+    let skip_block_prefix = |segs: &mut Vec<Seg>, r: &mut usize, d: usize| {
+        let prefix_start = *r;
+        while *r < raw.len()
+            && matches!(raw[*r], b' ' | b'\t' | b'>')
+            && dec.get(d) != Some(&raw[*r])
+        {
+            *r += 1;
+        }
+        if *r > prefix_start {
+            segs.push(Seg {
+                d_start: d as u32,
+                d_len: 0,
+                r_start: (r_start + prefix_start) as u32,
+                r_len: (*r - prefix_start) as u32,
+            });
+        }
+    };
+
+    // One predictable test keeps the smart arms off the hot path entirely for
+    // the documents that don't enable them.
+    let smart_any = smart.quotes || smart.dashes || smart.ellipses;
     let mut r = 0usize;
     let mut d = 0usize;
     while r < raw.len() {
         match raw[r] {
             b'&' => {
                 let (len, value) = crate::scanners::scan_entity(&raw[r..]);
-                if let Some(value) = value {
-                    if dec[d..].starts_with(value.as_bytes()) {
-                        push_atomic(&mut segs, r, len, d, value.len());
-                        r += len;
-                        d += value.len();
-                        continue;
-                    }
+                if let Some(value) = value
+                    && dec[d..].starts_with(value.as_bytes())
+                {
+                    push_atomic(&mut segs, r, len, d, value.len());
+                    r += len;
+                    d += value.len();
+                    continue;
                 }
             }
             b'\\' => {
-                if let Some(&next) = raw.get(r + 1) {
-                    if next.is_ascii_punctuation() && dec.get(d) == Some(&next) {
-                        push_atomic(&mut segs, r, 2, d, 1);
-                        r += 2;
-                        d += 1;
-                        continue;
-                    }
+                if let Some(&next) = raw.get(r + 1)
+                    && next.is_ascii_punctuation()
+                    && dec.get(d) == Some(&next)
+                {
+                    push_atomic(&mut segs, r, 2, d, 1);
+                    r += 2;
+                    d += 1;
+                    continue;
                 }
             }
             b'\r' if raw.get(r + 1) == Some(&b'\n') && dec.get(d) == Some(&b'\n') => {
                 push_atomic(&mut segs, r, 2, d, 1);
                 r += 2;
                 d += 1;
+                skip_block_prefix(&mut segs, &mut r, d);
                 continue;
             }
-            b'\n' if dec.get(d) == Some(&b'\n') => {
+            b'\n' | b'\r' if dec.get(d) == Some(&raw[r]) => {
                 extend_one_to_one(&mut segs, r, d);
                 r += 1;
                 d += 1;
-                // A continuation line's block prefix (`> `, indentation)
-                // produces no decoded bytes. Content can't start with one:
-                // leading whitespace is stripped and a leading `>` would have
-                // opened a blockquote.
-                let prefix_start = r;
-                while r < raw.len()
-                    && matches!(raw[r], b' ' | b'\t' | b'>')
-                    && dec.get(d) != Some(&raw[r])
-                {
-                    r += 1;
-                }
-                if r > prefix_start {
-                    segs.push(Seg {
-                        d_start: d as u32,
-                        d_len: 0,
-                        r_start: (r_start + prefix_start) as u32,
-                        r_len: (r - prefix_start) as u32,
-                    });
-                }
+                skip_block_prefix(&mut segs, &mut r, d);
                 continue;
             }
             b' ' | b'\t' if dec.get(d) != Some(&raw[r]) => {
@@ -1200,6 +1289,14 @@ fn build_raw_map(source: &[u8], r_start: usize, r_end: usize, decoded: &str) -> 
                     r_len: (r - run_start) as u32,
                 });
                 continue;
+            }
+            b'.' | b'-' | b'"' | b'\'' if smart_any => {
+                if let Some((r_len, d_len)) = smart_seg(raw, r, dec, d, smart) {
+                    push_atomic(&mut segs, r, r_len, d, d_len);
+                    r += r_len;
+                    d += d_len;
+                    continue;
+                }
             }
             0 => {
                 // CommonMark replaces NUL with the replacement character.
@@ -1254,7 +1351,7 @@ fn split_text_with_autolinks_fnr(
     text_id: u32,
     source_bytes: &[u8],
     cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
-    strict: bool,
+    smart: Smart,
 ) {
     let data = arena.get_type_data(text_id);
     if data.is_empty() {
@@ -1298,10 +1395,10 @@ fn split_text_with_autolinks_fnr(
     let (r_start, r_end) = (node.start_offset as usize, node.end_offset as usize);
     let map = cursor
         .as_ref()
-        .and_then(|_| build_raw_map(source_bytes, r_start, r_end, &text));
+        .and_then(|_| build_raw_map(source_bytes, r_start, r_end, &text, smart));
     if cursor.is_some() && map.is_none() {
         debug_assert!(
-            !strict,
+            false,
             "build_raw_map failed to reconstruct a text value from its source span"
         );
     }
@@ -1507,10 +1604,25 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_raw_map, RawMap};
+    use super::{RawMap, Smart, build_raw_map};
+
+    const OFF: Smart = Smart {
+        quotes: false,
+        dashes: false,
+        ellipses: false,
+    };
+    const ON: Smart = Smart {
+        quotes: true,
+        dashes: true,
+        ellipses: true,
+    };
 
     fn map(source: &str, decoded: &str) -> RawMap {
-        build_raw_map(source.as_bytes(), 0, source.len(), decoded).expect("map should build")
+        build_raw_map(source.as_bytes(), 0, source.len(), decoded, OFF).expect("map should build")
+    }
+
+    fn smart_map(source: &str, decoded: &str) -> RawMap {
+        build_raw_map(source.as_bytes(), 0, source.len(), decoded, ON).expect("map should build")
     }
 
     #[test]
@@ -1543,6 +1655,57 @@ mod tests {
     }
 
     #[test]
+    fn raw_map_spans_a_smart_dash_run_whole() {
+        // `--` occupies raw 1..3 and decodes to one 3-byte en dash.
+        let m = smart_map("a--b", "a\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(4), Some(3));
+        // Interior of the atomic run names no raw offset.
+        assert_eq!(m.raw_start_of(2), None);
+        assert_eq!(m.raw_end_of(2), None);
+    }
+
+    #[test]
+    fn raw_map_spans_a_long_dash_run_by_the_shared_formula() {
+        // Five hyphens render as em + en, so the run is 5 raw to 6 decoded.
+        let m = smart_map("a-----b", "a\u{2014}\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(7), Some(6));
+
+        // Seven is the branch that subtracts: em + two en, 7 raw to 9 decoded.
+        let m = smart_map("a-------b", "a\u{2014}\u{2013}\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(10), Some(8));
+    }
+
+    #[test]
+    fn raw_map_spans_an_ellipsis_and_a_quote_whole() {
+        let m = smart_map("a...b", "a\u{2026}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(4), Some(4));
+
+        let q = smart_map("a\"b\"", "a\u{201c}b\u{201d}");
+        assert_eq!(q.raw_start_of(1), Some(1));
+        assert_eq!(q.raw_end_of(4), Some(2));
+    }
+
+    #[test]
+    fn raw_map_leaves_smart_bytes_alone_when_the_option_is_off() {
+        // The same raw text decodes to itself, so it stays the identity map.
+        assert!(matches!(map("a--b", "a--b"), RawMap::Identity { .. }));
+        // And a curled value cannot be reconstructed without the option.
+        assert!(build_raw_map("a--b".as_bytes(), 0, 4, "a\u{2013}b", OFF).is_none());
+    }
+
+    #[test]
+    fn raw_map_prefers_the_escape_over_a_smart_dash() {
+        // `\-` is an escape, so the run after it is only two hyphens.
+        let m = smart_map("\\---", "-\u{2013}");
+        assert_eq!(m.raw_end_of(1), Some(2));
+        assert_eq!(m.raw_end_of(4), Some(4));
+    }
+
+    #[test]
     fn raw_map_excludes_a_continuation_prefix() {
         // The `> ` produces nothing, so it belongs to neither side.
         let m = map("a\n> b", "a\nb");
@@ -1560,7 +1723,7 @@ mod tests {
 
     #[test]
     fn raw_map_refuses_to_guess() {
-        assert!(build_raw_map(b"a&amp;b", 0, 7, "a&z").is_none());
-        assert!(build_raw_map(b"abc", 0, 3, "abcd").is_none());
+        assert!(build_raw_map(b"a&amp;b", 0, 7, "a&z", OFF).is_none());
+        assert!(build_raw_map(b"abc", 0, 3, "abcd", OFF).is_none());
     }
 }

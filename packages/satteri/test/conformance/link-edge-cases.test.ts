@@ -435,17 +435,37 @@ describe("MDAST conformance: deferred GFM autolink splice", () => {
     assertMdastConformance("[a http://x.y\\&amp;");
   });
 
-  // Only `<` is repaired: the other constructs leave nothing for the splice to
-  // re-open, so fixing them means deferring the escape itself.
-  test.fails("emphasis after a URL-ending backslash is swallowed", () => {
-    // Wanted: text(`<`) + emphasis(link + `_`) + text(`~\t>`); the closing `_`
-    // never becomes a delimiter.
+  test("emphasis closes after a URL-ending backslash", () => {
+    // text(`<`) + emphasis(link) + text(`~\t>`): the `_` the escape hid closes
+    // the run opened before the URL, so the link is the emphasis's only child.
     assertMdastConformance("<_HTTPS://a.b:-&;\\_~\t>");
+    assertMdastConformance("[a] *www.a.b\\* x");
+    assertMdastConformance("[a] _www.a.b\\_ x");
+    assertMdastConformance("[a] **www.a.b\\** x");
+    assertMdastConformance("[a] ~~www.a.b\\~~ x");
+    assertMdastConformance("[a] ~www.a.b\\~ x");
+    assertMdastConformance("`x` *www.a.b\\* x");
+    assertMdastConformance("<b> *www.a.b\\* x");
+    // Blocked instead of fired: the escape stands, so the delimiter it hid is
+    // literal and the run after it is one shorter.
+    assertMdastConformance("[a *www.a.b\\* x");
+    assertMdastConformance("[a ~~www.a.b\\~~ x");
   });
 
-  test.fails("a character reference after a URL-ending backslash is swallowed", () => {
-    // Wanted: link(`www.a.b\`) + text(`&`); the `&amp;` stays literal.
+  test("a character reference after a URL-ending backslash still decodes", () => {
+    // The link owns the `\`, so the reference the escape swallowed is split
+    // back out and decodes: link(`www.a.b\`) + text(`&`).
     assertMdastConformance("[a] www.a.b\\&amp;");
+    assertMdastConformance("[a] www.a.b\\&nbsp;");
+    assertMdastConformance("[a] http://x.y\\&amp;");
+    assertMdastConformance("`x` www.a.b\\&amp;");
+    // Only the reference the escape swallowed is at stake; a second one
+    // after it was never in doubt.
+    assertMdastConformance("[a] www.a.b\\&amp;&amp;");
+    // Not a reference, so the escape stands and the `&` stays literal.
+    assertMdastConformance("[a] www.a.b\\&notanentity;");
+    // Blocked instead of fired: the escape stands and nothing is split out.
+    assertMdastConformance("[a http://x.y\\&amp;");
   });
 
   test("an escaped `<` outside any autolink is unaffected", () => {
@@ -510,8 +530,9 @@ describe("MDAST conformance: unicode whitespace ends a GFM autolink literal", ()
     }
   });
 
-  test.fails("a U+FEFF ending the URL is dropped from the text after it", () => {
-    // The link's extent is right; the drop is general, not autolink-specific.
+  test("a U+FEFF ending the URL stays in the text after it", () => {
     assertMdastConformance("www.example.com/a\u{feff}b\n");
+    assertMdastConformance("https://example.com\u{feff}\n");
+    assertMdastConformance("user@example.com\u{feff}x\n");
   });
 });

@@ -841,9 +841,14 @@ describe("MDAST conformance: control and format characters at a text-node edge",
     assertMdastConformance("    code\u{b}\n");
   });
 
-  test.fails("a BOM opening a text node is kept", () => {
+  test("a BOM opening a text node is kept", () => {
     assertMdastConformance("*a*\u{feff}x\n");
     assertMdastConformance("user@example.com\u{feff}\n");
+    // The drop was general to any value starting on one, not inline-only.
+    assertMdastConformance("x\n\n\u{feff}y\n");
+    assertMdastConformance("# \u{feff}h\n");
+    assertMdastConformance("[a](b)\u{feff}y\n");
+    assertMdastConformance("`\u{feff}x`\n");
   });
 
   test("a line of only VT or FF is a paragraph, not a blank line", () => {

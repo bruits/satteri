@@ -22,10 +22,14 @@ mod tests {
             CowStr::Inlined("inline".try_into().unwrap()),
             CowStr::Inlined("".try_into().unwrap()),
         ] {
-            let encoded = bincode::serialize(i).unwrap();
-            let decoded1: CowStr = bincode::deserialize(&encoded).unwrap();
-            let decoded2: String = bincode::deserialize(&encoded).unwrap();
-            let decoded3: &str = bincode::deserialize(&encoded).unwrap();
+            let config = bincode::config::standard();
+            let encoded = bincode::serde::encode_to_vec(i, config).unwrap();
+            let (decoded1, _): (CowStr, _) =
+                bincode::serde::borrow_decode_from_slice(&encoded, config).unwrap();
+            let (decoded2, _): (String, _) =
+                bincode::serde::decode_from_slice(&encoded, config).unwrap();
+            let (decoded3, _): (&str, _) =
+                bincode::serde::borrow_decode_from_slice(&encoded, config).unwrap();
 
             assert_eq!(&decoded1, i);
             assert_eq!(decoded2, i.as_ref());
@@ -74,11 +78,14 @@ mod tests {
         let str = "a borrowed str";
         let string = "a owned str".to_owned();
 
-        let encoded_str = bincode::serialize(&str).unwrap();
-        let encoded_string = bincode::serialize(&string).unwrap();
+        let config = bincode::config::standard();
+        let encoded_str = bincode::serde::encode_to_vec(str, config).unwrap();
+        let encoded_string = bincode::serde::encode_to_vec(&string, config).unwrap();
 
-        let decoded_str: CowStr = bincode::deserialize(&encoded_str).unwrap();
-        let decoded_string: CowStr = bincode::deserialize(&encoded_string).unwrap();
+        let (decoded_str, _): (CowStr, _) =
+            bincode::serde::borrow_decode_from_slice(&encoded_str, config).unwrap();
+        let (decoded_string, _): (CowStr, _) =
+            bincode::serde::borrow_decode_from_slice(&encoded_string, config).unwrap();
 
         assert_eq!(decoded_str.as_ref(), str);
         assert_eq!(decoded_string.as_ref(), string);

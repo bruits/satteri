@@ -392,3 +392,177 @@ describe("MDX nested deep-indent lists", () => {
     assertMdastConformance("7. outer\n\n          - a\n          - b\n          - c\n");
   });
 });
+
+// A reference label is scanned over raw source, so it can stop on a `]` that
+// sits inside an expression — the expression loses to the label, and the bytes
+// past the label's `]` are literal text. remark resolves them the same way;
+// they used to belong to no node at all here and vanished from the output.
+describe("MDX expression holding the `]` that ends a reference label", () => {
+  test("full reference", () => {
+    assertMdastConformance('[a][{"]"}]\n\n[{"]: /u\n');
+  });
+
+  test("image reference", () => {
+    assertMdastConformance('![a][{"]"}]\n\n[{"]: /u\n');
+  });
+
+  test("the expression's own quoting does not matter", () => {
+    assertMdastConformance("[a][{`]`}]\n\n[{`]: /u\n");
+    assertMdastConformance('[a][{"]" + "]"}]\n\n[{"]: /u\n');
+  });
+
+  test("with content around it", () => {
+    assertMdastConformance('x [a][{"]"}] y\n\n[{"]: /u\n');
+    assertMdastConformance('[a][{"]"}][b]\n\n[{"]: /u\n\n[b]: /v\n');
+    assertMdastConformance('[a][{"]"}]\n\n[{"]: /u "t"\n');
+  });
+
+  test("in every container", () => {
+    assertMdastConformance('> [a][{"]"}]\n\n[{"]: /u\n');
+    assertMdastConformance('- [a][{"]"}]\n\n[{"]: /u\n');
+    assertMdastConformance('# [a][{"]"}]\n\n[{"]: /u\n');
+  });
+
+  // Controls: the expression survives whole when no label ends inside it.
+  test("an expression the label does not cut keeps its node", () => {
+    assertMdastConformance('[{"]"}][a]\n\n[a]: /u\n');
+    assertMdastConformance('[a][{"x"}]\n\n[{"x"}]: /u\n');
+    assertMdastConformance('x {"]"} y\n');
+  });
+
+  // The tree comparison above drops positions, so the span is pinned here.
+  test("the tail spans exactly the bytes past the label", () => {
+    const md = '[a][{"]"}]\n\n[{"]: /u\n';
+    const tree = mdxToMdast(md) as unknown as { children: Array<{ children: AnyNode[] }> };
+    expect(tree.children[0]?.children[1]).toEqual({
+      type: "text",
+      value: '"}]',
+      position: {
+        start: { line: 1, column: 8, offset: 7 },
+        end: { line: 1, column: 11, offset: 10 },
+      },
+    });
+  });
+
+  // Pre-existing: the expression is handed to oxc before reference resolution
+  // takes its `]`, so a diagnostic outlives the node it was about. The tree the
+  // arena builds is correct; only the error is spurious.
+  describe("divergence: an expression the label cuts still reports its error", () => {
+    test.fails("an expression that does not parse on its own", () => {
+      assertMdastConformance("[a][{x]}]\n\n[{x]: /u\n");
+    });
+
+    test.fails("a nested expression the label cuts", () => {
+      assertMdastConformance('[a][{f({"]"})}]\n\n[{f({"]: /u\n');
+    });
+  });
+
+  // The tail is emitted as literal text, so inline markup inside it is never
+  // tokenized. Pre-fix those bytes were dropped outright, so this is the
+  // remaining half of the class rather than a regression.
+  describe("divergence: markup in the tail stays literal", () => {
+    test.fails("emphasis", () => {
+      assertMdastConformance('[a][{"]*x*"}]\n\n[{"]: /u\n');
+    });
+
+    test.fails("inline code", () => {
+      assertMdastConformance('[a][{"]`c`"}]\n\n[{"]: /u\n');
+    });
+
+    test.fails("character reference", () => {
+      assertMdastConformance('[a][{"]&amp;"}]\n\n[{"]: /u\n');
+    });
+  });
+});
+
+// Found by `fuzz/mdx.test.ts` at seed 3. A `//` line comment ends at any line
+// ending, so every case below has to behave the same for `\n`, `\r\n` and a
+// lone `\r`.
+describe.each([
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+  ["CR", "\r"],
+])("MDX expression comment ended by %s", (_name, eol) => {
+  test("the `}` after the comment still closes the expression", () => {
+    assertMdastConformance(`a{//${eol}}`);
+    assertMdastConformance(`a{//${eol}} b`);
+  });
+
+  test("comment mid-expression", () => {
+    assertMdastConformance(`a{1 + // c${eol}2}`);
+    assertMdastConformance(`a{[1, //${eol}2]}`);
+    assertMdastConformance(`a{{x:1} //${eol}}`);
+  });
+
+  test("the comment body is not re-lexed", () => {
+    assertMdastConformance(`a{// }${eol}1}`);
+    assertMdastConformance(`a{// don't${eol}1}`);
+    assertMdastConformance(`a{// \`x${eol}1}`);
+    assertMdastConformance(`a{// /*${eol}1}`);
+    assertMdastConformance(`a{// /x/${eol}1}`);
+  });
+
+  test("comment-only body", () => {
+    assertMdastConformance(`{//${eol}}${eol}`);
+    assertMdastConformance(`{//a${eol}//b${eol}}`);
+  });
+
+  test("in JSX attributes and children", () => {
+    assertMdastConformance(`<Foo bar={//${eol}1}/>${eol}`);
+    assertMdastConformance(`<Box>{//${eol}1}</Box>${eol}`);
+  });
+
+  test("after a value that could swallow the line", () => {
+    assertMdastConformance(`a{\`t\` //${eol}}`);
+  });
+
+  // Block comments legitimately span line endings, so the same shapes must
+  // still run past one rather than stopping with the line.
+  test("block comments still span the line ending", () => {
+    assertMdastConformance(`a{/*${eol}*/}`);
+    assertMdastConformance(`a{/* x${eol}y${eol} */ 1}`);
+    assertMdastConformance(`<Foo bar={/* x${eol}*/ 1}/>${eol}`);
+  });
+
+  test("a comment in an ESM block ends with the line", () => {
+    assertMdastConformance(`import a from "b" //${eol}${eol}x${eol}`);
+    assertMdastConformance(`export const a = 1 // c${eol}${eol}x${eol}`);
+    assertMdastConformance(`import a from "b" //x${eol}import c from "d"${eol}${eol}y${eol}`);
+    assertMdastConformance(`export const a = 1 /* c${eol}*/${eol}${eol}x${eol}`);
+  });
+});
+
+// Pre-existing and unrelated to line endings — both reproduce identically for
+// `\n`, `\r\n` and `\r`. `export` followed by a line ending opens an ESM block
+// in Sätteri but not in micromark, and a block comment spanning the blank line
+// that should end the block is accepted rather than cut short.
+describe.each([
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+  ["CR", "\r"],
+])("MDX ESM block opener divergences (%s)", (_name, eol) => {
+  test.fails("`export` followed by a line ending is not an ESM block", () => {
+    assertMdastConformance(`export${eol}const a = 1${eol}${eol}x${eol}`);
+  });
+
+  test.fails("a block comment does not span the blank line ending the block", () => {
+    assertMdastConformance(`export const a = 1 /*${eol}${eol}*/${eol}z${eol}`);
+  });
+});
+
+// A `\` before a line ending is one JS line continuation, so the string runs on
+// to the next line. CRLF is one ending, and eating only half of it used to end
+// the string on the orphan `\n` and run the expression to end of input.
+describe.each([
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+  ["CR", "\r"],
+])("MDX expression string continued over a line ending (%s)", (_name, eol) => {
+  test("a double-quoted string keeps going", () => {
+    assertMdastConformance(`a{"x\\${eol}y"}${eol}`);
+  });
+
+  test("a single-quoted string keeps going", () => {
+    assertMdastConformance(`a{'x\\${eol}y'}${eol}`);
+  });
+});

@@ -104,7 +104,7 @@ impl NodeBuilder {
     }
 
     pub fn text(value_offset: u32, value_len: u32) -> Self {
-        use satteri_arena::{encode_string_ref_data, StringRef};
+        use satteri_arena::{StringRef, encode_string_ref_data};
         let string_ref = StringRef {
             offset: value_offset,
             len: value_len,

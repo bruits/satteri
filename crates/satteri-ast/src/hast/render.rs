@@ -2,11 +2,11 @@
 
 use satteri_arena::{Arena, Hast};
 
+use crate::hast::HastNodeType;
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
 };
 use crate::hast::properties::property_to_attribute;
-use crate::hast::HastNodeType;
 use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
     PROP_STRING,

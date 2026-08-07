@@ -6,12 +6,12 @@ use crate::generated::wire_constants::{
 };
 #[cfg(feature = "mdx")]
 use crate::js_commands::intern_mdx_jsx_attrs;
-use crate::js_commands::{alloc_opt_str, FieldCollector, HastFieldCollector};
+use crate::js_commands::{FieldCollector, HastFieldCollector, alloc_opt_str};
 use satteri_arena::{ArenaBuilder, Hast, Mdast, StringRef};
 use satteri_ast::hast::codec::encode_element_data;
 #[cfg(feature = "mdx")]
 use satteri_ast::mdast::codec::encode_mdx_jsx_element_data;
-use satteri_ast::mdast::codec::{encode_directive_data, encode_table_data, ColumnAlign};
+use satteri_ast::mdast::codec::{ColumnAlign, encode_directive_data, encode_table_data};
 use satteri_ast::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE};
 
 /// Largest fixed-field `type_data` layout; callers stack-allocate this much.

@@ -1,4 +1,4 @@
-use satteri_pulldown_cmark::{parse, Options};
+use satteri_pulldown_cmark::{Options, parse};
 
 fn render(input: &str, opts: Options) -> String {
     let (arena, _) = parse(input, opts);

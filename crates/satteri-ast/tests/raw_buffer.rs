@@ -1,7 +1,7 @@
 //! Integration tests for raw buffer export.
 
 use satteri_arena::{ArenaBuilder, Mdast, NODE_STRUCT_SIZE};
-use satteri_ast::mdast::{encode_heading_data, MdastNodeType};
+use satteri_ast::mdast::{MdastNodeType, encode_heading_data};
 
 fn build_test_arena() -> satteri_arena::Arena<Mdast> {
     let mut builder = ArenaBuilder::<Mdast>::new("# Hello\n\nParagraph.".to_string());

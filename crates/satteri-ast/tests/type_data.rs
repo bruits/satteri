@@ -2,9 +2,9 @@
 
 use satteri_arena::{ArenaBuilder, Mdast, StringRef};
 use satteri_ast::mdast::{
-    decode_code_data, decode_heading_data, decode_link_data, decode_list_data, encode_code_data,
-    encode_heading_data, encode_link_data, encode_list_data, encode_table_data, ColumnAlign,
-    MdastNodeType,
+    ColumnAlign, MdastNodeType, decode_code_data, decode_heading_data, decode_link_data,
+    decode_list_data, encode_code_data, encode_heading_data, encode_link_data, encode_list_data,
+    encode_table_data,
 };
 
 #[test]

@@ -1,16 +1,16 @@
 //! Convert an MDAST arena to a HAST arena.
 
 use rustc_hash::FxHashMap;
-use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, StringRef, decode_string_ref_data};
 
-use crate::hast::codec::encode_element_data_into;
 use crate::hast::HastNodeType;
+use crate::hast::codec::encode_element_data_into;
 use crate::mdast::{
-    decode_code_data, decode_custom_data, decode_definition_data, decode_description_details_data,
-    decode_footnote_definition_data, decode_heading_data, decode_image_data,
-    decode_image_reference_alt, decode_link_data, decode_list_data, decode_list_item_data,
-    decode_math_data, decode_reference_data, decode_table_alignments, ColumnAlign, ListItemData,
-    MdastNodeType,
+    ColumnAlign, ListItemData, MdastNodeType, decode_code_data, decode_custom_data,
+    decode_definition_data, decode_description_details_data, decode_footnote_definition_data,
+    decode_heading_data, decode_image_data, decode_image_reference_alt, decode_link_data,
+    decode_list_data, decode_list_item_data, decode_math_data, decode_reference_data,
+    decode_table_alignments,
 };
 #[cfg(feature = "mdx")]
 use crate::mdast::{
@@ -2088,7 +2088,7 @@ fn emit_gfm_footnotes_section(
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
+            .find(|&(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
             .map(|(i, _)| i);
 
         let total_refs = ctx
@@ -2382,12 +2382,12 @@ fn convert_mdx_jsx_element(
     builder.set_data_current(&encoded);
     // Propagate `node_data` (e.g. `_mdxExplicitJsx` for source-parsed nodes,
     // or any other plugin-attached metadata) from mdast to hast.
-    if let Some(mdast_nd) = view.get_node_data(node_id) {
-        if !mdast_nd.is_empty() {
-            let id = builder.current_node_id();
-            let copy = mdast_nd.to_vec();
-            builder.arena_mut().set_node_data(id, copy);
-        }
+    if let Some(mdast_nd) = view.get_node_data(node_id)
+        && !mdast_nd.is_empty()
+    {
+        let id = builder.current_node_id();
+        let copy = mdast_nd.to_vec();
+        builder.arena_mut().set_node_data(id, copy);
     }
     copy_position(node_id, view, builder);
 
@@ -2469,7 +2469,7 @@ mod hast_convert_tests {
         arena.set_node_data(node_id, json.as_bytes().to_vec());
     }
 
-    use crate::hast::{hast_arena_to_html, HastNodeType};
+    use crate::hast::{HastNodeType, hast_arena_to_html};
 
     fn parse_md(source: &str) -> Arena<Mdast> {
         let (arena, _) =

@@ -27,8 +27,8 @@ use memchr::{memchr, memchr2};
 
 pub(crate) use crate::puncttable::{is_ascii_punctuation, is_punctuation};
 use crate::{
-    entities, parse::HtmlScanGuard, strings::CowStr, Alignment, BlockQuoteKind, HeadingLevel,
-    LinkType,
+    Alignment, BlockQuoteKind, HeadingLevel, LinkType, entities, parse::HtmlScanGuard,
+    strings::CowStr,
 };
 
 type NewlineHandler<'a> = Option<&'a dyn Fn(&[u8]) -> usize>;
@@ -730,11 +730,7 @@ pub(crate) fn scan_hrule(bytes: &[u8]) -> Result<usize, usize> {
         }
         i += 1;
     }
-    if n >= 3 {
-        Ok(i)
-    } else {
-        Err(i)
-    }
+    if n >= 3 { Ok(i) } else { Err(i) }
 }
 
 /// Scan an ATX heading opening sequence.
@@ -1114,10 +1110,10 @@ pub(crate) fn scan_entity(bytes: &[u8]) -> (usize, Option<CowStr<'static>>) {
         };
     }
     end += scan_while(&bytes[end..], is_ascii_alphanumeric);
-    if bytes.get(end) == Some(&b';') {
-        if let Some(value) = entities::get_entity(&bytes[1..end]) {
-            return (end + 1, Some(value.into()));
-        }
+    if bytes.get(end) == Some(&b';')
+        && let Some(value) = entities::get_entity(&bytes[1..end])
+    {
+        return (end + 1, Some(value.into()));
     }
     (0, None)
 }

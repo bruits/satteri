@@ -3,7 +3,7 @@
 //! stays an expression.
 #![cfg(feature = "mdx")]
 
-use satteri_pulldown_cmark::{parse, CowStr, Event, Options, Parser, Tag, MDX_OPTIONS};
+use satteri_pulldown_cmark::{CowStr, Event, MDX_OPTIONS, Options, Parser, Tag, parse};
 
 fn opts() -> Options {
     MDX_OPTIONS | Options::ENABLE_HEADING_ATTRIBUTES

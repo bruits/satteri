@@ -11,6 +11,7 @@ import {
   serializeHandle,
 } from "../../src/index.js";
 import { satteriMdast, referenceMdast } from "./helpers.js";
+import { markdownToMdast } from "../../src/index.js";
 
 interface Positioned {
   type: string;
@@ -35,7 +36,11 @@ function flatten(tree: unknown): Positioned[] {
 
 /** Every emitted node, paired with the source text its span covers. */
 function spans(md: string): Array<[string, string, string]> {
-  return flatten(satteriMdast(md))
+  return spansOf(md, satteriMdast(md));
+}
+
+function spansOf(md: string, tree: unknown): Array<[string, string, string]> {
+  return flatten(tree)
     .filter((n) => n.type === "link" || n.type === "text")
     .map((n) => [
       n.type,
@@ -154,6 +159,16 @@ describe("find-and-replace autolink positions", () => {
     expect(link.position!.start).toEqual({ line: 2, column: 3, offset: 7 });
   });
 
+  test("7b. a lone carriage return ends the line the prefix follows", () => {
+    const md = "> [a\r> www.x.y";
+    expectReferenceTakesFnr(md);
+    expect(spans(md)).toEqual([
+      ["text", "[a\r", "[a\r"],
+      ["link", "http://www.x.y", "www.x.y"],
+      ["text", "www.x.y", "www.x.y"],
+    ]);
+  });
+
   test("8. a multi-character reference is included whole or not at all", () => {
     // `&fjlig;` decodes to two characters, so a boundary inside it has no raw
     // offset to name; here it falls within the match.
@@ -197,5 +212,81 @@ describe("find-and-replace autolink positions", () => {
     } finally {
       dropHandle(handle);
     }
+  });
+});
+
+// Smart punctuation rewrites the text a find-and-replace autolink is found in,
+// so the decoded value no longer matches its source span byte for byte. The
+// alignment undoes the three rewrites, and these pin that it lands exactly —
+// an approximate span would be worse than the absent one it replaces.
+describe("smart punctuation does not cost the autolink its position", () => {
+  const smart = (md: string) =>
+    spansOf(
+      md,
+      markdownToMdast(md, {
+        features: { frontmatter: false, math: false, smartPunctuation: true },
+      }),
+    );
+
+  test.each([
+    // Inside the URL: the value curls, the span still covers the raw run.
+    ["[www.a.com/a--b", "http://www.a.com/a\u{2013}b", "www.a.com/a--b"],
+    ["[www.a.com/a...b", "http://www.a.com/a\u{2026}b", "www.a.com/a...b"],
+    ['[www.a.com/a"b', "http://www.a.com/a\u{201c}b", 'www.a.com/a"b'],
+    // The `%6` em/en formula, which the alignment shares with the first pass.
+    ["[www.a.com/a----b", "http://www.a.com/a\u{2013}\u{2013}b", "www.a.com/a----b"],
+    ["[www.a.com/a-----b", "http://www.a.com/a\u{2014}\u{2013}b", "www.a.com/a-----b"],
+  ])("%j", (md, url, slice) => {
+    const link = smart(md).find(([type]) => type === "link");
+    expect(link).toEqual(["link", url, slice]);
+  });
+
+  test("a rewrite before or after the match keeps every span exact", () => {
+    expect(smart('"q" [www.a.com/x')).toEqual([
+      ["text", "\u{201c}q\u{201d} [", '"q" ['],
+      ["link", "http://www.a.com/x", "www.a.com/x"],
+      ["text", "www.a.com/x", "www.a.com/x"],
+    ]);
+    expect(smart("[www.a.com/x -- y")).toEqual([
+      ["text", "[", "["],
+      ["link", "http://www.a.com/x", "www.a.com/x"],
+      ["text", "www.a.com/x", "www.a.com/x"],
+      ["text", " \u{2013} y", " -- y"],
+    ]);
+  });
+
+  test("it composes with the alignment's existing rules", () => {
+    // A continuation prefix, a character reference, and an escape that keeps
+    // its `-` out of the dash run.
+    expect(smart('> "q"\n> [www.a.com/x').at(1)).toEqual([
+      "link",
+      "http://www.a.com/x",
+      "www.a.com/x",
+    ]);
+    expect(smart("-- [www.a.com/&amp;b").at(1)).toEqual([
+      "link",
+      "http://www.a.com/&b",
+      "www.a.com/&amp;b",
+    ]);
+    expect(smart('[www.a.com/a\\"b').at(1)).toEqual([
+      "link",
+      'http://www.a.com/a"b',
+      'www.a.com/a\\"b',
+    ]);
+  });
+
+  test("a lone carriage return keeps the alignment on the rails", () => {
+    expect(smart('> "q"\r> [www.a.com/x').at(1)).toEqual([
+      "link",
+      "http://www.a.com/x",
+      "www.a.com/x",
+    ]);
+  });
+
+  test("the construct path is untouched: smart punctuation never enters a URL", () => {
+    expect(smart("www.a.com/a--b")).toEqual([
+      ["link", "http://www.a.com/a--b", "www.a.com/a--b"],
+      ["text", "www.a.com/a--b", "www.a.com/a--b"],
+    ]);
   });
 });

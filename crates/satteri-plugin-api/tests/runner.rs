@@ -1,5 +1,5 @@
 use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
-use satteri_ast::mdast::{codec::*, MdastNodeType};
+use satteri_ast::mdast::{MdastNodeType, codec::*};
 use satteri_plugin_api::*;
 
 fn build_test_arena() -> Arena<Mdast> {

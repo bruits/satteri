@@ -25,6 +25,7 @@ const A_TRIGGERS = [
   "http://example.com",
   "user@example.com",
   "_user@example.com",
+  "www.user@example.com",
 ];
 
 // What each trigger links to when the preceding character lets it through, so a
@@ -33,62 +34,95 @@ const W = "http://www.example.com";
 const H = "http://example.com";
 const E = "mailto:user@example.com";
 const U = "mailto:_user@example.com";
+// The last trigger is a `www.` literal and an email at the same offset. The
+// email is registered first, so it wins wherever the preceding character lets
+// it through — and only there does the `www.` half get the match.
+const O = "mailto:www.user@example.com";
+const OW = "http://www.user@example.com";
 /** The trigger does not become a link at all. */
 const NO = "";
 
 const PRECEDING: Array<{ prefix: string; name: string; urls: string[] }> = [
-  { prefix: "", name: "start of document", urls: [W, H, E, U] },
-  { prefix: " ", name: "space", urls: [W, H, E, U] },
-  { prefix: "  ", name: "two spaces", urls: [W, H, E, U] },
-  { prefix: "(", name: "`(`", urls: [W, H, E, U] },
-  { prefix: "*", name: "`*`", urls: [W, H, E, U] },
-  { prefix: "_", name: "`_`", urls: [W, H, U, "mailto:__user@example.com"] },
-  { prefix: "~", name: "`~`", urls: [W, H, E, U] },
-  { prefix: "]", name: "`]`", urls: [W, H, E, U] },
-  { prefix: ">", name: "`>` (a blockquote marker here)", urls: [W, H, E, U] },
+  { prefix: "", name: "start of document", urls: [W, H, E, U, O] },
+  { prefix: " ", name: "space", urls: [W, H, E, U, O] },
+  { prefix: "  ", name: "two spaces", urls: [W, H, E, U, O] },
+  { prefix: "(", name: "`(`", urls: [W, H, E, U, O] },
+  { prefix: "*", name: "`*`", urls: [W, H, E, U, O] },
+  {
+    prefix: "_",
+    name: "`_`",
+    urls: [W, H, U, "mailto:__user@example.com", "mailto:_www.user@example.com"],
+  },
+  { prefix: "~", name: "`~`", urls: [W, H, E, U, O] },
+  { prefix: "]", name: "`]`", urls: [W, H, E, U, O] },
+  { prefix: ">", name: "`>` (a blockquote marker here)", urls: [W, H, E, U, O] },
   {
     prefix: ".",
     name: "`.`",
-    urls: [W, H, "mailto:.user@example.com", "mailto:._user@example.com"],
+    urls: [
+      W,
+      H,
+      "mailto:.user@example.com",
+      "mailto:._user@example.com",
+      "mailto:.www.user@example.com",
+    ],
   },
-  { prefix: ",", name: "`,`", urls: [W, H, E, U] },
-  { prefix: '"', name: '`"`', urls: [W, H, E, U] },
+  { prefix: ",", name: "`,`", urls: [W, H, E, U, O] },
+  { prefix: '"', name: '`"`', urls: [W, H, E, U, O] },
   {
     prefix: "-",
     name: "`-`",
-    urls: [W, H, "mailto:-user@example.com", "mailto:-_user@example.com"],
+    urls: [
+      W,
+      H,
+      "mailto:-user@example.com",
+      "mailto:-_user@example.com",
+      "mailto:-www.user@example.com",
+    ],
   },
-  { prefix: "|", name: "`|`", urls: [W, H, E, U] },
-  { prefix: "/", name: "`/`", urls: [W, H, NO, E] },
-  { prefix: "[", name: "`[`", urls: [W, H, E, U] },
-  { prefix: "\\", name: "`\\`", urls: [W, H, E, U] },
-  { prefix: "©", name: "So symbol", urls: [W, H, E, U] },
-  { prefix: "€", name: "Sc symbol", urls: [W, H, E, U] },
-  { prefix: "±", name: "Sm symbol", urls: [W, H, E, U] },
-  { prefix: "—", name: "Pd punctuation", urls: [W, H, E, U] },
-  { prefix: "•", name: "Po punctuation", urls: [W, H, E, U] },
-  { prefix: "。", name: "CJK Po punctuation", urls: [W, H, E, U] },
-  { prefix: "（", name: "Ps punctuation", urls: [W, H, E, U] },
-  { prefix: "\u{a0}", name: "Zs space", urls: [W, H, E, U] },
+  { prefix: "|", name: "`|`", urls: [W, H, E, U, O] },
+  { prefix: "/", name: "`/`", urls: [W, H, NO, E, OW] },
+  { prefix: "[", name: "`[`", urls: [W, H, E, U, OW] },
+  { prefix: "\\", name: "`\\`", urls: [W, H, E, U, O] },
+  { prefix: "©", name: "So symbol", urls: [W, H, E, U, O] },
+  { prefix: "€", name: "Sc symbol", urls: [W, H, E, U, O] },
+  { prefix: "±", name: "Sm symbol", urls: [W, H, E, U, O] },
+  { prefix: "—", name: "Pd punctuation", urls: [W, H, E, U, O] },
+  { prefix: "•", name: "Po punctuation", urls: [W, H, E, U, O] },
+  { prefix: "。", name: "CJK Po punctuation", urls: [W, H, E, U, O] },
+  { prefix: "（", name: "Ps punctuation", urls: [W, H, E, U, O] },
+  { prefix: "\u{a0}", name: "Zs space", urls: [W, H, E, U, O] },
   {
     prefix: "5",
     name: "Nd digit",
-    urls: [NO, H, "mailto:5user@example.com", "mailto:5_user@example.com"],
+    urls: [
+      NO,
+      H,
+      "mailto:5user@example.com",
+      "mailto:5_user@example.com",
+      "mailto:5www.user@example.com",
+    ],
   },
   {
     prefix: "a",
     name: "ASCII letter",
-    urls: [NO, NO, "mailto:auser@example.com", "mailto:a_user@example.com"],
+    urls: [
+      NO,
+      NO,
+      "mailto:auser@example.com",
+      "mailto:a_user@example.com",
+      "mailto:awww.user@example.com",
+    ],
   },
-  { prefix: "α", name: "Ll letter", urls: [NO, H, E, U] },
-  { prefix: "中", name: "Lo letter", urls: [NO, H, E, U] },
-  { prefix: "e\u{301}", name: "Mn combining mark", urls: [NO, H, E, U] },
-  { prefix: "\u{200b}", name: "Cf zero-width space", urls: [NO, H, E, U] },
-  { prefix: "\u{ad}", name: "Cf soft hyphen", urls: [NO, H, E, U] },
-  { prefix: "❤\u{fe0f}", name: "variation selector", urls: [NO, H, E, U] },
-  { prefix: "🯰", name: "astral Nd digit", urls: [NO, H, E, U] },
-  { prefix: "𝐀", name: "astral Lu letter", urls: [NO, H, E, U] },
-  { prefix: "𠀀", name: "astral Lo letter", urls: [NO, H, E, U] },
+  { prefix: "α", name: "Ll letter", urls: [NO, H, E, U, O] },
+  { prefix: "中", name: "Lo letter", urls: [NO, H, E, U, O] },
+  { prefix: "e\u{301}", name: "Mn combining mark", urls: [NO, H, E, U, O] },
+  { prefix: "\u{200b}", name: "Cf zero-width space", urls: [NO, H, E, U, O] },
+  { prefix: "\u{ad}", name: "Cf soft hyphen", urls: [NO, H, E, U, O] },
+  { prefix: "❤\u{fe0f}", name: "variation selector", urls: [NO, H, E, U, O] },
+  { prefix: "🯰", name: "astral Nd digit", urls: [NO, H, E, U, O] },
+  { prefix: "𝐀", name: "astral Lu letter", urls: [NO, H, E, U, O] },
+  { prefix: "𠀀", name: "astral Lo letter", urls: [NO, H, E, U, O] },
 ];
 
 describe("family A: the preceding-character classifier", () => {
@@ -100,7 +134,7 @@ describe("family A: the preceding-character classifier", () => {
     }
   });
 
-  // The trigger kinds the four-column table above does not carry.
+  // The trigger kinds the table above does not carry.
   test.each([
     ["www.example.com/a/b\n", ["http://www.example.com/a/b"]],
     ["https://example.com/a?b=c#d\n", ["https://example.com/a?b=c#d"]],
@@ -442,5 +476,54 @@ describe("family J: unicode whitespace as terminator and boundary", () => {
     ["x\u{feff}_user@example.com\n", ["mailto:_user@example.com"]],
     ["[a www.example.com/p\u{feff}q\n", ["http://www.example.com/p\u{feff}q"]],
     ["[a x\u{feff}www.example.com\n", ["http://www.example.com"]],
+  ])("%j", conforms);
+});
+
+// GFM registers the email construct ahead of `www` at the same offset, so an
+// email whose local part opens with `www.` beats the www literal that could
+// start there. The rows below are the whole family: every failing shape the
+// differential sweep found was one of these local parts under one of the
+// preceding characters `www` itself accepts.
+describe("family M: email and `www` triggering at the same offset", () => {
+  test.each([
+    ["www.x.ya@b.cd\n", ["mailto:www.x.ya@b.cd"]],
+    // The extent shrinks too, not just the scheme: `/p` stays text.
+    ["www.x.ya@b.cd/p\n", ["mailto:www.x.ya@b.cd"]],
+    ["WWW.x@b.cd\n", ["mailto:WWW.x@b.cd"]],
+    ["wWw.x@b.cd\n", ["mailto:wWw.x@b.cd"]],
+    ["www.@b.cd\n", ["mailto:www.@b.cd"]],
+    ["www.-@b.cd\n", ["mailto:www.-@b.cd"]],
+    ["www.1@b.cd\n", ["mailto:www.1@b.cd"]],
+    ["www.a.b.c@d.ef\n", ["mailto:www.a.b.c@d.ef"]],
+    // The email construct fails on its own terms here, so `www` still wins.
+    ["www.x.ya@b\n", ["http://www.x.ya@b"]],
+    // `_` is trailing punctuation, so the www URL trims it — and the email
+    // domain it would have ended on is rejected for not ending alphabetic.
+    ["www.x.ya@b.cd_\n", ["http://www.x.ya@b.cd"]],
+    // The domain scan rejects outright, so no span is skipped and the `@`
+    // hook picks it up unaided.
+    ["www.a_b@c.de\n", ["mailto:www.a_b@c.de"]],
+    ["_www.x.ya@b.cd\n", ["mailto:_www.x.ya@b.cd"]],
+    // An atext run from `h` stops at `:`, so a protocol literal and an email
+    // can never open at the same offset.
+    ["http://x.ya@b.cd\n", ["http://x.ya@b.cd"]],
+    ["https://x.ya@b.cd\n", ["https://x.ya@b.cd"]],
+    // The characters `www` accepts as a predecessor.
+    ["(www.x.ya@b.cd)\n", ["mailto:www.x.ya@b.cd"]],
+    ["*www.x.ya@b.cd*\n", ["mailto:www.x.ya@b.cd"]],
+    ["~www.x.ya@b.cd~\n", ["mailto:www.x.ya@b.cd"]],
+    ["]www.x.ya@b.cd\n", ["mailto:www.x.ya@b.cd"]],
+    ["x www.x.ya@b.cd\n", ["mailto:www.x.ya@b.cd"]],
+    // Not predecessors `www` accepts, so only the `@` hook can fire.
+    ["a.www.x.ya@b.cd\n", ["mailto:a.www.x.ya@b.cd"]],
+    ["1www.x.ya@b.cd\n", ["mailto:1www.x.ya@b.cd"]],
+    // The email ends before the www literal would have, and the bytes between
+    // the two ends go back through inline scanning as ordinary content.
+    ["www.x.ya@b.cd*em*\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd\\*\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd&amp;\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd)\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd<b>\n", ["mailto:www.x.ya@b.cd"]],
+    ["www.x.ya@b.cd`c`\n", ["mailto:www.x.ya@b.cd"]],
   ])("%j", conforms);
 });

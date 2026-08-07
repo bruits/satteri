@@ -19,7 +19,7 @@ export class MdastReader {
     } else {
       this.#view = new DataView(buffer);
     }
-    this.#textDecoder = new TextDecoder("utf-8");
+    this.#textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
     this.#header = this.#readHeader();
   }
 
