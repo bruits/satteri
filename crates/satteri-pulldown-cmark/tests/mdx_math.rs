@@ -2,9 +2,9 @@
 #![cfg(feature = "mdx")]
 
 use satteri_arena::{Arena, Mdast};
-use satteri_ast::mdast::{decode_math_data, MdastNodeType};
-use satteri_pulldown_cmark::arena_build::parse;
+use satteri_ast::mdast::{MdastNodeType, decode_math_data};
 use satteri_pulldown_cmark::Options;
+use satteri_pulldown_cmark::arena_build::parse;
 
 fn mdx_math_options() -> Options {
     Options::ENABLE_MDX | Options::ENABLE_MATH

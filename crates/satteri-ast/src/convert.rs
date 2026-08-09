@@ -1,16 +1,16 @@
 //! Convert an MDAST arena to a HAST arena.
 
 use rustc_hash::FxHashMap;
-use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, StringRef, decode_string_ref_data};
 
-use crate::hast::codec::encode_element_data_into;
 use crate::hast::HastNodeType;
+use crate::hast::codec::encode_element_data_into;
 use crate::mdast::{
-    decode_code_data, decode_custom_data, decode_definition_data, decode_description_details_data,
-    decode_footnote_definition_data, decode_heading_data, decode_image_data,
-    decode_image_reference_alt, decode_link_data, decode_list_data, decode_list_item_data,
-    decode_math_data, decode_reference_data, decode_table_alignments, ColumnAlign, ListItemData,
-    MdastNodeType,
+    ColumnAlign, ListItemData, MdastNodeType, decode_code_data, decode_custom_data,
+    decode_definition_data, decode_description_details_data, decode_footnote_definition_data,
+    decode_heading_data, decode_image_data, decode_image_reference_alt, decode_link_data,
+    decode_list_data, decode_list_item_data, decode_math_data, decode_reference_data,
+    decode_table_alignments,
 };
 #[cfg(feature = "mdx")]
 use crate::mdast::{
@@ -1241,7 +1241,12 @@ fn convert_node(
             }
             let code_id = if code_data.lang.len > 0 {
                 let lang = view.get_str(code_data.lang);
-                let class_val = format!("language-{}", lang);
+                // A character reference can decode to whitespace, so only the
+                // first word of the info string names the language.
+                let class_val = format!(
+                    "language-{}",
+                    lang.split(char::is_whitespace).next().unwrap_or("")
+                );
                 let class_ref = builder.alloc_string(&class_val);
                 let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
                 open_element_with_props(builder, "code", &props)
@@ -1312,8 +1317,8 @@ fn convert_node(
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
                 let value = view.get_str(string_ref);
-                if value.contains('\n') {
-                    let normalized = value.replace('\n', " ");
+                if value.contains(['\n', '\r']) {
+                    let normalized = code_span_line_endings_to_spaces(value);
                     let text_id = add_text_node(builder, &normalized);
                     copy_position_to(text_id, node_id, view, builder);
                 } else {
@@ -1789,6 +1794,21 @@ fn convert_node(
     }
 }
 
+/// Each line ending in a code span renders as one space, so a `\r\n` collapses
+/// to a single space rather than two.
+fn code_span_line_endings_to_spaces(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(i) = rest.find(['\r', '\n']) {
+        out.push_str(&rest[..i]);
+        out.push(' ');
+        let after = &rest[i..];
+        rest = after.strip_prefix("\r\n").unwrap_or(&after[1..]);
+    }
+    out.push_str(rest);
+    out
+}
+
 fn convert_children(
     node_id: u32,
     view: &Arena<Mdast>,
@@ -2068,7 +2088,7 @@ fn emit_gfm_footnotes_section(
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
+            .find(|&(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
             .map(|(i, _)| i);
 
         let total_refs = ctx
@@ -2362,12 +2382,12 @@ fn convert_mdx_jsx_element(
     builder.set_data_current(&encoded);
     // Propagate `node_data` (e.g. `_mdxExplicitJsx` for source-parsed nodes,
     // or any other plugin-attached metadata) from mdast to hast.
-    if let Some(mdast_nd) = view.get_node_data(node_id) {
-        if !mdast_nd.is_empty() {
-            let id = builder.current_node_id();
-            let copy = mdast_nd.to_vec();
-            builder.arena_mut().set_node_data(id, copy);
-        }
+    if let Some(mdast_nd) = view.get_node_data(node_id)
+        && !mdast_nd.is_empty()
+    {
+        let id = builder.current_node_id();
+        let copy = mdast_nd.to_vec();
+        builder.arena_mut().set_node_data(id, copy);
     }
     copy_position(node_id, view, builder);
 
@@ -2449,7 +2469,7 @@ mod hast_convert_tests {
         arena.set_node_data(node_id, json.as_bytes().to_vec());
     }
 
-    use crate::hast::{hast_arena_to_html, HastNodeType};
+    use crate::hast::{HastNodeType, hast_arena_to_html};
 
     fn parse_md(source: &str) -> Arena<Mdast> {
         let (arena, _) =
@@ -2692,5 +2712,16 @@ mod hast_convert_tests {
         set_data(&mut mdast, para_id, r#"{"someOther":"value"}"#);
         let html = hast_arena_to_html(&mdast_arena_to_hast_arena(&mdast));
         assert!(html.contains("<p>Hi</p>"), "got {html}");
+    }
+
+    #[test]
+    fn code_span_line_endings_render_as_one_space() {
+        let f = super::code_span_line_endings_to_spaces;
+        assert_eq!(f("a\r\nb"), "a b");
+        assert_eq!(f("a\rb"), "a b");
+        assert_eq!(f("a\nb"), "a b");
+        assert_eq!(f("a\r\n\r\nb"), "a  b");
+        assert_eq!(f("\r\n"), " ");
+        assert_eq!(f("ab"), "ab");
     }
 }

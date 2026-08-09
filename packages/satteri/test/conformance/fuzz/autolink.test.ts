@@ -39,10 +39,11 @@ describe("fuzz: GFM autolink conformance", () => {
         writeFileSync(issuesPath, report + "\n");
       }
 
-      const hard = unique.filter((i) => i.kind !== "position-only");
-      const inputs = hard.map((i) => JSON.stringify(i.input));
+      // Position-only issues count: an autolink's position reveals which pass
+      // produced it, so a difference means the wrong path ran.
+      const inputs = unique.map((i) => JSON.stringify(i.input));
       expect
-        .soft(hard, `Found ${hard.length} autolink conformance issue(s):\n${inputs.join("\n")}`)
+        .soft(unique, `Found ${unique.length} autolink conformance issue(s):\n${inputs.join("\n")}`)
         .toHaveLength(0);
     },
     FUZZ_TIMEOUT_MS,

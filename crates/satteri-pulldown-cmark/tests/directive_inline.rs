@@ -3,8 +3,8 @@
 
 use satteri_arena::{Arena, Mdast, StringRef};
 use satteri_ast::mdast::MdastNodeType;
-use satteri_pulldown_cmark::arena_build::{parse, DEFAULT_OPTIONS};
 use satteri_pulldown_cmark::Options;
+use satteri_pulldown_cmark::arena_build::{DEFAULT_OPTIONS, parse};
 
 fn dir_options() -> Options {
     DEFAULT_OPTIONS | Options::ENABLE_DIRECTIVE
@@ -186,4 +186,25 @@ fn directive_fragment_inside_code_span_does_not_swallow_later_code() {
     let children = arena.get_children(para);
     assert_eq!(node_value(&arena, children[0]), ":foo[");
     assert_eq!(node_value(&arena, children[2]), "bar]");
+}
+
+// A container directive's `[label]` has no event mapping, so the pull parser
+// panics on every one of them. The arena path, which every consumer in this
+// workspace uses, builds the label correctly.
+#[test]
+#[should_panic(expected = "unexpected item body DirectiveLabel")]
+fn a_container_directive_label_has_no_event() {
+    satteri_pulldown_cmark::Parser::new_ext(":::a[b]\n:::\n", dir_options()).count();
+}
+
+#[test]
+fn the_arena_path_builds_that_label() {
+    let (arena, _) = parse(":::a[b]\n:::\n", dir_options());
+    let directive = arena.get_children(0)[0];
+    let label = arena.get_children(directive)[0];
+    assert_eq!(
+        arena.get_node(label).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+    assert_eq!(node_value(&arena, arena.get_children(label)[0]), "b");
 }

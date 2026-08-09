@@ -30,6 +30,7 @@ fn generate_tests_from_spec() {
     let hardcoded = [
         "./third_party/CommonMark/spec.txt",
         "./third_party/CommonMark/smart_punct.txt",
+        "./third_party/GitHub/gfm_autolink.txt",
         "./third_party/GitHub/gfm_table.txt",
         "./third_party/GitHub/gfm_strikethrough.txt",
         "./third_party/GitHub/gfm_tasklist.txt",
@@ -156,6 +157,7 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         "spec" | "smart_punct" => 0,
 
         // GFM specs: GFM + the specific extension
+        "gfm_autolink" => GFM,
         "gfm_table" => GFM | TABLES,
         "gfm_strikethrough" => GFM | STRIKETHROUGH,
         "gfm_tasklist" => GFM | TASKLISTS,

@@ -1,5 +1,3 @@
-use memchr::memchr;
-
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{BigIntLiteral, NumericLiteral};
 use oxc_ast_visit::Visit;
@@ -334,10 +332,7 @@ pub(crate) fn try_parse_expression_body(
     let mut has_non_ws = false;
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
-            i += 2;
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
+            i = line_comment_end(bytes, i + 2);
         } else if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
             let comment_start = i;
             i += 2;
@@ -585,6 +580,10 @@ fn skip_string(bytes: &[u8], start: usize) -> usize {
     while ix < len && bytes[ix] != quote && bytes[ix] != b'\n' && bytes[ix] != b'\r' {
         if bytes[ix] == b'\\' {
             ix += 1;
+            // A line continuation escapes the whole ending, CRLF included.
+            if bytes.get(ix) == Some(&b'\r') && bytes.get(ix + 1) == Some(&b'\n') {
+                ix += 1;
+            }
         }
         ix += 1;
     }
@@ -592,6 +591,12 @@ fn skip_string(bytes: &[u8], start: usize) -> usize {
         ix += 1;
     }
     ix
+}
+
+/// End of a `//` line comment whose body starts at `start`. Stops *at* the line
+/// ending rather than past it, so the caller's own CRLF pairing still runs.
+fn line_comment_end(bytes: &[u8], start: usize) -> usize {
+    memchr::memchr2(b'\n', b'\r', &bytes[start..]).map_or(bytes.len(), |i| start + i)
 }
 
 /// Is the byte at `ix` a line ending followed by a blank line (or EOF)?
@@ -633,13 +638,13 @@ fn check_container_after_newline(
     ix: &mut usize,
     container_check: &Option<ContainerLineCheck<'_>>,
 ) -> Option<()> {
-    if let Some(check) = container_check {
-        if *ix < bytes.len() {
-            if let Some(skip) = check(&bytes[*ix..]) {
-                *ix += skip;
-            } else {
-                return None;
-            }
+    if let Some(check) = container_check
+        && *ix < bytes.len()
+    {
+        if let Some(skip) = check(&bytes[*ix..]) {
+            *ix += skip;
+        } else {
+            return None;
         }
     }
     Some(())
@@ -654,14 +659,14 @@ fn check_container_after_newline_lazy(
     ix: &mut usize,
     container_check: &Option<ContainerLineCheck<'_>>,
 ) -> LineMode {
-    if let Some(check) = container_check {
-        if *ix < bytes.len() {
-            if let Some(skip) = check(&bytes[*ix..]) {
-                *ix += skip;
-                return LineMode::Strict;
-            }
-            return LineMode::Lazy;
+    if let Some(check) = container_check
+        && *ix < bytes.len()
+    {
+        if let Some(skip) = check(&bytes[*ix..]) {
+            *ix += skip;
+            return LineMode::Strict;
         }
+        return LineMode::Lazy;
     }
     LineMode::Strict
 }
@@ -835,10 +840,7 @@ fn scan_mdx_expression_end_inner(
             }
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'/' => {
                 reject_if_lazy!();
-                ix += 2;
-                while ix < bytes.len() && bytes[ix] != b'\n' {
-                    ix += 1;
-                }
+                ix = line_comment_end(bytes, ix + 2);
             }
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'*' => {
                 reject_if_lazy!();
@@ -907,12 +909,9 @@ fn scan_mdx_expression_end_inner(
     None
 }
 
-/// Scan to the end of a line, returning offset past the newline.
+/// Scan to the end of a line, returning offset past the line ending.
 fn scan_to_line_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let eol = memchr(b'\n', &bytes[start..])
-        .map(|i| start + i + 1)
-        .unwrap_or(bytes.len());
-    Some(eol)
+    Some(start + crate::scanners::scan_nextline(&bytes[start..]))
 }
 
 /// Scan a JSX tag from `<` to `>` or `/>`, returning the byte offset
@@ -1369,9 +1368,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                 prev_was_value = true;
             }
             b'/' if ix + 1 < len && bytes[ix + 1] == b'/' => {
-                while ix < len && bytes[ix] != b'\n' {
-                    ix += 1;
-                }
+                ix = line_comment_end(bytes, ix + 2);
             }
             b'/' if ix + 1 < len && bytes[ix + 1] == b'*' => {
                 in_block_comment = true;
@@ -1385,7 +1382,10 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                 ix = scan_regex(bytes, ix);
                 prev_was_value = true;
             }
-            b'\n' => {
+            b'\n' | b'\r' => {
+                if bytes[ix] == b'\r' && ix + 1 < len && bytes[ix + 1] == b'\n' {
+                    ix += 1;
+                }
                 ix += 1;
                 if ix >= len {
                     break;
@@ -1402,7 +1402,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
                     break;
                 }
             }
-            b' ' | b'\t' | b'\r' => ix += 1,
+            b' ' | b'\t' => ix += 1,
             b')' | b']' | b'}' => {
                 prev_was_value = true;
                 ix += 1;
@@ -1475,12 +1475,12 @@ pub(crate) fn scan_mdx_jsx_block(
         if pos >= bytes.len() || bytes[pos] == b'\n' || bytes[pos] == b'\r' {
             break;
         }
-        if bytes[pos] == b'<' {
-            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check, 0) {
-                pos += end;
-                last_was_jsx = true;
-                continue;
-            }
+        if bytes[pos] == b'<'
+            && let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check, 0)
+        {
+            pos += end;
+            last_was_jsx = true;
+            continue;
         }
         if bytes[pos] == b'{' {
             // Flow context: child expressions can span multiple lines —
@@ -1536,15 +1536,15 @@ pub(crate) fn scan_mdx_expression_block(
                 continue;
             }
         }
-        if bytes[ix] == b'{' {
-            if let Some(len) = scan_mdx_expression_end(&bytes[ix..], true) {
-                if !last_was_jsx {
-                    return None;
-                }
-                ix += len;
-                last_was_jsx = false;
-                continue;
+        if bytes[ix] == b'{'
+            && let Some(len) = scan_mdx_expression_end(&bytes[ix..], true)
+        {
+            if !last_was_jsx {
+                return None;
             }
+            ix += len;
+            last_was_jsx = false;
+            continue;
         }
         return None;
     }
@@ -2201,7 +2201,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 }
 
 use crate::{
-    parse::{scan_containers, JsxAttr, JsxElementData},
+    parse::{JsxAttr, JsxElementData, scan_containers},
     scanners::LineStart,
 };
 

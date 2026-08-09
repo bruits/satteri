@@ -104,4 +104,18 @@ markdownToHtml(source, {
 });
 ```
 
+An entry can also be an array of plugins, nested as deeply as you like. A package can therefore export a bundle of plugins that you pass without spreading:
+
+```js
+import { typography } from "some-package"; // an array of plugins
+
+markdownToHtml(source, {
+  mdastPlugins: [typography, unwrapImages],
+});
+```
+
+The bundle's plugins keep their own order and run at the bundle's position, so the above is the same as `[...typography, unwrapImages]`.
+
+A factory can return a bundle too, which gives the plugins in it state that they share with each other but that still resets for every document.
+
 If you need to share state between visits (e.g. collecting a table of contents), close over a variable in the surrounding scope and read it back after `markdownToHtml` returns.

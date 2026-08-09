@@ -8,7 +8,7 @@ authors = [
 ]
 license = "MIT"
 description = "A fork of the pulldown-cmark crate with MDX extensions, used in the satteri project."
-edition = "2021"
+edition = "2024"
 
 build = "build.rs"
 

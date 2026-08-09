@@ -6,7 +6,9 @@
 
 import type { Position } from "unist";
 
-const textDecoder = new TextDecoder("utf-8");
+// `ignoreBOM` keeps a value-initial U+FEFF: each string is decoded from its
+// own byte range, so the default BOM strip would eat it as content.
+const textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 /** Read a u16 (LE) at `off`. */
 export function ru16(view: DataView, off: number): number {

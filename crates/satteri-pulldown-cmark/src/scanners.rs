@@ -23,12 +23,12 @@
 use alloc::{string::String, vec::Vec};
 use core::char;
 
-use memchr::memchr;
+use memchr::{memchr, memchr2};
 
 pub(crate) use crate::puncttable::{is_ascii_punctuation, is_punctuation};
 use crate::{
-    entities, parse::HtmlScanGuard, strings::CowStr, Alignment, BlockQuoteKind, HeadingLevel,
-    LinkType,
+    Alignment, BlockQuoteKind, HeadingLevel, LinkType, entities, parse::HtmlScanGuard,
+    strings::CowStr,
 };
 
 type NewlineHandler<'a> = Option<&'a dyn Fn(&[u8]) -> usize>;
@@ -435,7 +435,7 @@ impl<'a> LineStart<'a> {
             return None;
         }
         let is_checked = match self.bytes.get(self.ix) {
-            Some(&c) if is_ascii_whitespace_no_nl(c) => {
+            Some(&c) if is_space_or_tab(c) => {
                 self.ix += 1;
                 false
             }
@@ -455,7 +455,7 @@ impl<'a> LineStart<'a> {
         if !self
             .bytes
             .get(self.ix)
-            .map(|&b| is_ascii_whitespace(b))
+            .map(|&b| is_space_tab_or_eol(b))
             .unwrap_or(false)
         {
             *self = save;
@@ -488,8 +488,14 @@ pub(crate) fn is_definition_list_marker(bytes: &[u8]) -> bool {
         && matches!(bytes.get(1), None | Some(&(b' ' | b'\t' | b'\r' | b'\n')))
 }
 
-pub(crate) fn is_ascii_whitespace_no_nl(c: u8) -> bool {
-    c == b'\t' || c == 0x0b || c == 0x0c || c == b' '
+/// Block structure is made of spaces and tabs only, so a vertical tab or form
+/// feed is content wherever it appears.
+pub(crate) fn is_space_or_tab(c: u8) -> bool {
+    c == b' ' || c == b'\t'
+}
+
+pub(crate) fn is_space_tab_or_eol(c: u8) -> bool {
+    is_space_or_tab(c) || c == b'\r' || c == b'\n'
 }
 
 fn is_ascii_alpha(c: u8) -> bool {
@@ -556,10 +562,8 @@ pub(crate) fn scan_ch_repeat(data: &[u8], c: u8) -> usize {
     scan_while(data, |x| x == c)
 }
 
-// Note: this scans ASCII whitespace only, for Unicode whitespace use
-// a different function.
-pub(crate) fn scan_whitespace_no_nl(data: &[u8]) -> usize {
-    scan_while(data, is_ascii_whitespace_no_nl)
+pub(crate) fn scan_space_or_tab(data: &[u8]) -> usize {
+    scan_while(data, is_space_or_tab)
 }
 
 fn scan_attr_value_chars(data: &[u8]) -> usize {
@@ -577,12 +581,17 @@ pub(crate) fn scan_eol(bytes: &[u8]) -> Option<usize> {
 }
 
 pub(crate) fn scan_blank_line(bytes: &[u8]) -> Option<usize> {
-    let i = scan_whitespace_no_nl(bytes);
+    let i = scan_space_or_tab(bytes);
     scan_eol(&bytes[i..]).map(|n| i + n)
 }
 
 pub(crate) fn scan_nextline(bytes: &[u8]) -> usize {
-    memchr(b'\n', bytes).map_or(bytes.len(), |x| x + 1)
+    match memchr2(b'\n', b'\r', bytes) {
+        // A CRLF is one line ending, so step past both bytes.
+        Some(i) if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') => i + 2,
+        Some(i) => i + 1,
+        None => bytes.len(),
+    }
 }
 
 // return: end byte for closing code fence, or None
@@ -721,11 +730,7 @@ pub(crate) fn scan_hrule(bytes: &[u8]) -> Result<usize, usize> {
         }
         i += 1;
     }
-    if n >= 3 {
-        Ok(i)
-    } else {
-        Err(i)
-    }
+    if n >= 3 { Ok(i) } else { Err(i) }
 }
 
 /// Scan an ATX heading opening sequence.
@@ -733,7 +738,7 @@ pub(crate) fn scan_hrule(bytes: &[u8]) -> Result<usize, usize> {
 /// Returns number of bytes in prefix and level.
 pub(crate) fn scan_atx_heading(data: &[u8]) -> Option<HeadingLevel> {
     let level = scan_ch_repeat(data, b'#');
-    if data.get(level).copied().is_none_or(is_ascii_whitespace) {
+    if data.get(level).copied().is_none_or(is_space_tab_or_eol) {
         HeadingLevel::try_from(level).ok()
     } else {
         None
@@ -1105,10 +1110,10 @@ pub(crate) fn scan_entity(bytes: &[u8]) -> (usize, Option<CowStr<'static>>) {
         };
     }
     end += scan_while(&bytes[end..], is_ascii_alphanumeric);
-    if bytes.get(end) == Some(&b';') {
-        if let Some(value) = entities::get_entity(&bytes[1..end]) {
-            return (end + 1, Some(value.into()));
-        }
+    if bytes.get(end) == Some(&b';')
+        && let Some(value) = entities::get_entity(&bytes[1..end])
+    {
+        return (end + 1, Some(value.into()));
     }
     (0, None)
 }
@@ -1242,7 +1247,7 @@ fn scan_whitespace_with_newline_handler(
     buffer_ix: &mut usize,
 ) -> Option<usize> {
     while i < data.len() {
-        if !is_ascii_whitespace(data[i]) {
+        if !is_space_tab_or_eol(data[i]) {
             return Some(i);
         }
         if let Some(eol_bytes) = scan_eol(&data[i..]) {
@@ -1277,7 +1282,7 @@ fn scan_whitespace_with_newline_handler_without_buffer(
     newline_handler: NewlineHandler<'_>,
 ) -> Option<usize> {
     while i < data.len() {
-        if !is_ascii_whitespace(data[i]) {
+        if !is_space_tab_or_eol(data[i]) {
             return Some(i);
         }
         if let Some(eol_bytes) = scan_eol(&data[i..]) {
@@ -1379,9 +1384,9 @@ fn scan_attribute_value(
 pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> CowStr<'a> {
     let input = input.into();
     let bytes = input.as_bytes();
-    // Only `\`, `&` and `\r` can trigger a rewrite. Skip straight to the first
-    // one; if there is none the input is returned untouched without allocating.
-    let Some(first) = memchr::memchr3(b'\\', b'&', b'\r', bytes) else {
+    // Only `\` and `&` can trigger a rewrite. Skip straight to the first one;
+    // if there is none the input is returned untouched without allocating.
+    let Some(first) = memchr::memchr2(b'\\', b'&', bytes) else {
         return input;
     };
     let mut result = String::new();
@@ -1413,11 +1418,6 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
                 }
                 _ => i = next_unescape_candidate(bytes, i + 1),
             },
-            [b'\r', ..] => {
-                result.push_str(&input[mark..i]);
-                i += 1;
-                mark = i;
-            }
             // This byte isn't an escape (a candidate that didn't pan out, or a
             // plain byte landed on after a rewrite). Jump to the next candidate
             // rather than walking one byte at a time.
@@ -1432,11 +1432,11 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
     }
 }
 
-/// Index of the next `\`, `&` or `\r` at or after `from`, or `bytes.len()`
-/// when there is none (which ends `unescape`'s scan loop).
+/// Index of the next `\` or `&` at or after `from`, or `bytes.len()` when
+/// there is none (which ends `unescape`'s scan loop).
 #[inline]
 fn next_unescape_candidate(bytes: &[u8], from: usize) -> usize {
-    match memchr::memchr3(b'\\', b'&', b'\r', &bytes[from..]) {
+    match memchr::memchr2(b'\\', b'&', &bytes[from..]) {
         Some(rel) => from + rel,
         None => bytes.len(),
     }
@@ -1519,7 +1519,7 @@ pub(crate) fn scan_html_block_inner(
         loop {
             let old_i = i;
             loop {
-                i += scan_whitespace_no_nl(&data[i..]);
+                i += scan_space_or_tab(&data[i..]);
                 if let Some(eol_bytes) = scan_eol(&data[i..]) {
                     if eol_bytes == 0 {
                         return None;
@@ -1557,7 +1557,7 @@ pub(crate) fn scan_html_block_inner(
         }
     }
 
-    i += scan_whitespace_no_nl(&data[i..]);
+    i += scan_space_or_tab(&data[i..]);
 
     if close_tag_bytes == 0 {
         i += scan_ch(&data[i..], b'/');
@@ -1774,6 +1774,30 @@ pub(crate) fn scan_inline_html_processing(
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn scan_nextline_line_endings() {
+        assert_eq!(scan_nextline(b"abc\ndef"), 4);
+        assert_eq!(scan_nextline(b"abc\rdef"), 4);
+        assert_eq!(scan_nextline(b"abc\r\ndef"), 5);
+        assert_eq!(scan_nextline(b"abc"), 3);
+        assert_eq!(scan_nextline(b""), 0);
+        // A `\r` last in the slice has no `\n` to pair with.
+        assert_eq!(scan_nextline(b"abc\r"), 4);
+    }
+
+    #[test]
+    fn unescape_preserves_line_endings() {
+        // Line endings are content here; only escapes and entities are rewritten.
+        assert_eq!(unescape("a\r\nb", false).as_ref(), "a\r\nb");
+        assert_eq!(unescape("a\rb", false).as_ref(), "a\rb");
+        assert_eq!(unescape("\r", false).as_ref(), "\r");
+        assert_eq!(unescape("a\r\rb", false).as_ref(), "a\r\rb");
+        assert_eq!(unescape("a\nb", false).as_ref(), "a\nb");
+        assert_eq!(unescape("a\r\n\\*b", false).as_ref(), "a\r\n*b");
+        assert_eq!(unescape("a\r&amp;b", false).as_ref(), "a\r&b");
+    }
+
     #[test]
     fn overflow_list() {
         assert!(

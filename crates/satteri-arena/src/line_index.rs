@@ -55,7 +55,7 @@ impl<'a> LineIndex<'a> {
         let mut offsets = Vec::with_capacity(line_count_estimate);
         offsets.push(0u32);
         if all_ascii {
-            for nl_idx in memchr::memchr_iter(b'\n', bytes) {
+            for nl_idx in line_ending_iter(bytes) {
                 offsets.push(nl_idx as u32 + 1);
             }
             return LineIndex {
@@ -69,7 +69,7 @@ impl<'a> LineIndex<'a> {
         let mut line_meta = Vec::with_capacity(line_count_estimate);
         let mut utf16_count: u32 = 0;
         let mut last_byte: usize = 0;
-        for nl_idx in memchr::memchr_iter(b'\n', bytes) {
+        for nl_idx in line_ending_iter(bytes) {
             let line = &bytes[last_byte..=nl_idx];
             let is_ascii = line.is_ascii();
             line_meta.push(LineMeta {
@@ -207,6 +207,14 @@ impl LineIndexCursor<'_, '_> {
     }
 }
 
+/// Byte index of the last byte of every line ending in `bytes`. CommonMark
+/// counts `\n`, `\r` and `\r\n` alike, so the `\r` of a CRLF is skipped and
+/// the pair is reported once, at its `\n`.
+pub fn line_ending_iter(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
+    memchr::memchr2_iter(b'\n', b'\r', bytes)
+        .filter(move |&i| bytes[i] == b'\n' || bytes.get(i + 1) != Some(&b'\n'))
+}
+
 /// UTF-16 length of a UTF-8 byte slice. Continuation bytes (`0b10xxxxxx`)
 /// don't count; a 4-byte sequence (lead byte ≥ `0xF0`) is an astral code
 /// point — a surrogate pair, two units.
@@ -259,6 +267,83 @@ mod tests {
         assert_eq!(c.offset_to_line_col(10), (2, 5));
         assert_eq!(c.offset_to_line_col(12), (3, 1));
         assert_eq!(c.offset_to_line_col(16), (3, 5));
+    }
+
+    #[test]
+    fn lone_carriage_return_ends_a_line() {
+        let idx = LineIndex::from_source("a\rb");
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(0), (1, 1)); // a
+        assert_eq!(c.offset_to_line_col(1), (1, 2)); // \r
+        assert_eq!(c.offset_to_line_col(2), (2, 1)); // b
+        assert_eq!(c.offset_to_line_col(3), (2, 2)); // end
+    }
+
+    #[test]
+    fn crlf_is_one_line_ending() {
+        let idx = LineIndex::from_source("a\r\nb");
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(1), (1, 2)); // \r
+        assert_eq!(c.offset_to_line_col(2), (1, 3)); // \n
+        assert_eq!(c.offset_to_line_col(3), (2, 1)); // b
+    }
+
+    #[test]
+    fn mixed_line_endings() {
+        let idx = LineIndex::from_source("a\r\nb\rc\nd");
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(0), (1, 1)); // a
+        assert_eq!(c.offset_to_line_col(3), (2, 1)); // b
+        assert_eq!(c.offset_to_line_col(5), (3, 1)); // c
+        assert_eq!(c.offset_to_line_col(7), (4, 1)); // d
+    }
+
+    #[test]
+    fn line_ending_iter_counts_crlf_once() {
+        let collect = |s: &[u8]| line_ending_iter(s).collect::<Vec<_>>();
+        assert_eq!(collect(b"a\nb\nc"), [1, 3]);
+        assert_eq!(collect(b"a\rb\rc"), [1, 3]);
+        assert_eq!(collect(b"a\r\nb\r\nc"), [2, 5]);
+        assert_eq!(collect(b"a\r\rb"), [1, 2]);
+        assert_eq!(collect(b"a\n\rb"), [1, 2]);
+        assert!(collect(b"abc").is_empty());
+    }
+
+    #[test]
+    fn carriage_return_at_document_edges() {
+        let idx = LineIndex::from_source("\ra\r");
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(0), (1, 1)); // leading \r
+        assert_eq!(c.offset_to_line_col(1), (2, 1)); // a
+        assert_eq!(c.offset_to_line_col(3), (3, 1)); // past the trailing \r
+    }
+
+    #[test]
+    fn consecutive_carriage_returns() {
+        let idx = LineIndex::from_source("a\r\r\rb");
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(2), (2, 1));
+        assert_eq!(c.offset_to_line_col(3), (3, 1));
+        assert_eq!(c.offset_to_line_col(4), (4, 1)); // b
+    }
+
+    #[test]
+    fn carriage_return_in_non_ascii_source() {
+        // "ð" is 2 bytes, 1 unit; the per-line UTF-16 bookkeeping has to split
+        // on the lone \r too, not just on \n.
+        let idx = LineIndex::from_source("a\rð\rb");
+        let mut c = idx.cursor();
+        assert_eq!(c.offset_to_line_col(2), (2, 1)); // ð
+        assert_eq!(c.offset_to_line_col(5), (3, 1)); // b
+        assert_eq!(c.byte_to_utf16_offset(2), 2); // ð
+        assert_eq!(c.byte_to_utf16_offset(5), 4); // b
+        for byte_offset in [0u32, 1, 2, 4, 5, 6] {
+            let (line, col) = c.offset_to_line_col(byte_offset);
+            assert_eq!(
+                idx.utf16_offset_at(line, col),
+                c.byte_to_utf16_offset(byte_offset)
+            );
+        }
     }
 
     #[test]

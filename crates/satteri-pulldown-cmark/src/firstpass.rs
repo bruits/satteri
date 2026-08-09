@@ -4,21 +4,22 @@
 use alloc::{string::String, vec::Vec};
 use core::{cmp::max, ops::Range};
 
+use satteri_arena::line_ending_iter;
 use unicase::UniCase;
 
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
 use crate::{
-    linklabel::{scan_link_label_rest, LinkLabel},
+    HeadingLevel, LinkType, MetadataBlockKind, Options,
+    linklabel::{LinkLabel, scan_link_label_rest},
     parse::{
-        scan_containers, Allocations, DirectiveAttrData, FootnoteDef, HeadingAttributes,
-        HtmlScanGuard, Item, ItemBody, LinkDef, LINK_MAX_NESTED_PARENS,
+        Allocations, AutolinkCandidate, DirectiveAttrData, FootnoteDef, HeadingAttributes, Item,
+        ItemBody, LINK_MAX_NESTED_PARENS, LinkDef, scan_containers,
     },
     post_passes::{scan_autolink_literal, scan_email_autolink},
     scanners::*,
     strings::CowStr,
     tree::{Tree, TreeIndex},
-    HeadingLevel, LinkType, MetadataBlockKind, Options,
 };
 
 pub(crate) fn run_first_pass(
@@ -201,14 +202,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             let content_probe = start_ix + line_start.bytes_scanned();
             let has_content =
                 content_probe < bytes.len() && scan_blank_line(&bytes[content_probe..]).is_none();
-            if has_content {
-                if let Some(up) = self.tree.peek_up() {
-                    if let ItemBody::ListItem(_, _) = self.tree[up].item.body {
-                        if self.tree[up].child.is_some() {
-                            self.mark_enclosing_listitem_spread();
-                        }
-                    }
-                }
+            if has_content
+                && let Some(up) = self.tree.peek_up()
+                && let ItemBody::ListItem(_, _) = self.tree[up].item.body
+                && self.tree[up].child.is_some()
+            {
+                self.mark_enclosing_listitem_spread();
             }
         }
 
@@ -436,13 +435,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // A term may sit at most one blank line from its
                         // definition (pandoc / mdast-util-definition-list); two+
                         // disconnect it. `item.end` includes the paragraph's
-                        // trailing newline, so the gap to the marker holds 0
-                        // newlines when tight, 1 when loose, 2+ when disconnected.
+                        // trailing line ending, so the gap to the marker holds 0
+                        // line endings when tight, 1 when loose, 2+ when disconnected.
                         ItemBody::Paragraph | ItemBody::TightParagraph => {
                             let gap_start = item.end.min(container_start);
-                            bytes[gap_start..container_start]
-                                .iter()
-                                .filter(|&&b| b == b'\n')
+                            line_ending_iter(&bytes[gap_start..container_start])
+                                .take(2)
                                 .count()
                                 <= 1
                         }
@@ -530,13 +528,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     end: after_marker_index, // will get updated later if item not empty
                     body: ItemBody::DefinitionListDefinition(indent, loose),
                 });
-                if let Some(ItemBody::DefinitionList(ref mut is_tight)) =
+                if let Some(ItemBody::DefinitionList(is_tight)) =
                     self.tree.peek_up().map(|cur| &mut self.tree[cur].item.body)
+                    && self.last_line_blank
                 {
-                    if self.last_line_blank {
-                        *is_tight = false;
-                        self.last_line_blank = false;
-                    }
+                    *is_tight = false;
+                    self.last_line_blank = false;
                 }
                 self.tree.push();
                 if let Some(n) = scan_blank_line(&bytes[after_marker_index..]) {
@@ -604,7 +601,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         self.finish_list(start_ix);
                         // For block directives, advance to end of line
                         let after = &bytes[content_end..];
-                        let ws = scan_whitespace_no_nl(after);
+                        let ws = scan_space_or_tab(after);
                         let line_end = content_end + ws + scan_nextline(&after[ws..]);
                         // `[label]` offsets (0/0 when no brackets) — capture
                         // before `dir_data` is moved into the allocator.
@@ -634,7 +631,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     {
                         // Verify only whitespace follows on the line
                         let remaining = &bytes[line_end..];
-                        let ws = scan_whitespace_no_nl(remaining);
+                        let ws = scan_space_or_tab(remaining);
                         let at_eol = line_end + ws >= bytes.len()
                             || bytes[line_end + ws] == b'\n'
                             || bytes[line_end + ws] == b'\r';
@@ -839,17 +836,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Metadata blocks cannot be indented, and — matching remark-frontmatter
         // — only match at the very start of the document. `doc_start` is 0
         // normally, or 3 when a UTF-8 BOM was stripped.
-        if indent == 0 && ix == self.doc_start && self.tree.spine_len() == 0 {
-            if let Some((_n, metadata_block_ch)) = scan_metadata_block(
+        if indent == 0
+            && ix == self.doc_start
+            && self.tree.spine_len() == 0
+            && let Some((_n, metadata_block_ch)) = scan_metadata_block(
                 &bytes[ix..],
                 self.options
                     .contains(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS),
                 self.options
                     .contains(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS),
-            ) {
-                self.finish_list(start_ix);
-                return self.parse_metadata_block(ix, metadata_block_ch);
-            }
+            )
+        {
+            self.finish_list(start_ix);
+            return self.parse_metadata_block(ix, metadata_block_ch);
         }
 
         // MDX blocks, must be checked before HTML blocks since JSX looks like HTML.
@@ -865,85 +864,79 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     .tree
                     .walk_spine()
                     .all(|&ix| matches!(self.tree[ix].item.body, ItemBody::List(..)));
-            if at_root_for_esm {
-                if let Some(end_ix) = scan_mdx_esm(&bytes[ix..]) {
-                    let mut final_end = end_ix;
+            if at_root_for_esm && let Some(end_ix) = scan_mdx_esm(&bytes[ix..]) {
+                let mut final_end = end_ix;
 
-                    // If the scanned ESM block is incomplete (e.g. an export
-                    // spanning a blank line), retry across blank lines using
-                    // oxc — matching the reference mdxjs behavior.
-                    let candidate = self.text[ix..ix + final_end].trim_end();
-                    if !candidate.is_empty() {
-                        use crate::mdx::EsmParseResult;
-                        let mut allocator = oxc_allocator::Allocator::default();
-                        match crate::mdx::try_parse_esm(candidate, &mut allocator) {
-                            EsmParseResult::Complete => {}
-                            EsmParseResult::Incomplete => {
-                                let mut pos = ix + final_end;
-                                loop {
-                                    let blank_start = pos;
-                                    while pos < bytes.len()
-                                        && (bytes[pos] == b'\n'
-                                            || bytes[pos] == b'\r'
-                                            || bytes[pos] == b' '
-                                            || bytes[pos] == b'\t')
+                // If the scanned ESM block is incomplete (e.g. an export
+                // spanning a blank line), retry across blank lines using
+                // oxc — matching the reference mdxjs behavior.
+                let candidate = self.text[ix..ix + final_end].trim_end();
+                if !candidate.is_empty() {
+                    use crate::mdx::EsmParseResult;
+                    let mut allocator = oxc_allocator::Allocator::default();
+                    match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                        EsmParseResult::Complete => {}
+                        EsmParseResult::Incomplete => {
+                            let mut pos = ix + final_end;
+                            loop {
+                                let blank_start = pos;
+                                while pos < bytes.len()
+                                    && (bytes[pos] == b'\n'
+                                        || bytes[pos] == b'\r'
+                                        || bytes[pos] == b' '
+                                        || bytes[pos] == b'\t')
+                                {
+                                    pos += 1;
+                                }
+                                if pos == blank_start || pos >= bytes.len() {
+                                    break;
+                                }
+                                let chunk_start = pos;
+                                while pos < bytes.len() {
+                                    pos += scan_nextline(&bytes[pos..]);
+                                    if pos < bytes.len()
+                                        && (bytes[pos] == b'\n' || bytes[pos] == b'\r')
                                     {
-                                        pos += 1;
-                                    }
-                                    if pos == blank_start || pos >= bytes.len() {
                                         break;
-                                    }
-                                    let chunk_start = pos;
-                                    while pos < bytes.len() {
-                                        let eol = memchr::memchr(b'\n', &bytes[pos..])
-                                            .map(|i| pos + i + 1)
-                                            .unwrap_or(bytes.len());
-                                        pos = eol;
-                                        if pos < bytes.len()
-                                            && (bytes[pos] == b'\n' || bytes[pos] == b'\r')
-                                        {
-                                            break;
-                                        }
-                                    }
-                                    if pos == chunk_start {
-                                        break;
-                                    }
-                                    final_end = pos - ix;
-                                    let candidate = self.text[ix..ix + final_end].trim_end();
-                                    match crate::mdx::try_parse_esm(candidate, &mut allocator) {
-                                        EsmParseResult::Complete => break,
-                                        EsmParseResult::Incomplete => continue,
-                                        EsmParseResult::Error => break,
                                     }
                                 }
+                                if pos == chunk_start {
+                                    break;
+                                }
+                                final_end = pos - ix;
+                                let candidate = self.text[ix..ix + final_end].trim_end();
+                                match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                                    EsmParseResult::Complete => break,
+                                    EsmParseResult::Incomplete => continue,
+                                    EsmParseResult::Error => break,
+                                }
                             }
-                            EsmParseResult::Error => {}
                         }
+                        EsmParseResult::Error => {}
                     }
-
-                    self.finish_list(start_ix);
-                    return self.parse_mdx_esm(ix, ix + final_end);
                 }
+
+                self.finish_list(start_ix);
+                return self.parse_mdx_esm(ix, ix + final_end);
             }
 
             // MDX JSX flow: line starting with `<` followed by component name or fragment
-            if bytes[ix] == b'<' {
-                if let Some(end_ix) =
+            if bytes[ix] == b'<'
+                && let Some(end_ix) =
                     self.scan_mdx_flow_in_container(ix, |b, c| scan_mdx_jsx_block(b, c))
-                {
-                    self.finish_list(start_ix);
-                    let result = self.parse_mdx_jsx_flow(ix, ix + end_ix);
-                    // A blank line inside the consumed flow block means the
-                    // enclosing list item is "loose" (spread=true). remark
-                    // detects this naturally since its tokenizer reads line-
-                    // by-line; we consume the whole block atomically, so we
-                    // have to inspect the span here.
-                    if contains_blank_line(&bytes[ix..ix + end_ix]) {
-                        self.last_line_blank = true;
-                        self.mark_enclosing_listitem_spread();
-                    }
-                    return result;
+            {
+                self.finish_list(start_ix);
+                let result = self.parse_mdx_jsx_flow(ix, ix + end_ix);
+                // A blank line inside the consumed flow block means the
+                // enclosing list item is "loose" (spread=true). remark
+                // detects this naturally since its tokenizer reads line-
+                // by-line; we consume the whole block atomically, so we
+                // have to inspect the span here.
+                if contains_blank_line(&bytes[ix..ix + end_ix]) {
+                    self.last_line_blank = true;
+                    self.mark_enclosing_listitem_spread();
                 }
+                return result;
             }
 
             // MDX expression flow: line starting with `{`
@@ -1017,11 +1010,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return self.parse_fenced_code_block(ix, indent, fence_ch, n);
         }
 
-        if self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR) {
-            if let Some(n) = scan_math_fence(&bytes[ix..]) {
-                self.finish_list(start_ix);
-                return self.parse_math_block(ix, indent, n);
-            }
+        if self.options.contains(Options::ENABLE_MATH_MULTI_DOLLAR)
+            && let Some(n) = scan_math_fence(&bytes[ix..])
+        {
+            self.finish_list(start_ix);
+            return self.parse_math_block(ix, indent, n);
         }
 
         // parse refdef
@@ -1196,7 +1189,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
             first_iter = false;
             let _start_ix = ix;
-            ix += scan_whitespace_no_nl(&bytes[ix..]);
+            ix += scan_space_or_tab(&bytes[ix..]);
 
             if let Some(eol_bytes) = scan_eol(&bytes[ix..]) {
                 // A line with only an opening `|` and no content (e.g. stray
@@ -1435,19 +1428,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             };
             if !is_indented {
                 let ix_new = ix + line_start.bytes_scanned();
-                if current_container {
-                    if let Some(ix_setext) =
+                if current_container
+                    && let Some(ix_setext) =
                         self.parse_setext_heading(ix_new, node_ix, trailing_backslash_pos.is_some())
-                    {
-                        if let Some(pos) = trailing_backslash_pos {
-                            self.tree.append_text(pos, pos + 1, false);
-                        }
-                        self.pop(ix_setext);
-                        if body == ItemBody::MaybeDefinitionListTitle {
-                            self.finish_list(ix);
-                        }
-                        return ix_setext;
+                {
+                    if let Some(pos) = trailing_backslash_pos {
+                        self.tree.append_text(pos, pos + 1, false);
                     }
+                    self.pop(ix_setext);
+                    if body == ItemBody::MaybeDefinitionListTitle {
+                        self.finish_list(ix);
+                    }
+                    return ix_setext;
                 }
                 // first check for non-empty lists, then for other interrupts
                 let suffix = &bytes[ix_new..];
@@ -1626,10 +1618,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         last_line_start = next_line_start + line_start.bytes_scanned();
                     }
                 }
-                let trailing_ws = scan_rev_while(
-                    &bytes[last_line_start..content_end],
-                    is_ascii_whitespace_no_nl,
-                );
+                let trailing_ws =
+                    scan_rev_while(&bytes[last_line_start..content_end], is_space_or_tab);
                 content_end - trailing_ws
             };
 
@@ -1664,33 +1654,39 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if next_start <= prev_end {
                 return false;
             }
-            // Allow exactly one newline (the def's line terminator)
+            // Allow exactly one line ending (the def's line terminator)
             // plus any amount of leading whitespace on the next line.
             // Indented-code can't interrupt the def's still-open
             // paragraph, so even 4+ space indents are valid paragraph
             // continuations and qualify for chain-back.
-            let mut newlines = 0;
-            for &b in &bytes[prev_end..next_start] {
-                if b == b'\n' {
-                    if newlines > 0 {
+            let gap = &bytes[prev_end..next_start];
+            let mut line_endings = 0;
+            let mut i = 0;
+            while i < gap.len() {
+                let b = gap[i];
+                if b == b'\n' || b == b'\r' {
+                    if line_endings > 0 {
                         return false;
                     }
-                    newlines += 1;
-                } else if b == b'\r' {
-                    if newlines > 0 {
-                        return false;
-                    }
+                    line_endings += 1;
+                    // A CRLF terminates one line, not two.
+                    i += if b == b'\r' && gap.get(i + 1) == Some(&b'\n') {
+                        2
+                    } else {
+                        1
+                    };
                 } else if b == b' ' || b == b'\t' {
-                    if newlines == 0 {
+                    if line_endings == 0 {
                         return false;
                     }
                     // OK: whitespace after the line break is the
                     // next line's leading indent.
+                    i += 1;
                 } else {
                     return false;
                 }
             }
-            newlines == 1
+            line_endings == 1
         };
         let original_start = self.tree[node_ix].item.start;
         // Don't chain back when the heading's *first* content line is
@@ -1701,9 +1697,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // token — so the heading no longer inherits the def's start.
         // Other content-line shapes (plain text, `*`, `+`, …) leave the
         // paragraph token intact and the chain-back applies.
-        let first_line_end = bytes[original_start..ix]
-            .iter()
-            .position(|&b| b == b'\n')
+        let first_line_end = memchr::memchr2(b'\n', b'\r', &bytes[original_start..ix])
             .map(|p| original_start + p)
             .unwrap_or(ix);
         let first_line = &bytes[original_start..first_line_end];
@@ -1745,6 +1739,46 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         Some(ix + n)
     }
 
+    /// Commit a detected autolink. Only sound when nothing can still block it.
+    fn append_autolink_link(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
+        let link_ix = self
+            .allocs
+            .allocate_link(d.link_type, d.url.into(), "".into(), "".into());
+        self.tree.append_text(begin_text, d.start, escaped);
+        let link_node_ix = self.tree.append(Item {
+            start: d.start,
+            end: d.end,
+            body: ItemBody::Link(link_ix),
+        });
+        let text_child = self.tree.create_node(Item {
+            start: d.start,
+            end: d.end,
+            body: ItemBody::Text {
+                backslash_escaped: false,
+            },
+        });
+        self.tree[link_node_ix].child = Some(text_child);
+    }
+
+    /// Record a detected autolink as a zero-width marker: no byte's
+    /// tokenization changes, so the candidate can still be dropped.
+    fn append_autolink_marker(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
+        let link = self
+            .allocs
+            .allocate_link(d.link_type, d.url.into(), "".into(), "".into());
+        let cand = self.allocs.allocate_autolink_candidate(AutolinkCandidate {
+            start: d.start,
+            end: d.end,
+            link,
+        });
+        self.tree.append_text(begin_text, d.start, escaped);
+        self.tree.append(Item {
+            start: d.start,
+            end: d.start,
+            body: ItemBody::MaybeAutolink(cand),
+        });
+    }
+
     /// Parse a line of input, appending text and items to tree.
     ///
     /// Returns: index after line and an item representing the break.
@@ -1769,6 +1803,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // (e.g. an inline GFM autolink Link whose URL ended in `\`).
         // Used by the `\n` hardbreak check to skip those `\`s.
         let mut last_inline_emission_end: usize = start;
+        // Lowest start a further candidate may take: a committed candidate owns
+        // its bytes, a deferred one only rules out a retry at the same start.
+        let mut candidate_floor: usize = start;
+        // Ends of deferred candidates still in play. Overlapping candidates are
+        // possible, so this is a set; empty in every line without one.
+        let mut deferred_ends: Vec<usize> = Vec::new();
 
         let (final_ix, brk) = iterate_special_bytes(self.lookup_table, bytes, start, |ix, byte| {
             match byte {
@@ -1884,8 +1924,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         );
                     }
 
-                    let trailing_whitespace =
-                        scan_rev_while(&bytes[..ix], is_ascii_whitespace_no_nl);
+                    let trailing_whitespace = scan_rev_while(&bytes[..ix], is_space_or_tab);
                     self.tree
                         .append_text(begin_text, ix - trailing_whitespace, backslash_escaped);
                     backslash_escaped = false;
@@ -1919,6 +1958,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // is supposed to operate as-if backslash escaped pipes were stripped out in a
                         // separate pass.
                         begin_text = ix + 1;
+                        // The `\` isn't content, but the span still covers it.
+                        backslash_escaped = true;
+                        LoopInstruction::ContinueAndSkip(1)
+                    } else if bytes[ix + 1] == b'<' {
+                        // Still emit the marker: a deferred autolink may end on
+                        // this `\`, in which case the link owns it and the
+                        // inline HTML opens after all.
+                        self.tree.append(Item {
+                            start: ix + 1,
+                            end: ix + 2,
+                            body: ItemBody::MaybeHtml(true),
+                        });
+                        begin_text = ix + 2;
                         backslash_escaped = false;
                         LoopInstruction::ContinueAndSkip(1)
                     } else if bytes[ix + 1] == b'$' && self.options.has_math() {
@@ -1928,6 +1980,37 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         begin_text = ix + 1;
                         backslash_escaped = true;
                         LoopInstruction::ContinueAndSkip(0)
+                    } else if let Some((count, fired)) = (deferred_ends.contains(&(ix + 1)))
+                        .then(|| escaped_delim_run(self.text, start, ix, mode, self.options))
+                        .flatten()
+                    {
+                        // A deferred candidate's URL ends on this `\`, so the
+                        // run after it is the link's to unblock. Emitted in the
+                        // shape the link firing wants; `MaybeEmphasisEscaped`
+                        // holds it back until the splice says so.
+                        let blocked = delim_run_flags(
+                            self.text,
+                            start,
+                            ix + 2,
+                            count - 1,
+                            mode,
+                            self.options,
+                        );
+                        self.tree.append(Item {
+                            start: ix + 1,
+                            end: ix + 2,
+                            body: ItemBody::MaybeEmphasisEscaped(count, fired.0, fired.1),
+                        });
+                        for i in 1..count {
+                            self.tree.append(Item {
+                                start: ix + 1 + i,
+                                end: ix + 2 + i,
+                                body: ItemBody::MaybeEmphasis(count - i, blocked.0, blocked.1),
+                            });
+                        }
+                        begin_text = ix + 1 + count;
+                        backslash_escaped = false;
+                        LoopInstruction::ContinueAndSkip(count)
                     } else {
                         begin_text = ix + 1;
                         backslash_escaped = true;
@@ -1935,18 +2018,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     }
                 }
                 c @ b'*' | c @ b'_' | c @ b'~' | c @ b'^' => {
-                    // GFM precedence: at `_` (an email-local atext char),
-                    // try the email-literal construct first. micromark's
-                    // text registry binds `_` to `emailAutolink` and walks
-                    // forward through atext to find `@`. If a valid email
-                    // tokenizes here, it wins over the attentionSequence —
-                    // skipping the MaybeEmphasis emission keeps `_-_@…`
-                    // from forming an emphasis pair that hides the email.
+                    // GFM precedence: an email literal starting at this `_`
+                    // wins over the attention sequence — skipping MaybeEmphasis
+                    // keeps `_-_@…` from forming a pair that hides the email.
                     if c == b'_' && self.options.contains(Options::ENABLE_GFM) {
-                        // Run the cheap structural scan first — most `_`
-                        // in prose can't reach an `@` through atext chars
-                        // and we want to bail before paying for the
-                        // paragraph-scan predicates.
                         let paragraph_floor = self
                             .tree
                             .peek_up()
@@ -1954,37 +2029,32 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             .unwrap_or(start);
                         if let Some((email_start, email_end, full_url)) =
                             scan_email_forward_from_atext(bytes, ix, begin_text, paragraph_floor)
+                            && email_start >= candidate_floor
                         {
-                            if !has_unbalanced_bracket_from(bytes, paragraph_floor, ix)
-                                && !is_inside_code_span(bytes, ix)
-                                && !is_inside_link_destination(bytes, ix)
-                            {
-                                let link_ix = self.allocs.allocate_link(
-                                    LinkType::Email,
-                                    full_url
-                                        .strip_prefix("mailto:")
-                                        .map(str::to_owned)
-                                        .unwrap_or(full_url)
-                                        .into(),
-                                    "".into(),
-                                    "".into(),
-                                );
-                                self.tree
-                                    .append_text(begin_text, email_start, backslash_escaped);
+                            let d = AutolinkDetection {
+                                start: email_start,
+                                end: email_end,
+                                link_type: LinkType::Email,
+                                url: full_url
+                                    .strip_prefix("mailto:")
+                                    .map(str::to_owned)
+                                    .unwrap_or(full_url),
+                            };
+                            if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
+                                candidate_floor = email_start + 1;
+                                // Fall through to attention handling: a
+                                // marker that fires splices those
+                                // delimiters away, and a blocked one
+                                // wanted them.
+                                self.append_autolink_marker(d, begin_text, backslash_escaped);
+                                if email_start > begin_text {
+                                    backslash_escaped = false;
+                                }
+                                begin_text = email_start;
+                            } else {
+                                candidate_floor = email_end;
+                                self.append_autolink_link(d, begin_text, backslash_escaped);
                                 backslash_escaped = false;
-                                let link_node_ix = self.tree.append(Item {
-                                    start: email_start,
-                                    end: email_end,
-                                    body: ItemBody::Link(link_ix),
-                                });
-                                let text_child = self.tree.create_node(Item {
-                                    start: email_start,
-                                    end: email_end,
-                                    body: ItemBody::Text {
-                                        backslash_escaped: false,
-                                    },
-                                });
-                                self.tree[link_node_ix].child = Some(text_child);
                                 begin_text = email_end;
                                 last_inline_emission_end = email_end;
                                 let skip = email_end.saturating_sub(ix + 1);
@@ -2208,35 +2278,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
                 b'`' => {
                     let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'`');
-                    // Only suppress as text when this backtick would land
-                    // inside a literalAutolink URL *and* couldn't possibly
-                    // pair with an earlier backtick of the same length to
-                    // form a code span (which would have fired before the
-                    // URL construct in micromark's text-construct order).
-                    //
-                    // When an unbalanced `[` precedes the URL, micromark's
-                    // `previousUnbalanced` disables the autolink construct,
-                    // so a forward-matching backtick run also wins. Without
-                    // the bracket, the URL fires first and claims interior
-                    // backticks even when they could pair.
-                    let suppressed = self.options.contains(Options::ENABLE_GFM)
-                        && is_inside_gfm_autolink_url(bytes, ix)
-                        && !has_earlier_backtick_run(bytes, ix, count)
-                        && !(has_unbalanced_bracket_in_paragraph(bytes, ix)
-                            && has_later_backtick_run(bytes, ix + count, count));
-                    if suppressed {
-                        LoopInstruction::ContinueAndSkip(count - 1)
-                    } else {
-                        self.tree.append_text(begin_text, ix, backslash_escaped);
-                        backslash_escaped = false;
-                        self.tree.append(Item {
-                            start: ix,
-                            end: ix + count,
-                            body: ItemBody::MaybeCode(count, false),
-                        });
-                        begin_text = ix + count;
-                        LoopInstruction::ContinueAndSkip(count - 1)
-                    }
+                    self.tree.append_text(begin_text, ix, backslash_escaped);
+                    backslash_escaped = false;
+                    self.tree.append(Item {
+                        start: ix,
+                        end: ix + count,
+                        body: ItemBody::MaybeCode(count, false),
+                    });
+                    begin_text = ix + count;
+                    LoopInstruction::ContinueAndSkip(count - 1)
                 }
                 b'<' if self.options.contains(Options::ENABLE_MDX)
                     || bytes.get(ix + 1) != Some(&b'\\') =>
@@ -2251,7 +2301,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     self.tree.append(Item {
                         start: ix,
                         end: ix + 1,
-                        body: ItemBody::MaybeHtml,
+                        body: ItemBody::MaybeHtml(false),
                     });
                     begin_text = ix + 1;
                     LoopInstruction::ContinueAndSkip(0)
@@ -2384,20 +2434,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         } else if count == 3 {
                             ItemBody::SynthesizeChar('—')
                         } else {
-                            let (ems, ens) = match count % 6 {
-                                0 | 3 => (count / 3, 0),
-                                2 | 4 => (0, count / 2),
-                                1 => (count / 3 - 1, 2),
-                                _ => (count / 3, 1),
-                            };
-                            // – and — are 3 bytes each in utf8
-                            let mut buf = String::with_capacity(3 * (ems + ens));
-                            for _ in 0..ems {
-                                buf.push('—');
-                            }
-                            for _ in 0..ens {
-                                buf.push('–');
-                            }
+                            let buf = crate::post_passes::smart_dash_run(count);
                             ItemBody::SynthesizeText(self.allocs.allocate_cow(buf.into()))
                         };
 
@@ -2443,43 +2480,48 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     LoopInstruction::ContinueAndSkip(0)
                 }
                 b'h' | b'H' | b'w' | b'W' | b'@' if self.options.contains(Options::ENABLE_GFM) => {
-                    // GFM literal autolink: protocol/www/email. Runs during
-                    // inline tokenization so URL bytes are consumed before
-                    // bracket/image resolution claims them. Mirrors
-                    // micromark's text-context construct order — see
-                    // node_modules/.../micromark-extension-gfm-autolink-literal.
+                    // GFM literal autolink. Only the construct path lands here;
+                    // `gfm_autolink_literal_pass` is the backstop for the rest.
                     //
-                    // Only fires for the *construct* path. The mdast-util
-                    // find-and-replace fallback (position-less) is left to
-                    // gfm_autolink_literal_pass, which still runs as a
-                    // backstop.
-                    // For multi-line paragraphs, `start` is the current
-                    // *line* start. The actual paragraph bounds come from
-                    // the Paragraph item on the spine — use that as the
-                    // `has_unbalanced_bracket` floor so a `[` on an
-                    // earlier paragraph line is still seen.
+                    // `start` is the current *line* start, so take the floor
+                    // from the Paragraph on the spine — a `[` on an earlier
+                    // line still has to count.
                     let paragraph_floor = self
                         .tree
                         .peek_up()
                         .map(|ix| self.tree[ix].item.start)
                         .unwrap_or(start);
-                    let result = try_emit_gfm_autolink(
-                        self.text,
-                        bytes,
-                        ix,
-                        byte,
-                        paragraph_floor,
-                        begin_text,
-                        backslash_escaped,
-                        self.options,
-                        &mut self.tree,
-                        &mut self.allocs,
-                    );
-                    if let Some((new_begin_text, skip)) = result {
-                        begin_text = new_begin_text;
-                        last_inline_emission_end = new_begin_text;
-                        backslash_escaped = false;
-                        LoopInstruction::ContinueAndSkip(skip)
+                    let detection =
+                        detect_gfm_autolink(bytes, ix, byte, paragraph_floor, begin_text)
+                            .filter(|d| d.start >= candidate_floor);
+                    if let Some(d) = detection {
+                        let (cand_start, cand_end) = (d.start, d.end);
+                        if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
+                            candidate_floor = cand_start + 1;
+                            // The scan only moves forward, so ends behind it can
+                            // never be probed again; dropping them here keeps the
+                            // probe in the escape arm off a growing list.
+                            deferred_ends.retain(|&e| e > ix);
+                            deferred_ends.push(cand_end);
+                            // Leave `begin_text` at the candidate's start: its
+                            // bytes stay ordinary text unless the marker fires.
+                            self.append_autolink_marker(d, begin_text, backslash_escaped);
+                            if cand_start > begin_text {
+                                backslash_escaped = false;
+                            }
+                            begin_text = cand_start;
+                            LoopInstruction::ContinueAndSkip(0)
+                        } else {
+                            candidate_floor = cand_end;
+                            self.append_autolink_link(d, begin_text, backslash_escaped);
+                            begin_text = cand_end;
+                            last_inline_emission_end = cand_end;
+                            backslash_escaped = false;
+                            // Skip the URL bytes so later callbacks don't
+                            // re-trigger inside it; ContinueAndSkip(N) advances
+                            // by N then +1.
+                            LoopInstruction::ContinueAndSkip(cand_end.saturating_sub(ix + 1))
+                        }
                     } else {
                         LoopInstruction::ContinueAndSkip(0)
                     }
@@ -2489,8 +2531,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         });
 
         if brk.is_none() {
-            let trailing_whitespace =
-                scan_rev_while(&bytes[begin_text..final_ix], is_ascii_whitespace_no_nl);
+            let trailing_whitespace = scan_rev_while(&bytes[begin_text..final_ix], is_space_or_tab);
             // need to close text at eof
             self.tree.append_text(
                 begin_text,
@@ -2830,18 +2871,24 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.list_interrupted_paragraph = false;
         let bytes = self.text.as_bytes();
         let mut info_start = start_ix + n_fence_char;
-        info_start += scan_whitespace_no_nl(&bytes[info_start..]);
+        info_start += scan_space_or_tab(&bytes[info_start..]);
         // TODO: info strings are typically very short. wouldn't it be faster
         // to just do a forward scan here?
         let mut ix = info_start + scan_nextline(&bytes[info_start..]);
         // Strip only the line terminator (\n, \r, \r\n) — remark/mdast preserves
         // trailing spaces in the fence info string so they end up in `meta`.
         let info_end = ix - scan_rev_while(&bytes[info_start..ix], |b| b == b'\n' || b == b'\r');
-        let info_string = unescape(&self.text[info_start..info_end], self.tree.is_in_table());
+        // The lang/meta split is taken on raw source, so a character reference
+        // decoding to whitespace stays inside the language.
+        let raw_info = &self.text[info_start..info_end];
+        let raw_lang_end = raw_info.find([' ', '\t']).map_or(raw_info.len(), |ix| ix);
+        let in_table = self.tree.is_in_table();
+        let lang_len = unescape(&raw_info[..raw_lang_end], in_table).len() as u32;
+        let info_string = unescape(raw_info, in_table);
         self.tree.append(Item {
             start: start_ix,
             end: 0, // will get set later
-            body: ItemBody::FencedCodeBlock(self.allocs.allocate_cow(info_string)),
+            body: ItemBody::FencedCodeBlock(self.allocs.allocate_cow(info_string), lang_len),
         });
         self.tree.push();
         loop {
@@ -2924,7 +2971,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.list_interrupted_paragraph = false;
         let bytes = self.text.as_bytes();
         let mut meta_start = start_ix + n_fence_char;
-        meta_start += scan_whitespace_no_nl(&bytes[meta_start..]);
+        meta_start += scan_space_or_tab(&bytes[meta_start..]);
         let mut ix = meta_start + scan_nextline(&bytes[meta_start..]);
         // Only strip the trailing newline; preserve any trailing spaces/tabs
         // in the meta string (remark keeps them verbatim).
@@ -3013,11 +3060,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if n_containers < self.tree.spine_len() {
                 break;
             }
-            if let (_, 0) = calc_indent(&bytes[ix..], 4) {
-                if let Some(n) = scan_closing_metadata_block(&bytes[ix..], metadata_block_ch) {
-                    ix += n;
-                    break;
-                }
+            if let (_, 0) = calc_indent(&bytes[ix..], 4)
+                && let Some(n) = scan_closing_metadata_block(&bytes[ix..], metadata_block_ch)
+            {
+                ix += n;
+                break;
             }
             let remaining_space = line_start.remaining_space();
             ix += line_start.bytes_scanned();
@@ -3095,20 +3142,18 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     /// and end current list if it's a lone, empty item
     fn finish_list(&mut self, ix: usize) {
         self.finish_empty_list_item();
-        if let Some(node_ix) = self.tree.peek_up() {
-            if let ItemBody::List(_, _, _) | ItemBody::DefinitionList(_) =
+        if let Some(node_ix) = self.tree.peek_up()
+            && let ItemBody::List(_, _, _) | ItemBody::DefinitionList(_) =
                 self.tree[node_ix].item.body
-            {
-                self.pop(ix);
-            }
+        {
+            self.pop(ix);
         }
         if self.last_line_blank {
-            if let Some(node_ix) = self.tree.peek_grandparent() {
-                if let ItemBody::List(ref mut is_tight, _, _)
+            if let Some(node_ix) = self.tree.peek_grandparent()
+                && let ItemBody::List(ref mut is_tight, _, _)
                 | ItemBody::DefinitionList(ref mut is_tight) = self.tree[node_ix].item.body
-                {
-                    *is_tight = false;
-                }
+            {
+                *is_tight = false;
             }
             self.last_line_blank = false;
         }
@@ -3125,16 +3170,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     fn finish_empty_list_item(&mut self) {
-        if let Some(begin_list_item) = self.begin_list_item {
-            if self.last_line_blank {
-                // A list item can begin with at most one blank line.
-                if let Some(node_ix) = self.tree.peek_up() {
-                    if let ItemBody::ListItem(_, _) | ItemBody::DefinitionListDefinition(..) =
-                        self.tree[node_ix].item.body
-                    {
-                        self.pop(begin_list_item);
-                    }
-                }
+        if let Some(begin_list_item) = self.begin_list_item
+            && self.last_line_blank
+        {
+            // A list item can begin with at most one blank line.
+            if let Some(node_ix) = self.tree.peek_up()
+                && let ItemBody::ListItem(_, _) | ItemBody::DefinitionListDefinition(..) =
+                    self.tree[node_ix].item.body
+            {
+                self.pop(begin_list_item);
             }
         }
         self.begin_list_item = None;
@@ -3145,14 +3189,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     fn continue_list(&mut self, start: usize, ch: u8, index: u64) {
         self.finish_empty_list_item();
         if let Some(node_ix) = self.tree.peek_up() {
-            if let ItemBody::List(ref mut is_tight, existing_ch, _) = self.tree[node_ix].item.body {
-                if existing_ch == ch {
-                    if self.last_line_blank {
-                        *is_tight = false;
-                        self.last_line_blank = false;
-                    }
-                    return;
+            if let ItemBody::List(ref mut is_tight, existing_ch, _) = self.tree[node_ix].item.body
+                && existing_ch == ch
+            {
+                if self.last_line_blank {
+                    *is_tight = false;
+                    self.last_line_blank = false;
                 }
+                return;
             }
             // TODO: this is not the best choice for end; maybe get end from last list item.
             self.finish_list(start);
@@ -3207,7 +3251,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return ix + eol_bytes;
         }
         // skip leading spaces
-        let skip_spaces = scan_whitespace_no_nl(&bytes[ix..]);
+        let skip_spaces = scan_space_or_tab(&bytes[ix..]);
         ix += skip_spaces;
 
         // now handle the header text
@@ -3329,13 +3373,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
         i += 1;
         self.finish_list(start);
-        if let Some(node_ix) = self.tree.peek_up() {
-            if let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body {
-                // finish previous footnote if it's still open
-                self.pop(start);
-            }
+        if let Some(node_ix) = self.tree.peek_up()
+            && let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body
+        {
+            // finish previous footnote if it's still open
+            self.pop(start);
         }
-        i += scan_whitespace_no_nl(&bytes[i..]);
+        i += scan_space_or_tab(&bytes[i..]);
         self.allocs
             .footdefs
             .0
@@ -3396,7 +3440,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     fn scan_refdef_space(&self, bytes: &[u8], mut i: usize) -> Option<(usize, usize)> {
         let mut newlines = 0;
         loop {
-            let whitespaces = scan_whitespace_no_nl(&bytes[i..]);
+            let whitespaces = scan_space_or_tab(&bytes[i..]);
             i += whitespaces;
             if let Some(eol_bytes) = scan_eol(&bytes[i..]) {
                 i += eol_bytes;
@@ -3460,10 +3504,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         linebuf.as_mut().unwrap()
                     };
                     linebuf.push_str(&text[linestart..bytecount]);
-                    linebuf.push('\n'); // normalize line breaks
-                                        // skip line break
+                    // The title's line endings are content, kept byte for byte.
+                    linebuf.push(c as char);
                     bytecount += 1;
                     if c == b'\r' && bytes.get(bytecount) == Some(&b'\n') {
+                        linebuf.push('\n');
                         bytecount += 1;
                     }
                     let mut line_start = LineStart::new(&bytes[bytecount..]);
@@ -3487,10 +3532,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
                 b'\\' => {
                     bytecount += 1;
-                    if let Some(c) = bytes.get(bytecount) {
-                        if c != &b'\r' && c != &b'\n' {
-                            bytecount += 1;
-                        }
+                    if let Some(c) = bytes.get(bytecount)
+                        && c != &b'\r'
+                        && c != &b'\n'
+                    {
+                        bytecount += 1;
                     }
                 }
                 c if c == closing_delim => {
@@ -3529,7 +3575,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // remark folds trailing same-line whitespace after the URL into the
         // definition's source span even with no title. Extend the no-title
         // fallback to match.
-        let span_end = i + scan_whitespace_no_nl(&bytes[i..]);
+        let span_end = i + scan_space_or_tab(&bytes[i..]);
 
         // no title
         let mut backup = (
@@ -3566,18 +3612,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // remark folds trailing same-line whitespace after the
                 // title into the definition's source span (matches the
                 // behavior already applied above in the no-title path).
-                let span_end = i + scan_whitespace_no_nl(&bytes[i..]);
+                let span_end = i + scan_space_or_tab(&bytes[i..]);
                 backup.0 = i - start;
                 backup.1.span = span_start..span_end;
                 backup.1.title = Some(unescape(title, self.tree.is_in_table()));
                 return Some(backup);
             }
         }
-        if newlines > 0 {
-            Some(backup)
-        } else {
-            None
-        }
+        if newlines > 0 { Some(backup) } else { None }
     }
 
     /// Checks whether we should break a paragraph on the given input.
@@ -3777,12 +3819,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let mut spans: Vec<(usize, usize)> = Vec::new();
         let mut i = header_start;
         while i < header_end {
-            if bytes[i] == b':' {
-                if let Some(end) = scan_heading_text_directive(self.text, bytes, i, header_end) {
-                    spans.push((i, end));
-                    i = end;
-                    continue;
-                }
+            if bytes[i] == b':'
+                && let Some(end) = scan_heading_text_directive(self.text, bytes, i, header_end)
+            {
+                spans.push((i, end));
+                i = end;
+                continue;
             }
             i += 1;
         }
@@ -3828,7 +3870,7 @@ fn count_header_cols(
         return 1;
     }
     // was first pipe preceded by whitespace? if so, subtract one
-    start += scan_whitespace_no_nl(&bytes[start..]);
+    start += scan_space_or_tab(&bytes[start..]);
     if bytes[start] == b'|' {
         pipes -= 1;
     }
@@ -4663,10 +4705,10 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize, has_math: bool) -> boo
             offset = i + 1;
             continue;
         }
-        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..]) {
-            if pos + len > ix {
-                return true;
-            }
+        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..])
+            && pos + len > ix
+        {
+            return true;
         }
         offset = i + 1;
     }
@@ -4721,133 +4763,20 @@ fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
             i = j + 2;
             continue;
         }
-        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[j..]) {
-            if j + len > pos {
-                return true;
-            }
+        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[j..])
+            && j + len > pos
+        {
+            return true;
         }
         i = j + 1;
     }
     false
 }
 
-/// True if `pos` falls inside a GFM autolink URL on the current source line
-/// that micromark's `literalAutolink` construct would have tokenized — i.e.
-/// no unbalanced `[` / `![` precedes it. When micromark *does* tokenize the
-/// autolink, backticks (and other potential inline tokens) inside the URL
-/// are consumed as part of the URL, not as code-span markers. We'd
-/// otherwise let inline code break `https://foo.bar.\`baz>\``.
-///
-/// When there *is* an unbalanced `[`, micromark's `previousUnbalanced`
-/// check disables the autolink construct, so backticks must still tokenize
-/// as code spans (and `mdast-util-find-and-replace` later picks the URL
-/// out of the broken-label text). We mirror that here.
-fn is_inside_gfm_autolink_url(bytes: &[u8], pos: usize) -> bool {
-    if pos == 0 || pos >= bytes.len() {
-        return false;
-    }
-    let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos]).map_or(0, |nl| nl + 1);
-    // Track unbalanced `[` (and `![`) the way micromark does: if there's
-    // one open ahead of the URL, the literalAutolink construct doesn't fire.
-    let mut bracket_depth: i32 = 0;
-    let mut i = line_start;
-    while i < pos {
-        let b = bytes[i];
-        // Skip ONLY valid backslash escapes (`\` + ASCII punct). `\h` etc.
-        // is literal text — the URL `\http://...` starts at the `h`, so we
-        // mustn't blindly skip past the next byte.
-        if b == b'\\' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_punctuation() {
-            i += 2;
-            continue;
-        }
-        match b {
-            b'[' => bracket_depth += 1,
-            b']' if bracket_depth > 0 => {
-                bracket_depth -= 1;
-                // Closed link text `]` followed by `(` is a CommonMark link
-                // destination — micromark tokenizes the link first, so the URL
-                // inside isn't visible to the autolink-literal construct. Skip
-                // past the matching `)` so e.g. `[a](http://x)，`code`` doesn't
-                // gobble the trailing text into a phantom URL.
-                if bracket_depth == 0 && bytes.get(i + 1) == Some(&b'(') {
-                    let mut j = i + 2;
-                    let mut paren_depth: i32 = 1;
-                    while j < bytes.len() && paren_depth > 0 {
-                        let c = bytes[j];
-                        if c == b'\\' && j + 1 < bytes.len() && bytes[j + 1].is_ascii_punctuation()
-                        {
-                            j += 2;
-                            continue;
-                        }
-                        if matches!(c, b'\n' | b'\r') {
-                            break;
-                        }
-                        match c {
-                            b'(' => paren_depth += 1,
-                            b')' => paren_depth -= 1,
-                            _ => {}
-                        }
-                        j += 1;
-                    }
-                    if paren_depth == 0 {
-                        i = j;
-                        continue;
-                    }
-                }
-            }
-            _ => {}
-        }
-        // `scan_autolink_literal` rejects false positives, so the prefix
-        // scan only needs to recognize `http(s)` and `www.` (case-insensitive).
-        // TODO(layering): move the scanner to a shared module so firstpass
-        // doesn't reach into `post_passes`.
-        let prefix_match = bracket_depth == 0
-            && matches!(b, b'h' | b'H' | b'w' | b'W')
-            && crate::post_passes::match_autolink_scheme(bytes, i).is_some();
-        if prefix_match && !is_inside_link_destination(bytes, i) {
-            if let Some((_, raw_end, _, _, _)) =
-                crate::post_passes::scan_autolink_literal(bytes, i, false)
-            {
-                if raw_end > pos {
-                    return true;
-                }
-                i = raw_end;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    false
-}
-
-/// True if there's a backtick run of exactly `count` length earlier on the
-/// same line as `pos`. Used by the autolink-vs-code-span tie-break in the
-/// firstpass: if a backtick *could* close a code span opened earlier, we
-/// must let the normal MaybeCode logic decide — micromark fires code-span
-/// constructs at the opener position before any later URL ever gets a
-/// chance to tokenize.
-/// True if an unbalanced `[` (or `![`) sits before `pos` in the same
-/// paragraph (i.e. no matching `]` before `pos`). When this holds,
-/// micromark's `previousUnbalanced` rule disables the autolink-literal
-/// construct, letting backticks tokenize as a code span first. Used as a
-/// gate for the forward-looking backtick suppression check.
-/// GFM autolink-literal construct, dispatched during inline tokenization
-/// from `parse_line`'s callback on `h`/`H`/`w`/`W`/`@` triggers. Mirrors
-/// micromark's text-context construct (see
-/// `node_modules/.../micromark-extension-gfm-autolink-literal/dev/lib/syntax.js`):
-/// the URL bytes are consumed before bracket/image/code-span/emphasis
-/// resolvers see them, so cases like `[a](https://x[![alt](url)` produce a
-/// trailing literal autolink instead of nesting an image into the failed
-/// link's destination.
-///
-/// Returns `Some((new_begin_text, skip))` if a Link was emitted — the
-/// caller should set `begin_text = new_begin_text`, clear
-/// `backslash_escaped`, and return `ContinueAndSkip(skip)`.
 /// Walk forward from `start_ix` (an atext-class char like `_`) through
 /// `+`/`-`/`.`/`_`/alphanumeric to find an `@`, then check whether an
 /// email autolink tokenizes exactly at `start_ix..`. Returns `(start, end,
-/// "mailto:..")` on success. Mirrors micromark's `emailAutolink` construct
-/// when bound to atext start chars.
+/// "mailto:..")` on success.
 fn scan_email_forward_from_atext(
     bytes: &[u8],
     underscore_ix: usize,
@@ -4882,127 +4811,179 @@ fn is_email_local_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'_')
 }
 
-#[allow(clippy::too_many_arguments)]
-fn try_emit_gfm_autolink<'a>(
+/// True when a candidate at `pos` must go through `handle_inline_pass1`
+/// instead of being committed on the spot.
+///
+/// True whenever an earlier byte in the block could open a construct that ends
+/// up owning the trigger's bytes: `[` a bracket opener, `<` a pointed autolink
+/// or inline HTML, `` ` `` a code span, `$` a math span.
+fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize, options: Options) -> bool {
+    let before = &bytes[block_start..pos];
+    memchr::memchr3(b'[', b'<', b'`', before).is_some()
+        || (options.has_math() && memchr::memchr(b'$', before).is_some())
+}
+
+/// A GFM autolink literal the scanner accepted, before anything is committed
+/// to the tree.
+struct AutolinkDetection {
+    start: usize,
+    end: usize,
+    link_type: LinkType,
+    url: String,
+}
+
+/// `(can_open, can_close)` for the run of `run_len` delimiters at `at`.
+fn delim_run_flags(
     text: &str,
+    start: usize,
+    at: usize,
+    run_len: usize,
+    mode: TableParseMode,
+    options: Options,
+) -> (bool, bool) {
+    if run_len == 0 || at >= text.len() {
+        return (false, false);
+    }
+    let s = &text[start..];
+    let suffix = &text[at..];
+    (
+        delim_run_can_open(s, suffix, run_len, at - start, mode, options),
+        delim_run_can_close(s, suffix, run_len, at - start, mode, options),
+    )
+}
+
+/// A run of `~` only means anything at the lengths its extensions define.
+pub(crate) fn delim_run_is_valid(c: u8, count: usize, options: Options) -> bool {
+    c != b'~'
+        || count == 2
+        || (count == 1
+            && (options.contains(Options::ENABLE_STRIKETHROUGH)
+                || options.contains(Options::ENABLE_SUBSCRIPT)))
+}
+
+/// The delimiter run a `\` at `ix` would swallow, when the byte after it ends
+/// a deferred autolink candidate. `None` when nothing there could open or
+/// close, in which case the escape is left to stand as usual.
+fn escaped_delim_run(
+    text: &str,
+    start: usize,
+    ix: usize,
+    mode: TableParseMode,
+    options: Options,
+) -> Option<(usize, (bool, bool))> {
+    let bytes = text.as_bytes();
+    let c = *bytes.get(ix + 1)?;
+    if !matches!(c, b'*' | b'_' | b'~' | b'^') {
+        return None;
+    }
+    let count = 1 + scan_ch_repeat(&bytes[(ix + 2)..], c);
+    let fired = delim_run_flags(text, start, ix + 1, count, mode, options);
+    if (!fired.0 && !fired.1) || !delim_run_is_valid(c, count, options) {
+        return None;
+    }
+    Some((count, fired))
+}
+
+/// An email literal starting at the same offset as a `www.` literal, which
+/// GFM resolves in the email construct's favour. `www_end` bounds the search to
+/// the www span, which the committed path skips outright and the deferred path
+/// was already rescanning.
+fn detect_email_inside_www(
+    bytes: &[u8],
+    ix: usize,
+    www_end: usize,
+    paragraph_start: usize,
+    begin_text: usize,
+) -> Option<AutolinkDetection> {
+    // `_` is the one atext byte that can precede a www literal, and the
+    // attention arm's own email hook already owns that case.
+    if ix > 0 && bytes[ix - 1] == b'_' {
+        return None;
+    }
+    let at_ix = ix + memchr::memchr(b'@', &bytes[ix..www_end])?;
+    let (email_start, email_end, full_url, retry_needed) =
+        crate::post_passes::scan_email_autolink(bytes, at_ix, true)?;
+    // Opening past the trigger is the `@` hook's; opening before it needs an
+    // atext predecessor, and `_` is the only one a www literal takes.
+    if email_start != ix {
+        return None;
+    }
+    debug_assert!(
+        !retry_needed,
+        "a `/` predecessor would have failed the www literal first"
+    );
+    debug_assert!(
+        email_start >= begin_text && email_start >= paragraph_start,
+        "the trigger is inside the current text run"
+    );
+    Some(AutolinkDetection {
+        start: email_start,
+        end: email_end,
+        link_type: LinkType::Email,
+        url: email_addr(full_url),
+    })
+}
+
+/// `scan_email_autolink` returns `mailto:<addr>`; arena_build's Email-link path
+/// prepends `mailto:` again, so strip it here.
+fn email_addr(full_url: String) -> String {
+    full_url
+        .strip_prefix("mailto:")
+        .map(str::to_owned)
+        .unwrap_or(full_url)
+}
+
+/// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
+/// only — committing or deferring is the caller's call, since it turns on
+/// state this function cannot see.
+fn detect_gfm_autolink(
     bytes: &[u8],
     ix: usize,
     byte: u8,
     paragraph_start: usize,
     begin_text: usize,
-    backslash_escaped: bool,
-    options: Options,
-    tree: &mut Tree<Item>,
-    allocs: &mut Allocations<'a>,
-) -> Option<(usize, usize)> {
-    // Fast structural reject: every `h`/`H`/`w`/`W`/`@` in prose fires this
-    // path, but only a tiny fraction can actually start an autolink. The
-    // precedence predicates below each cost O(paragraph) to evaluate, so
-    // bail out on the cheap byte-level check first.
-    match byte {
-        b'h' | b'H' | b'w' | b'W' => {
-            crate::post_passes::match_autolink_scheme(bytes, ix)?;
-            // Pointed-autolink precedence: when an *unescaped* `<`
-            // immediately precedes AND a `>` closer exists before line
-            // end / whitespace, the CommonMark autolink construct will
-            // claim these bytes during MaybeHtml resolution. Cheap, so
-            // run before the paragraph-scan predicates.
-            if ix > 0 && bytes[ix - 1] == b'<' && !is_escaped(bytes, ix - 1) {
-                let has_close = bytes[ix..]
-                    .iter()
-                    .take_while(|&&b| !matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'<'))
-                    .any(|&b| b == b'>');
-                if has_close {
-                    return None;
-                }
-            }
-        }
+) -> Option<AutolinkDetection> {
+    // Cheap reject first: most triggers in prose can't start an autolink.
+    let is_www = match byte {
+        b'h' | b'H' | b'w' | b'W' => crate::post_passes::match_autolink_scheme(bytes, ix)?.1,
         b'@' => {
             // Email requires at least one atext char immediately before @.
             if ix == 0 || !is_email_local_char(bytes[ix - 1]) {
                 return None;
             }
+            false
         }
         _ => return None,
-    }
-
-    // Angle-construct precedence: a trigger sitting inside a `<…>` that the
-    // MaybeHtml second pass resolves (a pointed autolink `<scheme:…>` /
-    // `<addr@host>`, or an inline HTML tag/comment) is owned by that
-    // construct. The narrow flush-against-`<` check above only catches the
-    // autolink form when the trigger abuts the `<`; this covers triggers
-    // mid-construct (`<https://www.x/y>`, `<img alt=www.x>`). (issue #93)
-    if is_inside_angle_construct(text, ix) {
-        return None;
-    }
-    // previousUnbalanced: suppress when an unclosed `[`/`![` precedes the
-    // trigger in this paragraph.
-    if has_unbalanced_bracket_from(bytes, paragraph_start, ix) {
-        return None;
-    }
-    // Link/image destination precedence.
-    if is_inside_link_destination(bytes, ix) {
-        return None;
-    }
-    // Code span precedence.
-    if is_inside_code_span(bytes, ix) {
-        return None;
-    }
-    // Math span precedence (only matters when math is enabled).
-    if options.has_math() && is_inside_math_span(bytes, ix) {
-        return None;
-    }
-    // MDX JSX tag precedence (only matters when MDX is enabled).
-    if options.contains(Options::ENABLE_MDX) && is_inside_open_inline_jsx_tag(bytes, ix) {
-        return None;
-    }
+    };
 
     match byte {
         b'h' | b'H' | b'w' | b'W' => {
-            // previousProtocol / previousWww are checked inside
-            // `scan_autolink_literal` (loose check: prev not ASCII
-            // alphabetic). `fnr_only=false` means the *construct* path
-            // accepted — exactly the case the inline tokenizer fires on.
+            // `fnr_only`: only the find-and-replace fallback would accept,
+            // which is the post-pass's job.
             let (start, _raw_end, end, full_url, fnr_only) =
                 scan_autolink_literal(bytes, ix, ix == paragraph_start)?;
             if fnr_only {
                 return None;
             }
-            let link_type = LinkType::Autolink;
-            let link_ix = allocs.allocate_link(link_type, full_url.into(), "".into(), "".into());
-            tree.append_text(begin_text, start, backslash_escaped);
-            let link_node_ix = tree.append(Item {
+            // GFM registers the email construct ahead of www at the same
+            // offset, so an `@` the www span would swallow wins instead.
+            if is_www
+                && let Some(email) =
+                    detect_email_inside_www(bytes, ix, end, paragraph_start, begin_text)
+            {
+                return Some(email);
+            }
+            Some(AutolinkDetection {
                 start,
                 end,
-                body: ItemBody::Link(link_ix),
-            });
-            let text_child = tree.create_node(Item {
-                start,
-                end,
-                body: ItemBody::Text {
-                    backslash_escaped: false,
-                },
-            });
-            tree[link_node_ix].child = Some(text_child);
-            // Skip the URL bytes so subsequent special-byte callbacks don't
-            // re-trigger on `[`, `!`, etc. inside the URL. ContinueAndSkip(N)
-            // advances ix by N then +1, so to land at `end` we want N = end - ix - 1.
-            // `end > ix` always holds here (the construct requires non-empty
-            // body past the scheme).
-            let skip = end.saturating_sub(ix + 1);
-            Some((end, skip))
+                link_type: LinkType::Autolink,
+                url: full_url,
+            })
         }
         b'@' => {
-            // Email walks backward from `@` for atext, so the emitted
-            // Link's start may be BEFORE `ix`. micromark fires its email
-            // construct FORWARD from the first atext char (not backward
-            // from `@`), so when an atext char (e.g. `_`) is shared with
-            // another text construct (attentionSequence here) micromark's
-            // construct ordering decides which wins. We can't replicate
-            // that cleanly mid-iteration; if the walkback would cross
-            // back over an already-emitted Maybe* item, defer to the
-            // post-pass (which sees the resolved/flat text and runs
-            // find-and-replace if the construct rejected it).
+            // The local-part walkback can start the link before `ix`. If it
+            // would cross an already-emitted Maybe* item, that construct owns
+            // the bytes — leave the email to the post-pass.
             let (email_start, email_end, full_url, retry_needed) =
                 scan_email_autolink(bytes, ix, true)?;
             if retry_needed {
@@ -5014,497 +4995,24 @@ fn try_emit_gfm_autolink<'a>(
             if email_start < paragraph_start {
                 return None;
             }
-            // Construct-path rejection when an active backslash escape
-            // directly precedes the local-part. micromark sees `\X` as one
-            // escape token whose char is `X`; since `X` is punctuation
-            // (atext for `+`/`-`/`.`/`_`), `previousEmail` rejects.
-            // `scan_email_autolink` only checks raw `bytes[start-1] != '/'`
-            // so it misses this case. Let the post-pass emit the
-            // position-less FNR fallback.
+            // A live backslash escape directly before the local part blocks the
+            // construct: the escape and its char are one token, so there is no
+            // boundary. `scan_email_autolink` only rejects a preceding `/`.
             if email_start > 0
                 && bytes[email_start - 1] == b'\\'
                 && is_ascii_punctuation(bytes[email_start])
             {
                 return None;
             }
-            // `scan_email_autolink` returns `mailto:<addr>`; arena_build's
-            // Email-link path will prepend `mailto:` again, so strip here.
-            let email_addr = full_url
-                .strip_prefix("mailto:")
-                .map(str::to_owned)
-                .unwrap_or(full_url);
-            let link_ix =
-                allocs.allocate_link(LinkType::Email, email_addr.into(), "".into(), "".into());
-            tree.append_text(begin_text, email_start, backslash_escaped);
-            let link_node_ix = tree.append(Item {
+            Some(AutolinkDetection {
                 start: email_start,
                 end: email_end,
-                body: ItemBody::Link(link_ix),
-            });
-            let text_child = tree.create_node(Item {
-                start: email_start,
-                end: email_end,
-                body: ItemBody::Text {
-                    backslash_escaped: false,
-                },
-            });
-            tree[link_node_ix].child = Some(text_child);
-            let skip = email_end.saturating_sub(ix + 1);
-            Some((email_end, skip))
+                link_type: LinkType::Email,
+                url: email_addr(full_url),
+            })
         }
         _ => None,
     }
-}
-
-/// True when a literal-autolink trigger at `pos` sits inside a single-line
-/// CommonMark `<…>` construct whose closing `>` follows `pos`: a pointed
-/// autolink (`<scheme:…>` / `<addr@host>`) or an inline HTML tag/comment.
-///
-/// The first pass resolves GFM literal autolinks eagerly, before the
-/// MaybeHtml second pass resolves these `<…>` constructs. When a trigger is
-/// inside one, the eager link overlaps the construct the second pass then
-/// claims: its span gets clamped forward while its URL/content stay stale,
-/// and the bytes it consumed (often a trailing `>\` hard break) are lost.
-/// Deferring here lets MaybeHtml own those bytes, matching reference
-/// behavior for both `<https://www.x/y>` and `<img alt=www.x>` (issue #93).
-///
-/// Resolves constructs left to right from the line start, exactly as the
-/// second pass does, and reports whether one spans `pos`. Scanning forward
-/// and skipping each resolved construct wholesale (rather than walking back
-/// to the nearest `<`) keeps us correct when a `>` sits inside a construct
-/// body (a quoted attribute value or a comment), where it is not a closer.
-/// Only single-line constructs are detected, which is where the overlap
-/// manifests in practice.
-fn is_inside_angle_construct(text: &str, pos: usize) -> bool {
-    let bytes = text.as_bytes();
-    let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos]).map_or(0, |nl| nl + 1);
-    // Fast reject: a single-line `<…>` construct spanning `pos` must open at a
-    // `<` at or before `pos` on this line. With none, there's nothing to defer
-    // to. memchr is much cheaper than the construct-resolving walk below, and
-    // this is the common case for an autolink trigger (cf. `is_inside_code_span`).
-    if memchr::memchr(b'<', &bytes[line_start..=pos]).is_none() {
-        return false;
-    }
-
-    let mut j = line_start;
-    while j <= pos {
-        if bytes[j] == b'<' && !is_escaped(bytes, j) {
-            // Mirror the MaybeHtml resolution order: autolink, then HTML.
-            if let Some(end) = scan_autolink(text, j + 1)
-                .map(|(end, _, _)| end)
-                .or_else(|| resolves_as_inline_html(bytes, j))
-            {
-                if end > pos {
-                    return true;
-                }
-                // Construct ends at/before `pos`; skip the bytes it owns and
-                // keep resolving after it (a `>` it contains is not a closer).
-                j = end;
-                continue;
-            }
-        }
-        j += 1;
-    }
-    false
-}
-
-/// Resolve a single-line inline HTML construct opening at the `<` at `lt`,
-/// returning the byte offset just past its closing `>`. Mirrors the
-/// MaybeHtml second pass (`Parser::scan_inline_html`) with a throwaway scan
-/// guard (no cross-call memoization here) and no newline handler, since only
-/// single-line constructs are relevant to [`is_inside_angle_construct`].
-fn resolves_as_inline_html(bytes: &[u8], lt: usize) -> Option<usize> {
-    let mut guard = HtmlScanGuard::default();
-    match *bytes.get(lt + 1)? {
-        b'!' => scan_inline_html_comment(bytes, lt + 2, &mut guard),
-        b'?' => scan_inline_html_processing(bytes, lt + 2, &mut guard),
-        _ => scan_html_block_inner(&bytes[lt..], None).map(|(_, end)| end + lt),
-    }
-}
-
-/// True when the byte at `pos` is backslash-escaped: an odd run of `\`
-/// immediately precedes it.
-fn is_escaped(bytes: &[u8], pos: usize) -> bool {
-    bytes[..pos]
-        .iter()
-        .rev()
-        .take_while(|&&b| b == b'\\')
-        .count()
-        % 2
-        == 1
-}
-
-/// True when `pos` sits inside an inline link destination `[label](DEST`
-/// whose closing `)` actually exists — i.e. the link parse will succeed.
-/// In that case micromark's labelEnd resolver consumes the destination
-/// bytes before any text-context construct sees them, so the autolink
-/// construct must defer.
-///
-/// When the would-be destination has no valid closer (e.g. unmatched
-/// brackets, runs to EOF without `)`), micromark's labelEnd attempt
-/// fails and the destination bytes fall back to text context — the
-/// autolink construct *should* fire there.
-/// Does the line starting at `pos` open a block-level construct that would
-/// break paragraph continuation? Conservative: only matches markers that
-/// can't appear mid-paragraph (fenced code, ATX heading, blockquote, list
-/// marker, thematic break). Used by `is_inside_link_destination` to decide
-/// whether `[…]` can span across the line.
-fn line_starts_block(bytes: &[u8], pos: usize) -> bool {
-    let mut i = pos;
-    // Skip up to 3 cols of leading space (≥4 would be indented code, but
-    // that doesn't apply mid-paragraph either — punt and treat as block).
-    let mut sp = 0;
-    while i < bytes.len() && bytes[i] == b' ' && sp < 4 {
-        sp += 1;
-        i += 1;
-    }
-    if sp == 4 {
-        return true;
-    }
-    let Some(&c) = bytes.get(i) else {
-        return false;
-    };
-    match c {
-        b'>' => true,
-        b'#' => {
-            // ATX heading: 1-6 `#` then space/eol.
-            let mut h = 0;
-            while bytes.get(i + h) == Some(&b'#') && h < 7 {
-                h += 1;
-            }
-            (1..=6).contains(&h)
-                && matches!(bytes.get(i + h), None | Some(b' ' | b'\t' | b'\n' | b'\r'))
-        }
-        b'`' | b'~' => {
-            // Fenced code: 3+ identical fence chars.
-            let mut n = 0;
-            while bytes.get(i + n) == Some(&c) {
-                n += 1;
-            }
-            n >= 3
-        }
-        b'-' | b'_' | b'*' => {
-            // Thematic break: 3+ of the same char, only `- _ *` and spaces.
-            let mut j = i;
-            let mut count = 0;
-            while j < bytes.len() {
-                match bytes[j] {
-                    b' ' | b'\t' => {}
-                    x if x == c => count += 1,
-                    b'\n' | b'\r' => break,
-                    _ => return false,
-                }
-                j += 1;
-            }
-            count >= 3
-        }
-        _ => false,
-    }
-}
-
-fn is_inside_link_destination(bytes: &[u8], pos: usize) -> bool {
-    if pos < 2 {
-        return false;
-    }
-    // Fast reject: the walkback stops at the first newline, so a `(`
-    // outside the current source line can't reach `pos`. If there's none
-    // on this line before `pos`, no link tail is possible.
-    let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    if memchr::memchr(b'(', &bytes[line_start..pos]).is_none() {
-        return false;
-    }
-    let mut paren_close_excess: i32 = 0;
-    let mut paren_start: Option<usize> = None;
-    let mut i = pos;
-    while i > 0 {
-        i -= 1;
-        let b = bytes[i];
-        if matches!(b, b'\n' | b'\r') {
-            return false;
-        }
-        if i > 0 && bytes[i - 1] == b'\\' {
-            let mut bs = 0;
-            let mut j = i;
-            while j > 0 && bytes[j - 1] == b'\\' {
-                bs += 1;
-                j -= 1;
-            }
-            if bs % 2 == 1 {
-                continue;
-            }
-        }
-        match b {
-            b')' => paren_close_excess += 1,
-            b'(' => {
-                if paren_close_excess > 0 {
-                    paren_close_excess -= 1;
-                } else if i > 0 && bytes[i - 1] == b']' {
-                    paren_start = Some(i);
-                    break;
-                } else {
-                    return false;
-                }
-            }
-            _ => {}
-        }
-    }
-    let Some(paren_start) = paren_start else {
-        return false;
-    };
-    // Verify the `]` immediately before `(` has a matching `[` within the
-    // same paragraph. A `]` without an opener in the same paragraph can't
-    // form a link. CommonMark allows `[…]` to span multiple lines, but a
-    // blank line — or a line that opens a block-level construct (fenced
-    // code, ATX heading, blockquote, list marker, …) — terminates the
-    // paragraph and prevents the link from forming.
-    let rbracket = paren_start - 1;
-    {
-        let mut k = rbracket;
-        let mut depth: i32 = 1;
-        let mut matched = false;
-        let mut just_saw_newline = false;
-        while k > 0 {
-            k -= 1;
-            let b = bytes[k];
-            if matches!(b, b'\n' | b'\r') {
-                if just_saw_newline {
-                    break;
-                }
-                just_saw_newline = true;
-                // After `\n` (walking back), bytes[k+1..] is the line that
-                // came AFTER this newline (closer to `]`). If that line opens
-                // a new block, the paragraph carrying `[` can't continue
-                // into it, so the link can't form.
-                if line_starts_block(bytes, k + 1) {
-                    break;
-                }
-                continue;
-            }
-            if b == b' ' || b == b'\t' {
-                continue;
-            }
-            just_saw_newline = false;
-            if k > 0 && bytes[k - 1] == b'\\' {
-                let mut bs = 0;
-                let mut j = k;
-                while j > 0 && bytes[j - 1] == b'\\' {
-                    bs += 1;
-                    j -= 1;
-                }
-                if bs % 2 == 1 {
-                    continue;
-                }
-            }
-            if b == b']' {
-                depth += 1;
-            } else if b == b'[' {
-                depth -= 1;
-                if depth == 0 {
-                    matched = true;
-                    break;
-                }
-            }
-        }
-        if !matched {
-            return false;
-        }
-    }
-    // Destination = non-whitespace run with balanced unescaped parens.
-    // Titles aren't modeled — those after-destination tokens are uncommon
-    // and would re-trigger the autolink check anyway.
-    let mut j = paren_start + 1;
-    let mut depth: i32 = 0;
-    while j < bytes.len() {
-        let b = bytes[j];
-        if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
-            break;
-        }
-        if b == b'\\' && j + 1 < bytes.len() {
-            j += 2;
-            continue;
-        }
-        match b {
-            b'(' => depth += 1,
-            b')' => {
-                if depth == 0 {
-                    break;
-                }
-                depth -= 1;
-            }
-            _ => {}
-        }
-        j += 1;
-    }
-    if depth != 0 {
-        return false;
-    }
-    while j < bytes.len() && matches!(bytes[j], b' ' | b'\t') {
-        j += 1;
-    }
-    j < bytes.len() && bytes[j] == b')'
-}
-
-fn has_unbalanced_bracket_in_paragraph(bytes: &[u8], pos: usize) -> bool {
-    has_unbalanced_bracket_from(bytes, 0, pos)
-}
-
-/// Bounded variant: search back only to `floor` (typically the paragraph
-/// start passed to inline tokenization). Avoids leaking brackets from a
-/// previous block (e.g. indented code `\t![…\n` would otherwise mark the
-/// next paragraph's first byte as bracket-pending).
-fn has_unbalanced_bracket_from(bytes: &[u8], floor: usize, pos: usize) -> bool {
-    if pos <= floor {
-        return false;
-    }
-    // Fast reject: if no `[` appears anywhere between floor and pos there
-    // can't be an unbalanced bracket — bypass both the blank-line walkback
-    // and the bracket-depth walk.
-    if memchr::memchr(b'[', &bytes[floor..pos]).is_none() {
-        return false;
-    }
-    let mut search_start = floor;
-    {
-        let mut i = pos;
-        while i > floor {
-            i -= 1;
-            if matches!(bytes[i], b'\n' | b'\r') {
-                let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[floor..i])
-                    .map_or(floor, |nl| floor + nl + 1);
-                let line_is_blank = bytes[line_start..i]
-                    .iter()
-                    .all(|&b| matches!(b, b' ' | b'\t'));
-                if line_is_blank {
-                    search_start = i + 1;
-                    break;
-                }
-            }
-        }
-    }
-    // Re-check after narrowing the floor: the only `[` in the range may
-    // have been before a blank line we just skipped past.
-    if memchr::memchr(b'[', &bytes[search_start..pos]).is_none() {
-        return false;
-    }
-    let mut depth: i32 = 0;
-    let mut i = search_start;
-    while i < pos {
-        let b = bytes[i];
-        if b == b'\\' {
-            i += 2;
-            continue;
-        }
-        match b {
-            b'[' => depth += 1,
-            b']' if depth > 0 => depth -= 1,
-            _ => {}
-        }
-        i += 1;
-    }
-    depth > 0
-}
-
-/// True if there's a backtick run of exactly `count` length later in the
-/// same paragraph, starting at or after `pos`. Mirrors the backward
-/// `has_earlier_backtick_run` for the open-side of a code span: a
-/// `\`foo\`` inside what would otherwise be an autolink URL must still
-/// tokenize as a code span if the closing backticks exist later in the
-/// paragraph.
-fn has_later_backtick_run(bytes: &[u8], pos: usize, count: usize) -> bool {
-    if pos >= bytes.len() {
-        return false;
-    }
-    let mut search_end = bytes.len();
-    {
-        let mut i = pos;
-        while i < bytes.len() {
-            if matches!(bytes[i], b'\n' | b'\r') {
-                let next = i + 1;
-                let line_end = (next..bytes.len())
-                    .find(|&j| matches!(bytes[j], b'\n' | b'\r'))
-                    .unwrap_or(bytes.len());
-                let line_is_blank = bytes[next..line_end]
-                    .iter()
-                    .all(|&b| matches!(b, b' ' | b'\t'));
-                if line_is_blank {
-                    search_end = i;
-                    break;
-                }
-                i = next;
-                continue;
-            }
-            i += 1;
-        }
-    }
-    let mut i = pos;
-    while i < search_end {
-        if bytes[i] == b'\\' {
-            i += 2;
-            continue;
-        }
-        if bytes[i] == b'`' {
-            let run = 1 + scan_ch_repeat(&bytes[(i + 1)..], b'`');
-            if run == count {
-                return true;
-            }
-            i += run;
-            continue;
-        }
-        i += 1;
-    }
-    false
-}
-
-fn has_earlier_backtick_run(bytes: &[u8], pos: usize, count: usize) -> bool {
-    if pos == 0 {
-        return false;
-    }
-    // Code spans extend across line breaks, so walk back to the start of
-    // the paragraph (the previous blank line or start-of-input). A line-
-    // scoped check would miss a backtick opener on a previous line and
-    // wrongly suppress a closing backtick that micromark would have
-    // matched.
-    let mut search_start = 0;
-    {
-        let mut i = pos;
-        while i > 0 {
-            i -= 1;
-            // Detect blank line: scan back to find line start, then check
-            // whether everything from there to the previous newline is ws.
-            if matches!(bytes[i], b'\n' | b'\r') {
-                let line_end = i;
-                let mut j = if i > 0 { i - 1 } else { 0 };
-                while j > 0 && !matches!(bytes[j - 1], b'\n' | b'\r') {
-                    j -= 1;
-                }
-                let line_is_blank = bytes[j..line_end]
-                    .iter()
-                    .all(|&b| matches!(b, b' ' | b'\t'));
-                if line_is_blank {
-                    search_start = i + 1;
-                    break;
-                }
-            }
-        }
-    }
-    let mut i = search_start;
-    while i < pos {
-        if bytes[i] == b'\\' {
-            i += 2;
-            continue;
-        }
-        if bytes[i] == b'`' {
-            let run = 1 + scan_ch_repeat(&bytes[(i + 1)..], b'`');
-            if run == count {
-                return true;
-            }
-            i += run;
-            continue;
-        }
-        i += 1;
-    }
-    false
 }
 
 #[cfg(feature = "mdx")]
@@ -5812,21 +5320,23 @@ fn parse_directive_after_colons<'a>(
     let mut label_end = 0usize;
 
     // Label (no space allowed between name and [)
-    if pos < bytes.len() && bytes[pos] == b'[' {
-        if let Some((ls, le, consumed)) = scan_directive_label(&bytes[pos..]) {
-            label_start = pos + ls;
-            label_end = pos + le;
-            pos += consumed;
-        }
+    if pos < bytes.len()
+        && bytes[pos] == b'['
+        && let Some((ls, le, consumed)) = scan_directive_label(&bytes[pos..])
+    {
+        label_start = pos + ls;
+        label_end = pos + le;
+        pos += consumed;
     }
 
     // Attributes (no space allowed between label/name and {)
     let mut attributes = Vec::new();
-    if pos < bytes.len() && bytes[pos] == b'{' {
-        if let Some((attrs, consumed)) = scan_directive_attributes(&bytes[pos..]) {
-            attributes = attrs;
-            pos += consumed;
-        }
+    if pos < bytes.len()
+        && bytes[pos] == b'{'
+        && let Some((attrs, consumed)) = scan_directive_attributes(&bytes[pos..])
+    {
+        attributes = attrs;
+        pos += consumed;
     }
 
     Some((
@@ -6544,7 +6054,7 @@ pub(crate) fn mdast_position_end(
     }
     let is_math = matches!(item.body, ItemBody::MathBlock(_));
     let math_at_eof = is_math && end as usize >= source.len();
-    let is_fenced = matches!(item.body, ItemBody::FencedCodeBlock(_));
+    let is_fenced = matches!(item.body, ItemBody::FencedCodeBlock(..));
     let fenced_at_eof = is_fenced && end as usize >= source.len();
     let parent_is_bq = matches!(parent_body, Some(ItemBody::BlockQuote(_)));
     let parent_is_listitem = matches!(parent_body, Some(ItemBody::ListItem(..)));

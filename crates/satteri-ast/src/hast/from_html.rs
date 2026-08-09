@@ -10,18 +10,18 @@ use std::cell::{Cell, Ref, RefCell};
 use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::{
-    parse_document, parse_fragment, tree_builder::TreeBuilderOpts, Attribute, LocalName, Namespace,
-    ParseOpts, QualName,
+    Attribute, LocalName, Namespace, ParseOpts, QualName, parse_document, parse_fragment,
+    tree_builder::TreeBuilderOpts,
 };
 use satteri_arena::{Arena, ArenaBuilder, Hast, StringRef};
-use satteri_property_info::{find_property, PropKind};
+use satteri_property_info::{PropKind, find_property};
 
+use crate::hast::HastNodeType;
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
     encode_element_data,
 };
 use crate::hast::render::{is_void_element, render_node_inner};
-use crate::hast::HastNodeType;
 #[cfg(feature = "mdx")]
 use crate::mdast::codec::{
     decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
@@ -117,7 +117,7 @@ impl StitchRecognizer {
         claimed
             .iter()
             .enumerate()
-            .filter(|(_, &was_claimed)| !was_claimed)
+            .filter(|&(_, &was_claimed)| !was_claimed)
             .map(|(index, _)| format!("{}{}", self.prefix, index))
             .collect()
     }
@@ -238,12 +238,11 @@ impl TreeSink for HtmlSink {
     fn append(&self, parent: &usize, child: NodeOrText<usize>) {
         let mut nodes = self.nodes.borrow_mut();
         let parent = *parent;
-        if let NodeOrText::AppendText(text) = &child {
-            if let Some(&last) = nodes[parent].children.last() {
-                if push_text(&mut nodes, last, text) {
-                    return;
-                }
-            }
+        if let NodeOrText::AppendText(text) = &child
+            && let Some(&last) = nodes[parent].children.last()
+            && push_text(&mut nodes, last, text)
+        {
+            return;
         }
         let child = match child {
             NodeOrText::AppendText(text) => new_node(&mut nodes, NodeData::Text { contents: text }),

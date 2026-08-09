@@ -500,12 +500,10 @@ fn parse_mdast_pooled(
         satteri_pulldown_cmark::parse_no_positions_into(source, opts, reuse)
     };
     #[cfg(feature = "mdx")]
-    if mdx {
-        if let Some((offset, msg)) = mdx_errors.first() {
-            return Err(napi::Error::from_reason(
-                satteri_mdxjs::parse_error_to_message(source, *offset, msg).to_string(),
-            ));
-        }
+    if mdx && let Some((offset, msg)) = mdx_errors.first() {
+        return Err(napi::Error::from_reason(
+            satteri_mdxjs::parse_error_to_message(source, *offset, msg).to_string(),
+        ));
     }
     #[cfg(not(feature = "mdx"))]
     let _ = (mdx, mdx_errors);

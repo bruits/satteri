@@ -347,3 +347,35 @@ describe("Math singleDollarTextMath:false conformance (vs remark-math)", () => {
     assertNoSingleDollarMathHastConformance("$$\n\\gamma\n$$");
   });
 });
+
+// A math span's leading/trailing line ending is stripped like a space, and a
+// lone `\r` ends a line just as `\n` does.
+describe("Math MDAST conformance: line endings around a span", () => {
+  const FLAVORS: [string, string][] = [
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+    ["CR", "\r"],
+  ];
+
+  for (const [name, eol] of FLAVORS) {
+    describe(name, () => {
+      const md = (tpl: string) => tpl.split("EOL").join(eol);
+
+      test("one leading and trailing line ending is stripped", () => {
+        assertExtMdastConformance(md("$EOL\\alphaEOL$EOL"), MATH);
+      });
+
+      test("leading line ending with a trailing space", () => {
+        assertExtMdastConformance(md("$EOL\\alpha $EOL"), MATH);
+      });
+
+      test("inner line ending is kept", () => {
+        assertExtMdastConformance(md("$\\alphaEOL\\beta$EOL"), MATH);
+      });
+
+      test("span holding only line endings", () => {
+        assertExtMdastConformance(md("$EOL$EOL"), MATH);
+      });
+    });
+  }
+});

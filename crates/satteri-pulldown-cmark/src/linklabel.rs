@@ -25,7 +25,7 @@ use alloc::string::String;
 use unicase::UniCase;
 
 use crate::{
-    scanners::{is_ascii_punctuation, is_ascii_whitespace, scan_eol},
+    scanners::{is_ascii_punctuation, is_space_tab_or_eol, scan_eol},
     strings::CowStr,
 };
 
@@ -91,13 +91,13 @@ pub(crate) fn scan_link_label_rest<'t>(
                 codepoints += 2;
                 only_white_space = false;
             }
-            b if is_ascii_whitespace(b) => {
+            b if is_space_tab_or_eol(b) => {
                 // normalize labels by collapsing whitespaces, including linebreaks
                 let mut whitespaces = 0;
                 let mut linebreaks = 0;
                 let whitespace_start = ix;
 
-                while ix < bytes.len() && is_ascii_whitespace(bytes[ix]) {
+                while ix < bytes.len() && is_space_tab_or_eol(bytes[ix]) {
                     if let Some(eol_bytes) = scan_eol(&bytes[ix..]) {
                         linebreaks += 1;
                         if linebreaks > 1 {

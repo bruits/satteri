@@ -93,12 +93,34 @@ test("C3: walk-path position matches the reader for every matched node", () => {
   // The second doc leads with multibyte characters (❤️/CJK/astral 😀): the
   // walk path used to serialize raw byte offsets while the reader converted
   // to UTF-16 code units, so positions diverged after any multibyte char.
+  // The third doc adds lone-CR endings as parity input only. It cannot guard
+  // the line-ending split itself: both `utf16_offset_at` and
+  // `byte_to_utf16_offset` sum to the same UTF-16 length whatever the split,
+  // so the two paths agree even when the split is wrong. `line_index.rs`
+  // covers that.
   const docs = [
     "# Heading\n\nA paragraph with **bold** and a [link](/x).",
     "# ❤️你好\n\n😀 A paragraph with **bold** and a [link](/x).",
+    "# ❤️Heading\r\r😀 A paragraph with **bold** and a [link](/x).\rTail 你好.",
   ];
   for (const md of docs) {
     for (const type of ["heading", "paragraph", "text", "strong", "link"] as const) {
+      const { walked, materialized } = walkAndReader(md, type);
+      expect(walked.length).toBe(materialized.length);
+      expect(walked.length).toBeGreaterThan(0);
+      for (let i = 0; i < walked.length; i++) {
+        expect(walked[i]!.position).toEqual(materialized[i]!.position);
+      }
+    }
+  }
+});
+
+test("C3: GFM autolink positions match the reader, present or absent (#187)", () => {
+  // The first doc's autolink carries a position; the unclosed `[` in the second
+  // sends it down the position-less path.
+  const docs = ["[[x]](https://x.y)\n\n[x]: /", "a [b(https://x.y), c"];
+  for (const md of docs) {
+    for (const type of ["link", "text"] as const) {
       const { walked, materialized } = walkAndReader(md, type);
       expect(walked.length).toBe(materialized.length);
       expect(walked.length).toBeGreaterThan(0);

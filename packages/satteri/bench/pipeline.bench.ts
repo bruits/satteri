@@ -25,6 +25,8 @@ import type { MdastNode } from "../src/types.js";
 
 const MARKDOWN = readFileSync(new URL("./fixtures/markdown.md", import.meta.url), "utf8");
 const MDX = readFileSync(new URL("./fixtures/document.mdx", import.meta.url), "utf8");
+// `markdown.md` has no autolink triggers.
+const AUTOLINKS = readFileSync(new URL("./fixtures/autolinks.md", import.meta.url), "utf8");
 
 const noopHastPlugin = defineHastPlugin({
   name: "noop",
@@ -195,6 +197,12 @@ describe("markdownToHtml", () => {
   });
 });
 
+describe("markdownToHtml (autolinks)", () => {
+  bench("no plugins", () => {
+    markdownToHtml(AUTOLINKS);
+  });
+});
+
 describe("markdownToHtml (plugin transforms)", () => {
   bench("HAST replaceNode keep-children (links)", () => {
     markdownToHtml(MARKDOWN, { hastPlugins: [replaceLinksHast] });
@@ -229,6 +237,10 @@ describe("mdxToJs", () => {
 describe("markdownToMdast", () => {
   bench("markdown", () => {
     markdownToMdast(MARKDOWN);
+  });
+
+  bench("autolinks", () => {
+    markdownToMdast(AUTOLINKS);
   });
 });
 

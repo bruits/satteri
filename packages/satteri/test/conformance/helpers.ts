@@ -357,8 +357,226 @@ export function satteriFmHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
+// Find-and-replace autolinks carry source positions here and none in remark.
+// Dropping positions wholesale would hide every other position bug, so each
+// extra one is verified against the source before being removed.
+
+interface PositionedNode {
+  type: string;
+  tagName?: string;
+  value?: string;
+  children?: PositionedNode[];
+  position?: { start: { offset: number }; end: { offset: number } };
+}
+
+const entityCache = new Map<string, string>();
+
+/** Decode one `&…;` reference, or `undefined` if it isn't one. */
+function decodeEntity(raw: string): string | undefined {
+  let decoded = entityCache.get(raw);
+  if (decoded === undefined) {
+    const paragraph = (mdastProcessor.parse(raw).children as unknown as AnyNode[])[0];
+    const first = (paragraph?.children as AnyNode[] | undefined)?.[0];
+    decoded = first && first.type === "text" ? String(first.value) : raw;
+    entityCache.set(raw, decoded);
+  }
+  return decoded === raw ? undefined : decoded;
+}
+
+const ENTITY_RE = /^&(?:#[Xx][0-9A-Fa-f]{1,6}|#\d{1,7}|[A-Za-z][A-Za-z0-9]{0,31});/;
+
+/**
+ * Undo the transforms between raw source and a text node's value. Written
+ * independently of the parser's own alignment so a symmetric bug can't cancel out.
+ */
+function decodeRawSlice(raw: string, value: string): string {
+  let out = "";
+  let i = 0;
+  while (i < raw.length) {
+    const c = raw[i]!;
+    if (c === "&") {
+      const match = ENTITY_RE.exec(raw.slice(i));
+      const decoded = match ? decodeEntity(match[0]) : undefined;
+      if (match && decoded !== undefined) {
+        out += decoded;
+        i += match[0].length;
+        continue;
+      }
+    } else if (c === "\\" && /[!-/:-@[-`{-~]/.test(raw[i + 1] ?? "")) {
+      out += raw[i + 1];
+      i += 2;
+      continue;
+    } else if (c === " " || c === "\t") {
+      let j = i;
+      while (j < raw.length && (raw[j] === " " || raw[j] === "\t")) j += 1;
+      if (raw[j] === "\n" || raw[j] === "\r") {
+        i = j;
+        continue;
+      }
+    } else if (c === "\n" || c === "\r") {
+      // Both conventions are in use: a `text` keeps the raw line ending, an
+      // `inlineCode` normalizes it.
+      const ending = c === "\r" && raw[i + 1] === "\n" ? "\r\n" : c;
+      out += value.startsWith(ending, out.length) ? ending : "\n";
+      i += ending.length;
+      // The same characters can be content, so stop stripping the block prefix
+      // as soon as the value agrees.
+      while (
+        i < raw.length &&
+        (raw[i] === " " || raw[i] === "\t" || raw[i] === ">") &&
+        value[out.length] !== raw[i]
+      ) {
+        i += 1;
+      }
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/** Slicing the source by a node's reported offsets reproduces its raw text. */
+function assertSliceInvariant(node: PositionedNode, input: string, label: string): void {
+  const { start, end } = node.position!;
+  expect(start.offset, `${label}: start offset out of range`).toBeGreaterThanOrEqual(0);
+  expect(end.offset, `${label}: end before start`).toBeGreaterThanOrEqual(start.offset);
+  expect(end.offset, `${label}: end offset out of range`).toBeLessThanOrEqual(input.length);
+  if (typeof node.value === "string") {
+    // The span must be exact under one convention or the other: the construct
+    // path slices raw source into the value, find-and-replace decodes it.
+    const slice = input.slice(start.offset, end.offset);
+    if (slice !== node.value) {
+      expect(
+        decodeRawSlice(slice, node.value),
+        `${label}: raw slice does not decode to the node value`,
+      ).toBe(node.value);
+    }
+  }
+}
+
+/** Sibling spans are ascending, non-overlapping, and inside their parent's. */
+function assertSpanSet(parent: PositionedNode, label: string): void {
+  let previousEnd = 0;
+  for (const child of parent.children ?? []) {
+    if (!child.position) continue;
+    expect(
+      child.position.start.offset,
+      `${label}: overlapping sibling spans`,
+    ).toBeGreaterThanOrEqual(previousEnd);
+    previousEnd = child.position.end.offset;
+    if (parent.position) {
+      expect(
+        child.position.start.offset,
+        `${label}: child starts before its parent`,
+      ).toBeGreaterThanOrEqual(parent.position.start.offset);
+      expect(
+        child.position.end.offset,
+        `${label}: child ends after its parent`,
+      ).toBeLessThanOrEqual(parent.position.end.offset);
+    }
+  }
+}
+
+function isAutolinkNode(node: PositionedNode): boolean {
+  return node.type === "link" || (node.type === "element" && node.tagName === "a");
+}
+
+function stripVerifiedSubtree(
+  actual: PositionedNode | undefined,
+  expected: PositionedNode | undefined,
+  input: string,
+  label: string,
+): void {
+  if (!actual || !expected) return;
+  // A `link` has no `value`, so the slice invariant only bounds-checks it;
+  // sibling ordering is the rest of the check before the position is deleted.
+  assertSpanSet(actual, label);
+  if (actual.position) {
+    assertSliceInvariant(actual, input, label);
+    delete actual.position;
+  }
+  const expectedChildren = expected.children ?? [];
+  for (const [ix, child] of (actual.children ?? []).entries()) {
+    stripVerifiedSubtree(child, expectedChildren[ix], input, `${label}/${child.type}[${ix}]`);
+  }
+}
+
+/** The slice invariant on every `link` and `text`: a wrong position is worse
+ * than the absent one it replaces. */
+export function assertSliceInvariantEverywhere(tree: unknown, input: string): void {
+  const walk = (node: PositionedNode, label: string): void => {
+    if (node.position && (node.type === "link" || node.type === "text")) {
+      assertSliceInvariant(node, input, label);
+    }
+    for (const [ix, child] of (node.children ?? []).entries()) {
+      walk(child, `${label}/${child.type}[${ix}]`);
+    }
+  };
+  if (typeof tree !== "object" || tree === null) return;
+  walk(tree as PositionedNode, "root");
+}
+
+export function reconcileFnrPositions(actual: unknown, expected: unknown, input: string): void {
+  const walk = (a: PositionedNode, e: PositionedNode, label: string): void => {
+    const actualChildren = a.children;
+    const expectedChildren = e.children;
+    if (!Array.isArray(actualChildren) || !Array.isArray(expectedChildren)) return;
+    if (actualChildren.length !== expectedChildren.length) return;
+    // Scoped to the shape `findAndReplace` produces — a parent holding a
+    // position-less link — so a stray position anywhere else still fails.
+    const inFnrScope = expectedChildren.some((c) => isAutolinkNode(c) && !c.position);
+    if (inFnrScope) assertSpanSet(a, label);
+    for (const [ix, expectedChild] of expectedChildren.entries()) {
+      const actualChild = actualChildren[ix]!;
+      const childLabel = `${label}/${expectedChild.type}[${ix}]`;
+      if (inFnrScope && !expectedChild.position) {
+        stripVerifiedSubtree(actualChild, expectedChild, input, childLabel);
+      } else {
+        walk(actualChild, expectedChild, childLabel);
+      }
+    }
+  };
+  if (typeof actual !== "object" || actual === null) return;
+  if (typeof expected !== "object" || expected === null) return;
+  walk(actual as PositionedNode, expected as PositionedNode, "root");
+}
+
 export function assertMdastConformance(md: string): void {
-  expect(satteriMdast(md)).toEqual(referenceMdast(md));
+  const actual = satteriMdast(md);
+  const expected = referenceMdast(md);
+  reconcileFnrPositions(actual, expected, md);
+  expect(actual).toEqual(expected);
+}
+
+/** The part of an mdast node the autolink suites walk. */
+export interface UrlNode {
+  type: string;
+  url?: string;
+  children?: UrlNode[];
+  position?: { start: { offset: number }; end: { offset: number } };
+}
+
+/** Every `link` URL in document order. */
+export function collectUrls(tree: unknown): string[] {
+  const out: string[] = [];
+  const walk = (node: UrlNode): void => {
+    if (node.type === "link") out.push(String(node.url));
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(tree as UrlNode);
+  return out;
+}
+
+/** Every `link` URL satteri produces for `md`, in document order. */
+export function linkUrls(md: string): string[] {
+  return collectUrls(satteriMdast(md));
+}
+
+/** The tree matches remark, and the autolinks are the ones named. */
+export function conforms(md: string, urls: string[]): void {
+  assertMdastConformance(md);
+  expect(linkUrls(md), JSON.stringify(md)).toEqual(urls);
 }
 
 /** Like `assertMdastConformance` but strips `position` fields before
@@ -371,7 +589,10 @@ export function assertMdastConformanceNoPosition(md: string): void {
 }
 
 export function assertHastConformance(md: string): void {
-  expect(satteriHast(md)).toEqual(referenceHast(md));
+  const actual = satteriHast(md);
+  const expected = referenceHast(md);
+  reconcileFnrPositions(actual, expected, md);
+  expect(actual).toEqual(expected);
 }
 
 export function assertHtmlConformance(md: string): void {
@@ -383,6 +604,7 @@ export function assertExtMdastConformance(md: string, extensions: ExtensionSet[]
   const features = featuresToSatteri(extensions);
   const expected = stripData(serialize(proc.parse(md)));
   const actual = stripData(serialize(markdownToMdast(md, { features })));
+  reconcileFnrPositions(actual, expected, md);
   expect(actual).toEqual(expected);
 }
 
@@ -397,24 +619,13 @@ function stripPositions(node: AnyNode): AnyNode {
   return out;
 }
 
-/** Like `assertExtMdastConformance` but ignores `position`. Use this when
- * positions legitimately diverge even though trees are structurally identical
- * — e.g. remark's post-transform GFM autolink nodes carry no position while
- * ours do. */
-export function assertExtMdastConformanceNoPosition(md: string, extensions: ExtensionSet[]): void {
-  const proc = buildMdastProcessor(extensions);
-  const features = featuresToSatteri(extensions);
-  const expected = stripPositions(serialize(proc.parse(md)));
-  const actual = stripPositions(serialize(markdownToMdast(md, { features })));
-  expect(actual).toEqual(expected);
-}
-
 export function assertExtHastConformance(md: string, extensions: ExtensionSet[]): void {
   const proc = buildHastProcessor(extensions);
   const features = featuresToSatteri(extensions);
   const mdast = proc.parse(md);
   const expected = normalizeAlignToStyle(serialize(proc.runSync(mdast) as Nodes));
   const actual = stripHastDataLang(serialize(markdownToHast(md, { features })));
+  reconcileFnrPositions(actual, expected, md);
   expect(actual).toEqual(expected);
 }
 

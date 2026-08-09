@@ -53,11 +53,7 @@ impl PropKind {
 }
 
 fn table(in_svg: bool) -> Table {
-    if in_svg {
-        SVG_TABLE
-    } else {
-        HTML_TABLE
-    }
+    if in_svg { SVG_TABLE } else { HTML_TABLE }
 }
 
 /// Lowercase `name` for a table lookup; borrows when already lowercase.
@@ -115,10 +111,8 @@ pub fn property_to_attribute(name: &str, in_svg: bool) -> Cow<'_, str> {
     }
     // Schema lookup must beat the generic `data-*` fallback: `dataType` is a
     // real SVG attribute (→ `datatype`), not a custom `data-type`.
-    if in_svg {
-        if let Some(attr) = attribute_of(name, true) {
-            return Cow::Borrowed(attr);
-        }
+    if in_svg && let Some(attr) = attribute_of(name, true) {
+        return Cow::Borrowed(attr);
     }
     if let Some(rest) = strip_namespace_prefix(name, "data") {
         return Cow::Owned(format_data_attribute(rest));
@@ -210,7 +204,7 @@ fn format_data_attribute(suffix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_property, property_to_attribute, PropKind};
+    use super::{PropKind, find_property, property_to_attribute};
 
     fn html(name: &str) -> std::borrow::Cow<'_, str> {
         property_to_attribute(name, false)

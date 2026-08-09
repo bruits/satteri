@@ -10,11 +10,12 @@ import {
   type MdastHandle,
   type MdastPluginInstance,
 } from "./mdast/mdast-visitor.js";
+import { normalizePlugins } from "./plugin.js";
 import type {
   MdastPluginDefinition,
   HastPluginDefinition,
-  MdastPluginInput,
-  HastPluginInput,
+  MdastPluginList,
+  HastPluginList,
 } from "./plugin.js";
 import {
   applyCommandsAndCompileHandle,
@@ -153,7 +154,7 @@ function warnDroppedTransforms(
 
 function runMdastPluginsOnHandle(
   handle: MdastHandle,
-  plugins: MdastPluginInput[],
+  plugins: MdastPluginDefinition[],
   fileURL: URL | undefined,
   data: Data,
   sourceFormat: SourceFormat,
@@ -194,8 +195,7 @@ function runMdastPluginsOnHandle(
   let i = 0;
   const runNext = (): MdastPipelineResult | Promise<MdastPipelineResult> => {
     while (i < plugins.length) {
-      const raw = plugins[i++]!;
-      const plugin: MdastPluginDefinition = typeof raw === "function" ? raw() : raw;
+      const plugin = plugins[i++]!;
       const r = runPlugin(plugin as MdastPluginInstance, i === plugins.length);
       if (r instanceof Promise) return r.then(runNext);
     }
@@ -225,7 +225,7 @@ const NO_HAST_COMMANDS: CollectedHastCommands = {
  *  (`render` or `compile`), saving one NAPI roundtrip per compile. */
 function runHastPluginsCollectLast(
   handle: HastHandle,
-  plugins: HastPluginInput[],
+  plugins: HastPluginDefinition[],
   source: string,
   fileURL: URL | undefined,
   data: Data,
@@ -234,10 +234,9 @@ function runHastPluginsCollectLast(
   let i = 0;
   const runNext = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
     while (i < plugins.length) {
-      const raw = plugins[i]!;
+      const plugin = plugins[i]!;
       const isLast = i === plugins.length - 1;
       i++;
-      const plugin: HastPluginDefinition = typeof raw === "function" ? raw() : raw;
       const subs = resolveSubscriptions(plugin);
 
       if (isLast) {
@@ -463,8 +462,11 @@ export interface Features {
 }
 
 export interface CompileOptions {
-  mdastPlugins?: MdastPluginInput[];
-  hastPlugins?: HastPluginInput[];
+  /** MDAST plugins, in run order. A nested array runs its own plugins, in
+   *  their own order, at the array's position. */
+  mdastPlugins?: MdastPluginList;
+  /** HAST plugins, in run order. Nests like `mdastPlugins`. */
+  hastPlugins?: HastPluginList;
   features?: Features;
   /**
    * The document being processed, surfaced to plugins as `ctx.fileURL`. Must
@@ -599,8 +601,28 @@ type FieldIsAsync<V> = V extends AnyFn
 type AnyVisitorAsync<P> = {
   [K in keyof P]-?: FieldIsAsync<NonNullable<P[K]>>;
 }[keyof P];
-type IsPluginAsync<P> = true extends AnyVisitorAsync<P> ? true : false;
-type ResolveInput<P> = P extends () => infer D ? D : P;
+// `P extends unknown` forces distribution; `true extends AnyVisitorAsync<P>`
+// alone would not, since the checked type is `true` rather than P. Undistributed,
+// a union of plugins with differing visitor keys collapses to their common keys
+// and the async visitor goes unseen.
+type IsPluginAsync<P> = P extends unknown
+  ? true extends AnyVisitorAsync<P>
+    ? true
+    : false
+  : never;
+// Depth-capped because `PluginEntry` is recursive: an uncapped walk never
+// terminates on a value typed as the alias itself, which TS rejects outright as
+// "type instantiation is excessively deep".
+type ResolveInput<P, D extends readonly unknown[] = [0, 0, 0, 0, 0, 0, 0, 0]> = D extends readonly [
+  unknown,
+  ...infer Rest,
+]
+  ? P extends ReadonlyArray<infer Item>
+    ? ResolveInput<Item, Rest>
+    : P extends () => infer Def
+      ? ResolveInput<Def, Rest>
+      : P
+  : never;
 type AnyInputAsync<Ps> =
   Ps extends ReadonlyArray<infer P>
     ? true extends IsPluginAsync<ResolveInput<P>>
@@ -626,8 +648,8 @@ export function markdownToHtml(
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
   const { features, fileURL, data = {} } = options;
-  let mdastPlugins: MdastPluginInput[] = options.mdastPlugins ?? [];
-  let hastPlugins: HastPluginInput[] = options.hastPlugins ?? [];
+  const mdastPlugins = normalizePlugins(options.mdastPlugins ?? [], "mdastPlugins");
+  const hastPlugins = normalizePlugins(options.hastPlugins ?? [], "hastPlugins");
   const hastMayHaveStubs = hastPlugins.length > 0;
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
@@ -640,15 +662,10 @@ export function markdownToHtml(
     return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
   }
 
-  // Resolve plugin factories once. An instance is itself a valid plugin input,
-  // so the run helpers below consume the resolved arrays unchanged. Track source
-  // positions only when some plugin opts in with `position: true`; otherwise the
-  // parse skips the LineIndex build and per-node line/column lookups.
-  mdastPlugins = mdastPlugins.map((p) => (typeof p === "function" ? p() : p));
-  hastPlugins = hastPlugins.map((p) => (typeof p === "function" ? p() : p));
+  // Track source positions only when some plugin opts in with `position: true`;
+  // otherwise the parse skips the LineIndex build and per-node line/column lookups.
   const trackPositions =
-    mdastPlugins.some((p) => (p as MdastPluginDefinition).options?.position) ||
-    hastPlugins.some((p) => (p as HastPluginDefinition).options?.position);
+    mdastPlugins.some((p) => p.options?.position) || hastPlugins.some((p) => p.options?.position);
 
   // Fused tail for MDAST-plugins-only (no HAST plugins): after the MDAST
   // plugin pass returns its pending commands, apply + convert + render all
@@ -810,8 +827,8 @@ function toJsImpl(
     data = {},
     ...mdxFields
   } = options;
-  let mdastPlugins: MdastPluginInput[] = mdastInput;
-  let hastPlugins: HastPluginInput[] = hastInput;
+  const mdastPlugins = normalizePlugins(mdastInput, "mdastPlugins");
+  const hastPlugins = normalizePlugins(hastInput, "hastPlugins");
   const hastMayHaveStubs = hastPlugins.length > 0;
   const mdxOptions = mdxOptionsToNative(mdxFields);
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
@@ -830,13 +847,9 @@ function toJsImpl(
     return { code, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
   }
 
-  // Resolve plugin factories once and track positions only when a plugin opts
-  // in (see `markdownToHtml` for the rationale).
-  mdastPlugins = mdastPlugins.map((p) => (typeof p === "function" ? p() : p));
-  hastPlugins = hastPlugins.map((p) => (typeof p === "function" ? p() : p));
+  // Track positions only when a plugin opts in (see `markdownToHtml`).
   const trackPositions =
-    mdastPlugins.some((p) => (p as MdastPluginDefinition).options?.position) ||
-    hastPlugins.some((p) => (p as HastPluginDefinition).options?.position);
+    mdastPlugins.some((p) => p.options?.position) || hastPlugins.some((p) => p.options?.position);
 
   // MDAST-plugins-only fused tail (no HAST plugins): apply + extract
   // frontmatter + convert + simplify + compile happen in one NAPI call.
@@ -1003,7 +1016,7 @@ function readFrontmatter(handle: MdastHandle): Frontmatter | null {
  *  the yaml/toml node are reflected in the returned value. */
 function createHastHandleFromMdast(
   source: string,
-  mdastPlugins: MdastPluginInput[],
+  mdastPlugins: MdastPluginDefinition[],
   mdx: boolean,
   fileURL: URL | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

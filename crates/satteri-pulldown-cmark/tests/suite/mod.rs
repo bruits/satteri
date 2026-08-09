@@ -6,6 +6,7 @@ pub use super::test_markdown_html;
 mod container_extensions;
 mod definition_list;
 mod footnotes;
+mod gfm_autolink;
 mod gfm_strikethrough;
 mod gfm_table;
 mod gfm_tasklist;

@@ -1,7 +1,7 @@
 //! Integration tests verifying that PluginRunner actually applies structural commands.
 
 use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
-use satteri_ast::mdast::{codec::*, MdastNodeType};
+use satteri_ast::mdast::{MdastNodeType, codec::*};
 use satteri_plugin_api::*;
 
 /// In-place apply leaves detached garbage; assertions must only consider

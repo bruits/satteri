@@ -4,14 +4,15 @@
 //! (or, for synthesized leaves like the checkbox `<input>`, the parent
 //! MDAST node's position).
 
-use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast};
+use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, decode_string_ref_data};
 use satteri_ast::hast::{
+    HastNodeType,
     codec::{decode_element_prop, decode_element_prop_count, decode_element_tag},
-    mdast_arena_to_hast_arena, HastNodeType,
+    mdast_arena_to_hast_arena,
 };
 use satteri_ast::mdast::{
-    codec::{encode_definition_data, encode_reference_data},
     MdastNodeType,
+    codec::{encode_definition_data, encode_reference_data},
 };
 
 fn parse(md: &str) -> Arena<Mdast> {

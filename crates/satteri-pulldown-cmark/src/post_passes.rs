@@ -19,7 +19,9 @@
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
 use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
-use satteri_ast::mdast::{codec::LinkData, MdastNodeType};
+use satteri_ast::mdast::{MdastNodeType, codec::LinkData};
+
+use crate::puncttable::is_punctuation;
 
 #[cfg(feature = "mdx")]
 pub(crate) const MDX_EXPLICIT_JSX_DATA: &[u8] = b"{\"_mdxExplicitJsx\":true}";
@@ -246,21 +248,7 @@ pub(crate) fn scan_autolink_literal(
         if !prev_loose_ok {
             return None;
         }
-        let prev_strict_ok = if prev < 0x80 {
-            prev.is_ascii_whitespace() || prev.is_ascii_punctuation()
-        } else {
-            // Find-and-replace's `previous` accepts ws/punct/EOF in Unicode
-            // sense. Cyrillic letters are alphabetic, not punctuation, so
-            // they fail strict — but pass loose, leaving the construct path.
-            match core::str::from_utf8(&bytes[ix.saturating_sub(4)..ix]) {
-                Ok(s) => {
-                    let c = s.chars().last().unwrap_or(' ');
-                    c.is_whitespace() || !c.is_alphanumeric()
-                }
-                Err(_) => true,
-            }
-        };
-        !prev_strict_ok
+        !fnr_previous_ok(bytes, ix)
     } else {
         false
     };
@@ -295,7 +283,13 @@ pub(crate) fn scan_autolink_literal(
     let mut end = ix + proto_len;
     while end < bytes.len() {
         let b = bytes[end];
-        if b <= b' ' || b == 0x7F || b == b'<' {
+        if !b.is_ascii_graphic() {
+            // One range test leaves the hot path: control, space, DEL, or a
+            // scalar that has to be decoded before it can be judged.
+            if b < 0x80 || char_at(bytes, end).is_some_and(is_autolink_whitespace) {
+                break;
+            }
+        } else if b == b'<' {
             break;
         }
         if b == b']' {
@@ -777,16 +771,17 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
     }
 }
 
-/// Find-and-replace fallback for GFM autolink literals — the mdast-tree
-/// transform equivalent of `mdast-util-gfm-autolink-literal`'s
-/// `transformGfmAutolinkLiterals`. The inline construct in `firstpass.rs`
-/// handles the common case (URL bytes consumed during tokenization with
-/// source positions); this pass picks up URL/email patterns that survived
-/// in plain Text nodes — typically because the construct path didn't fire
-/// (e.g. preceded by a digit, inside a previously-failed `<...>` autolink,
-/// across container prefixes). All Links emitted here are position-less,
-/// matching `findAndReplace`'s behavior.
-pub(crate) fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>, source_bytes: &[u8]) {
+/// Tree-level fallback for GFM autolink literals. The inline construct in
+/// `firstpass.rs` handles the common case; this pass picks up URL/email
+/// patterns that survived in plain Text nodes because the construct didn't
+/// fire (preceded by a digit, inside a failed `<...>` autolink, across
+/// container prefixes).
+pub(crate) fn gfm_autolink_literal_pass(
+    arena: &mut Arena<Mdast>,
+    source_bytes: &[u8],
+    options: crate::Options,
+    mut cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
+) {
     let len = arena.len() as u32;
     let mut candidates: Vec<u32> = Vec::new();
     let text_ty = MdastNodeType::Text as u8;
@@ -846,31 +841,65 @@ pub(crate) fn gfm_autolink_literal_pass(arena: &mut Arena<Mdast>, source_bytes: 
             candidates.push(id);
         }
     }
+    let smart = Smart {
+        quotes: options.has_smart_quotes(),
+        dashes: options.has_smart_dashes(),
+        ellipses: options.has_smart_ellipses(),
+    };
     for node_id in candidates {
-        split_text_with_autolinks_fnr(arena, node_id, source_bytes);
+        split_text_with_autolinks_fnr(arena, node_id, source_bytes, cursor.as_deref_mut(), smart);
     }
 }
 
-/// `previous()` in `mdast-util-gfm-autolink-literal`: prev char must be
-/// whitespace, punctuation, or start-of-string. Stricter than the
-/// construct's `previousProtocol` (`!alphabetic`), since digits and
-/// non-ASCII letters fail.
-fn fnr_prev_ok(bytes: &[u8], ix: usize) -> bool {
+/// The whitespace class autolinks use: `White_Space` less U+0085, plus U+FEFF.
+#[inline]
+fn is_autolink_whitespace(c: char) -> bool {
+    (c.is_whitespace() && c != '\u{85}') || c == '\u{FEFF}'
+}
+
+/// The scalar starting at `ix`.
+fn char_at(bytes: &[u8], ix: usize) -> Option<char> {
+    let rest = bytes.get(ix..)?;
+    let width = match *rest.first()? {
+        b if b < 0x80 => 1,
+        b if b >> 5 == 0b110 => 2,
+        b if b >> 4 == 0b1110 => 3,
+        _ => 4,
+    };
+    core::str::from_utf8(rest.get(..width)?)
+        .ok()?
+        .chars()
+        .next()
+}
+
+/// The scalar before `ix`, or `None` at the start of the input.
+fn preceding_char(bytes: &[u8], ix: usize) -> Option<char> {
     if ix == 0 {
-        return true;
+        return None;
     }
     let prev = bytes[ix - 1];
     if prev < 0x80 {
-        return prev.is_ascii_whitespace() || prev.is_ascii_punctuation();
+        return Some(prev as char);
     }
-    // Decode the last char to apply Unicode whitespace/punctuation rules
-    // (matches the `\s` / `\p{P}` / `\p{S}` lookbehind in the regex).
-    match core::str::from_utf8(&bytes[ix.saturating_sub(4)..ix]) {
-        Ok(s) => {
-            let c = s.chars().last().unwrap_or(' ');
-            c.is_whitespace() || !c.is_alphanumeric()
-        }
-        Err(_) => true,
+    let mut start = ix - 1;
+    while start > 0 && bytes[start] & 0xC0 == 0x80 {
+        start -= 1;
+    }
+    core::str::from_utf8(&bytes[start..ix])
+        .ok()?
+        .chars()
+        .next_back()
+}
+
+/// Boundary rule for the fallback pass. Stricter than the construct's, which
+/// rejects only alphabetic, so digits and non-ASCII letters fail here.
+///
+/// Classifying the whole scalar accepts astral punctuation and symbols, a
+/// deliberate divergence — see `divergences.md`.
+pub(crate) fn fnr_previous_ok(bytes: &[u8], ix: usize) -> bool {
+    match preceding_char(bytes, ix) {
+        None => true,
+        Some(c) => is_autolink_whitespace(c) || is_punctuation(c),
     }
 }
 
@@ -884,7 +913,7 @@ fn fnr_prev_ok(bytes: &[u8], ix: usize) -> bool {
 fn fnr_find_url(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)> {
     let (proto_len, is_www) = match_autolink_scheme(bytes, ix)?;
     let s = ix;
-    if !fnr_prev_ok(bytes, s) {
+    if !fnr_previous_ok(bytes, s) {
         return None;
     }
     // Regex group 2, the domain, is `[-.\w]+` (alphanumeric, `.`, `_`, `-`).
@@ -966,7 +995,7 @@ fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usiz
     // links `.a@x`, not `_.a@x`. If no boundary precedes the `@`, there's no
     // match (this is also what keeps `пo\+@…`, whose `+` came from a source
     // escape that blocks the construct, from linking).
-    while s < ix && !fnr_prev_ok(bytes, s) {
+    while s < ix && !fnr_previous_ok(bytes, s) {
         s += 1;
     }
     if s >= ix {
@@ -976,12 +1005,354 @@ fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usiz
     Some((s, e, format!("mailto:{addr}"), e))
 }
 
-/// FNR-style scan over a Text node's bytes. Emits position-less Links for
-/// each match; left-over text becomes plain Text nodes between/around them.
-/// `findUrl` returns `[link, text(trail)]` when splitUrl strips trailing
-/// chars — `findAndReplace` then inserts those as adjacent siblings,
-/// keeping the trail distinct from the surrounding text. Mirror that.
-fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_bytes: &[u8]) {
+/// One aligned run between a Text node's decoded value and its raw source.
+///
+/// A 1:1 run splits at any interior offset; anything else (character
+/// reference, escape, CRLF, stripped prefix) is atomic, and its interior
+/// names no raw offset.
+#[derive(Clone, Copy)]
+struct Seg {
+    d_start: u32,
+    d_len: u32,
+    r_start: u32,
+    r_len: u32,
+}
+
+impl Seg {
+    #[inline]
+    fn is_one_to_one(&self) -> bool {
+        self.d_len == self.r_len && self.d_len > 0
+    }
+}
+
+/// Maps offsets in a Text node's decoded value back to the raw source the
+/// value was built from. `Segments` is ascending and gapless in decoded space.
+enum RawMap {
+    /// The decoded value is byte-identical to its raw span. No allocation.
+    Identity {
+        r_start: u32,
+    },
+    Segments(Vec<Seg>),
+}
+
+impl RawMap {
+    /// The segment producing decoded byte `d`; zero-width segments never match.
+    fn seg_containing(segs: &[Seg], d: usize) -> Option<&Seg> {
+        segs.iter()
+            .find(|s| (s.d_start as usize) <= d && d < (s.d_start + s.d_len) as usize)
+    }
+
+    /// Raw offset where the decoded byte at `d` starts being produced.
+    fn raw_start_of(&self, d: usize) -> Option<usize> {
+        match self {
+            RawMap::Identity { r_start } => Some(*r_start as usize + d),
+            RawMap::Segments(segs) => match Self::seg_containing(segs, d) {
+                Some(s) if s.is_one_to_one() => {
+                    Some((s.r_start as usize) + (d - s.d_start as usize))
+                }
+                // An atomic run is included whole or not at all.
+                Some(s) if d == s.d_start as usize => Some(s.r_start as usize),
+                Some(_) => None,
+                // Past the last decoded byte: the end of the raw span.
+                None => segs.last().map(|s| (s.r_start + s.r_len) as usize),
+            },
+        }
+    }
+
+    /// Raw offset just past the production of the decoded byte at `d - 1`.
+    fn raw_end_of(&self, d: usize) -> Option<usize> {
+        match self {
+            RawMap::Identity { r_start } => Some(*r_start as usize + d),
+            RawMap::Segments(segs) => {
+                let Some(prev) = d.checked_sub(1) else {
+                    return segs.first().map(|s| s.r_start as usize);
+                };
+                match Self::seg_containing(segs, prev) {
+                    Some(s) if s.is_one_to_one() => {
+                        Some((s.r_start as usize) + (d - s.d_start as usize))
+                    }
+                    Some(s) if d == (s.d_start + s.d_len) as usize => {
+                        Some((s.r_start + s.r_len) as usize)
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+
+/// Which smart-punctuation rewrites are on, so `build_raw_map` can undo them.
+#[derive(Clone, Copy)]
+pub(crate) struct Smart {
+    pub quotes: bool,
+    pub dashes: bool,
+    pub ellipses: bool,
+}
+
+/// How many em and en dashes smart punctuation renders a run of `count`
+/// hyphens as.
+fn smart_dash_counts(count: usize) -> (usize, usize) {
+    debug_assert!(count >= 2, "a lone hyphen is not a dash run");
+    match count % 6 {
+        0 | 3 => (count / 3, 0),
+        2 | 4 => (0, count / 2),
+        1 => (count / 3 - 1, 2),
+        _ => (count / 3, 1),
+    }
+}
+
+/// The em/en dash mix smart punctuation renders a run of `count` hyphens as.
+pub(crate) fn smart_dash_run(count: usize) -> String {
+    let (ems, ens) = smart_dash_counts(count);
+    let mut buf = String::with_capacity(EM_DASH.len() * (ems + ens));
+    for _ in 0..ems {
+        buf.push_str(EM_DASH);
+    }
+    for _ in 0..ens {
+        buf.push_str(EN_DASH);
+    }
+    buf
+}
+
+const EM_DASH: &str = "\u{2014}";
+const EN_DASH: &str = "\u{2013}";
+
+/// The raw and decoded lengths of the smart-punctuation rewrite at `raw[r]`.
+fn smart_seg(raw: &[u8], r: usize, dec: &[u8], d: usize, smart: Smart) -> Option<(usize, usize)> {
+    const ELLIPSIS: &str = "\u{2026}";
+    match raw[r] {
+        b'.' if smart.ellipses
+            && raw[r..].starts_with(b"...")
+            && dec[d..].starts_with(ELLIPSIS.as_bytes()) =>
+        {
+            Some((3, ELLIPSIS.len()))
+        }
+        b'-' if smart.dashes => {
+            let count = 1 + crate::scanners::scan_ch_repeat(&raw[(r + 1)..], b'-');
+            if count < 2 {
+                return None;
+            }
+            let (ems, ens) = smart_dash_counts(count);
+            let mut rest = &dec[d..];
+            for (n, dash) in [(ems, EM_DASH), (ens, EN_DASH)] {
+                for _ in 0..n {
+                    rest = rest.strip_prefix(dash.as_bytes())?;
+                }
+            }
+            Some((count, EM_DASH.len() * (ems + ens)))
+        }
+        c @ (b'"' | b'\'') if smart.quotes => {
+            let curly: [&str; 2] = if c == b'"' {
+                ["\u{201c}", "\u{201d}"]
+            } else {
+                ["\u{2018}", "\u{2019}"]
+            };
+            curly
+                .iter()
+                .find(|q| dec[d..].starts_with(q.as_bytes()))
+                .map(|q| (1, q.len()))
+        }
+        _ => None,
+    }
+}
+
+/// Align a Text node's decoded value with the raw source it came from.
+///
+/// At each raw offset the walk asks which transform applies, never whether the
+/// bytes differ: raw `&amp;` starts with the byte it decodes to, so a
+/// mismatch-directed walk would consume it and then choke on `amp;`.
+///
+/// Returns `None` when the value can't be reconstructed exactly; callers then
+/// report no position rather than a guessed one that mis-slices the source.
+fn build_raw_map(
+    source: &[u8],
+    r_start: usize,
+    r_end: usize,
+    decoded: &str,
+    smart: Smart,
+) -> Option<RawMap> {
+    if r_start > r_end || r_end > source.len() {
+        return None;
+    }
+    let raw = &source[r_start..r_end];
+    let dec = decoded.as_bytes();
+    if raw == dec {
+        return Some(RawMap::Identity {
+            r_start: r_start as u32,
+        });
+    }
+
+    let mut segs: Vec<Seg> = Vec::new();
+    let push_atomic = |segs: &mut Vec<Seg>, r: usize, r_len: usize, d: usize, d_len: usize| {
+        segs.push(Seg {
+            d_start: d as u32,
+            d_len: d_len as u32,
+            r_start: (r_start + r) as u32,
+            r_len: r_len as u32,
+        });
+    };
+    let extend_one_to_one = |segs: &mut Vec<Seg>, r: usize, d: usize| {
+        if let Some(last) = segs.last_mut()
+            && last.is_one_to_one()
+            && (last.d_start + last.d_len) as usize == d
+            && (last.r_start + last.r_len) as usize == r_start + r
+        {
+            last.d_len += 1;
+            last.r_len += 1;
+            return;
+        }
+        segs.push(Seg {
+            d_start: d as u32,
+            d_len: 1,
+            r_start: (r_start + r) as u32,
+            r_len: 1,
+        });
+    };
+
+    // A continuation line's block prefix (`> `, indentation) produces no
+    // decoded bytes. Content can't start with one: leading whitespace is
+    // stripped and a leading `>` would have opened a blockquote.
+    let skip_block_prefix = |segs: &mut Vec<Seg>, r: &mut usize, d: usize| {
+        let prefix_start = *r;
+        while *r < raw.len()
+            && matches!(raw[*r], b' ' | b'\t' | b'>')
+            && dec.get(d) != Some(&raw[*r])
+        {
+            *r += 1;
+        }
+        if *r > prefix_start {
+            segs.push(Seg {
+                d_start: d as u32,
+                d_len: 0,
+                r_start: (r_start + prefix_start) as u32,
+                r_len: (*r - prefix_start) as u32,
+            });
+        }
+    };
+
+    // One predictable test keeps the smart arms off the hot path entirely for
+    // the documents that don't enable them.
+    let smart_any = smart.quotes || smart.dashes || smart.ellipses;
+    let mut r = 0usize;
+    let mut d = 0usize;
+    while r < raw.len() {
+        match raw[r] {
+            b'&' => {
+                let (len, value) = crate::scanners::scan_entity(&raw[r..]);
+                if let Some(value) = value
+                    && dec[d..].starts_with(value.as_bytes())
+                {
+                    push_atomic(&mut segs, r, len, d, value.len());
+                    r += len;
+                    d += value.len();
+                    continue;
+                }
+            }
+            b'\\' => {
+                if let Some(&next) = raw.get(r + 1)
+                    && next.is_ascii_punctuation()
+                    && dec.get(d) == Some(&next)
+                {
+                    push_atomic(&mut segs, r, 2, d, 1);
+                    r += 2;
+                    d += 1;
+                    continue;
+                }
+            }
+            b'\r' if raw.get(r + 1) == Some(&b'\n') && dec.get(d) == Some(&b'\n') => {
+                push_atomic(&mut segs, r, 2, d, 1);
+                r += 2;
+                d += 1;
+                skip_block_prefix(&mut segs, &mut r, d);
+                continue;
+            }
+            b'\n' | b'\r' if dec.get(d) == Some(&raw[r]) => {
+                extend_one_to_one(&mut segs, r, d);
+                r += 1;
+                d += 1;
+                skip_block_prefix(&mut segs, &mut r, d);
+                continue;
+            }
+            b' ' | b'\t' if dec.get(d) != Some(&raw[r]) => {
+                // Whitespace at the end of a line is dropped from the value.
+                let run_start = r;
+                while r < raw.len() && matches!(raw[r], b' ' | b'\t') {
+                    r += 1;
+                }
+                if !matches!(raw.get(r), Some(b'\n') | Some(b'\r')) {
+                    return None;
+                }
+                segs.push(Seg {
+                    d_start: d as u32,
+                    d_len: 0,
+                    r_start: (r_start + run_start) as u32,
+                    r_len: (r - run_start) as u32,
+                });
+                continue;
+            }
+            b'.' | b'-' | b'"' | b'\'' if smart_any => {
+                if let Some((r_len, d_len)) = smart_seg(raw, r, dec, d, smart) {
+                    push_atomic(&mut segs, r, r_len, d, d_len);
+                    r += r_len;
+                    d += d_len;
+                    continue;
+                }
+            }
+            0 => {
+                // CommonMark replaces NUL with the replacement character.
+                const REPLACEMENT: &str = "\u{FFFD}";
+                if dec[d..].starts_with(REPLACEMENT.as_bytes()) {
+                    push_atomic(&mut segs, r, 1, d, REPLACEMENT.len());
+                    r += 1;
+                    d += REPLACEMENT.len();
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        if dec.get(d) != Some(&raw[r]) {
+            return None;
+        }
+        extend_one_to_one(&mut segs, r, d);
+        r += 1;
+        d += 1;
+    }
+    if d != dec.len() {
+        return None;
+    }
+    Some(RawMap::Segments(segs))
+}
+
+/// Source span and line/column pair for the decoded range `d_lo..d_hi`.
+///
+/// Line and column aren't optional: the exposed `position.*.offset` is derived
+/// from them downstream, so a zero line would serialize garbage.
+fn pos_for(
+    map: &RawMap,
+    cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
+    d_lo: usize,
+    d_hi: usize,
+) -> Option<(u32, u32, u32, u32, u32, u32)> {
+    let so = map.raw_start_of(d_lo)? as u32;
+    let eo = map.raw_end_of(d_hi)? as u32;
+    if eo < so {
+        return None;
+    }
+    let (sl, sc) = cursor.offset_to_line_col(so);
+    let (el, ec) = cursor.offset_to_line_col(eo);
+    Some((so, eo, sl, sc, el, ec))
+}
+
+/// Fallback scan over a Text node's bytes: each match becomes a Link, and
+/// everything left over — including characters stripped off a match's tail —
+/// becomes a sibling Text node.
+fn split_text_with_autolinks_fnr(
+    arena: &mut Arena<Mdast>,
+    text_id: u32,
+    source_bytes: &[u8],
+    cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
+    smart: Smart,
+) {
     let data = arena.get_type_data(text_id);
     if data.is_empty() {
         return;
@@ -1018,15 +1389,24 @@ fn split_text_with_autolinks_fnr(arena: &mut Arena<Mdast>, text_id: u32, source_
     let text = borrowed_text.to_string();
     let bytes = text.as_bytes();
 
-    // Per `mdast-util-gfm-autolink-literal`'s `findAndReplace`, links
-    // emitted here are intentionally position-less — even though they
-    // span a known source range, the F&R transform doesn't carry source
-    // offsets. We mirror that to match REF exactly on inputs where the
-    // construct-level autolink tokenizer didn't fire (e.g. autolinks
-    // preceded by `[`). Don't emit positions on the new nodes.
-    let _ = source_bytes;
-    let pos_for =
-        |_chunk_lo: usize, _chunk_hi: usize| -> Option<(u32, u32, u32, u32, u32, u32)> { None };
+    // Built only after the no-match return: text full of `w`/`h`/`@` that
+    // autolinks nothing shouldn't pay for the alignment.
+    let node = arena.get_node(text_id);
+    let (r_start, r_end) = (node.start_offset as usize, node.end_offset as usize);
+    let map = cursor
+        .as_ref()
+        .and_then(|_| build_raw_map(source_bytes, r_start, r_end, &text, smart));
+    if cursor.is_some() && map.is_none() {
+        debug_assert!(
+            false,
+            "build_raw_map failed to reconstruct a text value from its source span"
+        );
+    }
+    let mut cursor = cursor;
+    let mut pos_for = |lo: usize, hi: usize| -> Option<(u32, u32, u32, u32, u32, u32)> {
+        let map = map.as_ref()?;
+        pos_for(map, cursor.as_deref_mut()?, lo, hi)
+    };
 
     let mut new_children: Vec<u32> = Vec::new();
     let mut cursor = 0usize;
@@ -1219,5 +1599,131 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
             }
         }
         arena.replace_node_with_children(id, &promoted);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RawMap, Smart, build_raw_map};
+
+    const OFF: Smart = Smart {
+        quotes: false,
+        dashes: false,
+        ellipses: false,
+    };
+    const ON: Smart = Smart {
+        quotes: true,
+        dashes: true,
+        ellipses: true,
+    };
+
+    fn map(source: &str, decoded: &str) -> RawMap {
+        build_raw_map(source.as_bytes(), 0, source.len(), decoded, OFF).expect("map should build")
+    }
+
+    fn smart_map(source: &str, decoded: &str) -> RawMap {
+        build_raw_map(source.as_bytes(), 0, source.len(), decoded, ON).expect("map should build")
+    }
+
+    #[test]
+    fn raw_map_identity_is_allocation_free() {
+        assert!(matches!(
+            map("www.x.y", "www.x.y"),
+            RawMap::Identity { r_start: 0 }
+        ));
+    }
+
+    #[test]
+    fn raw_map_spans_a_character_reference_whole() {
+        // The reference occupies raw 1..6.
+        let m = map("a&amp;b", "a&b");
+        assert_eq!(m.raw_start_of(0), Some(0));
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(2), Some(6));
+        assert_eq!(m.raw_end_of(3), Some(7));
+    }
+
+    #[test]
+    fn raw_map_atomic_interior_has_no_position() {
+        // `&fjlig;` decodes to two characters; the boundary between them
+        // names no raw offset.
+        let m = map("&fjlig;", "fj");
+        assert_eq!(m.raw_start_of(0), Some(0));
+        assert_eq!(m.raw_end_of(2), Some(7));
+        assert_eq!(m.raw_start_of(1), None);
+        assert_eq!(m.raw_end_of(1), None);
+    }
+
+    #[test]
+    fn raw_map_spans_a_smart_dash_run_whole() {
+        // `--` occupies raw 1..3 and decodes to one 3-byte en dash.
+        let m = smart_map("a--b", "a\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(4), Some(3));
+        // Interior of the atomic run names no raw offset.
+        assert_eq!(m.raw_start_of(2), None);
+        assert_eq!(m.raw_end_of(2), None);
+    }
+
+    #[test]
+    fn raw_map_spans_a_long_dash_run_by_the_shared_formula() {
+        // Five hyphens render as em + en, so the run is 5 raw to 6 decoded.
+        let m = smart_map("a-----b", "a\u{2014}\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(7), Some(6));
+
+        // Seven is the branch that subtracts: em + two en, 7 raw to 9 decoded.
+        let m = smart_map("a-------b", "a\u{2014}\u{2013}\u{2013}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(10), Some(8));
+    }
+
+    #[test]
+    fn raw_map_spans_an_ellipsis_and_a_quote_whole() {
+        let m = smart_map("a...b", "a\u{2026}b");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(4), Some(4));
+
+        let q = smart_map("a\"b\"", "a\u{201c}b\u{201d}");
+        assert_eq!(q.raw_start_of(1), Some(1));
+        assert_eq!(q.raw_end_of(4), Some(2));
+    }
+
+    #[test]
+    fn raw_map_leaves_smart_bytes_alone_when_the_option_is_off() {
+        // The same raw text decodes to itself, so it stays the identity map.
+        assert!(matches!(map("a--b", "a--b"), RawMap::Identity { .. }));
+        // And a curled value cannot be reconstructed without the option.
+        assert!(build_raw_map("a--b".as_bytes(), 0, 4, "a\u{2013}b", OFF).is_none());
+    }
+
+    #[test]
+    fn raw_map_prefers_the_escape_over_a_smart_dash() {
+        // `\-` is an escape, so the run after it is only two hyphens.
+        let m = smart_map("\\---", "-\u{2013}");
+        assert_eq!(m.raw_end_of(1), Some(2));
+        assert_eq!(m.raw_end_of(4), Some(4));
+    }
+
+    #[test]
+    fn raw_map_excludes_a_continuation_prefix() {
+        // The `> ` produces nothing, so it belongs to neither side.
+        let m = map("a\n> b", "a\nb");
+        assert_eq!(m.raw_end_of(2), Some(2));
+        assert_eq!(m.raw_start_of(2), Some(4));
+    }
+
+    #[test]
+    fn raw_map_handles_escapes_and_line_endings() {
+        let m = map("a\\_b\r\nc", "a_b\nc");
+        assert_eq!(m.raw_start_of(1), Some(1));
+        assert_eq!(m.raw_end_of(2), Some(3));
+        assert_eq!(m.raw_start_of(4), Some(6));
+    }
+
+    #[test]
+    fn raw_map_refuses_to_guess() {
+        assert!(build_raw_map(b"a&amp;b", 0, 7, "a&z", OFF).is_none());
+        assert!(build_raw_map(b"abc", 0, 3, "abcd", OFF).is_none());
     }
 }

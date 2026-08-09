@@ -5,7 +5,7 @@ use crate::plugin::{NodeView, Plugin, VisitResult};
 use crate::typed_nodes::*;
 use satteri_arena::{Arena, ArenaBuilder, Mdast};
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::patch::{apply_patches_strict, Patch, PatchContent};
+use satteri_ast::patch::{Patch, PatchContent, apply_patches_strict};
 
 /// Result of running plugins against an arena.
 pub struct PluginRunResult {
@@ -92,14 +92,14 @@ impl PluginRunner {
 
             if has_cmds {
                 let patches = commands_to_patches(commands.iter().collect(), &current_arena);
-                if !patches.is_empty() {
-                    if let Err(err) = apply_patches_strict(&mut current_arena, &patches) {
-                        all_diagnostics.push(Diagnostic {
-                            message: format!("invalid patch combination: {err}"),
-                            node_id: None,
-                            severity: Severity::Error,
-                        });
-                    }
+                if !patches.is_empty()
+                    && let Err(err) = apply_patches_strict(&mut current_arena, &patches)
+                {
+                    all_diagnostics.push(Diagnostic {
+                        message: format!("invalid patch combination: {err}"),
+                        node_id: None,
+                        severity: Severity::Error,
+                    });
                 }
                 all_commands.extend(commands);
             }

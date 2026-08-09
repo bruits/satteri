@@ -33,13 +33,13 @@ use unicase::UniCase;
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
 use crate::{
+    Alignment, BlockQuoteKind, CodeBlockKind, DirectiveKind, Event, HeadingLevel, LinkType,
+    MetadataBlockKind, Options, Tag, TagEnd,
     firstpass::run_first_pass,
-    linklabel::{scan_link_label_rest, FootnoteLabel, LinkLabel, ReferenceLabel},
+    linklabel::{FootnoteLabel, LinkLabel, ReferenceLabel, scan_link_label_rest},
     scanners::*,
     strings::CowStr,
     tree::{Tree, TreeIndex},
-    Alignment, BlockQuoteKind, CodeBlockKind, DirectiveKind, Event, HeadingLevel, LinkType,
-    MetadataBlockKind, Options, Tag, TagEnd,
 };
 
 // Allowing arbitrary depth nested parentheses inside link destinations
@@ -62,16 +62,25 @@ pub(crate) enum ItemBody {
 
     // repeats, can_open, can_close
     MaybeEmphasis(usize, bool, bool),
+    /// Head of a run the first pass's escape handler would have swallowed,
+    /// sitting on the byte after a deferred autolink candidate's last. Carries
+    /// the flags for the run the link firing creates; blocked until it does.
+    // repeats, can_open, can_close
+    MaybeEmphasisEscaped(usize, bool, bool),
     // preceded_by_backslash, brace context
     MaybeMath(bool, u8),
     // quote byte, can_open, can_close
     MaybeSmartQuote(u8, bool, bool),
     MaybeCode(usize, bool), // number of backticks, preceded by backslash
-    MaybeHtml,
+    MaybeHtml(bool),        // preceded by backslash
     MaybeLinkOpen,
     // bool indicates whether or not the preceding section could be a reference
     MaybeLinkClose(bool),
     MaybeImage,
+    /// Zero-width marker where a GFM autolink literal would start. Firing is
+    /// decided in `handle_inline_pass1`, where bracket-resolution state is
+    /// known; it never survives into `arena_build`.
+    MaybeAutolink(AutolinkCandidateIndex),
 
     // These are inline items after resolution.
     Emphasis,
@@ -108,7 +117,10 @@ pub(crate) enum ItemBody {
     TightParagraph,
     Rule,
     Heading(HeadingLevel, Option<HeadingIndex>), // heading level
-    FencedCodeBlock(CowIndex),
+    // u32: byte length of the `lang` part within the decoded info string. The
+    // split is taken on raw source, so a character reference decoding to
+    // whitespace does not move it.
+    FencedCodeBlock(CowIndex, u32),
     MathBlock(CowIndex), // meta string (info after $$)
     // bool: true = lazy/no-extend (block was opened as a single-line
     // synthetic split, e.g. after an empty list item closed via blank
@@ -163,13 +175,15 @@ impl ItemBody {
         matches!(
             *self,
             MaybeEmphasis(..)
+                | MaybeEmphasisEscaped(..)
                 | MaybeMath(..)
                 | MaybeSmartQuote(..)
                 | MaybeCode(..)
-                | MaybeHtml
+                | MaybeHtml(..)
                 | MaybeLinkOpen
                 | MaybeLinkClose(..)
                 | MaybeImage
+                | MaybeAutolink(..)
         )
     }
     pub(crate) fn is_block_level(&self) -> bool {
@@ -180,13 +194,15 @@ impl ItemBody {
         matches!(
             *self,
             MaybeEmphasis(..)
+                | MaybeEmphasisEscaped(..)
                 | MaybeMath(..)
                 | MaybeSmartQuote(..)
                 | MaybeCode(..)
-                | MaybeHtml
+                | MaybeHtml(..)
                 | MaybeLinkOpen
                 | MaybeLinkClose(..)
                 | MaybeImage
+                | MaybeAutolink(..)
                 | Emphasis
                 | Strong
                 | Strikethrough
@@ -654,7 +670,16 @@ impl<'input> ParserInner<'input> {
 
         while let Some(mut cur_ix) = cur {
             match self.tree[cur_ix].item.body {
-                ItemBody::MaybeHtml => {
+                ItemBody::MaybeHtml(preceded_by_backslash) => {
+                    if preceded_by_backslash {
+                        // No autolink claimed the `\`, so the `<` is literal.
+                        self.tree[cur_ix].item.body = ItemBody::Text {
+                            backslash_escaped: true,
+                        };
+                        prev = cur;
+                        cur = self.tree[cur_ix].next;
+                        continue;
+                    }
                     // MDX inline JSX: check before HTML
                     #[cfg(feature = "mdx")]
                     if self.options.contains(Options::ENABLE_MDX) {
@@ -938,12 +963,11 @@ impl<'input> ParserInner<'input> {
                             // stale — clear it so arena_build doesn't extend
                             // the text node's source span back over bytes the
                             // link now owns. Mirrors the inline-link fix.
-                            if new_start > orig_start {
-                                if let ItemBody::Text { backslash_escaped } =
+                            if new_start > orig_start
+                                && let ItemBody::Text { backslash_escaped } =
                                     &mut self.tree[node_ix].item.body
-                                {
-                                    *backslash_escaped = false;
-                                }
+                            {
+                                *backslash_escaped = false;
                             }
                         }
                         continue;
@@ -978,12 +1002,11 @@ impl<'input> ParserInner<'input> {
                                 // an attribute value). Clear the stale flag
                                 // so arena_build doesn't extend the trail
                                 // back over bytes the HTML now owns.
-                                if new_start > orig_start {
-                                    if let ItemBody::Text { backslash_escaped } =
+                                if new_start > orig_start
+                                    && let ItemBody::Text { backslash_escaped } =
                                         &mut self.tree[node_ix].item.body
-                                    {
-                                        *backslash_escaped = false;
-                                    }
+                                {
+                                    *backslash_escaped = false;
                                 }
                             }
                             continue;
@@ -1150,6 +1173,100 @@ impl<'input> ParserInner<'input> {
                         }
                     }
                 }
+                ItemBody::MaybeAutolink(cand_ix) => {
+                    // An unresolved bracket opener blocks the construct, and
+                    // the stack holds exactly those.
+                    let next = self.tree[cur_ix].next;
+                    if !self.link_stack.is_empty() {
+                        // Zero-width `Text` rather than an unlink: the emphasis
+                        // resolver addresses nodes by arena index, so dropping
+                        // one from the chain would hand it whatever came next.
+                        self.tree[cur_ix].item.body = ItemBody::Text {
+                            backslash_escaped: false,
+                        };
+                        prev = cur;
+                        cur = next;
+                        continue;
+                    }
+                    // Reusing the marker node as the `Link` keeps the preceding
+                    // sibling's `next` pointer valid.
+                    let cand = self.allocs[cand_ix];
+                    let node_after = scan_nodes_to_ix(&self.tree, next, cand.end);
+                    let text_child = self.tree.create_node(Item {
+                        start: cand.start,
+                        end: cand.end,
+                        body: ItemBody::Text {
+                            backslash_escaped: false,
+                        },
+                    });
+                    self.tree[cur_ix].item = Item {
+                        start: cand.start,
+                        end: cand.end,
+                        body: ItemBody::Link(cand.link),
+                    };
+                    self.tree[cur_ix].child = Some(text_child);
+                    self.tree[cur_ix].next = node_after;
+                    if let Some(node_after_ix) = node_after {
+                        let orig_start = self.tree[node_after_ix].item.start;
+                        let new_start = max(orig_start, cand.end);
+                        // A `\` the first pass read as a hard-break marker
+                        // turns out to be the URL's last byte.
+                        if orig_start < cand.end
+                            && matches!(
+                                self.tree[node_after_ix].item.body,
+                                ItemBody::HardBreak(true)
+                            )
+                        {
+                            self.tree[node_after_ix].item.body = ItemBody::SoftBreak;
+                        }
+                        // The clamp below can't trim an item that carries its
+                        // own content: a character reference the URL ends
+                        // inside would still emit its decoded value.
+                        if orig_start < cand.end
+                            && matches!(
+                                self.tree[node_after_ix].item.body,
+                                ItemBody::SynthesizeText(..)
+                            )
+                        {
+                            self.tree[node_after_ix].item.body = ItemBody::Text {
+                                backslash_escaped: false,
+                            };
+                        }
+                        self.tree[node_after_ix].item.start = new_start;
+                        // The `\` a flag refers to sits one byte before its
+                        // item, so the link owns it here. A surviving flag
+                        // would stretch the successor's span back over it, and
+                        // on a `<` keep the inline HTML from opening.
+                        if orig_start <= cand.end {
+                            match &mut self.tree[node_after_ix].item.body {
+                                ItemBody::Text { backslash_escaped }
+                                | ItemBody::MaybeHtml(backslash_escaped) => {
+                                    *backslash_escaped = false;
+                                }
+                                _ => {}
+                            }
+                        }
+                        self.repair_construct_after_url_end(cand.end, node_after_ix);
+                    }
+                }
+                ItemBody::MaybeEmphasisEscaped(count, ..) => {
+                    // Nothing unblocked it, so the escape stands: the delimiter
+                    // it hid is literal and the run after it is one shorter.
+                    self.tree[cur_ix].item.body = ItemBody::Text {
+                        backslash_escaped: true,
+                    };
+                    let c = self.text.as_bytes()[self.tree[cur_ix].item.start];
+                    if !crate::firstpass::delim_run_is_valid(c, count - 1, self.options) {
+                        let mut scan = self.tree[cur_ix].next;
+                        for _ in 1..count {
+                            let Some(next_ix) = scan else { break };
+                            self.tree[next_ix].item.body = ItemBody::Text {
+                                backslash_escaped: false,
+                            };
+                            scan = self.tree[next_ix].next;
+                        }
+                    }
+                }
                 ItemBody::MaybeLinkOpen => {
                     self.tree[cur_ix].item.body = ItemBody::Text {
                         backslash_escaped: false,
@@ -1200,11 +1317,10 @@ impl<'input> ParserInner<'input> {
                                 matches!(self.tree[ix].item.body, ItemBody::MaybeLinkClose(..))
                             })
                             .unwrap_or(false)
+                        && let Some(node) = self.handle_wikilink(block_text, cur_ix, prev)
                     {
-                        if let Some(node) = self.handle_wikilink(block_text, cur_ix, prev) {
-                            cur = self.tree[node].next;
-                            continue;
-                        }
+                        cur = self.tree[node].next;
+                        continue;
                     }
                     if let Some(tos) = tos_link {
                         // skip rendering if already in a link, unless its an
@@ -1253,12 +1369,11 @@ impl<'input> ParserInner<'input> {
                                 // arena-build position fixup doesn't extend
                                 // the text node's source span back over
                                 // bytes already owned by the link.
-                                if new_start > orig_start {
-                                    if let ItemBody::Text { backslash_escaped } =
+                                if new_start > orig_start
+                                    && let ItemBody::Text { backslash_escaped } =
                                         &mut self.tree[next_node_ix].item.body
-                                    {
-                                        *backslash_escaped = false;
-                                    }
+                                {
+                                    *backslash_escaped = false;
                                 }
                             }
 
@@ -1278,39 +1393,37 @@ impl<'input> ParserInner<'input> {
                                 &self.text[first_bracket_start..first_bracket_end];
                             if let Some((_, ReferenceLabel::Footnote(footlabel))) =
                                 scan_link_label(&self.tree, first_bracket_text, self.options)
+                                && self.allocs.footdefs.contains(&footlabel)
                             {
-                                if self.allocs.footdefs.contains(&footlabel) {
-                                    let footref = self.allocs.allocate_cow(footlabel);
-                                    if let Some(def) = self
-                                        .allocs
-                                        .footdefs
-                                        .get_mut(self.allocs.cows[footref.0].to_owned())
-                                    {
-                                        def.use_count += 1;
-                                    }
-                                    let footnote_ix = if tos.ty == LinkStackTy::Image {
-                                        self.tree[tos.node].next = Some(cur_ix);
-                                        self.tree[tos.node].child = None;
-                                        self.tree[tos.node].item.body =
-                                            ItemBody::SynthesizeChar('!');
-                                        self.tree[cur_ix].item.start =
-                                            self.tree[tos.node].item.start + 1;
-                                        self.tree[tos.node].item.end =
-                                            self.tree[tos.node].item.start + 1;
-                                        cur_ix
-                                    } else {
-                                        tos.node
-                                    };
-                                    self.tree[footnote_ix].next = next;
-                                    self.tree[footnote_ix].child = None;
-                                    self.tree[footnote_ix].item.body =
-                                        ItemBody::FootnoteReference(footref);
-                                    self.tree[footnote_ix].item.end = first_bracket_end;
-                                    prev = Some(footnote_ix);
-                                    cur = next;
-                                    self.link_stack.clear();
-                                    continue;
+                                let footref = self.allocs.allocate_cow(footlabel);
+                                if let Some(def) = self
+                                    .allocs
+                                    .footdefs
+                                    .get_mut(self.allocs.cows[footref.0].to_owned())
+                                {
+                                    def.use_count += 1;
                                 }
+                                let footnote_ix = if tos.ty == LinkStackTy::Image {
+                                    self.tree[tos.node].next = Some(cur_ix);
+                                    self.tree[tos.node].child = None;
+                                    self.tree[tos.node].item.body = ItemBody::SynthesizeChar('!');
+                                    self.tree[cur_ix].item.start =
+                                        self.tree[tos.node].item.start + 1;
+                                    self.tree[tos.node].item.end =
+                                        self.tree[tos.node].item.start + 1;
+                                    cur_ix
+                                } else {
+                                    tos.node
+                                };
+                                self.tree[footnote_ix].next = next;
+                                self.tree[footnote_ix].child = None;
+                                self.tree[footnote_ix].item.body =
+                                    ItemBody::FootnoteReference(footref);
+                                self.tree[footnote_ix].item.end = first_bracket_end;
+                                prev = Some(footnote_ix);
+                                cur = next;
+                                self.link_stack.clear();
+                                continue;
                             }
                             // ok, so its not an inline link. maybe it is a reference
                             // to a defined link?
@@ -1332,7 +1445,28 @@ impl<'input> ParserInner<'input> {
                                     };
                                     self.tree[reference_close_node].item.body =
                                         ItemBody::MaybeLinkClose(false);
-                                    let next_node = self.tree[reference_close_node].next;
+                                    // The label scan walks raw source, so it can
+                                    // stop inside a wider item, e.g. an MDX
+                                    // expression or directive holding a `]`. The
+                                    // label owns up to `end_ix`; the rest is
+                                    // literal text, and without this it would
+                                    // belong to no node.
+                                    let close_end = self.tree[reference_close_node].item.end;
+                                    let next_node = if close_end > end_ix {
+                                        self.tree[reference_close_node].item.end = end_ix;
+                                        let tail = self.tree.create_node(Item {
+                                            start: end_ix,
+                                            end: close_end,
+                                            body: ItemBody::Text {
+                                                backslash_escaped: false,
+                                            },
+                                        });
+                                        self.tree[tail].next = self.tree[reference_close_node].next;
+                                        self.tree[reference_close_node].next = Some(tail);
+                                        Some(tail)
+                                    } else {
+                                        self.tree[reference_close_node].next
+                                    };
 
                                     (next_node, LinkType::Reference)
                                 }
@@ -1440,48 +1574,58 @@ impl<'input> ParserInner<'input> {
                                     self.link_stack.clear();
                                     continue;
                                 }
-                            } else if let Some((ReferenceLabel::Link(link_label), end)) = label {
-                                if let Some((def_link_type, url, title)) = self
+                            } else if let Some((ReferenceLabel::Link(link_label), end)) = label
+                                && let Some((def_link_type, url, title)) = self
                                     .fetch_link_type_url_title(
                                         link_label,
                                         (self.tree[tos.node].item.start)..end,
                                         link_type,
                                         callbacks,
                                     )
-                                {
-                                    let link_ix =
-                                        self.allocs.allocate_link(def_link_type, url, title, id);
-                                    self.tree[tos.node].item.body = if tos.ty == LinkStackTy::Image
-                                    {
-                                        ItemBody::Image(link_ix)
-                                    } else {
-                                        ItemBody::Link(link_ix)
-                                    };
-                                    let label_node = self.tree[tos.node].next;
+                            {
+                                let link_ix =
+                                    self.allocs.allocate_link(def_link_type, url, title, id);
+                                self.tree[tos.node].item.body = if tos.ty == LinkStackTy::Image {
+                                    ItemBody::Image(link_ix)
+                                } else {
+                                    ItemBody::Link(link_ix)
+                                };
+                                let label_node = self.tree[tos.node].next;
 
-                                    // lets do some tree surgery to add the link to the tree
-                                    // 1st: skip the label node and close node
-                                    self.tree[tos.node].next = node_after_link;
+                                // lets do some tree surgery to add the link to the tree
+                                // 1st: skip the label node and close node
+                                self.tree[tos.node].next = node_after_link;
 
-                                    // then, if it exists, add the label node as a child to the link node
-                                    if label_node != cur {
-                                        self.tree[tos.node].child = label_node;
+                                // then, if it exists, add the label node as a child to the link node
+                                if label_node != cur {
+                                    self.tree[tos.node].child = label_node;
 
-                                        // finally: disconnect list of children
-                                        if let Some(prev_ix) = prev {
-                                            self.tree[prev_ix].next = None;
-                                        }
+                                    // finally: disconnect list of children
+                                    if let Some(prev_ix) = prev {
+                                        self.tree[prev_ix].next = None;
                                     }
+                                }
 
-                                    self.tree[tos.node].item.end = end;
+                                self.tree[tos.node].item.end = end;
+                                // No `max(orig_start, end)` clamp here,
+                                // unlike the inline-link splice: the item at
+                                // `end - 1` either ends the label or was
+                                // truncated to it, and the zero-width items
+                                // that could sit at `end` all sit on a URL
+                                // or email byte, never a `]`.
+                                debug_assert!(
+                                    node_after_link.is_none_or(|node_after_ix| {
+                                        self.tree[node_after_ix].item.start >= end
+                                    }),
+                                    "reference splice must not overrun its successor",
+                                );
 
-                                    // set up cur so next node will be node_after_link
-                                    cur = Some(tos.node);
-                                    cur_ix = tos.node;
+                                // set up cur so next node will be node_after_link
+                                cur = Some(tos.node);
+                                cur_ix = tos.node;
 
-                                    if tos.ty == LinkStackTy::Link {
-                                        self.disable_all_links();
-                                    }
+                                if tos.ty == LinkStackTy::Link {
+                                    self.disable_all_links();
                                 }
                             }
                         }
@@ -1496,6 +1640,57 @@ impl<'input> ParserInner<'input> {
         self.wikilink_stack.clear();
         self.code_delims.clear();
         self.math_delims.clear();
+    }
+
+    /// The construct opening on the byte after a URL-ending `\`. The first
+    /// pass's escape handler consumed that byte, so the construct either never
+    /// got an item or got a blocked one; now that the link owns the `\`, give
+    /// it back.
+    fn repair_construct_after_url_end(&mut self, cand_end: usize, node_ix: TreeIndex) {
+        let item = self.tree[node_ix].item;
+        if item.start != cand_end {
+            return;
+        }
+        if let ItemBody::MaybeEmphasisEscaped(count, can_open, can_close) = item.body {
+            self.tree[node_ix].item.body = ItemBody::MaybeEmphasis(count, can_open, can_close);
+            // The rest of the run was emitted for the shorter run the escape
+            // would have left, so only its flanking needs restating.
+            let mut scan = self.tree[node_ix].next;
+            for _ in 1..count {
+                let Some(next_ix) = scan else { break };
+                if let ItemBody::MaybeEmphasis(_, open, close) = &mut self.tree[next_ix].item.body {
+                    *open = can_open;
+                    *close = can_close;
+                }
+                scan = self.tree[next_ix].next;
+            }
+            return;
+        }
+        if !matches!(item.body, ItemBody::Text { .. })
+            || self.text.as_bytes().get(cand_end) != Some(&b'&')
+        {
+            return;
+        }
+        let (n, Some(value)) = scan_entity(&self.text.as_bytes()[cand_end..]) else {
+            return;
+        };
+        if cand_end + n > item.end {
+            return;
+        }
+        let cow_ix = self.allocs.allocate_cow(value);
+        if cand_end + n < item.end {
+            let tail = self.tree.create_node(Item {
+                start: cand_end + n,
+                end: item.end,
+                body: ItemBody::Text {
+                    backslash_escaped: false,
+                },
+            });
+            self.tree[tail].next = self.tree[node_ix].next;
+            self.tree[node_ix].next = Some(tail);
+        }
+        self.tree[node_ix].item.end = cand_end + n;
+        self.tree[node_ix].item.body = ItemBody::SynthesizeText(cow_ix);
     }
 
     /// Handles a wikilink.
@@ -1959,7 +2154,7 @@ impl<'input> ParserInner<'input> {
         ix += 1;
 
         let scan_separator = |ix: &mut usize| {
-            *ix += scan_while(&underlying.as_bytes()[*ix..], is_ascii_whitespace_no_nl);
+            *ix += scan_while(&underlying.as_bytes()[*ix..], is_space_or_tab);
             if let Some(bl) = scan_eol(&underlying.as_bytes()[*ix..]) {
                 *ix += bl;
                 *ix += skip_container_prefixes(
@@ -1968,7 +2163,7 @@ impl<'input> ParserInner<'input> {
                     self.options,
                 );
             }
-            *ix += scan_while(&underlying.as_bytes()[*ix..], is_ascii_whitespace_no_nl);
+            *ix += scan_while(&underlying.as_bytes()[*ix..], is_space_or_tab);
         };
 
         scan_separator(&mut ix);
@@ -2029,25 +2224,28 @@ impl<'input> ParserInner<'input> {
                 return None;
             }
 
-            if c == b'\n' || c == b'\r' {
-                if let Some(node_ix) = scan_nodes_to_ix(&self.tree, node, i + 1) {
-                    if self.tree[node_ix].item.start > i {
-                        title.push_str(&text[mark..i]);
-                        title.push('\n');
-                        i = self.tree[node_ix].item.start;
-                        mark = i;
-                        continue;
-                    }
+            if (c == b'\n' || c == b'\r')
+                && let Some(node_ix) = scan_nodes_to_ix(&self.tree, node, i + 1)
+                && self.tree[node_ix].item.start > i
+            {
+                title.push_str(&text[mark..i]);
+                // The title's line endings are content, kept byte for byte.
+                title.push(c as char);
+                if c == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                    title.push('\n');
                 }
+                i = self.tree[node_ix].item.start;
+                mark = i;
+                continue;
             }
-            if c == b'&' {
-                if let (n, Some(value)) = scan_entity(&bytes[i..]) {
-                    title.push_str(&text[mark..i]);
-                    title.push_str(&value);
-                    i += n;
-                    mark = i;
-                    continue;
-                }
+            if c == b'&'
+                && let (n, Some(value)) = scan_entity(&bytes[i..])
+            {
+                title.push_str(&text[mark..i]);
+                title.push_str(&value);
+                i += n;
+                mark = i;
+                continue;
             }
             if self.tree.is_in_table()
                 && c == b'\\'
@@ -2165,35 +2363,10 @@ impl<'input> ParserInner<'input> {
             }
         }
 
-        let (opening, closing, all_spaces) = {
-            let s = if let Some(buf) = &mut buf {
-                buf.push_str(&spanned_text[start_ix..]);
-                &buf[..]
-            } else {
-                spanned_text
-            };
-            (
-                matches!(s.as_bytes().first(), Some(b' ' | b'\n')),
-                matches!(s.as_bytes().last(), Some(b' ' | b'\n')),
-                s.bytes().all(|b| b == b' ' || b == b'\n'),
-            )
-        };
-
-        let cow: CowStr<'input> = if !all_spaces && opening && closing {
-            if let Some(mut buf) = buf {
-                if !buf.is_empty() {
-                    buf.remove(0);
-                    buf.pop();
-                }
-                buf.into()
-            } else {
-                spanned_text[1..(spanned_text.len() - 1).max(1)].into()
-            }
-        } else if let Some(buf) = buf {
-            buf.into()
-        } else {
-            spanned_text.into()
-        };
+        if let Some(buf) = &mut buf {
+            buf.push_str(&spanned_text[start_ix..]);
+        }
+        let cow: CowStr<'input> = strip_span_padding(buf, spanned_text);
 
         self.tree[open].item.body = ItemBody::Math(self.allocs.allocate_cow(cow), false);
         self.tree[open].item.end = self.tree[close_end].item.end;
@@ -2216,10 +2389,13 @@ impl<'input> ParserInner<'input> {
             let c = spanned_bytes[ix];
             if c == b'\r' || c == b'\n' {
                 let buf = buf.get_or_insert_with(|| String::with_capacity(spanned_bytes.len()));
+                // The span's own line endings are content and are kept byte for
+                // byte; only the container prefix below is stripped.
                 buf.push_str(&spanned_text[start_ix..ix]);
-                buf.push('\n');
+                buf.push(c as char);
                 ix += 1;
                 if c == b'\r' && spanned_bytes.get(ix) == Some(&b'\n') {
+                    buf.push('\n');
                     ix += 1;
                 }
                 // Use the full source bytes from this position (not just
@@ -2259,35 +2435,10 @@ impl<'input> ParserInner<'input> {
             }
         }
 
-        let (opening, closing, all_spaces) = {
-            let s = if let Some(buf) = &mut buf {
-                buf.push_str(&spanned_text[start_ix..]);
-                &buf[..]
-            } else {
-                spanned_text
-            };
-            (
-                matches!(s.as_bytes().first(), Some(b' ' | b'\n')),
-                matches!(s.as_bytes().last(), Some(b' ' | b'\n')),
-                s.bytes().all(|b| b == b' ' || b == b'\n'),
-            )
-        };
-
-        let cow: CowStr<'input> = if !all_spaces && opening && closing {
-            if let Some(mut buf) = buf {
-                if !buf.is_empty() {
-                    buf.remove(0);
-                    buf.pop();
-                }
-                buf.into()
-            } else {
-                spanned_text[1..(spanned_text.len() - 1).max(1)].into()
-            }
-        } else if let Some(buf) = buf {
-            buf.into()
-        } else {
-            spanned_text.into()
-        };
+        if let Some(buf) = &mut buf {
+            buf.push_str(&spanned_text[start_ix..]);
+        }
+        let cow: CowStr<'input> = strip_span_padding(buf, spanned_text);
 
         if preceding_backslash {
             self.tree[open].item.body = ItemBody::Text {
@@ -2390,6 +2541,43 @@ pub(crate) fn scan_containers(
     i
 }
 
+/// Strip one leading and one trailing space or line ending from a code or math
+/// span, but only when both are present and the span isn't all whitespace. A
+/// CRLF is a single line ending, so it goes as a pair.
+///
+/// `buf` is the span's rewritten content when a container prefix or `\|` escape
+/// forced an allocation; otherwise the span is `spanned_text` verbatim.
+fn strip_span_padding<'input>(buf: Option<String>, spanned_text: &'input str) -> CowStr<'input> {
+    let s = buf.as_deref().unwrap_or(spanned_text);
+    let lead = if s.starts_with("\r\n") {
+        2
+    } else {
+        usize::from(matches!(s.as_bytes().first(), Some(b' ' | b'\n' | b'\r')))
+    };
+    let trail = if s.ends_with("\r\n") {
+        2
+    } else {
+        usize::from(matches!(s.as_bytes().last(), Some(b' ' | b'\n' | b'\r')))
+    };
+    let all_spaces = s.bytes().all(|b| matches!(b, b' ' | b'\n' | b'\r'));
+
+    if !all_spaces && lead > 0 && trail > 0 {
+        if let Some(mut buf) = buf {
+            if !buf.is_empty() {
+                buf.truncate(buf.len() - trail);
+                buf.replace_range(..lead, "");
+            }
+            buf.into()
+        } else {
+            spanned_text[lead..(spanned_text.len() - trail).max(lead)].into()
+        }
+    } else if let Some(buf) = buf {
+        buf.into()
+    } else {
+        spanned_text.into()
+    }
+}
+
 pub(crate) fn skip_container_prefixes(tree: &Tree<Item>, bytes: &[u8], options: Options) -> usize {
     let mut line_start = LineStart::new(bytes);
     let _ = scan_containers(tree, &mut line_start, options);
@@ -2415,12 +2603,12 @@ fn skip_container_prefixes_with_remaining(
 impl Tree<Item> {
     pub(crate) fn append_text(&mut self, start: usize, end: usize, backslash_escaped: bool) {
         if end > start {
-            if let Some(ix) = self.cur() {
-                if matches!(self[ix].item.body, ItemBody::Text { .. }) && self[ix].item.end == start
-                {
-                    self[ix].item.end = end;
-                    return;
-                }
+            if let Some(ix) = self.cur()
+                && matches!(self[ix].item.body, ItemBody::Text { .. })
+                && self[ix].item.end == start
+            {
+                self[ix].item.end = end;
+                return;
             }
             self.append(Item {
                 start,
@@ -2671,7 +2859,10 @@ fn scan_nodes_to_ix(
     ix: usize,
 ) -> Option<TreeIndex> {
     while let Some(node_ix) = node {
-        if tree[node_ix].item.end <= ix {
+        let item = tree[node_ix].item;
+        // A zero-width node *at* `ix` must not be skipped: callers splice the
+        // result back in as the tail, so skipping drops it from the tree.
+        if item.end <= ix && item.start < ix {
             node = tree[node_ix].next;
         } else {
             break;
@@ -2777,6 +2968,10 @@ struct LinkStack {
 }
 
 impl LinkStack {
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     fn push(&mut self, el: LinkStackEl) {
         self.inner.push(el);
     }
@@ -2920,6 +3115,20 @@ pub(crate) struct JsxElementIndex(usize);
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) struct DirectiveIndex(usize);
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct AutolinkCandidateIndex(usize);
+
+/// A GFM autolink literal the first pass found but did not commit to. The
+/// `Link` is allocated up front so firing is only a body swap.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct AutolinkCandidate {
+    /// Precedes the trigger byte when the email scan walks back over the local
+    /// part.
+    pub start: usize,
+    pub end: usize,
+    pub link: LinkIndex,
+}
+
 /// A parsed JSX attribute.
 #[cfg(feature = "mdx")]
 #[derive(Debug, Clone)]
@@ -3003,6 +3212,7 @@ pub(crate) struct Allocations<'a> {
     #[cfg(feature = "mdx")]
     jsx_elements: Vec<JsxElementData<'a>>,
     directives: Vec<DirectiveAttrData<'a>>,
+    autolink_candidates: Vec<AutolinkCandidate>,
 }
 
 /// Used by the heading attributes extension.
@@ -3031,7 +3241,9 @@ where
     }
 
     /// Provides an iterator over all the document's reference definitions.
-    pub fn iter(&'s self) -> impl Iterator<Item = (&'s str, &'s LinkDef<'input>)> {
+    pub fn iter(
+        &'s self,
+    ) -> impl Iterator<Item = (&'s str, &'s LinkDef<'input>)> + use<'s, 'input> {
         self.0.iter().map(|(k, v)| (k.as_ref(), v))
     }
 }
@@ -3063,7 +3275,17 @@ impl<'a> Allocations<'a> {
             #[cfg(feature = "mdx")]
             jsx_elements: Vec::new(),
             directives: Vec::new(),
+            autolink_candidates: Vec::new(),
         }
+    }
+
+    pub fn allocate_autolink_candidate(
+        &mut self,
+        candidate: AutolinkCandidate,
+    ) -> AutolinkCandidateIndex {
+        let ix = self.autolink_candidates.len();
+        self.autolink_candidates.push(candidate);
+        AutolinkCandidateIndex(ix)
     }
 
     pub fn allocate_cow(&mut self, cow: CowStr<'a>) -> CowIndex {
@@ -3170,6 +3392,14 @@ impl<'a> Index<LinkIndex> for Allocations<'a> {
 
     fn index(&self, ix: LinkIndex) -> &Self::Output {
         self.links.index(ix.0)
+    }
+}
+
+impl<'a> Index<AutolinkCandidateIndex> for Allocations<'a> {
+    type Output = AutolinkCandidate;
+
+    fn index(&self, ix: AutolinkCandidateIndex) -> &Self::Output {
+        self.autolink_candidates.index(ix.0)
     }
 }
 
@@ -3404,7 +3634,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::SoftBreak => return Event::SoftBreak,
         ItemBody::HardBreak(_) => return Event::HardBreak,
         ItemBody::FootnoteReference(cow_ix) => {
-            return Event::FootnoteReference(allocs.take_cow(cow_ix))
+            return Event::FootnoteReference(allocs.take_cow(cow_ix));
         }
         ItemBody::TaskListMarker(checked) => return Event::TaskListMarker(checked),
         ItemBody::Rule => return Event::Rule,
@@ -3450,7 +3680,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::MathBlock(cow_ix) => {
             Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
         }
-        ItemBody::FencedCodeBlock(cow_ix) => {
+        ItemBody::FencedCodeBlock(cow_ix, _) => {
             Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
         }
         ItemBody::IndentCodeBlock(..) => Tag::CodeBlock(CodeBlockKind::Indented),
@@ -3489,7 +3719,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
                 Event::DisplayMath(allocs.take_cow(cow_ix))
             } else {
                 Event::InlineMath(allocs.take_cow(cow_ix))
-            }
+            };
         }
         ItemBody::DefinitionList(_) => Tag::DefinitionList,
         ItemBody::DefinitionListTitle => Tag::DefinitionListTitle,
@@ -3506,11 +3736,11 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         }
         #[cfg(feature = "mdx")]
         ItemBody::MdxFlowExpression(cow_ix) => {
-            return Event::MdxFlowExpression(allocs.take_cow(cow_ix))
+            return Event::MdxFlowExpression(allocs.take_cow(cow_ix));
         }
         #[cfg(feature = "mdx")]
         ItemBody::MdxTextExpression(cow_ix) => {
-            return Event::MdxTextExpression(allocs.take_cow(cow_ix))
+            return Event::MdxTextExpression(allocs.take_cow(cow_ix));
         }
         #[cfg(feature = "mdx")]
         ItemBody::MdxEsm(cow_ix) => return Event::MdxEsm(allocs.take_cow(cow_ix)),
@@ -4050,9 +4280,11 @@ text
         // Without ENABLE_MDX, none of this should be parsed as MDX.
         let events: Vec<_> = Parser::new("import foo from 'bar'\n").collect();
         // Should be a regular paragraph.
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, Event::Start(Tag::Paragraph))));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::Start(Tag::Paragraph)))
+        );
     }
 
     #[cfg(feature = "mdx")]

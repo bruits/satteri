@@ -3,14 +3,14 @@
 
 use alloc::borrow::Cow;
 
-use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef, line_ending_iter};
 use satteri_ast::mdast::{
-    encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
     CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
     ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType, ReferenceData,
+    encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
 };
 #[cfg(feature = "mdx")]
-use satteri_ast::mdast::{encode_mdx_jsx_element_data, ExpressionData};
+use satteri_ast::mdast::{ExpressionData, encode_mdx_jsx_element_data};
 #[cfg(feature = "mdx")]
 use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
@@ -50,7 +50,7 @@ pub const MDX_OPTIONS: Options =
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
 pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, None)
+    parse_inner(source, options, true, None, false)
 }
 
 /// Skip-positions variant: leaves per-node line/column fields at the zero
@@ -58,7 +58,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
 /// the cp-offset post-pass. Byte offsets are still filled. Use when the
 /// consumer (HTML/JS codegen) never reads positions.
 pub fn parse_no_positions(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, None)
+    parse_inner(source, options, false, None, false)
 }
 
 /// Same as `parse_no_positions` but recycles a caller-pooled arena (via
@@ -69,7 +69,7 @@ pub fn parse_no_positions_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, Some(reuse))
+    parse_inner(source, options, false, Some(reuse), false)
 }
 
 /// Same as [`parse`] but recycles a caller-pooled arena; see [`parse_no_positions_into`].
@@ -78,14 +78,17 @@ pub fn parse_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, Some(reuse))
+    parse_inner(source, options, true, Some(reuse), false)
 }
 
+/// `skip_fnr_autolink` is the path-selection probe's lever: every entry point
+/// above passes `false`, so only `#[cfg(test)]` code can turn it on.
 fn parse_inner(
     source: &str,
     options: Options,
     track_positions: bool,
     reuse: Option<Arena<Mdast>>,
+    skip_fnr_autolink: bool,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
     // feature set. Expand it into the granular flags the parser checks so
@@ -276,7 +279,7 @@ fn parse_inner(
                         }
                     }
                     // Code block close: write accumulated content.
-                    ItemBody::FencedCodeBlock(_) | ItemBody::IndentCodeBlock(_) => {
+                    ItemBody::FencedCodeBlock(..) | ItemBody::IndentCodeBlock(_) => {
                         if let Some(mut content) = code_block_buf.take() {
                             // Drop the trailing line terminator (remark keeps
                             // CRLF inside the value but strips the one right
@@ -453,20 +456,20 @@ fn parse_inner(
                         // spread computation — mirrors the regular-close
                         // arm's blockquote handling but inline here since
                         // ListItem close has its own arm. See §B.
-                        if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last() {
-                            if snap_kind == MdastNodeType::ListItem {
-                                container_jsx_snapshot.pop();
-                                while jsx_stack.len() > snap_len {
-                                    let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
-                                    let loc = byte_offset_to_line_col(source, offset as usize);
-                                    mdx_errors.push((
+                        if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last()
+                            && snap_kind == MdastNodeType::ListItem
+                        {
+                            container_jsx_snapshot.pop();
+                            while jsx_stack.len() > snap_len {
+                                let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
+                                let loc = byte_offset_to_line_col(source, offset as usize);
+                                mdx_errors.push((
                                         offset as usize,
                                         format!(
                                             "Expected a closing tag for `<{name}>` ({loc}) before the end of `listItem`"
                                         ),
                                     ));
-                                    builder.close_node();
-                                }
+                                builder.close_node();
                             }
                         }
                         let id = builder.current_node_id();
@@ -488,7 +491,7 @@ fn parse_inner(
                         }
                         let is_spread = *item_spread || {
                             // Loose-list detection: a blank line between
-                            // consecutive children means two newlines in the
+                            // consecutive children means two line endings in the
                             // source gap. Counted on byte offsets, not lines, because
                             // skip-positions mode leaves `start_line` zero but
                             // offsets are always recorded.
@@ -502,7 +505,7 @@ fn parse_inner(
                                     let end = child_node.start_offset as usize;
                                     if start <= end && end <= source_bytes.len() {
                                         let gap = &source_bytes[start..end];
-                                        if memchr::memchr_iter(b'\n', gap).take(2).count() >= 2 {
+                                        if line_ending_iter(gap).take(2).count() >= 2 {
                                             found = true;
                                             break;
                                         }
@@ -613,7 +616,7 @@ fn parse_inner(
                                     let end = child_node.start_offset as usize;
                                     if start <= end && end <= source_bytes.len() {
                                         let gap = &source_bytes[start..end];
-                                        if memchr::memchr_iter(b'\n', gap).take(2).count() >= 2 {
+                                        if line_ending_iter(gap).take(2).count() >= 2 {
                                             found = true;
                                             break;
                                         }
@@ -676,20 +679,19 @@ fn parse_inner(
                             ItemBody::Paragraph
                                 | ItemBody::TightParagraph
                                 | ItemBody::DirectiveLabel
-                        ) {
-                            if let Some(opened_at) = paragraph_open_depth.pop() {
-                                while builder.stack_depth() > opened_at {
-                                    if let Some((name, offset, _is_flow)) = jsx_stack.pop() {
-                                        let loc = byte_offset_to_line_col(source, offset as usize);
-                                        mdx_errors.push((
+                        ) && let Some(opened_at) = paragraph_open_depth.pop()
+                        {
+                            while builder.stack_depth() > opened_at {
+                                if let Some((name, offset, _is_flow)) = jsx_stack.pop() {
+                                    let loc = byte_offset_to_line_col(source, offset as usize);
+                                    mdx_errors.push((
                                             offset as usize,
                                             format!(
                                                 "Expected a closing tag for `<{name}>` ({loc}) before the end of `paragraph`"
                                             ),
                                         ));
-                                    }
-                                    builder.close_node();
                                 }
+                                builder.close_node();
                             }
                         }
                         // Drain unclosed JSX opens that were pushed inside a
@@ -701,27 +703,26 @@ fn parse_inner(
                             ItemBody::ListItem(..) => Some(MdastNodeType::ListItem),
                             _ => None,
                         };
-                        if let Some(kind) = container_kind_for_drain {
-                            if let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last() {
-                                if snap_kind == kind {
-                                    container_jsx_snapshot.pop();
-                                    while jsx_stack.len() > snap_len {
-                                        let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
-                                        let loc = byte_offset_to_line_col(source, offset as usize);
-                                        let container_label = match kind {
-                                            MdastNodeType::Blockquote => "blockQuote",
-                                            MdastNodeType::ListItem => "listItem",
-                                            _ => "container",
-                                        };
-                                        mdx_errors.push((
+                        if let Some(kind) = container_kind_for_drain
+                            && let Some(&(snap_kind, snap_len)) = container_jsx_snapshot.last()
+                            && snap_kind == kind
+                        {
+                            container_jsx_snapshot.pop();
+                            while jsx_stack.len() > snap_len {
+                                let (name, offset, _is_flow) = jsx_stack.pop().unwrap();
+                                let loc = byte_offset_to_line_col(source, offset as usize);
+                                let container_label = match kind {
+                                    MdastNodeType::Blockquote => "blockQuote",
+                                    MdastNodeType::ListItem => "listItem",
+                                    _ => "container",
+                                };
+                                mdx_errors.push((
                                             offset as usize,
                                             format!(
                                                 "Expected a closing tag for `<{name}>` ({loc}) before the end of `{container_label}`"
                                             ),
                                         ));
-                                        builder.close_node();
-                                    }
-                                }
+                                builder.close_node();
                             }
                         }
                         let id = builder.current_node_id();
@@ -880,11 +881,18 @@ fn parse_inner(
                             let cow = inner.allocs.take_cow(*cow_ix);
                             buf.push_str(&cow);
                         }
-                        ItemBody::SoftBreak | ItemBody::HardBreak(_) => {
-                            // Remark preserves the newline in alt text rather
-                            // than collapsing it to a space.
-                            buf.push('\n');
+                        ItemBody::SoftBreak => {
+                            // Alt text keeps the break rather than collapsing it
+                            // to a space, and keeps the source's own line ending.
+                            let s = &source[item.start..item.end];
+                            match s.find(['\r', '\n']) {
+                                Some(eol) => buf.push_str(&s[eol..]),
+                                None => buf.push('\n'),
+                            }
                         }
+                        // A hard break carries no visible content, so it adds
+                        // nothing to the alt text.
+                        ItemBody::HardBreak(_) => {}
                         ItemBody::SynthesizeText(cow_ix) => {
                             let cow = inner.allocs.take_cow(*cow_ix);
                             buf.push_str(&cow);
@@ -965,13 +973,12 @@ fn parse_inner(
                         builder.set_data_current(&[depth]);
                         // Conveyed as `data.hProperties`, which the mdast->hast
                         // pass emits as `id`/`class`/custom attributes.
-                        if let Some(heading_ix) = heading_ix {
-                            if let Some(json) =
+                        if let Some(heading_ix) = heading_ix
+                            && let Some(json) =
                                 encode_heading_h_properties(&inner.allocs[heading_ix])
-                            {
-                                let heading_id = builder.current_node_id();
-                                builder.arena_mut().set_node_data(heading_id, json);
-                            }
+                        {
+                            let heading_id = builder.current_node_id();
+                            builder.arena_mut().set_node_data(heading_id, json);
                         }
                         inner.tree.push();
                     }
@@ -991,14 +998,14 @@ fn parse_inner(
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
                     }
-                    ItemBody::FencedCodeBlock(cow_ix) => {
+                    ItemBody::FencedCodeBlock(cow_ix, lang_len) => {
                         let info_cow = inner.allocs.take_cow(cow_ix);
                         let info_str = info_cow.as_ref();
-                        let (lang_str, meta_str) = match info_str.split_once(char::is_whitespace) {
-                            // Keep trailing whitespace in meta to match remark/mdast.
-                            Some((l, m)) => (l, m.trim_start()),
-                            None => (info_str, ""),
-                        };
+                        // The boundary was taken on raw source; whitespace a
+                        // character reference decodes to stays in the language.
+                        let split = (lang_len as usize).min(info_str.len());
+                        let (lang_str, meta_str) = info_str.split_at(split);
+                        let meta_str = meta_str.trim_start();
                         let lang_ref = if lang_str.is_empty() {
                             StringRef::empty()
                         } else {
@@ -1456,6 +1463,14 @@ fn parse_inner(
                         inner.tree.push();
                     }
 
+                    // A blocked autolink marker leaves a zero-width `Text`. The
+                    // escaped form is not empty: it reaches back over the `\`.
+                    ItemBody::Text {
+                        backslash_escaped: false,
+                    } if item.start == item.end => {
+                        inner.tree.next_sibling(cur_ix);
+                    }
+
                     ItemBody::Text { backslash_escaped } => {
                         let text_value: &str = &source[item.start..item.end];
 
@@ -1706,20 +1721,19 @@ fn parse_inner(
                         let checked_val = if checked { 1 } else { 0 };
                         let depth = builder.stack_depth();
                         for i in (0..depth).rev() {
-                            if let Some(node_id) = builder.stack_node_id(i) {
-                                if builder.arena_ref().get_node(node_id).node_type
+                            if let Some(node_id) = builder.stack_node_id(i)
+                                && builder.arena_ref().get_node(node_id).node_type
                                     == MdastNodeType::ListItem as u8
-                                {
-                                    let prev = builder.arena_ref().get_type_data(node_id).to_vec();
-                                    let prev_spread = prev.get(1).copied().unwrap_or(0) != 0;
-                                    let data = ListItemData {
-                                        checked: checked_val,
-                                        spread: prev_spread,
-                                    }
-                                    .to_bytes();
-                                    builder.arena_mut().set_type_data(node_id, &data);
-                                    break;
+                            {
+                                let prev = builder.arena_ref().get_type_data(node_id).to_vec();
+                                let prev_spread = prev.get(1).copied().unwrap_or(0) != 0;
+                                let data = ListItemData {
+                                    checked: checked_val,
+                                    spread: prev_spread,
                                 }
+                                .to_bytes();
+                                builder.arena_mut().set_type_data(node_id, &data);
+                                break;
                             }
                         }
                         inner.tree.next_sibling(cur_ix);
@@ -1825,10 +1839,11 @@ fn parse_inner(
 
                     // Unresolved inline markers, should have been resolved by handle_inline.
                     ItemBody::MaybeEmphasis(..)
+                    | ItemBody::MaybeEmphasisEscaped(..)
                     | ItemBody::MaybeMath(..)
                     | ItemBody::MaybeSmartQuote(..)
                     | ItemBody::MaybeCode(..)
-                    | ItemBody::MaybeHtml
+                    | ItemBody::MaybeHtml(..)
                     | ItemBody::MaybeLinkOpen
                     | ItemBody::MaybeLinkClose(..)
                     | ItemBody::MaybeImage => {
@@ -1876,6 +1891,13 @@ fn parse_inner(
                                 &sr.as_bytes(),
                             );
                         }
+                        inner.tree.next_sibling(cur_ix);
+                    }
+
+                    // `handle_inline_pass1` fires or unlinks every marker, and a
+                    // consumed item range drops the markers inside it.
+                    ItemBody::MaybeAutolink(..) => {
+                        debug_assert!(false, "unresolved autolink marker reached arena_build");
                         inner.tree.next_sibling(cur_ix);
                     }
 
@@ -1957,11 +1979,18 @@ fn parse_inner(
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
         // Triggers are case-insensitive (`HTTP://`, `WWW.`), so check the
-        // uppercase variants too.
-        if memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
-            || memchr::memchr2(b'H', b'W', source_bytes).is_some()
+        // uppercase variants too, and `&`: the pass matches decoded text, where
+        // a reference can supply a trigger the raw bytes lack (`&#104;ttp://x.y`).
+        if !skip_fnr_autolink
+            && (memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
+                || memchr::memchr3(b'H', b'W', b'&', source_bytes).is_some())
         {
-            crate::post_passes::gfm_autolink_literal_pass(&mut arena, source_bytes);
+            crate::post_passes::gfm_autolink_literal_pass(
+                &mut arena,
+                source_bytes,
+                options,
+                track_positions.then_some(&mut cursor),
+            );
         }
     }
 
@@ -2119,11 +2148,7 @@ fn normalize_inline_html_wrap(src: &str) -> Option<String> {
         }
         out.push_str(&src[line_start..i]);
     }
-    if out == src {
-        None
-    } else {
-        Some(out)
-    }
+    if out == src { None } else { Some(out) }
 }
 
 fn reference_end(
@@ -2420,11 +2445,14 @@ fn encode_heading_h_properties(attrs: &HeadingAttributes<'_>) -> Option<Vec<u8>>
 fn byte_offset_to_line_col(source: &str, offset: usize) -> String {
     let mut line = 1usize;
     let mut col = 1usize;
+    let bytes = source.as_bytes();
     for (i, ch) in source.char_indices() {
         if i >= offset {
             break;
         }
-        if ch == '\n' {
+        // `\r`, `\n` and `\r\n` all end a line; the `\r` of a CRLF is left to
+        // the `\n` so the pair counts once.
+        if ch == '\n' || (ch == '\r' && bytes.get(i + 1) != Some(&b'\n')) {
             line += 1;
             col = 1;
         } else {
@@ -2471,4 +2499,240 @@ fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<
         .collect();
 
     encode_mdx_jsx_element_data(name_ref, &attr_tuples, true)
+}
+
+/// Which of the two autolink routes produced each link. They disagree on
+/// decoding, accepted domains, and link extent, so rendered-output conformance
+/// can't pin the choice. Expected values are remark's classification;
+/// `test/conformance/autolink-path.test.ts` holds remark to the same tables.
+#[cfg(test)]
+mod autolink_path_probe {
+    use super::{Arena, Mdast, MdastNodeType, Options, parse_inner};
+    use satteri_ast::mdast::decode_link_data;
+
+    /// The JS conformance features: GFM, no frontmatter, no math.
+    const PROBE_OPTIONS: Options = Options::from_bits_truncate(
+        Options::ENABLE_GFM.bits()
+            | Options::ENABLE_TABLES.bits()
+            | Options::ENABLE_STRIKETHROUGH.bits()
+            | Options::ENABLE_TASKLISTS.bits()
+            | Options::ENABLE_FOOTNOTES.bits(),
+    );
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Path {
+        Construct,
+        Fnr,
+        None,
+    }
+    use Path::{Construct as C, Fnr as F, None as N};
+
+    /// Unique per link within a parse, so it survives the diff between parses.
+    type LinkKey = (u32, u32, String);
+
+    fn links(source: &str, skip_fnr_autolink: bool) -> Vec<LinkKey> {
+        let (arena, _) = parse_inner(source, PROBE_OPTIONS, true, None, skip_fnr_autolink);
+        let mut out = Vec::new();
+        if !arena.is_empty() {
+            collect(&arena, 0, &mut out);
+        }
+        out
+    }
+
+    fn collect(arena: &Arena<Mdast>, id: u32, out: &mut Vec<LinkKey>) {
+        let node = arena.get_node(id);
+        if matches!(
+            MdastNodeType::from_u8(node.node_type),
+            Some(MdastNodeType::Link)
+        ) {
+            let url = decode_link_data(arena.get_type_data(id)).url;
+            out.push((
+                node.start_offset,
+                node.end_offset,
+                arena.get_str(url).to_string(),
+            ));
+        }
+        let start = node.children_start as usize;
+        for i in start..start + node.children_count as usize {
+            collect(arena, arena.children[i], out);
+        }
+    }
+
+    /// Every link in document order, by route.
+    fn paths(source: &str) -> Vec<Path> {
+        let mut construct = links(source, true);
+        links(source, false)
+            .into_iter()
+            .map(|link| match construct.iter().position(|c| *c == link) {
+                Some(ix) => {
+                    construct.remove(ix);
+                    C
+                }
+                None => F,
+            })
+            .collect()
+    }
+
+    /// The single path a lone trigger takes.
+    fn path(source: &str) -> Path {
+        paths(source).first().copied().unwrap_or(N)
+    }
+
+    /// Every shape where the three opener states (still open, closed-and-failed,
+    /// closed-and-resolved) differ, plus every construct that can swallow a
+    /// bracket before the trigger sees it.
+    #[test]
+    fn each_autolink_takes_the_same_path_as_in_remark() {
+        let cases: &[(&str, &[Path])] = &[
+            // Bracket-opener states.
+            ("[a](/b) www.x.y", &[C, C]),
+            ("[a [b](/c) www.x.y", &[C, F]),
+            ("[a] www.x.y", &[C]),
+            ("![a] www.x.y", &[C]),
+            ("[a www.x.y", &[F]),
+            ("[a\nwww.x.y", &[F]),
+            ("[a\n\nwww.x.y", &[C]),
+            ("# [a www.x.y", &[F]),
+            // Brackets consumed by an enclosing construct before the trigger.
+            ("[a `]` www.x.y", &[F]),
+            ("`[` www.x.y", &[C]),
+            ("[a ``]`` www.x.y", &[F]),
+            ("``[`` www.x.y", &[C]),
+            ("<span a='['> www.x.y", &[C]),
+            ("[a <http://q.r/]> www.x.y", &[C, F]),
+            // A trigger inside a link destination the parser has already resolved.
+            ("[a](https://x.y)x", &[C]),
+            ("[a](www.x.y)x", &[C]),
+            // …and inside one it never resolves, so the trigger sees ordinary bytes.
+            ("[[x]](https://x.y)x\n\n[x]: /", &[C]),
+            ("[[x]](www.a.com)y\n\n[x]: /", &[C]),
+            ("[foo][bar](https://x.y)x\n\n[bar]: /", &[C]),
+            ("[[a](/b)](https://x.y)x", &[C, C]),
+            // Unclosed or non-resolving brackets around a trigger.
+            ("[www.a.com", &[F]),
+            ("[www.a.com]", &[F]),
+            ("[www.a.com](", &[F]),
+            ("![www.a.com", &[F]),
+            ("[foo][www.a.com]", &[F]),
+            ("[https://a.com](", &[F]),
+            // A `]` balances its opener even when nothing resolves, so a
+            // trigger past it is no longer blocked and the URL before it
+            // can't run on.
+            ("[www.a.com]www.b.com", &[F, C]),
+            ("[www.a.com]]www.b.com", &[F, C]),
+            ("[www.a.com]http://b.com", &[F, C]),
+            ("[www.a.com]u@b.com", &[F, C]),
+            ("[www.a.com]_u@b.com", &[F, C]),
+            ("[http://a.com]www.b.com", &[F, C]),
+            ("a[www.a.com]www.b.com", &[F, C]),
+            // The opener is still unbalanced, so both triggers stay blocked.
+            ("[[www.a.com]www.b.com", &[F]),
+            // No opener at all: `]` is an ordinary URL byte.
+            ("www.a.com]www.b.com", &[C]),
+            // Preceding-character rules. `www.` takes a fixed whitelist,
+            // `http://` rejects only ASCII letters, and email rejects `/` and atext.
+            ("www.x.y", &[C]),
+            (".www.x.y", &[F]),
+            (".http://x.y", &[C]),
+            ("awww.x.y", &[]),
+            ("5http://x.y", &[C]),
+            ("/a@b.cd", &[]),
+            ("(www.x.y)", &[C]),
+            ("_www.x.y_", &[C]),
+            ("x\u{85}www.x.y", &[]),
+        ];
+
+        assert_eq!(cases.len(), 44, "the probe lost inputs");
+        let mismatches: Vec<String> = cases
+            .iter()
+            .filter(|(input, expected)| paths(input) != **expected)
+            .map(|(input, expected)| format!("{input:?} want {expected:?} got {:?}", paths(input)))
+            .collect();
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    /// The triggers have disagreeing preceding-character rules, and what the
+    /// construct path blocks falls through to find-and-replace, which wants
+    /// whitespace or punctuation. The fourth is a `www.` literal and an email
+    /// at the same offset, so it also pins which construct is tried first.
+    #[test]
+    fn a_preceding_character_selects_the_path_per_trigger() {
+        const TRIGGERS: [&str; 4] = ["www.x.y", "http://x.y", "a@b.cd", "www.x@y.zz"];
+        let rules: &[(&str, [Path; 4])] = &[
+            ("", [C, C, C, C]),
+            (" ", [C, C, C, C]),
+            ("(", [C, C, C, C]),
+            ("*", [C, C, C, C]),
+            ("_", [C, C, C, C]),
+            ("]", [C, C, C, C]),
+            ("~", [C, C, C, C]),
+            ("[", [F, F, F, F]),
+            (".", [F, C, C, C]),
+            ("/", [F, C, N, F]),
+            ("+", [F, C, C, C]),
+            (")", [F, C, C, C]),
+            ("!", [F, C, C, C]),
+            (":", [F, C, C, C]),
+            ("¥", [F, C, C, C]),
+            ("→", [F, C, C, C]),
+            ("a", [N, N, C, C]),
+            ("5", [N, C, C, C]),
+            ("é", [N, C, C, C]),
+            ("你", [N, C, C, C]),
+            ("你好", [N, C, C, C]),
+            ("\u{200b}", [N, C, C, C]),
+            // U+FEFF is not `White_Space`, yet find-and-replace takes it as a
+            // boundary. Prefixed with a letter to keep leading-BOM handling out.
+            ("a\u{feff}", [F, C, C, C]),
+            // U+0085 is `White_Space`, but find-and-replace does not take it
+            // as a boundary.
+            ("\u{85}", [N, C, C, C]),
+        ];
+
+        for (prefix, expected) in rules {
+            for (trigger, want) in TRIGGERS.iter().zip(expected) {
+                let input = format!("{prefix}{trigger}");
+                assert_eq!(path(&input), *want, "{input:?}");
+            }
+        }
+    }
+
+    /// Deliberate divergence: the preceding character is classified as a whole
+    /// scalar, so astral punctuation and symbols open an autolink.
+    /// See website/content/docs/divergences.md.
+    #[test]
+    fn an_astral_punctuation_or_symbol_starts_an_autolink() {
+        for prefix in ["\u{10101}", "\u{1f600}", "\u{1d6db}"] {
+            // Unbracketed, only `www.` shows it: the other two take the construct path.
+            assert_eq!(path(&format!("{prefix}www.x.y")), F);
+            // An unclosed `[` blocks the construct, so all three fall through.
+            for trigger in ["www.x.y", "http://x.y", "a@b.cd"] {
+                assert_eq!(path(&format!("[{prefix}{trigger}")), F, "{trigger}");
+            }
+        }
+    }
+
+    /// `Nd`: the control for the divergence above.
+    #[test]
+    fn an_astral_digit_starts_nothing() {
+        let prefix = "\u{1fbf0}";
+        assert_eq!(path(&format!("{prefix}www.x.y")), N);
+        for trigger in ["www.x.y", "http://x.y", "a@b.cd"] {
+            assert_eq!(path(&format!("[{prefix}{trigger}")), N, "{trigger}");
+        }
+    }
+
+    /// The differential signal holds only while the skip is the sole difference.
+    #[test]
+    fn skipping_the_pass_changes_nothing_that_has_no_autolink() {
+        for input in ["[a](/b) x", "`[` x", "# [a", "text **bold** and `code`"] {
+            let (skipped, _) = parse_inner(input, PROBE_OPTIONS, true, None, true);
+            let (full, _) = parse_inner(input, PROBE_OPTIONS, true, None, false);
+            assert_eq!(
+                satteri_ast::mdast_to_html(&skipped),
+                satteri_ast::mdast_to_html(&full),
+                "{input:?}"
+            );
+        }
+    }
 }

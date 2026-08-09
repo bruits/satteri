@@ -1,7 +1,7 @@
 //! Integration tests for StringRef and get_str.
 
 use satteri_arena::{
-    decode_string_ref_data, encode_string_ref_data, Arena, ArenaBuilder, Mdast, StringRef,
+    Arena, ArenaBuilder, Mdast, StringRef, decode_string_ref_data, encode_string_ref_data,
 };
 use satteri_ast::mdast::MdastNodeType;
 

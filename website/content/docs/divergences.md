@@ -25,6 +25,51 @@ When `remark-frontmatter` sees `---` or `+++` at line 1 and can't find a matchin
 | `remark-parse` + `remark-frontmatter` | thematicBreak + paragraph(`- this …`) |
 | Sätteri (with frontmatter feature on) | thematicBreak + list                  |
 
+### Astral characters before a GFM autolink
+
+A bare URL or email only becomes a link when the character before it is whitespace, punctuation, or the start of the text. `remark-gfm` inspects that character one UTF-16 code unit at a time, so a character outside the Basic Multilingual Plane never counts as punctuation and blocks the link. Sätteri classifies the whole code point.
+
+```markdown
+😀www.example.com
+```
+
+| Parser                        | Output                                        |
+| ----------------------------- | --------------------------------------------- |
+| `remark-parse` + `remark-gfm` | text (`😀www.example.com`)                    |
+| Sätteri                       | text (`😀`) + link (`http://www.example.com`) |
+
+This only affects astral punctuation and symbols — `𐄁` (U+10101), `😀` (U+1F600), `𝛛` (U+1D6DB) and the like. Astral characters that aren't punctuation, such as the digit `🯰` (U+1FBF0), block the link on both sides. A ZWJ sequence is judged by its last code point, so `👨‍💻` behaves like the `💻` that ends it.
+
+### Missing positions on GFM autolinks
+
+`remark-gfm` emits some GFM autolinks — the ones a preceding `[` keeps it from tokenizing — with no `position` at all, on the link, its text child, or the text nodes around it. Sätteri reports the source span for every autolink.
+
+```markdown
+[www.example.com
+```
+
+| Parser                        | Output                                          |
+| ----------------------------- | ----------------------------------------------- |
+| `remark-parse` + `remark-gfm` | link with no `position`                         |
+| Sätteri                       | link with `position` spanning `www.example.com` |
+
+URLs are unchanged: `[www.example.com/&amp;b` links to `http://www.example.com/&b` on both sides, and the position covers the raw `&amp;`. Smart punctuation works the same way: the span covers the raw `--`, `...` or `"` run the value was rendered from — though under `smartPunctuation` such a link's URL carries the rewritten character, so `[www.example.com/x--` links to `http://www.example.com/x–` where the tokenized `www.example.com/x--` keeps the raw `--`. When a match starts or ends inside a character reference that decodes to more than one character, no exact span exists, and Sätteri reports no position rather than an approximate one.
+
+### Paragraph start in a task list item
+
+`mdast-util-gfm-task-list-item` pulls the paragraph's start back over the `[ ]` checkbox, but only when the paragraph's first child is a `text` node. Sätteri always starts the paragraph after the checkbox.
+
+```markdown
+- [ ] _e_
+```
+
+| Parser                        | `paragraph` span |
+| ----------------------------- | ---------------- |
+| `remark-parse` + `remark-gfm` | offsets 2–9      |
+| Sätteri                       | offsets 6–9      |
+
+For `- [ ] plain text` remark reports offsets 6–16, agreeing with Sätteri — so on its side the reported start depends on what follows the checkbox. Sätteri uses one rule for every first child. The same difference appears with `` `c` ``, `<b>i</b>` and `![a](/b)`, and for the `*`, `-` and `1.` markers alike.
+
 ## Rendering
 
 ### Code block `data.lang`

@@ -32,6 +32,8 @@ import {
   satteriMathMdast,
   satteriMathHast,
   satteriMathHtml,
+  reconcileFnrPositions,
+  assertSliceInvariantEverywhere,
 } from "../helpers.js";
 
 const { remarkMarkAndUnravel } = await import(
@@ -201,7 +203,7 @@ export const markdownBlock = fc.oneof(
   { weight: 1, arbitrary: htmlBlock },
 );
 
-const MD_SIGNIFICANT_CHARS = "# *_~`[]()!<>|-\\{}@^+=$:/ \t\n".split("");
+const MD_SIGNIFICANT_CHARS = "# *_~`[]()!<>|-\\{}@^+=$:/ \t\n\r".split("");
 const ALNUM = "abcdefghijklmnopqrstuvwxyz 0123456789".split("");
 
 // Spec-seeded arbitraries
@@ -536,6 +538,12 @@ const AL_TRAIL = fc.constantFrom(
   "&amp;",
   "&copy;",
   "&notreal",
+  // Only the `;` is trailing punctuation, so the URL ends mid-reference.
+  "&#104;",
+  "&#x68;",
+  // The escape and the link both want the byte after a URL-ending backslash.
+  "\\,",
+  "\\<a>",
   "?!",
   "*_~",
   '">',
@@ -609,6 +617,9 @@ export const autolinkDocument = fc
       "code",
       "para2",
       "img",
+      "dest",
+      "destUnresolved",
+      "destReference",
     ),
   )
   .map(([line, ctx]) => {
@@ -629,12 +640,20 @@ export const autolinkDocument = fc
         return `text\n${line}\n`;
       case "img":
         return `![${line}](/i)\n`;
+      // A destination reaches the autolink tokenizer only when the bracket pair
+      // fails to resolve; these cover both outcomes.
+      case "dest":
+        return `[a](${line})x\n`;
+      case "destUnresolved":
+        return `[[x]](${line})x\n\n[x]: /\n`;
+      case "destReference":
+        return `[a][b](${line})x\n\n[b]: /\n`;
       default:
         return line + "\n";
     }
   });
 
-export const autolinkChaos = makeChaos("./:@~_-wWhHtTpP><&;()");
+export const autolinkChaos = makeChaos("./:@~_-wWhHtTpP><&;()[]");
 
 // MDX arbitraries
 
@@ -1249,7 +1268,6 @@ function isAlignAttributeDivergence(
   const e = JSON.stringify(stripPositions(normalizeAlignProps(expected)));
   return a === e;
 }
-
 const HAST_LIKE_LEVELS = new Set<FuzzLevel>(["hast", "mdx-hast", "math-hast", "fm-hast"]);
 
 function normalizeAlignProps(node: unknown): unknown {
@@ -1341,6 +1359,14 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
       expected,
       actual: `INTERNAL_ERROR: ${actualError}`,
     };
+  }
+  // Extra find-and-replace positions are verified before being dropped, so a
+  // wrong one throws instead of passing as expected.
+  if (!HTML_LEVELS.has(level)) {
+    // A hast `text` inside `<code>` inherits the code span's span, delimiters
+    // included, so it never decodes back to its own value.
+    if (!HAST_LIKE_LEVELS.has(level)) assertSliceInvariantEverywhere(actual, input);
+    reconcileFnrPositions(actual, expected, input);
   }
   try {
     expect(actual).toEqual(expected);

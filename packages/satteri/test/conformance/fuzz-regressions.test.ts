@@ -8,6 +8,7 @@ import {
   assertExtHastConformance,
   satteriMdast,
   referenceMdast,
+  assertSliceInvariantEverywhere,
 } from "./helpers.js";
 
 // Each case below was discovered by fuzz runs in test/conformance/fuzz/ and
@@ -2153,10 +2154,9 @@ describe("fuzz regressions: GFM autolink fires during inline tokenization, not a
 // will get a green-test signal (vitest's `.fails` inverts the assertion).
 // Frequency note: each case surfaces ≤1× per 200k iterations.
 describe("fuzz known-fails: complex structural divergences (md)", () => {
-  // `*>ss)1.  foo` → REF treats the entire first line as paragraph text;
-  // Sätteri opens a list+blockquote+list-item stack first, which derails
-  // the subsequent indented `\`\`\`` fence + code block + `> bam` nesting.
-  test.fails("list/bq/code-fence/autolink cascade", () => {
+  // `*>ss)1.  foo` is paragraph text, not a list+blockquote+list-item stack;
+  // the indented fence and `> bam` nesting below depend on that.
+  test("list/bq/code-fence/autolink cascade", () => {
     assertMdastConformance(
       "*>ss)1.  foo\n\n    ```\n <https://ex   bar\n    ```\n\n    baz\n\n    > bam\n",
     );
@@ -2169,11 +2169,8 @@ describe("fuzz known-fails: complex structural divergences (md)", () => {
     assertMdastConformance("[\\\n](3*foo)\n");
   });
 
-  // `` `[)4p$[g`https://foo.bar.`baz>` `` — first backtick run opens a
-  // code span whose contents include `https://foo.bar.`. REF pairs the
-  // backticks differently from Sätteri here; downstream `baz>` ends up
-  // in different text nodes.
-  test.fails("code span pairing with autolink-like body", () => {
+  // The `[`s inside the code span `` `https://foo.bar.` `` must not gate autolinks.
+  test("code span pairing with autolink-like body", () => {
     assertMdastConformance("`[)4p$[g`https://foo.bar.`baz>`\n");
   });
 
@@ -2266,4 +2263,19 @@ describe("fuzz regressions: inline code after a link destination with CJK trail"
     // *does* treat CJK as part of the URL when there's no enclosing link.
     assertMdastConformance("use http://x，foo");
   });
+});
+
+describe("fuzz regressions: the slice invariant across every line ending", () => {
+  const cases = [
+    "{\r a",
+    "a\r\t$",
+    "#-\r\n\\$",
+    "q\r [Foo]\n[foo]: /url\n> bar\n",
+    "p\r\tfoo\tbaz\t\tbim\n",
+  ];
+  for (const input of cases) {
+    test(`positions decode back for ${JSON.stringify(input)}`, () => {
+      assertSliceInvariantEverywhere(satteriMdast(input), input);
+    });
+  }
 });

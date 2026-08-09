@@ -157,6 +157,67 @@ describe("MDAST conformance: images", () => {
   });
 });
 
+// A hard break inside an image label carries no visible content, so it adds
+// nothing to the flattened alt text; a soft break contributes the source's own
+// line ending.
+describe("MDAST conformance: line breaks in image alt text", () => {
+  test("backslash hard break", () => {
+    assertMdastConformance("![a\\\nb](c.png)");
+  });
+
+  test("backslash hard break with CRLF", () => {
+    assertMdastConformance("![a\\\r\nb](c.png)");
+  });
+
+  test("backslash hard break with a lone CR", () => {
+    assertMdastConformance("![a\\\rb](c.png)");
+  });
+
+  test("repeated backslash hard breaks", () => {
+    assertMdastConformance("![a\\\nb\\\nc](c.png)");
+  });
+
+  test("trailing-space hard break", () => {
+    assertMdastConformance("![a  \nb](c.png)");
+  });
+
+  test("trailing-space hard break with CRLF", () => {
+    assertMdastConformance("![a  \r\nb](c.png)");
+  });
+
+  test("trailing-space hard break with a lone CR", () => {
+    assertMdastConformance("![a  \rb](c.png)");
+  });
+
+  test("soft break", () => {
+    assertMdastConformance("![a\nb](c.png)");
+  });
+
+  test("soft break with CRLF", () => {
+    assertMdastConformance("![a\r\nb](c.png)");
+  });
+
+  test("soft break with a lone CR", () => {
+    assertMdastConformance("![a\rb](c.png)");
+  });
+
+  test("inline code in the label", () => {
+    assertMdastConformance("![a`x`b](c.png)");
+  });
+
+  test("emphasis in the label", () => {
+    assertMdastConformance("![a*x*b](c.png)");
+  });
+
+  test("hard break in a reference image label", () => {
+    assertMdastConformance("![a\\\nb][d]\n\n[d]: /u");
+  });
+
+  test("hard break in a collapsed reference image label", () => {
+    assertMdastConformance("![a\\\nb][]\n\n[a\\\nb]: /u");
+  });
+});
+
 describe("MDAST conformance: edge cases", () => {
   test("empty input", () => {
     assertMdastConformance("");
@@ -497,6 +558,163 @@ describe("MDAST conformance: softbreak preserves CRLF", () => {
   });
 });
 
+// CommonMark counts `\n`, `\r` and `\r\n` alike as line endings. The line
+// table was built by scanning for `\n` only, so a lone `\r` left every later
+// node on the previous line (offsets were unaffected).
+describe("MDAST conformance: standalone CR positions", () => {
+  test("paragraph across a lone CR", () => {
+    assertMdastConformance("a\rb");
+  });
+
+  test("lone CR inside a link destination", () => {
+    assertMdastConformance("[Mercury](\rmercury)");
+  });
+
+  test("mixed CR, CRLF and LF in one document", () => {
+    assertMdastConformance("a\r\nb\rc\nd");
+  });
+
+  test("CR at document start", () => {
+    assertMdastConformance("\ra");
+  });
+
+  test("CR at document end", () => {
+    assertMdastConformance("a\r");
+  });
+
+  test("consecutive CRs separate blocks", () => {
+    assertMdastConformance("a\r\rb");
+  });
+
+  test("lone CR across block structures", () => {
+    assertMdastConformance("# h\rp\r\n- x\r  y");
+  });
+
+  test("lone CR in a blockquote", () => {
+    assertMdastConformance("> q\rq2");
+  });
+
+  test("lone CR with multibyte characters", () => {
+    assertMdastConformance("❤️a\r😀b\rc");
+  });
+});
+
+// Block structure was decided by scanning for `\n` only, so a document whose
+// line endings are all lone `\r` was read as a single line.
+describe("MDAST conformance: standalone CR block structure", () => {
+  test("blank line between list items makes the list loose", () => {
+    assertMdastConformance("- a\r\r- b");
+  });
+
+  test("fenced code block", () => {
+    assertMdastConformance("```js\rcode\r```\r");
+  });
+
+  test("fenced code block left open", () => {
+    assertMdastConformance("```js\rcode\r");
+  });
+
+  test("indented code block strips continuation indentation", () => {
+    assertMdastConformance("    a\r    b\r");
+  });
+
+  test("HTML block ends at a blank line", () => {
+    assertMdastConformance("<div>\ra\r\rb\r");
+  });
+
+  test("setext heading underline", () => {
+    assertMdastConformance("title\r=====\r");
+  });
+
+  test("thematic break between paragraphs", () => {
+    assertMdastConformance("a\r***\rb");
+  });
+
+  test("nested list indentation", () => {
+    assertMdastConformance("- a\r  - b\r    - c\r");
+  });
+
+  test("block quote with a lazy continuation line", () => {
+    assertMdastConformance("> a\rb\r\rc");
+  });
+
+  test("link reference definition followed by a use", () => {
+    assertMdastConformance("[foo]: /url\r\r[foo]\r");
+  });
+
+  test("setext heading directly after a definition inherits its start", () => {
+    assertMdastConformance("[foo]: /url\rtitle\r=====\r");
+  });
+
+  test("setext heading after a run of definitions", () => {
+    assertMdastConformance("[a]: /a\r[b]: /b\r  title\r=====\r");
+  });
+
+  test("blank line between a definition and a setext heading breaks the chain", () => {
+    assertMdastConformance("[foo]: /url\r\rtitle\r=====\r");
+  });
+
+  test("hard line break before a lone CR", () => {
+    assertMdastConformance("a  \rb");
+  });
+
+  test("table", () => {
+    assertMdastConformance("| a | b |\r| - | - |\r| 1 | 2 |\r");
+  });
+});
+
+// Values carry the document's own line endings byte for byte; only the
+// matching `identifier` of a definition is normalized.
+describe("MDAST conformance: line endings inside values", () => {
+  const FLAVORS: [string, string][] = [
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+    ["CR", "\r"],
+  ];
+
+  for (const [name, eol] of FLAVORS) {
+    describe(name, () => {
+      const md = (tpl: string) => tpl.split("EOL").join(eol);
+
+      test("inline code span", () => {
+        assertMdastConformance(md("`fooEOLbar`EOL"));
+      });
+
+      test("inline code span stripped of one leading and trailing line ending", () => {
+        assertMdastConformance(md("``EOLfooEOLbar  EOLbazEOL``EOL"));
+      });
+
+      test("inline code span holding only a line ending", () => {
+        assertMdastConformance(md("`EOL`EOL"));
+      });
+
+      test("definition title", () => {
+        assertMdastConformance(md("[foo]: /url 'tEOLt2'EOLEOL[foo]EOL"));
+      });
+
+      test("definition title in parentheses", () => {
+        assertMdastConformance(md("[foo]: /url (tEOLt2)EOLEOL[foo]EOL"));
+      });
+
+      test("definition label", () => {
+        assertMdastConformance(md("[EOLfooEOL]: /urlEOLbarEOL"));
+      });
+
+      test("definition label with indented continuation", () => {
+        assertMdastConformance(md("[FooEOL  bar]: /urlEOLEOL[Baz][Foo bar]EOL"));
+      });
+
+      test("inline link title", () => {
+        assertMdastConformance(md("[a](/u 'tEOLt2')EOL"));
+      });
+
+      test("code block value", () => {
+        assertMdastConformance(md("    aEOL    bEOL"));
+      });
+    });
+  }
+});
+
 describe("MDAST conformance: closing code fence whitespace", () => {
   // Regression: CommonMark/remark allow tabs as well as spaces after the
   // closing fence. Satteri previously only consumed spaces, leaving the
@@ -565,5 +783,149 @@ describe("MDAST conformance: fuzz regressions", () => {
   // remaining run lengths (one `<strong>`/`<em>` per inner-loop pass).
   test("nested underscore emphasis around intraword", () => {
     assertMdastConformance("\\ `_@_b__=");
+  });
+});
+
+// Only spaces and tabs make up block structure and line-end padding, so VT and
+// FF are content wherever they appear.
+describe("MDAST conformance: control and format characters at a text-node edge", () => {
+  test("trailing VT ends a paragraph", () => {
+    assertMdastConformance("abc\u{b}\n");
+    assertMdastConformance("abc\u{b}\u{b}\n");
+    assertMdastConformance("abc\u{b}\r\n");
+  });
+
+  test("trailing FF ends a paragraph", () => {
+    assertMdastConformance("abc\u{c}\n");
+  });
+
+  test("trailing VT after an inline construct is its own text node", () => {
+    assertMdastConformance("*a*\u{b}\n");
+    assertMdastConformance("`c`\u{b}\n");
+    assertMdastConformance("[a](/x)\u{b}\n");
+    assertMdastConformance("<https://a.com>\u{b}\n");
+  });
+
+  test("trailing VT at end of input", () => {
+    assertMdastConformance("abc\u{b}");
+    assertMdastConformance("abc\u{c}");
+  });
+
+  test("VT and FF mid-line are content", () => {
+    assertMdastConformance("a\u{b}b\n");
+    assertMdastConformance("a\u{c}b\n");
+    assertMdastConformance("*a\u{b}*\n");
+  });
+
+  test("only the spaces and tabs around a VT are stripped", () => {
+    assertMdastConformance("abc \u{b} \n");
+    assertMdastConformance("abc\t\u{b}\t\n");
+    // Two trailing spaces after the VT still make a hard break.
+    assertMdastConformance("abc\u{b}  \ndef\n");
+  });
+
+  test("trailing VT ends a soft-broken line", () => {
+    assertMdastConformance("abc\u{b}\ndef\n");
+    assertMdastConformance("a\\\u{b}\nb\n");
+  });
+
+  test("trailing VT inside a container", () => {
+    assertMdastConformance("> q\u{b}\n");
+    assertMdastConformance("- i\u{b}\n");
+    assertMdastConformance("| a |\n| - |\n| x\u{b} |\n");
+    assertMdastConformance("h\u{b}\n===\n");
+  });
+
+  test("VT in a code block is content", () => {
+    assertMdastConformance("```\nx\u{b}\n```\n");
+    assertMdastConformance("    code\u{b}\n");
+  });
+
+  test("a BOM opening a text node is kept", () => {
+    assertMdastConformance("*a*\u{feff}x\n");
+    assertMdastConformance("user@example.com\u{feff}\n");
+    // The drop was general to any value starting on one, not inline-only.
+    assertMdastConformance("x\n\n\u{feff}y\n");
+    assertMdastConformance("# \u{feff}h\n");
+    assertMdastConformance("[a](b)\u{feff}y\n");
+    assertMdastConformance("`\u{feff}x`\n");
+  });
+
+  test("a line of only VT or FF is a paragraph, not a blank line", () => {
+    assertMdastConformance("\u{b}\n");
+    assertMdastConformance("\u{c}\n");
+    assertMdastConformance("  \u{b}  \n");
+    assertMdastConformance("a\n\u{b}\nb\n");
+    assertMdastConformance("- a\n\u{b}\n- b\n");
+    assertMdastConformance("```\na\n\u{b}\nb\n```\n");
+  });
+
+  test("a VT after a definition destination makes it a paragraph", () => {
+    assertMdastConformance("[a]: /x\u{b}\n\n[a]\n");
+    assertMdastConformance('[a]: /x "t"\u{b}\n\n[a]\n');
+  });
+
+  test("a VT does not stand in for the space a block marker needs", () => {
+    assertMdastConformance("-\u{b}a\n");
+    assertMdastConformance(">\u{b}a\n");
+    assertMdastConformance("- [\u{b}] a\n");
+    assertMdastConformance("```js\u{b}x\n```\n");
+  });
+
+  test("a VT does not open an ATX heading", () => {
+    assertMdastConformance("#\u{b}h\n");
+    assertMdastConformance("#\u{b}\n");
+    assertMdastConformance("###\u{c}h\n");
+  });
+
+  test("a VT does not close a task list marker", () => {
+    assertMdastConformance("- [ ]\u{b} a\n");
+    assertMdastConformance("- [x]\u{c} a\n");
+  });
+
+  test("a VT in a label is part of the identifier", () => {
+    assertMdastConformance("[\u{b}a]: /x\n\n[a]\n");
+    assertMdastConformance("[a\u{b}]: /x\n\n[a]\n");
+    assertMdastConformance("a[^1\u{b}]\n\n[^1]: n\n");
+    assertMdastConformance("a[^1]\n\n[^1\u{b}]: n\n");
+  });
+
+  test("a VT does not separate HTML attributes", () => {
+    assertMdastConformance('<a href\u{b}="/x">l</a>\n');
+    assertMdastConformance('<a href=\u{b}"/x">l</a>\n');
+  });
+});
+
+describe("MDAST conformance: table cell with an escaped pipe", () => {
+  test("leading `\\|` in a cell", () => {
+    assertMdastConformance("| a |\n| - |\n| \\|abc |\n");
+    assertMdastConformance("| a |\n| - |\n| \\| |\n");
+    assertMdastConformance("| a |\n| - |\n|\\|abc|\n");
+    assertMdastConformance("| \\|h |\n| - |\n| a |\n");
+    assertMdastConformance("| a | b |\n| - | - |\n| x | \\|y |\n");
+  });
+
+  test("consecutive and repeated escaped pipes in a cell", () => {
+    assertMdastConformance("| a |\n| - |\n| \\|\\|a |\n");
+    assertMdastConformance("| a |\n| - |\n| \\|abc\\|d |\n");
+    assertMdastConformance("| a |\n| - |\n| \\|\\*x |\n");
+  });
+
+  test("a leading `\\|` followed by an inline construct", () => {
+    assertMdastConformance("| a |\n| - |\n| \\|*e* |\n");
+    assertMdastConformance("| a |\n| - |\n| \\|`c` |\n");
+  });
+
+  test("a text node that starts on `\\|` after an inline construct", () => {
+    assertMdastConformance("| a |\n| - |\n| *x*\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| `c`\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| user@example.com\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| **b**\\|\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| [t](u)\\|z |\n");
+  });
+
+  test("an escape that is neither leading nor a pipe is unaffected", () => {
+    assertMdastConformance("| a |\n| - |\n| abc\\|z |\n");
+    assertMdastConformance("| a |\n| - |\n| \\*abc |\n");
   });
 });

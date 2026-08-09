@@ -1,10 +1,12 @@
-import { describe, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   assertExtHastConformance,
   assertHastConformance,
   assertHtmlConformance,
   assertMdastConformance,
+  satteriMdast,
 } from "./helpers.js";
+import type { Code } from "mdast";
 
 describe("CommonMark spec deltas: HTML blocks with following content", () => {
   test("spec 148: HTML block in table cell with following paragraph", () => {
@@ -189,5 +191,43 @@ describe("Emphasis: remark vs cmark divergences", () => {
 describe("GFM strikethrough: remark flanking rule", () => {
   test("`~~!~~` against intraword punctuation stays literal", () => {
     assertHtmlConformance("Here I strike out an exclamation point~~!~~.\n");
+  });
+});
+
+// A fence info string splits at the first *raw* space or tab, so a character
+// reference that decodes to whitespace stays inside the language.
+describe("Fence info strings: character references", () => {
+  const code = (md: string) => (satteriMdast(md) as { children: Code[] }).children[0]!;
+
+  test("a reference decoding to whitespace stays in the language", () => {
+    for (const ref of ["&Tab;", "&#9;", "&#32;", "&#10;", "&#13;", "&NewLine;"]) {
+      const md = `\`\`\` a${ref}aa\n x\n\`\`\`\n`;
+      assertMdastConformance(md);
+      assertHtmlConformance(md);
+    }
+    expect(code("``` a&#9;aa\n```\n")).toMatchObject({ lang: "a\taa", meta: null });
+  });
+
+  test("a reference decoding to non-whitespace behaves like ordinary text", () => {
+    for (const md of ["``` f&ouml;&ouml;\n x\n```\n", "``` &amp;\n x\n```\n"]) {
+      assertMdastConformance(md);
+      assertHtmlConformance(md);
+    }
+    expect(code("``` f&ouml;&ouml;\n```\n")).toMatchObject({ lang: "föö", meta: null });
+  });
+
+  test("references mixed with a raw separator split at the raw one", () => {
+    for (const md of [
+      "``` a&#9;aa b\n x\n```\n",
+      "``` &#32;a b\n x\n```\n",
+      "``` js&#x20;python&#x9;ruby\n x\n```\n",
+      "``` rust title=x\n x\n```\n",
+      "``` a\\ b\n x\n```\n",
+    ]) {
+      assertMdastConformance(md);
+      assertHtmlConformance(md);
+    }
+    expect(code("``` a&#9;aa b\n```\n")).toMatchObject({ lang: "a\taa", meta: "b" });
+    expect(code("``` &#32;a b\n```\n")).toMatchObject({ lang: " a", meta: "b" });
   });
 });

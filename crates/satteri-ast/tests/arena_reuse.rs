@@ -2,13 +2,12 @@
 
 use satteri_arena::{Arena, ArenaKind, Hast};
 use satteri_ast::hast::{
-    hast_arena_to_html, mdast_arena_to_hast_arena_into, mdast_arena_to_hast_arena_with_options,
-    ConvertOptions,
+    ConvertOptions, hast_arena_to_html, mdast_arena_to_hast_arena_into,
+    mdast_arena_to_hast_arena_with_options,
 };
 use satteri_pulldown_cmark::Options;
 
-const DOC: &str =
-    "# Héllo wörld\n\nSome *ünïcode…* text with [a link](https://example.com) and `code`.\n\n- one\n- twö\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
+const DOC: &str = "# Héllo wörld\n\nSome *ünïcode…* text with [a link](https://example.com) and `code`.\n\n- one\n- twö\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
 
 fn dirty_arena<K: ArenaKind>() -> Arena<K> {
     let mut arena = Arena::<K>::new("stale source from a previous document".to_string());
