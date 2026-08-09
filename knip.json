@@ -6,7 +6,7 @@
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],
       "project": ["src/**/*.ts"],
       "ignoreDependencies": [
-        "@bruits/satteri-*",
+        "^@bruits/satteri-.+$",
         "@emnapi/core",
         "@emnapi/runtime",
         "@napi-rs/wasm-runtime",
