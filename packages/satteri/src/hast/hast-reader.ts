@@ -19,7 +19,6 @@ export const HAST_ROOT = NAME_TO_TYPE.root!;
 export const HAST_ELEMENT = NAME_TO_TYPE.element!;
 export const HAST_TEXT = NAME_TO_TYPE.text!;
 export const HAST_COMMENT = NAME_TO_TYPE.comment!;
-export const HAST_DOCTYPE = NAME_TO_TYPE.doctype!;
 export const HAST_RAW = NAME_TO_TYPE.raw!;
 export const HAST_MDX_JSX_ELEMENT = NAME_TO_TYPE.mdxJsxFlowElement!;
 export const HAST_MDX_JSX_TEXT_ELEMENT = NAME_TO_TYPE.mdxJsxTextElement!;

@@ -91,7 +91,7 @@ export const heading = fc
   .tuple(fc.integer({ min: 1, max: 6 }), INLINE_TEXT)
   .map(([level, text]) => `${"#".repeat(level)} ${text}`);
 
-export const paragraph = INLINE_TEXT;
+const paragraph = INLINE_TEXT;
 export const bold = INLINE_TEXT.map((t) => `**${t}**`);
 export const italic = INLINE_TEXT.map((t) => `*${t}*`);
 export const inlineCode = WORD.map((t) => `\`${t}\``);
