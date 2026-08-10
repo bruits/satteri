@@ -642,6 +642,134 @@ fn optimize_static_nested_dynamic_prevents_collapse()
     Ok(())
 }
 
+// Issue withastro/compiler-rs#127: Astro's `renderJSX` drops a whitespace-only HTMLString.
+#[test]
+fn optimize_static_keeps_whitespace_between_components()
+-> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "<Span>hello</Span> <Span>world</Span>",
+        &Options {
+            optimize_static: Some(OptimizeStaticConfig::default()),
+            ..Default::default()
+        },
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("\"\\n\""),
+        "separator should be a plain string child: {result}"
+    );
+    assert!(
+        !result.contains("set:html"),
+        "text-only children should not be routed through the raw-HTML prop: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn optimize_static_keeps_whitespace_between_inline_components()
+-> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "Prose before <Span>hello</Span> <Span>world</Span> prose after.",
+        &Options {
+            optimize_static: Some(OptimizeStaticConfig::default()),
+            ..Default::default()
+        },
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("\" \""),
+        "inline separator should be a plain string child: {result}"
+    );
+    assert!(
+        !result.contains("set:html"),
+        "text-only children should not be routed through the raw-HTML prop: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn optimize_static_text_only_group_is_not_html_escaped()
+-> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "<Span>a</Span> & < <Span>b</Span>",
+        &Options {
+            optimize_static: Some(OptimizeStaticConfig::default()),
+            ..Default::default()
+        },
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("\" & < \""),
+        "text-only group should keep its characters verbatim: {result}"
+    );
+    assert!(
+        !result.contains("&amp;") && !result.contains("&lt;"),
+        "text-only group should not be HTML-escaped: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn optimize_static_raw_and_comment_groups_stay_raw_html()
+-> Result<(), satteri_arena::mdx_types::Message> {
+    use satteri_arena::{ArenaBuilder, Hast};
+    use satteri_ast::hast::HastNodeType;
+    use satteri_ast::hast::codec::{encode_element_data, encode_text_data};
+    use satteri_mdxjs::compile_hast_arena;
+
+    let mut builder = ArenaBuilder::<Hast>::new(String::new());
+    builder.open_node_raw(HastNodeType::Root as u8);
+
+    let ignored_paragraph = |builder: &mut ArenaBuilder<Hast>| {
+        let tag = builder.alloc_string("p");
+        let value = builder.alloc_string("x");
+        builder.open_node_raw(HastNodeType::Element as u8);
+        builder.set_data_current(&encode_element_data(tag, &[]));
+        let text = builder.add_leaf_raw(HastNodeType::Text as u8);
+        builder
+            .arena_mut()
+            .set_type_data(text, &encode_text_data(value));
+        builder.close_node();
+    };
+
+    ignored_paragraph(&mut builder);
+    let comment_value = builder.alloc_string(" keep me ");
+    let comment = builder.add_leaf_raw(HastNodeType::Comment as u8);
+    builder
+        .arena_mut()
+        .set_type_data(comment, &encode_text_data(comment_value));
+
+    ignored_paragraph(&mut builder);
+    let raw_value = builder.alloc_string("<hr data-keep>");
+    let raw = builder.add_leaf_raw(HastNodeType::Raw as u8);
+    builder
+        .arena_mut()
+        .set_type_data(raw, &encode_text_data(raw_value));
+
+    builder.close_node();
+    let arena = builder.finish();
+
+    let result = compile_hast_arena(
+        &arena,
+        &Options {
+            optimize_static: Some(OptimizeStaticConfig {
+                ignore_elements: vec!["p".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )?;
+    assert!(
+        result.contains("\"set:html\": \"<!-- keep me -->\""),
+        "a comment-only group should keep the raw-HTML prop: {result}"
+    );
+    assert!(
+        result.contains("\"set:html\": \"<hr data-keep>\""),
+        "a raw-only group should keep the raw-HTML prop: {result}"
+    );
+    Ok(())
+}
+
 // optimize_static component override detection tests
 
 #[test]

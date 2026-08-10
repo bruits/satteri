@@ -398,19 +398,17 @@ fn is_static_subtree(view: &Arena<Hast>, node_id: u32, config: &OptimizeStaticCo
     }
 }
 
-/// Try to render a static subtree to an HTML string. Returns false if not static.
-fn try_render_static(
-    view: &Arena<Hast>,
-    node_id: u32,
-    config: &OptimizeStaticConfig,
-    out: &mut String,
-    space: Space,
-) -> bool {
-    if !is_static_subtree(view, node_id, config) {
-        return false;
+fn is_text_node(view: &Arena<Hast>, node_id: u32) -> bool {
+    matches!(
+        HastNodeType::from_u8(view.get_node(node_id).node_type),
+        Some(HastNodeType::Text)
+    )
+}
+
+fn render_static_group(view: &Arena<Hast>, node_ids: &[u32], out: &mut String, space: Space) {
+    for &node_id in node_ids {
+        satteri_ast::hast::render_node(node_id, view, out, false, space == Space::Svg);
     }
-    satteri_ast::hast::render_node(node_id, view, out, false, space == Space::Svg);
-    true
 }
 
 /// Create a JSX node that injects raw HTML according to the optimization config.
@@ -496,25 +494,38 @@ fn all<'a>(
         while i < child_count {
             let child_id = context.view.get_children(parent_id)[i];
 
-            let mut html_buf = String::new();
-            if try_render_static(context.view, child_id, config, &mut html_buf, context.space) {
+            if is_static_subtree(context.view, child_id, config) {
                 // Accumulate consecutive static siblings
+                let group_start = i;
+                let mut text_only = is_text_node(context.view, child_id);
                 i += 1;
                 while i < child_count {
                     let next_id = context.view.get_children(parent_id)[i];
-                    if !try_render_static(
-                        context.view,
-                        next_id,
-                        config,
-                        &mut html_buf,
-                        context.space,
-                    ) {
+                    if !is_static_subtree(context.view, next_id, config) {
                         break;
                     }
+                    text_only &= is_text_node(context.view, next_id);
                     i += 1;
                 }
-                if !html_buf.is_empty() {
-                    result.push(create_raw_html_jsx(context.allocator, &html_buf, config));
+                if text_only {
+                    // Text carries no markup, and hosts may discard a whitespace-only raw-HTML carrier.
+                    for j in group_start..i {
+                        let text_id = context.view.get_children(parent_id)[j];
+                        if let Some(child) = transform_text(context, text_id) {
+                            result.push(child);
+                        }
+                    }
+                } else {
+                    let mut html_buf = String::new();
+                    render_static_group(
+                        context.view,
+                        &context.view.get_children(parent_id)[group_start..i],
+                        &mut html_buf,
+                        context.space,
+                    );
+                    if !html_buf.is_empty() {
+                        result.push(create_raw_html_jsx(context.allocator, &html_buf, config));
+                    }
                 }
             } else {
                 if let Some(child) = one(context, child_id, explicit_jsxs)? {
