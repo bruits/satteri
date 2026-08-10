@@ -1097,6 +1097,18 @@ describe("mdxToJs", () => {
     expect(js).toContain("Dynamic");
   });
 
+  // Issue withastro/compiler-rs#127: Astro's `renderJSX` drops a whitespace-only HTMLString.
+  test("optimizeStatic keeps whitespace between components as a plain string", () => {
+    const { code: js } = mdxToJs("<Span>hello</Span> <Span>world</Span>", {
+      optimizeStatic: {
+        component: "Fragment",
+        prop: "set:html",
+      },
+    });
+    expect(js).toContain('"\\n"');
+    expect(js).not.toContain("set:html");
+  });
+
   test("optimizeStatic off by default", () => {
     const { code: js } = mdxToJs("# Hello\n\nWorld");
     expect(js).not.toContain("set:html");
