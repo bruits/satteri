@@ -190,7 +190,7 @@ describe("SVG attribute conformance vs remark-rehype", () => {
             {
               type: "element",
               tagName: "div",
-              properties: { className: "embedded", tabIndex: 0 },
+              properties: { className: ["embedded"], tabIndex: 0 },
               children: [{ type: "text", value: "hi" }],
             } as ElementContent,
           ],
