@@ -668,6 +668,16 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject("```\nfence [x\n```\n](\\){)");
   });
 
+  test("a backtick closing an earlier line's span doesn't open a new one", async () => {
+    await assertMdxConformance("`x\n`a](b{1}`");
+    await assertMdxConformance("`x\n`a](b{1}`y");
+    await assertMdxConformance("``x\n``a](b{1}``");
+  });
+
+  test("a line of links with braces parses like any other", async () => {
+    await assertMdxConformance("[a](/u{x}) ".repeat(20));
+  });
+
   test("a label start earlier in the same paragraph does open one", async () => {
     await assertMdxConformance("[x\n\\[a]({)");
     await assertMdxConformance("> [x\n\\[a]({)");

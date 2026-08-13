@@ -4369,14 +4369,14 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize, scope_start: usize) -> bo
         return false;
     }
     let line_end = line_end_at(bytes, pos);
-    match replay_link_tails(bytes, pos, line_start, line_end) {
+    match replay_link_tails(bytes, pos, line_start, line_end, scope_start >= line_start) {
         TailReplay::Inside => true,
         TailReplay::Outside => false,
         // `scope_start` is the block's own start, so this cannot cross into one.
         TailReplay::NeedsScope => {
             scope_start < line_start
                 && matches!(
-                    replay_link_tails(bytes, pos, scope_start, line_end),
+                    replay_link_tails(bytes, pos, scope_start, line_end, true),
                     TailReplay::Inside
                 )
         }
@@ -4395,13 +4395,22 @@ enum TailReplay {
 /// Replays `from..pos` the way micromark tokenizes inline content, tracking the
 /// constructs that can own a bracket, and reports where `pos` landed.
 #[cfg(feature = "mdx")]
-fn replay_link_tails(bytes: &[u8], pos: usize, from: usize, scope_end: usize) -> TailReplay {
+fn replay_link_tails(
+    bytes: &[u8],
+    pos: usize,
+    from: usize,
+    scope_end: usize,
+    at_block_start: bool,
+) -> TailReplay {
     let mut depth: u32 = 0;
     let mut image_kinds: u64 = 0;
     let mut inactive_below: u32 = 0;
     let mut closes = TitleCloses::default();
     let mut needs_scope = false;
     let mut i = from;
+    // Refreshed only when `i` crosses a newline; rescanning per candidate makes
+    // an ordinary line of links quadratic.
+    let mut tail_line_end = line_end_at(bytes, from);
     while i < pos {
         match bytes[i] {
             b'\\' if i + 1 < scope_end && is_ascii_punctuation(bytes[i + 1]) => i += 2,
@@ -4409,8 +4418,14 @@ fn replay_link_tails(bytes: &[u8], pos: usize, from: usize, scope_end: usize) ->
                 needs_scope = true;
                 let run = 1 + scan_ch_repeat(&bytes[i + 1..scope_end], b'`');
                 match code_span_end(bytes, i + run, scope_end, run) {
-                    // `pos` is code text, literal for the same reason a URL's is.
-                    Some(end) if end > pos => return TailReplay::Inside,
+                    // Only a replay from the block start can vouch for a pairing.
+                    Some(end) if end > pos => {
+                        return if at_block_start {
+                            TailReplay::Inside
+                        } else {
+                            TailReplay::NeedsScope
+                        };
+                    }
                     Some(end) => i = end,
                     None => i += run,
                 }
@@ -4435,6 +4450,9 @@ fn replay_link_tails(bytes: &[u8], pos: usize, from: usize, scope_end: usize) ->
                     i += 1;
                     continue;
                 }
+                if i >= tail_line_end {
+                    tail_line_end = line_end_at(bytes, i);
+                }
                 let is_image =
                     depth <= LINK_LABEL_MAX_TRACKED_DEPTH && image_kinds & (1 << (depth - 1)) != 0;
                 let active = is_image || depth > inactive_below;
@@ -4442,8 +4460,7 @@ fn replay_link_tails(bytes: &[u8], pos: usize, from: usize, scope_end: usize) ->
                 inactive_below = inactive_below.min(depth);
                 if active
                     && bytes.get(i + 1) == Some(&b'(')
-                    && let Some(rparen) =
-                        link_tail_close(bytes, i + 1, line_end_at(bytes, i), &mut closes)
+                    && let Some(rparen) = link_tail_close(bytes, i + 1, tail_line_end, &mut closes)
                 {
                     if rparen > pos {
                         return TailReplay::Inside;
