@@ -4492,7 +4492,13 @@ fn earlier_lines_are_ambiguous(bytes: &[u8], scope_start: usize, line_start: usi
     if matches!(bytes.get(line_start), Some(b'{') | Some(b'<')) {
         return true;
     }
-    memchr::memchr(b'<', &bytes[scope_start..line_start]).is_some()
+    // Only a `<` that can open a tag competes with the label; `5 < 6` cannot.
+    memchr::memchr_iter(b'<', &bytes[scope_start..line_start]).any(|rel| {
+        matches!(
+            bytes.get(scope_start + rel + 1),
+            Some(c) if c.is_ascii_alphabetic() || matches!(c, b'/' | b'>' | b'!' | b'?' | b'_' | b'$')
+        )
+    })
 }
 
 /// End of the line holding `i`.

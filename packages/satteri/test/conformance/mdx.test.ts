@@ -689,6 +689,12 @@ describe("MDX conformance: markdown elements", () => {
     await assertMdxConformance("[`x`\n\\[a]({)");
   });
 
+  test("an angle bracket that cannot open a tag still lends its label start", async () => {
+    await assertMdxConformance("See the 5 < 6\n[a\nb](/u{z)");
+    await assertMdxConformance("a < b [x](/u{z)");
+    await assertBothReject("See a<3\n[a\nb](/u{z)");
+  });
+
   test("a label start earlier in the same paragraph does open one", async () => {
     await assertMdxConformance("[x\n\\[a]({)");
     await assertMdxConformance("> [x\n\\[a]({)");
