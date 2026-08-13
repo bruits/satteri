@@ -340,54 +340,22 @@ mod tests {
     #[test]
     fn react_cased_svg_properties_convert() {
         // Issue #193: React's own casing (`strokeLinecap`, not the canonical
-        // hast `strokeLineCap`) must also resolve through the table.
+        // hast `strokeLineCap`) must also resolve through the table. These are
+        // the only SVG names whose React casing differs from the canonical
+        // one; every other row is covered by the reverse-direction test below.
         assert_eq!(svg("strokeLinecap"), "stroke-linecap");
         assert_eq!(svg("strokeLinejoin"), "stroke-linejoin");
         assert_eq!(svg("strokeDasharray"), "stroke-dasharray");
         assert_eq!(svg("strokeDashoffset"), "stroke-dashoffset");
         assert_eq!(svg("strokeMiterlimit"), "stroke-miterlimit");
+        assert_eq!(svg("xlinkActuate"), "xlink:actuate");
+        assert_eq!(svg("xlinkArcrole"), "xlink:arcrole");
         assert_eq!(svg("xlinkHref"), "xlink:href");
+        assert_eq!(svg("xlinkRole"), "xlink:role");
+        assert_eq!(svg("xlinkShow"), "xlink:show");
+        assert_eq!(svg("xlinkTitle"), "xlink:title");
+        assert_eq!(svg("xlinkType"), "xlink:type");
         assert_eq!(svg("xmlnsXlink"), "xmlns:xlink");
-    }
-
-    #[test]
-    fn react_camelization_of_every_kebab_svg_attribute_converts() {
-        // For every kebab/namespaced SVG attribute, the React-style
-        // camelization (drop `-`/`:`, uppercase the next letter) must map back
-        // to that attribute. aria-*/data-* are exempt: React keeps them kebab.
-        let mut checked = 0;
-        for (key, _, attribute, _) in super::SVG_TABLE {
-            // Rows are keyed in both attribute and lowercased-property form;
-            // take the attribute-keyed row so each attribute is checked once.
-            if key != attribute
-                || attribute.starts_with("aria-")
-                || attribute.starts_with("data-")
-                || !attribute.contains(['-', ':'])
-            {
-                continue;
-            }
-            let mut react = String::with_capacity(attribute.len());
-            let mut upper = false;
-            for c in attribute.chars() {
-                if c == '-' || c == ':' {
-                    upper = true;
-                } else if upper {
-                    react.extend(c.to_uppercase());
-                    upper = false;
-                } else {
-                    react.push(c);
-                }
-            }
-            assert_eq!(
-                &property_to_attribute(&react, true),
-                attribute,
-                "react name {react}"
-            );
-            checked += 1;
-        }
-        // Guard against the sweep silently going vacuous if the table keying
-        // changes; 96 attributes qualify at the time of writing.
-        assert!(checked >= 50, "only {checked} attributes swept");
     }
 
     #[test]
