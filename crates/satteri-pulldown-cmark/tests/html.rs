@@ -332,3 +332,22 @@ fn heading_attributes_disabled_keeps_literal_text() {
     let expected = "<h2>Heading {#explicit .custom}</h2>\n";
     assert_eq!(expected, parse_to_html(original));
 }
+
+#[test]
+fn tilde_never_opens_emphasis_without_a_tilde_extension() {
+    assert_eq!("<p>a*~*</p>\n", parse_to_html("a*~*"));
+    assert_eq!("<p>a*~x~*</p>\n", parse_to_html("a*~x~*"));
+    assert_eq!("<p>a**~**</p>\n", parse_to_html("a**~**"));
+}
+
+#[test]
+fn tilde_opens_emphasis_with_strikethrough() {
+    assert_eq!(
+        "<p>a<em>~</em></p>\n",
+        parse_to_html_ext("a*~*", Options::ENABLE_STRIKETHROUGH)
+    );
+    assert_eq!(
+        "<p>a<em><del>x</del></em></p>\n",
+        parse_to_html_ext("a*~x~*", Options::ENABLE_STRIKETHROUGH)
+    );
+}

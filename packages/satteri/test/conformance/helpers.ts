@@ -549,6 +549,21 @@ export function assertMdastConformance(md: string): void {
   expect(actual).toEqual(expected);
 }
 
+const cmarkMdastProcessor = unified().use(remarkParse);
+const CMARK_FEATURES: Features = {
+  gfm: false,
+  frontmatter: false,
+  math: false,
+  headingAttributes: false,
+};
+
+/** Every extension off on both sides, against plain remark-parse. */
+export function assertCommonMarkMdastConformance(md: string): void {
+  expect(serialize(markdownToMdast(md, { features: CMARK_FEATURES }))).toEqual(
+    serialize(cmarkMdastProcessor.parse(md)),
+  );
+}
+
 /** The part of an mdast node the autolink suites walk. */
 export interface UrlNode {
   type: string;
