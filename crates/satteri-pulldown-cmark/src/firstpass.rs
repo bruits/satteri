@@ -3470,6 +3470,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     // returns (bytelength, title_str)
     fn scan_refdef_title<'t>(&self, text: &'t str) -> Option<(usize, CowStr<'t>)> {
         let bytes = text.as_bytes();
+        // Unlike CommonMark, remark keeps an unescaped `(` inside a paren title as content.
         let closing_delim = match bytes.first()? {
             b'\'' => b'\'',
             b'"' => b'"',
@@ -3483,12 +3484,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         while let Some(&c) = bytes.get(bytecount) {
             match c {
-                b'(' if closing_delim == b')' => {
-                    // https://spec.commonmark.org/0.30/#link-title
-                    // a sequence of zero or more characters between matching parentheses ((...)),
-                    // including a ( or ) character only if it is backslash-escaped.
-                    return None;
-                }
                 b'\n' | b'\r' => {
                     // push text to line buffer
                     // this is used to strip the block formatting:
