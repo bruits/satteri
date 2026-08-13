@@ -585,6 +585,20 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject('\\\n     bar\n[link](/uri "ti\0{w)');
   });
 
+  test("`{` inside a parenthesized link title is literal text", async () => {
+    await assertMdxConformance("[a](/u (title{w))");
+    await assertMdxConformance("[a](/u (ti(tle{w))");
+  });
+
+  test("a paren title closes at its first `)`, with or without a nested `(`", async () => {
+    await assertMdxConformance("[a](/u (ti(tle))");
+    await assertMdxConformance("[a](/u (t) {1})");
+  });
+
+  test("`{` where a link title should open is an expression", async () => {
+    await assertBothReject("[a](/u {w)");
+  });
+
   // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a
   // later `</div>` (or other type-1/6 HTML tag) on its own line, because MDX
   // disables HTML blocks entirely. Without this, the paragraph splits at
