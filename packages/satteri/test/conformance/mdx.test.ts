@@ -637,6 +637,30 @@ describe("MDX conformance: markdown elements", () => {
     await assertMdxConformance("[a](/u) [b](\\){)");
   });
 
+  test("an inner link deactivates the label starts around it", async () => {
+    await assertBothReject("[[a](/u)](\\){)");
+    await assertBothReject("[x [a](/u) y](\\){)");
+    // An image does not, so a linked image still takes a tail.
+    await assertMdxConformance("[![a](/i)](/u{z})");
+    await assertMdxConformance("[![a](/i)](\\){)");
+  });
+
+  test("a `{` inside a code span stays code text", async () => {
+    await assertMdxConformance("[a(`](!{{`[`})");
+    await assertMdxConformance("`a](b {c`");
+  });
+
+  test("a label start on an earlier line of the paragraph still counts", async () => {
+    await assertMdxConformance("[x\n\\[a]({)");
+    await assertMdxConformance("[a\n\\[](\\){)");
+    await assertMdxConformance("> [x\n\\[a]({)");
+  });
+
+  test("many malformed tails before the `{` do not change its meaning", async () => {
+    await assertMdxConformance("[a](x ".repeat(32) + "[b](/u{)");
+    await assertMdxConformance("[a](x ".repeat(33) + "[b](/u{)");
+  });
+
   // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a
   // later `</div>` (or other type-1/6 HTML tag) on its own line, because MDX
   // disables HTML blocks entirely. Without this, the paragraph splits at

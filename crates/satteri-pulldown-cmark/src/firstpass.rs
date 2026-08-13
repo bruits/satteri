@@ -4315,13 +4315,9 @@ fn scope_end_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -> 
     i
 }
 
-/// A link tail that never closes is only known to have failed once its scan
-/// reaches the line end, so an adversarial line could otherwise force one full
-/// rescan per `](`. Past this many failures the replay gives up and reports
-/// `pos` as outside a tail, which errs toward the expression scanner and so
-/// toward rejecting rather than accepting.
+/// Deeper label starts are taken as links, which only ever withholds a tail.
 #[cfg(feature = "mdx")]
-const LINK_TAIL_MAX_FAILED_SCANS: u32 = 32;
+const LINK_LABEL_MAX_TRACKED_DEPTH: u32 = 64;
 
 /// True if the byte at `pos` sits inside a CommonMark link tail `[...](...)`,
 /// that is, some `](` earlier on the line opens a tail that parses as
@@ -4342,55 +4338,141 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
     let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
         .map(|i| i + 1)
         .unwrap_or(0);
-    // A tail enclosing `pos` has its `](` wholly before `pos`.
+    // A tail is line-bounded, so one enclosing `pos` opens on `pos`'s own line.
     if !memchr::memchr_iter(b']', &bytes[line_start..pos])
         .any(|rel| bytes.get(line_start + rel + 1) == Some(&b'('))
     {
         return false;
     }
-    let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..]).map_or(bytes.len(), |i| pos + i);
+    match replay_link_tails(bytes, pos, line_start, line_end_at(bytes, pos)) {
+        TailReplay::Inside => true,
+        TailReplay::Outside => false,
+        // Only now is the paragraph worth the walk it costs to find.
+        TailReplay::StrandedLabel => {
+            let paragraph_start = lazy_paragraph_start(bytes, pos);
+            paragraph_start < line_start
+                && matches!(
+                    replay_link_tails(bytes, pos, paragraph_start, scope_for_inline(bytes, pos).1),
+                    TailReplay::Inside
+                )
+        }
+    }
+}
 
-    // Escapes and code spans only resolve left to right, so the line is replayed.
-    let mut label_starts: u32 = 0;
-    let mut failed_tails: u32 = 0;
-    let mut i = line_start;
+#[cfg(feature = "mdx")]
+enum TailReplay {
+    Inside,
+    Outside,
+    /// A `](` needed a label start that `from` was too late to have seen.
+    StrandedLabel,
+}
+
+/// Replays `from..pos` the way micromark tokenizes inline content, tracking the
+/// constructs that can own a bracket, and reports where `pos` landed.
+#[cfg(feature = "mdx")]
+fn replay_link_tails(bytes: &[u8], pos: usize, from: usize, scope_end: usize) -> TailReplay {
+    let mut depth: u32 = 0;
+    let mut image_kinds: u64 = 0;
+    let mut inactive_below: u32 = 0;
+    let mut stranded = false;
+    let mut i = from;
     while i < pos {
         match bytes[i] {
-            b'\\' if i + 1 < line_end && is_ascii_punctuation(bytes[i + 1]) => i += 2,
+            b'\\' if i + 1 < scope_end && is_ascii_punctuation(bytes[i + 1]) => i += 2,
             b'`' => {
-                let run = 1 + scan_ch_repeat(&bytes[i + 1..line_end], b'`');
-                i = code_span_end(bytes, i + run, line_end, run).unwrap_or(i + run);
+                let run = 1 + scan_ch_repeat(&bytes[i + 1..scope_end], b'`');
+                match code_span_end(bytes, i + run, scope_end, run) {
+                    // `pos` is code text, literal for the same reason a URL's is.
+                    Some(end) if end > pos => return TailReplay::Inside,
+                    Some(end) => i = end,
+                    None => i += run,
+                }
+            }
+            b'!' if bytes.get(i + 1) == Some(&b'[') => {
+                depth += 1;
+                if depth <= LINK_LABEL_MAX_TRACKED_DEPTH {
+                    image_kinds |= 1 << (depth - 1);
+                }
+                i += 2;
             }
             b'[' => {
-                label_starts += 1;
+                depth += 1;
+                if depth <= LINK_LABEL_MAX_TRACKED_DEPTH {
+                    image_kinds &= !(1 << (depth - 1));
+                }
                 i += 1;
             }
             b']' => {
-                if label_starts > 0 {
-                    label_starts -= 1;
-                    if bytes.get(i + 1) == Some(&b'(') {
-                        match link_tail_close(bytes, i + 1, line_end) {
-                            Some(rparen) if rparen > pos => return true,
-                            Some(rparen) => {
-                                i = rparen + 1;
-                                continue;
-                            }
-                            // A failed tail rescans to the line end, so cap them.
-                            None => {
-                                failed_tails += 1;
-                                if failed_tails > LINK_TAIL_MAX_FAILED_SCANS {
-                                    return false;
-                                }
-                            }
-                        }
+                if depth == 0 {
+                    stranded |= bytes.get(i + 1) == Some(&b'(');
+                    i += 1;
+                    continue;
+                }
+                let is_image =
+                    depth <= LINK_LABEL_MAX_TRACKED_DEPTH && image_kinds & (1 << (depth - 1)) != 0;
+                let active = is_image || depth > inactive_below;
+                depth -= 1;
+                inactive_below = inactive_below.min(depth);
+                if active
+                    && bytes.get(i + 1) == Some(&b'(')
+                    && let Some(rparen) = link_tail_close(bytes, i + 1, line_end_at(bytes, i))
+                {
+                    if rparen > pos {
+                        return TailReplay::Inside;
                     }
+                    // A link, unlike an image, deactivates the starts around it.
+                    if !is_image {
+                        inactive_below = depth;
+                    }
+                    i = rparen + 1;
+                    continue;
                 }
                 i += 1;
             }
             _ => i += 1,
         }
     }
-    false
+    if stranded {
+        TailReplay::StrandedLabel
+    } else {
+        TailReplay::Outside
+    }
+}
+
+/// Start of the paragraph holding `pos`, treating a line whose container
+/// prefix is shallower than its predecessor's as a lazy continuation of it.
+#[cfg(feature = "mdx")]
+fn lazy_paragraph_start(bytes: &[u8], pos: usize) -> usize {
+    let mut line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let mut prefix = leading_container_prefix(&bytes[line_start..]);
+    while line_start > 0 && !line_opens_list_item(bytes, line_start) {
+        let mut prev_end = line_start - 1;
+        if prev_end > 0 && bytes[prev_end] == b'\n' && bytes[prev_end - 1] == b'\r' {
+            prev_end -= 1;
+        }
+        let prev_start = memchr::memrchr2(b'\n', b'\r', &bytes[..prev_end])
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prev_line = &bytes[prev_start..prev_end];
+        if prev_line.iter().all(|&b| b == b' ' || b == b'\t') {
+            break;
+        }
+        let prev_prefix = leading_container_prefix(prev_line);
+        if prev_prefix < prefix {
+            break;
+        }
+        prefix = prev_prefix;
+        line_start = prev_start;
+    }
+    line_start
+}
+
+/// End of the line holding `i`.
+#[cfg(feature = "mdx")]
+fn line_end_at(bytes: &[u8], i: usize) -> usize {
+    memchr::memchr2(b'\n', b'\r', &bytes[i..]).map_or(bytes.len(), |k| i + k)
 }
 
 /// End of the code span opened by a `run`-long backtick run, per CommonMark's
@@ -4483,6 +4565,8 @@ fn scan_link_tail_title(bytes: &[u8], start: usize, line_end: usize) -> Option<u
         b'(' => b')',
         _ => return None,
     };
+    // An escaped close is still a close byte, so this rejects without accepting.
+    memchr::memchr(close, &bytes[start + 1..line_end])?;
 
     let mut i = start + 1;
     while i < line_end {
