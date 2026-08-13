@@ -4375,6 +4375,7 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize, scope_start: usize) -> bo
         // `scope_start` is the block's own start, so this cannot cross into one.
         TailReplay::NeedsScope => {
             scope_start < line_start
+                && !earlier_lines_are_ambiguous(bytes, scope_start, line_start)
                 && matches!(
                     replay_link_tails(bytes, pos, scope_start, line_end, true),
                     TailReplay::Inside
@@ -4482,6 +4483,16 @@ fn replay_link_tails(
     } else {
         TailReplay::Outside
     }
+}
+
+/// True if an earlier line of the block could hand `line_start` a construct
+/// mdx-js resolves against the code span or tag satteri would keep.
+#[cfg(feature = "mdx")]
+fn earlier_lines_are_ambiguous(bytes: &[u8], scope_start: usize, line_start: usize) -> bool {
+    if matches!(bytes.get(line_start), Some(b'{') | Some(b'<')) {
+        return true;
+    }
+    memchr::memchr(b'<', &bytes[scope_start..line_start]).is_some()
 }
 
 /// End of the line holding `i`.

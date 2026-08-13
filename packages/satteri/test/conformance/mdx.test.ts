@@ -678,6 +678,17 @@ describe("MDX conformance: markdown elements", () => {
     await assertMdxConformance("[a](/u{x}) ".repeat(20));
   });
 
+  test("an earlier line holding an open construct withholds its label start", async () => {
+    await assertBothReject("<div>html [x</div>\n]({)");
+    await assertBothReject("[`\n{`)]({)");
+    await assertBothReject("[`\n<`](><\\]`{! )");
+  });
+
+  test("an earlier line whose span closes here still lends its label start", async () => {
+    await assertMdxConformance("[`{\n`](}u{>!`{}[\\\\)");
+    await assertMdxConformance("[`x`\n\\[a]({)");
+  });
+
   test("a label start earlier in the same paragraph does open one", async () => {
     await assertMdxConformance("[x\n\\[a]({)");
     await assertMdxConformance("> [x\n\\[a]({)");
