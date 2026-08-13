@@ -4852,6 +4852,13 @@ fn delim_run_flags(
     )
 }
 
+/// `~` only forces an adjacent run open or closed while an extension gives it meaning.
+fn is_tilde_marker(c: char, options: Options) -> bool {
+    c == '~'
+        && (options.contains(Options::ENABLE_STRIKETHROUGH)
+            || options.contains(Options::ENABLE_SUBSCRIPT))
+}
+
 /// A run of `~` only means anything at the lengths its extensions define.
 pub(crate) fn delim_run_is_valid(c: u8, count: usize, options: Options) -> bool {
     c != b'~'
@@ -5504,7 +5511,9 @@ fn delim_run_can_open(
         }
     }
     let delim = suffix.bytes().next().unwrap();
-    if delim == b'*' && (next_char == '*' || next_char == '_' || next_char == '~') {
+    if delim == b'*'
+        && (next_char == '*' || next_char == '_' || is_tilde_marker(next_char, options))
+    {
         return true;
     }
     if (delim == b'*' || delim == b'^') && !is_punctuation(next_char) {
@@ -5573,7 +5582,9 @@ fn delim_run_can_close(
         }
     }
     let delim = suffix.bytes().next().unwrap();
-    if delim == b'*' && (prev_char == '*' || prev_char == '_' || prev_char == '~') {
+    if delim == b'*'
+        && (prev_char == '*' || prev_char == '_' || is_tilde_marker(prev_char, options))
+    {
         return true;
     }
     if (delim == b'*' || delim == b'^') && !is_punctuation(prev_char) {

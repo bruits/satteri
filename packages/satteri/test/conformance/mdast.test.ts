@@ -1,5 +1,9 @@
 import { describe, test } from "vitest";
-import { assertMdastConformance, assertExtMdastConformance } from "./helpers.js";
+import {
+  assertMdastConformance,
+  assertExtMdastConformance,
+  assertCommonMarkMdastConformance,
+} from "./helpers.js";
 
 describe("MDAST conformance: block elements", () => {
   test("heading", () => {
@@ -927,5 +931,29 @@ describe("MDAST conformance: table cell with an escaped pipe", () => {
   test("an escape that is neither leading nor a pipe is unaffected", () => {
     assertMdastConformance("| a |\n| - |\n| abc\\|z |\n");
     assertMdastConformance("| a |\n| - |\n| \\*abc |\n");
+  });
+});
+
+// Only GFM makes a `~` force an adjacent `*` run open or closed.
+describe("MDAST conformance: `~` beside a `*` run without GFM", () => {
+  test("a `*` run stays text when only the `~` could open it", () => {
+    assertCommonMarkMdastConformance("a*~*");
+    assertCommonMarkMdastConformance("a*~x~*");
+    assertCommonMarkMdastConformance("a**~**");
+    assertCommonMarkMdastConformance("a*~~x~~*");
+    assertCommonMarkMdastConformance("foo*~bar~*baz");
+    assertCommonMarkMdastConformance("~~a*~~*");
+  });
+
+  test("`*` and `_` keep forcing runs open and closed", () => {
+    assertCommonMarkMdastConformance("a*_x_*");
+    assertCommonMarkMdastConformance("a*__x__*");
+  });
+
+  test("with GFM the `~` still opens the run", () => {
+    assertMdastConformance("a*~*");
+    assertMdastConformance("a*~x~*");
+    assertMdastConformance("a**~**");
+    assertMdastConformance("a*~~x~~*");
   });
 });
