@@ -4315,6 +4315,14 @@ fn scope_end_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -> 
     i
 }
 
+/// A link tail that never closes is only known to have failed once its scan
+/// reaches the line end, so an adversarial line could otherwise force one full
+/// rescan per `](`. Past this many failures the replay gives up and reports
+/// `pos` as outside a tail, which errs toward the expression scanner and so
+/// toward rejecting rather than accepting.
+#[cfg(feature = "mdx")]
+const LINK_TAIL_MAX_FAILED_SCANS: u32 = 32;
+
 /// True if the byte at `pos` sits inside a CommonMark link tail `[...](...)`,
 /// that is, some `](` earlier on the line opens a tail that parses as
 /// destination, optional title, `)` and encloses `pos`. mdx-js does not
@@ -4334,62 +4342,80 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
     let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
         .map(|i| i + 1)
         .unwrap_or(0);
-    // A `)` may be escaped or quoted, so paren depth is not countable backwards.
-    let mut end = pos;
-    let mut cached_line_end = None;
-    while let Some(rel) = memchr::memrchr(b']', &bytes[line_start..end]) {
-        let rbracket = line_start + rel;
-        end = rbracket;
-        if bytes.get(rbracket + 1) != Some(&b'(') {
-            continue;
-        }
-        let line_end = *cached_line_end.get_or_insert_with(|| {
-            memchr::memchr2(b'\n', b'\r', &bytes[pos..]).map_or(bytes.len(), |i| pos + i)
-        });
-        if link_tail_well_formed(bytes, rbracket + 1, pos, line_end)
-            && has_label_start(bytes, rbracket)
-        {
-            return true;
-        }
+    // A tail enclosing `pos` has its `](` wholly before `pos`.
+    if !memchr::memchr_iter(b']', &bytes[line_start..pos])
+        .any(|rel| bytes.get(line_start + rel + 1) == Some(&b'('))
+    {
+        return false;
     }
-    false
-}
+    let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..]).map_or(bytes.len(), |i| pos + i);
 
-/// True if the `]` at `rbracket` is matched by a `[` earlier on the line.
-#[cfg(feature = "mdx")]
-fn has_label_start(bytes: &[u8], rbracket: usize) -> bool {
-    let mut depth: i32 = 1;
-    let mut j = rbracket;
-    while j > 0 {
-        j -= 1;
-        match bytes[j] {
-            b'\n' | b'\r' => return false,
-            b']' => depth += 1,
-            b'[' => {
-                depth -= 1;
-                if depth == 0 {
-                    return true;
-                }
+    // Escapes and code spans only resolve left to right, so the line is replayed.
+    let mut label_starts: u32 = 0;
+    let mut failed_tails: u32 = 0;
+    let mut i = line_start;
+    while i < pos {
+        match bytes[i] {
+            b'\\' if i + 1 < line_end && is_ascii_punctuation(bytes[i + 1]) => i += 2,
+            b'`' => {
+                let run = 1 + scan_ch_repeat(&bytes[i + 1..line_end], b'`');
+                i = code_span_end(bytes, i + run, line_end, run).unwrap_or(i + run);
             }
-            _ => {}
+            b'[' => {
+                label_starts += 1;
+                i += 1;
+            }
+            b']' => {
+                if label_starts > 0 {
+                    label_starts -= 1;
+                    if bytes.get(i + 1) == Some(&b'(') {
+                        match link_tail_close(bytes, i + 1, line_end) {
+                            Some(rparen) if rparen > pos => return true,
+                            Some(rparen) => {
+                                i = rparen + 1;
+                                continue;
+                            }
+                            // A failed tail rescans to the line end, so cap them.
+                            None => {
+                                failed_tails += 1;
+                                if failed_tails > LINK_TAIL_MAX_FAILED_SCANS {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            }
+            _ => i += 1,
         }
     }
     false
 }
 
-/// True if the link tail opening at `lparen` parses as `(`, destination,
-/// optional whitespace-separated title, `)` on this line, and `pos` sits
-/// inside it. Used as a tighter check for `is_inside_link_url_parens`: a
-/// malformed tail (e.g. a plain URL followed by non-title bytes) means the
-/// link won't form, so any `{` inside it should be treated as an expression
-/// start.
+/// End of the code span opened by a `run`-long backtick run, per CommonMark's
+/// equal-length pairing, within a single line.
 #[cfg(feature = "mdx")]
-fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize, line_end: usize) -> bool {
+fn code_span_end(bytes: &[u8], from: usize, line_end: usize, run: usize) -> Option<usize> {
+    let mut i = from;
+    while let Some(rel) = memchr::memchr(b'`', &bytes[i..line_end]) {
+        let start = i + rel;
+        let len = 1 + scan_ch_repeat(&bytes[start + 1..line_end], b'`');
+        if len == run {
+            return Some(start + len);
+        }
+        i = start + len;
+    }
+    None
+}
+
+/// Index of the `)` closing the link tail opened at `lparen`, if it parses as
+/// `(`, destination, optional whitespace-separated title, `)` on this line.
+#[cfg(feature = "mdx")]
+fn link_tail_close(bytes: &[u8], lparen: usize, line_end: usize) -> Option<usize> {
     let mut i = lparen + 1;
     i += scan_while(&bytes[i..line_end], is_space_or_tab);
-    let Some(dest_end) = scan_link_tail_dest(bytes, i, line_end) else {
-        return false;
-    };
+    let dest_end = scan_link_tail_dest(bytes, i, line_end)?;
     i = dest_end + scan_while(&bytes[dest_end..line_end], is_space_or_tab);
     // Without separating whitespace the delimiter was part of the destination.
     if i > dest_end
@@ -4398,7 +4424,7 @@ fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize, line_end: usiz
         i = title_end + scan_while(&bytes[title_end..line_end], is_space_or_tab);
     }
 
-    i < line_end && bytes[i] == b')' && pos < i
+    (i < line_end && bytes[i] == b')').then_some(i)
 }
 
 /// End of the link destination starting at `start`, mirroring

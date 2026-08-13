@@ -618,6 +618,25 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject("[a](/u){w");
   });
 
+  test("an escaped bracket is not a label delimiter, so no tail forms", async () => {
+    await assertBothReject("\\[a](\\){)");
+    await assertBothReject("[\\](\\){)");
+    await assertBothReject("[a\\](\\){)");
+    await assertBothReject("!\\[a](\\){)");
+    await assertBothReject('\\[a](/u "b](c {z")');
+  });
+
+  test("a `[` inside a code span is not a label start", async () => {
+    await assertBothReject("`[a`](\\){)");
+    await assertBothReject('`x[y` a](/u "b](c {z")');
+    await assertMdxConformance("`[a` [b](/u{z})");
+  });
+
+  test("a label start is consumed by the first `]`, not reused", async () => {
+    await assertBothReject("[a](/u) b](\\){)");
+    await assertMdxConformance("[a](/u) [b](\\){)");
+  });
+
   // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a
   // later `</div>` (or other type-1/6 HTML tag) on its own line, because MDX
   // disables HTML blocks entirely. Without this, the paragraph splits at
