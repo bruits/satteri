@@ -357,8 +357,8 @@ mod tests {
         // to that attribute. aria-*/data-* are exempt: React keeps them kebab.
         let mut checked = 0;
         for (key, _, attribute, _) in super::SVG_TABLE {
-            // Rows are keyed in both attribute and property form; take the
-            // attribute-keyed row so each attribute is checked once.
+            // Rows are keyed in both attribute and lowercased-property form;
+            // take the attribute-keyed row so each attribute is checked once.
             if key != attribute
                 || attribute.starts_with("aria-")
                 || attribute.starts_with("data-")
@@ -385,8 +385,8 @@ mod tests {
             );
             checked += 1;
         }
-        // Guard against the sweep going vacuous if the table keying changes:
-        // the stroke/fill/font families alone exceed this floor.
+        // Guard against the sweep silently going vacuous if the table keying
+        // changes; 96 attributes qualify at the time of writing.
         assert!(checked >= 50, "only {checked} attributes swept");
     }
 

@@ -228,7 +228,14 @@ describe("HAST plugins affecting HTML output", () => {
             type: "element",
             tagName: "svg",
             properties: { strokeWidth: "1.2", strokeLinecap: "round", strokeLinejoin: "miter" },
-            children: [],
+            children: [
+              {
+                type: "element",
+                tagName: "path",
+                properties: { strokeLinecap: "round", fillRule: "evenodd" },
+                children: [],
+              },
+            ],
           });
         },
       },
@@ -237,6 +244,8 @@ describe("HAST plugins affecting HTML output", () => {
     expect(html).toContain(
       '<svg stroke-width="1.2" stroke-linecap="round" stroke-linejoin="miter">',
     );
+    // Descendants inherit the SVG schema, not just the <svg> element itself.
+    expect(html).toContain('<path stroke-linecap="round" fill-rule="evenodd">');
   });
 
   test("HAST visitor: setProperty mutation is applied to elements", () => {
