@@ -2080,11 +2080,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         mode,
                         self.options,
                     );
-                    let is_valid_seq = c != b'~'
-                        || count == 2
-                        || (count == 1
-                            && (self.options.contains(Options::ENABLE_STRIKETHROUGH)
-                                || self.options.contains(Options::ENABLE_SUBSCRIPT)));
+                    let is_valid_seq = delim_run_is_valid(c, count, self.options);
 
                     if (can_open || can_close) && is_valid_seq {
                         self.tree.append_text(begin_text, ix, backslash_escaped);
@@ -4852,20 +4848,18 @@ fn delim_run_flags(
     )
 }
 
-/// `~` only forces an adjacent run open or closed while an extension gives it meaning.
-fn is_tilde_marker(c: char, options: Options) -> bool {
-    c == '~'
-        && (options.contains(Options::ENABLE_STRIKETHROUGH)
-            || options.contains(Options::ENABLE_SUBSCRIPT))
+/// Only GFM strikethrough ever adds `~` to micromark's attention markers.
+fn is_attention_marker(c: char, options: Options) -> bool {
+    c == '*' || c == '_' || (c == '~' && options.contains(Options::ENABLE_STRIKETHROUGH))
+}
+
+fn tilde_is_delimiter(options: Options) -> bool {
+    options.contains(Options::ENABLE_STRIKETHROUGH) || options.contains(Options::ENABLE_SUBSCRIPT)
 }
 
 /// A run of `~` only means anything at the lengths its extensions define.
 pub(crate) fn delim_run_is_valid(c: u8, count: usize, options: Options) -> bool {
-    c != b'~'
-        || count == 2
-        || (count == 1
-            && (options.contains(Options::ENABLE_STRIKETHROUGH)
-                || options.contains(Options::ENABLE_SUBSCRIPT)))
+    c != b'~' || count == 2 || (count == 1 && tilde_is_delimiter(options))
 }
 
 /// The delimiter run a `\` at `ix` would swallow, when the byte after it ends
@@ -5511,26 +5505,18 @@ fn delim_run_can_open(
         }
     }
     let delim = suffix.bytes().next().unwrap();
-    if delim == b'*'
-        && (next_char == '*' || next_char == '_' || is_tilde_marker(next_char, options))
-    {
+    if delim == b'*' && is_attention_marker(next_char, options) {
         return true;
     }
     if (delim == b'*' || delim == b'^') && !is_punctuation(next_char) {
         return true;
     }
-    // `~~` (and longer) follows the same flanking rules as `**`: it can open
-    // when followed by a non-punctuation char, OR when followed by punctuation
-    // BUT preceded by whitespace/punctuation (handled by the fall-through at
-    // the end of this function). Previously we returned `true` unconditionally
-    // here, which let `a~~/foo~~` open a strikethrough — GFM rejects that.
+    // GFM holds `~~` to the same flanking rules as `**`, so `a~~/foo~~` must not open.
     if delim == b'~' && run_len > 1 && !is_punctuation(next_char) {
         return true;
     }
     let prev_char = s[..ix].chars().last().unwrap();
-    // See the matching comment in `delim_run_can_close`: the
-    // `prev_char == '~'` shortcut bypasses standard flanking and lets pairing
-    // walk across escaped tildes, so it's now gated on subscript mode only.
+    // Subscript is intraword by design (`H~2~O`), unlike GFM strikethrough.
     if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) && !is_punctuation(next_char) {
         return true;
     }
@@ -5582,9 +5568,7 @@ fn delim_run_can_close(
         }
     }
     let delim = suffix.bytes().next().unwrap();
-    if delim == b'*'
-        && (prev_char == '*' || prev_char == '_' || is_tilde_marker(prev_char, options))
-    {
+    if delim == b'*' && is_attention_marker(prev_char, options) {
         return true;
     }
     if (delim == b'*' || delim == b'^') && !is_punctuation(prev_char) {
@@ -5593,10 +5577,7 @@ fn delim_run_can_close(
     if delim == b'~' && run_len > 1 && !is_punctuation(prev_char) {
         return true;
     }
-    // The `prev_char == '~'` shortcut historically let any `~`-adjacent run
-    // close, but that bypasses GFM's strict flanking rules and lets a run
-    // pair across an escaped (literal) `~`. Subscript mode depends on the
-    // relaxed pairing, so gate the shortcut on it.
+    // Subscript is intraword by design (`H~2~O`), unlike GFM strikethrough.
     if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) {
         return true;
     }
@@ -5633,9 +5614,7 @@ fn special_bytes(options: &Options) -> [bool; 256] {
     if options.contains(Options::ENABLE_TABLES) {
         bytes[b'|' as usize] = true;
     }
-    if options.contains(Options::ENABLE_STRIKETHROUGH)
-        || options.contains(Options::ENABLE_SUBSCRIPT)
-    {
+    if tilde_is_delimiter(*options) {
         bytes[b'~' as usize] = true;
     }
     if options.contains(Options::ENABLE_SUPERSCRIPT) {
