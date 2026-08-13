@@ -661,6 +661,19 @@ describe("MDX conformance: markdown elements", () => {
     await assertMdxConformance("[a](x ".repeat(33) + "[b](/u{)");
   });
 
+  test("a label start in an earlier block does not open a tail", async () => {
+    await assertBothReject("# h [x\n](\\){)");
+    await assertBothReject("# h [x\n\\[a](\\){)");
+    await assertBothReject("---\n](\\){)");
+    await assertBothReject("```\nfence [x\n```\n](\\){)");
+  });
+
+  test("a label start earlier in the same paragraph does open one", async () => {
+    await assertMdxConformance("[x\n\\[a]({)");
+    await assertMdxConformance("> [x\n\\[a]({)");
+    await assertMdxConformance("- [x\n\\[a]({)");
+  });
+
   // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a
   // later `</div>` (or other type-1/6 HTML tag) on its own line, because MDX
   // disables HTML blocks entirely. Without this, the paragraph splits at
