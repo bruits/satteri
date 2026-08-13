@@ -189,8 +189,6 @@ export type SourceFormat = "markdown" | "mdx";
 
 /** @internal Node with arena tracking ID, only used inside the library. */
 export type MdastNodeInternal = MdastStdNodes & { _nodeId: number };
-/** @internal */
-export type HastNodeInternal = HastStdNodes & { _nodeId: number };
 
 export interface StringRefRaw {
   offset: number;
