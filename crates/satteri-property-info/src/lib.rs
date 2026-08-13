@@ -338,6 +338,27 @@ mod tests {
     }
 
     #[test]
+    fn react_cased_svg_properties_convert() {
+        // Issue #193: React's own casing (`strokeLinecap`, not the canonical
+        // hast `strokeLineCap`) must also resolve through the table. These are
+        // the only SVG names whose React casing differs from the canonical
+        // one; every other row is covered by the reverse-direction test below.
+        assert_eq!(svg("strokeLinecap"), "stroke-linecap");
+        assert_eq!(svg("strokeLinejoin"), "stroke-linejoin");
+        assert_eq!(svg("strokeDasharray"), "stroke-dasharray");
+        assert_eq!(svg("strokeDashoffset"), "stroke-dashoffset");
+        assert_eq!(svg("strokeMiterlimit"), "stroke-miterlimit");
+        assert_eq!(svg("xlinkActuate"), "xlink:actuate");
+        assert_eq!(svg("xlinkArcrole"), "xlink:arcrole");
+        assert_eq!(svg("xlinkHref"), "xlink:href");
+        assert_eq!(svg("xlinkRole"), "xlink:role");
+        assert_eq!(svg("xlinkShow"), "xlink:show");
+        assert_eq!(svg("xlinkTitle"), "xlink:title");
+        assert_eq!(svg("xlinkType"), "xlink:type");
+        assert_eq!(svg("xmlnsXlink"), "xmlns:xlink");
+    }
+
+    #[test]
     fn svg_lowercased_attributes() {
         assert_eq!(svg("crossOrigin"), "crossorigin");
         assert_eq!(svg("hrefLang"), "hreflang");

@@ -11,7 +11,7 @@ import {
 } from "../index.js";
 import { HastReader } from "../src/hast/hast-reader.js";
 import { visitHastHandle, resolveSubscriptions } from "../src/hast/hast-visitor.js";
-import { markdownToHtml, defineMdastPlugin } from "../src/index.js";
+import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 import type { MdastNode } from "../src/types.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext, HastVisitorInstance } from "../src/hast/hast-visitor.js";
@@ -216,6 +216,36 @@ describe("HAST plugins affecting HTML output", () => {
     dropHandle(handle);
     expect(texts).toContain("Hello ");
     expect(texts).toContain("world");
+  });
+
+  test("appended SVG child converts React-cased properties to kebab-case (#193)", () => {
+    const plugin = defineHastPlugin({
+      name: "svg-append",
+      element: {
+        filter: ["p"],
+        visit(node, ctx) {
+          ctx.appendChild(node, {
+            type: "element",
+            tagName: "svg",
+            properties: { strokeWidth: "1.2", strokeLinecap: "round", strokeLinejoin: "miter" },
+            children: [
+              {
+                type: "element",
+                tagName: "path",
+                properties: { strokeLinecap: "round", fillRule: "evenodd" },
+                children: [],
+              },
+            ],
+          });
+        },
+      },
+    });
+    const { html } = markdownToHtml("hello", { hastPlugins: [plugin] });
+    expect(html).toContain(
+      '<svg stroke-width="1.2" stroke-linecap="round" stroke-linejoin="miter">',
+    );
+    // Descendants inherit the SVG schema, not just the <svg> element itself.
+    expect(html).toContain('<path stroke-linecap="round" fill-rule="evenodd">');
   });
 
   test("HAST visitor: setProperty mutation is applied to elements", () => {
