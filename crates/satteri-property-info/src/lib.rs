@@ -355,6 +355,7 @@ mod tests {
         // For every kebab/namespaced SVG attribute, the React-style
         // camelization (drop `-`/`:`, uppercase the next letter) must map back
         // to that attribute. aria-*/data-* are exempt: React keeps them kebab.
+        let mut checked = 0;
         for (key, _, attribute, _) in super::SVG_TABLE {
             // Rows are keyed in both attribute and property form; take the
             // attribute-keyed row so each attribute is checked once.
@@ -382,7 +383,11 @@ mod tests {
                 attribute,
                 "react name {react}"
             );
+            checked += 1;
         }
+        // Guard against the sweep going vacuous if the table keying changes:
+        // the stroke/fill/font families alone exceed this floor.
+        assert!(checked >= 50, "only {checked} attributes swept");
     }
 
     #[test]
