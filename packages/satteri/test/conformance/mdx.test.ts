@@ -599,6 +599,25 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject("[a](/u {w)");
   });
 
+  test("a `)` before the `{` that isn't the tail close keeps the tail", async () => {
+    await assertMdxConformance("[a](\\){)");
+    await assertMdxConformance('[a](/u "){")');
+    await assertMdxConformance("[a](<){>)");
+    await assertMdxConformance("![a](\\){)");
+    await assertMdxConformance("[a](/u (a\\){b))");
+  });
+
+  test("a `](` inside a title doesn't hide the tail that encloses it", async () => {
+    await assertMdxConformance('[a](/u "b](c {z")');
+    await assertMdxConformance("[a](/u (b](c {z))");
+    await assertMdxConformance('[a](/u "b](c {z}")');
+  });
+
+  test("a tail that closes before the `{` leaves it an expression", async () => {
+    await assertBothReject("[a](\\){)}");
+    await assertBothReject("[a](/u){w");
+  });
+
   // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a
   // later `</div>` (or other type-1/6 HTML tag) on its own line, because MDX
   // disables HTML blocks entirely. Without this, the paragraph splits at

@@ -4315,77 +4315,60 @@ fn scope_end_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -> 
     i
 }
 
-/// True if the byte at `pos` sits inside a CommonMark link URL `[...](...)`
-/// — i.e. there is an unmatched `(` between `pos` and the start of the
-/// current line, immediately preceded by `]`, that `]` is balanced by an
-/// earlier `[` on the same line, AND the `(` has a matching `)` ahead on
-/// the same line. mdx-js does not evaluate expressions in link URLs (URL
-/// `{x}` is literal text, URL-encoded at render time), so we treat `{`
-/// here as plain text rather than an expression start. This both avoids a
-/// hard error on unmatched `{` inside a valid URL (e.g. `[a]({)`) and
-/// removes a brittle dance where the link resolver previously had to
-/// reabsorb a stray `MdxTextExpression` token.
+/// True if the byte at `pos` sits inside a CommonMark link tail `[...](...)`,
+/// that is, some `](` earlier on the line opens a tail that parses as
+/// destination, optional title, `)` and encloses `pos`. mdx-js does not
+/// evaluate expressions in link URLs (URL `{x}` is literal text, URL-encoded
+/// at render time), so we treat `{` here as plain text rather than an
+/// expression start. This both avoids a hard error on unmatched `{` inside a
+/// valid URL (e.g. `[a]({)`) and removes a brittle dance where the link
+/// resolver previously had to reabsorb a stray `MdxTextExpression` token.
 ///
-/// When the `(` is unmatched (no closing `)` on the line), the link won't
-/// form. mdx-js then falls back to expression scanning and errors on the
-/// dangling `{`. We mirror that by returning false in this case so the
-/// caller can run the expression scanner.
+/// When no such tail encloses `pos` the link won't form. mdx-js then falls
+/// back to expression scanning and errors on a dangling `{`. We mirror that
+/// by returning false so the caller can run the expression scanner.
 ///
-/// CommonMark forbids URLs from spanning a blank line, so per-line scans
-/// are sufficient in both directions.
+/// Line-bounded, so a resource spanning lines is a known divergence.
 #[cfg(feature = "mdx")]
 fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
-    // Fast reject: walkback returns false on first newline, so a `(` past
-    // the current line can't reach pos. Skip the walk when this line has
-    // no `(` before pos.
     let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
         .map(|i| i + 1)
         .unwrap_or(0);
-    if memchr::memchr(b'(', &bytes[line_start..pos]).is_none() {
-        return false;
+    // A `)` may be escaped or quoted, so paren depth is not countable backwards.
+    let mut end = pos;
+    let mut cached_line_end = None;
+    while let Some(rel) = memchr::memrchr(b']', &bytes[line_start..end]) {
+        let rbracket = line_start + rel;
+        end = rbracket;
+        if bytes.get(rbracket + 1) != Some(&b'(') {
+            continue;
+        }
+        let line_end = *cached_line_end.get_or_insert_with(|| {
+            memchr::memchr2(b'\n', b'\r', &bytes[pos..]).map_or(bytes.len(), |i| pos + i)
+        });
+        if link_tail_well_formed(bytes, rbracket + 1, pos, line_end)
+            && has_label_start(bytes, rbracket)
+        {
+            return true;
+        }
     }
-    let mut paren_depth: i32 = 0;
-    let mut i = pos;
-    while i > 0 {
-        i -= 1;
-        match bytes[i] {
+    false
+}
+
+/// True if the `]` at `rbracket` is matched by a `[` earlier on the line.
+#[cfg(feature = "mdx")]
+fn has_label_start(bytes: &[u8], rbracket: usize) -> bool {
+    let mut depth: i32 = 1;
+    let mut j = rbracket;
+    while j > 0 {
+        j -= 1;
+        match bytes[j] {
             b'\n' | b'\r' => return false,
-            b')' => paren_depth += 1,
-            b'(' => {
-                if paren_depth == 0 {
-                    // Unmatched `(` to our left. If it's immediately
-                    // preceded by `]`, this is the link-tail open. Verify
-                    // and return.
-                    if i > 0 && bytes[i - 1] == b']' {
-                        let mut j = i - 1; // position of `]`
-                        let mut bracket_depth: i32 = 1;
-                        while j > 0 {
-                            j -= 1;
-                            match bytes[j] {
-                                b'\n' | b'\r' => return false,
-                                b']' => bracket_depth += 1,
-                                b'[' => {
-                                    bracket_depth -= 1;
-                                    if bracket_depth == 0 {
-                                        // Bracket pair matches. Confirm the
-                                        // `(` closes properly and any quoted
-                                        // title is closed.
-                                        return link_tail_well_formed(bytes, i, pos);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        return false;
-                    }
-                    // Otherwise: this `(` may be a paren-delimited title
-                    // open inside an outer `](...)` link tail (e.g.
-                    // `[a](/u (ti{w))`). Continue walking — we'll find the
-                    // outer `](` if it exists. Leave `paren_depth` at 0
-                    // (effectively treating this `(` as already matched
-                    // by a `)` past `pos`).
-                } else {
-                    paren_depth -= 1;
+            b']' => depth += 1,
+            b'[' => {
+                depth -= 1;
+                if depth == 0 {
+                    return true;
                 }
             }
             _ => {}
@@ -4401,10 +4384,7 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
 /// link won't form, so any `{` inside it should be treated as an expression
 /// start.
 #[cfg(feature = "mdx")]
-fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize) -> bool {
-    let line_end =
-        memchr::memchr2(b'\n', b'\r', &bytes[lparen..]).map_or(bytes.len(), |i| lparen + i);
-
+fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize, line_end: usize) -> bool {
     let mut i = lparen + 1;
     i += scan_while(&bytes[i..line_end], is_space_or_tab);
     let Some(dest_end) = scan_link_tail_dest(bytes, i, line_end) else {
