@@ -3470,6 +3470,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     // returns (bytelength, title_str)
     fn scan_refdef_title<'t>(&self, text: &'t str) -> Option<(usize, CowStr<'t>)> {
         let bytes = text.as_bytes();
+        // Unlike CommonMark, remark keeps an unescaped `(` inside a paren title as content.
         let closing_delim = match bytes.first()? {
             b'\'' => b'\'',
             b'"' => b'"',
@@ -3483,12 +3484,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         while let Some(&c) = bytes.get(bytecount) {
             match c {
-                b'(' if closing_delim == b')' => {
-                    // https://spec.commonmark.org/0.30/#link-title
-                    // a sequence of zero or more characters between matching parentheses ((...)),
-                    // including a ( or ) character only if it is backslash-escaped.
-                    return None;
-                }
                 b'\n' | b'\r' => {
                     // push text to line buffer
                     // this is used to strip the block formatting:
@@ -4403,192 +4398,101 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
     false
 }
 
-/// True if the link-URL parens at `lparen` close on the same line, the
-/// URL/title structure is well-formed, AND `pos` sits inside the URL
-/// portion (not the title or invalid whitespace gap). Used as a tighter
-/// check for `is_inside_link_url_parens`: a malformed tail (e.g. plain
-/// URL followed by non-title bytes) means the link won't form, so any
-/// `{` between them should be treated as an expression start.
+/// True if the link tail opening at `lparen` parses as `(`, destination,
+/// optional whitespace-separated title, `)` on this line, and `pos` sits
+/// inside it. Used as a tighter check for `is_inside_link_url_parens`: a
+/// malformed tail (e.g. a plain URL followed by non-title bytes) means the
+/// link won't form, so any `{` inside it should be treated as an expression
+/// start.
 #[cfg(feature = "mdx")]
 fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize) -> bool {
-    let mut depth: i32 = 1;
-    let mut k = lparen + 1;
-    let mut rparen = None;
-    while k < bytes.len() {
-        match bytes[k] {
-            b'\n' | b'\r' => return false,
-            b'\\' if k + 1 < bytes.len() => {
-                k += 2;
-                continue;
+    let line_end =
+        memchr::memchr2(b'\n', b'\r', &bytes[lparen..]).map_or(bytes.len(), |i| lparen + i);
+
+    let mut i = lparen + 1;
+    i += scan_while(&bytes[i..line_end], is_space_or_tab);
+    let Some(dest_end) = scan_link_tail_dest(bytes, i, line_end) else {
+        return false;
+    };
+    i = dest_end + scan_while(&bytes[dest_end..line_end], is_space_or_tab);
+    // Without separating whitespace the delimiter was part of the destination.
+    if i > dest_end
+        && let Some(title_end) = scan_link_tail_title(bytes, i, line_end)
+    {
+        i = title_end + scan_while(&bytes[title_end..line_end], is_space_or_tab);
+    }
+
+    i < line_end && bytes[i] == b')' && pos < i
+}
+
+/// End of the link destination starting at `start`, mirroring
+/// [`scan_link_dest`] within a single line.
+#[cfg(feature = "mdx")]
+fn scan_link_tail_dest(bytes: &[u8], start: usize, line_end: usize) -> Option<usize> {
+    let mut i = start;
+    if bytes.get(i) == Some(&b'<') {
+        i += 1;
+        while i < line_end {
+            match bytes[i] {
+                b'<' => return None,
+                b'>' => return Some(i + 1),
+                b'\\' if i + 1 < line_end && is_ascii_punctuation(bytes[i + 1]) => i += 1,
+                _ => {}
             }
-            b'(' => depth += 1,
+            i += 1;
+        }
+        return None;
+    }
+
+    let mut nest = 0;
+    while i < line_end {
+        match bytes[i] {
+            0x0..=0x20 => break,
+            b'(' => {
+                if nest > LINK_MAX_NESTED_PARENS {
+                    return None;
+                }
+                nest += 1;
+            }
             b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    rparen = Some(k);
+                if nest == 0 {
                     break;
                 }
+                nest -= 1;
             }
+            b'\\' if i + 1 < line_end && is_ascii_punctuation(bytes[i + 1]) => i += 1,
             _ => {}
         }
-        k += 1;
+        i += 1;
     }
-    let rparen = match rparen {
-        Some(r) => r,
-        None => return false,
+    (nest == 0).then_some(i)
+}
+
+/// End of the link title starting at `start`, mirroring `scan_link_title`
+/// within a single line: an unescaped `(` inside a paren title is content.
+#[cfg(feature = "mdx")]
+fn scan_link_tail_title(bytes: &[u8], start: usize, line_end: usize) -> Option<usize> {
+    if start >= line_end {
+        return None;
+    }
+    let close = match bytes[start] {
+        b'\'' => b'\'',
+        b'"' => b'"',
+        b'(' => b')',
+        _ => return None,
     };
-    // The CommonMark link tail is `(URL[ TITLE])`. Verify the structure
-    // matches: URL is either `<...>` or plain (no whitespace, no control
-    // chars). After URL, an optional whitespace-delimited title must be
-    // a properly closed `"..."`, `'...'`, or `(...)`. Anything else
-    // between URL end and `)` means the link fails to form — in that case
-    // `pos` should NOT be treated as inside a link URL.
-    {
-        let mut p = lparen + 1;
-        while p < rparen && (bytes[p] == b' ' || bytes[p] == b'\t') {
-            p += 1;
+
+    let mut i = start + 1;
+    while i < line_end {
+        if bytes[i] == close {
+            return Some(i + 1);
         }
-        let url_end;
-        if p < rparen && bytes[p] == b'<' {
-            p += 1;
-            let mut found = false;
-            while p < rparen {
-                match bytes[p] {
-                    b'\\' if p + 1 < rparen => p += 2,
-                    b'>' => {
-                        found = true;
-                        p += 1;
-                        break;
-                    }
-                    b'<' | b'\n' | b'\r' => break,
-                    _ => p += 1,
-                }
-            }
-            if !found {
-                return false;
-            }
-            url_end = p;
-        } else {
-            let mut depth_url: i32 = 0;
-            while p < rparen {
-                let b = bytes[p];
-                if b == b'\\' && p + 1 < rparen {
-                    p += 2;
-                    continue;
-                }
-                if b == b'(' {
-                    depth_url += 1;
-                    p += 1;
-                } else if b == b')' {
-                    if depth_url == 0 {
-                        break;
-                    }
-                    depth_url -= 1;
-                    p += 1;
-                } else if matches!(b, b' ' | b'\t') {
-                    break;
-                } else if b < 0x20 || b == 0x7f {
-                    return false;
-                } else {
-                    p += 1;
-                }
-            }
-            url_end = p;
+        if bytes[i] == b'\\' && i + 1 < line_end && is_ascii_punctuation(bytes[i + 1]) {
+            i += 1;
         }
-        // pos sits AFTER the URL: the tail is only well-formed if the
-        // post-URL bytes parse as `[ws]+(title)?[ws]*)`.
-        if pos >= url_end {
-            let mut q = url_end;
-            while q < rparen && (bytes[q] == b' ' || bytes[q] == b'\t') {
-                q += 1;
-            }
-            if q == rparen {
-                // No title — pos sits in trailing whitespace before `)`.
-                // The link is well-formed; treating `pos` as inside the
-                // URL portion is conservative but matches the original
-                // intent.
-            } else {
-                let title_open = bytes[q];
-                let title_close = match title_open {
-                    b'"' => b'"',
-                    b'\'' => b'\'',
-                    b'(' => b')',
-                    _ => return false,
-                };
-                let mut r = q + 1;
-                let mut closed = false;
-                while r < rparen {
-                    if bytes[r] == b'\\' && r + 1 < rparen {
-                        r += 2;
-                        continue;
-                    }
-                    if title_open == b'(' && bytes[r] == b'(' {
-                        // Nested `(` inside paren-title invalidates the
-                        // title per CommonMark.
-                        return false;
-                    }
-                    if bytes[r] == title_close {
-                        closed = true;
-                        break;
-                    }
-                    r += 1;
-                }
-                if !closed {
-                    return false;
-                }
-                let mut s = r + 1;
-                while s < rparen && (bytes[s] == b' ' || bytes[s] == b'\t') {
-                    s += 1;
-                }
-                if s != rparen {
-                    return false;
-                }
-            }
-        }
+        i += 1;
     }
-    // Walk the bytes between `(` and `)` checking for title quotes. The
-    // CommonMark link tail allows one title delimited by matching `"`,
-    // `'`, or `(...)`. The paren-title form is already covered by `depth`
-    // tracking above. We only need to check `"` and `'` for closure.
-    let mut k = lparen + 1;
-    while k < rparen {
-        let b = bytes[k];
-        if b == b'\\' && k + 1 < rparen {
-            k += 2;
-            continue;
-        }
-        if b == b'"' || b == b'\'' {
-            let quote = b;
-            let mut m = k + 1;
-            let mut closed = false;
-            while m < rparen {
-                if bytes[m] == b'\\' && m + 1 < rparen {
-                    m += 2;
-                    continue;
-                }
-                if bytes[m] == quote {
-                    closed = true;
-                    break;
-                }
-                m += 1;
-            }
-            // The link parser only treats `"`/`'` as title delimiters
-            // when preceded by whitespace and followed by content that
-            // closes before `)`. If the quote we found surrounds `pos`,
-            // closure of THIS quote determines validity. If the quote is
-            // unclosed and `pos` sits past the unclosed quote, the link
-            // fails and we should not suppress.
-            if !closed && pos > k {
-                return false;
-            }
-            if closed {
-                k = m + 1;
-                continue;
-            }
-        }
-        k += 1;
-    }
-    true
+    None
 }
 
 /// True if the byte at `pos` is the first content char of its source line,

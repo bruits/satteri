@@ -242,6 +242,38 @@ describe("HTML conformance: malformed inline links fall back to paragraphs", () 
   });
 });
 
+// CommonMark wants a `(` in a `(…)` title escaped; remark keeps it as content.
+describe("MDAST conformance: unescaped `(` inside a parenthesized title (#211)", () => {
+  test("the reported input is a link with url `*` and title `(`", () => {
+    const md = "[a](* (())";
+    assertExtMdastConformance(md, []);
+    const paragraph = (satteriMdast(md) as Root).children[0] as Paragraph;
+    const link = paragraph.children[0] as Link;
+    expect(link.url).toBe("*");
+    expect(link.title).toBe("(");
+  });
+
+  test("links and images keep the `(` in the title", () => {
+    assertMdastConformance("[a](/url (ti(tle))");
+    assertMdastConformance("![a](/url (ti(tle))");
+    assertMdastConformance("[a](/url (tit\\(le))");
+  });
+
+  test("the title still ends at the first unescaped `)`", () => {
+    // Title `((`, so the third `)` closes the link and the fourth is text.
+    assertMdastConformance("[a](/url ((()))");
+    // Title `a(b`, leaving `c))` before the `)` the link needs: no link.
+    assertMdastConformance("[a](/url (a(b)c))");
+  });
+
+  test("reference definitions take the same titles", () => {
+    assertMdastConformance("[a]: /url (ti(tle)\n\n[a]\n");
+    assertHtmlConformance("[link]: test (()\n\n[link]\n");
+    // Control: the trailing `)` leaves trailing text, so there is no definition.
+    assertHtmlConformance("[link]: test (())\n\n[link]\n");
+  });
+});
+
 describe("HTML conformance: YAML metadata block edge cases", () => {
   test("YAML frontmatter with leading blank line consumes the whole block", () => {
     // metadata_blocks_test_4: `---\n\ntitle:...\n---\n` — with frontmatter

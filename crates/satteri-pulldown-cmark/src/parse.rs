@@ -2201,6 +2201,7 @@ impl<'input> ParserInner<'input> {
             Some(b @ b'\'') | Some(b @ b'\"') | Some(b @ b'(') => *b,
             _ => return None,
         };
+        // Unlike CommonMark, remark keeps an unescaped `(` inside a paren title as content.
         let close = if open == b'(' { b')' } else { open };
 
         let mut title = String::new();
@@ -2219,9 +2220,6 @@ impl<'input> ParserInner<'input> {
                 };
 
                 return Some(cow);
-            }
-            if c == open {
-                return None;
             }
 
             if (c == b'\n' || c == b'\r')

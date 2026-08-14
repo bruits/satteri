@@ -3093,8 +3093,7 @@ fn regression_test_176() {
 
 [link]
 "##;
-    let expected = r##"<p>[link]: test (()</p>
-<p>[link]</p>
+    let expected = r##"<p><a href="test" title="(">link</a></p>
 "##;
 
     test_markdown_html(original, expected, 11358, false, false, false, false, false, false);
