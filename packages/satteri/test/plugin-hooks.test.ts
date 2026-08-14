@@ -96,6 +96,33 @@ describe("mdast lifecycle hooks", () => {
     expect(seen).toBe("seeded");
   });
 
+  test("ctx.report survives the pass boundaries, like ctx.data", () => {
+    const seen: string[][] = [];
+    markdownToHtml("# Hi", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "diag",
+          before(_root, ctx) {
+            ctx.report({ message: "from before", severity: "warning" });
+            seen.push(ctx.getDiagnostics().map((d) => d.message));
+          },
+          heading(_node, ctx) {
+            ctx.report({ message: "from visitor", severity: "warning" });
+            seen.push(ctx.getDiagnostics().map((d) => d.message));
+          },
+          after(_root, ctx) {
+            seen.push(ctx.getDiagnostics().map((d) => d.message));
+          },
+        }),
+      ],
+    });
+    expect(seen).toEqual([
+      ["from before"],
+      ["from before", "from visitor"],
+      ["from before", "from visitor"],
+    ]);
+  });
+
   test("async before settles before visitors dispatch", async () => {
     let seen: unknown;
     await markdownToHtml("# Hi", {
@@ -149,7 +176,7 @@ describe("mdast lifecycle hooks", () => {
     expect(code).toContain("const toc = []");
   });
 
-  test("after injects a TOC export built from headings visited in the same pass", () => {
+  test("after injects a TOC export built from the headings its visitors collected", () => {
     const headings: string[] = [];
     const { code } = mdxToJs("# One\n\n## Two", {
       mdastPlugins: [
@@ -167,8 +194,7 @@ describe("mdast lifecycle hooks", () => {
         }),
       ],
     });
-    expect(code).toContain('"One"');
-    expect(code).toContain('"Two"');
+    expect(code).toMatch(/export const toc = \["One",\s*"Two"\]/);
   });
 
   test("hooks prepend an import and append an export on an empty document", () => {
@@ -516,17 +542,29 @@ describe("mdast lifecycle hooks", () => {
   });
 
   test("a replacement root with _keepChildren keeps the document's children", () => {
-    const { html } = markdownToHtml("# Hi", {
+    const kept = markdownToHtml("# Hi", {
       mdastPlugins: [
         defineMdastPlugin({
-          name: "swap",
+          name: "keep",
           after(root, ctx) {
             ctx.replaceNode(root, { type: "root", _keepChildren: true } as unknown as MdastRoot);
           },
         }),
       ],
     });
-    expect(html).toBe("<h1>Hi</h1>\n");
+    expect(kept.html).toBe("<h1>Hi</h1>\n");
+
+    const dropped = markdownToHtml("# Hi", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "drop",
+          after(root, ctx) {
+            ctx.replaceNode(root, { type: "root" } as unknown as MdastRoot);
+          },
+        }),
+      ],
+    });
+    expect(dropped.html).toBe("");
   });
 
   test("a root is still unencodable as content for any other node", () => {
@@ -970,6 +1008,36 @@ describe("hast lifecycle hooks", () => {
       ],
     });
     expect(seen).toBe("seeded");
+  });
+
+  test("ctx.report survives the pass boundaries, like ctx.data", () => {
+    const seen: string[][] = [];
+    markdownToHtml("# Hi", {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "diag",
+          before(_root, ctx) {
+            ctx.report({ message: "from before", severity: "warning" });
+            seen.push(ctx.getDiagnostics().map((d) => d.message));
+          },
+          element: {
+            filter: ["h1"],
+            visit(_node, ctx) {
+              ctx.report({ message: "from visitor", severity: "warning" });
+              seen.push(ctx.getDiagnostics().map((d) => d.message));
+            },
+          },
+          after(_root, ctx) {
+            seen.push(ctx.getDiagnostics().map((d) => d.message));
+          },
+        }),
+      ],
+    });
+    expect(seen).toEqual([
+      ["from before"],
+      ["from before", "from visitor"],
+      ["from before", "from visitor"],
+    ]);
   });
 
   test("after fires exactly once on a non-empty document, with children", () => {

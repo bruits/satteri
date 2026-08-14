@@ -4,6 +4,7 @@ import {
   visitHastHook,
   visitHastHookCollect,
   resolveSubscriptions,
+  type HastDiagnostic,
   type HastHandle,
   type HastHookFn,
 } from "./hast/hast-visitor.js";
@@ -11,6 +12,7 @@ import {
   visitMdastHandle,
   visitMdastHook,
   resolveMdastSubscriptions,
+  type MdastDiagnostic,
   type MdastHandle,
   type MdastHookFn,
   type MdastPluginInstance,
@@ -210,6 +212,8 @@ function runMdastPluginsOnHandle(
     const before = typeof plugin.before === "function" ? plugin.before : undefined;
     const after = typeof plugin.after === "function" ? plugin.after : undefined;
     const hasVisitors = subs.length > 0;
+    // Threaded like `data`: one context per pass, since a resolver is epoch-bound.
+    const diagnostics: MdastDiagnostic[] = [];
     const runHook = (hook: MdastHookFn, isFinalPass: boolean) => () =>
       settle(
         visitMdastHook(
@@ -220,6 +224,7 @@ function runMdastPluginsOnHandle(
           fileURL,
           data,
           sourceFormat,
+          diagnostics,
         ),
         (r) => apply(r, isFinalPass),
       );
@@ -233,6 +238,7 @@ function runMdastPluginsOnHandle(
           fileURL,
           data,
           sourceFormat,
+          diagnostics,
         ),
         (r) => apply(r, isFinalPass),
       );
@@ -302,18 +308,46 @@ function runHastPluginsCollectLast(
       const warnIfDropped = (dropped: number): void => {
         if (dropped) warnDroppedTransforms(plugin, dropped, "hast");
       };
+      // Threaded like `data`: one context per pass, since a resolver is epoch-bound.
+      const diagnostics: HastDiagnostic[] = [];
       const runApplied = (pass: HastHookFn | "visitors") => () =>
         settle(
           pass === "visitors"
-            ? visitHastHandle(handle, plugin, subs, source, fileURL, data, sourceFormat)
-            : visitHastHook(handle, pass, source, fileURL, data, sourceFormat),
+            ? visitHastHandle(
+                handle,
+                plugin,
+                subs,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              )
+            : visitHastHook(handle, pass, source, fileURL, data, sourceFormat, diagnostics),
           warnIfDropped,
         );
       const collectFinal = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
         const collected =
           finalPass === "visitors"
-            ? visitHastHandleCollect(handle, plugin, subs, source, fileURL, data, sourceFormat)
-            : visitHastHookCollect(handle, finalPass, source, fileURL, data, sourceFormat);
+            ? visitHastHandleCollect(
+                handle,
+                plugin,
+                subs,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              )
+            : visitHastHookCollect(
+                handle,
+                finalPass,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              );
         return collected instanceof Promise
           ? collected.then((commands) => ({ commands, lastPlugin: plugin }))
           : { commands: collected, lastPlugin: plugin };

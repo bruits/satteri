@@ -356,7 +356,7 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
 
 class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
-  readonly #diagnostics: HastDiagnostic[] = [];
+  readonly #diagnostics: HastDiagnostic[];
   /** Track accumulated node state for multiple setProperty calls on the same node. */
   readonly #pendingNodes: Map<number, HastNode> = new Map();
   readonly #handle: HastHandle;
@@ -376,6 +376,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     resolver: LazyChildResolver<HastReader, HastNode>,
     data: Data,
     sourceFormat: SourceFormat,
+    diagnostics: HastDiagnostic[],
   ) {
     this.#handle = handle;
     this.#getSource = getSource;
@@ -383,6 +384,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#resolver = resolver;
     this.data = data;
     this.sourceFormat = sourceFormat;
+    this.#diagnostics = diagnostics;
   }
 
   get source(): string {
@@ -1212,8 +1214,18 @@ export function visitHastHandle(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: HastDiagnostic[] = [],
 ): number | Promise<number> {
-  const result = visitHastHandleCollect(handle, plugin, subs, source, fileURL, data, sourceFormat);
+  const result = visitHastHandleCollect(
+    handle,
+    plugin,
+    subs,
+    source,
+    fileURL,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   if (result instanceof Promise) {
     return result.then((commands) => applyCollectedCommands(handle, commands));
   }
@@ -1242,10 +1254,19 @@ export function visitHastHandleCollect(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: HastDiagnostic[] = [],
 ): Uint8Array | Promise<Uint8Array> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new HastLazyChildResolver(handle);
-  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data, sourceFormat);
+  const ctx = new HastVisitorContextImpl(
+    handle,
+    getSource,
+    fileURL,
+    resolver,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   const returnBuffer = acquireCommandBuffer();
   const rustSubs = getRustSubs(plugin);
   const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
@@ -1281,10 +1302,19 @@ export function visitHastHookCollect(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: HastDiagnostic[] = [],
 ): Uint8Array | Promise<Uint8Array> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new HastLazyChildResolver(handle);
-  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data, sourceFormat);
+  const ctx = new HastVisitorContextImpl(
+    handle,
+    getSource,
+    fileURL,
+    resolver,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   const returnBuffer = acquireCommandBuffer();
   const matchBuf = walkHandle(handle, HAST_ROOT_SUBS);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
@@ -1310,8 +1340,17 @@ export function visitHastHook(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: HastDiagnostic[] = [],
 ): number | Promise<number> {
-  const result = visitHastHookCollect(handle, hook, source, fileURL, data, sourceFormat);
+  const result = visitHastHookCollect(
+    handle,
+    hook,
+    source,
+    fileURL,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   if (result instanceof Promise) {
     return result.then((commands) => applyCollectedCommands(handle, commands));
   }

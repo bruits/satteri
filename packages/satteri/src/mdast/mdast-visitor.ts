@@ -159,7 +159,7 @@ const requireNid = makeRequireNid(nid);
 
 export class MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
-  readonly #diagnostics: MdastDiagnostic[] = [];
+  readonly #diagnostics: MdastDiagnostic[];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
@@ -194,6 +194,7 @@ export class MdastVisitorContext {
     resolver: LazyChildResolver<MdastReader, MdastNode>,
     data: Data,
     sourceFormat: SourceFormat,
+    diagnostics: MdastDiagnostic[],
   ) {
     this.#handle = handle;
     this.#getSource = getSource;
@@ -201,6 +202,7 @@ export class MdastVisitorContext {
     this.#resolver = resolver;
     this.data = data;
     this.sourceFormat = sourceFormat;
+    this.#diagnostics = diagnostics;
   }
 
   get source(): string {
@@ -1032,10 +1034,19 @@ export function visitMdastHandle(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: MdastDiagnostic[] = [],
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new MdastLazyChildResolver(handle);
-  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver, data, sourceFormat);
+  const context = new MdastVisitorContext(
+    handle,
+    getSource,
+    fileURL,
+    resolver,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   const returnBuffer = acquireCommandBuffer();
   const rustSubs = getMdastRustSubs(plugin);
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);
@@ -1101,10 +1112,19 @@ export function visitMdastHook(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: MdastDiagnostic[] = [],
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new MdastLazyChildResolver(handle);
-  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver, data, sourceFormat);
+  const context = new MdastVisitorContext(
+    handle,
+    getSource,
+    fileURL,
+    resolver,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   const returnBuffer = acquireCommandBuffer();
   const matchBuf: Uint8Array = walkMdastHandle(handle, MDAST_ROOT_SUBS);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
