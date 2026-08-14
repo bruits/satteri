@@ -222,6 +222,43 @@ export class HastReader {
    *   then prop_count * 20 bytes:
    *     [name: StringRef(8B)][value_type: u8(1B)][_pad: [u8;3](3B)][value: StringRef(8B)]
    */
+  /** Byte position of a node's `type_data`, relative to this reader's view, or
+   *  `-1` when the node stores fewer than `min` bytes. */
+  #typeDataAt(nodeId: number, min: number): number {
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    const v = this.#view;
+    if (v.getUint32(base + FIELD.data_len, true) < min) return -1;
+    return this.#header.typeDataOffset + v.getUint32(base + FIELD.data_offset, true);
+  }
+
+  #stringAt(at: number): string {
+    return this.getString(this.#view.getUint32(at, true), this.#view.getUint32(at + 4, true));
+  }
+
+  /** Element `tagName`, `properties` count, and the i-th property, read without
+   *  building the intermediate views and records `getElementData` allocates. */
+  getElementTagName(nodeId: number): string {
+    const at = this.#typeDataAt(nodeId, 16);
+    return at === -1 ? "" : this.#stringAt(at);
+  }
+
+  getElementPropCount(nodeId: number): number {
+    const at = this.#typeDataAt(nodeId, 16);
+    return at === -1 ? 0 : this.#view.getUint32(at + 8, true);
+  }
+
+  getElementPropName(nodeId: number, index: number): string {
+    const at = this.#typeDataAt(nodeId, 16);
+    return at === -1 ? "" : this.#stringAt(at + 16 + index * 20);
+  }
+
+  getElementPropValue(nodeId: number, index: number): HastProperty["value"] {
+    const at = this.#typeDataAt(nodeId, 16);
+    if (at === -1) return "";
+    const base = at + 16 + index * 20;
+    return decodeElementProp(this.#view.getUint8(base + 8), this.#stringAt(base + 12));
+  }
+
   getElementData(nodeId: number): { tagName: string; properties: HastProperty[] } {
     const data = this.getTypeData(nodeId);
     if (data.length < 16) {

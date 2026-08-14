@@ -45,9 +45,13 @@ const hastMaterializer = createMaterializer<HastReader, HastNode>({
   populate(node, reader, nodeId, nodeType) {
     switch (nodeType) {
       case HAST_ELEMENT: {
-        const { tagName, properties } = reader.getElementData(nodeId);
-        (node as { tagName: string }).tagName = tagName;
-        (node as { properties: unknown }).properties = propsToRecord(properties);
+        (node as { tagName: string }).tagName = reader.getElementTagName(nodeId);
+        const count = reader.getElementPropCount(nodeId);
+        const properties: Record<string, unknown> = {};
+        for (let i = 0; i < count; i++) {
+          properties[reader.getElementPropName(nodeId, i)] = reader.getElementPropValue(nodeId, i);
+        }
+        (node as { properties: unknown }).properties = properties;
         break;
       }
 

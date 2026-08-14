@@ -185,6 +185,27 @@ export class MdastReader {
     }
   }
 
+  /** Fixed-layout field reads that touch the buffer directly. The generated
+   *  decoder runs once per node, so an intermediate view or ref object here
+   *  costs an allocation per field. */
+  fieldU8(nodeId: number, offset: number, fallback: number): number {
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    const v = this.#view;
+    if (offset >= v.getUint32(base + FIELD.data_len, true)) return fallback;
+    const at = this.#header.typeDataOffset + v.getUint32(base + FIELD.data_offset, true);
+    return v.getUint8(at + offset);
+  }
+
+  /** `""` when the field is absent or empty; callers map that to `null` for
+   *  nullable fields, matching the Rust decoders' bounds checks. */
+  fieldString(nodeId: number, offset: number): string {
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    const v = this.#view;
+    if (offset + 8 > v.getUint32(base + FIELD.data_len, true)) return "";
+    const at = this.#header.typeDataOffset + v.getUint32(base + FIELD.data_offset, true) + offset;
+    return this.getString(v.getUint32(at, true), v.getUint32(at + 4, true));
+  }
+
   getTypeData(nodeId: number): Uint8Array {
     const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
     const v = this.#view;
