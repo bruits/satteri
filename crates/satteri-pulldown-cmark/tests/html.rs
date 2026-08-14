@@ -334,7 +334,7 @@ fn heading_attributes_disabled_keeps_literal_text() {
 }
 
 #[test]
-fn tilde_never_opens_emphasis_without_a_tilde_extension() {
+fn tilde_never_opens_emphasis_without_strikethrough() {
     assert_eq!("<p>a*~*</p>\n", parse_to_html("a*~*"));
     assert_eq!("<p>a*~x~*</p>\n", parse_to_html("a*~x~*"));
     assert_eq!("<p>a**~**</p>\n", parse_to_html("a**~**"));
@@ -349,5 +349,45 @@ fn tilde_opens_emphasis_with_strikethrough() {
     assert_eq!(
         "<p>a<em><del>x</del></em></p>\n",
         parse_to_html_ext("a*~x~*", Options::ENABLE_STRIKETHROUGH)
+    );
+    assert_eq!(
+        "<p>a<em><del>x</del></em></p>\n",
+        parse_to_html_ext("a*~~x~~*", Options::ENABLE_STRIKETHROUGH)
+    );
+}
+
+#[test]
+fn subscript_and_superscript_leave_an_intraword_star_run_closed() {
+    assert_eq!(
+        "<p>a*<sub>x</sub>*</p>\n",
+        parse_to_html_ext("a*~x~*", Options::ENABLE_SUBSCRIPT)
+    );
+    assert_eq!(
+        "<p>a*<sup>x</sup>*</p>\n",
+        parse_to_html_ext("a*^x^*", Options::ENABLE_SUPERSCRIPT)
+    );
+    assert_eq!(
+        "<p><em><sub>x</sub></em></p>\n",
+        parse_to_html_ext("*~x~*", Options::ENABLE_SUBSCRIPT)
+    );
+    assert_eq!(
+        "<p><em><sup>x</sup></em></p>\n",
+        parse_to_html_ext("*^x^*", Options::ENABLE_SUPERSCRIPT)
+    );
+    assert_eq!(
+        "<p>H<sub>2</sub>O</p>\n",
+        parse_to_html_ext("H~2~O", Options::ENABLE_SUBSCRIPT)
+    );
+}
+
+#[test]
+fn an_inert_tilde_run_does_not_open_emphasis_under_subscript() {
+    assert_eq!(
+        "<p>a*~~x~~*</p>\n",
+        parse_to_html_ext("a*~~x~~*", Options::ENABLE_SUBSCRIPT)
+    );
+    assert_eq!(
+        "<p>a~~x~~b</p>\n",
+        parse_to_html_ext("a~~x~~b", Options::ENABLE_SUBSCRIPT)
     );
 }

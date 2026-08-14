@@ -1,5 +1,6 @@
 ---
 cargo/satteri-pulldown-cmark: patch
+cargo/satteri-napi: patch
 npm/satteri: patch
 ---
 
