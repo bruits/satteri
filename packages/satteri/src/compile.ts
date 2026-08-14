@@ -1,13 +1,20 @@
 import {
   visitHastHandle,
   visitHastHandleCollect,
+  visitHastHook,
+  visitHastHookCollect,
   resolveSubscriptions,
+  type HastDiagnostic,
   type HastHandle,
+  type HastHookFn,
 } from "./hast/hast-visitor.js";
 import {
   visitMdastHandle,
+  visitMdastHook,
   resolveMdastSubscriptions,
+  type MdastDiagnostic,
   type MdastHandle,
+  type MdastHookFn,
   type MdastPluginInstance,
 } from "./mdast/mdast-visitor.js";
 import { normalizePlugins } from "./plugin.js";
@@ -152,6 +159,24 @@ function warnDroppedTransforms(
   );
 }
 
+function settle<T>(value: T | Promise<T>, fn: (value: T) => void): Promise<void> | undefined {
+  if (value instanceof Promise) return value.then(fn);
+  fn(value);
+  return undefined;
+}
+
+/** Stays synchronous until a step actually returns a promise. */
+function sequence(
+  steps: ((() => Promise<void> | undefined) | undefined)[],
+): Promise<void> | undefined {
+  let pending: Promise<void> | undefined;
+  for (const step of steps) {
+    if (step === undefined) continue;
+    pending = pending === undefined ? step() : pending.then(step);
+  }
+  return pending;
+}
+
 function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginDefinition[],
@@ -162,25 +187,19 @@ function runMdastPluginsOnHandle(
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
   const out: MdastPipelineResult = { handle };
 
-  // Each plugin runs once over the tree. A transform that passes a child
+  // A plugin's visitors run once over the tree. A transform that passes a child
   // through (returning it inside the replacement) keeps that child's identity,
-  // so a patch the same pass queued on it still applies — nesting composes in
-  // one pass. A plugin's own freshly-built nodes are not re-walked; transform
-  // them up front, or hand off to a later plugin that sees the materialized tree.
-  const runPlugin = (plugin: MdastPluginInstance, isLast: boolean): void | Promise<void> => {
+  // so a patch the same pass queued on it still applies: nesting composes in
+  // one pass. Visitor-built nodes are not re-walked; transform them up front,
+  // or hand off to a later plugin that sees the materialized tree.
+  const runPlugin = (plugin: MdastPluginInstance, isLastPlugin: boolean): void | Promise<void> => {
     const subs = resolveMdastSubscriptions(plugin);
-    const result = visitMdastHandle(
-      handle,
-      plugin,
-      subs,
-      () => getHandleSource(handle),
-      fileURL,
-      data,
-      sourceFormat,
-    );
-    const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
+    const apply = (
+      r: { commandBuffer: Uint8Array; hasMutations: boolean },
+      isFinalPass: boolean,
+    ): void => {
       if (!r.hasMutations) return;
-      if (collectLast && isLast) {
+      if (collectLast && isLastPlugin && isFinalPass) {
         out.pendingCommands = r.commandBuffer;
         out.lastPlugin = plugin as { name?: string };
         return;
@@ -189,7 +208,46 @@ function runMdastPluginsOnHandle(
       const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
       if (dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
     };
-    return result instanceof Promise ? result.then(apply) : apply(result);
+
+    const before = typeof plugin.before === "function" ? plugin.before : undefined;
+    const after = typeof plugin.after === "function" ? plugin.after : undefined;
+    const hasVisitors = subs.length > 0;
+    // Threaded like `data`: one context per pass, since a resolver is epoch-bound.
+    const diagnostics: MdastDiagnostic[] = [];
+    const runHook = (hook: MdastHookFn, isFinalPass: boolean) => () =>
+      settle(
+        visitMdastHook(
+          handle,
+          plugin,
+          hook,
+          () => getHandleSource(handle),
+          fileURL,
+          data,
+          sourceFormat,
+          diagnostics,
+        ),
+        (r) => apply(r, isFinalPass),
+      );
+    const runVisitors = (isFinalPass: boolean) => () =>
+      settle(
+        visitMdastHandle(
+          handle,
+          plugin,
+          subs,
+          () => getHandleSource(handle),
+          fileURL,
+          data,
+          sourceFormat,
+          diagnostics,
+        ),
+        (r) => apply(r, isFinalPass),
+      );
+
+    return sequence([
+      before ? runHook(before, !hasVisitors && after === undefined) : undefined,
+      hasVisitors ? runVisitors(after === undefined) : undefined,
+      after ? runHook(after, true) : undefined,
+    ]);
   };
 
   let i = 0;
@@ -235,36 +293,75 @@ function runHastPluginsCollectLast(
   const runNext = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
     while (i < plugins.length) {
       const plugin = plugins[i]!;
-      const isLast = i === plugins.length - 1;
+      const isLastPlugin = i === plugins.length - 1;
       i++;
       const subs = resolveSubscriptions(plugin);
+      const { before, after } = plugin;
 
-      if (isLast) {
-        const collected = visitHastHandleCollect(
-          handle,
-          plugin,
-          subs,
-          source,
-          fileURL,
-          data,
-          sourceFormat,
-        );
-        return collected instanceof Promise
-          ? collected.then((commands) => ({ commands, lastPlugin: plugin }))
-          : { commands: collected, lastPlugin: plugin };
-      }
+      const passes: (HastHookFn | "visitors")[] = [];
+      if (typeof before === "function") passes.push(before);
+      if (subs.length > 0) passes.push("visitors");
+      if (typeof after === "function") passes.push(after);
+      const finalPass = passes.pop();
+      if (finalPass === undefined) continue;
 
-      const result = visitHastHandle(handle, plugin, subs, source, fileURL, data, sourceFormat);
       const warnIfDropped = (dropped: number): void => {
         if (dropped) warnDroppedTransforms(plugin, dropped, "hast");
       };
-      if (result instanceof Promise) {
-        return result.then((dropped) => {
-          warnIfDropped(dropped);
-          return runNext();
-        });
+      // Threaded like `data`: one context per pass, since a resolver is epoch-bound.
+      const diagnostics: HastDiagnostic[] = [];
+      const runApplied = (pass: HastHookFn | "visitors") => () =>
+        settle(
+          pass === "visitors"
+            ? visitHastHandle(
+                handle,
+                plugin,
+                subs,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              )
+            : visitHastHook(handle, pass, source, fileURL, data, sourceFormat, diagnostics),
+          warnIfDropped,
+        );
+      const collectFinal = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
+        const collected =
+          finalPass === "visitors"
+            ? visitHastHandleCollect(
+                handle,
+                plugin,
+                subs,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              )
+            : visitHastHookCollect(
+                handle,
+                finalPass,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              );
+        return collected instanceof Promise
+          ? collected.then((commands) => ({ commands, lastPlugin: plugin }))
+          : { commands: collected, lastPlugin: plugin };
+      };
+
+      const head = sequence(passes.map(runApplied));
+
+      if (isLastPlugin) {
+        return head instanceof Promise ? head.then(collectFinal) : collectFinal();
       }
-      warnIfDropped(result);
+
+      const tail =
+        head instanceof Promise ? head.then(runApplied(finalPass)) : runApplied(finalPass)();
+      if (tail instanceof Promise) return tail.then(runNext);
     }
     return NO_HAST_COMMANDS;
   };

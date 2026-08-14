@@ -69,6 +69,9 @@ import {
   makeRequireNid,
   mergeAndReset,
   type PluginOptions,
+  ROOT_NODE_ID,
+  requireRootReplacement,
+  rootReplacementError,
   unencodableContentError,
 } from "../visitor-shared.js";
 import {
@@ -138,6 +141,8 @@ export interface HastVisitorContext {
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
+   * The document root takes a `root` and nothing else: the one place a `root`
+   * is accepted as content.
    */
   replaceNode(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
   insertBefore(node: Readonly<HastNode>, newNode: HastContent | HastContent[]): void;
@@ -275,6 +280,25 @@ function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node:
   if (!ok) throw unencodableContentError(node);
 }
 
+/** Separate from the per-node encoder, which rejects a `root` payload. */
+function emitHastRootReplace(buffer: CommandBuffer, root: HastContent): void {
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
+    emitHastRootOp(buffer, root as unknown as Record<string, unknown>),
+  );
+  if (!ok) throw unencodableContentError(root);
+}
+
+function emitHastRootOp(w: OpWriter, n: Record<string, unknown>): boolean {
+  w.open(HAST_ROOT);
+  if (n.data != null) w.data(n.data);
+  const children = n.children;
+  if (Array.isArray(children)) {
+    for (const c of children) if (!emitHastOp(w, c, false)) return false;
+  }
+  w.close();
+  return true;
+}
+
 function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
@@ -332,7 +356,7 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
 
 class HastVisitorContextImpl implements HastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
-  readonly #diagnostics: HastDiagnostic[] = [];
+  readonly #diagnostics: HastDiagnostic[];
   /** Track accumulated node state for multiple setProperty calls on the same node. */
   readonly #pendingNodes: Map<number, HastNode> = new Map();
   readonly #handle: HastHandle;
@@ -352,6 +376,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     resolver: LazyChildResolver<HastReader, HastNode>,
     data: Data,
     sourceFormat: SourceFormat,
+    diagnostics: HastDiagnostic[],
   ) {
     this.#handle = handle;
     this.#getSource = getSource;
@@ -359,6 +384,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#resolver = resolver;
     this.data = data;
     this.sourceFormat = sourceFormat;
+    this.#diagnostics = diagnostics;
   }
 
   get source(): string {
@@ -374,6 +400,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "replaceNode");
     if (Array.isArray(newNode)) {
+      if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // The last node carries the `replace` so refs back to the target still splice.
       let previous: HastContent | undefined;
       for (const n of newNode) {
@@ -383,11 +410,17 @@ class HastVisitorContextImpl implements HastVisitorContext {
       if (previous === undefined) {
         // Replacing with nothing drops the node, like removeNode.
         this.removeNode(node);
+      } else if (id === ROOT_NODE_ID) {
+        emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous));
       } else {
         emitHastTree(this.#commandBuffer, "replace", id, previous);
       }
       // A stale queued replacement would win: setProperty folds into it, landing last.
       this.#pendingNodes.delete(id);
+      return;
+    }
+    if (id === ROOT_NODE_ID) {
+      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode));
       return;
     }
     emitHastTree(this.#commandBuffer, "replace", id, newNode);
@@ -556,9 +589,19 @@ type HastVisitorFn<N extends HastNode = HastNode> = (
   ctx: HastVisitorContext,
 ) => HastNode | void | Promise<HastNode | void>;
 
+export type HastHookFn = (
+  root: Readonly<HastRoot>,
+  ctx: HastVisitorContext,
+) => void | Promise<void>;
+
 export interface HastVisitorInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
+  /** Runs once per document, before the plugin's visitors. Awaited when async. */
+  before?: HastHookFn;
+  /** Runs once per document, after the plugin's visitors have settled. Awaited
+   *  when async. */
+  after?: HastHookFn;
   // Element-like nodes: filtered by tag/component name (single or array)
   element?: HastFilteredVisitor<Element> | HastFilteredVisitor<Element>[];
   mdxJsxFlowElement?:
@@ -1009,10 +1052,18 @@ function readMatchedNode(
       data,
     );
   }
-  // Fallback (e.g. doctype): minimal node carrying whatever prelude data we found
+  // Fallback: root and doctype.
   const base: Record<string, unknown> = { type: TYPE_NAMES[nodeType] ?? `unknown(${nodeType})` };
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
+  if (nodeType === HAST_ROOT) {
+    // `...root.children` has to work in a hook.
+    if (childCount > 0) {
+      makeLazyChildren(base, view, buf, childIdsPos, childTypesPos, childCount, resolver);
+    } else {
+      base.children = [];
+    }
+  }
   const node = base as unknown as HastNode;
   nodeIdMap.set(node, nodeId);
   return node;
@@ -1118,10 +1169,6 @@ function isTextValueSwap(result: HastNode, original: HastNode): boolean {
   );
 }
 
-/**
- * Dispatch matched nodes from a binary match buffer to visitor functions.
- * Returns null if all sync, or an array of deferred promises if any visitor was async.
- */
 function dispatchMatches(
   matchBuf: Uint8Array,
   subs: ResolvedSubscription[],
@@ -1167,8 +1214,18 @@ export function visitHastHandle(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: HastDiagnostic[] = [],
 ): number | Promise<number> {
-  const result = visitHastHandleCollect(handle, plugin, subs, source, fileURL, data, sourceFormat);
+  const result = visitHastHandleCollect(
+    handle,
+    plugin,
+    subs,
+    source,
+    fileURL,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   if (result instanceof Promise) {
     return result.then((commands) => applyCollectedCommands(handle, commands));
   }
@@ -1197,10 +1254,19 @@ export function visitHastHandleCollect(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: HastDiagnostic[] = [],
 ): Uint8Array | Promise<Uint8Array> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new HastLazyChildResolver(handle);
-  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data, sourceFormat);
+  const ctx = new HastVisitorContextImpl(
+    handle,
+    getSource,
+    fileURL,
+    resolver,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   const returnBuffer = acquireCommandBuffer();
   const rustSubs = getRustSubs(plugin);
   const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
@@ -1221,6 +1287,74 @@ export function visitHastHandleCollect(
   }
 
   return collectCommands(returnBuffer, ctx);
+}
+
+const HAST_ROOT_SUBS: { nodeType: number; tagFilter: string[] }[] = [
+  { nodeType: HAST_ROOT, tagFilter: [] },
+];
+
+/** Its own pass so the caller can apply what `before` queued before the
+ *  visitors walk, and the visitors' mutations before `after` reads the tree. */
+export function visitHastHookCollect(
+  handle: HastHandle,
+  hook: HastHookFn,
+  source: string | (() => string),
+  fileURL: URL | undefined,
+  data: Data = {},
+  sourceFormat: SourceFormat = "markdown",
+  diagnostics: HastDiagnostic[] = [],
+): Uint8Array | Promise<Uint8Array> {
+  const getSource = typeof source === "function" ? source : () => source;
+  const resolver = new HastLazyChildResolver(handle);
+  const ctx = new HastVisitorContextImpl(
+    handle,
+    getSource,
+    fileURL,
+    resolver,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
+  const returnBuffer = acquireCommandBuffer();
+  const matchBuf = walkHandle(handle, HAST_ROOT_SUBS);
+  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
+  if (matchView.getUint32(0, true) === 0) return collectCommands(returnBuffer, ctx);
+
+  const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
+  const root = readMatchedNode(
+    wire,
+    matchView.getUint32(10, true),
+    matchView.getUint32(4, true),
+    HAST_ROOT,
+  ) as HastRoot;
+
+  const result = hook(root, ctx);
+  if (result instanceof Promise) return result.then(() => collectCommands(returnBuffer, ctx));
+  return collectCommands(returnBuffer, ctx);
+}
+
+export function visitHastHook(
+  handle: HastHandle,
+  hook: HastHookFn,
+  source: string | (() => string),
+  fileURL: URL | undefined,
+  data: Data = {},
+  sourceFormat: SourceFormat = "markdown",
+  diagnostics: HastDiagnostic[] = [],
+): number | Promise<number> {
+  const result = visitHastHookCollect(
+    handle,
+    hook,
+    source,
+    fileURL,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
+  if (result instanceof Promise) {
+    return result.then((commands) => applyCollectedCommands(handle, commands));
+  }
+  return applyCollectedCommands(handle, result);
 }
 
 function collectCommands(returnBuffer: CommandBuffer, ctx: HastVisitorContextImpl): Uint8Array {

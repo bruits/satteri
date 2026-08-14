@@ -58,6 +58,9 @@ import {
   makeRequireNid,
   mergeAndReset,
   type PluginOptions,
+  ROOT_NODE_ID,
+  requireRootReplacement,
+  rootReplacementError,
   unencodableContentError,
 } from "../visitor-shared.js";
 import {
@@ -156,7 +159,7 @@ const requireNid = makeRequireNid(nid);
 
 export class MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
-  readonly #diagnostics: MdastDiagnostic[] = [];
+  readonly #diagnostics: MdastDiagnostic[];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
@@ -191,6 +194,7 @@ export class MdastVisitorContext {
     resolver: LazyChildResolver<MdastReader, MdastNode>,
     data: Data,
     sourceFormat: SourceFormat,
+    diagnostics: MdastDiagnostic[],
   ) {
     this.#handle = handle;
     this.#getSource = getSource;
@@ -198,6 +202,7 @@ export class MdastVisitorContext {
     this.#resolver = resolver;
     this.data = data;
     this.sourceFormat = sourceFormat;
+    this.#diagnostics = diagnostics;
   }
 
   get source(): string {
@@ -267,10 +272,13 @@ export class MdastVisitorContext {
   /**
    * Swap `node` for one node, or for an array of nodes placed in order at its
    * position. An empty array drops the node, the same as `removeNode`.
+   * The document root takes a `root`, the one place a `root` is accepted as
+   * content, or a raw string, which parses to a root of its own.
    */
   replaceNode(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode");
     if (Array.isArray(newNode)) {
+      if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // The last node carries the `replace` so refs back to the target still splice.
       let previous: MdastContent | undefined;
       for (const n of newNode) {
@@ -282,9 +290,15 @@ export class MdastVisitorContext {
       if (previous === undefined) {
         // Replacing with nothing drops the node, like removeNode.
         this.removeNode(node);
+      } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
+        emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous));
       } else {
         emitMdastTree(this.#commandBuffer, "replace", id, previous, true);
       }
+      return;
+    }
+    if (id === ROOT_NODE_ID && !isRawMdastContent(newNode)) {
+      emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode));
       return;
     }
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true);
@@ -407,9 +421,19 @@ type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
   context: MdastVisitorContext,
 ) => MdastVisitorResult | Promise<MdastVisitorResult>;
 
+export type MdastHookFn = (
+  root: Readonly<MdastRoot>,
+  context: MdastVisitorContext,
+) => void | Promise<void>;
+
 export interface MdastPluginInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
   options?: PluginOptions;
+  /** Runs once per document, before the plugin's visitors. Awaited when async. */
+  before?: MdastHookFn;
+  /** Runs once per document, after the plugin's visitors have settled. Awaited
+   *  when async. */
+  after?: MdastHookFn;
   paragraph?: MdastVisitorFn<Paragraph>;
   heading?: MdastVisitorFn<Heading>;
   thematicBreak?: MdastVisitorFn<ThematicBreak>;
@@ -744,6 +768,29 @@ function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: u
   });
 }
 
+/** Separate from the per-node encoder, which rejects a `root` payload. */
+function emitMdastRootReplace(buffer: CommandBuffer, root: MdastContent): void {
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
+    emitMdastRootOp(buffer, root as unknown as Record<string, unknown>),
+  );
+  if (!ok) throw unencodableContentError(root);
+}
+
+function emitMdastRootOp(w: OpWriter, n: Record<string, unknown>): boolean {
+  w.open(MDAST_ROOT);
+  if (n.data != null) w.data(n.data);
+  if (n._keepChildren === true) {
+    w.keepChildren();
+  } else {
+    const children = n.children;
+    if (Array.isArray(children)) {
+      for (const c of children) if (!emitMdastOp(w, c, false, true)) return false;
+    }
+  }
+  w.close();
+  return true;
+}
+
 function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
@@ -987,10 +1034,19 @@ export function visitMdastHandle(
   fileURL: URL | undefined,
   data: Data = {},
   sourceFormat: SourceFormat = "markdown",
+  diagnostics: MdastDiagnostic[] = [],
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
   const resolver = new MdastLazyChildResolver(handle);
-  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver, data, sourceFormat);
+  const context = new MdastVisitorContext(
+    handle,
+    getSource,
+    fileURL,
+    resolver,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
   const returnBuffer = acquireCommandBuffer();
   const rustSubs = getMdastRustSubs(plugin);
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);
@@ -1039,6 +1095,54 @@ export function visitMdastHandle(
     });
   }
 
+  return finalizeMdastVisit(handle, context, returnBuffer);
+}
+
+const MDAST_ROOT_SUBS: { nodeType: number; tagFilter: string[] }[] = [
+  { nodeType: MDAST_ROOT, tagFilter: [] },
+];
+
+/** Its own pass so the caller can apply what `before` queued before the
+ *  visitors walk, and the visitors' mutations before `after` reads the tree. */
+export function visitMdastHook(
+  handle: MdastHandle,
+  plugin: MdastPluginInstance,
+  hook: MdastHookFn,
+  source: string | (() => string),
+  fileURL: URL | undefined,
+  data: Data = {},
+  sourceFormat: SourceFormat = "markdown",
+  diagnostics: MdastDiagnostic[] = [],
+): MdastVisitResult | Promise<MdastVisitResult> {
+  const getSource = typeof source === "function" ? source : () => source;
+  const resolver = new MdastLazyChildResolver(handle);
+  const context = new MdastVisitorContext(
+    handle,
+    getSource,
+    fileURL,
+    resolver,
+    data,
+    sourceFormat,
+    diagnostics,
+  );
+  const returnBuffer = acquireCommandBuffer();
+  const matchBuf: Uint8Array = walkMdastHandle(handle, MDAST_ROOT_SUBS);
+  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
+  if (ru32(matchView, 0) === 0) return finalizeMdastVisit(handle, context, returnBuffer);
+
+  const root = readMdastMatchedNode(
+    matchView,
+    matchBuf,
+    ru32(matchView, 10),
+    ru32(matchView, 4),
+    MDAST_ROOT,
+    resolver,
+  ) as MdastRoot;
+
+  const result = hook.call(plugin, root, context);
+  if (result instanceof Promise) {
+    return result.then(() => finalizeMdastVisit(handle, context, returnBuffer));
+  }
   return finalizeMdastVisit(handle, context, returnBuffer);
 }
 
