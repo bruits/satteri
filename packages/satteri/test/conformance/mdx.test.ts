@@ -1,6 +1,7 @@
-import { describe, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { createElement } from "react";
 import { assertMdxConformance, assertMdxMathConformance, assertBothReject } from "./helpers.js";
+import { mdxToMdast } from "../../src/index.js";
 
 const Foo = (props: any) => createElement("div", null, `bar=${props.bar}`);
 const Bar = (props: any) => createElement("em", null, `baz=${props.baz}`);
@@ -616,6 +617,72 @@ describe("MDX conformance: markdown elements", () => {
   test("a tail that closes before the `{` leaves it an expression", async () => {
     await assertBothReject("[a](\\){)}");
     await assertBothReject("[a](/u){w");
+  });
+
+  // Every whitespace run in a resource accepts line endings; only the
+  // destination is line-bounded.
+  test("a resource spanning lines keeps its `{` literal", async () => {
+    await assertMdxConformance("[a]({{{\n)");
+    await assertMdxConformance('[a](/u{\n"t")');
+    await assertMdxConformance('[a](/u "ti{\ntle")');
+    await assertMdxConformance('x\n[a](/u\n"ti{tle") y');
+  });
+
+  test("a resource opening on an earlier line still encloses the `{`", async () => {
+    await assertMdxConformance('[a](/u\n"ti{tle")');
+    await assertMdxConformance("[a](\nu{v})");
+    await assertMdxConformance("[a](}\n({))");
+    await assertMdxConformance('[a](/u "ti\ntl{e")');
+    await assertMdxConformance('![a](/u\n"ti{tle")');
+    await assertMdxConformance('[a](/u\r\n"ti{tle")');
+    await assertMdxConformance('> [a](/u\n> "ti{tle")');
+  });
+
+  test("a block boundary ends the resource, leaving the `{` an expression", async () => {
+    await assertBothReject('[a](/u "a{\n# b")');
+    await assertBothReject('[a](/u "a{\n``` b")');
+    await assertBothReject('[a](/u "a{\n***\nb")');
+    await assertBothReject('[a](/u "a{\n- b")');
+    await assertBothReject('[a](/u "a{\n\nb")');
+    await assertBothReject('[a](/u "a{\n> b")');
+  });
+
+  test("a line ending crosses neither a destination nor a closed tail", async () => {
+    await assertBothReject("[a](/u{\nmore)");
+    await assertBothReject("[a](/u\n) {w");
+  });
+
+  // The dangerous direction: swallowing one of these as title text loses the
+  // expression silently, with no parse error to notice.
+  test("a block boundary keeps a valid `{}` an expression, not title text", async () => {
+    await assertMdxConformance('[a](/u "ti{1+1}\n# tle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n``` tle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n- tle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n> tle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n***\ntle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n\ntle")');
+  });
+
+  test("an escaped label opens no tail, so the `{}` stays an expression", async () => {
+    await assertMdxConformance('\\[a](/u "ti{1+1}\ntle")');
+    await assertMdxConformance('x\\[a](/u "ti{1+1}\ntle")');
+    await assertMdxConformance('\\[a](/u "ti{1+1}tle")');
+    await assertMdxConformance('a\\](/u "ti{1+1}\ntle")');
+  });
+
+  // mdx-js has no GFM, so its footnote-blind parse can't be the oracle here;
+  // satteri's own block pass makes the definition, and the inline scan has to
+  // agree with it.
+  test("a footnote definition ends the resource, keeping the `{}` an expression", () => {
+    const tree = mdxToMdast('[a](/u "ti{1+1}\n[^a]: tle")') as { children: unknown[] };
+    const types: string[] = [];
+    const walk = (n: { type?: string; children?: unknown[] }) => {
+      if (n.type) types.push(n.type);
+      for (const c of n.children ?? []) walk(c as { type?: string; children?: unknown[] });
+    };
+    walk(tree as { children?: unknown[] });
+    expect(types).toContain("mdxTextExpression");
+    expect(types).toContain("footnoteDefinition");
   });
 
   test("an escaped bracket is not a label delimiter, so no tail forms", async () => {
