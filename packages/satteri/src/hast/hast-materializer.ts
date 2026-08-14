@@ -10,7 +10,6 @@ import {
   HAST_MDX_FLOW_EXPRESSION,
   HAST_MDX_TEXT_EXPRESSION,
   HAST_MDX_ESM,
-  type HastProperty,
 } from "./hast-reader.js";
 import type { Root } from "hast";
 import type { HastNode } from "../types.js";
@@ -27,16 +26,6 @@ export const HAST_CONTAINER_TYPES: ReadonlySet<number> = new Set([
   HAST_MDX_JSX_ELEMENT,
   HAST_MDX_JSX_TEXT_ELEMENT,
 ]);
-
-function propsToRecord(
-  props: HastProperty[],
-): Record<string, string | number | boolean | (string | number)[]> {
-  const result: Record<string, string | number | boolean | (string | number)[]> = {};
-  for (const p of props) {
-    result[p.name] = p.value;
-  }
-  return result;
-}
 
 const hastMaterializer = createMaterializer<HastReader, HastNode>({
   label: "materializeHastNode",

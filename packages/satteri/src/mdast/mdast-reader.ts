@@ -233,9 +233,7 @@ export class MdastReader {
    * These store a single StringRef as their type data.
    */
   getTextValue(nodeId: number): string {
-    const data = this.getTypeData(nodeId);
-    const ref = this.readStringRef(data);
-    return this.getString(ref.offset, ref.len);
+    return this.fieldString(nodeId, 0);
   }
 
   /**

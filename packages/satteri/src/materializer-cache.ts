@@ -9,6 +9,7 @@ import { deepFreeze } from "./freeze.js";
 
 /** The reader surface the shared machinery needs; both `HastReader` and `MdastReader` satisfy it. */
 export interface MaterializerReader {
+  readonly nodeCount: number;
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
   pushChildIds(nodeId: number, stack: number[]): void;
@@ -205,39 +206,43 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     return node;
   }
 
-  /** Iterative on purpose: recursing to full document depth overflows on deeply
-   *  nested input, and nothing else here descends more than one level. */
-  function fillTree(reader: TReader, cache: ReaderCache<TNode>, rootId: number): void {
-    const order: number[] = [];
+  /**
+   * Iterative on purpose: recursing to full document depth overflows on deeply
+   * nested input, and nothing else here descends more than one level.
+   *
+   * Node ids are dense, so nodes live in a flat array rather than the memo Map:
+   * one Map entry per node would outlive the whole build and reach old space,
+   * where the tree is already the dominant cost.
+   */
+  function fillTree(reader: TReader, cache: ReaderCache<TNode>, rootId: number): TNode {
+    const byId = new Array<TNode | undefined>(reader.nodeCount);
     const parents: number[] = [];
     const stack: number[] = [rootId];
+
     while (stack.length > 0) {
       const id = stack.pop()!;
-      order.push(id);
+      if (byId[id] === undefined) byId[id] = buildNode(reader, cache, id, true);
       if (spec.hasChildren(reader.getNodeType(id))) {
         parents.push(id);
         reader.pushChildIds(id, stack);
       }
     }
 
-    for (const id of order) {
-      if (!cache.nodes.has(id)) cache.nodes.set(id, buildNode(reader, cache, id, true));
-    }
-
-    for (const id of parents) {
+    for (let p = 0; p < parents.length; p++) {
+      const id = parents[p]!;
       const ids = reader.getChildIds(id);
       const kids = new Array<TNode>(ids.length);
-      for (let i = 0; i < ids.length; i++) kids[i] = cache.nodes.get(ids[i]!)!;
+      for (let i = 0; i < ids.length; i++) kids[i] = byId[ids[i]!]!;
       // Assignment beats defineProperty here; `eager` left `children` uninstalled.
-      (cache.nodes.get(id) as { children?: TNode[] }).children = kids;
+      (byId[id] as { children?: TNode[] }).children = kids;
     }
+
+    return byId[rootId]!;
   }
 
   /** Whole tree at once: the caller will walk it, so lazy accessors cost more than they defer. */
   function materializeTree(reader: TReader, rootId: number): TNode {
-    const cache = readerCache(reader, false);
-    fillTree(reader, cache, rootId);
-    return cache.nodes.get(rootId)!;
+    return fillTree(reader, readerCache(reader, false), rootId);
   }
 
   return { node: materialize, tree: materializeTree };

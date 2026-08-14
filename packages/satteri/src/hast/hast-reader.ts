@@ -357,9 +357,7 @@ export class HastReader {
    * These store a single StringRef (8 bytes) as their type_data.
    */
   getTextValue(nodeId: number): string {
-    const data = this.getTypeData(nodeId);
-    if (data.length < 8) return "";
-    const ref = this.#readStringRef(data, 0);
-    return this.getString(ref.offset, ref.len);
+    const at = this.#typeDataAt(nodeId, 8);
+    return at === -1 ? "" : this.#stringAt(at);
   }
 }
