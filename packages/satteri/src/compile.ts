@@ -156,6 +156,7 @@ function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginDefinition[],
   fileURL: URL | undefined,
+  warnings: boolean,
   data: Data,
   sourceFormat: SourceFormat,
   collectLast = false,
@@ -187,7 +188,7 @@ function runMdastPluginsOnHandle(
       }
       markHandleMutated(handle);
       const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
-      if (dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
+      if (warnings && dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
     };
     return result instanceof Promise ? result.then(apply) : apply(result);
   };
@@ -228,6 +229,7 @@ function runHastPluginsCollectLast(
   plugins: HastPluginDefinition[],
   source: string,
   fileURL: URL | undefined,
+  warnings: boolean,
   data: Data,
   sourceFormat: SourceFormat,
 ): CollectedHastCommands | Promise<CollectedHastCommands> {
@@ -256,7 +258,7 @@ function runHastPluginsCollectLast(
 
       const result = visitHastHandle(handle, plugin, subs, source, fileURL, data, sourceFormat);
       const warnIfDropped = (dropped: number): void => {
-        if (dropped) warnDroppedTransforms(plugin, dropped, "hast");
+        if (warnings && dropped) warnDroppedTransforms(plugin, dropped, "hast");
       };
       if (result instanceof Promise) {
         return result.then((dropped) => {
@@ -475,6 +477,10 @@ export interface CompileOptions {
    */
   fileURL?: URL;
   /**
+   * ...
+   */
+  warnings?: boolean;
+  /**
    * Initial document-level data bag, seeding `ctx.data` before any plugin runs.
    * It is the same object plugins mutate and the caller reads back as
    * `result.data`, so values flow both into and out of a compile. Defaults to a
@@ -647,7 +653,7 @@ export function markdownToHtml(
   source: string,
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
-  const { features, fileURL, data = {} } = options;
+  const { features, fileURL, warnings = true, data = {} } = options;
   const mdastPlugins = normalizePlugins(options.mdastPlugins ?? [], "mdastPlugins");
   const hastPlugins = normalizePlugins(options.hastPlugins ?? [], "hastPlugins");
   const hastMayHaveStubs = hastPlugins.length > 0;
@@ -678,6 +684,7 @@ export function markdownToHtml(
         mdastHandle,
         mdastPlugins,
         fileURL,
+		warnings,
         data,
         "markdown",
         true,
@@ -693,7 +700,7 @@ export function markdownToHtml(
             commands,
             nativeConvertOptions,
           );
-          if (droppedTransforms && r.lastPlugin)
+          if (warnings && droppedTransforms && r.lastPlugin)
             warnDroppedTransforms(r.lastPlugin, droppedTransforms, "mdast");
           return {
             html,
@@ -722,6 +729,7 @@ export function markdownToHtml(
     mdastPlugins,
     false,
     fileURL,
+	warnings,
     nativeFeatures,
     nativeConvertOptions,
     data,
@@ -741,6 +749,7 @@ export function markdownToHtml(
         hastPlugins,
         source,
         fileURL,
+		warnings,
         data,
         "markdown",
       );
@@ -769,7 +778,7 @@ export function markdownToHtml(
       let html: string;
       if (collected.commands.length > 0) {
         const result = applyCommandsAndRenderHandle(h, collected.commands);
-        if (result.droppedTransforms && collected.lastPlugin)
+        if (warnings && result.droppedTransforms && collected.lastPlugin)
           warnDroppedTransforms(collected.lastPlugin, result.droppedTransforms, "hast");
         html = result.html;
       } else {
@@ -824,6 +833,7 @@ function toJsImpl(
     hastPlugins: hastInput = [],
     features,
     fileURL,
+	warnings = true,
     data = {},
     ...mdxFields
   } = options;
@@ -862,6 +872,7 @@ function toJsImpl(
         mdastHandle,
         mdastPlugins,
         fileURL,
+		warnings,
         data,
         mdx ? "mdx" : "markdown",
         true,
@@ -875,7 +886,7 @@ function toJsImpl(
             mdxOptions,
             nativeConvertOptions,
           );
-          if (droppedTransforms && r.lastPlugin)
+          if (warnings && droppedTransforms && r.lastPlugin)
             warnDroppedTransforms(r.lastPlugin, droppedTransforms, "mdast");
           return {
             code,
@@ -904,6 +915,7 @@ function toJsImpl(
     mdastPlugins,
     mdx,
     fileURL,
+	warnings,
     nativeFeatures,
     nativeConvertOptions,
     data,
@@ -918,6 +930,7 @@ function toJsImpl(
         hastPlugins,
         source,
         fileURL,
+		warnings,
         data,
         mdx ? "mdx" : "markdown",
       );
@@ -946,7 +959,7 @@ function toJsImpl(
       let code: string;
       if (collected.commands.length > 0) {
         const result = applyCommandsAndCompileHandle(h, collected.commands, mdxOptions);
-        if (result.droppedTransforms && collected.lastPlugin)
+        if (warnings && result.droppedTransforms && collected.lastPlugin)
           warnDroppedTransforms(collected.lastPlugin, result.droppedTransforms, "hast");
         code = result.code;
       } else {
@@ -1019,6 +1032,7 @@ function createHastHandleFromMdast(
   mdastPlugins: MdastPluginDefinition[],
   mdx: boolean,
   fileURL: URL | undefined,
+  warnings: boolean,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nativeFeatures: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1072,6 +1086,7 @@ function createHastHandleFromMdast(
       mdastHandle,
       mdastPlugins,
       fileURL,
+	  warnings,
       data,
       sourceFormat,
     );
