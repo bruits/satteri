@@ -115,17 +115,24 @@ fn split_url_trim_end(bytes: &[u8], min_end: usize, raw_end: usize) -> usize {
 /// Case-insensitive: micromark's `protocolPrefixInside` lowercases the
 /// scheme before comparing, and its `wwwPrefix` accepts `W` as well as `w`.
 /// remark-gfm handles `http(s)` and `www.`, but not `ftp`.
+/// `| 0x20` folds ASCII letters and nothing else, so `.` must stay an exact
+/// compare: folding it would also accept the control byte 0x0E.
+#[inline]
 pub(crate) fn match_autolink_scheme(bytes: &[u8], ix: usize) -> Option<(usize, bool)> {
-    let rest = &bytes[ix..];
-    let ci = |prefix: &[u8]| {
-        rest.len() >= prefix.len() && rest[..prefix.len()].eq_ignore_ascii_case(prefix)
+    let rest = bytes.get(ix..)?;
+    let &[a, b, c, d, ..] = rest else {
+        return None;
     };
-    if ci(b"https://") {
+    if a | 0x20 == b'w' && b | 0x20 == b'w' && c | 0x20 == b'w' && d == b'.' {
+        return Some((4, true));
+    }
+    if a | 0x20 != b'h' || b | 0x20 != b't' || c | 0x20 != b't' || d | 0x20 != b'p' {
+        return None;
+    }
+    if rest.len() >= 8 && rest[4] | 0x20 == b's' && rest[5..8] == *b"://" {
         Some((8, false))
-    } else if ci(b"http://") {
+    } else if rest.len() >= 7 && rest[4..7] == *b"://" {
         Some((7, false))
-    } else if ci(b"www.") {
-        Some((4, true))
     } else {
         None
     }
@@ -831,13 +838,7 @@ pub(crate) fn gfm_autolink_literal_pass(
         }
         let sr = StringRef::from_bytes(data);
         let text = arena.get_str(sr);
-        let bytes = text.as_bytes();
-        // Triggers are case-insensitive (`HTTP://`, `WWW.`), so scan for the
-        // uppercase variants too.
-        if bytes
-            .iter()
-            .any(|&b| matches!(b, b'h' | b'H' | b'w' | b'W' | b'@'))
-        {
+        if has_autolink_trigger(text.as_bytes()) {
             candidates.push(id);
         }
     }
@@ -849,6 +850,40 @@ pub(crate) fn gfm_autolink_literal_pass(
     for node_id in candidates {
         split_text_with_autolinks_fnr(arena, node_id, source_bytes, cursor.as_deref_mut(), smart);
     }
+}
+
+/// One AVX2 vector; below it `next_autolink_trigger` scans scalar instead.
+const MEMCHR_MIN_LEN: usize = 32;
+
+/// Whether any byte can open an autolink literal, in either case.
+#[inline]
+fn has_autolink_trigger(bytes: &[u8]) -> bool {
+    memchr::memchr3(b'h', b'w', b'@', bytes).is_some()
+        || memchr::memchr2(b'H', b'W', bytes).is_some()
+}
+
+/// Triggers are case-insensitive and memchr takes three needles at a time, so
+/// the upper-case scan is bounded by the lower-case hit to stay leftmost.
+/// `upper` is hoisted per node so text without `H`/`W` scans once per step.
+#[inline]
+fn next_autolink_trigger(bytes: &[u8], from: usize, upper: bool) -> Option<usize> {
+    let hay = &bytes[from..];
+    // Below a vector's worth of bytes memchr's dispatch costs more than the
+    // scalar pass it replaces, and inline-dense text is nearly all short runs.
+    if hay.len() < MEMCHR_MIN_LEN {
+        return hay
+            .iter()
+            .position(|&b| matches!(b, b'h' | b'H' | b'w' | b'W' | b'@'))
+            .map(|i| from + i);
+    }
+    let lower = memchr::memchr3(b'h', b'w', b'@', hay);
+    if !upper {
+        return lower.map(|i| from + i);
+    }
+    let bound = lower.unwrap_or(hay.len());
+    memchr::memchr2(b'H', b'W', &hay[..bound])
+        .or(lower)
+        .map(|i| from + i)
 }
 
 /// The whitespace class autolinks use: `White_Space` less U+0085, plus U+FEFF.
@@ -1362,13 +1397,12 @@ fn split_text_with_autolinks_fnr(
     let bytes = borrowed_text.as_bytes();
 
     let mut matches: Vec<(usize, usize, usize, String)> = Vec::new();
+    let upper = memchr::memchr2(b'H', b'W', bytes).is_some();
     let mut i = 0;
-    while i < bytes.len() {
-        // Triggers are case-insensitive (`HTTP://`, `WWW.`).
-        let b = bytes[i];
-        let hit = match b {
-            b'h' | b'H' | b'w' | b'W' => fnr_find_url(bytes, i),
-            b'@' => fnr_find_email(bytes, i),
+    while let Some(at) = next_autolink_trigger(bytes, i, upper) {
+        let hit = match bytes[at] {
+            b'@' => fnr_find_email(bytes, at),
+            _ if match_autolink_scheme(bytes, at).is_some() => fnr_find_url(bytes, at),
             _ => None,
         };
         if let Some((s, url_end, url, raw_end)) = hit {
@@ -1379,7 +1413,7 @@ fn split_text_with_autolinks_fnr(
                 continue;
             }
         }
-        i += 1;
+        i = at + 1;
     }
 
     if matches.is_empty() {
