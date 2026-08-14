@@ -954,9 +954,17 @@ pub fn create_hast_handle(
     source: String,
     features: Option<JsFeatures>,
     convert_options: Option<JsConvertOptions>,
+    track_positions: Option<bool>,
 ) -> Result<HastHandle> {
-    let (handle, _) =
-        create_hast_handle_impl(env, &source, features, convert_options, false, true, false)?;
+    let (handle, _) = create_hast_handle_impl(
+        env,
+        &source,
+        features,
+        convert_options,
+        false,
+        track_positions.unwrap_or(true),
+        false,
+    )?;
     Ok(handle)
 }
 
@@ -979,9 +987,17 @@ pub fn create_mdx_hast_handle(
     source: String,
     features: Option<JsFeatures>,
     convert_options: Option<JsConvertOptions>,
+    track_positions: Option<bool>,
 ) -> Result<HastHandle> {
-    let (handle, _) =
-        create_hast_handle_impl(env, &source, features, convert_options, true, true, false)?;
+    let (handle, _) = create_hast_handle_impl(
+        env,
+        &source,
+        features,
+        convert_options,
+        true,
+        track_positions.unwrap_or(true),
+        false,
+    )?;
     Ok(handle)
 }
 

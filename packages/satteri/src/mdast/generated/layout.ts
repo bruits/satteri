@@ -290,21 +290,19 @@ export function materializeMdastFields(
 ): boolean {
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields === undefined) return false;
-  const data = reader.getTypeData(nodeId);
   const out = node as Record<string, unknown>;
   for (const f of fields) {
+    if (f.skip) continue;
     if (f.kind === "u8") {
       // Short type_data falls back to the layout's declared default,
       // matching the Rust walk serializer.
-      const b = data[f.offset] ?? f.default ?? 0;
-      if (!f.skip) out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
+      const b = reader.fieldU8(nodeId, f.offset, f.default ?? 0);
+      out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
     } else {
       // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
-      // yields an empty ref, mirroring the Rust decoders' bounds checks.
-      const ref =
-        f.offset + 8 <= data.length ? reader.readStringRef(data, f.offset) : { offset: 0, len: 0 };
-      if (f.skip) continue;
-      const s = f.nullable && ref.len === 0 ? null : reader.getString(ref.offset, ref.len);
+      // reads as empty, mirroring the Rust decoders' bounds checks.
+      const raw = reader.fieldString(nodeId, f.offset);
+      const s = f.nullable && raw === "" ? null : raw;
       out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;
     }
   }

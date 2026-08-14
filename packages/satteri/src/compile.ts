@@ -1091,9 +1091,26 @@ function createHastHandleFromMdast(
 
 // Step-by-step API: individual pipeline stages with materialized trees
 
+/** Options for the step-by-step tree functions. */
+export interface TreeOptions {
+  features?: Features;
+  /**
+   * Record `position` on every node. Default: `true`.
+   *
+   * A unist position is three objects per node and roughly half a materialized
+   * tree's memory, on top of the parser's line-index build. Pass `false` when
+   * nothing downstream reads `node.position`.
+   */
+  position?: boolean;
+}
+
 /** Parse Markdown source into a materialized mdast tree. */
-export function markdownToMdast(source: string, options: { features?: Features } = {}): MdastNode {
-  const handle = createMdastHandle(source, featuresToNative(options.features).features);
+export function markdownToMdast(source: string, options: TreeOptions = {}): MdastNode {
+  const handle = createMdastHandle(
+    source,
+    featuresToNative(options.features).features,
+    options.position,
+  );
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
@@ -1102,8 +1119,12 @@ export function markdownToMdast(source: string, options: { features?: Features }
 }
 
 /** Parse MDX source into a materialized mdast tree. */
-export function mdxToMdast(source: string, options: { features?: Features } = {}): MdastNode {
-  const handle = createMdxMdastHandle(source, featuresToNative(options.features).features);
+export function mdxToMdast(source: string, options: TreeOptions = {}): MdastNode {
+  const handle = createMdxMdastHandle(
+    source,
+    featuresToNative(options.features).features,
+    options.position,
+  );
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
@@ -1112,9 +1133,9 @@ export function mdxToMdast(source: string, options: { features?: Features } = {}
 }
 
 /** Convert Markdown source to a materialized hast tree. */
-export function markdownToHast(source: string, options: { features?: Features } = {}): HastNode {
+export function markdownToHast(source: string, options: TreeOptions = {}): HastNode {
   const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
-  const handle = createHastHandle(source, nativeFeatures, convertOptions);
+  const handle = createHastHandle(source, nativeFeatures, convertOptions, options.position);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
@@ -1123,9 +1144,9 @@ export function markdownToHast(source: string, options: { features?: Features } 
 }
 
 /** Convert MDX source to a materialized hast tree. */
-export function mdxToHast(source: string, options: { features?: Features } = {}): HastNode {
+export function mdxToHast(source: string, options: TreeOptions = {}): HastNode {
   const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
-  const handle = createMdxHastHandle(source, nativeFeatures, convertOptions);
+  const handle = createMdxHastHandle(source, nativeFeatures, convertOptions, options.position);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {

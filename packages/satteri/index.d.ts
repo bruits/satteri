@@ -75,7 +75,7 @@ export declare function convertMdastToHastHandle(handle: MdastHandle, convertOpt
  * Parse markdown source and convert to HAST. Returns an opaque handle.
  * The arena stays in Rust memory, no buffer is copied to JS.
  */
-export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
+export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): HastHandle
 
 /**
  * Parse an HTML string into structured HAST (elements, text, comments).
@@ -99,7 +99,7 @@ export declare function createHastHandleWithFrontmatter(source: string, features
 export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null, trackPositions?: boolean | undefined | null): MdastHandle
 
 /** Parse MDX source and convert to HAST. Returns an opaque handle. */
-export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): HastHandle
+export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): HastHandle
 
 /** MDX variant of [`create_hast_handle_with_frontmatter`]. */
 export declare function createMdxHastHandleWithFrontmatter(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
