@@ -36,6 +36,7 @@ export class HastReader {
   readonly #header: BufferHeader;
   readonly #textDecoder: TextDecoder;
   #stringPoolCache: string | null = null;
+  #poolIsAscii: boolean | null = null;
 
   constructor(buffer: ArrayBuffer | Uint8Array) {
     if (buffer instanceof Uint8Array) {
@@ -127,6 +128,14 @@ export class HastReader {
   /** Read a substring from the string pool by byte offset and length. */
   getString(offset: number, len: number): string {
     if (len === 0) return "";
+    if (this.#poolIsAscii === null) {
+      this.#poolIsAscii = this.getStringPool().length === this.#header.stringPoolLen;
+    }
+    // An all-ASCII pool has byte offsets equal to its UTF-16 indices, so one
+    // decode plus substrings beats a TextDecoder call per string.
+    if (this.#poolIsAscii) {
+      return this.getStringPool().substring(offset, offset + len);
+    }
     const { stringPoolOffset } = this.#header;
     const bytes = new Uint8Array(
       this.#view.buffer,
@@ -198,10 +207,10 @@ export class HastReader {
 
   /** Read a StringRef (offset: u32 LE, len: u32 LE) from a byte array at byteOffset. */
   #readStringRef(data: Uint8Array, byteOffset: number): { offset: number; len: number } {
-    const view = new DataView(data.buffer, data.byteOffset + byteOffset);
+    const at = data.byteOffset - this.#view.byteOffset + byteOffset;
     return {
-      offset: view.getUint32(0, true),
-      len: view.getUint32(4, true),
+      offset: this.#view.getUint32(at, true),
+      len: this.#view.getUint32(at + 4, true),
     };
   }
 
