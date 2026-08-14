@@ -116,6 +116,10 @@ const cases: Array<{ name: string; md: string }> = [
     name: "svg foreignObject",
     md: `<svg><foreignObject><div class="a">x</div></foreignObject></svg>`,
   },
+  {
+    name: "svg xlink sprite",
+    md: `<svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="#icon" xml:lang="en" foo:bar="x"/></svg>`,
+  },
   // Structure: context-sensitive elements outside their usual homes survive
   // (the fragment parses in a template context).
   { name: "bare td", md: `<td headers=" h1  h2 ">x</td>` },
