@@ -1,4 +1,5 @@
 ---
+cargo/satteri: patch
 cargo/satteri-arena: patch
 cargo/satteri-ast: patch
 cargo/satteri-plugin-api: patch
