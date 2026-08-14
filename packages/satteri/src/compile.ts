@@ -323,7 +323,7 @@ function runHastPluginsCollectLast(
                 sourceFormat,
                 diagnostics,
               )
-            : visitHastHook(handle, pass, source, fileURL, data, sourceFormat, diagnostics),
+            : visitHastHook(handle, plugin, pass, source, fileURL, data, sourceFormat, diagnostics),
           warnIfDropped,
         );
       const collectFinal = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
@@ -341,6 +341,7 @@ function runHastPluginsCollectLast(
               )
             : visitHastHookCollect(
                 handle,
+                plugin,
                 finalPass,
                 source,
                 fileURL,

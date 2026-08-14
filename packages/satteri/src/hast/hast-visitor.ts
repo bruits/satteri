@@ -1297,6 +1297,7 @@ const HAST_ROOT_SUBS: { nodeType: number; tagFilter: string[] }[] = [
  *  visitors walk, and the visitors' mutations before `after` reads the tree. */
 export function visitHastHookCollect(
   handle: HastHandle,
+  plugin: HastVisitorInstance,
   hook: HastHookFn,
   source: string | (() => string),
   fileURL: URL | undefined,
@@ -1328,13 +1329,14 @@ export function visitHastHookCollect(
     HAST_ROOT,
   ) as HastRoot;
 
-  const result = hook(root, ctx);
+  const result = hook.call(plugin, root, ctx);
   if (result instanceof Promise) return result.then(() => collectCommands(returnBuffer, ctx));
   return collectCommands(returnBuffer, ctx);
 }
 
 export function visitHastHook(
   handle: HastHandle,
+  plugin: HastVisitorInstance,
   hook: HastHookFn,
   source: string | (() => string),
   fileURL: URL | undefined,
@@ -1344,6 +1346,7 @@ export function visitHastHook(
 ): number | Promise<number> {
   const result = visitHastHookCollect(
     handle,
+    plugin,
     hook,
     source,
     fileURL,
