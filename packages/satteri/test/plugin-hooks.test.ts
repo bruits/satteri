@@ -288,7 +288,50 @@ describe("mdast lifecycle hooks", () => {
     expect(html).not.toContain("<h1>");
   });
 
-  test("visitor and after mutations both land in the same pass", () => {
+  test("the plugin's own visitors walk what before left behind", () => {
+    const seen: string[] = [];
+    const { html } = markdownToHtml("# Old", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "swap-then-visit",
+          before(root, ctx) {
+            ctx.replaceNode(root, {
+              type: "root",
+              children: [{ type: "paragraph", children: [{ type: "text", value: "new" }] }],
+            });
+          },
+          heading() {
+            seen.push("heading");
+          },
+          paragraph(node, ctx) {
+            seen.push(`paragraph:${ctx.textContent(node)}`);
+          },
+        }),
+      ],
+    });
+    expect(seen).toEqual(["paragraph:new"]);
+    expect(html).toBe("<p>new</p>\n");
+  });
+
+  test("after sees what the plugin's own visitors changed", () => {
+    let seen: string[] = [];
+    markdownToHtml("# Hi\n\nWorld", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "replace-then-observe",
+          heading() {
+            return { type: "thematicBreak" };
+          },
+          after(root) {
+            seen = root.children.map((c) => c.type);
+          },
+        }),
+      ],
+    });
+    expect(seen).toEqual(["thematicBreak", "paragraph"]);
+  });
+
+  test("visitor and after mutations both land", () => {
     const { html } = markdownToHtml("# Hi", {
       mdastPlugins: [
         defineMdastPlugin({
@@ -823,6 +866,53 @@ describe("hast lifecycle hooks", () => {
       ],
     });
     expect(order).toEqual(["before", "h1", "after"]);
+  });
+
+  test("element visitors walk what before appended", () => {
+    const seen: string[] = [];
+    markdownToHtml("# Hi", {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "append-then-visit",
+          before(root, ctx) {
+            ctx.appendChild(root, {
+              type: "element",
+              tagName: "footer",
+              properties: {},
+              children: [],
+            });
+          },
+          element: { filter: ["h1", "footer"], visit: (node) => void seen.push(node.tagName) },
+        }),
+      ],
+    });
+    expect(seen).toEqual(["h1", "footer"]);
+  });
+
+  test("after sees what the plugin's own element visitors returned", () => {
+    let seen: string[] = [];
+    markdownToHtml("# Hi", {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "replace-then-observe",
+          element: {
+            filter: ["h1"],
+            visit: () => ({
+              type: "element",
+              tagName: "h2",
+              properties: {},
+              children: [{ type: "text", value: "Hi" }],
+            }),
+          },
+          after(root) {
+            seen = root.children
+              .filter((c): c is Element => c.type === "element")
+              .map((c) => c.tagName);
+          },
+        }),
+      ],
+    });
+    expect(seen).toEqual(["h2"]);
   });
 
   test("after appends an element to an empty document", () => {

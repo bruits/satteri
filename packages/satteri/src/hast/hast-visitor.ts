@@ -587,7 +587,10 @@ type HastVisitorFn<N extends HastNode = HastNode> = (
   ctx: HastVisitorContext,
 ) => HastNode | void | Promise<HastNode | void>;
 
-type HastHookFn = (root: Readonly<HastRoot>, ctx: HastVisitorContext) => void | Promise<void>;
+export type HastHookFn = (
+  root: Readonly<HastRoot>,
+  ctx: HastVisitorContext,
+) => void | Promise<void>;
 
 export interface HastVisitorInstance {
   /** Plugin-level configuration (e.g. `{ position: true }` to read positions). */
@@ -678,14 +681,6 @@ function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
   }
 
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
-  if (typeof plugin.before === "function" || typeof plugin.after === "function") {
-    // Node 0 always exists, so subscribing by type fires exactly once per
-    // document. Dispatch also assumes this is the only root subscription.
-    if (process.env.NODE_ENV !== "production" && subs.some((s) => s.nodeType === HAST_ROOT)) {
-      throw new Error("satteri: `root` is subscribable, which breaks plugin hook dispatch");
-    }
-    rustSubs.push({ nodeType: HAST_ROOT, tagFilter: [] });
-  }
   return { subs, rustSubs };
 }
 
@@ -1173,19 +1168,20 @@ function isTextValueSwap(result: HastNode, original: HastNode): boolean {
 }
 
 function dispatchMatches(
-  wire: WalkWire,
-  matchCount: number,
-  startIndex: number,
+  matchBuf: Uint8Array,
   subs: ResolvedSubscription[],
   ctx: HastVisitorContextImpl,
   returnBuffer: CommandBuffer,
+  resolver: HastLazyChildResolver,
 ): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
-  const { view: matchView, buf: matchBuf } = wire;
+  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
+  const matchCount = matchView.getUint32(0, true);
+  const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
   let deferred:
     | { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[]
     | null = null;
 
-  for (let i = startIndex; i < matchCount; i++) {
+  for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
     const nodeId = matchView.getUint32(indexBase, true);
     const subIndex = matchBuf[indexBase + 4]!;
@@ -1252,89 +1248,74 @@ export function visitHastHandleCollect(
   const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data, sourceFormat);
   const returnBuffer = acquireCommandBuffer();
   const rustSubs = getRustSubs(plugin);
-  const matchBuf = walkHandle(handle, rustSubs);
-  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
-  const matchCount = matchView.getUint32(0, true);
-  const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
-
-  // `root` is not a subscribable visitor key, so a sub index past the visitors
-  // can only be the hook subscription, and pre-order puts it first.
-  if (matchCount > 0 && matchBuf[8] === subs.length) {
-    return visitHastHandleWithHooks(plugin, subs, ctx, returnBuffer, wire, matchCount);
-  }
-
-  const deferred = dispatchMatches(wire, matchCount, 0, subs, ctx, returnBuffer);
+  const deferred = dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer, resolver);
 
   if (deferred) {
-    return applyDeferredHastResults(deferred, returnBuffer).then(() =>
-      collectCommands(returnBuffer, ctx),
-    );
+    return Promise.all(
+      deferred.map((d) =>
+        d.promise.then((result) => ({ nodeId: d.nodeId, result, originalNode: d.originalNode })),
+      ),
+    ).then((results) => {
+      for (const { nodeId, result, originalNode } of results) {
+        if (result != null && result !== originalNode) {
+          emitHastTree(returnBuffer, "replace", nodeId, result);
+        }
+      }
+      return collectCommands(returnBuffer, ctx);
+    });
   }
 
   return collectCommands(returnBuffer, ctx);
 }
 
-function applyDeferredHastResults(
-  deferred: { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[],
-  returnBuffer: CommandBuffer,
-): Promise<void> {
-  return Promise.all(
-    deferred.map((d) =>
-      d.promise.then((result) => ({ nodeId: d.nodeId, result, originalNode: d.originalNode })),
-    ),
-  ).then((results) => {
-    for (const { nodeId, result, originalNode } of results) {
-      if (result != null && result !== originalNode) {
-        emitHastTree(returnBuffer, "replace", nodeId, result);
-      }
-    }
-  });
-}
+const HAST_ROOT_SUBS: { nodeType: number; tagFilter: string[] }[] = [
+  { nodeType: HAST_ROOT, tagFilter: [] },
+];
 
-/** Match 0 must be the hook root: the caller checks it, this does not. */
-function visitHastHandleWithHooks(
-  plugin: HastVisitorInstance,
-  subs: ResolvedSubscription[],
-  ctx: HastVisitorContextImpl,
-  returnBuffer: CommandBuffer,
-  wire: WalkWire,
-  matchCount: number,
+/** Its own pass so the caller can apply what `before` queued before the
+ *  visitors walk, and the visitors' mutations before `after` reads the tree. */
+export function visitHastHookCollect(
+  handle: HastHandle,
+  hook: HastHookFn,
+  source: string | (() => string),
+  fileURL: URL | undefined,
+  data: Data = {},
+  sourceFormat: SourceFormat = "markdown",
 ): Uint8Array | Promise<Uint8Array> {
-  const { view: matchView } = wire;
-  const hookRoot = readMatchedNode(
+  const getSource = typeof source === "function" ? source : () => source;
+  const resolver = new HastLazyChildResolver(handle);
+  const ctx = new HastVisitorContextImpl(handle, getSource, fileURL, resolver, data, sourceFormat);
+  const returnBuffer = acquireCommandBuffer();
+  const matchBuf = walkHandle(handle, HAST_ROOT_SUBS);
+  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
+  if (matchView.getUint32(0, true) === 0) return collectCommands(returnBuffer, ctx);
+
+  const wire: WalkWire = { view: matchView, buf: matchBuf, resolver };
+  const root = readMatchedNode(
     wire,
     matchView.getUint32(10, true),
     matchView.getUint32(4, true),
     HAST_ROOT,
   ) as HastRoot;
 
-  const dispatchAndCollect = (): Uint8Array | Promise<Uint8Array> => {
-    const deferred = dispatchMatches(wire, matchCount, 1, subs, ctx, returnBuffer);
+  const result = hook(root, ctx);
+  if (result instanceof Promise) return result.then(() => collectCommands(returnBuffer, ctx));
+  return collectCommands(returnBuffer, ctx);
+}
 
-    const runAfterAndCollect = (): Uint8Array | Promise<Uint8Array> => {
-      const afterFn = plugin.after;
-      if (typeof afterFn === "function") {
-        const result = afterFn(hookRoot, ctx);
-        if (result instanceof Promise) {
-          return result.then(() => collectCommands(returnBuffer, ctx));
-        }
-      }
-      return collectCommands(returnBuffer, ctx);
-    };
-
-    if (deferred) {
-      return applyDeferredHastResults(deferred, returnBuffer).then(runAfterAndCollect);
-    }
-
-    return runAfterAndCollect();
-  };
-
-  const beforeFn = plugin.before;
-  if (typeof beforeFn === "function") {
-    const result = beforeFn(hookRoot, ctx);
-    if (result instanceof Promise) return result.then(dispatchAndCollect);
+export function visitHastHook(
+  handle: HastHandle,
+  hook: HastHookFn,
+  source: string | (() => string),
+  fileURL: URL | undefined,
+  data: Data = {},
+  sourceFormat: SourceFormat = "markdown",
+): number | Promise<number> {
+  const result = visitHastHookCollect(handle, hook, source, fileURL, data, sourceFormat);
+  if (result instanceof Promise) {
+    return result.then((commands) => applyCollectedCommands(handle, commands));
   }
-  return dispatchAndCollect();
+  return applyCollectedCommands(handle, result);
 }
 
 function collectCommands(returnBuffer: CommandBuffer, ctx: HastVisitorContextImpl): Uint8Array {

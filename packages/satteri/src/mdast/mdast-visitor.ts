@@ -419,7 +419,7 @@ type MdastVisitorFn<N extends MdastNode | Custom = MdastNode> = (
   context: MdastVisitorContext,
 ) => MdastVisitorResult | Promise<MdastVisitorResult>;
 
-type MdastHookFn = (
+export type MdastHookFn = (
   root: Readonly<MdastRoot>,
   context: MdastVisitorContext,
 ) => void | Promise<void>;
@@ -533,14 +533,6 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
     }
   }
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
-  if (typeof plugin.before === "function" || typeof plugin.after === "function") {
-    // Node 0 always exists, so subscribing by type fires exactly once per
-    // document. Dispatch also assumes this is the only root subscription.
-    if (process.env.NODE_ENV !== "production" && subs.some((s) => s.nodeType === MDAST_ROOT)) {
-      throw new Error("satteri: `root` is subscribable, which breaks plugin hook dispatch");
-    }
-    rustSubs.push({ nodeType: MDAST_ROOT, tagFilter: [] });
-  }
   return { subs, rustSubs };
 }
 
@@ -1050,65 +1042,11 @@ export function visitMdastHandle(
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
   const matchCount = ru32(matchView, 0);
 
-  // `root` is not a subscribable visitor key, so a sub index past the visitors
-  // can only be the hook subscription, and pre-order puts it first.
-  if (matchCount > 0 && matchBuf[8] === subs.length) {
-    return visitMdastHandleWithHooks(
-      handle,
-      plugin,
-      subs,
-      context,
-      returnBuffer,
-      resolver,
-      matchView,
-      matchBuf,
-      matchCount,
-    );
-  }
+  let deferred:
+    | { nodeId: number; promise: Promise<MdastVisitorResult>; originalNode: MdastNode }[]
+    | null = null;
 
-  const deferred = dispatchMdastMatches(
-    matchView,
-    matchBuf,
-    matchCount,
-    0,
-    plugin,
-    subs,
-    context,
-    returnBuffer,
-    resolver,
-  );
-
-  if (deferred) {
-    return applyDeferredMdastResults(deferred, returnBuffer).then(() =>
-      finalizeMdastVisit(handle, context, returnBuffer),
-    );
-  }
-
-  return finalizeMdastVisit(handle, context, returnBuffer);
-}
-
-type DeferredMdastVisit = {
-  nodeId: number;
-  promise: Promise<MdastVisitorResult>;
-  originalNode: MdastNode;
-};
-
-/** Top-level rather than a closure over the caller's locals: capture measurably
- *  slowed per-node dispatch. */
-function dispatchMdastMatches(
-  matchView: DataView,
-  matchBuf: Uint8Array,
-  matchCount: number,
-  startIndex: number,
-  plugin: MdastPluginInstance,
-  subs: MdastSubscription[],
-  context: MdastVisitorContext,
-  returnBuffer: CommandBuffer,
-  resolver: MdastLazyChildResolver,
-): DeferredMdastVisit[] | null {
-  let deferred: DeferredMdastVisit[] | null = null;
-
-  for (let i = startIndex; i < matchCount; i++) {
+  for (let i = 0; i < matchCount; i++) {
     const indexBase = 4 + i * 10;
     const nodeId = ru32(matchView, indexBase);
     const subIndex = matchBuf[indexBase + 4]!;
@@ -1133,37 +1071,46 @@ function dispatchMdastMatches(
     }
   }
 
-  return deferred;
+  if (deferred) {
+    return Promise.all(
+      deferred.map((d) =>
+        d.promise.then((r) => ({ nodeId: d.nodeId, result: r, originalNode: d.originalNode })),
+      ),
+    ).then((results) => {
+      for (const { nodeId, result, originalNode } of results) {
+        applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
+      }
+      return finalizeMdastVisit(handle, context, returnBuffer);
+    });
+  }
+
+  return finalizeMdastVisit(handle, context, returnBuffer);
 }
 
-function applyDeferredMdastResults(
-  deferred: DeferredMdastVisit[],
-  returnBuffer: CommandBuffer,
-): Promise<void> {
-  return Promise.all(
-    deferred.map((d) =>
-      d.promise.then((r) => ({ nodeId: d.nodeId, result: r, originalNode: d.originalNode })),
-    ),
-  ).then((results) => {
-    for (const { nodeId, result, originalNode } of results) {
-      applyMdastVisitResult(result, nodeId, returnBuffer, originalNode);
-    }
-  });
-}
+const MDAST_ROOT_SUBS: { nodeType: number; tagFilter: string[] }[] = [
+  { nodeType: MDAST_ROOT, tagFilter: [] },
+];
 
-/** Match 0 must be the hook root: the caller checks it, this does not. */
-function visitMdastHandleWithHooks(
+/** Its own pass so the caller can apply what `before` queued before the
+ *  visitors walk, and the visitors' mutations before `after` reads the tree. */
+export function visitMdastHook(
   handle: MdastHandle,
   plugin: MdastPluginInstance,
-  subs: MdastSubscription[],
-  context: MdastVisitorContext,
-  returnBuffer: CommandBuffer,
-  resolver: MdastLazyChildResolver,
-  matchView: DataView,
-  matchBuf: Uint8Array,
-  matchCount: number,
+  hook: MdastHookFn,
+  source: string | (() => string),
+  fileURL: URL | undefined,
+  data: Data = {},
+  sourceFormat: SourceFormat = "markdown",
 ): MdastVisitResult | Promise<MdastVisitResult> {
-  const hookRoot = readMdastMatchedNode(
+  const getSource = typeof source === "function" ? source : () => source;
+  const resolver = new MdastLazyChildResolver(handle);
+  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver, data, sourceFormat);
+  const returnBuffer = acquireCommandBuffer();
+  const matchBuf: Uint8Array = walkMdastHandle(handle, MDAST_ROOT_SUBS);
+  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
+  if (ru32(matchView, 0) === 0) return finalizeMdastVisit(handle, context, returnBuffer);
+
+  const root = readMdastMatchedNode(
     matchView,
     matchBuf,
     ru32(matchView, 10),
@@ -1172,43 +1119,11 @@ function visitMdastHandleWithHooks(
     resolver,
   ) as MdastRoot;
 
-  const dispatchAndFinalize = (): MdastVisitResult | Promise<MdastVisitResult> => {
-    const deferred = dispatchMdastMatches(
-      matchView,
-      matchBuf,
-      matchCount,
-      1,
-      plugin,
-      subs,
-      context,
-      returnBuffer,
-      resolver,
-    );
-
-    const runAfterAndFinalize = (): MdastVisitResult | Promise<MdastVisitResult> => {
-      const afterFn = plugin.after;
-      if (typeof afterFn === "function") {
-        const result = afterFn.call(plugin, hookRoot, context);
-        if (result instanceof Promise) {
-          return result.then(() => finalizeMdastVisit(handle, context, returnBuffer));
-        }
-      }
-      return finalizeMdastVisit(handle, context, returnBuffer);
-    };
-
-    if (deferred) {
-      return applyDeferredMdastResults(deferred, returnBuffer).then(runAfterAndFinalize);
-    }
-
-    return runAfterAndFinalize();
-  };
-
-  const beforeFn = plugin.before;
-  if (typeof beforeFn === "function") {
-    const result = beforeFn.call(plugin, hookRoot, context);
-    if (result instanceof Promise) return result.then(dispatchAndFinalize);
+  const result = hook.call(plugin, root, context);
+  if (result instanceof Promise) {
+    return result.then(() => finalizeMdastVisit(handle, context, returnBuffer));
   }
-  return dispatchAndFinalize();
+  return finalizeMdastVisit(handle, context, returnBuffer);
 }
 
 function finalizeMdastVisit(

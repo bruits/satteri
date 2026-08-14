@@ -271,8 +271,8 @@ mdxFlowExpression(node) {
 
 Besides visitors, both plugin kinds accept two lifecycle hooks. Each runs **exactly once per document**, whether or not any of the plugin's visitors match, and receives the document root plus the usual `ctx`:
 
-- `before(root, ctx)` runs before any of the plugin's visitors, e.g. to seed `ctx.data` or closure state they read.
-- `after(root, ctx)` runs after all of the plugin's visitors have settled (async ones included), so it can emit output built from state they collected.
+- `before(root, ctx)` runs before any of the plugin's visitors, to seed `ctx.data` or closure state they read, or to reshape the tree they are about to walk.
+- `after(root, ctx)` runs after all of the plugin's visitors have settled (async ones included), so it can emit output built from state they collected, against the tree they left behind.
 
 `after` is the place for per-document work that must not depend on any particular node existing, such as injecting an ESM export:
 
@@ -308,7 +308,7 @@ after(root, ctx) {
 },
 ```
 
-Hooks are procedures, not transformers: their return values are ignored (an async hook is awaited), so mutate via `ctx`. Mutations queue until the end of the pass, so neither hook sees a tree its own pass changed: `before` cannot show the plugin's own visitors a changed tree, and `root.children` in `after` still reflects the document as it was walked, not what those visitors returned. Reach for a separate plugin when you need to work against the applied result.
+Hooks are procedures, not transformers: their return values are ignored (an async hook is awaited), so mutate via `ctx`. Each hook is its own pass, applied before the next one starts, so the ordering is the one the names imply: whatever `before` queues is already in the tree the plugin's visitors walk, and `root.children` in `after` reflects what those visitors did.
 
 ## Node lifetime
 
@@ -468,7 +468,7 @@ To share state across visits within a document, close over a variable in the sur
 Each Sätteri plugin walks the tree **once** — there is no re-walking until the tree stops changing. Within that single pass:
 
 - **Passed-through children keep their identity.** When a visitor returns a replacement that reuses the original children (e.g. `{ ...node, children: [...node.children] }`), those children are spliced back unchanged, so a transform queued on a nested one in the same pass still applies. This is what lets a single `containerDirective` visitor turn both an outer `:::note` and a nested `:::tip` into asides in one go.
-- **A plugin's own freshly-built nodes are not re-walked by that plugin.** A brand-new node a visitor returns isn't visited again by the same plugin. Produce its final shape directly, or hand it to a later plugin — every plugin runs over the fully materialized output of the ones before it.
+- **A plugin's own freshly-built nodes are not re-walked by that plugin.** A brand-new node a visitor returns isn't visited again by the same plugin. Produce its final shape directly, or hand it to a later plugin — every plugin runs over the fully materialized output of the ones before it. A `before` hook is the exception: it lands before the walk, so nodes it builds *are* visited.
 - **Dropping a subtree drops the transforms queued inside it.** If one visitor removes or replaces a node while another queued a transform on something inside that subtree, the orphaned transform is dropped and a warning is logged. Usually that's intended; the warning catches the cases where it isn't.
 - **Nodes from another document throw.** Handing a context method a node kept from a previous compile — or an mdast node inside a hast plugin — fails the compile. Keep nodes around within a document freely; don't carry them across.
 - **A few contradictory combinations throw.** Replacing a node with new content that reuses that same node while another plugin edits something inside it in the same pass, two replacements that each reuse the other's node, and inserting a sibling next to the root. Replacing, removing, or wrapping the root itself — say, via `ctx.parent()` on a top-level node — works fine.
