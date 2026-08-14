@@ -4354,34 +4354,90 @@ const LINK_LABEL_MAX_TRACKED_DEPTH: u32 = 64;
 /// back to expression scanning and errors on a dangling `{`. We mirror that
 /// by returning false so the caller can run the expression scanner.
 ///
-/// Line-bounded, so a resource spanning lines is a known divergence. Label
-/// starts are not: `scope_start` is where the enclosing block's inline content
-/// begins, so one on an earlier line of the same block still counts.
+/// A resource may span lines, since `resourceBefore`,
+/// `resourceDestinationAfter` and `resourceTitleAfter` all run
+/// `factoryWhitespace` and `factoryTitle` accepts line endings; only the
+/// destination is line-bounded. `scope_start` is where the enclosing block's
+/// inline content begins, so a tail opening on an earlier line of the same
+/// block still counts. Lazy and list-item continuations are a known
+/// divergence: the forward scan stops at a line that opens a block rather than
+/// tracking the enclosing container.
 #[cfg(feature = "mdx")]
 fn is_inside_link_url_parens(bytes: &[u8], pos: usize, scope_start: usize) -> bool {
     let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
         .map(|i| i + 1)
         .unwrap_or(0);
-    // A tail is line-bounded, so one enclosing `pos` opens on `pos`'s own line.
-    if !memchr::memchr_iter(b']', &bytes[line_start..pos])
-        .any(|rel| bytes.get(line_start + rel + 1) == Some(&b'('))
-    {
+    let opens_tail = |from: usize, to: usize| {
+        memchr::memchr_iter(b']', &bytes[from..to])
+            .any(|rel| bytes.get(from + rel + 1) == Some(&b'('))
+    };
+    let on_line = opens_tail(line_start, pos);
+    let earlier = scope_start < line_start && opens_tail(scope_start, line_start);
+    if !on_line && !earlier {
         return false;
     }
     let line_end = line_end_at(bytes, pos);
-    match replay_link_tails(bytes, pos, line_start, line_end, scope_start >= line_start) {
-        TailReplay::Inside => true,
-        TailReplay::Outside => false,
-        // `scope_start` is the block's own start, so this cannot cross into one.
-        TailReplay::NeedsScope => {
-            scope_start < line_start
-                && !earlier_lines_are_ambiguous(bytes, scope_start, line_start)
-                && matches!(
-                    replay_link_tails(bytes, pos, scope_start, line_end, true),
-                    TailReplay::Inside
-                )
+    let prefix = leading_container_prefix(&bytes[line_start..]);
+    // Two reasons to widen: a `](` on this line wanted a label start it never
+    // saw, or a tail on the line above is still open here. Only the second is
+    // worth paying the block replay to guess at.
+    let widen = if on_line {
+        match replay_link_tails(
+            bytes,
+            pos,
+            line_start,
+            line_end,
+            prefix,
+            scope_start >= line_start,
+        ) {
+            TailReplay::Inside => return true,
+            TailReplay::NeedsScope => true,
+            TailReplay::Outside => {
+                earlier && tail_reaches_from_line_above(bytes, line_start, pos, prefix)
+            }
         }
+    } else {
+        tail_reaches_from_line_above(bytes, line_start, pos, prefix)
+    };
+    // `scope_start` is the block's own start, so this cannot cross into one.
+    widen
+        && scope_start < line_start
+        && !earlier_lines_are_ambiguous(bytes, scope_start, line_start)
+        && matches!(
+            replay_link_tails(bytes, pos, scope_start, line_end, prefix, true),
+            TailReplay::Inside
+        )
+}
+
+/// Whether replaying the whole block could pay off. A whitespace run crosses at
+/// most one line ending, so a tail reaching `pos` from above either opens on
+/// the line before `pos`'s or spans it inside a title; either way one there
+/// must close past `pos`. Cheaper than the block replay and only ever withholds
+/// it, which leaves the `{` an expression.
+#[cfg(feature = "mdx")]
+fn tail_reaches_from_line_above(
+    bytes: &[u8],
+    line_start: usize,
+    pos: usize,
+    prefix: usize,
+) -> bool {
+    if line_start == 0 {
+        return false;
     }
+    let mut eol = line_start - 1;
+    if eol > 0 && bytes[eol] == b'\n' && bytes[eol - 1] == b'\r' {
+        eol -= 1;
+    }
+    let above = memchr::memrchr2(b'\n', b'\r', &bytes[..eol])
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let mut closes = TitleCloses::default();
+    memchr::memchr_iter(b']', &bytes[above..eol]).any(|rel| {
+        let rbracket = above + rel;
+        bytes.get(rbracket + 1) == Some(&b'(')
+            && link_tail_close(bytes, rbracket + 1, eol, prefix, &mut closes)
+                .is_some_and(|rparen| rparen > pos)
+    })
 }
 
 #[cfg(feature = "mdx")]
@@ -4401,6 +4457,7 @@ fn replay_link_tails(
     pos: usize,
     from: usize,
     scope_end: usize,
+    prefix: usize,
     at_block_start: bool,
 ) -> TailReplay {
     let mut depth: u32 = 0;
@@ -4461,7 +4518,8 @@ fn replay_link_tails(
                 inactive_below = inactive_below.min(depth);
                 if active
                     && bytes.get(i + 1) == Some(&b'(')
-                    && let Some(rparen) = link_tail_close(bytes, i + 1, tail_line_end, &mut closes)
+                    && let Some(rparen) =
+                        link_tail_close(bytes, i + 1, tail_line_end, prefix, &mut closes)
                 {
                     if rparen > pos {
                         return TailReplay::Inside;
@@ -4530,20 +4588,111 @@ fn link_tail_close(
     bytes: &[u8],
     lparen: usize,
     line_end: usize,
+    prefix: usize,
     closes: &mut TitleCloses,
 ) -> Option<usize> {
-    let mut i = lparen + 1;
-    i += scan_while(&bytes[i..line_end], is_space_or_tab);
+    let (i, line_end) = skip_resource_space(bytes, lparen + 1, line_end, prefix)?;
     let dest_end = scan_link_tail_dest(bytes, i, line_end)?;
-    i = dest_end + scan_while(&bytes[dest_end..line_end], is_space_or_tab);
+    let (mut i, mut line_end) = skip_resource_space(bytes, dest_end, line_end, prefix)?;
     // Without separating whitespace the delimiter was part of the destination.
     if i > dest_end
-        && let Some(title_end) = scan_link_tail_title(bytes, i, line_end, closes)
+        && let Some((title_end, title_line_end)) =
+            scan_link_tail_title(bytes, i, line_end, prefix, closes)
     {
-        i = title_end + scan_while(&bytes[title_end..line_end], is_space_or_tab);
+        (i, line_end) = skip_resource_space(bytes, title_end, title_line_end, prefix)?;
     }
 
     (i < line_end && bytes[i] == b')').then_some(i)
+}
+
+/// Spaces, tabs and line endings between the parts of a resource, following
+/// paragraph continuation lines. Returns the position and its line's end.
+#[cfg(feature = "mdx")]
+fn skip_resource_space(
+    bytes: &[u8],
+    mut at: usize,
+    mut line_end: usize,
+    prefix: usize,
+) -> Option<(usize, usize)> {
+    loop {
+        at += scan_while(&bytes[at..line_end], is_space_or_tab);
+        if at < line_end {
+            return Some((at, line_end));
+        }
+        at = resource_continuation_line(bytes, line_end, prefix)?;
+        line_end = line_end_at(bytes, at);
+    }
+}
+
+/// Where the next line's content starts when a paragraph continues past the
+/// line ending at `eol`.
+#[cfg(feature = "mdx")]
+fn resource_continuation_line(bytes: &[u8], eol: usize, prefix: usize) -> Option<usize> {
+    if eol >= bytes.len() {
+        return None;
+    }
+    let mut next = eol + 1;
+    if bytes[eol] == b'\r' && bytes.get(next) == Some(&b'\n') {
+        next += 1;
+    }
+    let mut i = next;
+    for _ in 0..prefix {
+        i += scan_while_max(&bytes[i..], |b| b == b' ', 3);
+        if bytes.get(i) != Some(&b'>') {
+            return None;
+        }
+        i += 1;
+        if bytes.get(i).is_some_and(|&b| is_space_or_tab(b)) {
+            i += 1;
+        }
+    }
+    let content = i + scan_while(&bytes[i..], is_space_or_tab);
+    match bytes.get(content) {
+        None | Some(b'\n' | b'\r') => None,
+        Some(_) if opens_block(&bytes[content..]) => None,
+        Some(_) => Some(i),
+    }
+}
+
+/// Every branch below fires only on one of these bytes, so the match is a fast
+/// reject for ordinary prose rather than a duplicate of their conditions.
+#[cfg(feature = "mdx")]
+fn opens_block(data: &[u8]) -> bool {
+    let Some(&first) = data.first() else {
+        return true;
+    };
+    if !matches!(
+        first,
+        b'<' | b'|'
+            | b'{'
+            | b':'
+            | b'['
+            | b'#'
+            | b'>'
+            | b'*'
+            | b'-'
+            | b'_'
+            | b'+'
+            | b'='
+            | b'`'
+            | b'~'
+            | b'$'
+            | b'0'..=b'9'
+    ) {
+        return false;
+    }
+    // `:` opens a directive fence or definition-list item, `[^` a footnote
+    // definition; all interrupt a paragraph.
+    matches!(first, b'<' | b'|' | b'{' | b':')
+        || data.starts_with(b"[^")
+        || scan_hrule(data).is_ok()
+        || scan_atx_heading(data).is_some()
+        || scan_code_fence(data).is_some()
+        || scan_setext_heading(data).is_some()
+        || scan_blockquote_start(data).is_some()
+        || scan_listitem(data).is_some()
+        || scan_math_fence(data).is_some()
+        || scan_interrupting_container_extensions_fence(data)
 }
 
 /// End of the link destination starting at `start`, mirroring
@@ -4651,8 +4800,9 @@ fn scan_link_tail_title(
     bytes: &[u8],
     start: usize,
     line_end: usize,
+    prefix: usize,
     closes: &mut TitleCloses,
-) -> Option<usize> {
+) -> Option<(usize, usize)> {
     if start >= line_end {
         return None;
     }
@@ -4662,9 +4812,17 @@ fn scan_link_tail_title(
         b'(' => (2, b')'),
         _ => return None,
     };
-    closes
-        .find(bytes, kind, close, start + 1, line_end)
-        .map(|i| i + 1)
+    // `TitleCloses` is keyed on the line, so crossing is driven from out here
+    // and each line keeps its own memo.
+    let mut from = start + 1;
+    let mut line_end = line_end;
+    loop {
+        if let Some(i) = closes.find(bytes, kind, close, from, line_end) {
+            return Some((i + 1, line_end));
+        }
+        from = resource_continuation_line(bytes, line_end, prefix)?;
+        line_end = line_end_at(bytes, from);
+    }
 }
 
 /// True if the byte at `pos` is the first content char of its source line,
