@@ -599,6 +599,108 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject("[a](/u {w)");
   });
 
+  test("a `)` before the `{` that isn't the tail close keeps the tail", async () => {
+    await assertMdxConformance("[a](\\){)");
+    await assertMdxConformance('[a](/u "){")');
+    await assertMdxConformance("[a](<){>)");
+    await assertMdxConformance("![a](\\){)");
+    await assertMdxConformance("[a](/u (a\\){b))");
+  });
+
+  test("a `](` inside a title doesn't hide the tail that encloses it", async () => {
+    await assertMdxConformance('[a](/u "b](c {z")');
+    await assertMdxConformance("[a](/u (b](c {z))");
+    await assertMdxConformance('[a](/u "b](c {z}")');
+  });
+
+  test("a tail that closes before the `{` leaves it an expression", async () => {
+    await assertBothReject("[a](\\){)}");
+    await assertBothReject("[a](/u){w");
+  });
+
+  test("an escaped bracket is not a label delimiter, so no tail forms", async () => {
+    await assertBothReject("\\[a](\\){)");
+    await assertBothReject("[\\](\\){)");
+    await assertBothReject("[a\\](\\){)");
+    await assertBothReject("!\\[a](\\){)");
+    await assertBothReject('\\[a](/u "b](c {z")');
+  });
+
+  test("a `[` inside a code span is not a label start", async () => {
+    await assertBothReject("`[a`](\\){)");
+    await assertBothReject('`x[y` a](/u "b](c {z")');
+    await assertMdxConformance("`[a` [b](/u{z})");
+  });
+
+  test("a label start is consumed by the first `]`, not reused", async () => {
+    await assertBothReject("[a](/u) b](\\){)");
+    await assertMdxConformance("[a](/u) [b](\\){)");
+  });
+
+  test("an inner link deactivates the label starts around it", async () => {
+    await assertBothReject("[[a](/u)](\\){)");
+    await assertBothReject("[x [a](/u) y](\\){)");
+    // An image does not, so a linked image still takes a tail.
+    await assertMdxConformance("[![a](/i)](/u{z})");
+    await assertMdxConformance("[![a](/i)](\\){)");
+  });
+
+  test("a `{` inside a code span stays code text", async () => {
+    await assertMdxConformance("[a(`](!{{`[`})");
+    await assertMdxConformance("`a](b {c`");
+  });
+
+  test("a label start on an earlier line of the paragraph still counts", async () => {
+    await assertMdxConformance("[x\n\\[a]({)");
+    await assertMdxConformance("[a\n\\[](\\){)");
+    await assertMdxConformance("> [x\n\\[a]({)");
+  });
+
+  test("many malformed tails before the `{` do not change its meaning", async () => {
+    await assertMdxConformance("[a](x ".repeat(32) + "[b](/u{)");
+    await assertMdxConformance("[a](x ".repeat(33) + "[b](/u{)");
+  });
+
+  test("a label start in an earlier block does not open a tail", async () => {
+    await assertBothReject("# h [x\n](\\){)");
+    await assertBothReject("# h [x\n\\[a](\\){)");
+    await assertBothReject("---\n](\\){)");
+    await assertBothReject("```\nfence [x\n```\n](\\){)");
+  });
+
+  test("a backtick closing an earlier line's span doesn't open a new one", async () => {
+    await assertMdxConformance("`x\n`a](b{1}`");
+    await assertMdxConformance("`x\n`a](b{1}`y");
+    await assertMdxConformance("``x\n``a](b{1}``");
+  });
+
+  test("a line of links with braces parses like any other", async () => {
+    await assertMdxConformance("[a](/u{x}) ".repeat(20));
+  });
+
+  test("an earlier line holding an open construct withholds its label start", async () => {
+    await assertBothReject("<div>html [x</div>\n]({)");
+    await assertBothReject("[`\n{`)]({)");
+    await assertBothReject("[`\n<`](><\\]`{! )");
+  });
+
+  test("an earlier line whose span closes here still lends its label start", async () => {
+    await assertMdxConformance("[`{\n`](}u{>!`{}[\\\\)");
+    await assertMdxConformance("[`x`\n\\[a]({)");
+  });
+
+  test("an angle bracket that cannot open a tag still lends its label start", async () => {
+    await assertMdxConformance("See the 5 < 6\n[a\nb](/u{z)");
+    await assertMdxConformance("a < b [x](/u{z)");
+    await assertBothReject("See a<3\n[a\nb](/u{z)");
+  });
+
+  test("a label start earlier in the same paragraph does open one", async () => {
+    await assertMdxConformance("[x\n\\[a]({)");
+    await assertMdxConformance("> [x\n\\[a]({)");
+    await assertMdxConformance("- [x\n\\[a]({)");
+  });
+
   // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a
   // later `</div>` (or other type-1/6 HTML tag) on its own line, because MDX
   // disables HTML blocks entirely. Without this, the paragraph splits at
