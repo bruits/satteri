@@ -11,6 +11,7 @@ import { deepFreeze } from "./freeze.js";
 export interface MaterializerReader {
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
+  pushChildIds(nodeId: number, stack: number[]): void;
   getPosition(nodeId: number): Position | undefined;
   getNodeData(nodeId: number): string | null;
 }
@@ -20,7 +21,8 @@ interface ReaderCache<TNode extends object> {
   nodes: Map<number, TNode>;
   /** Frozen-mode memo of children arrays, keyed by node id. */
   childLists: Map<number, readonly TNode[]>;
-  children: PropertyDescriptor;
+  /** Frozen mode only; mutable mode builds a per-node descriptor instead. */
+  children: PropertyDescriptor | undefined;
   frozen: boolean;
 }
 
@@ -40,13 +42,20 @@ export interface MaterializerSpec<TReader extends MaterializerReader, TNode exte
 }
 
 /**
- * Build a memoizing materializer: scalars eager, `children` lazy, memoized per
- * `(reader, id)`; `frozen` (the plugin walk path) deep-freezes every node at
- * construction so plugins cannot corrupt the shared cache.
+ * Build a memoizing materializer, memoized per `(reader, id)`.
+ *
+ * `node` materializes one node with lazy `children`; `frozen` (the plugin walk
+ * path) deep-freezes every node at construction so plugins cannot corrupt the
+ * shared cache. `tree` materializes a whole tree eagerly, which is what the
+ * step-by-step API wants: it asked for the tree, so laziness would only add
+ * per-node accessor overhead.
  */
 export function createMaterializer<TReader extends MaterializerReader, TNode extends object>(
   spec: MaterializerSpec<TReader, TNode>,
-): (reader: TReader, nodeId: number, frozen?: boolean) => TNode {
+): {
+  node: (reader: TReader, nodeId: number, frozen?: boolean) => TNode;
+  tree: (reader: TReader, rootId: number) => TNode;
+} {
   const readerCaches = new WeakMap<TReader, ReaderCache<TNode>>();
 
   function materialize(reader: TReader, nodeId: number, frozen = false): TNode {
@@ -70,9 +79,10 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
         const nodeId = (this as unknown as { _nodeId: number })._nodeId;
         let value = cache.childLists.get(nodeId);
         if (value === undefined) {
-          value = Object.freeze(
-            reader.getChildIds(nodeId).map((id) => materialize(reader, id, true)),
-          );
+          const ids = reader.getChildIds(nodeId);
+          const built = new Array<TNode>(ids.length);
+          for (let i = 0; i < ids.length; i++) built[i] = materialize(reader, ids[i]!, true);
+          value = Object.freeze(built);
           cache.childLists.set(nodeId, value);
         }
         return value;
@@ -82,12 +92,15 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     };
   }
 
-  /** Mutable-mode `children`: self-replacing with a plain writable array on first read. */
-  function mutableChildrenDescriptor(reader: TReader): PropertyDescriptor {
+  /** Mutable-mode `children`: self-replacing with a plain writable array on
+   *  first read. The id is captured rather than stored on the node, so a
+   *  materialized tree carries no marker for `toEqual` or a spread to find. */
+  function mutableChildrenDescriptor(reader: TReader, nodeId: number): PropertyDescriptor {
     return {
       get(this: TNode): TNode[] {
-        const nodeId = (this as unknown as { _nodeId: number })._nodeId;
-        const value = reader.getChildIds(nodeId).map((id) => materialize(reader, id));
+        const ids = reader.getChildIds(nodeId);
+        const value = new Array<TNode>(ids.length);
+        for (let i = 0; i < ids.length; i++) value[i] = materialize(reader, ids[i]!);
         Object.defineProperty(this, "children", {
           value,
           writable: true,
@@ -107,12 +120,10 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
       cache = {
         nodes: new Map(),
         childLists: new Map(),
-        children: undefined as unknown as PropertyDescriptor,
+        children: undefined,
         frozen,
       };
-      cache.children = frozen
-        ? frozenChildrenDescriptor(reader, cache)
-        : mutableChildrenDescriptor(reader);
+      if (frozen) cache.children = frozenChildrenDescriptor(reader, cache);
       readerCaches.set(reader, cache);
     }
     if (cache.frozen !== frozen) {
@@ -121,23 +132,31 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     return cache;
   }
 
-  function buildNode(reader: TReader, cache: ReaderCache<TNode>, nodeId: number): TNode {
+  function buildNode(
+    reader: TReader,
+    cache: ReaderCache<TNode>,
+    nodeId: number,
+    eager = false,
+  ): TNode {
     const nodeType = reader.getNodeType(nodeId);
     const typeName = spec.typeNames[nodeType] ?? `unknown(${nodeType})`;
 
+    // Plain object, not a class: unified's `assertNode` rejects any other prototype.
     const node = { type: typeName } as unknown as TNode;
     const position = reader.getPosition(nodeId);
     if (position !== undefined) {
       (node as { position?: Position }).position = position;
     }
 
-    // _nodeId: non-enumerable internal reference
-    Object.defineProperty(node, "_nodeId", {
-      value: nodeId,
-      writable: false,
-      configurable: true,
-      enumerable: false,
-    });
+    if (cache.frozen) {
+      // Non-enumerable so `nid()` never trusts an id that a spread copied.
+      Object.defineProperty(node, "_nodeId", {
+        value: nodeId,
+        writable: false,
+        configurable: true,
+        enumerable: false,
+      });
+    }
 
     spec.populate(node, reader, nodeId, nodeType);
 
@@ -162,8 +181,12 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
       }
     }
 
-    if (spec.hasChildren(nodeType)) {
-      Object.defineProperty(node, "children", cache.children);
+    if (!eager && spec.hasChildren(nodeType)) {
+      Object.defineProperty(
+        node,
+        "children",
+        cache.children ?? mutableChildrenDescriptor(reader, nodeId),
+      );
     }
 
     if (cache.frozen) {
@@ -182,5 +205,40 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     return node;
   }
 
-  return materialize;
+  /** Iterative on purpose: recursing to full document depth overflows on deeply
+   *  nested input, and nothing else here descends more than one level. */
+  function fillTree(reader: TReader, cache: ReaderCache<TNode>, rootId: number): void {
+    const order: number[] = [];
+    const parents: number[] = [];
+    const stack: number[] = [rootId];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      order.push(id);
+      if (spec.hasChildren(reader.getNodeType(id))) {
+        parents.push(id);
+        reader.pushChildIds(id, stack);
+      }
+    }
+
+    for (const id of order) {
+      if (!cache.nodes.has(id)) cache.nodes.set(id, buildNode(reader, cache, id, true));
+    }
+
+    for (const id of parents) {
+      const ids = reader.getChildIds(id);
+      const kids = new Array<TNode>(ids.length);
+      for (let i = 0; i < ids.length; i++) kids[i] = cache.nodes.get(ids[i]!)!;
+      // Assignment beats defineProperty here; `eager` left `children` uninstalled.
+      (cache.nodes.get(id) as { children?: TNode[] }).children = kids;
+    }
+  }
+
+  /** Whole tree at once: the caller will walk it, so lazy accessors cost more than they defer. */
+  function materializeTree(reader: TReader, rootId: number): TNode {
+    const cache = readerCache(reader, false);
+    fillTree(reader, cache, rootId);
+    return cache.nodes.get(rootId)!;
+  }
+
+  return { node: materialize, tree: materializeTree };
 }

@@ -38,12 +38,7 @@ function propsToRecord(
   return result;
 }
 
-/**
- * Materialize a single HAST node; scalars eager, `children` lazy, memoized per
- * `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
- * cannot corrupt the shared cache.
- */
-export const materializeHastNode = createMaterializer<HastReader, HastNode>({
+const hastMaterializer = createMaterializer<HastReader, HastNode>({
   label: "materializeHastNode",
   typeNames: TYPE_NAMES,
   hasChildren: (nodeType) => HAST_CONTAINER_TYPES.has(nodeType),
@@ -87,8 +82,15 @@ export const materializeHastNode = createMaterializer<HastReader, HastNode>({
 });
 
 /**
+ * Materialize a single HAST node; scalars eager, `children` lazy, memoized per
+ * `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
+ * cannot corrupt the shared cache.
+ */
+export const materializeHastNode = hastMaterializer.node;
+
+/**
  * Materialize the full HAST tree from root (nodeId=0).
  */
 export function materializeHastTree(reader: HastReader): Root {
-  return materializeHastNode(reader, 0) as Root;
+  return hastMaterializer.tree(reader, 0) as Root;
 }
