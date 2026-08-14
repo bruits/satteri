@@ -18,6 +18,7 @@ export type {
   EvaluateOptions,
   OptimizeStaticConfig,
   Features,
+  TreeOptions,
   SmartPunctuationOptions,
   Frontmatter,
   MarkdownToHtmlResult,
