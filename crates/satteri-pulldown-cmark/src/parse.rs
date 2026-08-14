@@ -2172,9 +2172,13 @@ impl<'input> ParserInner<'input> {
         let dest = unescape(dest, self.tree.is_in_table());
         ix += dest_length;
 
+        let dest_end = ix;
         scan_separator(&mut ix);
 
-        let title = if let Some((bytes_scanned, t)) = self.scan_link_title(underlying, ix, node) {
+        // A title is only reachable through whitespace after the destination.
+        let title = if ix > dest_end
+            && let Some((bytes_scanned, t)) = self.scan_link_title(underlying, ix, node)
+        {
             ix += bytes_scanned;
             scan_separator(&mut ix);
             t

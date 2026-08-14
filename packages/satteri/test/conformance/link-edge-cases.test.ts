@@ -274,6 +274,28 @@ describe("MDAST conformance: unescaped `(` inside a parenthesized title (#211)",
   });
 });
 
+describe("MDAST conformance: a link title needs whitespace after the destination", () => {
+  test("a title jammed against a pointy destination is not a link", () => {
+    assertMdastConformance('[a](<x>"t")');
+    assertMdastConformance("[a](<x>(t))");
+    assertMdastConformance("[a](<>'t')");
+    assertMdastConformance('![a](<x>"t")');
+  });
+
+  test("spaces or a line ending still separate a title", () => {
+    assertMdastConformance('[a](<x> "t")');
+    assertMdastConformance('[a](<x>\n"t")');
+    assertMdastConformance("[a](<x>)");
+    // A raw destination swallows the quotes, so this stays one link.
+    assertMdastConformance('[a](/u"t")');
+  });
+
+  test("reference definitions keep the same rule", () => {
+    assertMdastConformance('[a]: <x>"t"\n\n[a]\n');
+    assertMdastConformance('[a]: <x> "t"\n\n[a]\n');
+  });
+});
+
 describe("HTML conformance: YAML metadata block edge cases", () => {
   test("YAML frontmatter with leading blank line consumes the whole block", () => {
     // metadata_blocks_test_4: `---\n\ntitle:...\n---\n` — with frontmatter
