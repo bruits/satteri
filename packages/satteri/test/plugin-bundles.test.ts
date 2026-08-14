@@ -6,7 +6,7 @@ import {
   defineMdastPlugin,
   defineHastPlugin,
 } from "../src/index.js";
-import type { MarkdownToHtmlResult } from "../src/index.js";
+import type { MarkdownToHtmlResult, MdastPluginEntry } from "../src/index.js";
 
 /** Records its name on each heading, making run order observable. */
 function recordMdast(order: string[], name: string) {
@@ -90,6 +90,76 @@ describe("nested plugin lists", () => {
     expect(result.html).toContain("<h1>Title</h1>");
   });
 
+  test("null, undefined and false entries are skipped", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [null, recordMdast(order, "a"), undefined, false, recordMdast(order, "b")],
+    });
+
+    expect(order).toEqual(["a", "b"]);
+  });
+
+  test("skip entries are skipped inside a nested bundle", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [[null, recordMdast(order, "a")], [[false, recordMdast(order, "b")]]],
+    });
+
+    expect(order).toEqual(["a", "b"]);
+  });
+
+  test("an inline condition can drop a plugin from the list", () => {
+    const order: string[] = [];
+    const enabled = false;
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [enabled && recordMdast(order, "off"), recordMdast(order, "on")],
+    });
+
+    expect(order).toEqual(["on"]);
+  });
+
+  test("a factory may return a skip value instead of a plugin", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      mdastPlugins: [() => null, recordMdast(order, "a"), () => undefined, () => false],
+    });
+
+    expect(order).toEqual(["a"]);
+  });
+
+  test("a factory returning a skip value drops the whole bundle it would have returned", () => {
+    const order: string[] = [];
+    const preset = (enabled: boolean) => () =>
+      enabled ? [recordMdast(order, "a"), recordMdast(order, "b")] : null;
+
+    markdownToHtml("# Title", { mdastPlugins: [preset(false), preset(true)] });
+
+    expect(order).toEqual(["a", "b"]);
+  });
+
+  test("a list of only skip values compiles as if no plugins were passed", () => {
+    const result = markdownToHtml("# Title", {
+      mdastPlugins: [null, undefined, false, [null], () => null],
+      hastPlugins: [false, () => undefined],
+    });
+
+    expect(result.html).toBe(markdownToHtml("# Title").html);
+  });
+
+  test("hast entries accept skip values too", () => {
+    const order: string[] = [];
+
+    markdownToHtml("# Title", {
+      hastPlugins: [null, recordHast(order, "a"), false, () => null],
+    });
+
+    expect(order).toEqual(["a"]);
+  });
+
   test("factories inside a bundle are invoked once per compile", () => {
     let calls = 0;
     const factory = () => {
@@ -154,6 +224,31 @@ describe("nested plugin lists", () => {
     );
     expect(() => markdownToHtml("# T", { hastPlugins: [cyclic as never] })).toThrowError(
       /^hastPlugins: plugin factory nesting is too deep/,
+    );
+  });
+
+  test("factories nest ten deep, and the eleventh is rejected", () => {
+    const order: string[] = [];
+    const nest = (depth: number, plugin: MdastPluginEntry): MdastPluginEntry =>
+      depth === 0 ? plugin : () => nest(depth - 1, plugin);
+
+    markdownToHtml("# T", { mdastPlugins: [nest(10, recordMdast(order, "deep"))] });
+    expect(order).toEqual(["deep"]);
+
+    expect(() =>
+      markdownToHtml("# T", { mdastPlugins: [nest(11, recordMdast(order, "too-deep"))] }),
+    ).toThrowError(/^mdastPlugins: plugin factory nesting is too deep/);
+  });
+
+  test("an entry that is neither a plugin, factory, list nor skip value is rejected", () => {
+    expect(() => markdownToHtml("# T", { mdastPlugins: [0 as never] })).toThrowError(
+      /^mdastPlugins: expected a plugin, a factory, a list, or null\/undefined\/false/,
+    );
+    expect(() => markdownToHtml("# T", { hastPlugins: ["" as never] })).toThrowError(
+      /^hastPlugins: expected a plugin, a factory, a list, or null\/undefined\/false/,
+    );
+    expect(() => markdownToHtml("# T", { mdastPlugins: [true as never] })).toThrowError(
+      /^mdastPlugins: expected a plugin/,
     );
   });
 

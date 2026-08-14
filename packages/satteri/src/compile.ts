@@ -619,7 +619,8 @@ type ResolveInput<P, D extends readonly unknown[] = [0, 0, 0, 0, 0, 0, 0, 0]> = 
 ]
   ? P extends ReadonlyArray<infer Item>
     ? ResolveInput<Item, Rest>
-    : P extends () => infer Def
+    : // A factory taking a ctx is not assignable to `() => infer Def`, which would drop it as sync.
+      P extends (...args: never[]) => infer Def
       ? ResolveInput<Def, Rest>
       : P
   : never;
@@ -648,8 +649,22 @@ export function markdownToHtml(
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
   const { features, fileURL, data = {} } = options;
-  const mdastPlugins = normalizePlugins(options.mdastPlugins ?? [], "mdastPlugins");
-  const hastPlugins = normalizePlugins(options.hastPlugins ?? [], "hastPlugins");
+  const mdastPlugins = normalizePlugins(
+    options.mdastPlugins ?? [],
+    "mdastPlugins",
+    source,
+    fileURL,
+    "markdown",
+    data,
+  );
+  const hastPlugins = normalizePlugins(
+    options.hastPlugins ?? [],
+    "hastPlugins",
+    source,
+    fileURL,
+    "markdown",
+    data,
+  );
   const hastMayHaveStubs = hastPlugins.length > 0;
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
@@ -827,8 +842,23 @@ function toJsImpl(
     data = {},
     ...mdxFields
   } = options;
-  const mdastPlugins = normalizePlugins(mdastInput, "mdastPlugins");
-  const hastPlugins = normalizePlugins(hastInput, "hastPlugins");
+  const sourceFormat: SourceFormat = mdx ? "mdx" : "markdown";
+  const mdastPlugins = normalizePlugins(
+    mdastInput,
+    "mdastPlugins",
+    source,
+    fileURL,
+    sourceFormat,
+    data,
+  );
+  const hastPlugins = normalizePlugins(
+    hastInput,
+    "hastPlugins",
+    source,
+    fileURL,
+    sourceFormat,
+    data,
+  );
   const hastMayHaveStubs = hastPlugins.length > 0;
   const mdxOptions = mdxOptionsToNative(mdxFields);
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
