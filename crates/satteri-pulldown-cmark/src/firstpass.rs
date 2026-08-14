@@ -4359,9 +4359,11 @@ const LINK_LABEL_MAX_TRACKED_DEPTH: u32 = 64;
 /// `factoryWhitespace` and `factoryTitle` accepts line endings; only the
 /// destination is line-bounded. `scope_start` is where the enclosing block's
 /// inline content begins, so a tail opening on an earlier line of the same
-/// block still counts. Lazy and list-item continuations are a known
-/// divergence: the forward scan stops at a line that opens a block rather than
-/// tracking the enclosing container.
+/// block still counts, as long as it is the line directly above: a resource
+/// spanning two or more line endings, as in `[a](\n/u\n"ti{tle")`, stays a
+/// known divergence. So do lazy and list-item continuations, since the forward
+/// scan stops at a line that opens a block rather than tracking the enclosing
+/// container.
 #[cfg(feature = "mdx")]
 fn is_inside_link_url_parens(bytes: &[u8], pos: usize, scope_start: usize) -> bool {
     let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
@@ -4409,11 +4411,11 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize, scope_start: usize) -> bo
         )
 }
 
-/// Whether replaying the whole block could pay off. A whitespace run crosses at
-/// most one line ending, so a tail reaching `pos` from above either opens on
-/// the line before `pos`'s or spans it inside a title; either way one there
-/// must close past `pos`. Cheaper than the block replay and only ever withholds
-/// it, which leaves the `{` an expression.
+/// Whether replaying the whole block could pay off: a `](` on the line
+/// directly above `pos` opens a tail closing past it. Only that line is
+/// scanned, so a tail whose `](` is two or more lines up, which a title
+/// spanning both endings could still carry down, is refused and leaves the `{`
+/// an expression. Cheaper than the block replay and only ever withholds it.
 #[cfg(feature = "mdx")]
 fn tail_reaches_from_line_above(
     bytes: &[u8],
