@@ -523,8 +523,8 @@ export function reconcileFnrPositions(actual: unknown, expected: unknown, input:
     const expectedChildren = e.children;
     if (!Array.isArray(actualChildren) || !Array.isArray(expectedChildren)) return;
     if (actualChildren.length !== expectedChildren.length) return;
-    // Scoped to the shape `findAndReplace` produces — a parent holding a
-    // position-less link — so a stray position anywhere else still fails.
+    // Scoped to the shape `findAndReplace` produces (a parent holding a
+    // position-less link), so a stray position anywhere else still fails.
     const inFnrScope = expectedChildren.some((c) => isAutolinkNode(c) && !c.position);
     if (inFnrScope) assertSpanSet(a, label);
     for (const [ix, expectedChild] of expectedChildren.entries()) {

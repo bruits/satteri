@@ -854,7 +854,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
                 // If the scanned ESM block is incomplete (e.g. an export
                 // spanning a blank line), retry across blank lines using
-                // oxc — matching the reference mdxjs behavior.
+                // oxc, matching the reference mdxjs behavior.
                 let candidate = self.text[ix..ix + final_end].trim_end();
                 if !candidate.is_empty() {
                     use crate::mdx::EsmParseResult;
@@ -2015,7 +2015,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
                 c @ b'*' | c @ b'_' | c @ b'~' | c @ b'^' => {
                     // GFM precedence: an email literal starting at this `_`
-                    // wins over the attention sequence — skipping MaybeEmphasis
+                    // wins over the attention sequence; skipping MaybeEmphasis
                     // keeps `_-_@…` from forming a pair that hides the email.
                     if c == b'_' && self.options.contains(Options::ENABLE_GFM) {
                         let paragraph_floor = self
@@ -2481,7 +2481,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // `gfm_autolink_literal_pass` is the backstop for the rest.
                     //
                     // `start` is the current *line* start, so take the floor
-                    // from the Paragraph on the spine — a `[` on an earlier
+                    // from the Paragraph on the spine: a `[` on an earlier
                     // line still has to count.
                     let paragraph_floor = self
                         .tree
@@ -3774,7 +3774,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             extract_attribute_block_content_from_header_text(header_bytes);
         let range = attr_block_range_rel?;
 
-        // Claim as attributes only when the body isn't valid JS — otherwise MDX
+        // Claim as attributes only when the body isn't valid JS; otherwise MDX
         // treats `{...}` as an expression. try_parse_expression_body returns None
         // when it parses, so `?` bails and leaves real expressions alone.
         #[cfg(feature = "mdx")]
@@ -5159,7 +5159,7 @@ fn email_addr(full_url: String) -> String {
 }
 
 /// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
-/// only — committing or deferring is the caller's call, since it turns on
+/// only: committing or deferring is the caller's call, since it turns on
 /// state this function cannot see.
 fn detect_gfm_autolink(
     bytes: &[u8],
@@ -5208,7 +5208,7 @@ fn detect_gfm_autolink(
         b'@' => {
             // The local-part walkback can start the link before `ix`. If it
             // would cross an already-emitted Maybe* item, that construct owns
-            // the bytes — leave the email to the post-pass.
+            // the bytes, so leave the email to the post-pass.
             let (email_start, email_end, full_url, retry_needed) =
                 scan_email_autolink(bytes, ix, true)?;
             if retry_needed {

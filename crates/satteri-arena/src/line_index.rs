@@ -1,6 +1,5 @@
-/// Per-line UTF-16 offset and ASCII flag for non-ASCII sources, indexed
-/// like `line_offsets`. Folded into one record so a lookup reads both from a
-/// single cache line rather than two parallel arrays.
+/// Per-line UTF-16 offset and ASCII flag, folded into one record so a lookup
+/// reads both from a single cache line rather than two parallel arrays.
 #[derive(Clone, Copy)]
 struct LineMeta {
     /// UTF-16 code-unit offset where the line starts (the UTF-16 analogue of
@@ -14,7 +13,7 @@ struct LineMeta {
 
 /// Maps byte offsets to 1-based (line, column) pairs and 0-based UTF-16
 /// offsets. Built once; lookups are O(log n). Columns and offsets count UTF-16
-/// code units — the unit JS strings index by — so `position` values slice the
+/// code units (the unit JS strings index by), so `position` values slice the
 /// source string even for astral characters (two units each).
 pub struct LineIndex<'a> {
     source: &'a [u8],
@@ -28,16 +27,14 @@ pub struct LineIndex<'a> {
     /// True when the entire source is ASCII — every lookup short-circuits
     /// without consulting `line_meta`.
     all_ascii: bool,
-    /// "Skip positions" mode: every lookup returns the all-zero sentinel and
-    /// the per-line scan at construction is skipped. Used by HTML/JS output
-    /// paths that never read positions.
+    /// "Skip positions" mode for HTML/JS output paths that never read them: no
+    /// per-line scan, and every lookup returns the all-zero sentinel.
     disabled: bool,
 }
 
 impl<'a> LineIndex<'a> {
-    /// Construct a no-op index: `cursor()` returns trivial values without
-    /// inspecting the source. The source slice is still held so debug helpers
-    /// keep working, but no line scan happens.
+    /// Construct a no-op index: no line scan, and `cursor()` returns trivial
+    /// values. The source slice is still held so debug helpers keep working.
     pub fn disabled_for(source: &'a str) -> Self {
         LineIndex {
             source: source.as_bytes(),
@@ -179,9 +176,9 @@ impl LineIndexCursor<'_, '_> {
         }
     }
 
-    /// Returns the line index containing `offset` and that line's start byte
-    /// offset, so callers don't re-index `line_offsets` (and pay a second
-    /// bounds check) for the start they already located.
+    /// Returns the line index and that line's start byte offset, so callers
+    /// skip a second bounds-checked `line_offsets` read for a start already
+    /// located.
     #[inline]
     fn find_line_idx(&mut self, offset: u32) -> (usize, u32) {
         let offsets = &self.index.line_offsets;
@@ -225,7 +222,7 @@ pub fn line_ending_iter(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
 
 /// UTF-16 length of a UTF-8 byte slice. Continuation bytes (`0b10xxxxxx`)
 /// don't count; a 4-byte sequence (lead byte ≥ `0xF0`) is an astral code
-/// point — a surrogate pair, two units.
+/// point (a surrogate pair, two units).
 fn utf16_len_bytes(bytes: &[u8]) -> u32 {
     let mut count: u32 = 0;
     for &b in bytes {

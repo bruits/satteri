@@ -361,7 +361,7 @@ test("context.wrapNode() wraps a node in a bare user-defined parent", () => {
   expect(html).toContain("<div><h1>Hello</h1></div>");
 });
 
-// Lists are hand-written on purpose — independent of the LEAF_TYPES the check
+// Lists are hand-written on purpose, independent of the LEAF_TYPES the check
 // reads, so a misclassified type surfaces here.
 test("context.wrapNode() accepts built-in parents and rejects built-in leaves", () => {
   const parents: MdastParentContent[] = [
@@ -1082,9 +1082,8 @@ test("setProperty(node, 'children', ...) rides the op-stream", () => {
   expect(result.commandBuffer[5]).toBe(0x14); // PAYLOAD_OPSTREAM
 });
 
-// Lazy-children lifecycle: matched nodes resolve `.children` from a snapshot
-// taken during the pass; after the pass the arena may be rebuilt with new ids,
-// so a first-time read must fail loudly instead of mapping stale ids.
+// Matched nodes resolve `.children` from the pass snapshot, so a first read
+// after a mutating pass must fail loudly rather than serve a stale tree.
 
 test("async visitor reads `.children` in a deferred callback", async () => {
   const { handle, source } = setup();
@@ -1272,8 +1271,7 @@ test("stub `.type` stays readable after the pass; first materialization throws",
     name: "retain-heading-children",
     heading(node, ctx) {
       retained = node.children;
-      // A mutation: the arena rebuilds after the pass, so stale ids must
-      // refuse to materialize.
+      // Mutating invalidates the pass snapshot, so the retained stub must throw.
       ctx.setProperty(node, "depth", 2);
     },
   });

@@ -556,7 +556,7 @@ export interface Features {
    * By default, inline and block HTML is kept as opaque `raw` nodes
    * (re-emitted verbatim on stringify). With `rawHtml: true`, the tree is
    * reparsed so raw HTML becomes structured `element`/`text`/`comment` nodes
-   * with normalized properties — including tags that open in one raw block
+   * with normalized properties, including tags that open in one raw block
    * and close in another. Positions are not preserved through the reparse.
    */
   rawHtml?: boolean;
@@ -914,7 +914,7 @@ export function mdxToJs(
 
 /**
  * Compile plain Markdown to a JavaScript module: like {@link mdxToJs}, but
- * without MDX syntax — `{...}` expressions, JSX tags, and `import`/`export`
+ * without MDX syntax: `{...}` expressions, JSX tags, and `import`/`export`
  * lines are ordinary Markdown. HTML has no JSX representation and is dropped;
  * enable `features: { rawHtml: true }` to parse it into real elements instead.
  */

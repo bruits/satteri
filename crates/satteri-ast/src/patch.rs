@@ -10,7 +10,7 @@ use satteri_arena::{Arena, ArenaKind, Hast, Mdast};
 /// type_data (u32 LE) here." Higher than any real MDAST (≤104) or HAST (≤14)
 /// type. Resolving it copies the original subtree *and applies any pending
 /// patch on it*, so a nested transform queued on a passed-through child still
-/// lands — no stranding, no re-visit. One exception: a discarding self-ref
+/// lands (no stranding, no re-visit). One exception: a discarding self-ref
 /// whose subtree contains other patched anchors errors with
 /// [`CommandError::UnsupportedPatchShape`] instead of re-entering (see
 /// [`apply_patches_in_place`]).
@@ -63,7 +63,7 @@ pub enum Patch<K: ArenaKind> {
         child_tree: PatchContent<K>,
     },
     /// Replaces the node's child list with `new_children` (a Root-rooted
-    /// sub-arena, spliced in), keeping the node itself — unlike `Replace`.
+    /// sub-arena, spliced in), keeping the node itself (unlike `Replace`).
     SetChildren {
         node_id: u32,
         new_children: PatchContent<K>,
@@ -76,7 +76,7 @@ pub enum Patch<K: ArenaKind> {
 ///
 /// MDAST and HAST share many numeric `node_type` values (e.g. MDAST `List` and
 /// HAST `Raw` both = 5). Dispatch on `K::KIND_TAG` first so each schema's
-/// layout is interpreted independently — applying HAST's "StringRef at 0"
+/// layout is interpreted independently: applying HAST's "StringRef at 0"
 /// rule to an MDAST `List` would corrupt the `start: u32` field stored there.
 fn remap_string_refs<K: ArenaKind>(data: &mut [u8], node_type: u8, base: u32) {
     if K::KIND_TAG == Mdast::KIND_TAG {
@@ -145,7 +145,7 @@ fn remap_mdast_string_refs(data: &mut [u8], node_type: u8, base: u32) {
         27 | 28 => &[0, 8],
         // MdxFlowExpression(102), MdxTextExpression(103), MdxjsEsm(104): value(0)
         102..=104 => &[0],
-        // List(5) carries `start: u32` at offset 0 — NOT a StringRef. Heading(2)
+        // List(5) carries `start: u32` at offset 0, NOT a StringRef. Heading(2)
         // carries `depth: u8` only. ListItem(6), Table(21) and the rest have no
         // StringRef fields. Don't remap.
         _ => &[],
@@ -300,7 +300,7 @@ fn graft_node<K: ArenaKind>(
 
 /// Graft a payload sub-arena, returning the ids to splice into the slot.
 /// Root-wrapped payloads contribute their root's children, mirroring
-/// `emit_subtree` — unless `preserve_root` is set (root-anchored Replace),
+/// `emit_subtree`, unless `preserve_root` is set (root-anchored Replace),
 /// which keeps the payload root as a node since it lands on node 0.
 fn graft_subtree<K: ArenaKind>(
     arena: &mut Arena<K>,
@@ -352,7 +352,7 @@ enum GraftMode {
     /// Wrap payload: node 0 is the wrapper itself, copied verbatim (a REF at
     /// position 0 is never resolved).
     Wrap,
-    /// Root-anchored Replace: the payload root is kept as-is — even a ROOT —
+    /// Root-anchored Replace: the payload root is kept as-is (even a ROOT)
     /// because it lands on node 0 instead of being spliced into a sibling
     /// list. REF roots still resolve.
     KeepRoot,
@@ -508,9 +508,9 @@ fn overwrite_root_with<K: ArenaKind>(arena: &mut Arena<K>, src: u32) {
     }
 }
 
-/// Make node 0 an empty root: no children, no data, zeroed position — the
-/// in-place equivalent of the old rebuild's empty arena for `Remove` on the
-/// root. The node type is kept so the document still serializes (as empty).
+/// Make node 0 an empty root (no children, no data, zeroed position) for a
+/// `Remove` on the root. The node type is kept so the document still
+/// serializes (as empty).
 fn clear_root<K: ArenaKind>(arena: &mut Arena<K>) {
     {
         let root = arena.get_node_mut(0);
@@ -569,8 +569,8 @@ fn copy_root_shallow<K: ArenaKind>(arena: &mut Arena<K>) -> u32 {
 /// arena mutation, so on `Err` the arena is untouched.
 ///
 /// Returns the anchors whose patch landed inside a subtree that an ancestor's
-/// `Remove`/`Replace` genuinely discarded, so the patch could not be applied —
-/// and is moot, since the plugin chose to drop that subtree. A *passed-through*
+/// `Remove`/`Replace` genuinely discarded, so the patch could not be applied
+/// (and is moot, since the plugin chose to drop that subtree). A *passed-through*
 /// child is not dropped this way: it is spliced back by a `REF_NODE_TYPE` node
 /// (see [`REF_NODE_TYPE`]), keeping its id so a patch queued on it still
 /// applies.
@@ -988,7 +988,7 @@ fn apply_patches_impl<K: ArenaKind>(
     };
 
     // Each anchor splices immediately so later copies observe post-patch
-    // state — except that with no refs in play there is nothing that copies
+    // state, except that with no refs in play there is nothing that copies
     // spliced subtrees, so sibling splices are grouped per parent and each
     // parent's child list is rebuilt once at the end (a per-anchor rebuild is
     // O(anchors × siblings) and grows the flat children vec unboundedly).
@@ -2151,7 +2151,7 @@ mod tests {
 
     /// Multiple `Replace` patches on the same anchor: last-wins. The HAST
     /// `setProperty` path for MDX JSX elements emits a fresh `replaceNode`
-    /// for every prop set, each carrying the accumulated attribute list — so
+    /// for every prop set, each carrying the accumulated attribute list, so
     /// the final replacement is the one with the full state.
     #[test]
     fn multiple_replace_same_anchor_last_wins() {
@@ -2237,7 +2237,7 @@ mod tests {
         );
     }
 
-    /// `wrapNode(N) + removeNode(N)` has no defined meaning — the node won't
+    /// `wrapNode(N) + removeNode(N)` has no defined meaning: the node won't
     /// exist to wrap. Surface as an error rather than silently dropping the
     /// wrap.
     #[test]
@@ -2336,7 +2336,7 @@ mod tests {
         let text_in_heading = orig.get_children(heading_id)[0];
 
         // Replace the heading (dropping its subtree), and also replace the text
-        // inside it — the kind of pair a nested-directive transform produces.
+        // inside it, the kind of pair a nested-directive transform produces.
         let mut replacement = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         replacement.open_node(MdastNodeType::Paragraph as u8);
         replacement.close_node();
@@ -2367,7 +2367,7 @@ mod tests {
 
     /// Same shape as the stranding test, but the replacement *references* the
     /// original child via a `REF_NODE_TYPE` node instead of discarding it. The
-    /// child's own patch then applies (text → Break) and nothing strands — this
+    /// child's own patch then applies (text → Break) and nothing strands. This
     /// is how a passed-through child keeps its identity so a nested transform
     /// queued on it runs in the same pass.
     #[test]
@@ -2699,7 +2699,7 @@ mod tests {
     }
 
     /// A patch on a kept child still applies under a keep_children root
-    /// replace — including when the child's patch is issued first.
+    /// replace, including when the child's patch is issued first.
     #[test]
     fn replace_root_keep_children_applies_descendant_patch() {
         let orig = build_hello_world();
@@ -2856,7 +2856,7 @@ mod tests {
         );
     }
 
-    /// Sibling inserts on the root stay rejected — the root has no siblings.
+    /// Sibling inserts on the root stay rejected: the root has no siblings.
     #[test]
     fn insert_before_root_errors() {
         let orig = build_hello_world();

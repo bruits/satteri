@@ -11,7 +11,7 @@ import { visitMdastHandle, resolveMdastSubscriptions } from "../../src/mdast/mda
 import { defineMdastPlugin } from "../../src/plugin.js";
 
 // Definition lists aren't in the remark/rehype reference pipeline, so we can't
-// use the remark conformance harness here — assert HTML/mdast shape directly.
+// use the remark conformance harness here: assert HTML/mdast shape directly.
 
 function html(md: string, features: Record<string, unknown> = { definitionList: true }): string {
   const r = markdownToHtml(md, { features });
@@ -45,7 +45,7 @@ describe("definition list: HTML", () => {
 
 describe("definition list: per-dd tight/loose (matches mdast-util-definition-list)", () => {
   // Each definition is loose (its <dd> keeps an inner <p>) iff a blank line
-  // directly precedes its own `:` marker — the same per-dd rule as
+  // directly precedes its own `:` marker, the same per-dd rule as
   // mdast-util-definition-list, verified against that library.
 
   test("blank before the 2nd definition makes only the 2nd loose", () => {
@@ -246,7 +246,7 @@ describe("definition list: disabled by default (never break userspace)", () => {
 
 describe("definition list: the marker requires whitespace (matches reference)", () => {
   // pandoc / mdast-util-definition-list require whitespace after the colon.
-  // A colon glued to content is not a marker — the line stays a paragraph.
+  // A colon glued to content is not a marker, so the line stays a paragraph.
   test("a colon glued to content (`:tada:`) is not a marker", () => {
     const out = html("Apple\n:tada:\n");
     expect(out).not.toContain("<dl>");

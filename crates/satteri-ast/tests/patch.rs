@@ -1,6 +1,4 @@
-//! Integration tests for arena rebuild.
-//!
-//! Tests apply patches to the "# Hello\n\nWorld" arena and verify the resulting structure.
+//! Integration tests for in-place arena patching, over the "# Hello\n\nWorld" arena.
 
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
 use satteri_ast::hast::HastNodeType;

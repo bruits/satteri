@@ -481,7 +481,7 @@ pub struct JsSubscription {
 
 /// Shared head of the handle-creation pipelines: acquire a pooled MDAST arena,
 /// parse `source` into it (with or without position tracking), surface the
-/// first MDX parse error (MDX callers only — plain-markdown parses never
+/// first MDX parse error (MDX callers only; plain-markdown parses never
 /// produce any, so those entry points ignore the list), and stamp
 /// `parse_options` on the arena.
 ///
