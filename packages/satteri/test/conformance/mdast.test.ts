@@ -855,6 +855,18 @@ describe("MDAST conformance: control and format characters at a text-node edge",
     assertMdastConformance("`\u{feff}x`\n");
   });
 
+  test("a leading BOM is outside the position space", () => {
+    assertMdastConformance("\u{feff}# h\n");
+    assertMdastConformance("\u{feff}# h\n\ntext with *emphasis*\n");
+    assertMdastConformance("\u{feff}a\n\n> q\n\n- one\n- two\n");
+    assertMdastConformance("\u{feff}\u{feff}a\n");
+  });
+
+  test("a leading BOM shifts nothing in a multibyte document", () => {
+    assertMdastConformance("\u{feff}# héllo 😀\n\nté*xt* 😀 [a](b)\n");
+    assertMdastConformance("\u{feff}😀\n\n`é`\n");
+  });
+
   test("a line of only VT or FF is a paragraph, not a blank line", () => {
     assertMdastConformance("\u{b}\n");
     assertMdastConformance("\u{c}\n");

@@ -259,6 +259,26 @@ describe("plugin factory context", () => {
     expect(result.data.fromFactory).toBe(true);
   });
 
+  test("a leading BOM is outside the source a factory and a visitor see", () => {
+    const seen: string[] = [];
+
+    markdownToHtml("\uFEFF# Title", {
+      mdastPlugins: [
+        (ctx) => {
+          seen.push(ctx.source);
+          return defineMdastPlugin({
+            name: "reader",
+            heading(_node, visitorCtx) {
+              seen.push(visitorCtx.source);
+            },
+          });
+        },
+      ],
+    });
+
+    expect(seen).toEqual(["# Title", "# Title"]);
+  });
+
   test("a factory cannot mutate the context a later factory sees", () => {
     const seen: string[] = [];
     const vandal = (ctx: PluginFactoryContext) => {

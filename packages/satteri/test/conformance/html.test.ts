@@ -16,3 +16,10 @@ describe("HTML conformance: HTML block in list item", () => {
     assertHtmlConformance("*\n      <div>\n     <div>\n");
   });
 });
+
+describe("HTML conformance: leading BOM", () => {
+  test("a leading BOM never renders", () => {
+    assertHtmlConformance("\u{feff}# h\n\ntext\n");
+    assertHtmlConformance("\u{feff}- one\n- two\n");
+  });
+});

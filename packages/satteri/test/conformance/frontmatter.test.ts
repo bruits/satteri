@@ -56,6 +56,10 @@ describe("Frontmatter MDAST conformance", () => {
     // frontmatter — remark keeps `\r\n` in `yaml.value`).
     assertExtMdastConformance("---\r\ntitle: X\r\nauthor: Y\r\n---\r\n", FM);
   });
+
+  test("frontmatter still opens the document after a BOM", () => {
+    assertExtMdastConformance("\u{feff}---\ntitle: Hello\n---\n\nContent\n", FM);
+  });
 });
 
 describe("Frontmatter HAST conformance", () => {

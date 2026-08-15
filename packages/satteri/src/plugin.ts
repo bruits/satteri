@@ -13,7 +13,8 @@ export interface PluginFactoryContext {
   readonly fileURL: URL | undefined;
   /** Which kind of document is being compiled. */
   readonly sourceFormat: SourceFormat;
-  /** The unparsed source. Intended for cheap checks, not for parsing Markdown. */
+  /** The unparsed source, minus a leading BOM as the parser sees it. Intended
+   *  for cheap checks, not for parsing Markdown. */
   readonly source: string;
   /** The document-level data bag, before any plugin has run. */
   readonly data: Data;
@@ -82,7 +83,13 @@ export function normalizePlugins<D>(
         );
       }
       // `data` stays mutable on purpose: it is the live bag the visitors share.
-      ctx ??= Object.freeze({ fileURL, sourceFormat, source, data });
+      ctx ??= Object.freeze({
+        fileURL,
+        sourceFormat,
+        // The parser drops a leading BOM, so `ctx.source` in a visitor lacks it too.
+        source: source.startsWith("\uFEFF") ? source.slice(1) : source,
+        data,
+      });
       walk((entry as (ctx: PluginFactoryContext) => PluginEntry<D>)(ctx), factoryDepth - 1);
       return;
     }
