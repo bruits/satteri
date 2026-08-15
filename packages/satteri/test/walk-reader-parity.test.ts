@@ -13,6 +13,7 @@ import {
   createMdxHastHandle,
   getHandleSource,
   serializeHandle,
+  applyCommandsToMdastHandle,
 } from "../index.js";
 import { visitMdastHandle, resolveMdastSubscriptions } from "../src/mdast/mdast-visitor.js";
 import { visitHastHandle, resolveSubscriptions } from "../src/hast/hast-visitor.js";
@@ -22,7 +23,7 @@ import { HastReader } from "../src/hast/hast-reader.js";
 import { materializeHastTree } from "../src/hast/hast-materializer.js";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 import type { MdastPluginDefinition } from "../src/plugin.js";
-import type { MdastNode } from "../src/types.js";
+import type { Custom, MdastNode } from "../src/types.js";
 import type { MdxJsxFlowElementHast } from "../src/mdx-types.js";
 import type { Link, Paragraph, Strong, Text as MdastText } from "mdast";
 import type { Element, ElementContent, Text as HastText } from "hast";
@@ -386,4 +387,63 @@ test("leaf node omits children on the walk path, matching the reader", () => {
   expect(materialized).toHaveLength(1);
   expect("children" in walked[0]!).toBe(false);
   expect("children" in materialized[0]!).toBe(false);
+});
+
+/** Create `replacement` for the doc's paragraph, then read it back both ways. */
+function customWalkAndReader(replacement: Custom) {
+  const handle = createMdastHandle("> placeholder\n");
+  const source = getHandleSource(handle);
+  const create = defineMdastPlugin({
+    name: "create-custom",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, replacement);
+    },
+  });
+  const result = visitMdastHandle(
+    handle,
+    create,
+    resolveMdastSubscriptions(create),
+    source,
+    undefined,
+  ) as { commandBuffer: Uint8Array };
+  applyCommandsToMdastHandle(handle, result.commandBuffer);
+
+  let walked: Custom | undefined;
+  let stub: TreeNode | undefined;
+  const capture = defineMdastPlugin({
+    name: "capture-custom",
+    custom(node) {
+      walked = node;
+    },
+    blockquote(node) {
+      stub = node.children[0];
+    },
+  });
+  visitMdastHandle(handle, capture, resolveMdastSubscriptions(capture), source, undefined);
+
+  const tree = materializeMdastTree(new MdastReader(serializeHandle(handle)));
+  const materialized = collect(tree, (n): n is TreeNode => n.type === replacement.type);
+  return { walked, stub, materialized };
+}
+
+test("a custom leaf omits children on the walk, stub and reader paths alike", () => {
+  const { walked, stub, materialized } = customWalkAndReader({ type: "kbd", value: "Ctrl" });
+  expect(materialized).toHaveLength(1);
+  expect(walked?.value).toBe("Ctrl");
+  expect("children" in walked!).toBe(false);
+  expect("children" in materialized[0]!).toBe(false);
+  // A stub resolves `children` against the arena on read, then drops the key.
+  expect(stub!.children).toBeUndefined();
+  expect("children" in stub!).toBe(false);
+});
+
+test("a custom parent keeps its children on the walk, stub and reader paths alike", () => {
+  const { walked, stub, materialized } = customWalkAndReader({
+    type: "section",
+    children: [{ type: "text", value: "hi" }],
+  });
+  expect(materialized).toHaveLength(1);
+  expect(walked?.children?.map((c) => c.type)).toEqual(["text"]);
+  expect(materialized[0]!.children?.map((c) => c.type)).toEqual(["text"]);
+  expect(stub!.children?.map((c) => c.type)).toEqual(["text"]);
 });

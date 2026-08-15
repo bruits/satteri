@@ -143,6 +143,8 @@ fn remap_mdast_string_refs(data: &mut [u8], node_type: u8, base: u32) {
         19 => &[0, 8],
         // Math(27), InlineMath(28): meta(0), value(8)
         27 | 28 => &[0, 8],
+        // Custom(38): name(0), value(8)
+        38 => &[0, 8],
         // MdxFlowExpression(102), MdxTextExpression(103), MdxjsEsm(104): value(0)
         102..=104 => &[0],
         // List(5) carries `start: u32` at offset 0, NOT a StringRef. Heading(2)

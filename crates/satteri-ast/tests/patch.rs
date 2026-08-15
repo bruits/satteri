@@ -775,6 +775,25 @@ fn math_string_refs_round_trip() {
 }
 
 #[test]
+fn custom_string_refs_round_trip() {
+    use satteri_ast::mdast::codec::decode_custom_data;
+
+    let rebuilt = replace_para_with(MdastNodeType::Custom, |sub| {
+        let name = sub.alloc_string("kbd");
+        let value = sub.alloc_string("Ctrl");
+        // No public encoder for `custom`: name(0..8), value(8..16).
+        let mut data = name.as_bytes().to_vec();
+        data.extend_from_slice(&value.as_bytes());
+        sub.set_data_current(&data);
+    });
+
+    let id = first_node_of(&rebuilt, MdastNodeType::Custom);
+    let c = decode_custom_data(rebuilt.get_type_data(id));
+    assert_eq!(rebuilt.get_str(c.name), "kbd");
+    assert_eq!(rebuilt.get_str(c.value), "Ctrl");
+}
+
+#[test]
 fn expression_string_refs_round_trip() {
     use satteri_ast::mdast::codec::{decode_expression_data, encode_expression_data};
 

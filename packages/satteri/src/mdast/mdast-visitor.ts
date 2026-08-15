@@ -1,4 +1,4 @@
-import { LEAF_TYPES, materializeNode } from "./mdast-materializer.js";
+import { LEAF_TYPES, isCustomLeaf, materializeNode } from "./mdast-materializer.js";
 import { MdastReader } from "./mdast-reader.js";
 import {
   acquireCommandBuffer,
@@ -714,20 +714,10 @@ function readMdastMatchedNode(
     if (node.value === "") delete node.value;
   }
 
-  /**
-   * A custom node is a leaf only when it has a value and no `children` or `data.h*`.
-   * @see {@link Custom}
-   */
-  const hProperties = initialData?.hProperties;
-  const hasHProperties =
-    hProperties !== null && typeof hProperties === "object" && !Array.isArray(hProperties);
-  const hasHData =
-    typeof initialData?.hName === "string" ||
-    hasHProperties ||
-    Array.isArray(initialData?.hChildren);
-  const isCustomLeaf = nodeType === MDAST_CUSTOM && typeof node.value === "string" && !hasHData;
+  const leafCustom =
+    nodeType === MDAST_CUSTOM && isCustomLeaf({ value: node.value, data: initialData }, childCount);
 
-  if (childCount === 0 && !LEAF_TYPES.has(nodeType) && !isCustomLeaf) {
+  if (childCount === 0 && !LEAF_TYPES.has(nodeType) && !leafCustom) {
     node.children = [];
   }
 
