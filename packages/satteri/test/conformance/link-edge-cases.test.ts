@@ -6,6 +6,7 @@
 import { describe, test, expect } from "vitest";
 import {
   assertHtmlConformance,
+  assertCommonMarkMdastConformance,
   assertExtMdastConformance,
   assertMdastConformance,
   satteriMdast,
@@ -588,5 +589,48 @@ describe("MDAST conformance: unicode whitespace ends a GFM autolink literal", ()
     assertMdastConformance("www.example.com/a\u{feff}b\n");
     assertMdastConformance("https://example.com\u{feff}\n");
     assertMdastConformance("user@example.com\u{feff}x\n");
+  });
+});
+
+describe("MDAST conformance: a defined footnote reference beats an inline link tail", () => {
+  const DEF = "[^x]: d\n\n";
+
+  test("`[^x](y)` is a footnote reference plus literal `(y)`", () => {
+    assertMdastConformance(`${DEF}[^x](y)`);
+    assertMdastConformance(`${DEF}[^x](y "t")`);
+    assertMdastConformance(`${DEF}[^x]()`);
+  });
+
+  test("an undefined `[^x](y)` is still a link", () => {
+    assertMdastConformance("[^x](y)");
+    assertMdastConformance(`${DEF}[^y](y)`);
+  });
+
+  test("the definition is matched case-insensitively", () => {
+    assertMdastConformance(`${DEF}[^X](y)`);
+  });
+
+  test("a label with whitespace is not a footnote call, so the link stands", () => {
+    assertMdastConformance(`${DEF}[^x ](y)`);
+    assertMdastConformance(`${DEF}[^ x](y)`);
+  });
+
+  test("`![^x](y)` stays an image even when `x` is defined", () => {
+    assertMdastConformance(`${DEF}![^x](y)`);
+    assertMdastConformance("![^x](y)");
+  });
+
+  test("a plain link next to a footnote definition is untouched", () => {
+    assertMdastConformance(`${DEF}[x](y)`);
+    assertMdastConformance(`${DEF}[^x] [y](z)`);
+  });
+
+  test("with GFM off the label is a link again", () => {
+    assertCommonMarkMdastConformance(`${DEF}[^x](y)`);
+    assertCommonMarkMdastConformance(`${DEF}![^x](y)`);
+  });
+
+  test("the footnote wins inside emphasis too", () => {
+    assertMdastConformance(`${DEF}*[^x](y)*`);
   });
 });

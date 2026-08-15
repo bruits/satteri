@@ -1338,8 +1338,12 @@ impl<'input> ParserInner<'input> {
                             continue;
                         }
                         let next = self.tree[cur_ix].next;
-                        if let Some((next_ix, url, title)) =
-                            self.scan_inline_link(block_text, self.tree[cur_ix].item.end, next)
+                        // remark's image label start eats the `[`, so `![^x](y)` stays an image.
+                        let footnote_first = tos.ty == LinkStackTy::Link
+                            && self.defined_footnote_label(tos.node, cur_ix);
+                        if !footnote_first
+                            && let Some((next_ix, url, title)) =
+                                self.scan_inline_link(block_text, self.tree[cur_ix].item.end, next)
                         {
                             let next_node = scan_nodes_to_ix(&self.tree, next, next_ix);
                             if let Some(prev_ix) = prev {
@@ -2140,6 +2144,26 @@ impl<'input> ParserInner<'input> {
     fn disable_all_links(&mut self) {
         self.link_stack.disable_all_links();
         self.wikilink_stack.disable_all_links();
+    }
+
+    fn defined_footnote_label(&self, open_ix: TreeIndex, close_ix: TreeIndex) -> bool {
+        let start = self.tree[open_ix].item.start;
+        if !self.options.contains(Options::ENABLE_FOOTNOTES)
+            || self.text.as_bytes().get(start + 1) != Some(&b'^')
+        {
+            return false;
+        }
+        let label_text = &self.text[start..self.tree[close_ix].item.end];
+        let Some((len, ReferenceLabel::Footnote(label))) =
+            scan_link_label(&self.tree, label_text, self.options)
+        else {
+            return false;
+        };
+        // micromark ends a footnote call at whitespace, where the shared label scan collapses it.
+        !label_text.as_bytes()[..len]
+            .iter()
+            .any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+            && self.allocs.footdefs.contains(&label)
     }
 
     /// Returns next byte index, url and title.
