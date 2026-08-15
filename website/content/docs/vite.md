@@ -79,13 +79,14 @@ By default, the plugin compiles MDX with `development: true` in `serve` so React
 
 ## Options
 
-| Option         | Type                    | Default | Effect                                                         |
-| -------------- | ----------------------- | ------- | -------------------------------------------------------------- |
-| `markdown`     | `boolean`               | `true`  | Process `.md` files.                                           |
-| `mdx`          | `boolean \| MdxOptions` | `true`  | Process `.mdx` files. Pass an object to configure the compile. |
-| `mdastPlugins` | `MdastPluginList`       | —       | MDAST-stage plugins, shared across `.md` and `.mdx`.           |
-| `hastPlugins`  | `HastPluginList`        | —       | HAST-stage plugins, shared across `.md` and `.mdx`.            |
-| `features`     | `Features`              | —       | Parser toggles. See [Features](/docs/features/).               |
+| Option         | Type                    | Default | Effect                                                                                |
+| -------------- | ----------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `markdown`     | `boolean`               | `true`  | Process `.md` files.                                                                  |
+| `mdx`          | `boolean \| MdxOptions` | `true`  | Process `.mdx` files. Pass an object to configure the compile.                        |
+| `mdastPlugins` | `MdastPluginList`       | —       | MDAST-stage plugins, shared across `.md` and `.mdx`.                                  |
+| `hastPlugins`  | `HastPluginList`        | —       | HAST-stage plugins, shared across `.md` and `.mdx`.                                   |
+| `features`     | `Features`              | —       | Parser toggles. See [Features](/docs/features/).                                      |
+| `warnings`     | `boolean`               | `true`  | Display warnings about [dropped transforms](/docs/plugin-api#how-transforms-compose). |
 
 `MdxOptions` mirrors Sätteri's MDX options minus `outputFormat`. The plugin always emits an ES module so Vite can import it.
 
