@@ -1,5 +1,10 @@
 import { describe, test, expect } from "vitest";
-import { markdownToHtml, mdxToJs } from "../../src/index.js";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkRehype from "remark-rehype";
+import rehypeStringify from "rehype-stringify";
+import { remarkDefinitionList, defListHastHandlers } from "remark-definition-list";
+import { markdownToHtml, markdownToMdast, mdxToJs } from "../../src/index.js";
 import type { MdastNode } from "../../src/types.js";
 import {
   createMdastHandle,
@@ -10,8 +15,7 @@ import {
 import { visitMdastHandle, resolveMdastSubscriptions } from "../../src/mdast/mdast-visitor.js";
 import { defineMdastPlugin } from "../../src/plugin.js";
 
-// Definition lists aren't in the remark/rehype reference pipeline, so we can't
-// use the remark conformance harness here: assert HTML/mdast shape directly.
+// The default remark harness has no definition lists; remark-definition-list is the reference.
 
 function html(md: string, features: Record<string, unknown> = { definitionList: true }): string {
   const r = markdownToHtml(md, { features });
@@ -467,5 +471,103 @@ describe("definition list: MDX", () => {
     expect(code).toContain("Outer");
     expect(code).toContain("Inner");
     expect(code).toContain("Deep.");
+  });
+});
+
+const referenceProcessor = unified().use(remarkParse).use(remarkDefinitionList);
+const referenceHtmlProcessor = unified()
+  .use(remarkParse)
+  .use(remarkDefinitionList)
+  .use(remarkRehype, { handlers: defListHastHandlers })
+  .use(rehypeStringify);
+
+const REFERENCE_TYPE_MAP: Record<string, string> = {
+  defList: "descriptionList",
+  defListTerm: "descriptionTerm",
+  defListDescription: "descriptionDetails",
+};
+
+interface ComparableNode {
+  type: string;
+  value?: unknown;
+  children?: ComparableNode[];
+}
+
+interface NodeShape {
+  type: string;
+  value?: string;
+  children?: NodeShape[];
+}
+
+function toShape(node: ComparableNode): NodeShape {
+  const shape: NodeShape = { type: REFERENCE_TYPE_MAP[node.type] ?? node.type };
+  if (typeof node.value === "string") shape.value = node.value;
+  if (node.children) shape.children = node.children.map(toShape);
+  return shape;
+}
+
+function isParent(node: { type: string }): node is ComparableNode & { children: ComparableNode[] } {
+  return "children" in node;
+}
+
+function referenceMdastShape(md: string): NodeShape[] {
+  const root = referenceProcessor.runSync(referenceProcessor.parse(md));
+  return isParent(root) ? root.children.map(toShape) : [];
+}
+
+function satteriMdastShape(md: string): NodeShape[] {
+  const root = markdownToMdast(md, { features: { definitionList: true } });
+  return isParent(root) ? root.children.map(toShape) : [];
+}
+
+function collapseTagWhitespace(h: string): string {
+  return h.replace(/>\s+</g, "><").replace(/\s+<\//g, "</").trim();
+}
+
+describe("definition list: conformance vs remark-definition-list", () => {
+  const CASES: Array<[string, string]> = [
+    ["tight single-block definition", "Apple\n:   Red.\n"],
+    ["tight definition with a blank-line continuation", "Apple\n:   Red.\n\n    More red.\n"],
+    ["loose multi-block definition", "Apple\n\n:   Red.\n\n    More red.\n"],
+    ["one term with two definitions", "Apple\n:   Red.\n:   Green.\n"],
+    ["two terms sharing a definition", "T1\nT2\n:   d\n"],
+    ["inline markup in term and definition", "*Apple*\n:   A **fruit**.\n"],
+    ["definition containing a nested list", "Term\n:   intro\n\n    - a\n    - b\n"],
+    ["definition list between paragraphs", "before\n\nTerm\n:   def\n\nafter\n"],
+  ];
+
+  describe("mdast structure matches the reference", () => {
+    for (const [name, md] of CASES) {
+      test(name, () => {
+        expect(satteriMdastShape(md)).toEqual(referenceMdastShape(md));
+      });
+    }
+  });
+
+  describe("html output matches the reference", () => {
+    const HTML_CASES: Array<[string, string]> = [
+      ["tight single-block definition", "Apple\n:   Red.\n"],
+      ["loose multi-block definition", "Apple\n\n:   Red.\n\n    More red.\n"],
+      ["one term with two definitions", "Apple\n:   Red.\n:   Green.\n"],
+      ["two terms sharing a definition", "T1\nT2\n:   d\n"],
+      ["inline markup in term and definition", "*Apple*\n:   A **fruit**.\n"],
+    ];
+    for (const [name, md] of HTML_CASES) {
+      test(name, () => {
+        const reference = collapseTagWhitespace(String(referenceHtmlProcessor.processSync(md)));
+        expect(collapseTagWhitespace(html(md))).toBe(reference);
+      });
+    }
+  });
+
+  // Deliberate divergence: multi-block definitions render loose per pandoc, not newline-joined.
+  test("multi-block tight definition renders loose, unlike the reference", () => {
+    const md = "Apple\n:   Red.\n\n    More red.\n";
+    expect(collapseTagWhitespace(html(md))).toBe(
+      "<dl><dt>Apple</dt><dd><p>Red.</p><p>More red.</p></dd></dl>",
+    );
+    expect(collapseTagWhitespace(String(referenceHtmlProcessor.processSync(md)))).toBe(
+      "<dl><dt>Apple</dt><dd>Red.\nMore red.</dd></dl>",
+    );
   });
 });
