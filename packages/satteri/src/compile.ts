@@ -683,13 +683,18 @@ export interface MarkdownToJsResult {
 // Used to narrow the compile entry points to a sync return when every plugin
 // is sync, while keeping the union when at least one visitor is async.
 
+// "maybe" is for a declared type that admits both, where no call site can tell which it gets.
+type CombineAsync<A> = "async" extends A ? "async" : "maybe" extends A ? "maybe" : "sync";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...args: any[]) => unknown;
 type ReturnsPromise<F> = F extends AnyFn
-  ? Extract<ReturnType<F>, Promise<unknown>> extends never
-    ? false
-    : true
-  : false;
+  ? [Extract<ReturnType<F>, Promise<unknown>>] extends [never]
+    ? "sync"
+    : [Exclude<ReturnType<F>, Promise<unknown>>] extends [never]
+      ? "async"
+      : "maybe"
+  : "sync";
 type FieldIsAsync<V> = V extends AnyFn
   ? ReturnsPromise<V>
   : V extends { visit: infer F }
@@ -697,20 +702,16 @@ type FieldIsAsync<V> = V extends AnyFn
     : V extends ReadonlyArray<infer Item>
       ? Item extends { visit: infer F }
         ? ReturnsPromise<F>
-        : false
-      : false;
+        : "sync"
+      : "sync";
 type AnyVisitorAsync<P> = {
   [K in keyof P]-?: FieldIsAsync<NonNullable<P[K]>>;
 }[keyof P];
-// `P extends unknown` forces distribution; `true extends AnyVisitorAsync<P>`
-// alone would not, since the checked type is `true` rather than P. Undistributed,
+// `P extends unknown` forces distribution; `"async" extends AnyVisitorAsync<P>`
+// alone would not, since the checked type is `"async"` rather than P. Undistributed,
 // a union of plugins with differing visitor keys collapses to their common keys
 // and the async visitor goes unseen.
-type IsPluginAsync<P> = P extends unknown
-  ? true extends AnyVisitorAsync<P>
-    ? true
-    : false
-  : never;
+type IsPluginAsync<P> = P extends unknown ? CombineAsync<AnyVisitorAsync<P>> : never;
 // Depth-capped because `PluginEntry` is recursive: an uncapped walk never
 // terminates on a value typed as the alias itself, which TS rejects outright as
 // "type instantiation is excessively deep".
@@ -726,21 +727,19 @@ type ResolveInput<P, D extends readonly unknown[] = [0, 0, 0, 0, 0, 0, 0, 0]> = 
       : P
   : never;
 type AnyInputAsync<Ps> =
-  Ps extends ReadonlyArray<infer P>
-    ? true extends IsPluginAsync<ResolveInput<P>>
-      ? true
-      : false
-    : false;
-type OptionsAsync<O> = (
-  O extends { mdastPlugins: infer Ps } ? AnyInputAsync<Ps> : false
-) extends true
-  ? true
-  : (O extends { hastPlugins: infer Ps } ? AnyInputAsync<Ps> : false) extends true
-    ? true
-    : false;
+  Ps extends ReadonlyArray<infer P> ? CombineAsync<IsPluginAsync<ResolveInput<P>>> : "sync";
+// Indexed access, not `O extends { mdastPlugins: infer Ps }`: that is false for an optional property.
+type OptionsAsync<O extends CompileOptions> = CombineAsync<
+  AnyInputAsync<NonNullable<O["mdastPlugins"]>> | AnyInputAsync<NonNullable<O["hastPlugins"]>>
+>;
 
-type ResultFor<O, R> = OptionsAsync<O> extends true ? Promise<R> : R;
+type ResultFor<O extends CompileOptions, R> = {
+  sync: R;
+  async: Promise<R>;
+  maybe: R | Promise<R>;
+}[OptionsAsync<O>];
 
+export function markdownToHtml(source: string): MarkdownToHtmlResult;
 export function markdownToHtml<O extends CompileOptions>(
   source: string,
   options?: O,
@@ -901,6 +900,7 @@ export function markdownToHtml(
   return runHastThenRender(result);
 }
 
+export function mdxToJs(source: string): MdxToJsResult;
 export function mdxToJs<O extends MdxCompileOptions>(
   source: string,
   options?: O,
@@ -918,6 +918,7 @@ export function mdxToJs(
  * lines are ordinary Markdown. HTML has no JSX representation and is dropped;
  * enable `features: { rawHtml: true }` to parse it into real elements instead.
  */
+export function markdownToJs(source: string): MarkdownToJsResult;
 export function markdownToJs<O extends MarkdownToJsOptions>(
   source: string,
   options?: O,
