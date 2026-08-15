@@ -827,6 +827,45 @@ describe("mdast lifecycle hooks", () => {
     }
   });
 
+  test("function-declared hooks receive the plugin as this", () => {
+    const seenThis: unknown[] = [];
+    const plugin = defineMdastPlugin({
+      name: "this-binding",
+      before() {
+        seenThis.push(this);
+      },
+      after() {
+        seenThis.push(this);
+      },
+    });
+    markdownToHtml("# Hi", { mdastPlugins: [plugin] });
+    expect(seenThis).toHaveLength(2);
+    expect(seenThis[0]).toBe(plugin);
+    expect(seenThis[1]).toBe(plugin);
+  });
+
+  test("state stored on this flows across before, visitors, and after", () => {
+    let seenAtAfter: string[] = [];
+    markdownToHtml("# One\n\n## Two", {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "this-state",
+          headings: [] as string[],
+          before() {
+            this.headings.push("before");
+          },
+          heading(node, ctx) {
+            this.headings.push(ctx.textContent(node));
+          },
+          after() {
+            seenAtAfter = [...this.headings];
+          },
+        }),
+      ],
+    });
+    expect(seenAtAfter).toEqual(["before", "One", "Two"]);
+  });
+
   test("the child operations work on the root", () => {
     const prepended = markdownToHtml("# Hi\n\nWorld", {
       mdastPlugins: [
@@ -1373,5 +1412,45 @@ describe("hast lifecycle hooks", () => {
         }),
       ).toThrow(/sibling insert on root/);
     }
+  });
+
+  test("function-declared hooks receive the plugin as this", () => {
+    const seenThis: unknown[] = [];
+    const plugin = defineHastPlugin({
+      name: "this-binding",
+      before() {
+        seenThis.push(this);
+      },
+      after() {
+        seenThis.push(this);
+      },
+    });
+    markdownToHtml("# Hi", { hastPlugins: [plugin] });
+    expect(seenThis).toHaveLength(2);
+    expect(seenThis[0]).toBe(plugin);
+    expect(seenThis[1]).toBe(plugin);
+  });
+
+  test("state stored on this in before survives the visitor pass into after", () => {
+    const visited: string[] = [];
+    let seenAtAfter: string[] = [];
+    markdownToHtml("# Hi", {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "this-state",
+          tags: [] as string[],
+          before() {
+            this.tags.push("before");
+          },
+          element: { filter: ["h1"], visit: (node) => void visited.push(node.tagName) },
+          after() {
+            this.tags.push("after");
+            seenAtAfter = [...this.tags];
+          },
+        }),
+      ],
+    });
+    expect(visited).toEqual(["h1"]);
+    expect(seenAtAfter).toEqual(["before", "after"]);
   });
 });
