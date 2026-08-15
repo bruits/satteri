@@ -527,3 +527,31 @@ describe("family M: email and `www` triggering at the same offset", () => {
     ["www.x.ya@b.cd`c`\n", ["mailto:www.x.ya@b.cd"]],
   ])("%j", conforms);
 });
+
+// The fallback path inverts family M's precedence: `findAndReplace` applies
+// the url pattern to the whole tree before the email pattern, so the `www.`
+// wins wherever the unclosed `[` keeps the construct from firing.
+describe("family N: a www link overlapping an email on the fallback path", () => {
+  test.each([
+    ["[a user@www.example.org\n", ["http://www.example.org"]],
+    ["[a user@www.example.org y\n", ["http://www.example.org"]],
+    ["[a user@www.example.org.\n", ["http://www.example.org"]],
+    ["[a user@www.x\n", ["http://www.x"]],
+    ["[a a\\.b@www.c.com\n", ["http://www.c.com"]],
+    ["[a a\\+b@www.c.com\n", ["http://www.c.com"]],
+    ["[a x\\+a@www.b.com y\n", ["http://www.b.com"]],
+    ["[a /_a@www.b.com y\n", ["http://www.b.com"]],
+    ["[a user@http://x.y\n", ["http://x.y"]],
+    // The url pass cuts the text the email pattern sees, so the address ends
+    // where the link starts rather than being dropped whole.
+    ["[a a@b.www.x.com\n", ["http://www.x.com"]],
+    ["[a a@b.c.www.x.com\n", ["mailto:a@b.c", "http://www.x.com"]],
+    // Addresses outside the link's range are untouched, on either side.
+    ["[a u@b.com www.c.org u2@d.com\n", ["mailto:u@b.com", "http://www.c.org", "mailto:u2@d.com"]],
+    ["[a c@www.d.e f@g.hi\n", ["http://www.d.e", "mailto:f@g.hi"]],
+    ["[a user@example.com\n", ["mailto:user@example.com"]],
+    ["[a user@mail.wwwexample.com\n", ["mailto:user@mail.wwwexample.com"]],
+    // Unblocked, so the construct runs and family M's precedence holds.
+    ["user@www.example.org\n", ["mailto:user@www.example.org"]],
+  ])("%j", conforms);
+});
