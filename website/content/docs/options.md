@@ -9,13 +9,14 @@ Options for Sätteri's [entry points](/docs/entry-points/). `CompileOptions` is 
 
 ## CompileOptions
 
-| Option         | Type              | Notes                                                                                         |
-| -------------- | ----------------- | --------------------------------------------------------------------------------------------- |
-| `mdastPlugins` | `MdastPluginList` | MDAST plugins, factories that return one, or arrays of either. See [Plugins](/docs/plugins/). |
-| `hastPlugins`  | `HastPluginList`  | HAST plugins, factories, or arrays of either.                                                 |
-| `features`     | `Features`        | Parser extensions. See [Features](/docs/features/).                                           |
-| `fileURL`      | `URL`             | The document's URL, surfaced to plugins as `ctx.fileURL`.                                     |
-| `data`         | `Data`            | Initial [data bag](#data).                                                                    |
+| Option         | Type              | Notes                                                                                                |
+| -------------- | ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `mdastPlugins` | `MdastPluginList` | MDAST plugins, factories that return one, or arrays of either. See [Plugins](/docs/plugins/).        |
+| `hastPlugins`  | `HastPluginList`  | HAST plugins, factories, or arrays of either.                                                        |
+| `features`     | `Features`        | Parser extensions. See [Features](/docs/features/).                                                  |
+| `fileURL`      | `URL`             | The document's URL, surfaced to plugins as `ctx.fileURL`.                                            |
+| `data`         | `Data`            | Initial [data bag](#data).                                                                           |
+| `warnings`     | `boolean`         | Display warnings about [dropped transforms](/docs/plugin-api#how-transforms-compose). Default: true. |
 
 ### fileURL
 

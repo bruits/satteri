@@ -156,8 +156,8 @@ function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginDefinition[],
   fileURL: URL | undefined,
-  warnings: boolean,
   data: Data,
+  warnings: boolean,
   sourceFormat: SourceFormat,
   collectLast = false,
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
@@ -229,8 +229,8 @@ function runHastPluginsCollectLast(
   plugins: HastPluginDefinition[],
   source: string,
   fileURL: URL | undefined,
-  warnings: boolean,
   data: Data,
+  warnings: boolean,
   sourceFormat: SourceFormat,
 ): CollectedHastCommands | Promise<CollectedHastCommands> {
   let i = 0;
@@ -477,10 +477,6 @@ export interface CompileOptions {
    */
   fileURL?: URL;
   /**
-   * ...
-   */
-  warnings?: boolean;
-  /**
    * Initial document-level data bag, seeding `ctx.data` before any plugin runs.
    * It is the same object plugins mutate and the caller reads back as
    * `result.data`, so values flow both into and out of a compile. Defaults to a
@@ -488,6 +484,8 @@ export interface CompileOptions {
    * throwaway object per compile rather than a shared one.
    */
   data?: Data;
+  /** Display warnings about dropped transforms. Default: true. */
+  warnings?: boolean;
 }
 
 /**
@@ -653,7 +651,7 @@ export function markdownToHtml(
   source: string,
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
-  const { features, fileURL, warnings = true, data = {} } = options;
+  const { features, fileURL, data = {}, warnings = true } = options;
   const mdastPlugins = normalizePlugins(options.mdastPlugins ?? [], "mdastPlugins");
   const hastPlugins = normalizePlugins(options.hastPlugins ?? [], "hastPlugins");
   const hastMayHaveStubs = hastPlugins.length > 0;
@@ -684,8 +682,8 @@ export function markdownToHtml(
         mdastHandle,
         mdastPlugins,
         fileURL,
-		warnings,
         data,
+        warnings,
         "markdown",
         true,
       );
@@ -729,10 +727,10 @@ export function markdownToHtml(
     mdastPlugins,
     false,
     fileURL,
-	warnings,
     nativeFeatures,
     nativeConvertOptions,
     data,
+    warnings,
     trackPositions,
   );
 
@@ -749,8 +747,8 @@ export function markdownToHtml(
         hastPlugins,
         source,
         fileURL,
-		warnings,
         data,
+        warnings,
         "markdown",
       );
     } catch (err) {
@@ -833,8 +831,8 @@ function toJsImpl(
     hastPlugins: hastInput = [],
     features,
     fileURL,
-	warnings = true,
     data = {},
+    warnings = true,
     ...mdxFields
   } = options;
   const mdastPlugins = normalizePlugins(mdastInput, "mdastPlugins");
@@ -872,8 +870,8 @@ function toJsImpl(
         mdastHandle,
         mdastPlugins,
         fileURL,
-		warnings,
         data,
+        warnings,
         mdx ? "mdx" : "markdown",
         true,
       );
@@ -915,10 +913,10 @@ function toJsImpl(
     mdastPlugins,
     mdx,
     fileURL,
-	warnings,
     nativeFeatures,
     nativeConvertOptions,
     data,
+    warnings,
     trackPositions,
   );
 
@@ -930,8 +928,8 @@ function toJsImpl(
         hastPlugins,
         source,
         fileURL,
-		warnings,
         data,
+        warnings,
         mdx ? "mdx" : "markdown",
       );
     } catch (err) {
@@ -1032,12 +1030,12 @@ function createHastHandleFromMdast(
   mdastPlugins: MdastPluginDefinition[],
   mdx: boolean,
   fileURL: URL | undefined,
-  warnings: boolean,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nativeFeatures: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nativeConvertOptions: any,
   data: Data,
+  warnings: boolean,
   trackPositions: boolean,
 ): HastWithFrontmatter | Promise<HastWithFrontmatter> {
   if (mdastPlugins.length === 0) {
@@ -1086,8 +1084,8 @@ function createHastHandleFromMdast(
       mdastHandle,
       mdastPlugins,
       fileURL,
-	  warnings,
       data,
+      warnings,
       sourceFormat,
     );
 

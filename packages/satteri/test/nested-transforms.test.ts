@@ -113,6 +113,8 @@ test("a stranded HAST transform is dropped with a warning, like MDAST", () => {
         },
       },
     });
+    markdownToHtml("# *Hi*", { hastPlugins: [plugin], warnings: false });
+    expect(warn).toHaveBeenCalledTimes(0);
     const { html } = markdownToHtml("# *Hi*", { hastPlugins: [plugin] });
     expect(html.trim()).toBe(""); // heading + its em gone, no throw
     expect(warn).toHaveBeenCalledTimes(1);

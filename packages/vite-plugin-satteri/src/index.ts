@@ -43,7 +43,7 @@ export interface VitePluginSatteriOptions {
   hastPlugins?: HastPluginList;
   /** Parser feature toggles (gfm, frontmatter, math, …). Shared across .md and .mdx. */
   features?: Features;
-  /** Display warnings about dropped transformations. Default: true. */
+  /** Display warnings about dropped transforms. Default: true. */
   warnings?: boolean;
 }
 
@@ -58,7 +58,14 @@ function parseFrontmatter(fm: Frontmatter | null): unknown {
 }
 
 export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}): Plugin {
-  const { markdown = true, mdx = true, mdastPlugins, hastPlugins, features, warnings = true } = options;
+  const {
+    markdown = true,
+    mdx = true,
+    mdastPlugins,
+    hastPlugins,
+    features,
+    warnings = true,
+  } = options;
 
   const mdxEnabled = mdx !== false;
   const mdxOptions: MdxOptions = typeof mdx === "object" ? mdx : {};
@@ -83,7 +90,7 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
         const isDev = mdxOptions.development ?? viteConfig?.command === "serve";
         const opts: MdxCompileOptions = {
           fileURL,
-		  warnings,
+          warnings,
           development: isDev,
           ...(mdastPlugins ? { mdastPlugins } : {}),
           ...(hastPlugins ? { hastPlugins } : {}),
@@ -103,7 +110,7 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
             ? { pragmaImportSource: mdxOptions.pragmaImportSource }
             : {}),
         };
-        const { code: mdxCode, frontmatter } = await mdxToJs(source, opts);
+        const { code: mdxCode, frontmatter } = mdxToJs(source, opts);
         const fm = parseFrontmatter(frontmatter);
         const code = `export const frontmatter = ${JSON.stringify(fm)};\n${mdxCode}`;
         return { code, map: null };
@@ -111,12 +118,12 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
 
       const opts: CompileOptions = {
         fileURL,
-		warnings,
+        warnings,
         ...(mdastPlugins ? { mdastPlugins } : {}),
         ...(hastPlugins ? { hastPlugins } : {}),
         ...(features ? { features } : {}),
       };
-      const { html, frontmatter } = await markdownToHtml(source, opts);
+      const { html, frontmatter } = markdownToHtml(source, opts);
       const fm = parseFrontmatter(frontmatter);
       const code =
         `const html = ${JSON.stringify(html)};\n` +

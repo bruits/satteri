@@ -185,7 +185,7 @@ MDX treats `{...}` as a JavaScript expression, which normally collides with the 
 # Welcome {name}
 ```
 
-A `{...}` that *is* valid JavaScript stays an expression even when it looks like attributes: `{hidden}`, `{level=2}` and `{title="Home"}` evaluate rather than apply — silently, and unlike in plain Markdown. Add a `#`/`.` shorthand to force attributes; `{#id hidden}` applies both.
+A `{...}` that _is_ valid JavaScript stays an expression even when it looks like attributes: `{hidden}`, `{level=2}` and `{title="Home"}` evaluate rather than apply — silently, and unlike in plain Markdown. Add a `#`/`.` shorthand to force attributes; `{#id hidden}` applies both.
 
 ## Directives
 
