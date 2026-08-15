@@ -2148,6 +2148,18 @@ describe("fuzz regressions: GFM autolink fires during inline tokenization, not a
   });
 });
 
+describe("fuzz known-fails: email autolink after a backslash escape", () => {
+  // `\\` is an escaped backslash, so remark still starts an email at `+`.
+  test.fails("escaped backslash before a non-alphanumeric local part", () => {
+    assertMdastConformance("\\\\+@.a\n");
+  });
+
+  // `\+` escapes the `+`, so remark's find-and-replace never starts an email.
+  test.fails("escaped `+` still starts an email in satteri", () => {
+    assertMdastConformance("\\+_@.a\n");
+  });
+});
+
 // Each `test.fails` below is a structural divergence Sätteri still has
 // vs remark — discovered by `FUZZ_RUNS=1000000` runs of test/conformance/
 // fuzz/md.test.ts. They are tracked here so that whoever closes the gap

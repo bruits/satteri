@@ -984,9 +984,10 @@ export async function assertBothReject(input: string): Promise<void> {
     satteriOk = false;
   }
 
-  expect(satteriOk).toBe(mdxOk);
+  expect(mdxOk).toBe(false);
+  expect(satteriOk).toBe(false);
 }
 
-export async function assertRejects(input: string): Promise<void> {
+export function assertRejects(input: string): void {
   expect(() => mdxToJs(input)).toThrow();
 }

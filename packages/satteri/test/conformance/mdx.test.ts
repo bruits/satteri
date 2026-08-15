@@ -32,10 +32,10 @@ describe("MDX conformance: expressions", () => {
     await assertMdxConformance("{ true ? 'a' : 'b' }");
   });
 
+  // The expression references an undefined binding, so it never renders.
   test("expression spanning blank line is not parsed as expression", async () => {
-    // mdx-js hard-errors, satteri treats as text — both are valid.
-    // Just verify satteri doesn't silently produce wrong output.
-    await assertBothReject("{a +\n\nb}");
+    const { satteriMdxMdast, referenceMdxMdast } = await import("./fuzz/shared.js");
+    expect(satteriMdxMdast("{a +\n\nb}")).toEqual(referenceMdxMdast("{a +\n\nb}"));
   });
 
   test("comment-only expression", async () => {
@@ -232,10 +232,10 @@ describe("MDX conformance: unicode", () => {
     await assertMdxConformance("<Café/>", { Café });
   });
 
+  // React rejects the ZWNJ tag name at render time, so compare trees instead.
   test("ZWNJ in tag name", async () => {
-    // ZWNJ produces a tag name that React can't render as HTML,
-    // so we just verify both compilers accept it without error.
-    await assertBothReject("<foo\u200Cbar/>");
+    const { satteriMdxMdast, referenceMdxMdast } = await import("./fuzz/shared.js");
+    expect(satteriMdxMdast("<foo\u200Cbar/>")).toEqual(referenceMdxMdast("<foo\u200Cbar/>"));
   });
 
   test("unicode tag name with attributes", async () => {
@@ -304,8 +304,8 @@ describe("MDX conformance: error cases", () => {
     await assertBothReject("{1 +");
   });
 
-  test("rejects empty expression", async () => {
-    await assertBothReject("{}");
+  test("empty expression is accepted by both", async () => {
+    await assertMdxConformance("{}");
   });
 
   test("rejects unclosed JSX tag", async () => {
@@ -615,7 +615,7 @@ describe("MDX conformance: markdown elements", () => {
   });
 
   test("a tail that closes before the `{` leaves it an expression", async () => {
-    await assertBothReject("[a](\\){)}");
+    await assertMdxConformance("[a](\\){)}");
     await assertBothReject("[a](/u){w");
   });
 
