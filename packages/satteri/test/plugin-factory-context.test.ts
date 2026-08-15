@@ -220,11 +220,13 @@ describe("plugin factory context", () => {
     });
 
     markdownToHtml("# Title", { mdastPlugins: [wantsPositions, observer] });
+    expect(positions).toHaveLength(1);
     expect(positions[0]).toBeDefined();
 
     markdownToHtml("# Title", {
       mdastPlugins: [(ctx) => (ctx.sourceFormat === "mdx" ? wantsPositions : null), observer],
     });
+    expect(positions).toHaveLength(2);
     expect(positions[1]).toBeUndefined();
   });
 

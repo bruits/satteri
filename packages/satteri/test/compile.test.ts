@@ -2195,13 +2195,15 @@ describe("per-plugin position opt-in", () => {
   });
 
   test("one opted-in plugin enables positions for the whole pipeline", () => {
-    let mdastSeen: unknown = "unset";
+    let mdastRan = false;
+    let mdastSeen: unknown;
     let hastSeen: { start: { line: number } } | undefined;
     markdownToHtml(SOURCE, {
       mdastPlugins: [
         defineMdastPlugin({
           name: "no-opt",
           heading(node) {
+            mdastRan = true;
             mdastSeen = node.position;
           },
         }),
@@ -2221,6 +2223,7 @@ describe("per-plugin position opt-in", () => {
     });
     // A hast plugin opting in flips mdast tracking on too, so the earlier
     // mdast plugin observes positions even though it didn't ask.
+    expect(mdastRan).toBe(true);
     expect(mdastSeen).toBeDefined();
     expect(hastSeen?.start.line).toBe(1);
   });

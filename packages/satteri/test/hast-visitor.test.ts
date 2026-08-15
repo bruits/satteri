@@ -752,11 +752,13 @@ describe("visitHastHandle - mutations", () => {
 
   test("walk-path materialized nodes are frozen against plugin mutation", () => {
     const { handle, source } = setup("# Hello");
+    let vandalRan = false;
     const vandal = defineHastPlugin({
       name: "vandal",
       element: {
         filter: ["h1"],
         visit(node, ctx) {
+          vandalRan = true;
           const parent = ctx.parent(node);
           if (!parent) throw new Error("h1 must have a parent");
           const h1 = parent.children.find((c) => c.type === "element") as Element;
@@ -779,12 +781,15 @@ describe("visitHastHandle - mutations", () => {
     });
     const subs = resolveSubscriptions(vandal);
     visitHastHandle(handle, vandal, subs, source, undefined);
+    expect(vandalRan).toBe(true);
 
+    let witnessRan = false;
     const witness = defineHastPlugin({
       name: "witness",
       element: {
         filter: ["h1"],
         visit(node, ctx) {
+          witnessRan = true;
           const parent = ctx.parent(node);
           expect(parent).toBeDefined();
           const h1 = parent!.children.find((c) => c.type === "element") as Element;
@@ -793,6 +798,7 @@ describe("visitHastHandle - mutations", () => {
       },
     });
     visitHastHandle(handle, witness, resolveSubscriptions(witness), source, undefined);
+    expect(witnessRan).toBe(true);
     expect(renderHandle(handle)).toContain("<h1>Hello</h1>");
   });
 
