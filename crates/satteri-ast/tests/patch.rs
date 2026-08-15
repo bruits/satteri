@@ -980,6 +980,64 @@ fn position_preserved_after_remove_sibling() {
 }
 
 #[test]
+fn grafted_payload_nodes_get_no_position() {
+    use satteri_ast::mdast::codec::{decode_string_ref_data, encode_string_ref_data};
+
+    let orig = build_hello_world();
+    let heading_id = orig.get_children(0)[0];
+    let orig_para = *orig.get_node(orig.get_children(0)[1]);
+
+    let mut b = ArenaBuilder::<Mdast>::new("**bold**".to_string());
+    b.open_node(MdastNodeType::Root as u8);
+    b.set_position_current(0, 8, 1, 1, 1, 9);
+    b.open_node(MdastNodeType::Strong as u8);
+    b.set_position_current(0, 8, 1, 1, 1, 9);
+    b.open_node(MdastNodeType::Text as u8);
+    b.set_position_current(2, 6, 1, 3, 1, 7);
+    let value = b.alloc_string("bold");
+    b.set_data_current(&encode_string_ref_data(value));
+    b.close_node();
+    b.close_node();
+    b.close_node();
+    let replacement = b.finish();
+
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: heading_id,
+            new_tree: PatchContent::Tree(replacement),
+            keep_children: false,
+        }],
+    );
+
+    let strong_id = rebuilt.get_children(0)[0];
+    let text_id = rebuilt.get_children(strong_id)[0];
+    for id in [strong_id, text_id] {
+        let n = rebuilt.get_node(id);
+        assert_eq!(
+            (
+                n.start_offset,
+                n.end_offset,
+                n.start_line,
+                n.start_column,
+                n.end_line,
+                n.end_column
+            ),
+            (0, 0, 0, 0, 0, 0),
+            "grafted node {id} kept a fragment position"
+        );
+    }
+
+    let text_value = decode_string_ref_data(rebuilt.get_type_data(text_id));
+    assert_eq!(rebuilt.get_str(text_value), "bold");
+
+    let new_para = rebuilt.get_node(rebuilt.get_children(0)[1]);
+    assert_eq!(new_para.start_offset, orig_para.start_offset);
+    assert_eq!(new_para.start_line, orig_para.start_line);
+    assert_eq!(new_para.end_column, orig_para.end_column);
+}
+
+#[test]
 fn append_child_with_string_ref_type_data_round_trip() {
     use satteri_ast::mdast::codec::{decode_link_data, encode_link_data};
 
