@@ -2441,3 +2441,88 @@ fn copying_a_deeply_nested_subtree_does_not_overflow_the_stack() {
 
     assert_eq!(chain_len(&rebuilt, rebuilt.get_children(0)[0]), 3000);
 }
+
+/// A node an earlier apply removed keeps a stale parent, so its splice strands.
+#[test]
+fn insert_after_node_removed_by_an_earlier_apply_is_dropped() {
+    let mut arena = build_hello_world();
+    let heading = arena.get_children(0)[0];
+    apply_patches_in_place(&mut arena, &[Patch::Remove { node_id: heading }]).expect("remove");
+    assert_eq!(arena.get_children(0).len(), 1);
+
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[Patch::InsertAfter {
+            node_id: heading,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+        }],
+    )
+    .expect("apply failed");
+
+    assert_eq!(dropped, vec![heading]);
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 1);
+    assert_eq!(
+        arena.get_node(kids[0]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+}
+
+#[test]
+fn replace_of_node_removed_by_an_earlier_apply_is_dropped() {
+    let mut arena = build_hello_world();
+    let heading = arena.get_children(0)[0];
+    apply_patches_in_place(&mut arena, &[Patch::Remove { node_id: heading }]).expect("remove");
+
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[Patch::Replace {
+            node_id: heading,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            keep_children: false,
+        }],
+    )
+    .expect("apply failed");
+
+    assert_eq!(dropped, vec![heading]);
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 1);
+    assert_eq!(
+        arena.get_node(kids[0]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+}
+
+/// A ref anywhere in the batch switches splices to the immediate path.
+#[test]
+fn stranded_splice_is_dropped_on_the_immediate_path() {
+    let mut arena = build_hello_world();
+    let heading = arena.get_children(0)[0];
+    let paragraph = arena.get_children(0)[1];
+    let text = arena.get_children(paragraph)[0];
+    apply_patches_in_place(&mut arena, &[Patch::Remove { node_id: heading }]).expect("remove");
+
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+            Patch::InsertBefore {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(ref_payload_mdast(text)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    assert_eq!(dropped, vec![heading]);
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 2);
+    assert_eq!(arena.get_node(kids[0]).node_type, MdastNodeType::Text as u8);
+    assert_eq!(
+        arena.get_node(kids[1]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+}

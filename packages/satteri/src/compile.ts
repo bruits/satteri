@@ -154,8 +154,8 @@ function warnDroppedTransforms(
   const name = plugin.name ?? "<anonymous>";
   const noun = dropped === 1 ? "transform" : "transforms";
   console.warn(
-    `satteri: plugin "${name}" queued ${dropped} ${kind} ${noun} on node(s) that were removed or ` +
-      `replaced earlier in the same pass; ${dropped === 1 ? "it was" : "they were"} dropped.`,
+    `satteri: plugin "${name}" queued ${dropped} ${kind} ${noun} on node(s) that a plugin had ` +
+      `already removed or replaced; ${dropped === 1 ? "it was" : "they were"} dropped.`,
   );
 }
 
