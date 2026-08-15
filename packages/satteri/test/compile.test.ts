@@ -2228,6 +2228,70 @@ describe("per-plugin position opt-in", () => {
     expect(hastSeen?.start.line).toBe(1);
   });
 
+  test("mdast nodes spliced in from a raw string have no position", () => {
+    const spliced: unknown[] = [];
+    let headingSeen: { start: { line: number } } | undefined;
+    markdownToHtml(SOURCE, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "splice",
+          paragraph() {
+            return { raw: "**bold 😀 text**" };
+          },
+        }),
+        defineMdastPlugin({
+          name: "reader",
+          options: { position: true },
+          heading(node) {
+            headingSeen = node.position;
+          },
+          paragraph(node) {
+            spliced.push(node.position);
+          },
+          strong(node) {
+            spliced.push(node.position);
+          },
+          text(node) {
+            if (node.value === "bold 😀 text") spliced.push(node.position);
+          },
+        }),
+      ],
+    });
+    expect(spliced).toHaveLength(3);
+    expect(spliced.every((position) => position === undefined)).toBe(true);
+    expect(headingSeen?.start.line).toBe(1);
+  });
+
+  test("hast elements converted from a raw splice have no position", () => {
+    let strongSeen: unknown = "unset";
+    let headingSeen: { start: { line: number } } | undefined;
+    markdownToHtml(SOURCE, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "splice",
+          paragraph() {
+            return { raw: "**bold 😀 text**" };
+          },
+        }),
+      ],
+      hastPlugins: [
+        defineHastPlugin({
+          name: "reader",
+          options: { position: true },
+          element: {
+            filter: ["h1", "strong"],
+            visit(node) {
+              if (node.tagName === "strong") strongSeen = node.position;
+              else headingSeen = node.position;
+            },
+          },
+        }),
+      ],
+    });
+    expect(strongSeen).toBeUndefined();
+    expect(headingSeen?.start.line).toBe(1);
+  });
+
   // Issue #172: the walk path leaked byte offsets, so
   // `ctx.source.slice(start.offset, end.offset)` drifted right after any
   // multibyte character. Offsets and columns are UTF-16 code units, so
@@ -2378,6 +2442,26 @@ describe("MDX source positions without a position opt-in", () => {
     if (result instanceof Promise) throw new Error("expected sync");
     expect(result.code).toContain("lineNumber: 3");
     expect(result.code).toContain("columnNumber: 1");
+  });
+
+  test("dev __source reports no line for JSX built from a raw splice", () => {
+    const src = "# Title\n\nsome `code` here\n";
+    const result = mdxToJs(src, {
+      development: true,
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "splice",
+          inlineCode() {
+            return { raw: "**bold 😀 text**" };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.code).toContain("_components.strong");
+    const emitted = [...result.code.matchAll(/lineNumber: (\d+)/g)].map((m) => Number(m[1]));
+    expect(emitted.length).toBeGreaterThan(0);
+    expect(Math.max(...emitted)).toBeLessThanOrEqual(src.trimEnd().split("\n").length);
   });
 
   test("MDX parse errors report line:col (not a byte offset) on the fast path", () => {

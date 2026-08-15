@@ -276,15 +276,7 @@ fn graft_node<K: ArenaKind>(
     if let Some(data) = sub.get_node_data(sub_id) {
         arena.set_node_data(new_id, data.to_vec());
     }
-    arena.set_position(
-        new_id,
-        node.start_offset + source_base,
-        node.end_offset + source_base,
-        node.start_line,
-        node.start_column,
-        node.end_line,
-        node.end_column,
-    );
+    // Payload coordinates are fragment-relative, so the no-position sentinel stays.
     let type_data = sub.get_type_data(sub_id);
     if !type_data.is_empty() {
         if source_base != 0 {
