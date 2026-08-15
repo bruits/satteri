@@ -1078,7 +1078,7 @@ fn replay_hast_opstream(
 }
 
 /// Returns (arena, keep_children) for a HAST sub-tree payload: an op-stream,
-/// or — wrap only — `PAYLOAD_RAW` parsed as an HTML fragment. Other ops don't
+/// or (wrap only) `PAYLOAD_RAW` parsed as an HTML fragment. Other ops don't
 /// need raw: the `raw` node type covers opaque HTML.
 fn read_hast_payload(
     reader: &mut BufReader<'_>,

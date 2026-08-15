@@ -86,7 +86,7 @@ test("custom type round-trips as node.type and content stays visible to other pl
 });
 
 test("GFM content survives inside a custom node (the #125 repro, fixed)", () => {
-  // Replace a blockquote with a section wrapping its children — a GFM table
+  // Replace a blockquote with a section wrapping its children, a GFM table
   // among them. A directive wrapper drops all of it without an `hName`.
   const wrap = defineMdastPlugin({
     name: "wrap-block",
@@ -109,7 +109,7 @@ test("custom leaf node (value, no children) renders as an escaped text node", ()
   const wrap = defineMdastPlugin({
     name: "leaf",
     paragraph(node, ctx) {
-      // Replace the paragraph with a value-bearing leaf — no children, no hName.
+      // Replace the paragraph with a value-bearing leaf: no children, no hName.
       ctx.replaceNode(node, { type: "token", value: "a < b & c" });
     },
   });
@@ -283,7 +283,7 @@ test("fields outside the node shape are dropped; data carries metadata", () => {
 
 test("a custom node can be mutated from the custom visitor", () => {
   // The node handed to `custom` goes straight back into the mutation API,
-  // without a cast — the type-level half of this test is the compile.
+  // without a cast; the type-level half of this test is the compile.
   const create = defineMdastPlugin({
     name: "create",
     paragraph(node, ctx) {

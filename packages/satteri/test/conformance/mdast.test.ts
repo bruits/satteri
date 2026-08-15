@@ -738,7 +738,7 @@ describe("MDAST conformance: closing code fence whitespace", () => {
 });
 
 // Astral characters are a single code point but two UTF-16 units, and
-// `position` counts UTF-16 units — so both columns and offsets advance by
+// `position` counts UTF-16 units, so both columns and offsets advance by
 // two. BMP multibyte text can't catch a regression back to code points;
 // only these can.
 describe("MDAST conformance: astral characters in positions", () => {

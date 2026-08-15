@@ -152,7 +152,7 @@ export interface HastVisitorContext {
    * children `parentNode` declares are kept after it, so a `div` with an anchor
    * child wraps a heading as `div > [heading, anchor]`. `parentNode` is an
    * element, an MDX JSX element, or `{ rawHtml }` parsing to exactly one
-   * element — never a void element, whose children would not render.
+   * element, never a void element, whose children would not render.
    */
   wrapNode(node: Readonly<HastNode>, parentNode: HastParentContent | RawHtmlHastContent): void;
   prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;

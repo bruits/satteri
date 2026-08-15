@@ -583,8 +583,8 @@ fn emit_arena_node(
     }
 }
 
-/// Serialise `parent`'s children to HTML — MDX nodes become placeholder
-/// comments — reparse that as a fragment, and emit the result into the
+/// Serialise `parent`'s children to HTML (MDX nodes become placeholder
+/// comments), reparse that as a fragment, and emit the result into the
 /// currently open node. Recurses once per nested MDX level via
 /// [`emit_arena_node`]. An MDX node whose placeholder the parser swallowed as
 /// text (e.g. inside an unclosed raw `<script>`) is dropped and its marker
@@ -771,7 +771,7 @@ pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
     builder.finish()
 }
 
-/// Parse an HTML fragment in a `<template>` context — the most permissive
+/// Parse an HTML fragment in a `<template>` context, the most permissive
 /// insertion mode, so table parts (`<td>`, `<tr>`, ...) survive outside a
 /// table instead of being dropped. Returns the node list, the top-level node
 /// indices, and the markers of any swallowed stitches. The fragment algorithm
@@ -956,7 +956,7 @@ mod tests {
 
     #[test]
     fn deeply_nested_input_does_not_overflow_the_stack() {
-        // Count by scanning the flat arena — a recursive walk would itself
+        // Count by scanning the flat arena: a recursive walk would itself
         // overflow and defeat the test. `<span>` avoids html5ever's per-token
         // scope re-scans, keeping the parse linear at this depth.
         let depth = 50_000;

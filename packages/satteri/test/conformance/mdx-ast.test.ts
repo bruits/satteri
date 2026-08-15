@@ -394,7 +394,7 @@ describe("MDX nested deep-indent lists", () => {
 });
 
 // A reference label is scanned over raw source, so it can stop on a `]` that
-// sits inside an expression — the expression loses to the label, and the bytes
+// sits inside an expression: the expression loses to the label, and the bytes
 // past the label's `]` are literal text. remark resolves them the same way;
 // they used to belong to no node at all here and vanished from the output.
 describe("MDX expression holding the `]` that ends a reference label", () => {
@@ -532,7 +532,7 @@ describe.each([
   });
 });
 
-// Pre-existing and unrelated to line endings — both reproduce identically for
+// Pre-existing and unrelated to line endings: both reproduce identically for
 // `\n`, `\r\n` and `\r`. `export` followed by a line ending opens an ESM block
 // in Sätteri but not in micromark, and a block comment spanning the blank line
 // that should end the block is accepted rather than cut short.

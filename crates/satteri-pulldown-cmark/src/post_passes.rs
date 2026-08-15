@@ -930,7 +930,7 @@ fn preceding_char(bytes: &[u8], ix: usize) -> Option<char> {
 /// rejects only alphabetic, so digits and non-ASCII letters fail here.
 ///
 /// Classifying the whole scalar accepts astral punctuation and symbols, a
-/// deliberate divergence — see `divergences.md`.
+/// deliberate divergence (see `divergences.md`).
 pub(crate) fn fnr_previous_ok(bytes: &[u8], ix: usize) -> bool {
     match preceding_char(bytes, ix) {
         None => true,
@@ -1379,7 +1379,7 @@ fn pos_for(
 }
 
 /// Fallback scan over a Text node's bytes: each match becomes a Link, and
-/// everything left over — including characters stripped off a match's tail —
+/// everything left over (including characters stripped off a match's tail)
 /// becomes a sibling Text node.
 fn split_text_with_autolinks_fnr(
     arena: &mut Arena<Mdast>,

@@ -105,7 +105,7 @@ import type { MdxjsEsm } from "../mdx-types.js";
 import type { ContainerDirective, LeafDirective, TextDirective } from "../directive-types.js";
 
 /** A string spliced into the tree, re-parsed as Markdown. Set `mdxExpressions:
- *  false` to keep MDX `{…}` literal — needed when injecting generated HTML
+ *  false` to keep MDX `{…}` literal, needed when injecting generated HTML
  *  (KaTeX, highlighters, diagrams) whose braces aren't expressions. Default true. */
 export interface RawMdastContent {
   raw: string;
@@ -808,14 +808,14 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   if (type === undefined) {
     if (typeof n.type !== "string" || n.type.length === 0) return false;
     // A known built-in that just isn't op-stream-encodable (e.g. `root`) is a
-    // real type used wrong — fail loudly rather than reinterpreting it as a
+    // real type used wrong, so fail loudly rather than reinterpreting it as a
     // user-defined node. Only genuinely-unknown type strings become custom.
     if (NAME_TO_TYPE[n.type] !== undefined) return false;
     type = MDAST_CUSTOM;
     isCustom = true;
   } else if (type === MDAST_CUSTOM) {
     // `"custom"` is the internal tag's own public name, so it resolves here
-    // instead of falling through as unknown. Still a user-defined node — carry
+    // instead of falling through as unknown. Still a user-defined node, so carry
     // the `type` string as the name so it round-trips rather than vanishing.
     isCustom = true;
   }
@@ -944,8 +944,8 @@ function assertMdastWrapParent(parentNode: MdastContent): void {
     // a text leaf.
     if (Array.isArray((parentNode as Custom).children)) return;
     throw new Error(
-      `wrapNode: a user-defined "${String(type)}" wrapper must declare a children array — ` +
-        "a leaf-shaped custom node renders as text and cannot hold the wrapped node.",
+      `wrapNode: a user-defined "${String(type)}" wrapper must declare a children array. ` +
+        "A leaf-shaped custom node renders as text and cannot hold the wrapped node.",
     );
   }
   if (!LEAF_TYPES.has(tag)) return;

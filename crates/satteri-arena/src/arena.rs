@@ -43,7 +43,7 @@ pub struct Arena<K: ArenaKind> {
     /// UTF-16 offset equals the byte offset). Read by `to_raw_buffer` and the
     /// walk to skip the second `LineIndex` build + per-node
     /// `byte_to_utf16_offset` lookup that would otherwise re-traverse the
-    /// source. Empty means "not precomputed" — readers fall back to live
+    /// source. Empty means "not precomputed": readers fall back to live
     /// conversion.
     pub utf16_offsets: Vec<(u32, u32)>,
     pub(crate) _kind: PhantomData<fn() -> K>,

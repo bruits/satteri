@@ -36,7 +36,7 @@ export interface MaterializerSpec<TReader extends MaterializerReader, TNode exte
   hasChildren(nodeType: number): boolean;
   /**
    * Install the type-specific eager fields on `node`. Must not install
-   * `children`, `position`, `data`, or `_nodeId`, and must not freeze —
+   * `children`, `position`, `data`, or `_nodeId`, and must not freeze:
    * the shared machinery owns all of those.
    */
   populate(node: TNode, reader: TReader, nodeId: number, nodeType: number): void;

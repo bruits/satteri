@@ -4,8 +4,8 @@
 // other kept case repeats: where the matrix enumerated a rule over a vocabulary,
 // only the members that sit on a boundary of that rule survive.
 //
-// Each row carries the URLs satteri must produce, so a row that stops linking —
-// or starts linking something new — fails on its own terms and not only through
+// Each row carries the URLs satteri must produce, so a row that stops linking
+// (or starts linking something new) fails on its own terms and not only through
 // the tree comparison.
 //
 // This half covers the scanner itself: what may precede a trigger, where the
@@ -14,11 +14,11 @@
 import { describe, test, expect } from "vitest";
 import { assertMdastConformance, conforms, linkUrls } from "./helpers.js";
 
-// Family A — the preceding-character classifier. It asks a character for its
+// Family A: the preceding-character classifier. It asks a character for its
 // Unicode General_Category, so there is one row per category it must accept or
 // reject, plus the ASCII characters that mean something else to a neighbouring
 // construct; not one row per character in the matrix. Which of the two autolink
-// paths each case takes is pinned in autolink-path.test.ts — what is pinned here
+// paths each case takes is pinned in autolink-path.test.ts; what is pinned here
 // is the tree that comes out, for trigger kinds that file does not carry.
 const A_TRIGGERS = [
   "www.example.com",
@@ -36,7 +36,7 @@ const E = "mailto:user@example.com";
 const U = "mailto:_user@example.com";
 // The last trigger is a `www.` literal and an email at the same offset. The
 // email is registered first, so it wins wherever the preceding character lets
-// it through — and only there does the `www.` half get the match.
+// it through, and only there does the `www.` half get the match.
 const O = "mailto:www.user@example.com";
 const OW = "http://www.user@example.com";
 /** The trigger does not become a link at all. */
@@ -148,7 +148,7 @@ describe("family A: the preceding-character classifier", () => {
     [".xmpp:user@example.com\n", ["mailto:user@example.com"]],
   ])("%j", conforms);
 
-  // Mid-line, the same prefixes classify the same way — except these two, where
+  // Mid-line, the same prefixes classify the same way, except these two, where
   // the character means something else at the start of a line.
   test.each([
     ["x \twww.example.com\n", ["http://www.example.com"]],
@@ -163,14 +163,14 @@ describe("family A: the preceding-character classifier", () => {
 // Astral characters before a trigger are a documented divergence, pinned in
 // autolink-path.test.ts alongside remark's side of it.
 
-// Family B — the trailing-punctuation and trailing-entity rules. For `www.` and
+// Family B: the trailing-punctuation and trailing-entity rules. For `www.` and
 // `http://` the trim is a set-membership test, so there is one row per member: a
 // member quietly leaving the trim set (or joining it) fails exactly one row here
 // and nothing else. Trailing runs that are not a member and only repeat "left
 // alone" are dropped.
 //
-// Emails get no trim at all — `fnr_find_email` reports the scan's end as the URL
-// end — so the third block is not a member sweep: the scan simply stops at the
+// Emails get no trim at all (`fnr_find_email` reports the scan's end as the URL
+// end), so the third block is not a member sweep: the scan simply stops at the
 // first byte the domain rule rejects, and the rows are the few characters the
 // rule does read (`.`, `_`, `-`).
 describe("family B: trailing punctuation and entities", () => {
@@ -248,7 +248,7 @@ describe("family B: trailing punctuation and entities", () => {
   ])("%j", conforms);
 });
 
-// Family C — the GFM balanced-paren rule.
+// Family C: the GFM balanced-paren rule.
 describe("family C: the balanced-paren rule", () => {
   test.each([
     ["www.example.com/a(b\n", ["http://www.example.com/a(b"]],
@@ -284,7 +284,7 @@ describe("family C: the balanced-paren rule", () => {
   ])("%j", conforms);
 });
 
-// Family G — unicode inside and around the URL, and the rule that an underscore
+// Family G: unicode inside and around the URL, and the rule that an underscore
 // may not appear in either of the last two domain labels.
 describe("family G: unicode in and around the URL", () => {
   test.each([
@@ -332,7 +332,7 @@ describe("family G: underscores in the last two domain labels", () => {
   ])("%j", conforms);
 });
 
-// Family H — one case per clause of GFM §6.9 (www / url / email autolink
+// Family H: one case per clause of GFM §6.9 (www / url / email autolink
 // extended). The spec's own examples already run as HTML in the generated
 // `gfm_autolink` suite on the Rust side; the tree and the URL are a different
 // assertion layer, which is why they are repeated here. The enumerations around
@@ -430,7 +430,7 @@ describe("family H: GFM §6.9 spec clauses", () => {
   ])("%j", conforms);
 });
 
-// Family J — unicode whitespace. link-edge-cases.test.ts already covers it
+// Family J: unicode whitespace. link-edge-cases.test.ts already covers it
 // inside a www/http URL body; these are the shapes it does not reach: the email
 // forms, the preceding-character (boundary) forms, and the find-and-replace
 // path. U+0085 is the boundary the `www` classifier had to be taught, and the two
@@ -467,8 +467,7 @@ describe("family J: unicode whitespace as terminator and boundary", () => {
     ["x\u{200b}_user@example.com\n", ["mailto:_user@example.com"]],
     ["[a www.example.com/p\u{200b}q\n", ["http://www.example.com/p\u{200b}q"]],
     ["[a x\u{200b}www.example.com\n", []],
-    // U+FEFF has no `https://example.com{WS}` or `user@example.com{WS}x` row:
-    // both trip the drop pinned as `test.fails` in link-edge-cases.test.ts.
+    // The U+FEFF `https://` and `user@…x` rows live in link-edge-cases.test.ts.
     ["user@exa\u{feff}mple.com\n", []],
     ["x\u{feff}www.example.com\n", ["http://www.example.com"]],
     ["x\u{feff}http://example.com\n", ["http://example.com"]],
@@ -497,7 +496,7 @@ describe("family M: email and `www` triggering at the same offset", () => {
     ["www.a.b.c@d.ef\n", ["mailto:www.a.b.c@d.ef"]],
     // The email construct fails on its own terms here, so `www` still wins.
     ["www.x.ya@b\n", ["http://www.x.ya@b"]],
-    // `_` is trailing punctuation, so the www URL trims it — and the email
+    // `_` is trailing punctuation, so the www URL trims it, and the email
     // domain it would have ended on is rejected for not ending alphabetic.
     ["www.x.ya@b.cd_\n", ["http://www.x.ya@b.cd"]],
     // The domain scan rejects outright, so no span is skipped and the `@`

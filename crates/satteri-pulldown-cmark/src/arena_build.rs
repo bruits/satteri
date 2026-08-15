@@ -1996,7 +1996,7 @@ fn parse_inner(
 
     // Precompute per-node UTF-16 offsets so `to_raw_buffer` skips a
     // second `LineIndex` build + per-node `byte_to_utf16_offset` lookup.
-    // ASCII sources skip — UTF-16 offsets equal byte offsets and downstream
+    // ASCII sources skip: UTF-16 offsets equal byte offsets and downstream
     // serializers won't touch the cache. The cursor is already warm from the
     // arena walk.
     // Skip-positions mode skips too: downstream paths don't read utf16_offsets.
