@@ -602,7 +602,7 @@ fn reparse_children_into(src: &Arena<Hast>, parent: u32, builder: &mut ArenaBuil
             stitches.push(node_id);
         };
         for &child in src.get_children(parent) {
-            render_node_inner(child, src, &mut html, false, false, Some(&mut on_mdx));
+            render_node_inner(child, src, &mut html, false, false, Some(&mut on_mdx), 0);
         }
     }
     let recognizer = StitchRecognizer::new(prefix, stitches.len());

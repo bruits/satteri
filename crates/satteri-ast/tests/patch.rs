@@ -2323,3 +2323,65 @@ fn repro_dropped_divergence() {
     let dropped = apply_patches_in_place(&mut arena, &patches).unwrap();
     assert_eq!(dropped, vec![20]);
 }
+
+/// Chain of `depth` nested Blockquotes under a Root, built without recursing.
+fn deeply_nested_arena(depth: usize) -> Arena<Mdast> {
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(MdastNodeType::Root as u8);
+    for _ in 0..depth {
+        b.open_node(MdastNodeType::Blockquote as u8);
+    }
+    for _ in 0..depth {
+        b.close_node();
+    }
+    b.close_node();
+    b.finish()
+}
+
+fn chain_len<K: ArenaKind>(arena: &Arena<K>, from: u32) -> usize {
+    let mut len = 1;
+    let mut id = from;
+    while let Some(&child) = arena.get_children(id).first() {
+        len += 1;
+        id = child;
+    }
+    len
+}
+
+#[test]
+fn grafting_a_deeply_nested_tree_does_not_overflow_the_stack() {
+    let orig = build_hello_world();
+    let para_id = orig.get_children(0)[1];
+
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::InsertAfter {
+            node_id: para_id,
+            new_tree: PatchContent::Tree(deeply_nested_arena(3000)),
+        }],
+    );
+
+    let grafted = *rebuilt.get_children(0).last().unwrap();
+    assert_eq!(chain_len(&rebuilt, grafted), 3000);
+}
+
+#[test]
+fn copying_a_deeply_nested_subtree_does_not_overflow_the_stack() {
+    let deep = deeply_nested_arena(3000);
+    let anchor = deep.get_children(0)[0];
+
+    let mut wrapper = ArenaBuilder::<Mdast>::new(String::new());
+    wrapper.open_node(MdastNodeType::Blockquote as u8);
+    wrapper.close_node();
+
+    let rebuilt = rebuild(
+        &deep,
+        &[Patch::Replace {
+            node_id: anchor,
+            new_tree: PatchContent::Tree(wrapper.finish()),
+            keep_children: true,
+        }],
+    );
+
+    assert_eq!(chain_len(&rebuilt, rebuilt.get_children(0)[0]), 3000);
+}

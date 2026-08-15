@@ -24,10 +24,11 @@ describe("deeply nested documents", () => {
     expect(result.stdout).toBe("5");
   });
 
-  test("compiles a 5000 deep blockquote nest without crashing", () => {
-    const result = compileNestedBlockquotes(5000);
+  // An optimized build only exhausts Node's 8 MB main stack past ~12000 levels.
+  test("compiles a 50000 deep blockquote nest without crashing", () => {
+    const result = compileNestedBlockquotes(50000);
     expect(result.signal).toBeNull();
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("5000");
+    expect(result.stdout).toBe("50000");
   });
 });

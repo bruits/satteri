@@ -231,11 +231,11 @@ fn unsupported(reason: &'static str) -> CommandError {
 }
 
 /// Subtree copy by id; the append-only pool keeps type_data StringRefs valid verbatim.
-fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, id: u32) -> u32 {
-    crate::stack::with_headroom(|| copy_subtree_inner(arena, id))
+fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, id: u32, depth: u32) -> u32 {
+    crate::stack::with_headroom(depth, || copy_subtree_inner(arena, id, depth))
 }
 
-fn copy_subtree_inner<K: ArenaKind>(arena: &mut Arena<K>, id: u32) -> u32 {
+fn copy_subtree_inner<K: ArenaKind>(arena: &mut Arena<K>, id: u32, depth: u32) -> u32 {
     let node = *arena.get_node(id);
     let new_id = arena.alloc_node(node.node_type);
     if let Some(data) = arena.get_node_data(id).map(<[u8]>::to_vec) {
@@ -256,7 +256,10 @@ fn copy_subtree_inner<K: ArenaKind>(arena: &mut Arena<K>, id: u32) -> u32 {
     }
     let children = arena.get_children(id).to_vec();
     if !children.is_empty() {
-        let ids: Vec<u32> = children.iter().map(|&c| copy_subtree(arena, c)).collect();
+        let ids: Vec<u32> = children
+            .iter()
+            .map(|&c| copy_subtree(arena, c, depth + 1))
+            .collect();
         arena.set_children(new_id, &ids);
     }
     new_id
@@ -270,9 +273,10 @@ fn graft_node<K: ArenaKind>(
     source_base: u32,
     resolved_refs: &FxHashMap<u32, Vec<u32>>,
     out: &mut Vec<u32>,
+    depth: u32,
 ) {
-    crate::stack::with_headroom(|| {
-        graft_node_inner(arena, sub, sub_id, source_base, resolved_refs, out);
+    crate::stack::with_headroom(depth, || {
+        graft_node_inner(arena, sub, sub_id, source_base, resolved_refs, out, depth);
     });
 }
 
@@ -283,6 +287,7 @@ fn graft_node_inner<K: ArenaKind>(
     source_base: u32,
     resolved_refs: &FxHashMap<u32, Vec<u32>>,
     out: &mut Vec<u32>,
+    depth: u32,
 ) {
     let node = sub.get_node(sub_id);
     if node.node_type == REF_NODE_TYPE {
@@ -316,7 +321,15 @@ fn graft_node_inner<K: ArenaKind>(
     if !sub_children.is_empty() {
         let mut ids: Vec<u32> = Vec::with_capacity(sub_children.len());
         for c in sub_children {
-            graft_node(arena, sub, c, source_base, resolved_refs, &mut ids);
+            graft_node(
+                arena,
+                sub,
+                c,
+                source_base,
+                resolved_refs,
+                &mut ids,
+                depth + 1,
+            );
         }
         arena.set_children(new_id, &ids);
     }
@@ -345,10 +358,10 @@ fn graft_subtree<K: ArenaKind>(
     let mut out = Vec::new();
     if !preserve_root && sub.get_node(0).node_type == K::ROOT_TAG {
         for c in sub.get_children(0).to_vec() {
-            graft_node(arena, sub, c, source_base, resolved_refs, &mut out);
+            graft_node(arena, sub, c, source_base, resolved_refs, &mut out, 0);
         }
     } else {
-        graft_node(arena, sub, 0, source_base, resolved_refs, &mut out);
+        graft_node(arena, sub, 0, source_base, resolved_refs, &mut out, 0);
     }
     out
 }
@@ -400,19 +413,19 @@ fn resolve_target<K: ArenaKind>(
         if self_removed {
             return Vec::new();
         }
-        return vec![copy_subtree(arena, anchor)];
+        return vec![copy_subtree(arena, anchor, 0)];
     }
     if let Some(slot) = slots.get(&target) {
         if truly_dead.contains(&target) && adopted_by_id.insert(target) {
             return slot.clone();
         }
         let ids: Vec<u32> = slot.clone();
-        return ids.iter().map(|&id| copy_subtree(arena, id)).collect();
+        return ids.iter().map(|&id| copy_subtree(arena, id, 0)).collect();
     }
     if truly_dead.contains(&target) && adopted_by_id.insert(target) {
         return vec![target];
     }
-    vec![copy_subtree(arena, target)]
+    vec![copy_subtree(arena, target, 0)]
 }
 
 /// Resolve a grafted payload's placeholder refs in place and return the final
@@ -1350,6 +1363,7 @@ fn apply_patches_impl<K: ArenaKind>(
                                 source_base,
                                 &wrap_resolved,
                                 &mut wrapper_children,
+                                0,
                             );
                         }
                         arena.set_children(0, &wrapper_children);
@@ -1404,6 +1418,7 @@ fn apply_patches_impl<K: ArenaKind>(
                         source_base,
                         &wrap_resolved,
                         &mut wrapper_children,
+                        0,
                     );
                 }
                 arena.set_children(wrapper_id, &wrapper_children);
