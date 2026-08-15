@@ -208,3 +208,36 @@ fn the_arena_path_builds_that_label() {
     );
     assert_eq!(node_value(&arena, arena.get_children(label)[0]), "b");
 }
+
+// remark's autolink tokenizer rejects an underscore in either of the last two
+// domain labels, and the `:port` then stays a text directive.
+#[test]
+fn a_port_directive_survives_an_unlinkable_host() {
+    let (arena, _) = parse("http://my_app.localhost:3000/admin", dir_options());
+
+    let para = arena.get_children(0)[0];
+    assert_eq!(
+        types_of(&arena, para),
+        vec![
+            MdastNodeType::Text as u8,
+            MdastNodeType::TextDirective as u8,
+            MdastNodeType::Text as u8,
+        ]
+    );
+    let children = arena.get_children(para);
+    assert_eq!(node_value(&arena, children[0]), "http://my_app.localhost");
+    assert_eq!(node_value(&arena, children[1]), "3000");
+    assert_eq!(node_value(&arena, children[2]), "/admin");
+}
+
+#[test]
+fn a_linkable_host_still_swallows_the_port() {
+    let (arena, _) = parse("http://example.com:3000/x", dir_options());
+
+    let para = arena.get_children(0)[0];
+    assert_eq!(types_of(&arena, para), vec![MdastNodeType::Link as u8]);
+    assert_eq!(
+        node_value(&arena, arena.get_children(para)[0]),
+        "http://example.com:3000/x"
+    );
+}
