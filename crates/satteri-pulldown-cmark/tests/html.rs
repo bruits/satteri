@@ -391,3 +391,12 @@ fn an_inert_tilde_run_does_not_open_emphasis_under_subscript() {
         parse_to_html_ext("a~~x~~b", Options::ENABLE_SUBSCRIPT)
     );
 }
+
+#[test]
+fn many_unclosed_parenthesized_titles_stay_linear() {
+    let unclosed = "[a](x (".repeat(4000);
+    assert_eq!(
+        format!("<p>{unclosed}</p>\n<p><a href=\"y\" title=\"t\">b</a></p>\n"),
+        parse_to_html(&format!("{unclosed}\n\n[b](y (t))\n"))
+    );
+}

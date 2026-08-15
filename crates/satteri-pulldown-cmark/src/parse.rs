@@ -22,6 +22,7 @@
 
 use alloc::{borrow::ToOwned, boxed::Box, collections::VecDeque, string::String, vec::Vec};
 use core::{
+    cell::Cell,
     cmp::{max, min},
     iter::FusedIterator,
     num::NonZeroUsize,
@@ -264,6 +265,9 @@ pub(crate) struct ParserInner<'input> {
     // To prevent this, track how much it's expanded and limit it.
     link_ref_expansion_limit: usize,
 
+    /// Earliest `(`-title start whose scan hit the block end with no `)`: later starts share that tail.
+    unclosed_paren_title_floor: Cell<usize>,
+
     /// MDX validation errors collected during inline parsing.
     pub(crate) mdx_errors: Vec<(usize, String)>,
 
@@ -357,6 +361,7 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
                 html_scan_guard,
                 // always allow 100KiB
                 link_ref_expansion_limit: text.len().max(100_000),
+                unclosed_paren_title_floor: Cell::new(usize::MAX),
                 mdx_errors: Vec::new(),
                 code_delims: CodeDelims::new(),
                 math_delims: MathDelims::new(),
@@ -419,6 +424,7 @@ impl<'input> ParserInner<'input> {
             wikilink_stack: Default::default(),
             html_scan_guard: Default::default(),
             link_ref_expansion_limit: text.len().max(100_000),
+            unclosed_paren_title_floor: Cell::new(usize::MAX),
             mdx_errors: firstpass_mdx_errors,
             code_delims: CodeDelims::new(),
             math_delims: MathDelims::new(),
@@ -667,6 +673,7 @@ impl<'input> ParserInner<'input> {
 
         let block_end = self.tree[self.tree.peek_up().unwrap()].item.end;
         let block_text = &self.text[..block_end];
+        self.unclosed_paren_title_floor.set(usize::MAX);
 
         while let Some(mut cur_ix) = cur {
             match self.tree[cur_ix].item.body {
@@ -2205,6 +2212,9 @@ impl<'input> ParserInner<'input> {
             Some(b @ b'\'') | Some(b @ b'\"') | Some(b @ b'(') => *b,
             _ => return None,
         };
+        if open == b'(' && start_ix >= self.unclosed_paren_title_floor.get() {
+            return None;
+        }
         // Unlike CommonMark, remark keeps an unescaped `(` inside a paren title as content.
         let close = if open == b'(' { b')' } else { open };
 
@@ -2270,6 +2280,10 @@ impl<'input> ParserInner<'input> {
             i += 1;
         }
 
+        if open == b'(' {
+            let floor = self.unclosed_paren_title_floor.get();
+            self.unclosed_paren_title_floor.set(floor.min(start_ix));
+        }
         None
     }
 
