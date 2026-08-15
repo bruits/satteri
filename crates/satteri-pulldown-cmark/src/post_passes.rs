@@ -1378,6 +1378,34 @@ fn pos_for(
     Some((so, eo, sl, sc, el, ec))
 }
 
+/// Email matches inside `gap_start..gap_end`, consuming the triggers there.
+///
+/// `findAndReplace` runs the url pattern over the whole text before the email
+/// pattern, which then only sees the Text nodes the url pass left: an email
+/// can't claim a url's range or reach past one, hence the truncated slice.
+fn push_fnr_emails(
+    bytes: &[u8],
+    gap_start: usize,
+    gap_end: usize,
+    triggers: &[usize],
+    next_trigger: &mut usize,
+    out: &mut Vec<(usize, usize, usize, String)>,
+) {
+    let mut last_end = gap_start;
+    while let Some(&at) = triggers.get(*next_trigger) {
+        if at >= gap_end {
+            return;
+        }
+        *next_trigger += 1;
+        if let Some((s, end, url, raw_end)) = fnr_find_email(&bytes[..gap_end], at)
+            && s >= last_end
+        {
+            out.push((s, end, raw_end, url));
+            last_end = raw_end;
+        }
+    }
+}
+
 /// Fallback scan over a Text node's bytes: each match becomes a Link, and
 /// everything left over — including characters stripped off a match's tail —
 /// becomes a sibling Text node.
@@ -1396,25 +1424,47 @@ fn split_text_with_autolinks_fnr(
     let borrowed_text = arena.get_str(sr);
     let bytes = borrowed_text.as_bytes();
 
-    let mut matches: Vec<(usize, usize, usize, String)> = Vec::new();
+    let mut url_matches: Vec<(usize, usize, usize, String)> = Vec::new();
+    let mut email_triggers: Vec<usize> = Vec::new();
     let upper = memchr::memchr2(b'H', b'W', bytes).is_some();
     let mut i = 0;
     while let Some(at) = next_autolink_trigger(bytes, i, upper) {
-        let hit = match bytes[at] {
-            b'@' => fnr_find_email(bytes, at),
-            _ if match_autolink_scheme(bytes, at).is_some() => fnr_find_url(bytes, at),
-            _ => None,
-        };
-        if let Some((s, url_end, url, raw_end)) = hit {
-            let last_end = matches.last().map_or(0, |m| m.2);
-            if s >= last_end {
-                matches.push((s, url_end, raw_end, url));
-                i = raw_end;
-                continue;
-            }
+        if bytes[at] == b'@' {
+            email_triggers.push(at);
+        } else if match_autolink_scheme(bytes, at).is_some()
+            && let Some((s, url_end, url, raw_end)) = fnr_find_url(bytes, at)
+        {
+            url_matches.push((s, url_end, raw_end, url));
+            i = raw_end;
+            continue;
         }
         i = at + 1;
     }
+
+    let mut matches: Vec<(usize, usize, usize, String)> =
+        Vec::with_capacity(url_matches.len() + email_triggers.len());
+    let mut trigger = 0;
+    let mut gap_start = 0;
+    for url_match in url_matches {
+        push_fnr_emails(
+            bytes,
+            gap_start,
+            url_match.0,
+            &email_triggers,
+            &mut trigger,
+            &mut matches,
+        );
+        gap_start = url_match.2;
+        matches.push(url_match);
+    }
+    push_fnr_emails(
+        bytes,
+        gap_start,
+        bytes.len(),
+        &email_triggers,
+        &mut trigger,
+        &mut matches,
+    );
 
     if matches.is_empty() {
         return;
