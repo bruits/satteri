@@ -267,6 +267,13 @@ describe("MDAST conformance: unescaped `(` inside a parenthesized title (#211)",
     assertMdastConformance("[a](/url (a(b)c))");
   });
 
+  test("a paragraph full of unclosed `(` titles parses in linear time", () => {
+    // No `)` anywhere, so every `](` candidate's title scan reaches the end of the block.
+    const md = "[a](x (".repeat(20000);
+    const paragraph = (satteriMdast(md) as Root).children[0] as Paragraph;
+    expect(paragraph.children).toEqual([{ type: "text", value: md, position: expect.anything() }]);
+  });
+
   test("reference definitions take the same titles", () => {
     assertMdastConformance("[a]: /url (ti(tle)\n\n[a]\n");
     assertHtmlConformance("[link]: test (()\n\n[link]\n");
