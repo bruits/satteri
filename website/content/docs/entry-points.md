@@ -93,13 +93,18 @@ const { default: Content } = evaluate("# Hello\n\n<Sparkle />", { ...runtime });
 
 ## Trees without compiling
 
-To get a plain JavaScript AST without running plugins or rendering, use the tree functions. Each parses the source and returns a materialized tree directly (not a result object), and accepts only a `features` option.
+To get a plain JavaScript AST without running plugins or rendering, use the tree functions. Each parses the source and returns a materialized tree directly (not a result object), and accepts a `TreeOptions` object with a `features` and a `position` option.
 
 ```ts
-markdownToMdast(source: string, options?: { features?: Features }): MdastNode;
-mdxToMdast(source: string, options?: { features?: Features }): MdastNode;
-markdownToHast(source: string, options?: { features?: Features }): HastNode;
-mdxToHast(source: string, options?: { features?: Features }): HastNode;
+interface TreeOptions {
+  features?: Features;
+  position?: boolean;
+}
+
+markdownToMdast(source: string, options?: TreeOptions): MdastNode;
+mdxToMdast(source: string, options?: TreeOptions): MdastNode;
+markdownToHast(source: string, options?: TreeOptions): HastNode;
+mdxToHast(source: string, options?: TreeOptions): HastNode;
 htmlToHast(html: string): HastNode;
 ```
 
@@ -109,6 +114,12 @@ import { markdownToMdast } from "satteri";
 const tree = markdownToMdast("# Hello");
 tree.children[0].type; // "heading"
 tree.children[0].depth; // 1
+```
+
+Pass `position: false` to skip recording `node.position`. Disabling positions can greatly increase performance and lower the memory usage, so it is worth passing whenever nothing downstream reads positions.
+
+```js
+const tree = markdownToMdast(source, { position: false });
 ```
 
 This is useful when you want Sätteri's fast native parsing but another pipeline (e.g. remark plugins and `remark-stringify`) for the rest. The returned tree is plain objects, yours to keep — see [Node lifetime](/docs/plugin-api/#node-lifetime) for why that matters.
