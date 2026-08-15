@@ -32,7 +32,7 @@ function addTypeProperties(
     // Drop an empty `value` so a parent node isn't given a spurious leaf field.
     if (nodeType === MDAST_CUSTOM) {
       const n = node as { type: string; name?: string; value?: string };
-      n.type = n.name!;
+      if (n.name !== undefined) n.type = n.name;
       delete n.name;
       if (n.value === "") delete n.value;
     }

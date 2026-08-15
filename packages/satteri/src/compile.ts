@@ -252,8 +252,10 @@ function runMdastPluginsOnHandle(
 
   let i = 0;
   const runNext = (): MdastPipelineResult | Promise<MdastPipelineResult> => {
-    while (i < plugins.length) {
-      const plugin = plugins[i++]!;
+    for (;;) {
+      const plugin = plugins[i];
+      if (plugin === undefined) break;
+      i++;
       const r = runPlugin(plugin as MdastPluginInstance, i === plugins.length);
       if (r instanceof Promise) return r.then(runNext);
     }
@@ -291,8 +293,9 @@ function runHastPluginsCollectLast(
 ): CollectedHastCommands | Promise<CollectedHastCommands> {
   let i = 0;
   const runNext = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
-    while (i < plugins.length) {
-      const plugin = plugins[i]!;
+    for (;;) {
+      const plugin = plugins[i];
+      if (plugin === undefined) break;
       const isLastPlugin = i === plugins.length - 1;
       i++;
       const subs = resolveSubscriptions(plugin);

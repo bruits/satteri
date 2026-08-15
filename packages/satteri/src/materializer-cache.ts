@@ -82,7 +82,8 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
         if (value === undefined) {
           const ids = reader.getChildIds(nodeId);
           const built = new Array<TNode>(ids.length);
-          for (let i = 0; i < ids.length; i++) built[i] = materialize(reader, ids[i]!, true);
+          let i = 0;
+          for (const childId of ids) built[i++] = materialize(reader, childId, true);
           value = Object.freeze(built);
           cache.childLists.set(nodeId, value);
         }
@@ -101,7 +102,8 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
       get(this: TNode): TNode[] {
         const ids = reader.getChildIds(nodeId);
         const value = new Array<TNode>(ids.length);
-        for (let i = 0; i < ids.length; i++) value[i] = materialize(reader, ids[i]!);
+        let i = 0;
+        for (const childId of ids) value[i++] = materialize(reader, childId);
         Object.defineProperty(this, "children", {
           value,
           writable: true,
@@ -218,9 +220,12 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     const byId = new Array<TNode | undefined>(reader.nodeCount);
     const parents: number[] = [];
     const stack: number[] = [rootId];
+    const root = buildNode(reader, cache, rootId, true);
+    byId[rootId] = root;
 
-    while (stack.length > 0) {
-      const id = stack.pop()!;
+    for (;;) {
+      const id = stack.pop();
+      if (id === undefined) break;
       if (byId[id] === undefined) byId[id] = buildNode(reader, cache, id, true);
       if (spec.hasChildren(reader.getNodeType(id))) {
         parents.push(id);
@@ -228,16 +233,20 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
       }
     }
 
-    for (let p = 0; p < parents.length; p++) {
-      const id = parents[p]!;
+    for (const id of parents) {
       const ids = reader.getChildIds(id);
       const kids = new Array<TNode>(ids.length);
-      for (let i = 0; i < ids.length; i++) kids[i] = byId[ids[i]!]!;
+      let i = 0;
+      for (const childId of ids) {
+        const kid = byId[childId];
+        if (kid !== undefined) kids[i] = kid;
+        i++;
+      }
       // Assignment beats defineProperty here; `eager` left `children` uninstalled.
       (byId[id] as { children?: TNode[] }).children = kids;
     }
 
-    return byId[rootId]!;
+    return root;
   }
 
   /** Whole tree at once: the caller will walk it, so lazy accessors cost more than they defer. */
