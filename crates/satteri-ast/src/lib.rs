@@ -7,6 +7,7 @@ pub mod hast;
 pub mod mdast;
 pub mod patch;
 pub mod shared;
+mod stack;
 pub mod text_content;
 pub mod walk;
 

@@ -1084,6 +1084,15 @@ fn convert_node(
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
 ) {
+    crate::stack::with_headroom(|| convert_node_inner(node_id, view, builder, ctx));
+}
+
+fn convert_node_inner(
+    node_id: u32,
+    view: &Arena<Mdast>,
+    builder: &mut ArenaBuilder<Hast>,
+    ctx: &ConvertCtx<'_, '_>,
+) {
     let node = view.get_node(node_id);
     let raw_type = node.node_type;
 

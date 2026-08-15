@@ -61,6 +61,29 @@ pub fn render_node(
 /// Raw-HTML reparse hook: receives the output buffer and the MDX node's id.
 pub(crate) type OnMdx<'a> = dyn FnMut(&mut String, u32) + 'a;
 
+fn render_children<'cb>(
+    node_id: u32,
+    view: &Arena<Hast>,
+    out: &mut String,
+    in_raw_text: bool,
+    in_svg: bool,
+    on_mdx: Option<&mut OnMdx<'cb>>,
+) {
+    crate::stack::with_headroom(move || {
+        let mut on_mdx = on_mdx;
+        for &child_id in view.get_children(node_id) {
+            render_node_inner(
+                child_id,
+                view,
+                out,
+                in_raw_text,
+                in_svg,
+                on_mdx.as_deref_mut(),
+            );
+        }
+    });
+}
+
 /// MDX nodes have no HTML representation: `on_mdx` decides what to emit for
 /// them; `None` skips them.
 pub(crate) fn render_node_inner<'cb>(
@@ -74,31 +97,20 @@ pub(crate) fn render_node_inner<'cb>(
     let node = view.get_node(node_id);
 
     let Some(node_type) = HastNodeType::from_u8(node.node_type) else {
-        for &child_id in view.get_children(node_id) {
-            render_node_inner(
-                child_id,
+        render_children(node_id, view, out, in_raw_text, in_svg, on_mdx);
+        return;
+    };
+
+    match node_type {
+        HastNodeType::Root => {
+            render_children(
+                node_id,
                 view,
                 out,
                 in_raw_text,
                 in_svg,
                 on_mdx.as_deref_mut(),
             );
-        }
-        return;
-    };
-
-    match node_type {
-        HastNodeType::Root => {
-            for &child_id in view.get_children(node_id) {
-                render_node_inner(
-                    child_id,
-                    view,
-                    out,
-                    in_raw_text,
-                    in_svg,
-                    on_mdx.as_deref_mut(),
-                );
-            }
         }
 
         HastNodeType::Element => {
@@ -145,16 +157,14 @@ pub(crate) fn render_node_inner<'cb>(
             } else {
                 out.push('>');
                 let child_in_raw_text = in_raw_text || is_raw_text_element(tag);
-                for &child_id in view.get_children(node_id) {
-                    render_node_inner(
-                        child_id,
-                        view,
-                        out,
-                        child_in_raw_text,
-                        element_in_svg,
-                        on_mdx.as_deref_mut(),
-                    );
-                }
+                render_children(
+                    node_id,
+                    view,
+                    out,
+                    child_in_raw_text,
+                    element_in_svg,
+                    on_mdx.as_deref_mut(),
+                );
                 out.push_str("</");
                 out.push_str(tag);
                 out.push('>');

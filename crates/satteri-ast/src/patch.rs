@@ -232,6 +232,10 @@ fn unsupported(reason: &'static str) -> CommandError {
 
 /// Subtree copy by id; the append-only pool keeps type_data StringRefs valid verbatim.
 fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, id: u32) -> u32 {
+    crate::stack::with_headroom(|| copy_subtree_inner(arena, id))
+}
+
+fn copy_subtree_inner<K: ArenaKind>(arena: &mut Arena<K>, id: u32) -> u32 {
     let node = *arena.get_node(id);
     let new_id = arena.alloc_node(node.node_type);
     if let Some(data) = arena.get_node_data(id).map(<[u8]>::to_vec) {
@@ -260,6 +264,19 @@ fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, id: u32) -> u32 {
 
 /// `REF_NODE_TYPE` payload nodes expand to the pre-resolved id list for their position.
 fn graft_node<K: ArenaKind>(
+    arena: &mut Arena<K>,
+    sub: &Arena<K>,
+    sub_id: u32,
+    source_base: u32,
+    resolved_refs: &FxHashMap<u32, Vec<u32>>,
+    out: &mut Vec<u32>,
+) {
+    crate::stack::with_headroom(|| {
+        graft_node_inner(arena, sub, sub_id, source_base, resolved_refs, out);
+    });
+}
+
+fn graft_node_inner<K: ArenaKind>(
     arena: &mut Arena<K>,
     sub: &Arena<K>,
     sub_id: u32,
