@@ -337,6 +337,7 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
     ///
     /// See the [`ParserCallbacks`] trait for a list of callbacks that can be overridden.
     pub fn new_with_callbacks(text: &'input str, options: Options, callbacks: CB) -> Self {
+        let text = crate::strip_leading_bom(text);
         let (mut tree, allocs, _firstpass_mdx_errors) = run_first_pass(text, options);
         tree.reset();
         let inline_stack = Default::default();
@@ -2172,9 +2173,13 @@ impl<'input> ParserInner<'input> {
         let dest = unescape(dest, self.tree.is_in_table());
         ix += dest_length;
 
+        let dest_end = ix;
         scan_separator(&mut ix);
 
-        let title = if let Some((bytes_scanned, t)) = self.scan_link_title(underlying, ix, node) {
+        // A title is only reachable through whitespace after the destination.
+        let title = if ix > dest_end
+            && let Some((bytes_scanned, t)) = self.scan_link_title(underlying, ix, node)
+        {
             ix += bytes_scanned;
             scan_separator(&mut ix);
             t
@@ -2201,6 +2206,7 @@ impl<'input> ParserInner<'input> {
             Some(b @ b'\'') | Some(b @ b'\"') | Some(b @ b'(') => *b,
             _ => return None,
         };
+        // Unlike CommonMark, remark keeps an unescaped `(` inside a paren title as content.
         let close = if open == b'(' { b')' } else { open };
 
         let mut title = String::new();
@@ -2219,9 +2225,6 @@ impl<'input> ParserInner<'input> {
                 };
 
                 return Some(cow);
-            }
-            if c == open {
-                return None;
             }
 
             if (c == b'\n' || c == b'\r')

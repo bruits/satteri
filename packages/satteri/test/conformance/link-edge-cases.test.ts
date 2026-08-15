@@ -242,6 +242,60 @@ describe("HTML conformance: malformed inline links fall back to paragraphs", () 
   });
 });
 
+// CommonMark wants a `(` in a `(…)` title escaped; remark keeps it as content.
+describe("MDAST conformance: unescaped `(` inside a parenthesized title (#211)", () => {
+  test("the reported input is a link with url `*` and title `(`", () => {
+    const md = "[a](* (())";
+    assertExtMdastConformance(md, []);
+    const paragraph = (satteriMdast(md) as Root).children[0] as Paragraph;
+    const link = paragraph.children[0] as Link;
+    expect(link.url).toBe("*");
+    expect(link.title).toBe("(");
+  });
+
+  test("links and images keep the `(` in the title", () => {
+    assertMdastConformance("[a](/url (ti(tle))");
+    assertMdastConformance("![a](/url (ti(tle))");
+    assertMdastConformance("[a](/url (tit\\(le))");
+  });
+
+  test("the title still ends at the first unescaped `)`", () => {
+    // Title `((`, so the third `)` closes the link and the fourth is text.
+    assertMdastConformance("[a](/url ((()))");
+    // Title `a(b`, leaving `c))` before the `)` the link needs: no link.
+    assertMdastConformance("[a](/url (a(b)c))");
+  });
+
+  test("reference definitions take the same titles", () => {
+    assertMdastConformance("[a]: /url (ti(tle)\n\n[a]\n");
+    assertHtmlConformance("[link]: test (()\n\n[link]\n");
+    // Control: the trailing `)` leaves trailing text, so there is no definition.
+    assertHtmlConformance("[link]: test (())\n\n[link]\n");
+  });
+});
+
+describe("MDAST conformance: a link title needs whitespace after the destination", () => {
+  test("a title jammed against a pointy destination is not a link", () => {
+    assertMdastConformance('[a](<x>"t")');
+    assertMdastConformance("[a](<x>(t))");
+    assertMdastConformance("[a](<>'t')");
+    assertMdastConformance('![a](<x>"t")');
+  });
+
+  test("spaces or a line ending still separate a title", () => {
+    assertMdastConformance('[a](<x> "t")');
+    assertMdastConformance('[a](<x>\n"t")');
+    assertMdastConformance("[a](<x>)");
+    // A raw destination swallows the quotes, so this stays one link.
+    assertMdastConformance('[a](/u"t")');
+  });
+
+  test("reference definitions keep the same rule", () => {
+    assertMdastConformance('[a]: <x>"t"\n\n[a]\n');
+    assertMdastConformance('[a]: <x> "t"\n\n[a]\n');
+  });
+});
+
 describe("HTML conformance: YAML metadata block edge cases", () => {
   test("YAML frontmatter with leading blank line consumes the whole block", () => {
     // metadata_blocks_test_4: `---\n\ntitle:...\n---\n` — with frontmatter

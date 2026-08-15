@@ -22,6 +22,7 @@ markdownToHtml(source, {
     wikilinks: false,
     definitionList: false,
     smartPunctuation: false,
+    rawHtml: false,
   },
 });
 ```
@@ -260,3 +261,24 @@ markdownToHtml(source, {
 ```
 
 Omitted keys in the options object default to `true`, so `{ dashes: false }` enables quotes and ellipses but disables dashes.
+
+## Raw HTML
+
+Default: `false`.
+
+```ts
+rawHtml?: boolean
+```
+
+By default, raw HTML embedded in Markdown is kept as opaque `raw` nodes and re-emitted verbatim. `rawHtml: true` reparses it into real HAST element, text, and comment nodes. The reparse runs during the mdast→hast conversion, so `markdownToHast`, `markdownToHtml`, and the plugin pipelines all reparse identically, and HAST plugins always see the reparsed elements.
+
+The whole tree goes through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalised into typed hast properties (`class` → `className: ["…"]`, `disabled` → `true`, `tabindex` → a number, `data-foo-bar` → `dataFooBar`). In MDX, JSX elements and expressions are preserved in place while the raw HTML around them is still resolved. Positions are not preserved through the reparse.
+
+```js
+import { markdownToHast } from "satteri";
+
+const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
+  features: { rawHtml: true },
+});
+// <div> is now a real element wrapping the parsed <p><strong>hi</strong></p>
+```

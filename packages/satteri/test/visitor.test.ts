@@ -584,8 +584,10 @@ test("a child getter throwing during 'children' encoding leaves the buffer usabl
 });
 
 test("walk-path materialized nodes are frozen against plugin mutation", () => {
+  let ran = false;
   const html = visitAndRender("# Hello\n\nWorld", {
     heading(node, ctx) {
+      ran = true;
       const parent = ctx.parent(node);
       if (!parent) throw new Error("heading must have a parent");
       // containers are frozen eagerly at construction; reading children
@@ -607,6 +609,7 @@ test("walk-path materialized nodes are frozen against plugin mutation", () => {
       (clone as { type: string }).type = "mutable-copy";
     },
   });
+  expect(ran).toBe(true);
   expect(html).toContain("Hello");
 });
 

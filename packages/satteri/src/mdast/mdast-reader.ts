@@ -12,6 +12,7 @@ export class MdastReader {
   readonly #header: BufferHeader;
   readonly #textDecoder: TextDecoder;
   #stringPoolCache: string | null = null;
+  #poolIsAscii: boolean | null = null;
 
   constructor(buffer: ArrayBuffer | Uint8Array) {
     if (buffer instanceof Uint8Array) {
@@ -101,6 +102,14 @@ export class MdastReader {
 
   getString(offset: number, len: number): string {
     if (len === 0) return "";
+    if (this.#poolIsAscii === null) {
+      this.#poolIsAscii = this.getStringPool().length === this.#header.stringPoolLen;
+    }
+    // An all-ASCII pool has byte offsets equal to its UTF-16 indices, so one
+    // decode plus substrings beats a TextDecoder call per string.
+    if (this.#poolIsAscii) {
+      return this.getStringPool().substring(offset, offset + len);
+    }
     const { stringPoolOffset } = this.#header;
     const bytes = new Uint8Array(
       this.#view.buffer,
@@ -176,6 +185,27 @@ export class MdastReader {
     }
   }
 
+  /** Fixed-layout field reads that touch the buffer directly. The generated
+   *  decoder runs once per node, so an intermediate view or ref object here
+   *  costs an allocation per field. */
+  fieldU8(nodeId: number, offset: number, fallback: number): number {
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    const v = this.#view;
+    if (offset >= v.getUint32(base + FIELD.data_len, true)) return fallback;
+    const at = this.#header.typeDataOffset + v.getUint32(base + FIELD.data_offset, true);
+    return v.getUint8(at + offset);
+  }
+
+  /** `""` when the field is absent or empty; callers map that to `null` for
+   *  nullable fields, matching the Rust decoders' bounds checks. */
+  fieldString(nodeId: number, offset: number): string {
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    const v = this.#view;
+    if (offset + 8 > v.getUint32(base + FIELD.data_len, true)) return "";
+    const at = this.#header.typeDataOffset + v.getUint32(base + FIELD.data_offset, true) + offset;
+    return this.getString(v.getUint32(at, true), v.getUint32(at + 4, true));
+  }
+
   getTypeData(nodeId: number): Uint8Array {
     const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
     const v = this.#view;
@@ -191,10 +221,10 @@ export class MdastReader {
 
   /** Read a StringRef (offset: u32 LE, len: u32 LE) from type data. */
   readStringRef(typeData: Uint8Array, byteOffset = 0): StringRefRaw {
-    const view = new DataView(typeData.buffer, typeData.byteOffset + byteOffset);
+    const at = typeData.byteOffset - this.#view.byteOffset + byteOffset;
     return {
-      offset: view.getUint32(0, true),
-      len: view.getUint32(4, true),
+      offset: this.#view.getUint32(at, true),
+      len: this.#view.getUint32(at + 4, true),
     };
   }
 
@@ -203,9 +233,7 @@ export class MdastReader {
    * These store a single StringRef as their type data.
    */
   getTextValue(nodeId: number): string {
-    const data = this.getTypeData(nodeId);
-    const ref = this.readStringRef(data);
-    return this.getString(ref.offset, ref.len);
+    return this.fieldString(nodeId, 0);
   }
 
   /**

@@ -1966,6 +1966,48 @@ describe("markdownToJs", () => {
 
 // Step-by-step API
 
+describe("position: false", () => {
+  const MD = "# Hi\n\nSome *text* with [a link](/u).\n";
+  const MDX = '# Hi\n\n<Comp x="1" />\n';
+
+  /** The subset of mdast/hast every node shares, so one helper walks both. */
+  interface TreeLike {
+    type: string;
+    value?: unknown;
+    tagName?: unknown;
+    position?: unknown;
+    children?: readonly TreeLike[];
+  }
+
+  const hasAnyPosition = (node: TreeLike): boolean =>
+    node.position !== undefined || (node.children ?? []).some(hasAnyPosition);
+
+  const shape = (node: TreeLike): unknown => ({
+    type: node.type,
+    value: node.value,
+    tagName: node.tagName,
+    children: (node.children ?? []).map(shape),
+  });
+
+  const cases: ReadonlyArray<readonly [string, () => TreeLike, () => TreeLike]> = [
+    ["markdownToMdast", () => markdownToMdast(MD), () => markdownToMdast(MD, { position: false })],
+    ["mdxToMdast", () => mdxToMdast(MDX), () => mdxToMdast(MDX, { position: false })],
+    ["markdownToHast", () => markdownToHast(MD), () => markdownToHast(MD, { position: false })],
+    ["mdxToHast", () => mdxToHast(MDX), () => mdxToHast(MDX, { position: false })],
+  ];
+
+  for (const [name, withPositions, without] of cases) {
+    test(`${name} records positions by default and drops them on request`, () => {
+      expect(hasAnyPosition(withPositions())).toBe(true);
+      expect(hasAnyPosition(without())).toBe(false);
+    });
+
+    test(`${name} builds the same tree either way`, () => {
+      expect(shape(without())).toEqual(shape(withPositions()));
+    });
+  }
+});
+
 describe("markdownToMdast", () => {
   test("returns an mdast root", () => {
     const tree = markdownToMdast("# Hello\n\nWorld");
@@ -2153,13 +2195,15 @@ describe("per-plugin position opt-in", () => {
   });
 
   test("one opted-in plugin enables positions for the whole pipeline", () => {
-    let mdastSeen: unknown = "unset";
+    let mdastRan = false;
+    let mdastSeen: unknown;
     let hastSeen: { start: { line: number } } | undefined;
     markdownToHtml(SOURCE, {
       mdastPlugins: [
         defineMdastPlugin({
           name: "no-opt",
           heading(node) {
+            mdastRan = true;
             mdastSeen = node.position;
           },
         }),
@@ -2179,6 +2223,7 @@ describe("per-plugin position opt-in", () => {
     });
     // A hast plugin opting in flips mdast tracking on too, so the earlier
     // mdast plugin observes positions even though it didn't ask.
+    expect(mdastRan).toBe(true);
     expect(mdastSeen).toBeDefined();
     expect(hastSeen?.start.line).toBe(1);
   });

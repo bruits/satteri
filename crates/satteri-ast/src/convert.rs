@@ -511,6 +511,16 @@ struct CollectedRefs<'src> {
     footnote_ref_totals: FxHashMap<&'src str, usize>,
 }
 
+/// Flat probe over the node array for the two types [`collect_refs`] resolves.
+#[inline]
+fn has_any_ref_node(view: &Arena<Mdast>) -> bool {
+    let definition = MdastNodeType::Definition as u8;
+    let footnote_definition = MdastNodeType::FootnoteDefinition as u8;
+    view.nodes
+        .iter()
+        .any(|n| n.node_type == definition || n.node_type == footnote_definition)
+}
+
 fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     let mut defs: FxHashMap<&str, Definition> = FxHashMap::default();
     let mut fn_def_nodes: FxHashMap<&str, u32> = FxHashMap::default();
@@ -523,7 +533,12 @@ fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     // position before inserting.
     // Root walk, not an id scan: in-place applies leave detached garbage that must not resolve refs
     let mut def_nodes: Vec<u32> = Vec::new();
-    let mut stack: Vec<u32> = if view.is_empty() { Vec::new() } else { vec![0] };
+    // Reachable implies present, so "none present" skips the walk safely.
+    let mut stack: Vec<u32> = if has_any_ref_node(view) {
+        vec![0]
+    } else {
+        Vec::new()
+    };
     while let Some(id) = stack.pop() {
         let node = view.get_node(id);
         let data = view.get_type_data(id);

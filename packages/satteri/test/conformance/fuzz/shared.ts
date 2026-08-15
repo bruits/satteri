@@ -575,6 +575,8 @@ const AL_PREV = fc.constantFrom(
     ":",
     "<",
     "!",
+    "\\",
+    "\\\\",
   ],
 );
 const AL_POST = fc.constantFrom(
@@ -653,7 +655,7 @@ export const autolinkDocument = fc
     }
   });
 
-export const autolinkChaos = makeChaos("./:@~_-wWhHtTpP><&;()[]");
+export const autolinkChaos = makeChaos("./:@~_-wWhHtTpP><&;()[]\\");
 
 // MDX arbitraries
 

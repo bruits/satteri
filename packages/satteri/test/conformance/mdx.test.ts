@@ -1,6 +1,7 @@
-import { describe, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { createElement } from "react";
 import { assertMdxConformance, assertMdxMathConformance, assertBothReject } from "./helpers.js";
+import { mdxToMdast } from "../../src/index.js";
 
 const Foo = (props: any) => createElement("div", null, `bar=${props.bar}`);
 const Bar = (props: any) => createElement("em", null, `baz=${props.baz}`);
@@ -31,10 +32,10 @@ describe("MDX conformance: expressions", () => {
     await assertMdxConformance("{ true ? 'a' : 'b' }");
   });
 
+  // The expression references an undefined binding, so it never renders.
   test("expression spanning blank line is not parsed as expression", async () => {
-    // mdx-js hard-errors, satteri treats as text — both are valid.
-    // Just verify satteri doesn't silently produce wrong output.
-    await assertBothReject("{a +\n\nb}");
+    const { satteriMdxMdast, referenceMdxMdast } = await import("./fuzz/shared.js");
+    expect(satteriMdxMdast("{a +\n\nb}")).toEqual(referenceMdxMdast("{a +\n\nb}"));
   });
 
   test("comment-only expression", async () => {
@@ -231,10 +232,10 @@ describe("MDX conformance: unicode", () => {
     await assertMdxConformance("<Café/>", { Café });
   });
 
+  // React rejects the ZWNJ tag name at render time, so compare trees instead.
   test("ZWNJ in tag name", async () => {
-    // ZWNJ produces a tag name that React can't render as HTML,
-    // so we just verify both compilers accept it without error.
-    await assertBothReject("<foo\u200Cbar/>");
+    const { satteriMdxMdast, referenceMdxMdast } = await import("./fuzz/shared.js");
+    expect(satteriMdxMdast("<foo\u200Cbar/>")).toEqual(referenceMdxMdast("<foo\u200Cbar/>"));
   });
 
   test("unicode tag name with attributes", async () => {
@@ -303,8 +304,8 @@ describe("MDX conformance: error cases", () => {
     await assertBothReject("{1 +");
   });
 
-  test("rejects empty expression", async () => {
-    await assertBothReject("{}");
+  test("empty expression is accepted by both", async () => {
+    await assertMdxConformance("{}");
   });
 
   test("rejects unclosed JSX tag", async () => {
@@ -583,6 +584,206 @@ describe("MDX conformance: markdown elements", () => {
   test("unclosed link title with `{` falls through to expression scan", async () => {
     await assertBothReject('[link](/uri "ti{w)');
     await assertBothReject('\\\n     bar\n[link](/uri "ti\0{w)');
+  });
+
+  test("`{` inside a parenthesized link title is literal text", async () => {
+    await assertMdxConformance("[a](/u (title{w))");
+    await assertMdxConformance("[a](/u (ti(tle{w))");
+  });
+
+  test("a paren title closes at its first `)`, with or without a nested `(`", async () => {
+    await assertMdxConformance("[a](/u (ti(tle))");
+    await assertMdxConformance("[a](/u (t) {1})");
+  });
+
+  test("`{` where a link title should open is an expression", async () => {
+    await assertBothReject("[a](/u {w)");
+  });
+
+  test("a `)` before the `{` that isn't the tail close keeps the tail", async () => {
+    await assertMdxConformance("[a](\\){)");
+    await assertMdxConformance('[a](/u "){")');
+    await assertMdxConformance("[a](<){>)");
+    await assertMdxConformance("![a](\\){)");
+    await assertMdxConformance("[a](/u (a\\){b))");
+  });
+
+  test("a `](` inside a title doesn't hide the tail that encloses it", async () => {
+    await assertMdxConformance('[a](/u "b](c {z")');
+    await assertMdxConformance("[a](/u (b](c {z))");
+    await assertMdxConformance('[a](/u "b](c {z}")');
+  });
+
+  test("a tail that closes before the `{` leaves it an expression", async () => {
+    await assertMdxConformance("[a](\\){)}");
+    await assertBothReject("[a](/u){w");
+  });
+
+  // Every whitespace run in a resource accepts line endings; only the
+  // destination is line-bounded.
+  test("a resource spanning lines keeps its `{` literal", async () => {
+    await assertMdxConformance("[a]({{{\n)");
+    await assertMdxConformance('[a](/u{\n"t")');
+    await assertMdxConformance('[a](/u "ti{\ntle")');
+    await assertMdxConformance('x\n[a](/u\n"ti{tle") y');
+  });
+
+  test("a resource opening on an earlier line still encloses the `{`", async () => {
+    await assertMdxConformance('[a](/u\n"ti{tle")');
+    await assertMdxConformance("[a](\nu{v})");
+    await assertMdxConformance("[a](}\n({))");
+    await assertMdxConformance('[a](/u "ti\ntl{e")');
+    await assertMdxConformance('![a](/u\n"ti{tle")');
+    await assertMdxConformance('[a](/u\r\n"ti{tle")');
+    await assertMdxConformance('> [a](/u\n> "ti{tle")');
+  });
+
+  test("a block boundary ends the resource, leaving the `{` an expression", async () => {
+    await assertBothReject('[a](/u "a{\n# b")');
+    await assertBothReject('[a](/u "a{\n``` b")');
+    await assertBothReject('[a](/u "a{\n***\nb")');
+    await assertBothReject('[a](/u "a{\n- b")');
+    await assertBothReject('[a](/u "a{\n\nb")');
+    await assertBothReject('[a](/u "a{\n> b")');
+  });
+
+  test("a line ending crosses neither a destination nor a closed tail", async () => {
+    await assertBothReject("[a](/u{\nmore)");
+    await assertBothReject("[a](/u\n) {w");
+  });
+
+  // The dangerous direction: swallowing one of these as title text loses the
+  // expression silently, with no parse error to notice.
+  test("a block boundary keeps a valid `{}` an expression, not title text", async () => {
+    await assertMdxConformance('[a](/u "ti{1+1}\n# tle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n``` tle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n- tle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n> tle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n***\ntle")');
+    await assertMdxConformance('[a](/u "ti{1+1}\n\ntle")');
+  });
+
+  test("an escaped label opens no tail, so the `{}` stays an expression", async () => {
+    await assertMdxConformance('\\[a](/u "ti{1+1}\ntle")');
+    await assertMdxConformance('x\\[a](/u "ti{1+1}\ntle")');
+    await assertMdxConformance('\\[a](/u "ti{1+1}tle")');
+    await assertMdxConformance('a\\](/u "ti{1+1}\ntle")');
+  });
+
+  // mdx-js has no GFM, so its footnote-blind parse can't be the oracle here;
+  // satteri's own block pass makes the definition, and the inline scan has to
+  // agree with it.
+  test("a footnote definition ends the resource, keeping the `{}` an expression", () => {
+    const tree = mdxToMdast('[a](/u "ti{1+1}\n[^a]: tle")') as { children: unknown[] };
+    const types: string[] = [];
+    const walk = (n: { type?: string; children?: unknown[] }) => {
+      if (n.type) types.push(n.type);
+      for (const c of n.children ?? []) walk(c as { type?: string; children?: unknown[] });
+    };
+    walk(tree as { children?: unknown[] });
+    expect(types).toContain("mdxTextExpression");
+    expect(types).toContain("footnoteDefinition");
+  });
+
+  test("an escaped bracket is not a label delimiter, so no tail forms", async () => {
+    await assertBothReject("\\[a](\\){)");
+    await assertBothReject("[\\](\\){)");
+    await assertBothReject("[a\\](\\){)");
+    await assertBothReject("!\\[a](\\){)");
+    await assertBothReject('\\[a](/u "b](c {z")');
+  });
+
+  test("a `[` inside a code span is not a label start", async () => {
+    await assertBothReject("`[a`](\\){)");
+    await assertBothReject('`x[y` a](/u "b](c {z")');
+    await assertMdxConformance("`[a` [b](/u{z})");
+  });
+
+  test("a label start is consumed by the first `]`, not reused", async () => {
+    await assertBothReject("[a](/u) b](\\){)");
+    await assertMdxConformance("[a](/u) [b](\\){)");
+  });
+
+  test("an inner link deactivates the label starts around it", async () => {
+    await assertBothReject("[[a](/u)](\\){)");
+    await assertBothReject("[x [a](/u) y](\\){)");
+    // An image does not, so a linked image still takes a tail.
+    await assertMdxConformance("[![a](/i)](/u{z})");
+    await assertMdxConformance("[![a](/i)](\\){)");
+  });
+
+  test("a `{` inside a code span stays code text", async () => {
+    await assertMdxConformance("[a(`](!{{`[`})");
+    await assertMdxConformance("`a](b {c`");
+  });
+
+  test("a label start on an earlier line of the paragraph still counts", async () => {
+    await assertMdxConformance("[x\n\\[a]({)");
+    await assertMdxConformance("[a\n\\[](\\){)");
+    await assertMdxConformance("> [x\n\\[a]({)");
+  });
+
+  test("many malformed tails before the `{` do not change its meaning", async () => {
+    await assertMdxConformance("[a](x ".repeat(32) + "[b](/u{)");
+    await assertMdxConformance("[a](x ".repeat(33) + "[b](/u{)");
+  });
+
+  test("a label start in an earlier block does not open a tail", async () => {
+    await assertBothReject("# h [x\n](\\){)");
+    await assertBothReject("# h [x\n\\[a](\\){)");
+    await assertBothReject("---\n](\\){)");
+    await assertBothReject("```\nfence [x\n```\n](\\){)");
+  });
+
+  test("a backtick closing an earlier line's span doesn't open a new one", async () => {
+    await assertMdxConformance("`x\n`a](b{1}`");
+    await assertMdxConformance("`x\n`a](b{1}`y");
+    await assertMdxConformance("``x\n``a](b{1}``");
+  });
+
+  test("a line of links with braces parses like any other", async () => {
+    await assertMdxConformance("[a](/u{x}) ".repeat(20));
+  });
+
+  test("an earlier line holding an open construct withholds its label start", async () => {
+    await assertBothReject("<div>html [x</div>\n]({)");
+    await assertBothReject("[`\n{`)]({)");
+    await assertBothReject("[`\n<`](><\\]`{! )");
+  });
+
+  test("an earlier line whose span closes here still lends its label start", async () => {
+    await assertMdxConformance("[`{\n`](}u{>!`{}[\\\\)");
+    await assertMdxConformance("[`x`\n\\[a]({)");
+  });
+
+  test("an angle bracket that cannot open a tag still lends its label start", async () => {
+    await assertMdxConformance("See the 5 < 6\n[a\nb](/u{z)");
+    await assertMdxConformance("a < b [x](/u{z)");
+    await assertBothReject("See a<3\n[a\nb](/u{z)");
+  });
+
+  test("a label start earlier in the same paragraph does open one", async () => {
+    await assertMdxConformance("[x\n\\[a]({)");
+    await assertMdxConformance("> [x\n\\[a]({)");
+    await assertMdxConformance("- [x\n\\[a]({)");
+  });
+
+  test("a title jammed against a pointy destination leaves the `<` to JSX", async () => {
+    await assertBothReject("[a](<>())");
+    await assertBothReject('[a](<x>"")');
+    await assertBothReject('[a](<}>"")');
+    await assertBothReject("[a](</>'')");
+    await assertBothReject("![a](<>())");
+    await assertBothReject('[a]( <>"")');
+  });
+
+  test("a separated title still forms a link and `< >` stays text", async () => {
+    await assertMdxConformance('[a](<x> "t")');
+    await assertMdxConformance('[a](<x>\n"t")');
+    await assertMdxConformance("[a](<x>)");
+    await assertMdxConformance('[a](/u"t")');
+    await assertMdxConformance("[a](< >())");
+    await assertMdxConformance('[a](<u> "t") and [b](<v>) end');
   });
 
   // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a

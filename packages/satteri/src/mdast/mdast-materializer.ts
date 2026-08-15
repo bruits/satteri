@@ -32,7 +32,7 @@ function addTypeProperties(
     // Drop an empty `value` so a parent node isn't given a spurious leaf field.
     if (nodeType === MDAST_CUSTOM) {
       const n = node as { type: string; name?: string; value?: string };
-      n.type = n.name!;
+      if (n.name !== undefined) n.type = n.name;
       delete n.name;
       if (n.value === "") delete n.value;
     }
@@ -99,19 +99,21 @@ function addTypeProperties(
   }
 }
 
-/**
- * Materialize a single MDAST node; scalars eager, `children` lazy, memoized
- * per `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
- * cannot corrupt the shared cache.
- */
-export const materializeNode = createMaterializer<MdastReader, MdastNode>({
+const mdastMaterializer = createMaterializer<MdastReader, MdastNode>({
   label: "materializeNode",
   typeNames: TYPE_NAMES,
   hasChildren: (nodeType) => !LEAF_TYPES.has(nodeType),
   populate: addTypeProperties,
 });
 
+/**
+ * Materialize a single MDAST node; scalars eager, `children` lazy, memoized
+ * per `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
+ * cannot corrupt the shared cache.
+ */
+export const materializeNode = mdastMaterializer.node;
+
 /** Materialize the full tree from root (nodeId=0). */
 export function materializeMdastTree(reader: MdastReader): Root {
-  return materializeNode(reader, 0) as Root;
+  return mdastMaterializer.tree(reader, 0) as Root;
 }

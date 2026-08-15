@@ -45,7 +45,6 @@ pub(crate) fn run_first_pass(
         #[cfg(feature = "mdx")]
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
         pending_lazy_blockquote_close: false,
-        doc_start: 0,
     };
     first_pass.run()
 }
@@ -95,25 +94,11 @@ pub(crate) struct FirstPass<'a, 'b> {
     /// on every expression — the allocator is `reset()` between parses.
     #[cfg(feature = "mdx")]
     pub(crate) mdx_expr_allocator: oxc_allocator::Allocator,
-    /// Byte offset where the document's parseable content begins — 3 when
-    /// a UTF-8 BOM is stripped, 0 otherwise. Used to gate
-    /// "must-be-at-doc-start" constructs (frontmatter) without anchoring
-    /// them at literal byte 0.
-    pub(crate) doc_start: usize,
 }
 
 impl<'a, 'b> FirstPass<'a, 'b> {
     fn run(mut self) -> (Tree<Item>, Allocations<'a>, Vec<(usize, String)>) {
-        // Skip a leading UTF-8 BOM (`U+FEFF` = EF BB BF). micromark treats it
-        // as a zero-width prefix, not part of the first block — without this,
-        // `\u{FEFF}# Title` becomes a paragraph because the `#` isn't at the
-        // line start. Positions are byte offsets into the original source so
-        // skipping bytes is fine; downstream nodes just won't reference [0..3).
         let mut ix = 0;
-        if self.text.as_bytes().starts_with(b"\xEF\xBB\xBF") {
-            ix = 3;
-            self.doc_start = 3;
-        }
         while ix < self.text.len() {
             ix = self.parse_block(ix);
         }
@@ -653,6 +638,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     label_start,
                                     Some(label_end),
                                     TableParseMode::Disabled,
+                                    label_start,
                                 );
                                 self.tree.pop();
                             }
@@ -833,11 +819,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         let ix = start_ix + line_start.bytes_scanned();
 
-        // Metadata blocks cannot be indented, and — matching remark-frontmatter
-        // — only match at the very start of the document. `doc_start` is 0
-        // normally, or 3 when a UTF-8 BOM was stripped.
+        // Metadata blocks cannot be indented and, matching remark-frontmatter,
+        // only match at the very start of the document.
         if indent == 0
-            && ix == self.doc_start
+            && ix == 0
             && self.tree.spine_len() == 0
             && let Some((_n, metadata_block_ch)) = scan_metadata_block(
                 &bytes[ix..],
@@ -1215,7 +1200,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 body: ItemBody::TableCell,
             });
             self.tree.push();
-            let (next_ix, _brk) = self.parse_line(ix, None, TableParseMode::Active);
+            let (next_ix, _brk) = self.parse_line(ix, None, TableParseMode::Active, ix);
 
             self.tree[cell_ix].item.end = next_ix;
             self.tree.pop();
@@ -1336,7 +1321,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         });
         self.tree.push();
         if label_start < label_end {
-            self.parse_line(label_start, Some(label_end), TableParseMode::Disabled);
+            self.parse_line(
+                label_start,
+                Some(label_end),
+                TableParseMode::Disabled,
+                label_start,
+            );
         }
         self.tree.pop();
     }
@@ -1382,7 +1372,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             } else {
                 TableParseMode::Disabled
             };
-            let (next_ix, brk) = self.parse_line(ix, None, scan_mode);
+            let (next_ix, brk) = self.parse_line(ix, None, scan_mode, start_ix);
 
             // break out when we find a table
             if let Some(Item {
@@ -1633,7 +1623,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
 
             if let Some(tail_start) = tail_start {
-                self.parse_line(tail_start, Some(header_end), TableParseMode::Disabled);
+                self.parse_line(
+                    tail_start,
+                    Some(header_end),
+                    TableParseMode::Disabled,
+                    tail_start,
+                );
             }
         }
 
@@ -1787,6 +1782,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         start: usize,
         end: Option<usize>,
         mode: TableParseMode,
+        scope_start: usize,
     ) -> (usize, Option<Item>) {
         let bytes = self.text.as_bytes();
         let bytes = match end {
@@ -2080,11 +2076,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         mode,
                         self.options,
                     );
-                    let is_valid_seq = c != b'~'
-                        || count == 2
-                        || (count == 1
-                            && (self.options.contains(Options::ENABLE_STRIKETHROUGH)
-                                || self.options.contains(Options::ENABLE_SUBSCRIPT)));
+                    let is_valid_seq = delim_run_is_valid(c, count, self.options);
 
                     if (can_open || can_close) && is_valid_seq {
                         self.tree.append_text(begin_text, ix, backslash_escaped);
@@ -2146,7 +2138,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // LaTeX (`\frac{-b}{2a}`) are math text, not expressions —
                     // matching block `$$` and the autolink math-span check.
                     if is_inside_code_span(bytes, ix)
-                        || is_inside_link_url_parens(bytes, ix)
+                        || is_inside_link_url_parens(bytes, ix, scope_start)
                         || is_inside_open_inline_jsx_tag(bytes, ix)
                         || (self.options.has_math() && is_inside_math_span(bytes, ix))
                     {
@@ -2389,7 +2381,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // re-entering the inline scanner over the `[…]` span.
                         if label_start < label_end {
                             self.tree.push();
-                            self.parse_line(label_start, Some(label_end), TableParseMode::Disabled);
+                            self.parse_line(
+                                label_start,
+                                Some(label_end),
+                                TableParseMode::Disabled,
+                                label_start,
+                            );
                             self.tree.pop();
                         }
                         begin_text = end_pos;
@@ -3266,11 +3263,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             None
         };
         let (end, content_end, attrs) = if let Some((block, header_end)) = attr_block {
-            self.parse_line(ix, Some(block.block_open), TableParseMode::Disabled);
+            self.parse_line(ix, Some(block.block_open), TableParseMode::Disabled, ix);
             // Reparse the trailing directive run separately so it keeps its own `{...}`.
             let content_end = match block.tail_start {
                 Some(tail_start) => {
-                    self.parse_line(tail_start, Some(header_end), TableParseMode::Disabled);
+                    self.parse_line(
+                        tail_start,
+                        Some(header_end),
+                        TableParseMode::Disabled,
+                        tail_start,
+                    );
                     header_end
                 }
                 None => block.block_open,
@@ -3286,7 +3288,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             } else {
                 None
             };
-            let (line_ix, line_brk) = self.parse_line(ix, line_end, TableParseMode::Disabled);
+            let (line_ix, line_brk) = self.parse_line(ix, line_end, TableParseMode::Disabled, ix);
             ix = line_ix;
             // Backslash at end is actually hard line break
             if let Some(Item {
@@ -3470,6 +3472,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     // returns (bytelength, title_str)
     fn scan_refdef_title<'t>(&self, text: &'t str) -> Option<(usize, CowStr<'t>)> {
         let bytes = text.as_bytes();
+        // Unlike CommonMark, remark keeps an unescaped `(` inside a paren title as content.
         let closing_delim = match bytes.first()? {
             b'\'' => b'\'',
             b'"' => b'"',
@@ -3483,12 +3486,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         while let Some(&c) = bytes.get(bytecount) {
             match c {
-                b'(' if closing_delim == b')' => {
-                    // https://spec.commonmark.org/0.30/#link-title
-                    // a sequence of zero or more characters between matching parentheses ((...)),
-                    // including a ( or ) character only if it is backslash-escaped.
-                    return None;
-                }
                 b'\n' | b'\r' => {
                     // push text to line buffer
                     // this is used to strip the block formatting:
@@ -4324,271 +4321,494 @@ fn scope_end_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -> 
     i
 }
 
-/// True if the byte at `pos` sits inside a CommonMark link URL `[...](...)`
-/// — i.e. there is an unmatched `(` between `pos` and the start of the
-/// current line, immediately preceded by `]`, that `]` is balanced by an
-/// earlier `[` on the same line, AND the `(` has a matching `)` ahead on
-/// the same line. mdx-js does not evaluate expressions in link URLs (URL
-/// `{x}` is literal text, URL-encoded at render time), so we treat `{`
-/// here as plain text rather than an expression start. This both avoids a
-/// hard error on unmatched `{` inside a valid URL (e.g. `[a]({)`) and
-/// removes a brittle dance where the link resolver previously had to
-/// reabsorb a stray `MdxTextExpression` token.
-///
-/// When the `(` is unmatched (no closing `)` on the line), the link won't
-/// form. mdx-js then falls back to expression scanning and errors on the
-/// dangling `{`. We mirror that by returning false in this case so the
-/// caller can run the expression scanner.
-///
-/// CommonMark forbids URLs from spanning a blank line, so per-line scans
-/// are sufficient in both directions.
+/// Deeper label starts are taken as links, which only ever withholds a tail.
 #[cfg(feature = "mdx")]
-fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
-    // Fast reject: walkback returns false on first newline, so a `(` past
-    // the current line can't reach pos. Skip the walk when this line has
-    // no `(` before pos.
+const LINK_LABEL_MAX_TRACKED_DEPTH: u32 = 64;
+
+/// True if the byte at `pos` sits inside a CommonMark link tail `[...](...)`,
+/// that is, some `](` earlier on the line opens a tail that parses as
+/// destination, optional title, `)` and encloses `pos`. mdx-js does not
+/// evaluate expressions in link URLs (URL `{x}` is literal text, URL-encoded
+/// at render time), so we treat `{` here as plain text rather than an
+/// expression start. This both avoids a hard error on unmatched `{` inside a
+/// valid URL (e.g. `[a]({)`) and removes a brittle dance where the link
+/// resolver previously had to reabsorb a stray `MdxTextExpression` token.
+///
+/// When no such tail encloses `pos` the link won't form. mdx-js then falls
+/// back to expression scanning and errors on a dangling `{`. We mirror that
+/// by returning false so the caller can run the expression scanner.
+///
+/// A resource may span lines, since `resourceBefore`,
+/// `resourceDestinationAfter` and `resourceTitleAfter` all run
+/// `factoryWhitespace` and `factoryTitle` accepts line endings; only the
+/// destination is line-bounded. `scope_start` is where the enclosing block's
+/// inline content begins, so a tail opening on an earlier line of the same
+/// block still counts, as long as it is the line directly above: a resource
+/// spanning two or more line endings, as in `[a](\n/u\n"ti{tle")`, stays a
+/// known divergence. So do lazy and list-item continuations, since the forward
+/// scan stops at a line that opens a block rather than tracking the enclosing
+/// container.
+#[cfg(feature = "mdx")]
+fn is_inside_link_url_parens(bytes: &[u8], pos: usize, scope_start: usize) -> bool {
     let line_start = memchr::memrchr2(b'\n', b'\r', &bytes[..pos])
         .map(|i| i + 1)
         .unwrap_or(0);
-    if memchr::memchr(b'(', &bytes[line_start..pos]).is_none() {
+    let opens_tail = |from: usize, to: usize| {
+        memchr::memchr_iter(b']', &bytes[from..to])
+            .any(|rel| bytes.get(from + rel + 1) == Some(&b'('))
+    };
+    let on_line = opens_tail(line_start, pos);
+    let earlier = scope_start < line_start && opens_tail(scope_start, line_start);
+    if !on_line && !earlier {
         return false;
     }
-    let mut paren_depth: i32 = 0;
-    let mut i = pos;
-    while i > 0 {
-        i -= 1;
-        match bytes[i] {
-            b'\n' | b'\r' => return false,
-            b')' => paren_depth += 1,
-            b'(' => {
-                if paren_depth == 0 {
-                    // Unmatched `(` to our left. If it's immediately
-                    // preceded by `]`, this is the link-tail open. Verify
-                    // and return.
-                    if i > 0 && bytes[i - 1] == b']' {
-                        let mut j = i - 1; // position of `]`
-                        let mut bracket_depth: i32 = 1;
-                        while j > 0 {
-                            j -= 1;
-                            match bytes[j] {
-                                b'\n' | b'\r' => return false,
-                                b']' => bracket_depth += 1,
-                                b'[' => {
-                                    bracket_depth -= 1;
-                                    if bracket_depth == 0 {
-                                        // Bracket pair matches. Confirm the
-                                        // `(` closes properly and any quoted
-                                        // title is closed.
-                                        return link_tail_well_formed(bytes, i, pos);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        return false;
-                    }
-                    // Otherwise: this `(` may be a paren-delimited title
-                    // open inside an outer `](...)` link tail (e.g.
-                    // `[a](/u (ti{w))`). Continue walking — we'll find the
-                    // outer `](` if it exists. Leave `paren_depth` at 0
-                    // (effectively treating this `(` as already matched
-                    // by a `)` past `pos`).
-                } else {
-                    paren_depth -= 1;
-                }
+    let line_end = line_end_at(bytes, pos);
+    let prefix = leading_container_prefix(&bytes[line_start..]);
+    // Two reasons to widen: a `](` on this line wanted a label start it never
+    // saw, or a tail on the line above is still open here. Only the second is
+    // worth paying the block replay to guess at.
+    let widen = if on_line {
+        match replay_link_tails(
+            bytes,
+            pos,
+            line_start,
+            line_end,
+            prefix,
+            scope_start >= line_start,
+        ) {
+            TailReplay::Inside => return true,
+            TailReplay::NeedsScope => true,
+            TailReplay::Outside => {
+                earlier && tail_reaches_from_line_above(bytes, line_start, pos, prefix)
             }
-            _ => {}
         }
-    }
-    false
+    } else {
+        tail_reaches_from_line_above(bytes, line_start, pos, prefix)
+    };
+    // `scope_start` is the block's own start, so this cannot cross into one.
+    widen
+        && scope_start < line_start
+        && !earlier_lines_are_ambiguous(bytes, scope_start, line_start)
+        && matches!(
+            replay_link_tails(bytes, pos, scope_start, line_end, prefix, true),
+            TailReplay::Inside
+        )
 }
 
-/// True if the link-URL parens at `lparen` close on the same line, the
-/// URL/title structure is well-formed, AND `pos` sits inside the URL
-/// portion (not the title or invalid whitespace gap). Used as a tighter
-/// check for `is_inside_link_url_parens`: a malformed tail (e.g. plain
-/// URL followed by non-title bytes) means the link won't form, so any
-/// `{` between them should be treated as an expression start.
+/// Whether replaying the whole block could pay off: a `](` on the line
+/// directly above `pos` opens a tail closing past it. Only that line is
+/// scanned, so a tail whose `](` is two or more lines up, which a title
+/// spanning both endings could still carry down, is refused and leaves the `{`
+/// an expression. Cheaper than the block replay and only ever withholds it.
 #[cfg(feature = "mdx")]
-fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize) -> bool {
-    let mut depth: i32 = 1;
-    let mut k = lparen + 1;
-    let mut rparen = None;
-    while k < bytes.len() {
-        match bytes[k] {
-            b'\n' | b'\r' => return false,
-            b'\\' if k + 1 < bytes.len() => {
-                k += 2;
-                continue;
-            }
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    rparen = Some(k);
-                    break;
+fn tail_reaches_from_line_above(
+    bytes: &[u8],
+    line_start: usize,
+    pos: usize,
+    prefix: usize,
+) -> bool {
+    if line_start == 0 {
+        return false;
+    }
+    let mut eol = line_start - 1;
+    if eol > 0 && bytes[eol] == b'\n' && bytes[eol - 1] == b'\r' {
+        eol -= 1;
+    }
+    let above = memchr::memrchr2(b'\n', b'\r', &bytes[..eol])
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let mut closes = TitleCloses::default();
+    memchr::memchr_iter(b']', &bytes[above..eol]).any(|rel| {
+        let rbracket = above + rel;
+        bytes.get(rbracket + 1) == Some(&b'(')
+            && link_tail_close(bytes, rbracket + 1, eol, prefix, &mut closes)
+                .is_some_and(|rparen| rparen > pos)
+    })
+}
+
+#[cfg(feature = "mdx")]
+enum TailReplay {
+    Inside,
+    Outside,
+    /// The line alone cannot answer: a `](` wanted a label start it never saw,
+    /// or a backtick run whose pair may live on an earlier line.
+    NeedsScope,
+}
+
+/// Replays `from..pos` the way micromark tokenizes inline content, tracking the
+/// constructs that can own a bracket, and reports where `pos` landed.
+#[cfg(feature = "mdx")]
+fn replay_link_tails(
+    bytes: &[u8],
+    pos: usize,
+    from: usize,
+    scope_end: usize,
+    prefix: usize,
+    at_block_start: bool,
+) -> TailReplay {
+    let mut depth: u32 = 0;
+    let mut image_kinds: u64 = 0;
+    let mut inactive_below: u32 = 0;
+    let mut closes = TitleCloses::default();
+    let mut needs_scope = false;
+    let mut i = from;
+    // Refreshed only when `i` crosses a newline; rescanning per candidate makes
+    // an ordinary line of links quadratic.
+    let mut tail_line_end = line_end_at(bytes, from);
+    while i < pos {
+        match bytes[i] {
+            b'\\' if i + 1 < scope_end && is_ascii_punctuation(bytes[i + 1]) => i += 2,
+            b'`' => {
+                needs_scope = true;
+                let run = 1 + scan_ch_repeat(&bytes[i + 1..scope_end], b'`');
+                match code_span_end(bytes, i + run, scope_end, run) {
+                    // Only a replay from the block start can vouch for a pairing.
+                    Some(end) if end > pos => {
+                        return if at_block_start {
+                            TailReplay::Inside
+                        } else {
+                            TailReplay::NeedsScope
+                        };
+                    }
+                    Some(end) => i = end,
+                    None => i += run,
                 }
             }
+            b'!' if bytes.get(i + 1) == Some(&b'[') => {
+                depth += 1;
+                if depth <= LINK_LABEL_MAX_TRACKED_DEPTH {
+                    image_kinds |= 1 << (depth - 1);
+                }
+                i += 2;
+            }
+            b'[' => {
+                depth += 1;
+                if depth <= LINK_LABEL_MAX_TRACKED_DEPTH {
+                    image_kinds &= !(1 << (depth - 1));
+                }
+                i += 1;
+            }
+            b']' => {
+                if depth == 0 {
+                    needs_scope |= bytes.get(i + 1) == Some(&b'(');
+                    i += 1;
+                    continue;
+                }
+                if i >= tail_line_end {
+                    tail_line_end = line_end_at(bytes, i);
+                }
+                let is_image =
+                    depth <= LINK_LABEL_MAX_TRACKED_DEPTH && image_kinds & (1 << (depth - 1)) != 0;
+                let active = is_image || depth > inactive_below;
+                depth -= 1;
+                inactive_below = inactive_below.min(depth);
+                if active
+                    && bytes.get(i + 1) == Some(&b'(')
+                    && let Some(rparen) =
+                        link_tail_close(bytes, i + 1, tail_line_end, prefix, &mut closes)
+                {
+                    if rparen > pos {
+                        return TailReplay::Inside;
+                    }
+                    // A link, unlike an image, deactivates the starts around it.
+                    if !is_image {
+                        inactive_below = depth;
+                    }
+                    i = rparen + 1;
+                    continue;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    if needs_scope {
+        TailReplay::NeedsScope
+    } else {
+        TailReplay::Outside
+    }
+}
+
+/// True if an earlier line of the block could hand `line_start` a construct
+/// mdx-js resolves against the code span or tag satteri would keep.
+#[cfg(feature = "mdx")]
+fn earlier_lines_are_ambiguous(bytes: &[u8], scope_start: usize, line_start: usize) -> bool {
+    if matches!(bytes.get(line_start), Some(b'{') | Some(b'<')) {
+        return true;
+    }
+    // Only a `<` that can open a tag competes with the label; `5 < 6` cannot.
+    memchr::memchr_iter(b'<', &bytes[scope_start..line_start]).any(|rel| {
+        matches!(
+            bytes.get(scope_start + rel + 1),
+            Some(c) if c.is_ascii_alphabetic() || matches!(c, b'/' | b'>' | b'!' | b'?' | b'_' | b'$')
+        )
+    })
+}
+
+/// End of the line holding `i`.
+#[cfg(feature = "mdx")]
+fn line_end_at(bytes: &[u8], i: usize) -> usize {
+    memchr::memchr2(b'\n', b'\r', &bytes[i..]).map_or(bytes.len(), |k| i + k)
+}
+
+/// End of the code span opened by a `run`-long backtick run, per CommonMark's
+/// equal-length pairing, within a single line.
+#[cfg(feature = "mdx")]
+fn code_span_end(bytes: &[u8], from: usize, line_end: usize, run: usize) -> Option<usize> {
+    let mut i = from;
+    while let Some(rel) = memchr::memchr(b'`', &bytes[i..line_end]) {
+        let start = i + rel;
+        let len = 1 + scan_ch_repeat(&bytes[start + 1..line_end], b'`');
+        if len == run {
+            return Some(start + len);
+        }
+        i = start + len;
+    }
+    None
+}
+
+/// Index of the `)` closing the link tail opened at `lparen`, if it parses as
+/// `(`, destination, optional whitespace-separated title, `)` on this line.
+#[cfg(feature = "mdx")]
+fn link_tail_close(
+    bytes: &[u8],
+    lparen: usize,
+    line_end: usize,
+    prefix: usize,
+    closes: &mut TitleCloses,
+) -> Option<usize> {
+    let (i, line_end) = skip_resource_space(bytes, lparen + 1, line_end, prefix)?;
+    let dest_end = scan_link_tail_dest(bytes, i, line_end)?;
+    let (mut i, mut line_end) = skip_resource_space(bytes, dest_end, line_end, prefix)?;
+    // Without separating whitespace the delimiter was part of the destination.
+    if i > dest_end
+        && let Some((title_end, title_line_end)) =
+            scan_link_tail_title(bytes, i, line_end, prefix, closes)
+    {
+        (i, line_end) = skip_resource_space(bytes, title_end, title_line_end, prefix)?;
+    }
+
+    (i < line_end && bytes[i] == b')').then_some(i)
+}
+
+/// Spaces, tabs and line endings between the parts of a resource, following
+/// paragraph continuation lines. Returns the position and its line's end.
+#[cfg(feature = "mdx")]
+fn skip_resource_space(
+    bytes: &[u8],
+    mut at: usize,
+    mut line_end: usize,
+    prefix: usize,
+) -> Option<(usize, usize)> {
+    loop {
+        at += scan_while(&bytes[at..line_end], is_space_or_tab);
+        if at < line_end {
+            return Some((at, line_end));
+        }
+        at = resource_continuation_line(bytes, line_end, prefix)?;
+        line_end = line_end_at(bytes, at);
+    }
+}
+
+/// Where the next line's content starts when a paragraph continues past the
+/// line ending at `eol`.
+#[cfg(feature = "mdx")]
+fn resource_continuation_line(bytes: &[u8], eol: usize, prefix: usize) -> Option<usize> {
+    if eol >= bytes.len() {
+        return None;
+    }
+    let mut next = eol + 1;
+    if bytes[eol] == b'\r' && bytes.get(next) == Some(&b'\n') {
+        next += 1;
+    }
+    let mut i = next;
+    for _ in 0..prefix {
+        i += scan_while_max(&bytes[i..], |b| b == b' ', 3);
+        if bytes.get(i) != Some(&b'>') {
+            return None;
+        }
+        i += 1;
+        if bytes.get(i).is_some_and(|&b| is_space_or_tab(b)) {
+            i += 1;
+        }
+    }
+    let content = i + scan_while(&bytes[i..], is_space_or_tab);
+    match bytes.get(content) {
+        None | Some(b'\n' | b'\r') => None,
+        Some(_) if opens_block(&bytes[content..]) => None,
+        Some(_) => Some(i),
+    }
+}
+
+/// Every branch below fires only on one of these bytes, so the match is a fast
+/// reject for ordinary prose rather than a duplicate of their conditions.
+#[cfg(feature = "mdx")]
+fn opens_block(data: &[u8]) -> bool {
+    let Some(&first) = data.first() else {
+        return true;
+    };
+    if !matches!(
+        first,
+        b'<' | b'|'
+            | b'{'
+            | b':'
+            | b'['
+            | b'#'
+            | b'>'
+            | b'*'
+            | b'-'
+            | b'_'
+            | b'+'
+            | b'='
+            | b'`'
+            | b'~'
+            | b'$'
+            | b'0'..=b'9'
+    ) {
+        return false;
+    }
+    // `:` opens a directive fence or definition-list item, `[^` a footnote
+    // definition; all interrupt a paragraph.
+    matches!(first, b'<' | b'|' | b'{' | b':')
+        || data.starts_with(b"[^")
+        || scan_hrule(data).is_ok()
+        || scan_atx_heading(data).is_some()
+        || scan_code_fence(data).is_some()
+        || scan_setext_heading(data).is_some()
+        || scan_blockquote_start(data).is_some()
+        || scan_listitem(data).is_some()
+        || scan_math_fence(data).is_some()
+        || scan_interrupting_container_extensions_fence(data)
+}
+
+/// End of the link destination starting at `start`, mirroring
+/// [`scan_link_dest`] within a single line.
+#[cfg(feature = "mdx")]
+fn scan_link_tail_dest(bytes: &[u8], start: usize, line_end: usize) -> Option<usize> {
+    let mut i = start;
+    if bytes.get(i) == Some(&b'<') {
+        i += 1;
+        while i < line_end {
+            match bytes[i] {
+                b'<' => return None,
+                b'>' => return Some(i + 1),
+                b'\\' if i + 1 < line_end && is_ascii_punctuation(bytes[i + 1]) => i += 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        return None;
+    }
+
+    let mut nest = 0;
+    while i < line_end {
+        match bytes[i] {
+            0x0..=0x20 => break,
+            b'(' => {
+                if nest > LINK_MAX_NESTED_PARENS {
+                    return None;
+                }
+                nest += 1;
+            }
+            b')' => {
+                if nest == 0 {
+                    break;
+                }
+                nest -= 1;
+            }
+            b'\\' if i + 1 < line_end && is_ascii_punctuation(bytes[i + 1]) => i += 1,
             _ => {}
         }
-        k += 1;
+        i += 1;
     }
-    let rparen = match rparen {
-        Some(r) => r,
-        None => return false,
-    };
-    // The CommonMark link tail is `(URL[ TITLE])`. Verify the structure
-    // matches: URL is either `<...>` or plain (no whitespace, no control
-    // chars). After URL, an optional whitespace-delimited title must be
-    // a properly closed `"..."`, `'...'`, or `(...)`. Anything else
-    // between URL end and `)` means the link fails to form — in that case
-    // `pos` should NOT be treated as inside a link URL.
-    {
-        let mut p = lparen + 1;
-        while p < rparen && (bytes[p] == b' ' || bytes[p] == b'\t') {
-            p += 1;
+    (nest == 0).then_some(i)
+}
+
+/// Running answer to "where does the next unescaped `\"`, `'` or `)` start".
+/// Tail attempts move forward, so each byte of a line is examined once per
+/// delimiter however many malformed tails ask.
+#[cfg(feature = "mdx")]
+#[derive(Default)]
+struct TitleCloses {
+    line_end: usize,
+    asked_from: [usize; 3],
+    found_at: [usize; 3],
+}
+
+#[cfg(feature = "mdx")]
+impl TitleCloses {
+    fn find(
+        &mut self,
+        bytes: &[u8],
+        kind: usize,
+        close: u8,
+        start: usize,
+        line_end: usize,
+    ) -> Option<usize> {
+        if self.line_end != line_end {
+            *self = Self {
+                line_end,
+                asked_from: [usize::MAX; 3],
+                found_at: [0; 3],
+            };
         }
-        let url_end;
-        if p < rparen && bytes[p] == b'<' {
-            p += 1;
-            let mut found = false;
-            while p < rparen {
-                match bytes[p] {
-                    b'\\' if p + 1 < rparen => p += 2,
-                    b'>' => {
-                        found = true;
-                        p += 1;
-                        break;
-                    }
-                    b'<' | b'\n' | b'\r' => break,
-                    _ => p += 1,
+        let cached = self.asked_from[kind];
+        if cached != usize::MAX && start >= cached && start <= self.found_at[kind] {
+            return (self.found_at[kind] < line_end).then_some(self.found_at[kind]);
+        }
+        // An escaped close is still a close byte, so absence settles it outright.
+        let mut i = if memchr::memchr(close, &bytes[start..line_end]).is_some() {
+            let mut j = start;
+            while j < line_end {
+                if bytes[j] == close {
+                    break;
                 }
+                if bytes[j] == b'\\' && j + 1 < line_end && is_ascii_punctuation(bytes[j + 1]) {
+                    j += 1;
+                }
+                j += 1;
             }
-            if !found {
-                return false;
-            }
-            url_end = p;
+            j
         } else {
-            let mut depth_url: i32 = 0;
-            while p < rparen {
-                let b = bytes[p];
-                if b == b'\\' && p + 1 < rparen {
-                    p += 2;
-                    continue;
-                }
-                if b == b'(' {
-                    depth_url += 1;
-                    p += 1;
-                } else if b == b')' {
-                    if depth_url == 0 {
-                        break;
-                    }
-                    depth_url -= 1;
-                    p += 1;
-                } else if matches!(b, b' ' | b'\t') {
-                    break;
-                } else if b < 0x20 || b == 0x7f {
-                    return false;
-                } else {
-                    p += 1;
-                }
-            }
-            url_end = p;
-        }
-        // pos sits AFTER the URL: the tail is only well-formed if the
-        // post-URL bytes parse as `[ws]+(title)?[ws]*)`.
-        if pos >= url_end {
-            let mut q = url_end;
-            while q < rparen && (bytes[q] == b' ' || bytes[q] == b'\t') {
-                q += 1;
-            }
-            if q == rparen {
-                // No title — pos sits in trailing whitespace before `)`.
-                // The link is well-formed; treating `pos` as inside the
-                // URL portion is conservative but matches the original
-                // intent.
-            } else {
-                let title_open = bytes[q];
-                let title_close = match title_open {
-                    b'"' => b'"',
-                    b'\'' => b'\'',
-                    b'(' => b')',
-                    _ => return false,
-                };
-                let mut r = q + 1;
-                let mut closed = false;
-                while r < rparen {
-                    if bytes[r] == b'\\' && r + 1 < rparen {
-                        r += 2;
-                        continue;
-                    }
-                    if title_open == b'(' && bytes[r] == b'(' {
-                        // Nested `(` inside paren-title invalidates the
-                        // title per CommonMark.
-                        return false;
-                    }
-                    if bytes[r] == title_close {
-                        closed = true;
-                        break;
-                    }
-                    r += 1;
-                }
-                if !closed {
-                    return false;
-                }
-                let mut s = r + 1;
-                while s < rparen && (bytes[s] == b' ' || bytes[s] == b'\t') {
-                    s += 1;
-                }
-                if s != rparen {
-                    return false;
-                }
-            }
-        }
+            line_end
+        };
+        i = i.min(line_end);
+        self.asked_from[kind] = start;
+        self.found_at[kind] = i;
+        (i < line_end).then_some(i)
     }
-    // Walk the bytes between `(` and `)` checking for title quotes. The
-    // CommonMark link tail allows one title delimited by matching `"`,
-    // `'`, or `(...)`. The paren-title form is already covered by `depth`
-    // tracking above. We only need to check `"` and `'` for closure.
-    let mut k = lparen + 1;
-    while k < rparen {
-        let b = bytes[k];
-        if b == b'\\' && k + 1 < rparen {
-            k += 2;
-            continue;
-        }
-        if b == b'"' || b == b'\'' {
-            let quote = b;
-            let mut m = k + 1;
-            let mut closed = false;
-            while m < rparen {
-                if bytes[m] == b'\\' && m + 1 < rparen {
-                    m += 2;
-                    continue;
-                }
-                if bytes[m] == quote {
-                    closed = true;
-                    break;
-                }
-                m += 1;
-            }
-            // The link parser only treats `"`/`'` as title delimiters
-            // when preceded by whitespace and followed by content that
-            // closes before `)`. If the quote we found surrounds `pos`,
-            // closure of THIS quote determines validity. If the quote is
-            // unclosed and `pos` sits past the unclosed quote, the link
-            // fails and we should not suppress.
-            if !closed && pos > k {
-                return false;
-            }
-            if closed {
-                k = m + 1;
-                continue;
-            }
-        }
-        k += 1;
+}
+
+/// End of the link title starting at `start`, mirroring `scan_link_title`
+/// within a single line: an unescaped `(` inside a paren title is content.
+#[cfg(feature = "mdx")]
+fn scan_link_tail_title(
+    bytes: &[u8],
+    start: usize,
+    line_end: usize,
+    prefix: usize,
+    closes: &mut TitleCloses,
+) -> Option<(usize, usize)> {
+    if start >= line_end {
+        return None;
     }
-    true
+    let (kind, close) = match bytes[start] {
+        b'\'' => (0, b'\''),
+        b'"' => (1, b'"'),
+        b'(' => (2, b')'),
+        _ => return None,
+    };
+    // `TitleCloses` is keyed on the line, so crossing is driven from out here
+    // and each line keeps its own memo.
+    let mut from = start + 1;
+    let mut line_end = line_end;
+    loop {
+        if let Some(i) = closes.find(bytes, kind, close, from, line_end) {
+            return Some((i + 1, line_end));
+        }
+        from = resource_continuation_line(bytes, line_end, prefix)?;
+        line_end = line_end_at(bytes, from);
+    }
 }
 
 /// True if the byte at `pos` is the first content char of its source line,
@@ -4852,20 +5072,18 @@ fn delim_run_flags(
     )
 }
 
-/// `~` only forces an adjacent run open or closed while an extension gives it meaning.
-fn is_tilde_marker(c: char, options: Options) -> bool {
-    c == '~'
-        && (options.contains(Options::ENABLE_STRIKETHROUGH)
-            || options.contains(Options::ENABLE_SUBSCRIPT))
+/// Only GFM strikethrough ever adds `~` to micromark's attention markers.
+fn is_attention_marker(c: char, options: Options) -> bool {
+    c == '*' || c == '_' || (c == '~' && options.contains(Options::ENABLE_STRIKETHROUGH))
+}
+
+fn tilde_is_delimiter(options: Options) -> bool {
+    options.contains(Options::ENABLE_STRIKETHROUGH) || options.contains(Options::ENABLE_SUBSCRIPT)
 }
 
 /// A run of `~` only means anything at the lengths its extensions define.
 pub(crate) fn delim_run_is_valid(c: u8, count: usize, options: Options) -> bool {
-    c != b'~'
-        || count == 2
-        || (count == 1
-            && (options.contains(Options::ENABLE_STRIKETHROUGH)
-                || options.contains(Options::ENABLE_SUBSCRIPT)))
+    c != b'~' || count == 2 || (count == 1 && tilde_is_delimiter(options))
 }
 
 /// The delimiter run a `\` at `ix` would swallow, when the byte after it ends
@@ -5511,26 +5729,18 @@ fn delim_run_can_open(
         }
     }
     let delim = suffix.bytes().next().unwrap();
-    if delim == b'*'
-        && (next_char == '*' || next_char == '_' || is_tilde_marker(next_char, options))
-    {
+    if delim == b'*' && is_attention_marker(next_char, options) {
         return true;
     }
     if (delim == b'*' || delim == b'^') && !is_punctuation(next_char) {
         return true;
     }
-    // `~~` (and longer) follows the same flanking rules as `**`: it can open
-    // when followed by a non-punctuation char, OR when followed by punctuation
-    // BUT preceded by whitespace/punctuation (handled by the fall-through at
-    // the end of this function). Previously we returned `true` unconditionally
-    // here, which let `a~~/foo~~` open a strikethrough — GFM rejects that.
+    // GFM holds `~~` to the same flanking rules as `**`, so `a~~/foo~~` must not open.
     if delim == b'~' && run_len > 1 && !is_punctuation(next_char) {
         return true;
     }
     let prev_char = s[..ix].chars().last().unwrap();
-    // See the matching comment in `delim_run_can_close`: the
-    // `prev_char == '~'` shortcut bypasses standard flanking and lets pairing
-    // walk across escaped tildes, so it's now gated on subscript mode only.
+    // Subscript is intraword by design (`H~2~O`), unlike GFM strikethrough.
     if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) && !is_punctuation(next_char) {
         return true;
     }
@@ -5582,9 +5792,7 @@ fn delim_run_can_close(
         }
     }
     let delim = suffix.bytes().next().unwrap();
-    if delim == b'*'
-        && (prev_char == '*' || prev_char == '_' || is_tilde_marker(prev_char, options))
-    {
+    if delim == b'*' && is_attention_marker(prev_char, options) {
         return true;
     }
     if (delim == b'*' || delim == b'^') && !is_punctuation(prev_char) {
@@ -5593,10 +5801,7 @@ fn delim_run_can_close(
     if delim == b'~' && run_len > 1 && !is_punctuation(prev_char) {
         return true;
     }
-    // The `prev_char == '~'` shortcut historically let any `~`-adjacent run
-    // close, but that bypasses GFM's strict flanking rules and lets a run
-    // pair across an escaped (literal) `~`. Subscript mode depends on the
-    // relaxed pairing, so gate the shortcut on it.
+    // Subscript is intraword by design (`H~2~O`), unlike GFM strikethrough.
     if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) {
         return true;
     }
@@ -5633,9 +5838,7 @@ fn special_bytes(options: &Options) -> [bool; 256] {
     if options.contains(Options::ENABLE_TABLES) {
         bytes[b'|' as usize] = true;
     }
-    if options.contains(Options::ENABLE_STRIKETHROUGH)
-        || options.contains(Options::ENABLE_SUBSCRIPT)
-    {
+    if tilde_is_delimiter(*options) {
         bytes[b'~' as usize] = true;
     }
     if options.contains(Options::ENABLE_SUPERSCRIPT) {

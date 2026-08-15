@@ -103,6 +103,7 @@ impl<'a> LineIndex<'a> {
     pub fn cursor(&self) -> LineIndexCursor<'_, 'a> {
         LineIndexCursor {
             index: self,
+            disabled: self.disabled,
             last_line_idx: 0,
             last_line_col: (u32::MAX, (0, 0)),
         }
@@ -129,17 +130,24 @@ impl<'a> LineIndex<'a> {
 /// the cursor scans forward from the last known line instead of binary-searching.
 pub struct LineIndexCursor<'idx, 'src> {
     index: &'idx LineIndex<'src>,
+    /// Mirrored off the index so the skip-positions early-out is one local load.
+    disabled: bool,
     last_line_idx: usize,
     /// One-entry memo; a sibling's end offset is usually the next one's start.
     last_line_col: (u32, (u32, u32)),
 }
 
 impl LineIndexCursor<'_, '_> {
-    #[inline]
+    #[inline(always)]
     pub fn offset_to_line_col(&mut self, offset: u32) -> (u32, u32) {
-        if self.index.disabled {
+        if self.disabled {
             return (0, 0);
         }
+        self.offset_to_line_col_tracked(offset)
+    }
+
+    #[inline(never)]
+    fn offset_to_line_col_tracked(&mut self, offset: u32) -> (u32, u32) {
         if offset == self.last_line_col.0 {
             return self.last_line_col.1;
         }

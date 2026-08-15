@@ -1,13 +1,20 @@
 import {
   visitHastHandle,
   visitHastHandleCollect,
+  visitHastHook,
+  visitHastHookCollect,
   resolveSubscriptions,
+  type HastDiagnostic,
   type HastHandle,
+  type HastHookFn,
 } from "./hast/hast-visitor.js";
 import {
   visitMdastHandle,
+  visitMdastHook,
   resolveMdastSubscriptions,
+  type MdastDiagnostic,
   type MdastHandle,
+  type MdastHookFn,
   type MdastPluginInstance,
 } from "./mdast/mdast-visitor.js";
 import { normalizePlugins } from "./plugin.js";
@@ -152,6 +159,24 @@ function warnDroppedTransforms(
   );
 }
 
+function settle<T>(value: T | Promise<T>, fn: (value: T) => void): Promise<void> | undefined {
+  if (value instanceof Promise) return value.then(fn);
+  fn(value);
+  return undefined;
+}
+
+/** Stays synchronous until a step actually returns a promise. */
+function sequence(
+  steps: ((() => Promise<void> | undefined) | undefined)[],
+): Promise<void> | undefined {
+  let pending: Promise<void> | undefined;
+  for (const step of steps) {
+    if (step === undefined) continue;
+    pending = pending === undefined ? step() : pending.then(step);
+  }
+  return pending;
+}
+
 function runMdastPluginsOnHandle(
   handle: MdastHandle,
   plugins: MdastPluginDefinition[],
@@ -163,25 +188,19 @@ function runMdastPluginsOnHandle(
 ): MdastPipelineResult | Promise<MdastPipelineResult> {
   const out: MdastPipelineResult = { handle };
 
-  // Each plugin runs once over the tree. A transform that passes a child
+  // A plugin's visitors run once over the tree. A transform that passes a child
   // through (returning it inside the replacement) keeps that child's identity,
-  // so a patch the same pass queued on it still applies — nesting composes in
-  // one pass. A plugin's own freshly-built nodes are not re-walked; transform
-  // them up front, or hand off to a later plugin that sees the materialized tree.
-  const runPlugin = (plugin: MdastPluginInstance, isLast: boolean): void | Promise<void> => {
+  // so a patch the same pass queued on it still applies: nesting composes in
+  // one pass. Visitor-built nodes are not re-walked; transform them up front,
+  // or hand off to a later plugin that sees the materialized tree.
+  const runPlugin = (plugin: MdastPluginInstance, isLastPlugin: boolean): void | Promise<void> => {
     const subs = resolveMdastSubscriptions(plugin);
-    const result = visitMdastHandle(
-      handle,
-      plugin,
-      subs,
-      () => getHandleSource(handle),
-      fileURL,
-      data,
-      sourceFormat,
-    );
-    const apply = (r: { commandBuffer: Uint8Array; hasMutations: boolean }): void => {
+    const apply = (
+      r: { commandBuffer: Uint8Array; hasMutations: boolean },
+      isFinalPass: boolean,
+    ): void => {
       if (!r.hasMutations) return;
-      if (collectLast && isLast) {
+      if (collectLast && isLastPlugin && isFinalPass) {
         out.pendingCommands = r.commandBuffer;
         out.lastPlugin = plugin as { name?: string };
         return;
@@ -190,13 +209,54 @@ function runMdastPluginsOnHandle(
       const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
       if (warnings && dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
     };
-    return result instanceof Promise ? result.then(apply) : apply(result);
+
+    const before = typeof plugin.before === "function" ? plugin.before : undefined;
+    const after = typeof plugin.after === "function" ? plugin.after : undefined;
+    const hasVisitors = subs.length > 0;
+    // Threaded like `data`: one context per pass, since a resolver is epoch-bound.
+    const diagnostics: MdastDiagnostic[] = [];
+    const runHook = (hook: MdastHookFn, isFinalPass: boolean) => () =>
+      settle(
+        visitMdastHook(
+          handle,
+          plugin,
+          hook,
+          () => getHandleSource(handle),
+          fileURL,
+          data,
+          sourceFormat,
+          diagnostics,
+        ),
+        (r) => apply(r, isFinalPass),
+      );
+    const runVisitors = (isFinalPass: boolean) => () =>
+      settle(
+        visitMdastHandle(
+          handle,
+          plugin,
+          subs,
+          () => getHandleSource(handle),
+          fileURL,
+          data,
+          sourceFormat,
+          diagnostics,
+        ),
+        (r) => apply(r, isFinalPass),
+      );
+
+    return sequence([
+      before ? runHook(before, !hasVisitors && after === undefined) : undefined,
+      hasVisitors ? runVisitors(after === undefined) : undefined,
+      after ? runHook(after, true) : undefined,
+    ]);
   };
 
   let i = 0;
   const runNext = (): MdastPipelineResult | Promise<MdastPipelineResult> => {
-    while (i < plugins.length) {
-      const plugin = plugins[i++]!;
+    for (;;) {
+      const plugin = plugins[i];
+      if (plugin === undefined) break;
+      i++;
       const r = runPlugin(plugin as MdastPluginInstance, i === plugins.length);
       if (r instanceof Promise) return r.then(runNext);
     }
@@ -235,38 +295,79 @@ function runHastPluginsCollectLast(
 ): CollectedHastCommands | Promise<CollectedHastCommands> {
   let i = 0;
   const runNext = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
-    while (i < plugins.length) {
-      const plugin = plugins[i]!;
-      const isLast = i === plugins.length - 1;
+    for (;;) {
+      const plugin = plugins[i];
+      if (plugin === undefined) break;
+      const isLastPlugin = i === plugins.length - 1;
       i++;
       const subs = resolveSubscriptions(plugin);
+      const { before, after } = plugin;
 
-      if (isLast) {
-        const collected = visitHastHandleCollect(
-          handle,
-          plugin,
-          subs,
-          source,
-          fileURL,
-          data,
-          sourceFormat,
-        );
-        return collected instanceof Promise
-          ? collected.then((commands) => ({ commands, lastPlugin: plugin }))
-          : { commands: collected, lastPlugin: plugin };
-      }
+      const passes: (HastHookFn | "visitors")[] = [];
+      if (typeof before === "function") passes.push(before);
+      if (subs.length > 0) passes.push("visitors");
+      if (typeof after === "function") passes.push(after);
+      const finalPass = passes.pop();
+      if (finalPass === undefined) continue;
 
-      const result = visitHastHandle(handle, plugin, subs, source, fileURL, data, sourceFormat);
       const warnIfDropped = (dropped: number): void => {
         if (warnings && dropped) warnDroppedTransforms(plugin, dropped, "hast");
       };
-      if (result instanceof Promise) {
-        return result.then((dropped) => {
-          warnIfDropped(dropped);
-          return runNext();
-        });
+      // Threaded like `data`: one context per pass, since a resolver is epoch-bound.
+      const diagnostics: HastDiagnostic[] = [];
+      const runApplied = (pass: HastHookFn | "visitors") => () =>
+        settle(
+          pass === "visitors"
+            ? visitHastHandle(
+                handle,
+                plugin,
+                subs,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              )
+            : visitHastHook(handle, plugin, pass, source, fileURL, data, sourceFormat, diagnostics),
+          warnIfDropped,
+        );
+      const collectFinal = (): CollectedHastCommands | Promise<CollectedHastCommands> => {
+        const collected =
+          finalPass === "visitors"
+            ? visitHastHandleCollect(
+                handle,
+                plugin,
+                subs,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              )
+            : visitHastHookCollect(
+                handle,
+                plugin,
+                finalPass,
+                source,
+                fileURL,
+                data,
+                sourceFormat,
+                diagnostics,
+              );
+        return collected instanceof Promise
+          ? collected.then((commands) => ({ commands, lastPlugin: plugin }))
+          : { commands: collected, lastPlugin: plugin };
+      };
+
+      const head = sequence(passes.map(runApplied));
+
+      if (isLastPlugin) {
+        return head instanceof Promise ? head.then(collectFinal) : collectFinal();
       }
-      warnIfDropped(result);
+
+      const tail =
+        head instanceof Promise ? head.then(runApplied(finalPass)) : runApplied(finalPass)();
+      if (tail instanceof Promise) return tail.then(runNext);
     }
     return NO_HAST_COMMANDS;
   };
@@ -623,7 +724,8 @@ type ResolveInput<P, D extends readonly unknown[] = [0, 0, 0, 0, 0, 0, 0, 0]> = 
 ]
   ? P extends ReadonlyArray<infer Item>
     ? ResolveInput<Item, Rest>
-    : P extends () => infer Def
+    : // A factory taking a ctx is not assignable to `() => infer Def`, which would drop it as sync.
+      P extends (...args: never[]) => infer Def
       ? ResolveInput<Def, Rest>
       : P
   : never;
@@ -652,8 +754,22 @@ export function markdownToHtml(
   options: CompileOptions = {},
 ): MarkdownToHtmlResult | Promise<MarkdownToHtmlResult> {
   const { features, fileURL, data = {}, warnings = true } = options;
-  const mdastPlugins = normalizePlugins(options.mdastPlugins ?? [], "mdastPlugins");
-  const hastPlugins = normalizePlugins(options.hastPlugins ?? [], "hastPlugins");
+  const mdastPlugins = normalizePlugins(
+    options.mdastPlugins ?? [],
+    "mdastPlugins",
+    source,
+    fileURL,
+    "markdown",
+    data,
+  );
+  const hastPlugins = normalizePlugins(
+    options.hastPlugins ?? [],
+    "hastPlugins",
+    source,
+    fileURL,
+    "markdown",
+    data,
+  );
   const hastMayHaveStubs = hastPlugins.length > 0;
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
     featuresToNative(features);
@@ -835,8 +951,23 @@ function toJsImpl(
     warnings = true,
     ...mdxFields
   } = options;
-  const mdastPlugins = normalizePlugins(mdastInput, "mdastPlugins");
-  const hastPlugins = normalizePlugins(hastInput, "hastPlugins");
+  const sourceFormat: SourceFormat = mdx ? "mdx" : "markdown";
+  const mdastPlugins = normalizePlugins(
+    mdastInput,
+    "mdastPlugins",
+    source,
+    fileURL,
+    sourceFormat,
+    data,
+  );
+  const hastPlugins = normalizePlugins(
+    hastInput,
+    "hastPlugins",
+    source,
+    fileURL,
+    sourceFormat,
+    data,
+  );
   const hastMayHaveStubs = hastPlugins.length > 0;
   const mdxOptions = mdxOptionsToNative(mdxFields);
   const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
@@ -1104,9 +1235,26 @@ function createHastHandleFromMdast(
 
 // Step-by-step API: individual pipeline stages with materialized trees
 
+/** Options for the step-by-step tree functions. */
+export interface TreeOptions {
+  features?: Features;
+  /**
+   * Record `position` on every node. Default: `true`.
+   *
+   * A unist position is three objects per node and roughly half a materialized
+   * tree's memory, on top of the parser's line-index build. Pass `false` when
+   * nothing downstream reads `node.position`.
+   */
+  position?: boolean;
+}
+
 /** Parse Markdown source into a materialized mdast tree. */
-export function markdownToMdast(source: string, options: { features?: Features } = {}): MdastNode {
-  const handle = createMdastHandle(source, featuresToNative(options.features).features);
+export function markdownToMdast(source: string, options: TreeOptions = {}): MdastNode {
+  const handle = createMdastHandle(
+    source,
+    featuresToNative(options.features).features,
+    options.position,
+  );
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
@@ -1115,8 +1263,12 @@ export function markdownToMdast(source: string, options: { features?: Features }
 }
 
 /** Parse MDX source into a materialized mdast tree. */
-export function mdxToMdast(source: string, options: { features?: Features } = {}): MdastNode {
-  const handle = createMdxMdastHandle(source, featuresToNative(options.features).features);
+export function mdxToMdast(source: string, options: TreeOptions = {}): MdastNode {
+  const handle = createMdxMdastHandle(
+    source,
+    featuresToNative(options.features).features,
+    options.position,
+  );
   try {
     return materializeMdastTree(new MdastReader(serializeHandle(handle)));
   } finally {
@@ -1125,9 +1277,9 @@ export function mdxToMdast(source: string, options: { features?: Features } = {}
 }
 
 /** Convert Markdown source to a materialized hast tree. */
-export function markdownToHast(source: string, options: { features?: Features } = {}): HastNode {
+export function markdownToHast(source: string, options: TreeOptions = {}): HastNode {
   const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
-  const handle = createHastHandle(source, nativeFeatures, convertOptions);
+  const handle = createHastHandle(source, nativeFeatures, convertOptions, options.position);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
@@ -1136,9 +1288,9 @@ export function markdownToHast(source: string, options: { features?: Features } 
 }
 
 /** Convert MDX source to a materialized hast tree. */
-export function mdxToHast(source: string, options: { features?: Features } = {}): HastNode {
+export function mdxToHast(source: string, options: TreeOptions = {}): HastNode {
   const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
-  const handle = createMdxHastHandle(source, nativeFeatures, convertOptions);
+  const handle = createMdxHastHandle(source, nativeFeatures, convertOptions, options.position);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {

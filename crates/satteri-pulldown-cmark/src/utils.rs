@@ -15,6 +15,13 @@ use core::ops::Range;
 
 use crate::{CowStr, Event};
 
+/// The source the parser works on: micromark's preprocessor drops a leading
+/// BOM before positions exist, so it is outside the position space.
+#[must_use]
+pub fn strip_leading_bom(source: &str) -> &str {
+    source.strip_prefix('\u{feff}').unwrap_or(source)
+}
+
 /// Decode HTML5 character references (`&gt;`, `&amp;`, `&#x3C;`, `&#123;`, …)
 /// inside a string. Unrecognised `&foo` runs are left as-is.
 ///

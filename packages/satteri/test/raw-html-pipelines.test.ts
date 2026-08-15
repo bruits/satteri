@@ -130,3 +130,11 @@ test("plugin-spliced raw HTML is reparsed too", () => {
   );
   expect(html).toContain('<aside class="n m">hi</aside>');
 });
+
+test("rawHtml keeps namespaced SVG attributes through the round trip", () => {
+  const sprite =
+    '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="#icon"/></svg>\n';
+  const { html } = sync(markdownToHtml(sprite, { features: { rawHtml: true } }));
+  expect(html).toContain('xmlns:xlink="http://www.w3.org/1999/xlink"');
+  expect(html).toContain('xlink:href="#icon"');
+});

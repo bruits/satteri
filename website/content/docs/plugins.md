@@ -104,7 +104,11 @@ markdownToHtml(source, {
 });
 ```
 
-An entry can also be an array of plugins, nested as deeply as you like. A package can therefore export a bundle of plugins that you pass without spreading:
+## What an entry can be
+
+A list entry is usually a plugin definition, but three other shapes are accepted.
+
+An entry can be an **array** of entries, nested as deeply as you like, so a package can export a bundle of plugins that you pass without spreading:
 
 ```js
 import { typography } from "some-package"; // an array of plugins
@@ -116,6 +120,16 @@ markdownToHtml(source, {
 
 The bundle's plugins keep their own order and run at the bundle's position, so the above is the same as `[...typography, unwrapImages]`.
 
-A factory can return a bundle too, which gives the plugins in it state that they share with each other but that still resets for every document.
+An entry can be a **factory**, a function returning any of the other shapes. It runs once per compile, so state it closes over resets for every document, and it is handed what is known about that document before parsing: the file's URL, whether it is Markdown or MDX, the unparsed source, and the `data` bag.
+
+An entry can also be **`null`, `undefined` or `false`**, which leaves it out. Combined with a factory, that is how one plugin runs on some documents and not others, and it is cheaper than checking the same condition inside every visitor, which still pays for the plugin on documents it does not apply to:
+
+```js
+markdownToHtml(source, {
+  mdastPlugins: [isDev && debugPlugin, (ctx) => (ctx.sourceFormat === "mdx" ? mdxOnly : null)],
+});
+```
+
+See [Passing plugins](/docs/plugin-api/#passing-plugins) for the entry type and the full factory context.
 
 If you need to share state between visits (e.g. collecting a table of contents), close over a variable in the surrounding scope and read it back after `markdownToHtml` returns.

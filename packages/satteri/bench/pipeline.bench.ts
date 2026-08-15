@@ -234,30 +234,40 @@ describe("mdxToJs", () => {
   });
 });
 
+// Without a walk these time the call and not the tree, so deferred work reads as free.
+function walk(node: MdastNode | HastNode): number {
+  let count = 1;
+  const children = (node as { children?: (MdastNode | HastNode)[] }).children;
+  if (children !== undefined) {
+    for (const child of children) count += walk(child);
+  }
+  return count;
+}
+
 describe("markdownToMdast", () => {
   bench("markdown", () => {
-    markdownToMdast(MARKDOWN);
+    walk(markdownToMdast(MARKDOWN));
   });
 
   bench("autolinks", () => {
-    markdownToMdast(AUTOLINKS);
+    walk(markdownToMdast(AUTOLINKS));
   });
 });
 
 describe("mdxToMdast", () => {
   bench("mdx", () => {
-    mdxToMdast(MDX);
+    walk(mdxToMdast(MDX));
   });
 });
 
 describe("markdownToHast", () => {
   bench("markdown", () => {
-    markdownToHast(MARKDOWN);
+    walk(markdownToHast(MARKDOWN));
   });
 });
 
 describe("mdxToHast", () => {
   bench("mdx", () => {
-    mdxToHast(MDX);
+    walk(mdxToHast(MDX));
   });
 });

@@ -47,6 +47,8 @@ pub const MDX_OPTIONS: Options =
 
 /// Parse markdown source into an Arena.
 ///
+/// Offsets and the arena's source are relative to [`crate::strip_leading_bom`].
+///
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
 pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
@@ -90,6 +92,8 @@ fn parse_inner(
     reuse: Option<Arena<Mdast>>,
     skip_fnr_autolink: bool,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
+    let source = crate::strip_leading_bom(source);
+
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
     // feature set. Expand it into the granular flags the parser checks so
     // callers don't have to remember which sub-flags GFM implies.

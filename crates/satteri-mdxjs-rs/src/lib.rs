@@ -598,6 +598,7 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
 /// line/column instead of a bare byte offset.
 #[must_use]
 pub fn parse_error_to_message(source: &str, offset: usize, reason: &str) -> message::Message {
+    let source = satteri_pulldown_cmark::strip_leading_bom(source);
     message::Message {
         place: Some(Box::new(message::Place::Point(byte_offset_to_point(
             source, offset,
@@ -612,11 +613,13 @@ pub fn parse_error_to_message(source: &str, offset: usize, reason: &str) -> mess
 fn byte_offset_to_point(value: &str, offset: usize) -> message::Point {
     let mut line = 1;
     let mut col = 1;
+    let bytes = value.as_bytes();
     for (i, ch) in value.char_indices() {
         if i >= offset {
             break;
         }
-        if ch == '\n' {
+        // The `\r` of a CRLF defers to its `\n` so the pair counts one ending.
+        if ch == '\n' || (ch == '\r' && bytes.get(i + 1) != Some(&b'\n')) {
             line += 1;
             col = 1;
         } else {

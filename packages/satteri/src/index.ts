@@ -18,6 +18,7 @@ export type {
   EvaluateOptions,
   OptimizeStaticConfig,
   Features,
+  TreeOptions,
   SmartPunctuationOptions,
   Frontmatter,
   MarkdownToHtmlResult,
@@ -36,6 +37,7 @@ export type {
   HastPluginEntry,
   MdastPluginList,
   HastPluginList,
+  PluginFactoryContext,
 } from "./plugin.js";
 
 // Visitor types (for plugin authors)

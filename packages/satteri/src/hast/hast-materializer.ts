@@ -10,7 +10,6 @@ import {
   HAST_MDX_FLOW_EXPRESSION,
   HAST_MDX_TEXT_EXPRESSION,
   HAST_MDX_ESM,
-  type HastProperty,
 } from "./hast-reader.js";
 import type { Root } from "hast";
 import type { HastNode } from "../types.js";
@@ -28,31 +27,20 @@ export const HAST_CONTAINER_TYPES: ReadonlySet<number> = new Set([
   HAST_MDX_JSX_TEXT_ELEMENT,
 ]);
 
-function propsToRecord(
-  props: HastProperty[],
-): Record<string, string | number | boolean | (string | number)[]> {
-  const result: Record<string, string | number | boolean | (string | number)[]> = {};
-  for (const p of props) {
-    result[p.name] = p.value;
-  }
-  return result;
-}
-
-/**
- * Materialize a single HAST node; scalars eager, `children` lazy, memoized per
- * `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
- * cannot corrupt the shared cache.
- */
-export const materializeHastNode = createMaterializer<HastReader, HastNode>({
+const hastMaterializer = createMaterializer<HastReader, HastNode>({
   label: "materializeHastNode",
   typeNames: TYPE_NAMES,
   hasChildren: (nodeType) => HAST_CONTAINER_TYPES.has(nodeType),
   populate(node, reader, nodeId, nodeType) {
     switch (nodeType) {
       case HAST_ELEMENT: {
-        const { tagName, properties } = reader.getElementData(nodeId);
-        (node as { tagName: string }).tagName = tagName;
-        (node as { properties: unknown }).properties = propsToRecord(properties);
+        (node as { tagName: string }).tagName = reader.getElementTagName(nodeId);
+        const count = reader.getElementPropCount(nodeId);
+        const properties: Record<string, unknown> = {};
+        for (let i = 0; i < count; i++) {
+          properties[reader.getElementPropName(nodeId, i)] = reader.getElementPropValue(nodeId, i);
+        }
+        (node as { properties: unknown }).properties = properties;
         break;
       }
 
@@ -87,8 +75,15 @@ export const materializeHastNode = createMaterializer<HastReader, HastNode>({
 });
 
 /**
+ * Materialize a single HAST node; scalars eager, `children` lazy, memoized per
+ * `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
+ * cannot corrupt the shared cache.
+ */
+export const materializeHastNode = hastMaterializer.node;
+
+/**
  * Materialize the full HAST tree from root (nodeId=0).
  */
 export function materializeHastTree(reader: HastReader): Root {
-  return materializeHastNode(reader, 0) as Root;
+  return hastMaterializer.tree(reader, 0) as Root;
 }

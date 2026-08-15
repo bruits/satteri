@@ -1,9 +1,9 @@
 import { test, expect, describe } from "vitest";
 import { MdastReader } from "../src/mdast/mdast-reader.js";
-import { materializeMdastTree } from "../src/mdast/mdast-materializer.js";
+import { materializeMdastTree, materializeNode } from "../src/mdast/mdast-materializer.js";
 import type { MdastNode, MdastNodeInternal } from "../src/types.js";
 import { buildHelloWorldBuffer } from "./fixtures.js";
-import { createMdxMdastHandle, serializeHandle } from "../index.js";
+import { createMdastHandle, createMdxMdastHandle, serializeHandle } from "../index.js";
 
 function setup() {
   const buf = buildHelloWorldBuffer();
@@ -17,12 +17,27 @@ test('materializeMdastTree returns a root node with type === "root"', () => {
   expect(root.type).toBe("root");
 });
 
-test("root node children is a lazy getter initially", () => {
+test("children is a plain writable array on every node", () => {
   const { reader } = setup();
   const root = materializeMdastTree(reader);
-  const desc = Object.getOwnPropertyDescriptor(root, "children");
-  expect(typeof desc?.get === "function").toBe(true);
-  expect("value" in (desc ?? {})).toBe(false);
+  if (root.type !== "root") throw new Error("expected root");
+
+  for (const node of [root, root.children[0]!] as MdastNode[]) {
+    const desc = Object.getOwnPropertyDescriptor(node, "children");
+    expect(desc?.value).toBeInstanceOf(Array);
+    expect(desc?.writable).toBe(true);
+    expect(desc?.enumerable).toBe(true);
+  }
+});
+
+test("the whole tree is materialized, not just one level", () => {
+  const { reader } = setup();
+  const root = materializeMdastTree(reader);
+  if (root.type !== "root") throw new Error("expected root");
+
+  const heading = root.children[0]!;
+  if (heading.type !== "heading") throw new Error("expected heading");
+  expect(Object.getOwnPropertyDescriptor(heading, "children")?.value).toBeInstanceOf(Array);
 });
 
 test("accessing root.children returns 2 children (heading, paragraph)", () => {
@@ -72,9 +87,17 @@ test("position data is correct: root.position.start.line === 1", () => {
   expect(root.position!.start.line).toBe(1);
 });
 
-test("_nodeId is non-enumerable", () => {
+test("a materialized tree carries no _nodeId marker", () => {
   const { reader } = setup();
   const root = materializeMdastTree(reader);
+  expect(Object.keys(root)).not.toContain("_nodeId");
+  expect(Object.getOwnPropertySymbols(root)).toEqual([]);
+  expect((root as MdastNodeInternal)._nodeId).toBeUndefined();
+});
+
+test("the frozen plugin path keeps _nodeId non-enumerable", () => {
+  const { reader } = setup();
+  const root = materializeNode(reader, 0, true);
   expect(Object.keys(root)).not.toContain("_nodeId");
   expect((root as MdastNodeInternal)._nodeId).toBe(0);
 });
@@ -85,21 +108,41 @@ test("data is undefined when no data is set", () => {
   expect(root.data).toBeUndefined();
 });
 
-test("children are lazily evaluated (getter replaced by plain array after access)", () => {
+test("repeated children reads return the same array and the same nodes", () => {
   const { reader } = setup();
   const root = materializeMdastTree(reader);
   if (root.type !== "root") throw new Error("expected root");
 
-  const beforeDesc = Object.getOwnPropertyDescriptor(root, "children");
-  expect(typeof beforeDesc?.get === "function").toBe(true);
-
-  const children = root.children;
-  expect(Array.isArray(children)).toBe(true);
-
-  const afterDesc = Object.getOwnPropertyDescriptor(root, "children");
-  expect("get" in (afterDesc ?? {})).toBe(false);
-  expect("value" in (afterDesc ?? {})).toBe(true);
+  expect(root.children).toBe(root.children);
+  expect(root.children[0]).toBe(root.children[0]);
 });
+
+test("children survives reassignment, so callers can rewrite the tree", () => {
+  const { reader } = setup();
+  const root = materializeMdastTree(reader);
+  if (root.type !== "root") throw new Error("expected root");
+
+  const replacement = [root.children[1]!];
+  root.children = replacement;
+  expect(root.children).toBe(replacement);
+  expect(root.children).toHaveLength(1);
+});
+
+// Past Node's ~12.5k frame limit, so a materializer that recursed per level
+// would overflow here. Generous timeout: CI parses with a debug Rust build.
+test("a deeply nested document materializes without overflowing the stack", () => {
+  const depth = 15_000;
+  const handle = createMdastHandle(">".repeat(depth) + " hi\n");
+  const tree = materializeMdastTree(new MdastReader(serializeHandle(handle) as Uint8Array));
+
+  let node: MdastNode = tree;
+  let seen = 0;
+  while ("children" in node && node.children.length > 0) {
+    node = node.children[0]!;
+    seen++;
+  }
+  expect(seen).toBeGreaterThanOrEqual(depth);
+}, 30_000);
 
 // MDX JSX attribute tests
 

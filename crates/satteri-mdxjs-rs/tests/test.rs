@@ -1740,3 +1740,31 @@ fn plain_markdown_keeps_mdx_syntax_literal() -> Result<(), satteri_arena::mdx_ty
 
     Ok(())
 }
+
+#[test]
+fn unclosed_jsx_error_location_agrees_for_every_line_ending() {
+    use satteri_arena::mdx_types::Place;
+
+    for eol in ["\n", "\r", "\r\n"] {
+        let src = format!("a{eol}b{eol}<Foo>bar\n");
+        let err = compile(&src, &Options::default(), MDX_OPTS)
+            .expect_err("unclosed JSX element should fail to compile");
+        assert!(
+            err.reason.contains("(3:1)"),
+            "{eol:?}: embedded location should be 3:1, got {:?}",
+            err.reason
+        );
+        let place = err
+            .place
+            .expect("parse error should carry a source position");
+        let point = match *place {
+            Place::Point(p) => p,
+            Place::Position(p) => p.start,
+        };
+        assert_eq!(
+            (point.line, point.column),
+            (3, 1),
+            "{eol:?}: place should agree with the embedded 3:1, got {point:?}"
+        );
+    }
+}
