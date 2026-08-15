@@ -34,6 +34,21 @@ fn smart_punctuation_does_not_duplicate_into_source() {
 }
 
 #[test]
+fn a_leading_bom_is_outside_the_source_and_the_position_space() {
+    let (with_bom, _) = parse("\u{feff}# h\n\ntext\n", Options::empty());
+    let (without_bom, _) = parse("# h\n\ntext\n", Options::empty());
+    assert_eq!(with_bom.source(), "# h\n\ntext\n");
+    for id in 0..without_bom.len() as u32 {
+        let (a, b) = (with_bom.get_node(id), without_bom.get_node(id));
+        assert_eq!(
+            (a.start_offset, a.start_line, a.start_column, a.end_offset),
+            (b.start_offset, b.start_line, b.start_column, b.end_offset),
+            "node {id}"
+        );
+    }
+}
+
+#[test]
 fn mdast_to_hast_conversion_preserves_the_source_boundary() {
     let (mdast, _) = parse(ISSUE_MARKDOWN, Options::empty());
     let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);

@@ -598,6 +598,7 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
 /// line/column instead of a bare byte offset.
 #[must_use]
 pub fn parse_error_to_message(source: &str, offset: usize, reason: &str) -> message::Message {
+    let source = satteri_pulldown_cmark::strip_leading_bom(source);
     message::Message {
         place: Some(Box::new(message::Place::Point(byte_offset_to_point(
             source, offset,

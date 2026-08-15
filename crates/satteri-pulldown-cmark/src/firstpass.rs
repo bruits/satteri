@@ -45,7 +45,6 @@ pub(crate) fn run_first_pass(
         #[cfg(feature = "mdx")]
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
         pending_lazy_blockquote_close: false,
-        doc_start: 0,
     };
     first_pass.run()
 }
@@ -95,25 +94,11 @@ pub(crate) struct FirstPass<'a, 'b> {
     /// on every expression — the allocator is `reset()` between parses.
     #[cfg(feature = "mdx")]
     pub(crate) mdx_expr_allocator: oxc_allocator::Allocator,
-    /// Byte offset where the document's parseable content begins — 3 when
-    /// a UTF-8 BOM is stripped, 0 otherwise. Used to gate
-    /// "must-be-at-doc-start" constructs (frontmatter) without anchoring
-    /// them at literal byte 0.
-    pub(crate) doc_start: usize,
 }
 
 impl<'a, 'b> FirstPass<'a, 'b> {
     fn run(mut self) -> (Tree<Item>, Allocations<'a>, Vec<(usize, String)>) {
-        // Skip a leading UTF-8 BOM (`U+FEFF` = EF BB BF). micromark treats it
-        // as a zero-width prefix, not part of the first block — without this,
-        // `\u{FEFF}# Title` becomes a paragraph because the `#` isn't at the
-        // line start. Positions are byte offsets into the original source so
-        // skipping bytes is fine; downstream nodes just won't reference [0..3).
         let mut ix = 0;
-        if self.text.as_bytes().starts_with(b"\xEF\xBB\xBF") {
-            ix = 3;
-            self.doc_start = 3;
-        }
         while ix < self.text.len() {
             ix = self.parse_block(ix);
         }
@@ -834,11 +819,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         let ix = start_ix + line_start.bytes_scanned();
 
-        // Metadata blocks cannot be indented, and — matching remark-frontmatter
-        // — only match at the very start of the document. `doc_start` is 0
-        // normally, or 3 when a UTF-8 BOM was stripped.
+        // Metadata blocks cannot be indented and, matching remark-frontmatter,
+        // only match at the very start of the document.
         if indent == 0
-            && ix == self.doc_start
+            && ix == 0
             && self.tree.spine_len() == 0
             && let Some((_n, metadata_block_ch)) = scan_metadata_block(
                 &bytes[ix..],
