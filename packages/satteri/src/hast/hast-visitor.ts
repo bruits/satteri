@@ -151,10 +151,13 @@ export interface HastVisitorContext {
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
    * children `parentNode` declares are kept after it, so a `div` with an anchor
    * child wraps a heading as `div > [heading, anchor]`. `parentNode` is an
-   * element, an MDX JSX element, or `{ rawHtml }` parsing to exactly one
+   * element, an MDX JSX element, or `{ raw }` HTML parsing to exactly one
    * element, never a void element, whose children would not render.
    */
-  wrapNode(node: Readonly<HastNode>, parentNode: HastParentContent | RawHtmlHastContent): void;
+  wrapNode(
+    node: Readonly<HastNode>,
+    parentNode: HastParentContent | RawHastContent | RawHtmlHastContent,
+  ): void;
   prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   appendChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -218,9 +221,17 @@ export type HastContent = HastNode;
 /** A `wrapNode` wrapper: node types that can hold children. */
 export type HastParentContent = Exclude<Extract<HastNode, { children: unknown[] }>, HastRoot>;
 
-/** Raw HTML `wrapNode` wrapper: parsed at apply time (not call time); must
- *  yield exactly one non-void element, which becomes the wrapper. */
+/** Raw `wrapNode` wrapper: the HTML is parsed at apply time (not call time)
+ *  and must yield exactly one non-void element, which becomes the wrapper.
+ *  `mdxExpressions` is accepted for parity with the MDAST phase and has no
+ *  effect: braces in HTML text are always literal. */
+export interface RawHastContent {
+  raw: string;
+  mdxExpressions?: boolean;
+}
+
 export interface RawHtmlHastContent {
+  /** @deprecated Use the equivalent `{ raw }`. */
   rawHtml: string;
 }
 
@@ -245,7 +256,7 @@ function assertHastWrapParent(parentNode: HastContent): void {
   throw new Error(
     `wrapNode: "${String(type)}" nodes cannot hold children, so they cannot wrap a node. ` +
       'Wrap in an element instead, e.g. { type: "element", tagName: "div", properties: {}, children: [] } ' +
-      'or { rawHtml: "<div></div>" }.',
+      'or { raw: "<div></div>" }.',
   );
 }
 
@@ -438,10 +449,16 @@ class HastVisitorContextImpl implements HastVisitorContext {
     for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertAfter", id, n);
   }
 
-  wrapNode(node: HastNode, parentNode: HastParentContent | RawHtmlHastContent): void {
+  wrapNode(
+    node: HastNode,
+    parentNode: HastParentContent | RawHastContent | RawHtmlHastContent,
+  ): void {
     const id = requireNid(node, "wrapNode");
-    if (typeof (parentNode as RawHtmlHastContent).rawHtml === "string") {
-      this.#commandBuffer.wrapNode(id, parentNode as RawHtmlHastContent);
+    if (
+      typeof (parentNode as RawHastContent).raw === "string" ||
+      typeof (parentNode as RawHtmlHastContent).rawHtml === "string"
+    ) {
+      this.#commandBuffer.wrapNode(id, parentNode as RawHastContent | RawHtmlHastContent);
       return;
     }
     assertHastWrapParent(parentNode as HastContent);

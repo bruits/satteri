@@ -228,10 +228,15 @@ export class MdastVisitorContext {
   /**
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
    * children `parentNode` declares are kept after it. `parentNode` must be a
-   * node type that can hold children; to surround a node with raw HTML tags,
-   * use `replaceNode(node, [openTag, node, closeTag])` instead.
+   * node type that can hold children, or a raw string parsing to exactly one
+   * such block (`{ raw: "> " }` wraps in a blockquote); to surround a node
+   * with raw HTML tags, use `replaceNode(node, [openTag, node, closeTag])`
+   * instead.
    */
-  wrapNode(node: Readonly<MdastTarget>, parentNode: MdastParentContent): void {
+  wrapNode(
+    node: Readonly<MdastTarget>,
+    parentNode: MdastParentContent | RawMdastContent | RawHtmlMdastContent,
+  ): void {
     const id = requireNid(node as MdastNode, "wrapNode");
     assertMdastWrapParent(parentNode);
     emitMdastTree(this.#commandBuffer, "wrapNode", id, parentNode);
@@ -930,13 +935,8 @@ function emitMdastTree(
 function assertMdastWrapParent(parentNode: MdastContent): void {
   const sandwich =
     'replaceNode(node, [{ type: "html", value: "<div>" }, node, { type: "html", value: "</div>" }])';
-  if (isRawMdastContent(parentNode)) {
-    throw new Error(
-      "wrapNode: raw content cannot wrap a node. Pass a parent node such as " +
-        `{ type: "blockquote", children: [] }, surround the node with tags: ${sandwich}, ` +
-        "or wrap at the HAST phase, where wrapNode accepts { rawHtml }.",
-    );
-  }
+  // A raw wrapper is only a tree once Rust has parsed it, so it is checked there.
+  if (isRawMdastContent(parentNode)) return;
   const type = (parentNode as { type?: unknown }).type;
   const tag = typeof type === "string" ? NAME_TO_TYPE[type] : undefined;
   if (tag === undefined) {
@@ -951,8 +951,8 @@ function assertMdastWrapParent(parentNode: MdastContent): void {
   if (!LEAF_TYPES.has(tag)) return;
   throw new Error(
     `wrapNode: "${String(type)}" nodes cannot hold children, so they cannot wrap a node. ` +
-      `Surround the node with tags instead: ${sandwich}, or wrap at the HAST phase, ` +
-      "where wrapNode accepts elements and { rawHtml }.",
+      'Pass a parent node such as { type: "blockquote", children: [] }, a raw wrapper ' +
+      `such as { raw: "> " }, or surround the node with tags: ${sandwich}.`,
   );
 }
 

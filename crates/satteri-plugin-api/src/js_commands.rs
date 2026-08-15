@@ -1118,18 +1118,88 @@ fn read_hast_payload(
 
 #[cfg(feature = "from-html")]
 fn hast_wrap_arena_from_html(raw: &str) -> Result<Arena<Hast>, CommandError> {
-    satteri_ast::hast::html_fragment_to_wrap_arena(raw).map_err(CommandError::InvalidWrapHtml)
+    satteri_ast::hast::html_fragment_to_wrap_arena(raw).map_err(CommandError::InvalidRawWrapper)
 }
 
 /// Erroring beats silently mis-wrapping when the parser was compiled out.
 #[cfg(not(feature = "from-html"))]
 fn hast_wrap_arena_from_html(_raw: &str) -> Result<Arena<Hast>, CommandError> {
-    Err(CommandError::InvalidWrapHtml(
+    Err(CommandError::InvalidRawWrapper(
         "requires HTML parsing, which this build omits (from-html feature)".to_string(),
     ))
 }
 
-/// A void wrapper would drop the wrapped node at render. `{rawHtml}` payloads
+/// Mirrors `LEAF_TYPES` in `mdast-materializer.ts`, so a raw wrapper is
+/// judged like a declarative one.
+fn is_mdast_leaf(node_type: u8) -> bool {
+    use MdastNodeType::*;
+    matches!(
+        MdastNodeType::from_u8(node_type),
+        Some(
+            ThematicBreak
+                | Html
+                | Code
+                | Definition
+                | Text
+                | InlineCode
+                | Break
+                | Image
+                | ImageReference
+                | FootnoteReference
+                | Yaml
+                | Toml
+                | Math
+                | InlineMath
+                | MdxFlowExpression
+                | MdxTextExpression
+                | MdxjsEsm
+        )
+    )
+}
+
+/// Reshape a parsed `{raw}` payload into the arena `Patch::Wrap` takes: the
+/// single block becomes node 0, re-rooted in place so its string refs stay
+/// valid against the arena's own pool.
+fn mdast_wrap_arena_from_tree(mut tree: Arena<Mdast>) -> Result<Arena<Mdast>, CommandError> {
+    let roots: &[u32] = if tree.is_empty() {
+        &[]
+    } else {
+        tree.get_children(0)
+    };
+    let &[wrapper] = roots else {
+        return Err(CommandError::InvalidRawWrapper(
+            "must parse to exactly one block".to_string(),
+        ));
+    };
+    let node = *tree.get_node(wrapper);
+    if is_mdast_leaf(node.node_type) {
+        let name = MdastNodeType::from_u8(node.node_type).map_or("node", MdastNodeType::name);
+        return Err(CommandError::InvalidRawWrapper(format!(
+            "parses to a {name}, which cannot hold the wrapped node"
+        )));
+    }
+    let children = tree.get_children(wrapper).to_vec();
+    let type_data = tree.get_type_data(wrapper).to_vec();
+    let node_data = tree.get_node_data(wrapper).map(<[u8]>::to_vec);
+    tree.get_node_mut(0).node_type = node.node_type;
+    tree.set_position(
+        0,
+        node.start_offset,
+        node.end_offset,
+        node.start_line,
+        node.start_column,
+        node.end_line,
+        node.end_column,
+    );
+    tree.set_type_data(0, &type_data);
+    tree.set_children(0, &children);
+    if let Some(data) = node_data {
+        tree.set_node_data(0, data);
+    }
+    Ok(tree)
+}
+
+/// A void wrapper would drop the wrapped node at render. `{raw}` payloads
 /// are rejected at parse time; this covers op-stream element payloads.
 fn reject_void_wrap_parent(
     parent_tree: &PatchContent<Hast>,
@@ -1330,6 +1400,12 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
+                let parent_tree = match parent_tree {
+                    PatchContent::Tree(tree) => {
+                        PatchContent::Tree(mdast_wrap_arena_from_tree(tree)?)
+                    }
+                    grafted => grafted,
+                };
                 patches.push(Patch::Wrap {
                     node_id,
                     parent_tree,
@@ -2343,6 +2419,79 @@ mod tests {
         buf.extend_from_slice(raw.as_bytes());
     }
 
+    fn parse_two_blocks(_source: &str) -> Arena<Mdast> {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(MdastNodeType::Paragraph as u8);
+        b.close_node();
+        b.open_node(MdastNodeType::Paragraph as u8);
+        b.close_node();
+        b.close_node();
+        b.finish()
+    }
+
+    fn parse_leaf_block(_source: &str) -> Arena<Mdast> {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(MdastNodeType::ThematicBreak as u8);
+        b.close_node();
+        b.close_node();
+        b.finish()
+    }
+
+    #[test]
+    fn mdast_wrap_with_raw_payload() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+        let mut buf = Vec::new();
+        push_raw_command(&mut buf, CMD_WRAP, heading_id, "quoted");
+
+        let result = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap();
+        let wrapper = result.get_children(0)[0];
+        assert_eq!(
+            result.get_node(wrapper).node_type,
+            MdastNodeType::Paragraph as u8
+        );
+        let wrapped = result.get_children(wrapper);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(
+            result.get_node(wrapped[0]).node_type,
+            MdastNodeType::Heading as u8
+        );
+        assert_eq!(
+            result.get_node(wrapped[1]).node_type,
+            MdastNodeType::Text as u8
+        );
+    }
+
+    #[test]
+    fn mdast_wrap_with_multi_block_raw_payload_errors() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+        let mut buf = Vec::new();
+        push_raw_command(&mut buf, CMD_WRAP, heading_id, "one\n\ntwo");
+
+        let err = apply_mdast_commands(arena, &buf, &parse_two_blocks).unwrap_err();
+        assert!(
+            matches!(&err, CommandError::InvalidRawWrapper(r) if r.contains("exactly one block")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn mdast_wrap_with_leaf_raw_payload_errors() {
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+        let mut buf = Vec::new();
+        push_raw_command(&mut buf, CMD_WRAP, heading_id, "---");
+
+        let err = apply_mdast_commands(arena, &buf, &parse_leaf_block).unwrap_err();
+        assert!(
+            matches!(&err, CommandError::InvalidRawWrapper(r) if r.contains("thematicBreak")),
+            "{err:?}"
+        );
+    }
+
     #[cfg(feature = "from-html")]
     #[test]
     fn hast_wrap_with_raw_html_payload() {
@@ -2372,7 +2521,7 @@ mod tests {
         push_raw_command(&mut buf, CMD_WRAP, 1, "just text");
 
         let err = apply_hast_commands(arena, &buf).unwrap_err();
-        assert!(matches!(err, CommandError::InvalidWrapHtml(_)), "{err:?}");
+        assert!(matches!(err, CommandError::InvalidRawWrapper(_)), "{err:?}");
     }
 
     /// The op-stream shape a `{type: "element"}` wrapper compiles to.

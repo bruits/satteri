@@ -5,6 +5,8 @@ import {
   type MdastHandle,
   type MdastParentContent,
   type MdastVisitorContext,
+  type RawMdastContent,
+  type RawHtmlMdastContent,
 } from "../src/mdast/mdast-visitor.js";
 import type { HastHandle } from "../src/hast/hast-visitor.js";
 import {
@@ -321,22 +323,35 @@ test("context.wrapNode() rejects a leaf node as the wrapper", () => {
   expect(html).toMatch(/<h1>Hello<\/h1>/);
 });
 
-// Regression #182: a raw payload wrapped in the parse root, landing the
-// parsed content after the node.
-test("context.wrapNode() rejects raw content as the wrapper", () => {
-  const html = visitAndRender("# Hello\n\nWorld", {
-    heading(node: MdastNode, ctx: MdastVisitorContext) {
-      expect(() =>
-        // @ts-expect-error raw content is not a wrapNode parent
-        ctx.wrapNode(node, { rawHtml: "<div></div>" }),
-      ).toThrow(/raw content cannot wrap/);
-      expect(() =>
-        // @ts-expect-error raw content is not a wrapNode parent
-        ctx.wrapNode(node, { raw: "> quoted" }),
-      ).toThrow(/raw content cannot wrap/);
+function wrapInRaw(parentNode: RawMdastContent | RawHtmlMdastContent) {
+  return defineMdastPlugin({
+    name: "wrap-heading-in-raw",
+    heading(node, ctx) {
+      ctx.wrapNode(node, parentNode);
     },
   });
-  expect(html).toMatch(/<h1>Hello<\/h1>/);
+}
+
+test("context.wrapNode() accepts a raw markdown wrapper", () => {
+  const html = visitAndRender("# Hello\n\nWorld", wrapInRaw({ raw: "> quoted" }));
+  expect(html).toContain("<blockquote>\n<h1>Hello</h1>\n<p>quoted</p>\n</blockquote>");
+});
+
+// The parsed string is the wrapper itself, so anything but one block is ambiguous.
+test("context.wrapNode() rejects a raw wrapper that is not exactly one block", () => {
+  for (const raw of ["", "one\n\ntwo"]) {
+    expect(() => visitAndRender("# Hello", wrapInRaw({ raw })), raw).toThrow(/exactly one block/);
+  }
+});
+
+test("context.wrapNode() rejects a raw wrapper that cannot hold children", () => {
+  expect(() => visitAndRender("# Hello", wrapInRaw({ raw: "***" }))).toThrow(
+    /thematicBreak, which cannot hold the wrapped node/,
+  );
+  // The deprecated shape is markdown too, where `<div>` is a leaf html node.
+  expect(() => visitAndRender("# Hello", wrapInRaw({ rawHtml: "<div></div>" }))).toThrow(
+    /cannot hold the wrapped node/,
+  );
 });
 
 test("context.wrapNode() accepts a user-defined parent node", () => {
