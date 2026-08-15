@@ -60,6 +60,8 @@ const INITIAL_SIZE = 4096;
  *  copies the bytes out before a buffer is released, so no view outlives a
  *  pass. Cap bounds the pool for processes that briefly burst high. */
 const COMMAND_BUFFER_POOL_MAX = 8;
+/** Backings above this are dropped on release so one huge compile does not retain megabytes forever. */
+export const COMMAND_BUFFER_RETAIN_MAX = 1 << 20;
 const commandBufferPool: CommandBuffer[] = [];
 
 export function acquireCommandBuffer(): CommandBuffer {
@@ -68,6 +70,7 @@ export function acquireCommandBuffer(): CommandBuffer {
 
 export function releaseCommandBuffer(buf: CommandBuffer): void {
   if (commandBufferPool.length >= COMMAND_BUFFER_POOL_MAX) return;
+  if (buf.capacity > COMMAND_BUFFER_RETAIN_MAX) return;
   buf.reset();
   commandBufferPool.push(buf);
 }
