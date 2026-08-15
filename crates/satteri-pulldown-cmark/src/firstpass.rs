@@ -180,8 +180,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         // Before processing new containers: if we arrive here with a
         // non-blank line pending, the previous line was a non-trailing blank
-        // that belongs to the currently-open list item. Mark the item as
-        // spread (loose). Must happen before the new-containers loop, which
+        // that belongs to the currently-open list item or definition. Mark it
+        // as spread (loose). Must happen before the new-containers loop, which
         // could open a deeper nested list item and shift the spine tip.
         if self.last_line_blank {
             let content_probe = start_ix + line_start.bytes_scanned();
@@ -189,10 +189,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 content_probe < bytes.len() && scan_blank_line(&bytes[content_probe..]).is_none();
             if has_content
                 && let Some(up) = self.tree.peek_up()
-                && let ItemBody::ListItem(_, _) = self.tree[up].item.body
                 && self.tree[up].child.is_some()
             {
-                self.mark_enclosing_listitem_spread();
+                match self.tree[up].item.body {
+                    ItemBody::ListItem(_, _) => self.mark_enclosing_listitem_spread(),
+                    ItemBody::DefinitionListDefinition(indent, _) => {
+                        self.tree[up].item.body = ItemBody::DefinitionListDefinition(indent, true);
+                    }
+                    _ => {}
+                }
             }
         }
 

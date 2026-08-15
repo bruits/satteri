@@ -67,6 +67,12 @@ describe("definition list: per-dd tight/loose (matches mdast-util-definition-lis
     expect(out).toContain("<dd>\n<p>Blue.</p>\n</dd>");
   });
 
+  test("a blank line inside a tight definition makes only that definition loose", () => {
+    const out = html("Apple\n:   Red.\n\n    More red.\n:   Green.\n");
+    expect(out).toContain("<dd>\n<p>Red.</p>\n<p>More red.</p>\n</dd>");
+    expect(out).toContain("<dd>Green.</dd>");
+  });
+
   test("a fully tight list unwraps every <dd>", () => {
     const out = html("Apple\n:   Red.\n:   Green.\n");
     expect(out).toContain("<dd>Red.</dd>");
@@ -101,6 +107,23 @@ describe("definition list: block content, nesting & positions", () => {
       }),
     );
     expect(types).toEqual(["paragraph", "paragraph"]);
+  });
+
+  test("a tight-marker <dd> with a continuation block is spread", () => {
+    let types: string[] = [];
+    let spread: boolean | undefined;
+    run(
+      "Apple\n:   Red.\n\n    More red.\n",
+      defineMdastPlugin({
+        name: "dd-continuation",
+        descriptionDetails(n) {
+          types = n.children.map((c) => c.type);
+          spread = n.spread;
+        },
+      }),
+    );
+    expect(types).toEqual(["paragraph", "paragraph"]);
+    expect(spread).toBe(true);
   });
 
   test("a <dd> can contain a nested list", () => {
