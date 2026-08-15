@@ -446,11 +446,12 @@ fn emit(
                             || !leaked.iter().any(|m| attr.name.local.contains(m.as_str()))
                     })
                     .map(|attr| {
-                        let (property, prop_kind) = find_property(&attr.name.local, in_svg);
+                        let attr_name = qualified_attr_name(&attr.name);
+                        let (property, prop_kind) = find_property(&attr_name, in_svg);
                         let name_ref = builder.alloc_string(&property);
                         let value = scrub_markers(&attr.value, leaked);
                         let (kind, value_ref) =
-                            coerce_value(builder, prop_kind, &attr.name.local, &value);
+                            coerce_value(builder, prop_kind, &attr_name, &value);
                         (name_ref, kind, value_ref)
                     })
                     .collect();
@@ -472,6 +473,14 @@ fn emit(
                 }
             }
         }
+    }
+}
+
+/// html5ever splits foreign attrs into prefix + local; the tables key `prefix:local`.
+fn qualified_attr_name(name: &QualName) -> std::borrow::Cow<'_, str> {
+    match &name.prefix {
+        Some(prefix) => std::borrow::Cow::Owned(format!("{prefix}:{}", name.local)),
+        None => std::borrow::Cow::Borrowed(&name.local),
     }
 }
 

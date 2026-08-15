@@ -67,6 +67,24 @@ describe("htmlToHast", () => {
     });
   });
 
+  test("resolves namespaced SVG attributes to their hast properties", () => {
+    const tree = htmlToHast(
+      `<svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="#a" xml:lang="en" foo:bar="x"/></svg>`,
+    );
+    const svg = findElement(tree, "svg")!;
+    if (svg.type !== "element") return;
+    expect(svg.properties).toMatchObject({
+      xmlnsXLink: "http://www.w3.org/1999/xlink",
+    });
+    const use = findElement(tree, "use")!;
+    if (use.type !== "element") return;
+    expect(use.properties).toEqual({
+      xLinkHref: "#a",
+      xmlLang: "en",
+      "foo:bar": "x",
+    });
+  });
+
   test("decodes character references in text", () => {
     const tree = htmlToHast("<p>a &amp; b</p>");
     const p = findElement(tree, "p");
