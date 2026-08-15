@@ -116,7 +116,7 @@ tree.children[0].type; // "heading"
 tree.children[0].depth; // 1
 ```
 
-Pass `position: false` to skip recording `node.position`. On a 1 MB document that halves both the time to build the tree and the memory it occupies, so it is worth passing whenever nothing downstream reads positions.
+Pass `position: false` to skip recording `node.position`. Disabling positions can greatly increase performance and lower the memory usage, so it is worth passing whenever nothing downstream reads positions.
 
 ```js
 const tree = markdownToMdast(source, { position: false });
