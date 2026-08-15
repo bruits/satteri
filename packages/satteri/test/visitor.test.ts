@@ -15,6 +15,7 @@ import {
 } from "../index.js";
 import type { DirectiveAttributes, MdastNode } from "../src/types.js";
 import type { Heading, Paragraph, Text } from "mdast";
+import type { Position } from "unist";
 import { defineMdastPlugin } from "../src/plugin.js";
 import { markdownToHtml, applyCommandsToMdastHandle } from "../src/index.js";
 
@@ -1131,6 +1132,35 @@ test("a retained node keeps `.children` readable after an async pass settles", a
   });
   await visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
   expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
+});
+
+test("an async text swap keeps the text node's position", async () => {
+  const { handle, source } = setup("Hello");
+  const shout = defineMdastPlugin({
+    name: "shout-text-async",
+    async text(node) {
+      await new Promise((r) => setTimeout(r, 1));
+      return { type: "text", value: node.value.toUpperCase() } satisfies Text;
+    },
+  });
+  const swap = (await visitMdastHandle(
+    handle,
+    shout,
+    resolveMdastSubscriptions(shout),
+    source,
+    undefined,
+  )) as { commandBuffer: Uint8Array };
+  applyCommandsToMdastHandle(handle, swap.commandBuffer);
+
+  let position: Position | undefined;
+  const reader = defineMdastPlugin({
+    name: "read-text-position",
+    text(node) {
+      position ??= node.position;
+    },
+  });
+  visitMdastHandle(handle, reader, resolveMdastSubscriptions(reader), source, undefined);
+  expect(position).toMatchObject({ start: { line: 1, column: 1 } });
 });
 
 test("an in-pass deep read pins the snapshot: retained nodes survive a later mutating pass", () => {

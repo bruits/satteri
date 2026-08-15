@@ -1128,6 +1128,21 @@ function makeLazyChildren(
  *  A same-type text-like node carrying only a new `value` becomes a
  *  setProperty("value") rather than a structural replace, which would force
  *  the arena into a full rebuild for a shape that didn't change. */
+function applyHastVisitResult(
+  result: HastNode | void,
+  nodeId: number,
+  returnBuffer: CommandBuffer,
+  originalNode: HastNode,
+): void {
+  if (result == null) return;
+  if (result === originalNode) return;
+  if (isTextValueSwap(result, originalNode)) {
+    returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
+    return;
+  }
+  emitHastTree(returnBuffer, "replace", nodeId, result);
+}
+
 function handleVisitResult(
   result: HastNode | void | Promise<HastNode | void>,
   nodeId: number,
@@ -1135,18 +1150,12 @@ function handleVisitResult(
   deferred: { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null,
   originalNode: HastNode,
 ): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
-  if (result == null) return deferred;
-  if (result === originalNode) return deferred;
   if (result instanceof Promise) {
     const list = deferred ?? [];
     list.push({ nodeId, promise: result, originalNode });
     return list;
   }
-  if (isTextValueSwap(result, originalNode)) {
-    returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
-    return deferred;
-  }
-  emitHastTree(returnBuffer, "replace", nodeId, result);
+  applyHastVisitResult(result, nodeId, returnBuffer, originalNode);
   return deferred;
 }
 
@@ -1278,9 +1287,7 @@ export function visitHastHandleCollect(
       ),
     ).then((results) => {
       for (const { nodeId, result, originalNode } of results) {
-        if (result != null && result !== originalNode) {
-          emitHastTree(returnBuffer, "replace", nodeId, result);
-        }
+        applyHastVisitResult(result, nodeId, returnBuffer, originalNode);
       }
       return collectCommands(returnBuffer, ctx);
     });
