@@ -619,6 +619,20 @@ fn update_bracket_depth(was_open: bool, s: &str) -> bool {
     depth > 0
 }
 
+/// remark keeps the text directive whenever the re-merged URL doesn't autolink.
+fn port_merge_autolinks(merged: &str, host_end: usize) -> bool {
+    let bytes = merged.as_bytes();
+    let Some(scheme_end) = merged[..host_end].rfind("://") else {
+        return false;
+    };
+    let mut scheme_start = scheme_end;
+    while scheme_start > 0 && bytes[scheme_start - 1].is_ascii_alphabetic() {
+        scheme_start -= 1;
+    }
+    scan_autolink_literal(bytes, scheme_start, false)
+        .is_some_and(|(_, _, url_end, _, _)| url_end > host_end)
+}
+
 pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
     // Explicitly skip Link / LinkReference — a bracketed link's label text
     // intentionally preserves `text + textDirective + text` splits (remark
@@ -723,6 +737,7 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
 
             // Build merged value. Trailing text (i+2) is merged too if present
             // and starts with a URL-path char, or we leave it standalone.
+            let host_end = text_val.len();
             let mut merged = text_val;
             merged.push(':');
             merged.push_str(&dir_name);
@@ -738,6 +753,12 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
                     merged.push_str(after_val);
                     consumed = 3;
                 }
+            }
+
+            if !port_merge_autolinks(&merged, host_end) {
+                new_children.push(text_id);
+                i += 1;
+                continue;
             }
 
             let merged_sr = arena.alloc_string(&merged);
