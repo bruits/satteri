@@ -22,12 +22,14 @@ Sätteri is a Rust + TypeScript monorepo containing the following Rust crates:
 | `satteri-napi-binding`   | NAPI bindings exposing the Rust pipeline to JavaScript                 | —                                                                                                                                                                               | [README](./crates/satteri-napi-binding/README.md)   |
 | `satteri-mdxjs-rs`       | MDX-to-JavaScript compiler, fork of [mdxjs-rs] adapted for OXC         | <a href="https://crates.io/crates/satteri-mdxjs"><img alt="Satteri MDXJS Crates.io Version" src="https://img.shields.io/crates/v/satteri-mdxjs"></a>                            | [README](./crates/satteri-mdxjs-rs/readme.md)       |
 | `satteri-pulldown-cmark` | CommonMark parser with MDX extension support, fork of [pulldown-cmark] | <a href="https://crates.io/crates/satteri-pulldown-cmark"><img alt="Satteri pulldown-cmark Crates.io Version" src="https://img.shields.io/crates/v/satteri-pulldown-cmark"></a> | [README](./crates/satteri-pulldown-cmark/README.md) |
+| `satteri-wasm-binding`   | WASI-free WebAssembly bindings for edge runtimes                       | —                                                                                                                                                                               | [README](./crates/satteri-wasm-binding/README.md)   |
 
 And the following npm packages:
 
 | Name                                             | Description                                          | Registry                                                                                                                                                                       | README                                                 |
 | ------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
 | [`satteri`][npm]                                 | TypeScript layer: plugin API and top-level functions | <a href="https://www.npmjs.com/package/satteri"><img alt="Satteri npm Version" src="https://img.shields.io/npm/v/satteri"></a>                                                 | [README](./packages/satteri/README.md)                 |
+| [`@bruits/satteri-wasm`][npm-satteri-wasm]       | WASI-free WebAssembly bindings for edge runtimes    | —                                                                                                                                                                             | [README](./packages/satteri-wasm/README.md)            |
 | [`satteri-expressive-code`][npm-expressive-code] | HAST plugin: render code blocks with Expressive Code | <a href="https://www.npmjs.com/package/satteri-expressive-code"><img alt="Satteri Expressive Code npm Version" src="https://img.shields.io/npm/v/satteri-expressive-code"></a> | [README](./packages/satteri-expressive-code/README.md) |
 | [`vite-plugin-satteri`][npm-vite-plugin]         | Vite plugin: import `.md` and `.mdx` files           | <a href="https://www.npmjs.com/package/vite-plugin-satteri"><img alt="vite-plugin-satteri npm Version" src="https://img.shields.io/npm/v/vite-plugin-satteri"></a>             | [README](./packages/vite-plugin-satteri/README.md)     |
 
@@ -52,5 +54,6 @@ Sätteri is an open-source project born from [Bruits](https://bruits.org/), a Ru
 [Lightning CSS]: https://lightningcss.dev
 [mdxjs-rs]: https://github.com/wooorm/mdxjs-rs
 [npm]: https://www.npmjs.com/package/satteri
+[npm-satteri-wasm]: https://www.npmjs.com/package/@bruits/satteri-wasm
 [npm-expressive-code]: https://www.npmjs.com/package/satteri-expressive-code
 [npm-vite-plugin]: https://www.npmjs.com/package/vite-plugin-satteri

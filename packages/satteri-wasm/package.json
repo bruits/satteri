@@ -1,0 +1,37 @@
+{
+  "name": "@bruits/satteri-wasm",
+  "version": "0.1.0",
+  "description": "WASI-free WebAssembly bindings for Sätteri",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bruits/satteri.git",
+    "directory": "packages/satteri-wasm"
+  },
+  "files": [
+    "dist",
+    "index.d.ts",
+    "index.js",
+    "README.md",
+    "wasm.d.ts"
+  ],
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
+    "./wasm": {
+      "types": "./wasm.d.ts",
+      "default": "./dist/satteri_wasm_bg.wasm"
+    }
+  },
+  "scripts": {
+    "build": "npm run build:ts",
+    "build:ts": "wasm-pack build ../../crates/satteri-wasm-binding --target web --release --out-dir ../../packages/satteri-wasm/dist --out-name satteri_wasm --no-pack && node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist/.gitignore', { force: true })\"",
+    "test": "npm run build && node --test test/runtime.test.mjs"
+  }
+}
