@@ -861,6 +861,42 @@ describe("mdxToJs", () => {
     expect(liveCode).toContain("children: foo");
   });
 
+  test("{ raw, mdxExpressions: false } keeps braces literal after a bare `<`", () => {
+    const rawParagraph = (html: string) =>
+      defineMdastPlugin({
+        name: "raw-bare-lt",
+        paragraph() {
+          return { raw: html, mdxExpressions: false };
+        },
+      });
+
+    const tagged = mdxToJs("x\n", {
+      mdastPlugins: [rawParagraph("<span>5 < 6 and {literal} here</span>")],
+    }).code;
+    expect(tagged).toContain('"5 < 6 and "');
+    expect(tagged).toContain('"{"');
+    expect(tagged).toContain('"literal"');
+    expect(tagged).toContain('"}"');
+
+    const tagless = mdxToJs("x\n", {
+      mdastPlugins: [rawParagraph("a < b {notExpr} tail")],
+    }).code;
+    expect(tagless).toContain('"a < b "');
+    expect(tagless).toContain('"{"');
+    expect(tagless).toContain('"notExpr"');
+
+    const attributeBraces = mdxToJs("x\n", {
+      mdastPlugins: [rawParagraph('<span data-x="{a}">{b}</span>')],
+    }).code;
+    expect(attributeBraces).toContain('"data-x": "{a}"');
+    expect(attributeBraces).toContain('"b"');
+
+    const { html } = markdownToHtml("x\n", {
+      mdastPlugins: [rawParagraph("<span>5 < 6 and {literal} here</span>")],
+    });
+    expect(html).toContain("<span>5 &lt; 6 and {literal} here</span>");
+  });
+
   test("html node compiling to MDX throws (raw HTML has no JSX representation)", () => {
     const plugin = defineMdastPlugin({
       name: "html-node",

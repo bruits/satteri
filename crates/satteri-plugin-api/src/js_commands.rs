@@ -275,7 +275,8 @@ fn escape_braces_in_html_text(html: &str) -> String {
     let mut in_tag = false;
     let mut in_quote: Option<char> = None;
 
-    for ch in html.chars() {
+    let mut chars = html.chars().peekable();
+    while let Some(ch) = chars.next() {
         if in_tag {
             match ch {
                 '"' | '\'' if in_quote == Some(ch) => {
@@ -294,7 +295,7 @@ fn escape_braces_in_html_text(html: &str) -> String {
             }
         } else {
             match ch {
-                '<' => {
+                '<' if chars.peek().copied().is_some_and(can_open_tag) => {
                     in_tag = true;
                     result.push(ch);
                 }
@@ -305,6 +306,11 @@ fn escape_braces_in_html_text(html: &str) -> String {
         }
     }
     result
+}
+
+/// Only a `<` that can open a tag suspends brace escaping; `5 < 6` cannot.
+fn can_open_tag(after: char) -> bool {
+    after.is_ascii_alphabetic() || matches!(after, '/' | '>' | '!' | '?' | '_' | '$')
 }
 
 /// Options controlling how MDAST command buffers are applied.
@@ -2164,6 +2170,22 @@ mod tests {
         assert_eq!(
             escape_braces_in_html_text("<span>{foo: 1}</span>"),
             "<span>{'{'}foo: 1{'}'}</span>"
+        );
+    }
+
+    #[test]
+    fn escape_braces_after_comparison_less_than() {
+        assert_eq!(
+            escape_braces_in_html_text("<span>5 < 6 and {literal} here</span>"),
+            "<span>5 < 6 and {'{'}literal{'}'} here</span>"
+        );
+        assert_eq!(
+            escape_braces_in_html_text("a < b {notExpr} tail"),
+            "a < b {'{'}notExpr{'}'} tail"
+        );
+        assert_eq!(
+            escape_braces_in_html_text("trailing {x} <"),
+            "trailing {'{'}x{'}'} <"
         );
     }
 
