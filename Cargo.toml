@@ -26,7 +26,7 @@ oxc_span = "0.121.0"
 oxc_syntax = "0.121.0"
 rustc-hash = "2"
 satteri-arena = { path = "crates/satteri-arena", version = "0.2.2" }
-satteri = { path = "crates/satteri", version = "0.2.8" }
+satteri = { path = "crates/satteri", version = "0.2.8", default-features = false }
 # default-features = false here is what lets consumers drop the `mdx` default
 # (and, for pulldown-cmark, the whole oxc stack). A per-crate
 # `default-features = false` is IGNORED for `workspace = true` deps unless it is

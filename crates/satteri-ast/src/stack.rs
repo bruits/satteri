@@ -1,6 +1,7 @@
 //! Stack headroom for the tree recursions in `convert`, `hast::render`, and `patch`.
 
 /// Levels between headroom checks; `PROBE_INTERVAL * frame_size` must stay inside `RED_ZONE`.
+#[cfg(not(target_family = "wasm"))]
 const PROBE_INTERVAL: u32 = 32;
 
 /// Runs `f` on a fresh stack segment when the current one is nearly exhausted.

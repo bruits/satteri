@@ -21,7 +21,7 @@ pub fn markdown_to_html(source: &str) -> String {
 #[wasm_bindgen]
 pub fn mdx_to_hast(source: &str) -> Result<Vec<u8>, JsValue> {
     let (mdast, errors) =
-        satteri_pulldown_cmark::parse(source, satteri_pulldown_cmark::MDX_OPTIONS);
+        satteri_pulldown_cmark::parse_no_positions(source, satteri_pulldown_cmark::MDX_OPTIONS);
 
     if let Some((offset, message)) = errors.first() {
         return Err(JsValue::from_str(&format!(
@@ -37,6 +37,7 @@ pub fn mdx_to_hast(source: &str) -> Result<Vec<u8>, JsValue> {
 ///
 /// Runtime consumers should prefer [`mdx_to_hast`] because edge runtimes can
 /// prohibit evaluating JavaScript generated from request data.
+#[cfg(feature = "build-js")]
 #[wasm_bindgen]
 pub fn mdx_to_js(source: &str) -> Result<String, JsValue> {
     let options = satteri_mdxjs::Options::default();
