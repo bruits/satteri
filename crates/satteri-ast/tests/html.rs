@@ -342,3 +342,18 @@ fn footnote_duplicate_definitions_resolve_first_wins() {
         "duplicate definition must not win: {out}"
     );
 }
+
+#[test]
+fn deeply_nested_blockquotes_do_not_overflow_the_stack() {
+    let out = html(&format!("{} hi", ">".repeat(5000)));
+    assert_eq!(out.matches("<blockquote>").count(), 5000);
+}
+
+#[test]
+fn deeply_nested_lists_do_not_overflow_the_stack() {
+    let source: String = (0..1500)
+        .map(|depth| format!("{}- x\n", "  ".repeat(depth)))
+        .collect();
+    let out = html(&source);
+    assert_eq!(out.matches("<ul>").count(), 1500);
+}

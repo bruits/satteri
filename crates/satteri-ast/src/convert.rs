@@ -453,7 +453,7 @@ fn mdast_arena_to_hast_arena_impl(
         newline_ref,
         options,
     };
-    convert_node(0, source, &mut builder, &ctx);
+    convert_node(0, source, &mut builder, &ctx, 0);
     let arena = builder.finish();
     #[cfg(feature = "from-html")]
     if options.raw_html {
@@ -1083,6 +1083,19 @@ fn convert_node(
     view: &Arena<Mdast>,
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
+    depth: u32,
+) {
+    crate::stack::with_headroom(depth, || {
+        convert_node_inner(node_id, view, builder, ctx, depth)
+    });
+}
+
+fn convert_node_inner(
+    node_id: u32,
+    view: &Arena<Mdast>,
+    builder: &mut ArenaBuilder<Hast>,
+    ctx: &ConvertCtx<'_, '_>,
+    depth: u32,
 ) {
     let node = view.get_node(node_id);
     let raw_type = node.node_type;
@@ -1091,8 +1104,8 @@ fn convert_node(
         Some(MdastNodeType::Root) => {
             builder.open_node_raw(HastNodeType::Root as u8);
             copy_position(node_id, view, builder);
-            convert_children_wrapped(node_id, view, builder, ctx);
-            emit_gfm_footnotes_section(view, builder, ctx);
+            convert_children_wrapped(node_id, view, builder, ctx, depth);
+            emit_gfm_footnotes_section(view, builder, ctx, depth);
             builder.close_node();
         }
 
@@ -1102,19 +1115,19 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "p", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
 
         Some(MdastNodeType::Heading) => {
             let data = view.get_type_data(node_id);
-            let depth = if data.is_empty() {
+            let level = if data.is_empty() {
                 1
             } else {
                 decode_heading_data(data).depth
             };
-            let tag = match depth {
+            let tag = match level {
                 1 => "h1",
                 2 => "h2",
                 3 => "h3",
@@ -1125,7 +1138,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, tag, &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1139,7 +1152,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "blockquote", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children_with_newlines(node_id, view, builder, ctx);
+                convert_children_with_newlines(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1167,7 +1180,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, tag, &prop_specs);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children_with_newlines(node_id, view, builder, ctx);
+                convert_children_with_newlines(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1218,6 +1231,7 @@ fn convert_node(
                     builder,
                     ctx,
                     is_task.then(|| item_data.unwrap()),
+                    depth,
                 );
             } else {
                 convert_children_unwrap_paragraphs_task(
@@ -1226,6 +1240,7 @@ fn convert_node(
                     builder,
                     ctx,
                     is_task.then(|| item_data.unwrap()),
+                    depth,
                 );
             }
             builder.close_node();
@@ -1311,7 +1326,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "em", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1320,7 +1335,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "strong", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1365,7 +1380,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "a", &specs);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1394,7 +1409,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "del", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1403,7 +1418,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "sup", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1412,7 +1427,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "sub", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1421,7 +1436,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "dl", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children_with_newlines(node_id, view, builder, ctx);
+                convert_children_with_newlines(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1430,7 +1445,7 @@ fn convert_node(
             let action = open_h_element(builder, view, node_id, "dt", &[]);
             copy_position(node_id, view, builder);
             if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx);
+                convert_children(node_id, view, builder, ctx, depth);
             }
             builder.close_node();
         }
@@ -1447,9 +1462,9 @@ fn convert_node(
             let data = view.get_type_data(node_id);
             let loose = !data.is_empty() && decode_description_details_data(data).spread;
             if loose {
-                convert_children_with_newlines(node_id, view, builder, ctx);
+                convert_children_with_newlines(node_id, view, builder, ctx, depth);
             } else {
-                convert_children_unwrap_paragraphs_task(node_id, view, builder, ctx, None);
+                convert_children_unwrap_paragraphs_task(node_id, view, builder, ctx, None, depth);
             }
             builder.close_node();
         }
@@ -1468,7 +1483,7 @@ fn convert_node(
                 open_element(builder, "thead");
                 copy_position(child_ids[0], view, builder);
                 add_text_node_with_ref(builder, ctx.newline_ref);
-                convert_table_row(child_ids[0], view, builder, ctx, true, &alignments);
+                convert_table_row(child_ids[0], view, builder, ctx, true, &alignments, depth);
                 add_text_node_with_ref(builder, ctx.newline_ref);
                 builder.close_node(); // thead
                 add_text_node_with_ref(builder, ctx.newline_ref);
@@ -1490,7 +1505,7 @@ fn convert_node(
                     );
                     add_text_node_with_ref(builder, ctx.newline_ref);
                     for &row_id in &child_ids[1..] {
-                        convert_table_row(row_id, view, builder, ctx, false, &alignments);
+                        convert_table_row(row_id, view, builder, ctx, false, &alignments, depth);
                         add_text_node_with_ref(builder, ctx.newline_ref);
                     }
                     builder.close_node(); // tbody
@@ -1561,12 +1576,12 @@ fn convert_node(
                     let action = open_h_element(builder, view, node_id, "a", &specs);
                     copy_position(node_id, view, builder);
                     if matches!(action, ChildrenAction::Recurse) {
-                        convert_children(node_id, view, builder, ctx);
+                        convert_children(node_id, view, builder, ctx, depth);
                     }
                     builder.close_node();
                 } else {
                     // Unresolved: output children as-is
-                    convert_children(node_id, view, builder, ctx);
+                    convert_children(node_id, view, builder, ctx, depth);
                 }
             }
         }
@@ -1671,6 +1686,7 @@ fn convert_node(
                 builder,
                 ctx,
                 HastNodeType::MdxJsxElement as u8,
+                depth,
             );
         }
         #[cfg(feature = "mdx")]
@@ -1681,6 +1697,7 @@ fn convert_node(
                 builder,
                 ctx,
                 HastNodeType::MdxJsxTextElement as u8,
+                depth,
             );
         }
 
@@ -1778,7 +1795,7 @@ fn convert_node(
                 if let Some(children) = h.h_children() {
                     emit_h_children(builder, children);
                 } else {
-                    convert_children(node_id, view, builder, ctx);
+                    convert_children(node_id, view, builder, ctx, depth);
                 }
                 builder.close_node();
             }
@@ -1796,7 +1813,7 @@ fn convert_node(
                 let action = open_h_element(builder, view, node_id, "div", &[]);
                 copy_position(node_id, view, builder);
                 if matches!(action, ChildrenAction::Recurse) {
-                    convert_children(node_id, view, builder, ctx);
+                    convert_children(node_id, view, builder, ctx, depth);
                 }
                 builder.close_node();
             }
@@ -1804,7 +1821,7 @@ fn convert_node(
 
         _ => {
             // Unknown: recurse into children
-            convert_children(node_id, view, builder, ctx);
+            convert_children(node_id, view, builder, ctx, depth);
         }
     }
 }
@@ -1829,13 +1846,14 @@ fn convert_children(
     view: &Arena<Mdast>,
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
+    depth: u32,
 ) {
     let children = view.get_children(node_id);
     let mut prev_was_break = false;
     let break_ty = MdastNodeType::Break as u8;
     for &child_id in children {
         let before_count = builder.current_pending_children().len();
-        convert_node(child_id, view, builder, ctx);
+        convert_node(child_id, view, builder, ctx, depth + 1);
         if prev_was_break {
             let pending = builder.current_pending_children();
             if pending.len() > before_count {
@@ -1904,6 +1922,7 @@ fn convert_children_with_newlines(
     view: &Arena<Mdast>,
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
+    depth: u32,
 ) {
     let children = view.get_children(node_id);
     add_text_node_with_ref(builder, ctx.newline_ref);
@@ -1914,7 +1933,7 @@ fn convert_children_with_newlines(
         if !produces_hast_output(child_id, view) {
             continue;
         }
-        convert_node(child_id, view, builder, ctx);
+        convert_node(child_id, view, builder, ctx, depth + 1);
         add_text_node_with_ref(builder, ctx.newline_ref);
     }
 }
@@ -1951,6 +1970,7 @@ fn convert_children_with_newlines_task(
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
     task: Option<ListItemData>,
+    depth: u32,
 ) {
     let children = view.get_children(node_id);
     if children.is_empty() {
@@ -1974,13 +1994,13 @@ fn convert_children_with_newlines_task(
             open_element(builder, "p");
             copy_position(child_id, view, builder);
             emit_checkbox(builder, td);
-            convert_children(child_id, view, builder, ctx);
+            convert_children(child_id, view, builder, ctx, depth + 1);
             builder.close_node();
         } else if let (true, Some(td)) = (first, task) {
             emit_checkbox(builder, td);
-            convert_node(child_id, view, builder, ctx);
+            convert_node(child_id, view, builder, ctx, depth + 1);
         } else {
-            convert_node(child_id, view, builder, ctx);
+            convert_node(child_id, view, builder, ctx, depth + 1);
         }
         // Skip the trailing separator for children that render to nothing
         // (e.g. directives without a handler) so we don't leave stray `\n`s.
@@ -1997,6 +2017,7 @@ fn convert_children_unwrap_paragraphs_task(
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
     task: Option<ListItemData>,
+    depth: u32,
 ) {
     let children = view.get_children(node_id);
     let mut first = true;
@@ -2012,7 +2033,7 @@ fn convert_children_unwrap_paragraphs_task(
             if let (true, Some(td)) = (first, task) {
                 emit_checkbox(builder, td);
             }
-            convert_children(child_id, view, builder, ctx);
+            convert_children(child_id, view, builder, ctx, depth + 1);
             prev_was_block = false;
         } else {
             if !prev_was_block {
@@ -2021,7 +2042,7 @@ fn convert_children_unwrap_paragraphs_task(
             if let (true, Some(td)) = (first, task) {
                 emit_checkbox(builder, td);
             }
-            convert_node(child_id, view, builder, ctx);
+            convert_node(child_id, view, builder, ctx, depth + 1);
             add_text_node_with_ref(builder, ctx.newline_ref);
             prev_was_block = true;
         }
@@ -2038,6 +2059,7 @@ fn emit_gfm_footnotes_section(
     view: &Arena<Mdast>,
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
+    depth: u32,
 ) {
     if ctx.footnote_defs.is_empty() {
         return;
@@ -2123,10 +2145,17 @@ fn emit_gfm_footnotes_section(
                 }
                 if Some(i) == last_para_idx {
                     emit_paragraph_with_backrefs(
-                        child_id, view, builder, ctx, &safe_id, number, total_refs,
+                        child_id,
+                        view,
+                        builder,
+                        ctx,
+                        &safe_id,
+                        number,
+                        total_refs,
+                        depth + 1,
                     );
                 } else {
-                    convert_node(child_id, view, builder, ctx);
+                    convert_node(child_id, view, builder, ctx, depth + 1);
                 }
             }
             // Fallback: definition contained no paragraph at all. Append the
@@ -2151,6 +2180,7 @@ fn emit_gfm_footnotes_section(
 /// appending the GFM footnote backref(s). Matches remark-gfm's behaviour of
 /// merging the separator space into the trailing text node when possible
 /// (so the output has one text "foo " instead of two nodes "foo" + " ").
+#[allow(clippy::too_many_arguments)]
 fn emit_paragraph_with_backrefs(
     para_id: u32,
     view: &Arena<Mdast>,
@@ -2159,6 +2189,7 @@ fn emit_paragraph_with_backrefs(
     identifier: &str,
     number: usize,
     total_refs: usize,
+    depth: u32,
 ) {
     open_element(builder, "p");
     copy_position(para_id, view, builder);
@@ -2166,7 +2197,7 @@ fn emit_paragraph_with_backrefs(
     let inline_children = view.get_children(para_id);
     if let Some((&last_id, prefix)) = inline_children.split_last() {
         for &cid in prefix {
-            convert_node(cid, view, builder, ctx);
+            convert_node(cid, view, builder, ctx, depth + 1);
         }
         let last_is_text = view.get_node(last_id).node_type == MdastNodeType::Text as u8;
         if last_is_text {
@@ -2180,11 +2211,11 @@ fn emit_paragraph_with_backrefs(
                 // trailing space is not represented in source).
                 copy_position_to(leaf_id, last_id, view, builder);
             } else {
-                convert_node(last_id, view, builder, ctx);
+                convert_node(last_id, view, builder, ctx, depth + 1);
                 add_text_node(builder, " ");
             }
         } else {
-            convert_node(last_id, view, builder, ctx);
+            convert_node(last_id, view, builder, ctx, depth + 1);
             add_text_node(builder, " ");
         }
     }
@@ -2268,6 +2299,7 @@ fn convert_children_wrapped(
     view: &Arena<Mdast>,
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
+    depth: u32,
 ) {
     let children = view.get_children(node_id);
     let mut has_output = false;
@@ -2278,7 +2310,7 @@ fn convert_children_wrapped(
             }
             has_output = true;
         }
-        convert_node(child_id, view, builder, ctx);
+        convert_node(child_id, view, builder, ctx, depth + 1);
     }
 }
 
@@ -2289,6 +2321,7 @@ fn convert_table_row(
     ctx: &ConvertCtx<'_, '_>,
     is_header: bool,
     alignments: &[ColumnAlign],
+    depth: u32,
 ) {
     open_element(builder, "tr");
     copy_position(row_id, view, builder);
@@ -2326,7 +2359,7 @@ fn convert_table_row(
             open_element(builder, cell_tag);
         }
         copy_position(cell_id, view, builder);
-        convert_children(cell_id, view, builder, ctx);
+        convert_children(cell_id, view, builder, ctx, depth);
         builder.close_node();
         add_text_node_with_ref(builder, ctx.newline_ref);
     }
@@ -2364,6 +2397,7 @@ fn convert_mdx_jsx_element(
     builder: &mut ArenaBuilder<Hast>,
     ctx: &ConvertCtx<'_, '_>,
     hast_type: u8,
+    depth: u32,
 ) {
     let mdast_data = view.get_type_data(node_id);
 
@@ -2406,7 +2440,7 @@ fn convert_mdx_jsx_element(
     }
     copy_position(node_id, view, builder);
 
-    convert_children(node_id, view, builder, ctx);
+    convert_children(node_id, view, builder, ctx, depth);
     builder.close_node();
 }
 
