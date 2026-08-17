@@ -2578,3 +2578,140 @@ describe("MDX source positions without a position opt-in", () => {
     expect(message).not.toMatch(/byte \d+/);
   });
 });
+
+describe("nodes kept from another compile", () => {
+  function keepFirstParagraph(source: string): MdastNode {
+    let kept: MdastNode | undefined;
+    const capture = defineMdastPlugin({
+      name: "capture-paragraph",
+      paragraph(node) {
+        kept ??= node;
+      },
+    });
+    markdownToHtml(source, { mdastPlugins: [capture] });
+    if (kept === undefined) throw new Error("no paragraph was visited");
+    return kept;
+  }
+
+  test("removeNode on a node kept from an identically shaped document is rejected", () => {
+    const kept = keepFirstParagraph("Document A paragraph.");
+    const edit = defineMdastPlugin({
+      name: "remove-kept",
+      paragraph(_node, ctx) {
+        ctx.removeNode(kept);
+      },
+    });
+
+    expect(() => markdownToHtml("Document B paragraph.", { mdastPlugins: [edit] })).toThrow(
+      /invalid node id/,
+    );
+  });
+
+  test("replaceNode on a node kept from a differently shaped document is rejected", () => {
+    const kept = keepFirstParagraph("Alpha.\n\nBravo.\n\n- one\n- two\n\nCharlie.");
+    const edit = defineMdastPlugin({
+      name: "replace-kept",
+      heading(_node, ctx) {
+        ctx.replaceNode(kept, {
+          type: "paragraph",
+          children: [{ type: "text", value: "injected" }],
+        });
+      },
+    });
+
+    expect(() =>
+      markdownToHtml("# Title\n\n> Quoted line.\n\nTail paragraph.", { mdastPlugins: [edit] }),
+    ).toThrow(/invalid node id/);
+  });
+
+  test("setProperty on a node kept from a previous compile is rejected", () => {
+    const kept = keepFirstParagraph("Document A paragraph.");
+    const edit = defineMdastPlugin({
+      name: "set-property-on-kept",
+      paragraph(_node, ctx) {
+        ctx.setProperty(kept, "data", { hName: "section" });
+      },
+    });
+
+    expect(() => markdownToHtml("Document B paragraph.", { mdastPlugins: [edit] })).toThrow(
+      /invalid node id/,
+    );
+  });
+
+  test("a hast element kept from a previous compile is rejected", () => {
+    let kept: HastNode | undefined;
+    const capture = defineHastPlugin({
+      name: "capture-element",
+      element: {
+        filter: ["p"],
+        visit(node) {
+          kept ??= node;
+        },
+      },
+    });
+    markdownToHtml("Document A paragraph.", { hastPlugins: [capture] });
+    if (kept === undefined) throw new Error("no element was visited");
+    const foreign = kept;
+
+    const edit = defineHastPlugin({
+      name: "remove-kept-element",
+      element: {
+        filter: ["p"],
+        visit(_node, ctx) {
+          ctx.removeNode(foreign);
+        },
+      },
+    });
+
+    expect(() => markdownToHtml("Document B paragraph.", { hastPlugins: [edit] })).toThrow(
+      /invalid node id/,
+    );
+  });
+
+  test("an mdast node handed to a hast plugin is rejected", () => {
+    let captured: MdastNode | undefined;
+    const capture = defineMdastPlugin({
+      name: "capture-for-hast",
+      paragraph(node) {
+        captured ??= node;
+      },
+    });
+    const edit = defineHastPlugin({
+      name: "remove-mdast-node",
+      element: {
+        filter: ["p"],
+        visit(_node, ctx) {
+          // @ts-expect-error an mdast node is not a hast node; the runtime guard is what is tested
+          const foreign: HastNode = captured;
+          ctx.removeNode(foreign);
+        },
+      },
+    });
+
+    expect(() =>
+      markdownToHtml("A paragraph.", { mdastPlugins: [capture], hastPlugins: [edit] }),
+    ).toThrow(/invalid node id/);
+  });
+
+  test("a kept node that is only read still reads as the tree looked in its pass", () => {
+    let kept: MdastNode | undefined;
+    const capture = defineMdastPlugin({
+      name: "capture-and-read",
+      paragraph(node) {
+        kept ??= node;
+        const first = node.children[0];
+        // Reading content in-pass pins the snapshot the retained node reads from.
+        if (first?.type === "text") void first.value;
+      },
+    });
+    markdownToHtml("Kept paragraph text.", { mdastPlugins: [capture] });
+    markdownToHtml("A later, unrelated compile.", {
+      mdastPlugins: [defineMdastPlugin({ name: "noop", paragraph() {} })],
+    });
+
+    if (kept?.type !== "paragraph") throw new Error("expected a paragraph");
+    const first = kept.children[0];
+    expect(first?.type).toBe("text");
+    expect(first?.type === "text" ? first.value : "").toBe("Kept paragraph text.");
+  });
+});
