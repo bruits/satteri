@@ -603,7 +603,9 @@ fn transform_element<'a>(
     let mut attrs = OxcVec::new_in(alloc);
 
     let prop_count = decode_element_prop_count(data);
-    let in_svg = context.space == Space::Svg;
+    // The schema switch covers the <svg> element's own attributes too, not
+    // just its descendants (mirrors the HTML serializer in hast/render.rs).
+    let in_svg = space == Space::Svg || tag_name == "svg";
     let attr_case = context.element_attribute_name_case;
     let style_case = context.style_property_name_case;
     for i in 0..prop_count {

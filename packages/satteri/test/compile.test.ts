@@ -1180,6 +1180,46 @@ describe("mdxToJs", () => {
     expect(js).toContain('className: "x"');
   });
 
+  test("elementAttributeNameCase: 'html' converts a nested appended <svg>'s own attributes (#208)", () => {
+    const plugin = defineHastPlugin({
+      name: "svg-append",
+      element: {
+        filter: ["p"],
+        visit(node, ctx) {
+          ctx.appendChild(node, {
+            type: "element",
+            tagName: "span",
+            properties: {},
+            children: [
+              {
+                type: "element",
+                tagName: "svg",
+                properties: { strokeWidth: "1.2", strokeLinecap: "round" },
+                children: [
+                  {
+                    type: "element",
+                    tagName: "path",
+                    properties: { fillRule: "evenodd" },
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          });
+        },
+      },
+    });
+    const { code: js } = mdxToJs("hello", {
+      hastPlugins: [plugin],
+      elementAttributeNameCase: "html",
+    });
+    // The SVG schema covers the <svg> element's own attributes, not just descendants.
+    expect(js).toContain('"stroke-width": "1.2"');
+    expect(js).toContain('"stroke-linecap": "round"');
+    expect(js).not.toContain("strokeWidth");
+    expect(js).toContain('"fill-rule": "evenodd"');
+  });
+
   test("style attribute parses into an object by default (DOM casing)", () => {
     const { code: js } = mdxToJs("| a | b |\n|:--|--:|\n| c | d |\n", {
       features: { gfm: true },
