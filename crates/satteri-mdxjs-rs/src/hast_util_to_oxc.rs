@@ -9,6 +9,7 @@ use crate::oxc_utils::{
     create_prop_name, create_string_literal, inter_element_whitespace, is_literal_name,
 };
 use core::str;
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -654,10 +655,12 @@ fn transform_element<'a>(
             _ => continue,
         };
 
+        // Keep the Cow borrowed where possible: create_jsx_attr_name_from_str
+        // arena-copies from &str, so an intermediate String is pure waste.
         let attr_name = match attr_case {
-            ElementAttributeNameCase::React => prop_to_attr_name(name),
+            ElementAttributeNameCase::React => Cow::Owned(prop_to_attr_name(name)),
             ElementAttributeNameCase::Html => {
-                satteri_ast::hast::properties::property_to_attribute(name, in_svg).into_owned()
+                satteri_ast::hast::properties::property_to_attribute(name, in_svg)
             }
         };
         attrs.push(JSXAttributeItem::Attribute(OxcBox::new_in(
