@@ -17,8 +17,7 @@ use crate::mdast::{
     decode_list_item_data, decode_math_data, decode_reference_data, decode_table_alignments,
 };
 
-/// Render `view` to HTML without an intermediate arena, or `None` when the
-/// document or options need the two-stage pipeline.
+/// Render `view` to HTML, or `None` when the document or options need the two-stage pipeline.
 pub(crate) fn mdast_to_html_fused(view: &Arena<Mdast>, options: &ConvertOptions) -> Option<String> {
     if view.is_empty() || view.node_data.values().any(|blob| contains_h_key(blob)) {
         return None;
@@ -712,6 +711,7 @@ impl Emitter<'_, '_> {
             return;
         }
         let view = self.view;
+        let options = self.options;
         self.push_newline();
         self.begin_element("section");
         self.attr_bool("data-footnotes");
@@ -721,8 +721,7 @@ impl Emitter<'_, '_> {
         self.attr("class", "sr-only");
         self.attr("id", "footnote-label");
         self.finish_open();
-        let label = self.options.footnote_label.clone();
-        self.push_text(&label);
+        self.push_text(&options.footnote_label);
         self.close_element("h2");
         self.push_newline();
         self.begin_element("ol");
