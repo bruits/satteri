@@ -6,6 +6,7 @@ use crate::hast::HastNodeType;
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
 };
+use crate::hast::escape::{escape_html_attr_value, escape_html_body_text};
 use crate::hast::properties::property_to_attribute;
 use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
@@ -20,23 +21,6 @@ pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
         out.push('\n');
     }
     out
-}
-
-/// Escape a string to appear inside a double-quoted HTML attribute value,
-/// matching hast-util-to-html's default "safe" serialization. Encodes `&`,
-/// `"`, `'`, and `` ` `` (backtick is escaped because some legacy browsers
-/// treat it as an attribute-value delimiter). Unlike body-text escaping,
-/// `<` and `>` are kept as-is since they're valid inside attribute values.
-fn escape_html_attr_value(out: &mut String, value: &str) {
-    for c in value.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            '`' => out.push_str("&#x60;"),
-            _ => out.push(c),
-        }
-    }
 }
 
 /// Render a HAST node subtree to HTML.
@@ -150,7 +134,7 @@ fn render_node_at<'cb>(
                         out.push(' ');
                         out.push_str(&attr_name);
                         out.push_str("=\"");
-                        escape_html_attr_value(&mut *out, value);
+                        escape_html_attr_value(out, value);
                         out.push('"');
                     }
                     _ => {}
@@ -187,7 +171,7 @@ fn render_node_at<'cb>(
                 if in_raw_text {
                     out.push_str(text);
                 } else {
-                    pulldown_cmark_escape::escape_html_body_text(&mut *out, text).unwrap();
+                    escape_html_body_text(out, text);
                 }
             }
         }

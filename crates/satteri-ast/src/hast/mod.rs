@@ -1,6 +1,7 @@
 //! HAST-specific node types, codecs, and rendering.
 
 pub mod codec;
+pub mod escape;
 #[cfg(feature = "from-html")]
 pub mod from_html;
 pub(crate) mod generated;
