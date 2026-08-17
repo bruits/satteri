@@ -326,3 +326,61 @@ test("a freshly-generated node is transformed by a later plugin (the multi-plugi
   expect((both.match(/<aside/g) ?? []).length).toBe(1);
   expect(both).toContain('data-v="tip"');
 });
+
+const removedHeadingDoc = "# Head\n\nKept\n";
+
+function removeHeadingKeeping(seen: { node?: MdastNode }) {
+  return defineMdastPlugin({
+    name: "remove-heading",
+    heading(node, ctx) {
+      seen.node = node;
+      ctx.removeNode(node);
+    },
+  });
+}
+
+test("an insertAfter on a node another plugin removed is dropped with a warning", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const seen: { node?: MdastNode } = {};
+    const insert = defineMdastPlugin({
+      name: "insert-after-heading",
+      paragraph(_node, ctx) {
+        if (seen.node) ctx.insertAfter(seen.node, { type: "thematicBreak" } satisfies MdastNode);
+      },
+    });
+    const { html } = markdownToHtml(removedHeadingDoc, {
+      mdastPlugins: [removeHeadingKeeping(seen), insert],
+    });
+    expect(html.trim()).toBe("<p>Kept</p>");
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = warn.mock.calls[0]?.[0] as string;
+    expect(message).toContain('plugin "insert-after-heading"');
+    expect(message).toContain("dropped");
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test("a replaceNode on a node another plugin removed is dropped with a warning", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const seen: { node?: MdastNode } = {};
+    const replace = defineMdastPlugin({
+      name: "replace-heading",
+      paragraph(_node, ctx) {
+        if (seen.node) ctx.replaceNode(seen.node, { type: "thematicBreak" } satisfies MdastNode);
+      },
+    });
+    const { html } = markdownToHtml(removedHeadingDoc, {
+      mdastPlugins: [removeHeadingKeeping(seen), replace],
+    });
+    expect(html.trim()).toBe("<p>Kept</p>");
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = warn.mock.calls[0]?.[0] as string;
+    expect(message).toContain('plugin "replace-heading"');
+    expect(message).toContain("dropped");
+  } finally {
+    warn.mockRestore();
+  }
+});
