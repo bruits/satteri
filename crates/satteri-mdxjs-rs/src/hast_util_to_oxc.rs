@@ -9,6 +9,7 @@ use crate::oxc_utils::{
     create_prop_name, create_string_literal, inter_element_whitespace, is_literal_name,
 };
 use core::str;
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -603,7 +604,9 @@ fn transform_element<'a>(
     let mut attrs = OxcVec::new_in(alloc);
 
     let prop_count = decode_element_prop_count(data);
-    let in_svg = context.space == Space::Svg;
+    // The schema switch covers the <svg> element's own attributes too, not
+    // just its descendants (mirrors the HTML serializer in hast/render.rs).
+    let in_svg = space == Space::Svg || tag_name == "svg";
     let attr_case = context.element_attribute_name_case;
     let style_case = context.style_property_name_case;
     for i in 0..prop_count {
@@ -652,10 +655,12 @@ fn transform_element<'a>(
             _ => continue,
         };
 
+        // Keep the Cow borrowed where possible: create_jsx_attr_name_from_str
+        // arena-copies from &str, so an intermediate String is pure waste.
         let attr_name = match attr_case {
-            ElementAttributeNameCase::React => prop_to_attr_name(name),
+            ElementAttributeNameCase::React => Cow::Owned(prop_to_attr_name(name)),
             ElementAttributeNameCase::Html => {
-                satteri_ast::hast::properties::property_to_attribute(name, in_svg).into_owned()
+                satteri_ast::hast::properties::property_to_attribute(name, in_svg)
             }
         };
         attrs.push(JSXAttributeItem::Attribute(OxcBox::new_in(
