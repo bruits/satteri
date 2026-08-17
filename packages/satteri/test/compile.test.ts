@@ -1875,16 +1875,16 @@ describe("markdownToJs", () => {
     ];
 
     for (const [name, options] of paths) {
-      test(`${name}: returns frontmatter and drops raw HTML`, () => {
-        const { code: js, frontmatter } = markdownToJs(src, options);
+      test(`${name}: returns frontmatter and drops raw HTML`, async () => {
+        const { code: js, frontmatter } = await markdownToJs(src, options);
         expect(frontmatter).toEqual({ kind: "yaml", value: "title: T" });
         expect(js).toContain("para");
         expect(js).not.toContain('b: "b"');
         expect(js).not.toContain("<b>");
       });
 
-      test(`${name}: applies rawHtml`, () => {
-        const { code: js } = markdownToJs("a <b>x</b>", {
+      test(`${name}: applies rawHtml`, async () => {
+        const { code: js } = await markdownToJs("a <b>x</b>", {
           ...options,
           features: { rawHtml: true },
         });

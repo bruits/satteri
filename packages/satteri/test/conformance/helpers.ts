@@ -863,7 +863,7 @@ export async function assertMarkdownJsModuleConformance(
       }),
     ),
   );
-  const { code } = markdownToJs(input, {
+  const { code } = await markdownToJs(input, {
     ...jsOptions,
     features: { frontmatter, math: false, ...features },
   });
