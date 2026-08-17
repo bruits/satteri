@@ -897,6 +897,29 @@ export async function assertMarkdownJsDevPositionConformance(input: string): Pro
   expect(positions(code)).toEqual(expected);
 }
 
+/**
+ * Compare development-mode source locations against @mdx-js/mdx: the `__source`
+ * `line:column` of every JSX call and every `_missingMdxReference` range.
+ */
+export async function assertMdxDevPositionConformance(input: string): Promise<void> {
+  const positions = (code: string): string[] =>
+    [...code.matchAll(/lineNumber: (\d+),\s*columnNumber: (\d+)/g)].map(
+      (match) => `${match[1]}:${match[2]}`,
+    );
+  // Sorted: the two pipelines emit the reference guards in different orders.
+  const missingRefPlaces = (code: string): string[] =>
+    [...code.matchAll(/_missingMdxReference\("[^"]*", \w+, "([^"]*)"\)/g)]
+      .map((match) => match[1]!)
+      .sort();
+
+  const expected = String(await mdxCompile(input, { development: true }));
+  const { code } = mdxToJs(input, { development: true });
+
+  expect(positions(expected).length).toBeGreaterThan(0);
+  expect(positions(code)).toEqual(positions(expected));
+  expect(missingRefPlaces(code)).toEqual(missingRefPlaces(expected));
+}
+
 // Like `assertMdxConformance`, but with math enabled on both pipelines
 // (satteri `features.math`, reference `remark-math`). Exercises how MDX
 // expressions and `$...$` math interact, e.g. that braces inside a math span

@@ -112,7 +112,7 @@ struct Context<'a> {
     space: Space,
     comments: Vec<MdxComment>,
     esm: Vec<Statement<'a>>,
-    location: Option<&'a Location>,
+    location: Option<&'a Location<'a>>,
     allocator: &'a Allocator,
     view: &'a Arena<Hast>,
     /// Behind `Rc` because `all()` needs to hold the config while mutably
@@ -130,7 +130,7 @@ struct Context<'a> {
 pub fn hast_util_to_oxc<'a>(
     view: &'a Arena<Hast>,
     path: Option<String>,
-    location: Option<&'a Location>,
+    location: Option<&'a Location<'a>>,
     explicit_jsxs: &mut FxHashSet<Span>,
     allocator: &'a Allocator,
     optimize_static: Option<&OptimizeStaticConfig>,
