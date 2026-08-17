@@ -78,7 +78,7 @@ impl HData {
 
 /// Quick byte scan for any of the three quoted h-keys. False positives just
 /// fall through to a real JSON parse, so this needs to be cheap, not perfect.
-fn contains_h_key(bytes: &[u8]) -> bool {
+pub(crate) fn contains_h_key(bytes: &[u8]) -> bool {
     // The shortest key is `"hName"` (7 bytes including quotes). Anything
     // smaller can't match.
     if bytes.len() < 7 {
@@ -283,6 +283,13 @@ fn emit_h_child(builder: &mut ArenaBuilder<Hast>, child: &serde_json::Value) {
 }
 
 fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
+    match normalize_url(url) {
+        std::borrow::Cow::Borrowed(s) => builder.alloc_string(s),
+        std::borrow::Cow::Owned(s) => builder.alloc_string(&s),
+    }
+}
+
+pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
     let bytes = url.as_bytes();
     // micromark's `normalizeUri` keeps a `%` as-is when it is followed by two
     // ASCII *alphanumerics* (not strictly hex digits, so `%ax` and `%2g` are
@@ -300,7 +307,7 @@ fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
         }
     });
     if !needs_encode {
-        return builder.alloc_string(url);
+        return std::borrow::Cow::Borrowed(url);
     }
     let mut encoded = String::with_capacity(url.len() * 2);
     for (i, &byte) in bytes.iter().enumerate() {
@@ -317,7 +324,7 @@ fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
             encoded.push(hex_digit(byte & 0xf));
         }
     }
-    builder.alloc_string(&encoded)
+    std::borrow::Cow::Owned(encoded)
 }
 
 fn is_url_safe(b: u8) -> bool {
@@ -382,7 +389,7 @@ impl Default for ConvertOptions {
     }
 }
 
-fn resolve_backref(backref: &Backref, number: usize, k: usize) -> String {
+pub(crate) fn resolve_backref(backref: &Backref, number: usize, k: usize) -> String {
     match backref {
         Backref::Template(tpl) => {
             let token = if k > 1 {
@@ -489,26 +496,26 @@ struct ConvertCtx<'a, 'src> {
 }
 
 /// Definition data stored as StringRefs into the MDAST source, avoids cloning strings.
-struct Definition {
-    url: StringRef,
-    title: StringRef, // empty = no title
+pub(crate) struct Definition {
+    pub(crate) url: StringRef,
+    pub(crate) title: StringRef, // empty = no title
 }
 
 /// Single-pass collection of everything later arms need to cross-reference:
 /// link/image reference definitions, plus source-order numbering for
 /// footnote references and definitions.
-struct CollectedRefs<'src> {
-    defs: FxHashMap<&'src str, Definition>,
+pub(crate) struct CollectedRefs<'src> {
+    pub(crate) defs: FxHashMap<&'src str, Definition>,
     /// `None` when the document contains no footnotes — saves the HashMap
     /// allocation on the common path.
-    footnotes: Option<FxHashMap<&'src str, usize>>,
+    pub(crate) footnotes: Option<FxHashMap<&'src str, usize>>,
     /// FootnoteDefinition node ids in the order their identifiers are first
     /// referenced (main flow first, then inside definitions that got queued).
-    footnote_defs: Vec<u32>,
+    pub(crate) footnote_defs: Vec<u32>,
     /// 1-based occurrence index for each FootnoteReference node id.
-    footnote_ref_occurrence: FxHashMap<u32, usize>,
+    pub(crate) footnote_ref_occurrence: FxHashMap<u32, usize>,
     /// Total reference count per identifier.
-    footnote_ref_totals: FxHashMap<&'src str, usize>,
+    pub(crate) footnote_ref_totals: FxHashMap<&'src str, usize>,
 }
 
 /// Flat probe over the node array for the two types [`collect_refs`] resolves.
@@ -521,7 +528,7 @@ fn has_any_ref_node(view: &Arena<Mdast>) -> bool {
         .any(|n| n.node_type == definition || n.node_type == footnote_definition)
 }
 
-fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
+pub(crate) fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     let mut defs: FxHashMap<&str, Definition> = FxHashMap::default();
     let mut fn_def_nodes: FxHashMap<&str, u32> = FxHashMap::default();
 
@@ -825,7 +832,7 @@ fn write_element_data_specs(
     builder.finish_data_current(writer);
 }
 
-fn list_contains_task_item(list_id: u32, view: &Arena<Mdast>) -> bool {
+pub(crate) fn list_contains_task_item(list_id: u32, view: &Arena<Mdast>) -> bool {
     for &child_id in view.get_children(list_id) {
         let child = view.get_node(child_id);
         if MdastNodeType::from_u8(child.node_type) != Some(MdastNodeType::ListItem) {
@@ -905,7 +912,7 @@ fn add_text_node(builder: &mut ArenaBuilder<Hast>, text: &str) -> u32 {
 /// (only line ENDS for non-final lines and line STARTS for non-first lines
 /// get trimmed). Returns `Cow::Borrowed` when the value is unchanged so the
 /// caller can reuse the original `StringRef`.
-fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
     let bytes = value.as_bytes();
     // Quick scan: any line break with adjacent ws? If not, nothing to trim.
     let mut needs_trim = false;
@@ -1828,7 +1835,7 @@ fn convert_node_inner(
 
 /// Each line ending in a code span renders as one space, so a `\r\n` collapses
 /// to a single space rather than two.
-fn code_span_line_endings_to_spaces(value: &str) -> String {
+pub(crate) fn code_span_line_endings_to_spaces(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut rest = value;
     while let Some(i) = rest.find(['\r', '\n']) {
@@ -2444,7 +2451,7 @@ fn convert_mdx_jsx_element(
     builder.close_node();
 }
 
-fn extract_text_content(node_id: u32, view: &Arena<Mdast>) -> String {
+pub(crate) fn extract_text_content(node_id: u32, view: &Arena<Mdast>) -> String {
     let mut out = String::new();
     extract_text_recursive(node_id, view, &mut out);
     out
