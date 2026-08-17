@@ -78,6 +78,7 @@ impl HData {
 
 /// Quick byte scan for any of the three quoted h-keys. False positives just
 /// fall through to a real JSON parse, so this needs to be cheap, not perfect.
+#[inline]
 pub(crate) fn contains_h_key(bytes: &[u8]) -> bool {
     // The shortest key is `"hName"` (7 bytes including quotes). Anything
     // smaller can't match.
@@ -289,6 +290,7 @@ fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
     }
 }
 
+#[inline]
 pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
     let bytes = url.as_bytes();
     // micromark's `normalizeUri` keeps a `%` as-is when it is followed by two
@@ -832,6 +834,7 @@ fn write_element_data_specs(
     builder.finish_data_current(writer);
 }
 
+#[inline]
 pub(crate) fn list_contains_task_item(list_id: u32, view: &Arena<Mdast>) -> bool {
     for &child_id in view.get_children(list_id) {
         let child = view.get_node(child_id);
@@ -912,17 +915,23 @@ fn add_text_node(builder: &mut ArenaBuilder<Hast>, text: &str) -> u32 {
 /// (only line ENDS for non-final lines and line STARTS for non-first lines
 /// get trimmed). Returns `Cow::Borrowed` when the value is unchanged so the
 /// caller can reuse the original `StringRef`.
+#[inline]
 pub(crate) fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
-    let bytes = value.as_bytes();
-    // Quick scan: any line break with adjacent ws? If not, nothing to trim.
-    let mut needs_trim = false;
+    if !needs_line_trim(value.as_bytes()) {
+        return std::borrow::Cow::Borrowed(value);
+    }
+    std::borrow::Cow::Owned(trim_lines_rewrite(value))
+}
+
+/// Every text node pays this scan, so it stays separate from the rewrite it guards.
+#[inline]
+fn needs_line_trim(bytes: &[u8]) -> bool {
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
         if b == b'\n' || b == b'\r' {
             if i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
-                needs_trim = true;
-                break;
+                return true;
             }
             let after = if b == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
                 i + 2
@@ -930,17 +939,18 @@ pub(crate) fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
                 i + 1
             };
             if after < bytes.len() && (bytes[after] == b' ' || bytes[after] == b'\t') {
-                needs_trim = true;
-                break;
+                return true;
             }
             i = after;
             continue;
         }
         i += 1;
     }
-    if !needs_trim {
-        return std::borrow::Cow::Borrowed(value);
-    }
+    false
+}
+
+fn trim_lines_rewrite(value: &str) -> String {
+    let bytes = value.as_bytes();
     let mut out = String::with_capacity(value.len());
     let mut last = 0;
     let mut i = 0;
@@ -974,7 +984,7 @@ pub(crate) fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
         i += 1;
     }
     out.push_str(&value[last..]);
-    std::borrow::Cow::Owned(out)
+    out
 }
 
 /// Add a text leaf reusing a StringRef from the source arena that seeded the
