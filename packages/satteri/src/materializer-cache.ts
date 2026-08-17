@@ -32,8 +32,9 @@ export interface MaterializerSpec<TReader extends MaterializerReader, TNode exte
   label: string;
   /** Node-type tag -> canonical AST name (the generated `TYPE_NAMES`). */
   typeNames: Readonly<Record<number, string>>;
-  /** Whether nodes of this type carry `children`. */
-  hasChildren(nodeType: number): boolean;
+  /** Whether `node` carries `children`. Takes the built node because mdast
+   *  `custom` decides leafness per node rather than per type. */
+  hasChildren(nodeType: number, node: TNode, reader: TReader, nodeId: number): boolean;
   /**
    * Install the type-specific eager fields on `node`. Must not install
    * `children`, `position`, `data`, or `_nodeId`, and must not freeze:
@@ -184,7 +185,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
       }
     }
 
-    if (!eager && spec.hasChildren(nodeType)) {
+    if (!eager && spec.hasChildren(nodeType, node, reader, nodeId)) {
       Object.defineProperty(
         node,
         "children",
@@ -226,8 +227,12 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     for (;;) {
       const id = stack.pop();
       if (id === undefined) break;
-      if (byId[id] === undefined) byId[id] = buildNode(reader, cache, id, true);
-      if (spec.hasChildren(reader.getNodeType(id))) {
+      let node = byId[id];
+      if (node === undefined) {
+        node = buildNode(reader, cache, id, true);
+        byId[id] = node;
+      }
+      if (spec.hasChildren(reader.getNodeType(id), node, reader, id)) {
         parents.push(id);
         reader.pushChildIds(id, stack);
       }

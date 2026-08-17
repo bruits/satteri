@@ -16,6 +16,24 @@ export const LEAF_TYPES: ReadonlySet<number> = new Set([
   9, 10, 13, 7, 8, 14, 3, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104,
 ]);
 
+/** A `custom` node is a leaf when it has a non-empty `value` and no children or
+ *  `data.h*`. Leafness is per node there, not per type, so the read paths ask
+ *  this instead of {@link LEAF_TYPES}.
+ *  @see {@link Custom} */
+export function isCustomLeaf(
+  node: { readonly value?: unknown; readonly data?: unknown },
+  childCount: number,
+): boolean {
+  const { value, data } = node;
+  if (childCount !== 0 || typeof value !== "string" || value === "") return false;
+  if (data === null || typeof data !== "object") return true;
+  if ("hName" in data && typeof data.hName === "string") return false;
+  if ("hChildren" in data && Array.isArray(data.hChildren)) return false;
+  if (!("hProperties" in data)) return true;
+  const props = data.hProperties;
+  return props === null || typeof props !== "object" || Array.isArray(props);
+}
+
 /**
  * Add type-specific properties to a node object as eager plain stores.
  */
@@ -102,7 +120,10 @@ function addTypeProperties(
 const mdastMaterializer = createMaterializer<MdastReader, MdastNode>({
   label: "materializeNode",
   typeNames: TYPE_NAMES,
-  hasChildren: (nodeType) => !LEAF_TYPES.has(nodeType),
+  hasChildren: (nodeType, node, reader, nodeId) =>
+    nodeType === MDAST_CUSTOM
+      ? !isCustomLeaf(node, reader.getChildIds(nodeId).length)
+      : !LEAF_TYPES.has(nodeType),
   populate: addTypeProperties,
 });
 
