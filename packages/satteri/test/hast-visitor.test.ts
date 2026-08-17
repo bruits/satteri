@@ -13,7 +13,11 @@ import { defineHastPlugin } from "../src/plugin.js";
 import { dropHandle } from "../src/index.js";
 import { collect } from "./fixtures.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
-import type { HastParentContent, HastVisitorContext } from "../src/hast/hast-visitor.js";
+import type {
+  HastHandle,
+  HastParentContent,
+  HastVisitorContext,
+} from "../src/hast/hast-visitor.js";
 import type { Element, ElementContent, Text } from "hast";
 import type { Position } from "unist";
 
@@ -1627,6 +1631,47 @@ describe("visitHastHandle - lazy children lifecycle", () => {
     });
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
     expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
+  });
+});
+
+describe("visitHastHandle - text value swap", () => {
+  function readTextPosition(handle: HastHandle, source: string): Position | undefined {
+    let position: Position | undefined;
+    const reader = defineHastPlugin({
+      name: "read-text-position",
+      text(node) {
+        position ??= node.position;
+      },
+    });
+    visitHastHandle(handle, reader, resolveSubscriptions(reader), source, undefined);
+    return position;
+  }
+
+  test("a sync swap keeps the text node's position", () => {
+    const { handle, source } = setup("Hello");
+    const shout = defineHastPlugin({
+      name: "shout-text",
+      text(node) {
+        return { type: "text", value: node.value.toUpperCase() } satisfies Text;
+      },
+    });
+    visitHastHandle(handle, shout, resolveSubscriptions(shout), source, undefined);
+    expect(readTextPosition(handle, source)).toMatchObject({ start: { line: 1, column: 1 } });
+    expect(renderHandle(handle)).toContain("HELLO");
+  });
+
+  test("an async swap keeps the text node's position", async () => {
+    const { handle, source } = setup("Hello");
+    const shout = defineHastPlugin({
+      name: "shout-text-async",
+      async text(node) {
+        await new Promise((r) => setTimeout(r, 1));
+        return { type: "text", value: node.value.toUpperCase() } satisfies Text;
+      },
+    });
+    await visitHastHandle(handle, shout, resolveSubscriptions(shout), source, undefined);
+    expect(readTextPosition(handle, source)).toMatchObject({ start: { line: 1, column: 1 } });
+    expect(renderHandle(handle)).toContain("HELLO");
   });
 });
 
