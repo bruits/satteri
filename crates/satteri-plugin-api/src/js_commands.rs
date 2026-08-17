@@ -1759,6 +1759,7 @@ mod tests {
         push_set_property(&mut buf, bad_id, PROP_INT, "depth", "3");
         let err = apply_mdast_commands(arena, &buf, &test_parse_markdown).unwrap_err();
         assert!(matches!(err, CommandError::InvalidNodeId(id) if id == bad_id));
+        assert!(err.to_string().contains("invalid node id"));
 
         let hast = build_hast_element(&[]);
         let bad_id = hast.len() as u32;

@@ -10,6 +10,7 @@ import type { MdastReader } from "./mdast-reader.js";
 import { MDAST_LAYOUT_KEYS } from "./generated/layout.js";
 import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
 import { LEAF_TYPES } from "./mdast-materializer.js";
+import type { NodeRefs } from "../visitor-shared.js";
 
 type MdastResolver = LazyChildResolver<MdastReader, MdastNode>;
 
@@ -76,6 +77,11 @@ export class MdastChildStub {
       this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
     }
     installStubDescriptors(this, MDAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
+  }
+
+  /** @internal */
+  get _refs(): NodeRefs {
+    return this._resolver.refs;
   }
 }
 

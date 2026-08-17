@@ -108,7 +108,10 @@ impl std::fmt::Display for CommandError {
                 write!(f, "unbalanced op-stream: OPEN and CLOSE ops do not pair up")
             }
             Self::InvalidNodeId(id) => {
-                write!(f, "node id {id} does not exist in the target arena")
+                write!(
+                    f,
+                    "invalid node id: {id} does not exist in the target arena"
+                )
             }
             Self::TypeDataTooShort => {
                 write!(

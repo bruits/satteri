@@ -1072,14 +1072,14 @@ test("a replacement nested past the replay depth cap fails loudly", () => {
   expect(() => visitAndRender("Hello", plugin)).toThrow(/nests deeper/);
 });
 
-test("context mutations reject plugin-built nodes with no arena id", () => {
+test("context mutations reject plugin-built nodes, which have no id here", () => {
   const plugin = defineMdastPlugin({
     name: "remove-fresh-node",
     heading(_node, ctx) {
       ctx.removeNode({ type: "text", value: "x" });
     },
   });
-  expect(() => visitAndRender("# Hello", plugin)).toThrow(/no arena id/);
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/invalid node id/);
 });
 
 test("setProperty(node, 'children', ...) rides the op-stream", () => {
@@ -1454,7 +1454,7 @@ test("parent works on child stubs, not just visited nodes", () => {
   expect(stubParentType).toBe("heading");
 });
 
-test("parent throws on plugin-built nodes (no arena id)", () => {
+test("parent throws on plugin-built nodes, which have no id here", () => {
   const { handle, source } = setup();
   let error: Error | undefined;
   const plugin = defineMdastPlugin({
@@ -1468,7 +1468,7 @@ test("parent throws on plugin-built nodes (no arena id)", () => {
     },
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
-  expect(error?.message).toMatch(/no arena id/);
+  expect(error?.message).toMatch(/invalid node id/);
 });
 
 test("parent called after a non-mutating pass resolves from the pass snapshot", () => {
@@ -1681,7 +1681,7 @@ test("the plugin-built object itself stays id-less across passes", () => {
   });
   markdownToHtml("# Title\n", { mdastPlugins: [inserted, observe] });
   // The built object never gets an arena id; the tree holds a node derived from it.
-  expect(error?.message).toMatch(/no arena id/);
+  expect(error?.message).toMatch(/invalid node id/);
 });
 
 test("indexOf ignores buffered mutations within the same pass", () => {

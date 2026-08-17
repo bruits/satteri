@@ -6,6 +6,7 @@
 
 import type { Position } from "unist";
 import { deepFreeze } from "./freeze.js";
+import type { NodeRefs } from "./visitor-shared.js";
 
 /** The reader surface the shared machinery needs; both `HastReader` and `MdastReader` satisfy it. */
 export interface MaterializerReader {
@@ -25,6 +26,8 @@ interface ReaderCache<TNode extends object> {
   /** Frozen mode only; mutable mode builds a per-node descriptor instead. */
   children: PropertyDescriptor | undefined;
   frozen: boolean;
+  /** Frozen mode only: the edited tree's refs, which these nodes join as proof of ownership. */
+  refs: NodeRefs | undefined;
 }
 
 export interface MaterializerSpec<TReader extends MaterializerReader, TNode extends object> {
@@ -55,13 +58,13 @@ export interface MaterializerSpec<TReader extends MaterializerReader, TNode exte
 export function createMaterializer<TReader extends MaterializerReader, TNode extends object>(
   spec: MaterializerSpec<TReader, TNode>,
 ): {
-  node: (reader: TReader, nodeId: number, frozen?: boolean) => TNode;
+  node: (reader: TReader, nodeId: number, frozen?: boolean, refs?: NodeRefs) => TNode;
   tree: (reader: TReader, rootId: number) => TNode;
 } {
   const readerCaches = new WeakMap<TReader, ReaderCache<TNode>>();
 
-  function materialize(reader: TReader, nodeId: number, frozen = false): TNode {
-    const cache = readerCache(reader, frozen);
+  function materialize(reader: TReader, nodeId: number, frozen = false, refs?: NodeRefs): TNode {
+    const cache = readerCache(reader, frozen, refs);
     let node = cache.nodes.get(nodeId);
     if (node === undefined) {
       node = buildNode(reader, cache, nodeId);
@@ -118,7 +121,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     };
   }
 
-  function readerCache(reader: TReader, frozen: boolean): ReaderCache<TNode> {
+  function readerCache(reader: TReader, frozen: boolean, refs: NodeRefs | undefined): ReaderCache<TNode> {
     let cache = readerCaches.get(reader);
     if (cache === undefined) {
       cache = {
@@ -126,6 +129,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
         childLists: new Map(),
         children: undefined,
         frozen,
+        refs,
       };
       if (frozen) cache.children = frozenChildrenDescriptor(reader, cache);
       readerCaches.set(reader, cache);
@@ -154,6 +158,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
 
     if (cache.frozen) {
       // Non-enumerable so `nid()` never trusts an id that a spread copied.
+      cache.refs?.set(node, nodeId);
       Object.defineProperty(node, "_nodeId", {
         value: nodeId,
         writable: false,
@@ -256,7 +261,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
 
   /** Whole tree at once: the caller will walk it, so lazy accessors cost more than they defer. */
   function materializeTree(reader: TReader, rootId: number): TNode {
-    return fillTree(reader, readerCache(reader, false), rootId);
+    return fillTree(reader, readerCache(reader, false, undefined), rootId);
   }
 
   return { node: materialize, tree: materializeTree };

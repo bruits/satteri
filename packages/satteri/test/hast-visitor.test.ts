@@ -1204,7 +1204,7 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain("<h1>A B Hello</h1>");
   });
 
-  test("context mutations reject plugin-built nodes with no arena id", () => {
+  test("context mutations reject plugin-built nodes, which have no id here", () => {
     const { handle, source } = setup();
     const plugin = defineHastPlugin({
       name: "remove-fresh-node",
@@ -1217,7 +1217,7 @@ describe("visitHastHandle - mutations", () => {
     });
     expect(() =>
       visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
-    ).toThrow(/no arena id/);
+    ).toThrow(/invalid node id/);
   });
 });
 
@@ -1966,7 +1966,7 @@ test("parent and indexOf work on child stubs, not just visited nodes", () => {
   expect(stubIndex).toBe(0);
 });
 
-test("parent throws on plugin-built nodes (no arena id)", () => {
+test("parent throws on plugin-built nodes, which have no id here", () => {
   const { handle, source } = setup("hello\n");
   let error: Error | undefined;
   const plugin = defineHastPlugin({
@@ -1983,5 +1983,5 @@ test("parent throws on plugin-built nodes (no arena id)", () => {
     },
   });
   visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
-  expect(error?.message).toMatch(/no arena id/);
+  expect(error?.message).toMatch(/invalid node id/);
 });
