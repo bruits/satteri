@@ -309,66 +309,87 @@ describe("visitHastHandle - mutations", () => {
     );
   });
 
-  test("context.wrapNode() accepts a rawHtml wrapper, parsed to an element", () => {
+  test("context.wrapNode() accepts a raw wrapper, parsed to an element", () => {
     const { handle, source } = setup("# Hello");
-    const plugin = {
+    const plugin = defineHastPlugin({
+      name: "wrap-h1-in-raw-callout",
       element: {
         filter: ["h1"],
-        visit(node: HastNode, ctx: HastVisitorContext) {
-          ctx.wrapNode(node, { rawHtml: '<div class="callout"></div>' });
+        visit(node, ctx) {
+          ctx.wrapNode(node, { raw: '<div class="callout"></div>' });
         },
       },
-    };
+    });
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain('<div class="callout"><h1>Hello</h1></div>');
   });
 
-  test("context.wrapNode() keeps a rawHtml wrapper's own children after the wrapped node", () => {
+  test("context.wrapNode() accepts the deprecated rawHtml wrapper", () => {
     const { handle, source } = setup("# Hello");
-    const plugin = {
+    const plugin = defineHastPlugin({
+      name: "wrap-h1-in-raw-html-callout",
       element: {
         filter: ["h1"],
-        visit(node: HastNode, ctx: HastVisitorContext) {
-          ctx.wrapNode(node, { rawHtml: '<div><a href="#hello">#</a></div>' });
+        visit(node, ctx) {
+          ctx.wrapNode(node, { rawHtml: '<div class="callout"></div>' });
         },
       },
-    };
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain('<div class="callout"><h1>Hello</h1></div>');
+  });
+
+  test("context.wrapNode() keeps a raw wrapper's own children after the wrapped node", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "wrap-h1-with-anchor",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.wrapNode(node, { raw: '<div><a href="#hello">#</a></div>' });
+        },
+      },
+    });
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain('<div><h1>Hello</h1><a href="#hello">#</a></div>');
   });
 
-  test("context.wrapNode() rejects rawHtml that is not exactly one element", () => {
-    for (const rawHtml of ["just text", "<i></i><b></b>", ""]) {
+  test("context.wrapNode() rejects raw HTML that is not exactly one element", () => {
+    for (const raw of ["just text", "<i></i><b></b>", ""]) {
       const { handle, source } = setup("# Hello");
-      const plugin = {
+      const plugin = defineHastPlugin({
+        name: "wrap-h1-in-raw",
         element: {
           filter: ["h1"],
-          visit(node: HastNode, ctx: HastVisitorContext) {
-            ctx.wrapNode(node, { rawHtml });
+          visit(node, ctx) {
+            ctx.wrapNode(node, { raw });
           },
         },
-      };
+      });
       const subs = resolveSubscriptions(plugin);
-      expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(
+      expect(() => visitHastHandle(handle, plugin, subs, source, undefined), raw).toThrow(
         /exactly one element/,
       );
     }
   });
 
-  test("context.wrapNode() rejects a void element as rawHtml wrapper", () => {
+  test("context.wrapNode() rejects a void element as raw wrapper", () => {
     const { handle, source } = setup("# Hello");
-    const plugin = {
+    const plugin = defineHastPlugin({
+      name: "wrap-h1-in-void",
       element: {
         filter: ["h1"],
-        visit(node: HastNode, ctx: HastVisitorContext) {
-          ctx.wrapNode(node, { rawHtml: '<img src="x.png">' });
+        visit(node, ctx) {
+          ctx.wrapNode(node, { raw: '<img src="x.png">' });
         },
       },
-    };
+    });
     const subs = resolveSubscriptions(plugin);
     expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(/void element/);
   });

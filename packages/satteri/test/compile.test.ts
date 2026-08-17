@@ -897,6 +897,32 @@ describe("mdxToJs", () => {
     expect(html).toContain("<span>5 &lt; 6 and {literal} here</span>");
   });
 
+  test("wrapNode({ raw, mdxExpressions: false }) keeps the wrapper's braces literal", () => {
+    const quote = "> {foo}";
+    const literal = defineMdastPlugin({
+      name: "wrap-literal",
+      paragraph(node, ctx) {
+        ctx.wrapNode(node, { raw: quote, mdxExpressions: false });
+      },
+    });
+    const live = defineMdastPlugin({
+      name: "wrap-live",
+      paragraph(node, ctx) {
+        ctx.wrapNode(node, { raw: quote });
+      },
+    });
+
+    const literalCode = mdxToJs("x\n", { mdastPlugins: [literal] }).code;
+    expect(literalCode).toContain("blockquote");
+    expect(literalCode).toContain('"{"');
+    expect(literalCode).toContain('"}"');
+
+    const liveCode = mdxToJs("x\n", { mdastPlugins: [live] }).code;
+    expect(liveCode).toContain("blockquote");
+    expect(liveCode).not.toContain('"{"');
+    expect(liveCode).toMatch(/^\s*foo,$/m);
+  });
+
   test("html node compiling to MDX throws (raw HTML has no JSX representation)", () => {
     const plugin = defineMdastPlugin({
       name: "html-node",

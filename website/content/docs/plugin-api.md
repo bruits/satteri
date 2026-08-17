@@ -424,19 +424,18 @@ declare module "satteri" {
 
 `parentNode` must be a node type that can hold children — a HAST element, an MDX JSX element, an MDAST container like `blockquote`, or a [custom node](#custom-nodes) declaring a `children` array. Leaf nodes (`html`, `text`, …) and leaf-shaped custom nodes have no slot for the wrapped node, so `wrapNode` rejects them. A void HAST element (`img`, `br`, …) is rejected for the same reason: it renders as a lone tag, so its children would never reach the output.
 
-In a HAST plugin, `wrapNode` also accepts a raw HTML string. It is parsed as an HTML fragment and must yield exactly one non-void element, which becomes the wrapper (its own children are kept after the wrapped node):
+`wrapNode` also takes the `{ raw }` string shape the other mutations take. The string is parsed at apply time and must yield exactly one wrapper: an HTML fragment holding one non-void element in a HAST plugin, one block that can hold children in an MDAST plugin. Its own children are kept after the wrapped node, and anything else (no block, several blocks, a leaf) fails the compile.
 
 ```ts
-ctx.wrapNode(node, { rawHtml: '<div class="callout"></div>' });
+ctx.wrapNode(node, { raw: '<div class="callout"></div>' }); // hast
+ctx.wrapNode(node, { raw: "> " }); // mdast: a blockquote
 ```
 
-In an MDAST plugin there is no element node to parse into, so raw strings are rejected there. To surround an MDAST node with raw HTML tags, replace it with the tag halves around itself instead:
+The deprecated `{ rawHtml }` still works and behaves like `{ raw, mdxExpressions: false }`. No MDAST block wraps a node in a pair of raw HTML tags (`<div></div>` parses to a leaf `html` node), so surround the node with the tag halves instead:
 
 ```ts
 ctx.replaceNode(node, [{ type: "html", value: "<div>" }, node, { type: "html", value: "</div>" }]);
 ```
-
-`wrapNode` is deliberately the odd one out on both sides: it is the only MDAST mutation that refuses `{ raw }` / `{ rawHtml }` (a parsed string has no single slot to wrap with), and the only HAST mutation that accepts `{ rawHtml }` (the other HAST mutations take real nodes, and `raw` is a HAST node type of its own).
 
 `replaceNode`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and `insertChildAt` each accept either a single node or an array of nodes. An array is inserted in order at the target position, so `replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. Passing `replaceNode` an empty array removes the node.
 
