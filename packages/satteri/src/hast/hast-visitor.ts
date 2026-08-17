@@ -677,6 +677,26 @@ function getRustSubs(plugin: HastVisitorInstance): { nodeType: number; tagFilter
   return built.rustSubs;
 }
 
+function isFilteredVisitor(value: unknown): value is HastFilteredVisitor {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Array.isArray((value as { filter?: unknown }).filter) &&
+    typeof (value as { visit?: unknown }).visit === "function"
+  );
+}
+
+/** Caught pre-wire so the failure names the API shape, not the internal `tagFilter` field. */
+function malformedFilteredVisitorError(plugin: HastVisitorInstance, methodName: string): Error {
+  const name = (plugin as { name?: unknown }).name;
+  const pluginName = typeof name === "string" && name !== "" ? name : "(unnamed)";
+  return new Error(
+    `hast plugin "${pluginName}": "${methodName}" visitors filter by tag/component name, ` +
+      `so each must be an object { filter: string[], visit: function } (or an array of those). ` +
+      `Use filter: [] to visit every "${methodName}" node.`,
+  );
+}
+
 function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
   const subs: ResolvedSubscription[] = [];
 
@@ -686,7 +706,8 @@ function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
 
     if (FILTERED_METHODS.has(methodName)) {
       const items = Array.isArray(value) ? value : [value];
-      for (const fv of items as HastFilteredVisitor[]) {
+      for (const fv of items) {
+        if (!isFilteredVisitor(fv)) throw malformedFilteredVisitorError(plugin, methodName);
         subs.push({
           nodeType,
           tagFilter: fv.filter,

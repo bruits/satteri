@@ -96,6 +96,12 @@ export function normalizePlugins<D>(
     if (typeof entry !== "object") {
       throw new Error(`${option}: expected a plugin, a factory, a list, or null/undefined/false`);
     }
+    if (typeof (entry as { then?: unknown }).then === "function") {
+      throw new Error(
+        `${option}: a Promise is not a plugin. Plugin factories must be synchronous; ` +
+          `await the value first and pass the plugin itself.`,
+      );
+    }
     out.push(entry as D);
   };
   for (const entry of entries) walk(entry, MAX_FACTORY_DEPTH);

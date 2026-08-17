@@ -10,7 +10,7 @@ import {
   getHandleSource,
 } from "../index.js";
 import { defineHastPlugin } from "../src/plugin.js";
-import { dropHandle } from "../src/index.js";
+import { dropHandle, markdownToHtml } from "../src/index.js";
 import { collect } from "./fixtures.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type {
@@ -100,6 +100,35 @@ describe("visitHastHandle - basic behaviour", () => {
     visitHastHandle(handle, plugin, subs, source, undefined);
     expect(positions.Hello?.start.line).toBe(1);
     expect(positions.World?.start.line).toBe(3);
+  });
+});
+
+describe("resolveSubscriptions - malformed filtered visitors", () => {
+  test("an element visitor without filter is rejected, naming the plugin and the shape", () => {
+    const plugin = { name: "x", element: { visit() {} } };
+    expect(() => resolveSubscriptions(plugin as never)).toThrowError(
+      /^hast plugin "x": "element" visitors filter by tag\/component name, so each must be an object \{ filter: string\[\], visit: function \}/,
+    );
+  });
+
+  test("the element function shorthand is rejected", () => {
+    const plugin = { name: "shorthand", element() {} };
+    expect(() => resolveSubscriptions(plugin as never)).toThrowError(
+      /^hast plugin "shorthand": "element" visitors/,
+    );
+  });
+
+  test("a filtered visitor without visit is rejected, naming the visitor key", () => {
+    const plugin = { name: "x", mdxJsxFlowElement: { filter: ["Note"] } };
+    expect(() => resolveSubscriptions(plugin as never)).toThrowError(
+      /^hast plugin "x": "mdxJsxFlowElement" visitors/,
+    );
+  });
+
+  test("the error surfaces from markdownToHtml before the compile starts", () => {
+    expect(() =>
+      markdownToHtml("# Hi", { hastPlugins: [{ name: "x", element: { visit() {} } } as never] }),
+    ).toThrowError(/^hast plugin "x": "element" visitors/);
   });
 });
 

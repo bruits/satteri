@@ -252,6 +252,32 @@ describe("nested plugin lists", () => {
     );
   });
 
+  test("a Promise in a plugin list is rejected, naming the option", () => {
+    expect(() =>
+      markdownToHtml("# H", { mdastPlugins: [Promise.resolve({ name: "x" }) as never] }),
+    ).toThrowError(/^mdastPlugins: a Promise is not a plugin/);
+    expect(() =>
+      markdownToHtml("# H", { hastPlugins: [Promise.resolve({ name: "x" }) as never] }),
+    ).toThrowError(/^hastPlugins: a Promise is not a plugin/);
+  });
+
+  test("an async factory is rejected, telling factories to stay synchronous", () => {
+    const factory = async () => defineMdastPlugin({ name: "late", heading() {} });
+
+    expect(() => markdownToHtml("# H", { mdastPlugins: [factory as never] })).toThrowError(
+      /^mdastPlugins: a Promise is not a plugin\. Plugin factories must be synchronous/,
+    );
+  });
+
+  test("the same bundle may appear twice", () => {
+    const order: string[] = [];
+    const bundle = [recordMdast(order, "x")];
+
+    markdownToHtml("# T", { mdastPlugins: [bundle, bundle] });
+
+    expect(order).toEqual(["x", "x"]);
+  });
+
   test("mutations from a bundled plugin are applied", () => {
     const removeHeadings = defineMdastPlugin({
       name: "remove-headings",
