@@ -110,7 +110,7 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
             ? { pragmaImportSource: mdxOptions.pragmaImportSource }
             : {}),
         };
-        const { code: mdxCode, frontmatter } = mdxToJs(source, opts);
+        const { code: mdxCode, frontmatter } = await mdxToJs(source, opts);
         const fm = parseFrontmatter(frontmatter);
         const code = `export const frontmatter = ${JSON.stringify(fm)};\n${mdxCode}`;
         return { code, map: null };
@@ -123,7 +123,7 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
         ...(hastPlugins ? { hastPlugins } : {}),
         ...(features ? { features } : {}),
       };
-      const { html, frontmatter } = markdownToHtml(source, opts);
+      const { html, frontmatter } = await markdownToHtml(source, opts);
       const fm = parseFrontmatter(frontmatter);
       const code =
         `const html = ${JSON.stringify(html)};\n` +

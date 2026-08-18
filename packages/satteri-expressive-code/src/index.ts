@@ -169,7 +169,7 @@ function fileURLToFilePath(fileURL: URL | undefined): string {
  *
  * @example
  * ```ts
- * const html = markdownToHtml(source, {
+ * const html = await markdownToHtml(source, {
  *   hastPlugins: [expressiveCode({ themes: ['github-dark'] })],
  * })
  * ```
