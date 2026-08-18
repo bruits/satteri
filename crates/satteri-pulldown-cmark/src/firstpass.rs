@@ -6386,6 +6386,8 @@ where
     scalar_iterate_special_bytes(lut, bytes, ix, callback)
 }
 
+const SCAN_BLOCK: usize = 16;
+
 fn scalar_iterate_special_bytes<F, T>(
     lut: &[bool; 256],
     bytes: &[u8],
@@ -6406,8 +6408,20 @@ where
                     return (ix, val);
                 }
             }
+            ix += 1;
+        } else {
+            ix += 1;
+            // Byte by byte the callback's live state spills `lut`; a block keeps it in a register.
+            'skip: while ix + SCAN_BLOCK <= bytes.len() {
+                for offset in 0..SCAN_BLOCK {
+                    if lut[bytes[ix + offset] as usize] {
+                        ix += offset;
+                        break 'skip;
+                    }
+                }
+                ix += SCAN_BLOCK;
+            }
         }
-        ix += 1;
     }
 
     (ix, None)
