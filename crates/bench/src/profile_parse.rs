@@ -2,11 +2,13 @@
 /// perf/flamegraph gets enough samples to show a meaningful call graph.
 ///
 /// Run via: cargo flamegraph -p satteri-bench --bin profile_parse [-- <workload>]
-/// Workloads: `parse` (default, with positions), `parse-no-pos`, `html`, `mdx`.
-/// The `mdx` workload uses the `.mdx` fixture; the rest use the Markdown one.
+/// Workloads: `parse` (default, with positions), `parse-no-pos`, `autolinks`,
+/// `html`, `mdx`, `mdx-static`, `apply`. The `mdx*` workloads use the `.mdx`
+/// fixture, `autolinks` the autolink-heavy one; the rest use the Markdown one.
 fn main() {
     let md_src = include_str!("../fixtures/markdown.md");
     let mdx_src = include_str!("../fixtures/document.mdx");
+    let autolinks_src = include_str!("../fixtures/autolinks.md");
     let workload = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "parse".to_string());
@@ -17,6 +19,9 @@ fn main() {
 
     let (src, run): (&str, fn(&str, satteri_pulldown_cmark::Options)) = match workload.as_str() {
         "parse" => (md_src, |src, opts| {
+            std::hint::black_box(satteri_pulldown_cmark::parse(src, opts));
+        }),
+        "autolinks" => (autolinks_src, |src, opts| {
             std::hint::black_box(satteri_pulldown_cmark::parse(src, opts));
         }),
         "parse-no-pos" => (md_src, |src, opts| {
