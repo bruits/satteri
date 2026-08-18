@@ -1740,10 +1740,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     /// Commit a detected autolink. Only sound when nothing can still block it.
-    fn append_autolink_link(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
+    fn append_autolink_link(&mut self, d: AutolinkDetection<'a>, begin_text: usize, escaped: bool) {
         let link_ix = self
             .allocs
-            .allocate_link(d.link_type, d.url.into(), "".into(), "".into());
+            .allocate_link(d.link_type, d.url, "".into(), "".into());
         self.tree.append_text(begin_text, d.start, escaped);
         let link_node_ix = self.tree.append(Item {
             start: d.start,
@@ -1762,10 +1762,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
     /// Record a detected autolink as a zero-width marker: no byte's
     /// tokenization changes, so the candidate can still be dropped.
-    fn append_autolink_marker(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
+    fn append_autolink_marker(
+        &mut self,
+        d: AutolinkDetection<'a>,
+        begin_text: usize,
+        escaped: bool,
+    ) {
         let link = self
             .allocs
-            .allocate_link(d.link_type, d.url.into(), "".into(), "".into());
+            .allocate_link(d.link_type, d.url, "".into(), "".into());
         let cand = self.allocs.allocate_autolink_candidate(AutolinkCandidate {
             start: d.start,
             end: d.end,
@@ -2040,10 +2045,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 start: email_start,
                                 end: email_end,
                                 link_type: LinkType::Email,
-                                url: full_url
-                                    .strip_prefix("mailto:")
-                                    .map(str::to_owned)
-                                    .unwrap_or(full_url),
+                                url: email_addr(full_url),
                             };
                             if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
                                 candidate_floor = email_start + 1;
@@ -2501,9 +2503,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         .peek_up()
                         .map(|ix| self.tree[ix].item.start)
                         .unwrap_or(start);
-                    let detection =
-                        detect_gfm_autolink(bytes, ix, byte, paragraph_floor, begin_text)
-                            .filter(|d| d.start >= candidate_floor);
+                    let detection = detect_gfm_autolink(
+                        self.text,
+                        bytes,
+                        ix,
+                        byte,
+                        paragraph_floor,
+                        begin_text,
+                    )
+                    .filter(|d| d.start >= candidate_floor);
                     if let Some(d) = detection {
                         let (cand_start, cand_end) = (d.start, d.end);
                         if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
@@ -5061,11 +5069,11 @@ fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize, options
 
 /// A GFM autolink literal the scanner accepted, before anything is committed
 /// to the tree.
-struct AutolinkDetection {
+struct AutolinkDetection<'a> {
     start: usize,
     end: usize,
     link_type: LinkType,
-    url: String,
+    url: CowStr<'a>,
 }
 
 /// `(can_open, can_close)` for the run of `run_len` delimiters at `at`.
@@ -5129,13 +5137,13 @@ fn escaped_delim_run(
 /// GFM resolves in the email construct's favour. `www_end` bounds the search to
 /// the www span, which the committed path skips outright and the deferred path
 /// was already rescanning.
-fn detect_email_inside_www(
+fn detect_email_inside_www<'a>(
     bytes: &[u8],
     ix: usize,
     www_end: usize,
     paragraph_start: usize,
     begin_text: usize,
-) -> Option<AutolinkDetection> {
+) -> Option<AutolinkDetection<'a>> {
     // `_` is the one atext byte that can precede a www literal, and the
     // attention arm's own email hook already owns that case.
     if ix > 0 && bytes[ix - 1] == b'_' {
@@ -5165,25 +5173,33 @@ fn detect_email_inside_www(
     })
 }
 
+/// Out of line: allocating URLs is rare enough that inlining only bloats the loop.
+#[inline(never)]
+fn www_url<'a>(span: &str) -> CowStr<'a> {
+    format!("http://{span}").into()
+}
+
 /// `scan_email_autolink` returns `mailto:<addr>`; arena_build's Email-link path
 /// prepends `mailto:` again, so strip it here.
-fn email_addr(full_url: String) -> String {
-    full_url
-        .strip_prefix("mailto:")
-        .map(str::to_owned)
-        .unwrap_or(full_url)
+#[inline(never)]
+fn email_addr<'a>(mut full_url: String) -> CowStr<'a> {
+    if full_url.starts_with("mailto:") {
+        full_url.drain(.."mailto:".len());
+    }
+    full_url.into()
 }
 
 /// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
 /// only: committing or deferring is the caller's call, since it turns on
 /// state this function cannot see.
-fn detect_gfm_autolink(
+fn detect_gfm_autolink<'a>(
+    text: &'a str,
     bytes: &[u8],
     ix: usize,
     byte: u8,
     paragraph_start: usize,
     begin_text: usize,
-) -> Option<AutolinkDetection> {
+) -> Option<AutolinkDetection<'a>> {
     // Cheap reject first: most triggers in prose can't start an autolink.
     let is_www = match byte {
         b'h' | b'H' | b'w' | b'W' => crate::post_passes::match_autolink_scheme(bytes, ix)?.1,
@@ -5201,7 +5217,7 @@ fn detect_gfm_autolink(
         b'h' | b'H' | b'w' | b'W' => {
             // `fnr_only`: only the find-and-replace fallback would accept,
             // which is the post-pass's job.
-            let (start, _raw_end, end, full_url, fnr_only) =
+            let (start, _raw_end, end, _, fnr_only) =
                 scan_autolink_literal(bytes, ix, ix == paragraph_start)?;
             if fnr_only {
                 return None;
@@ -5214,11 +5230,16 @@ fn detect_gfm_autolink(
             {
                 return Some(email);
             }
+            let span = text.get(ix..end)?;
             Some(AutolinkDetection {
                 start,
                 end,
                 link_type: LinkType::Autolink,
-                url: full_url,
+                url: if is_www {
+                    www_url(span)
+                } else {
+                    CowStr::Borrowed(span)
+                },
             })
         }
         b'@' => {

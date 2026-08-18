@@ -230,35 +230,12 @@ pub(crate) fn footnote_fragment_id(identifier: &str) -> String {
 #[inline]
 pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
     let bytes = url.as_bytes();
-    // micromark's `normalizeUri` keeps a `%` as-is when it is followed by two
-    // ASCII *alphanumerics* (not strictly hex digits, so `%ax` and `%2g` are
-    // kept); otherwise the `%` itself is percent-encoded as `%25`.
-    let pct_safe = |i: usize| -> bool {
-        i + 2 < bytes.len()
-            && bytes[i + 1].is_ascii_alphanumeric()
-            && bytes[i + 2].is_ascii_alphanumeric()
-    };
-    let mut from = 0;
-    let needs_encode = loop {
-        let Some(offset) = bytes[from..].iter().position(|&b| !URL_SAFE[b as usize]) else {
-            break false;
-        };
-        let at = from + offset;
-        if bytes[at] != b'%' || !pct_safe(at) {
-            break true;
-        }
-        from = at + 1;
-    };
-    if !needs_encode {
+    if next_unsafe(bytes, 0).is_none() {
         return std::borrow::Cow::Borrowed(url);
     }
     let mut encoded = String::with_capacity(url.len() * 2);
     for (i, &byte) in bytes.iter().enumerate() {
-        let safe = if byte == b'%' {
-            pct_safe(i)
-        } else {
-            is_url_safe(byte)
-        };
+        let safe = is_url_safe(byte) || (byte == b'%' && pct_safe(bytes, i));
         if safe {
             encoded.push(byte as char);
         } else {
@@ -270,25 +247,48 @@ pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(encoded)
 }
 
-const fn url_safe_table() -> [bool; 256] {
-    let mut table = [false; 256];
-    let mut byte = 0usize;
-    while byte < 256 {
-        table[byte] = is_url_safe(byte as u8);
-        byte += 1;
+/// micromark's `normalizeUri` keeps a `%` as-is when it is followed by two
+/// ASCII *alphanumerics* (not strictly hex digits, so `%ax` and `%2g` are
+/// kept); otherwise the `%` itself is percent-encoded as `%25`.
+#[inline]
+fn pct_safe(bytes: &[u8], i: usize) -> bool {
+    i + 2 < bytes.len()
+        && bytes[i + 1].is_ascii_alphanumeric()
+        && bytes[i + 2].is_ascii_alphanumeric()
+}
+
+/// Offset of the first byte at or after `from` that `normalizeUri` encodes.
+fn next_unsafe(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while let Some(offset) = bytes[i..].iter().position(|&b| !is_url_safe(b)) {
+        let at = i + offset;
+        if bytes[at] != b'%' || !pct_safe(bytes, at) {
+            return Some(at);
+        }
+        i = at + 1;
+    }
+    None
+}
+
+const URL_SAFE_BYTES: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\
+0123456789-._~:/?#@!$&'()*+,;=";
+
+const fn url_safe_table() -> [u64; 4] {
+    let mut table = [0u64; 4];
+    let mut i = 0;
+    while i < URL_SAFE_BYTES.len() {
+        let b = URL_SAFE_BYTES[i] as usize;
+        table[b >> 6] |= 1 << (b & 63);
+        i += 1;
     }
     table
 }
 
-static URL_SAFE: [bool; 256] = url_safe_table();
+static URL_SAFE: [u64; 4] = url_safe_table();
 
-const fn is_url_safe(b: u8) -> bool {
-    matches!(b,
-        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-        | b'-' | b'.' | b'_' | b'~'
-        | b':' | b'/' | b'?' | b'#' | b'@'
-        | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'='
-    )
+#[inline]
+fn is_url_safe(b: u8) -> bool {
+    URL_SAFE[(b >> 6) as usize] & (1 << (b & 63)) != 0
 }
 
 fn hex_digit(n: u8) -> char {
