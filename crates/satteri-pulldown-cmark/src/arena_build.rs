@@ -1974,13 +1974,7 @@ fn parse_inner(
         {
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
-        // Triggers are case-insensitive (`HTTP://`, `WWW.`), so check the
-        // uppercase variants too, and `&`: the pass matches decoded text, where
-        // a reference can supply a trigger the raw bytes lack (`&#104;ttp://x.y`).
-        if !skip_fnr_autolink
-            && (memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
-                || memchr::memchr3(b'H', b'W', b'&', source_bytes).is_some())
-        {
+        if !skip_fnr_autolink && crate::post_passes::gfm_autolink_literal_may_apply(source_bytes) {
             crate::post_passes::gfm_autolink_literal_pass(
                 &mut arena,
                 source_bytes,
@@ -2716,6 +2710,98 @@ mod autolink_path_probe {
             assert_eq!(
                 satteri_ast::mdast_to_html(&skipped),
                 satteri_ast::mdast_to_html(&full),
+                "{input:?}"
+            );
+        }
+    }
+
+    const NO_POSSIBLE_TRIGGER: &[&str] = &[
+        "how the wind howls",
+        "Web WWW rows, HTTP verbs: what, where, why",
+        "**how** *what* ~~where~~ `hth` w.x ww.x.y wwww http:x.y https:/x.y",
+        "[a w.x](http:foo) ![b](w:x)",
+        "| head h | w col |\n| --- | --- |\n| ha | wo |",
+        "- [ ] winter\n- [x] home\n\n> quote how\n\n# heading with words",
+    ];
+
+    const CONSTRUCT_PATH_LINKS: &[&str] = &[
+        "www.x.y http://x.y a@b.cd",
+        "HTTP://X.Y WWW.X.Y",
+        "*www.x.y* _a@b.cd_",
+    ];
+
+    const FNR_PATH_LINKS: &[&str] = &[
+        "[a www.x.y",
+        ".www.x.y",
+        "[a <http://q.r/]> www.x.y",
+        "<www.x.y> b",
+        "[a] www.a.b x\\* www.c.d",
+        "> [a www.x.y\n> more",
+    ];
+
+    const DECODE_SYNTHESIZED_TRIGGERS: &[&str] = &[
+        "www\\.x.y",
+        "http:\\//x.y",
+        "ww&#119;.x.y",
+        "w&#119;w.x.y",
+        "x&#64;y.zz",
+        "&#104;ttp&#58;//x.y",
+        "w\\ww.x.y",
+    ];
+
+    const IGNORED_OR_TRUNCATED_SHAPES: &[&str] = &[
+        "`www.x.y` [www.x.y](/u) ![w](www.x.y)",
+        "```\nwww.x.y\n```",
+        "www.",
+        "www.x",
+        "a@",
+        "htt",
+        "x@y.zz",
+        "| www.x.y |\n| --- |\n| a@b.cd |",
+        "a[^1]\n\n[^1]: www.x.y ok",
+    ];
+
+    /// A wrong document-level skip is silent; this is the check that catches it.
+    #[test]
+    fn force_running_the_fnr_pass_after_a_parse_changes_nothing() {
+        let smart = PROBE_OPTIONS.union(Options::ENABLE_SMART_PUNCTUATION);
+        for options in [PROBE_OPTIONS, smart] {
+            for input in NO_POSSIBLE_TRIGGER
+                .iter()
+                .chain(CONSTRUCT_PATH_LINKS)
+                .chain(FNR_PATH_LINKS)
+                .chain(DECODE_SYNTHESIZED_TRIGGERS)
+                .chain(IGNORED_OR_TRUNCATED_SHAPES)
+            {
+                let (mut arena, _) = parse_inner(input, options, true, None, false);
+                let before = satteri_ast::mdast_to_html(&arena);
+                crate::post_passes::gfm_autolink_literal_pass(
+                    &mut arena,
+                    input.as_bytes(),
+                    options,
+                    None,
+                );
+                assert_eq!(before, satteri_ast::mdast_to_html(&arena), "{input:?}");
+            }
+        }
+    }
+
+    /// Keeps the corpus honest: an entry drifting to the wrong verdict would void the proof above.
+    #[test]
+    fn the_gate_corpus_exercises_both_verdicts() {
+        for input in NO_POSSIBLE_TRIGGER {
+            assert!(
+                !crate::post_passes::gfm_autolink_literal_may_apply(input.as_bytes()),
+                "{input:?}"
+            );
+        }
+        for input in DECODE_SYNTHESIZED_TRIGGERS
+            .iter()
+            .chain(CONSTRUCT_PATH_LINKS)
+            .chain(FNR_PATH_LINKS)
+        {
+            assert!(
+                crate::post_passes::gfm_autolink_literal_may_apply(input.as_bytes()),
                 "{input:?}"
             );
         }

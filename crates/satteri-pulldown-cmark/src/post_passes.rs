@@ -873,8 +873,31 @@ pub(crate) fn gfm_autolink_literal_pass(
     }
 }
 
+/// `&`/`\` count: an entity or escape can synthesize a decoded trigger the raw bytes lack.
+pub(crate) fn gfm_autolink_literal_may_apply(source_bytes: &[u8]) -> bool {
+    memchr::memchr2_iter(b'@', b':', source_bytes).any(|at| trigger_at(source_bytes, at))
+        || www_prefix_present(source_bytes)
+        || memchr::memchr2(b'&', b'\\', source_bytes).is_some()
+}
+
+/// A `www.` literal needs a dot as well, and ruling one out beats walking every `w`.
+fn www_prefix_present(bytes: &[u8]) -> bool {
+    memchr::memchr(b'.', bytes).is_some()
+        && memchr::memchr2_iter(b'w', b'W', bytes)
+            .any(|at| match_autolink_scheme(bytes, at).is_some())
+}
+
 /// One AVX2 vector; below it the trigger scans go scalar instead.
 const MEMCHR_MIN_LEN: usize = 32;
+
+#[inline]
+fn trigger_at(bytes: &[u8], at: usize) -> bool {
+    match bytes[at] {
+        b'@' => true,
+        b':' => matches!(bytes.get(at + 1..at + 3), Some([b'/', b'/'])),
+        _ => at >= 3 && match_autolink_scheme(bytes, at - 3).is_some(),
+    }
+}
 
 /// Keying `www.` on its dot keeps the needle set at three case-exact bytes.
 #[inline]
@@ -882,18 +905,8 @@ fn has_autolink_trigger(bytes: &[u8]) -> bool {
     let mut from = 0;
     while let Some(off) = next_trigger_byte(&bytes[from..]) {
         let at = from + off;
-        match bytes[at] {
-            b'@' => return true,
-            b':' => {
-                if matches!(bytes.get(at + 1..at + 3), Some([b'/', b'/'])) {
-                    return true;
-                }
-            }
-            _ => {
-                if at >= 3 && match_autolink_scheme(bytes, at - 3).is_some() {
-                    return true;
-                }
-            }
+        if trigger_at(bytes, at) {
+            return true;
         }
         from = at + 1;
     }
