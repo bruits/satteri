@@ -61,7 +61,7 @@ const fn attr_value_escape(byte: u8) -> Option<&'static str> {
 }
 
 /// Position and replacement of the first byte at or after `from` that needs
-/// escaping, or `None` when the rest is clean.
+/// escaping, or `None` when the rest is clean. `bytes` must hold a whole word.
 ///
 /// A sub-word remainder is covered by re-reading the final eight bytes with the
 /// already-cleared lanes masked off, which is one more word test instead of a
@@ -72,10 +72,10 @@ fn next_escape(
     bytes: &[u8],
     from: usize,
     mask_of: impl Fn(u64) -> u64,
-    needles: &[bool; 256],
     escape_of: impl Fn(u8) -> Option<&'static str>,
 ) -> Option<(usize, &'static str)> {
     let len = bytes.len();
+    debug_assert!(len >= 8, "the tail re-read needs a whole word behind `i`");
     let mut i = from;
     while let Some(chunk) = bytes[i..].first_chunk::<8>() {
         let mut mask = mask_of(u64::from_le_bytes(*chunk));
@@ -93,13 +93,11 @@ fn next_escape(
         return None;
     }
 
-    let Some(base) = len.checked_sub(8).filter(|&base| base < i) else {
-        return scan_bytes(bytes, i, needles, escape_of);
-    };
-    let Some(chunk) = bytes[base..].first_chunk::<8>() else {
-        return scan_bytes(bytes, i, needles, escape_of);
-    };
-    let mut mask = mask_of(u64::from_le_bytes(*chunk)) & (u64::MAX << ((i - base) * 8));
+    // The loop leaves `len - i` in `1..8`, so the shift below never reaches 64.
+    let base = len - 8;
+    let mut tail = [0u8; 8];
+    tail.copy_from_slice(&bytes[base..]);
+    let mut mask = mask_of(u64::from_le_bytes(tail)) & (u64::MAX << ((i - base) * 8));
     while mask != 0 {
         let at = base + (mask.trailing_zeros() / 8) as usize;
         if let Some(escaped) = escape_of(bytes[at]) {
@@ -154,7 +152,7 @@ fn escape_into(
         copy_around_escapes(out, s, |from| scan_bytes(bytes, from, needles, &escape_of));
     } else {
         copy_around_escapes(out, s, |from| {
-            next_escape(bytes, from, &mask_of, needles, &escape_of)
+            next_escape(bytes, from, &mask_of, &escape_of)
         });
     }
 }
