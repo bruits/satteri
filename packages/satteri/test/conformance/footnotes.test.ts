@@ -190,15 +190,47 @@ describe("GFM footnote semantics conformance (vs remark-rehype)", () => {
     assertFootnoteHastConformance("Text[^a].\n\n[^a]: First para.\n\n    Second para.\n");
   });
 
-  // remark appends the backref after a non-paragraph last block; satteri keeps it in the paragraph.
-  test.fails("a definition ending in a list puts the backref after the list", () => {
+  test("a definition ending in a list puts the backref after the list", () => {
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    - one\n");
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: - one\n");
+  });
+
+  test("a definition ending in a list and code block places the backref last", () => {
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    - one\n\n        code\n");
+    assertFootnoteHastConformance(
+      "Text[^a].\n\n[^a]: Body.\n\n    - one\n\n    ```\n    code\n    ```\n",
+    );
+  });
+
+  test("a definition ending in a non-paragraph block puts the backref after it", () => {
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n        code\n");
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    > quote\n");
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    # Head\n");
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    ***\n");
+    assertFootnoteHastConformance(
+      "Text[^a].\n\n[^a]: Body.\n\n    | a | b |\n    | - | - |\n    | 1 | 2 |\n",
+    );
+  });
+
+  test("a paragraph after a list still takes the backref", () => {
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: One.\n\n    - x\n\n    Two.\n");
+  });
+
+  test("repeated references to a definition ending in a list all get backrefs", () => {
+    assertFootnoteHastConformance("Text[^a] and[^a].\n\n[^a]: Body.\n\n    - one\n");
+    assertFootnoteHastConformance("T[^a] a[^a] b[^a].\n\n[^a]: Body.\n\n    - one\n");
+    assertFootnoteHastConformance("Text[^a] and[^a].\n\n[^a]: Body.\n\n    > quote\n");
+  });
+
+  // Divergences below are `position`-only; the elements and backrefs already match.
+  // remark stretches a definition's blocks over the indent it stripped, satteri ends
+  // them at their own last byte.
+  test.fails("a multi-item list in a definition positions its items like remark", () => {
     assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    - one\n    - two\n");
   });
 
-  test.fails("a definition ending in a list and code block places the backref last", () => {
-    assertFootnoteHastConformance(
-      "Text[^a].\n\n[^a]: Body.\n\n    - one\n    - two\n\n        code\n",
-    );
+  test.fails("a definition holding a nested definition positions its paragraph like remark", () => {
+    assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    [^b]: Inner.\n\nAlso[^b].\n");
   });
 
   test("a definition can reference another footnote", () => {
@@ -221,5 +253,6 @@ describe("GFM footnote semantics conformance (vs remark-rehype)", () => {
 
   test("a definition body can be empty", () => {
     assertFootnoteHastConformance("Text[^a].\n\n[^a]:\n");
+    assertFootnoteHastConformance("Text[^a] and[^a].\n\n[^a]:\n");
   });
 });

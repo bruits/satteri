@@ -895,12 +895,9 @@ fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, d
         sink.newline();
 
         let children = view.get_children(def_id);
-        let last_para_idx = children
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|&(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
-            .map(|(i, _)| i);
+        let ends_in_paragraph = children
+            .last()
+            .is_some_and(|&cid| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8);
         let total_refs = ctx
             .refs
             .footnote_ref_totals
@@ -910,13 +907,13 @@ fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, d
             .max(1);
 
         if children.is_empty() {
-            emit_footnote_backrefs(&safe_id, number, total_refs, ctx, sink);
+            emit_footnote_backrefs(&safe_id, number, total_refs, true, ctx, sink);
         } else {
             for (i, &child_id) in children.iter().enumerate() {
                 if i > 0 {
                     sink.newline();
                 }
-                if Some(i) == last_para_idx {
+                if ends_in_paragraph && i + 1 == children.len() {
                     emit_paragraph_with_backrefs(
                         child_id,
                         &safe_id,
@@ -930,10 +927,9 @@ fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, d
                     emit_node(child_id, ctx, sink, depth + 1);
                 }
             }
-            // Fallback: the definition contained no paragraph at all.
-            if last_para_idx.is_none() {
+            if !ends_in_paragraph {
                 sink.newline();
-                emit_footnote_backrefs(&safe_id, number, total_refs, ctx, sink);
+                emit_footnote_backrefs(&safe_id, number, total_refs, true, ctx, sink);
             }
         }
 
@@ -972,20 +968,28 @@ fn emit_paragraph_with_backrefs<S: ConvertSink>(
             sink.text(" ", Pos::None);
         }
     }
-    emit_footnote_backrefs(identifier, number, total_refs, ctx, sink);
+    emit_footnote_backrefs(identifier, number, total_refs, false, ctx, sink);
     sink.close_element("p");
 }
 
+/// remark's loose wrap newlines the separator when the backrefs are `<li>` children.
 fn emit_footnote_backrefs<S: ConvertSink>(
     identifier: &str,
     number: usize,
     total_refs: usize,
+    li_children: bool,
     ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
 ) {
     for k in 1..=total_refs.max(1) {
         if k > 1 {
+            if li_children {
+                sink.newline();
+            }
             sink.text(" ", Pos::None);
+            if li_children {
+                sink.newline();
+            }
         }
         let aria = resolve_backref(&ctx.options.footnote_back_label, number, k);
         let back_content = resolve_backref(&ctx.options.footnote_back_content, number, k);
