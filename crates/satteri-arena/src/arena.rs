@@ -289,6 +289,14 @@ impl<K: ArenaKind> Arena<K> {
         let end = start + node.data_len as usize;
         &self.type_data[start..end]
     }
+
+    /// For same-length fixups; `set_type_data` appends a copy and orphans the old bytes.
+    pub fn get_type_data_mut(&mut self, node_id: u32) -> &mut [u8] {
+        let node = &self.nodes[node_id as usize];
+        let start = node.data_offset as usize;
+        let end = start + node.data_len as usize;
+        &mut self.type_data[start..end]
+    }
 }
 
 /// Handle for tracking in-progress variable-length type data writes.
