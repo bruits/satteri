@@ -166,6 +166,45 @@ Apple
 </dl>
 ````````````````````````````````
 
+A blank line *inside* a definition separates two blocks, so that definition is
+loose (both blocks are wrapped) even though no blank line preceded its own `:`
+marker:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+
+    More red.
+.
+<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+<p>More red.</p>
+</dd>
+</dl>
+````````````````````````````````
+
+Only the definition that holds the blank line turns loose; a sibling definition
+made of a single block stays tight:
+
+```````````````````````````````` example_deflists
+Apple
+:   Red.
+
+    More red.
+:   Green.
+.
+<dl>
+<dt>Apple</dt>
+<dd>
+<p>Red.</p>
+<p>More red.</p>
+</dd>
+<dd>Green.</dd>
+</dl>
+````````````````````````````````
+
 A definition can contain any block content, such as an indented code block:
 
 ```````````````````````````````` example_deflists
