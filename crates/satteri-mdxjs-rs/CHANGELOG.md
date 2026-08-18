@@ -1,5 +1,58 @@
 # satteri-mdxjs
 
+## 0.3.9 — 2026-08-18
+
+### Patch changes
+
+- [c9985d9](https://github.com/bruits/satteri/commit/c9985d93b5ee23aff07491360be83d4a3412f18b) Fixed `development: true` line and column numbers, missing-component references, and MDX parse error locations being wrong in documents with multibyte or emoji characters. — Thanks @Princesseuh!
+- [5c4cd17](https://github.com/bruits/satteri/commit/5c4cd170b2e4d0db4fb9f610fc15802aa2757fd9) Fixed `elementAttributeNameCase: "html"` leaving a nested `<svg>` element's own React-cased attributes (like `strokeWidth`) unconverted on the MDX compile path; the SVG schema now covers the `<svg>` element itself, not just its descendants. — Thanks @gtritchie!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Faster parsing, MDX compilation, and plugin execution. — Thanks @Princesseuh!
+- [166419c](https://github.com/bruits/satteri/commit/166419cf912b3639abedfcb87ee8059920e5b221) Fixed `jsx: true` output not saying which JSX runtime to use, so a bundler compiling the JSX ignored `jsxImportSource` and the pragma options. — Thanks @Princesseuh!
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added a `rawHtml` feature that reparses raw HTML embedded in Markdown into real HAST nodes. Enable it with `features: { rawHtml: true }` on any entry point; it is applied during the MDAST→HAST conversion, so `markdownToHast`, `markdownToHtml`, and the plugin pipelines all reparse identically, and hast plugins always see the reparsed elements.
+  
+  The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalized into typed hast properties (`class` → `className: [...]`, `disabled` → `true`, `tabindex` → number, `data-foo-bar` → `dataFooBar`). `htmlToHast` normalizes properties the same way.
+  
+  MDX nodes are passed through the reparse rather than dropped: each JSX element/expression is preserved in place while the surrounding raw HTML is still resolved around it. So `mdxToHast(source, { features: { rawHtml: true } })` keeps its MDX content.
+  
+  ```ts
+  import { markdownToHast } from "satteri";
+  
+  const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
+    features: { rawHtml: true },
+  });
+  // <div> is a real element wrapping <p><strong>hi</strong></p>
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+- [166419c](https://github.com/bruits/satteri/commit/166419cf912b3639abedfcb87ee8059920e5b221) Added `markdownToJs`, the plain-Markdown counterpart to `mdxToJs`: MDX syntax like `{...}` stays literal text.
+  
+  ```ts
+  import { markdownToJs } from "satteri";
+  
+  const { code } = markdownToJs("Hello {world}");
+  ```
+  
+  HTML in the source is dropped. Pass `features: { rawHtml: true }` to parse it into real elements instead. — Thanks @Princesseuh!
+- [166419c](https://github.com/bruits/satteri/commit/166419cf912b3639abedfcb87ee8059920e5b221) Fixed `development: true` leaving out the line and column of elements that came from Markdown rather than from JSX written by hand. — Thanks @Princesseuh!
+- [47768aa](https://github.com/bruits/satteri/commit/47768aaf8cb3566cbd0e231124bb0beff7212ded) Fixed whitespace between adjacent components disappearing in MDX compiled with static optimization enabled. — Thanks @Princesseuh!
+- [9094edd](https://github.com/bruits/satteri/commit/9094edd70cbf49f28444838afc7c489ddf068c09) Improved MDX to JavaScript compilation performance. — Thanks @Princesseuh!
+- [63fbb77](https://github.com/bruits/satteri/commit/63fbb77a16b88d4df4928ed07e943752e87fff17) Plugins now splice strings with a single shape, `{ raw: string, mdxExpressions?: boolean }`, accepted by visitor return values and every structural mutator (`replace`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, `wrapNode`). The string is re-parsed in place of the node.
+  
+  `mdxExpressions` (default `true`) controls what `{…}` means when the document is MDX: live expressions by default, or literal text with `mdxExpressions: false` — the right choice when injecting generated HTML whose braces are not expressions, like a Mermaid decision node `C{JWT valid?}` or math renderer output. Plain Markdown has no expressions, so the option is a no-op there.
+  
+  `{ rawHtml: string }` is deprecated; it keeps working and behaves exactly like `{ raw, mdxExpressions: false }`.
+  
+  ```ts
+  defineMdastPlugin({
+    code(node) {
+      if (node.lang !== "mermaid") return;
+      return { raw: renderMermaid(node.value), mdxExpressions: false };
+    },
+  });
+  ```
+   — Thanks @Princesseuh!
+- [c9f0757](https://github.com/bruits/satteri/commit/c9f07579e26a92f19d58afbc09336787f25e3587) Fixed MDX error messages reporting two different locations for documents that use lone carriage returns as line endings. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.0, satteri-ast (Cargo)@0.5.0, satteri-pulldown-cmark (Cargo)@0.6.0
+
 ## 0.3.8 — 2026-07-08
 
 ### Patch changes
