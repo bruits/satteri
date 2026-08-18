@@ -9,6 +9,7 @@ use crate::oxc_utils::{
     create_prop_name, create_string_literal, inter_element_whitespace, is_literal_name,
 };
 use core::str;
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -112,7 +113,7 @@ struct Context<'a> {
     space: Space,
     comments: Vec<MdxComment>,
     esm: Vec<Statement<'a>>,
-    location: Option<&'a Location>,
+    location: Option<&'a Location<'a>>,
     allocator: &'a Allocator,
     view: &'a Arena<Hast>,
     /// Behind `Rc` because `all()` needs to hold the config while mutably
@@ -130,7 +131,7 @@ struct Context<'a> {
 pub fn hast_util_to_oxc<'a>(
     view: &'a Arena<Hast>,
     path: Option<String>,
-    location: Option<&'a Location>,
+    location: Option<&'a Location<'a>>,
     explicit_jsxs: &mut FxHashSet<Span>,
     allocator: &'a Allocator,
     optimize_static: Option<&OptimizeStaticConfig>,
@@ -484,8 +485,8 @@ fn all<'a>(
     parent_id: u32,
     explicit_jsxs: &mut FxHashSet<Span>,
 ) -> Result<OxcVec<'a, JSXChild<'a>>, message::Message> {
-    let mut result = OxcVec::new_in(context.allocator);
     let child_count = context.view.get_children(parent_id).len();
+    let mut result = OxcVec::with_capacity_in(child_count, context.allocator);
 
     if let Some(config) = context.optimize_static.clone() {
         // Optimization enabled: group consecutive static siblings into raw HTML.
@@ -600,10 +601,12 @@ fn transform_element<'a>(
     context.space = space;
 
     let alloc = context.allocator;
-    let mut attrs = OxcVec::new_in(alloc);
-
     let prop_count = decode_element_prop_count(data);
-    let in_svg = context.space == Space::Svg;
+    let mut attrs = OxcVec::with_capacity_in(prop_count as usize, alloc);
+
+    // The schema switch covers the <svg> element's own attributes too, not
+    // just its descendants (mirrors the HTML serializer in hast/render.rs).
+    let in_svg = space == Space::Svg || tag_name == "svg";
     let attr_case = context.element_attribute_name_case;
     let style_case = context.style_property_name_case;
     for i in 0..prop_count {
@@ -652,10 +655,12 @@ fn transform_element<'a>(
             _ => continue,
         };
 
+        // Keep the Cow borrowed where possible: create_jsx_attr_name_from_str
+        // arena-copies from &str, so an intermediate String is pure waste.
         let attr_name = match attr_case {
-            ElementAttributeNameCase::React => prop_to_attr_name(name),
+            ElementAttributeNameCase::React => Cow::Owned(prop_to_attr_name(name)),
             ElementAttributeNameCase::Html => {
-                satteri_ast::hast::properties::property_to_attribute(name, in_svg).into_owned()
+                satteri_ast::hast::properties::property_to_attribute(name, in_svg)
             }
         };
         attrs.push(JSXAttributeItem::Attribute(OxcBox::new_in(
@@ -716,9 +721,9 @@ fn transform_mdx_jsx_element<'a>(
     context.space = space;
 
     let alloc = context.allocator;
-    let mut attrs = OxcVec::new_in(alloc);
-
     let attr_count = decode_mdx_jsx_attr_count(data);
+    let mut attrs = OxcVec::with_capacity_in(attr_count as usize, alloc);
+
     for i in 0..attr_count {
         let (kind, attr_name_ref, attr_value_ref) = decode_mdx_jsx_attr(data, i);
 

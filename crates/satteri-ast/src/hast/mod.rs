@@ -1,6 +1,7 @@
 //! HAST-specific node types, codecs, and rendering.
 
 pub mod codec;
+pub mod escape;
 #[cfg(feature = "from-html")]
 pub mod from_html;
 pub(crate) mod generated;
@@ -13,7 +14,10 @@ pub use crate::convert::{
     mdast_arena_to_hast_arena_with_options,
 };
 #[cfg(feature = "from-html")]
-pub use from_html::{html_fragment_to_wrap_arena, html_to_hast_arena, raw_to_hast_arena};
+pub use from_html::{
+    HtmlSpace, html_fragment_to_hast_arena, html_fragment_to_wrap_arena, html_to_hast_arena,
+    raw_to_hast_arena,
+};
 pub use node::HastNodeType;
 pub use render::{hast_arena_to_html, is_void_element, render_node};
 

@@ -10,7 +10,7 @@ use satteri_arena::{Arena, ArenaKind, Hast, Mdast};
 /// type_data (u32 LE) here." Higher than any real MDAST (≤104) or HAST (≤14)
 /// type. Resolving it copies the original subtree *and applies any pending
 /// patch on it*, so a nested transform queued on a passed-through child still
-/// lands — no stranding, no re-visit. One exception: a discarding self-ref
+/// lands (no stranding, no re-visit). One exception: a discarding self-ref
 /// whose subtree contains other patched anchors errors with
 /// [`CommandError::UnsupportedPatchShape`] instead of re-entering (see
 /// [`apply_patches_in_place`]).
@@ -63,7 +63,7 @@ pub enum Patch<K: ArenaKind> {
         child_tree: PatchContent<K>,
     },
     /// Replaces the node's child list with `new_children` (a Root-rooted
-    /// sub-arena, spliced in), keeping the node itself — unlike `Replace`.
+    /// sub-arena, spliced in), keeping the node itself (unlike `Replace`).
     SetChildren {
         node_id: u32,
         new_children: PatchContent<K>,
@@ -76,7 +76,7 @@ pub enum Patch<K: ArenaKind> {
 ///
 /// MDAST and HAST share many numeric `node_type` values (e.g. MDAST `List` and
 /// HAST `Raw` both = 5). Dispatch on `K::KIND_TAG` first so each schema's
-/// layout is interpreted independently — applying HAST's "StringRef at 0"
+/// layout is interpreted independently: applying HAST's "StringRef at 0"
 /// rule to an MDAST `List` would corrupt the `start: u32` field stored there.
 fn remap_string_refs<K: ArenaKind>(data: &mut [u8], node_type: u8, base: u32) {
     if K::KIND_TAG == Mdast::KIND_TAG {
@@ -143,9 +143,11 @@ fn remap_mdast_string_refs(data: &mut [u8], node_type: u8, base: u32) {
         19 => &[0, 8],
         // Math(27), InlineMath(28): meta(0), value(8)
         27 | 28 => &[0, 8],
+        // Custom(38): name(0), value(8)
+        38 => &[0, 8],
         // MdxFlowExpression(102), MdxTextExpression(103), MdxjsEsm(104): value(0)
         102..=104 => &[0],
-        // List(5) carries `start: u32` at offset 0 — NOT a StringRef. Heading(2)
+        // List(5) carries `start: u32` at offset 0, NOT a StringRef. Heading(2)
         // carries `depth: u8` only. ListItem(6), Table(21) and the rest have no
         // StringRef fields. Don't remap.
         _ => &[],
@@ -231,7 +233,11 @@ fn unsupported(reason: &'static str) -> CommandError {
 }
 
 /// Subtree copy by id; the append-only pool keeps type_data StringRefs valid verbatim.
-fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, id: u32) -> u32 {
+fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, id: u32, depth: u32) -> u32 {
+    crate::stack::with_headroom(depth, || copy_subtree_inner(arena, id, depth))
+}
+
+fn copy_subtree_inner<K: ArenaKind>(arena: &mut Arena<K>, id: u32, depth: u32) -> u32 {
     let node = *arena.get_node(id);
     let new_id = arena.alloc_node(node.node_type);
     if let Some(data) = arena.get_node_data(id).map(<[u8]>::to_vec) {
@@ -252,7 +258,10 @@ fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, id: u32) -> u32 {
     }
     let children = arena.get_children(id).to_vec();
     if !children.is_empty() {
-        let ids: Vec<u32> = children.iter().map(|&c| copy_subtree(arena, c)).collect();
+        let ids: Vec<u32> = children
+            .iter()
+            .map(|&c| copy_subtree(arena, c, depth + 1))
+            .collect();
         arena.set_children(new_id, &ids);
     }
     new_id
@@ -266,6 +275,21 @@ fn graft_node<K: ArenaKind>(
     source_base: u32,
     resolved_refs: &FxHashMap<u32, Vec<u32>>,
     out: &mut Vec<u32>,
+    depth: u32,
+) {
+    crate::stack::with_headroom(depth, || {
+        graft_node_inner(arena, sub, sub_id, source_base, resolved_refs, out, depth);
+    });
+}
+
+fn graft_node_inner<K: ArenaKind>(
+    arena: &mut Arena<K>,
+    sub: &Arena<K>,
+    sub_id: u32,
+    source_base: u32,
+    resolved_refs: &FxHashMap<u32, Vec<u32>>,
+    out: &mut Vec<u32>,
+    depth: u32,
 ) {
     let node = sub.get_node(sub_id);
     if node.node_type == REF_NODE_TYPE {
@@ -276,15 +300,7 @@ fn graft_node<K: ArenaKind>(
     if let Some(data) = sub.get_node_data(sub_id) {
         arena.set_node_data(new_id, data.to_vec());
     }
-    arena.set_position(
-        new_id,
-        node.start_offset + source_base,
-        node.end_offset + source_base,
-        node.start_line,
-        node.start_column,
-        node.end_line,
-        node.end_column,
-    );
+    // Payload coordinates are fragment-relative, so the no-position sentinel stays.
     let type_data = sub.get_type_data(sub_id);
     if !type_data.is_empty() {
         if source_base != 0 {
@@ -299,7 +315,15 @@ fn graft_node<K: ArenaKind>(
     if !sub_children.is_empty() {
         let mut ids: Vec<u32> = Vec::with_capacity(sub_children.len());
         for c in sub_children {
-            graft_node(arena, sub, c, source_base, resolved_refs, &mut ids);
+            graft_node(
+                arena,
+                sub,
+                c,
+                source_base,
+                resolved_refs,
+                &mut ids,
+                depth + 1,
+            );
         }
         arena.set_children(new_id, &ids);
     }
@@ -308,7 +332,7 @@ fn graft_node<K: ArenaKind>(
 
 /// Graft a payload sub-arena, returning the ids to splice into the slot.
 /// Root-wrapped payloads contribute their root's children, mirroring
-/// `emit_subtree` — unless `preserve_root` is set (root-anchored Replace),
+/// `emit_subtree`, unless `preserve_root` is set (root-anchored Replace),
 /// which keeps the payload root as a node since it lands on node 0.
 fn graft_subtree<K: ArenaKind>(
     arena: &mut Arena<K>,
@@ -328,10 +352,10 @@ fn graft_subtree<K: ArenaKind>(
     let mut out = Vec::new();
     if !preserve_root && sub.get_node(0).node_type == K::ROOT_TAG {
         for c in sub.get_children(0).to_vec() {
-            graft_node(arena, sub, c, source_base, resolved_refs, &mut out);
+            graft_node(arena, sub, c, source_base, resolved_refs, &mut out, 0);
         }
     } else {
-        graft_node(arena, sub, 0, source_base, resolved_refs, &mut out);
+        graft_node(arena, sub, 0, source_base, resolved_refs, &mut out, 0);
     }
     out
 }
@@ -360,7 +384,7 @@ enum GraftMode {
     /// Wrap payload: node 0 is the wrapper itself, copied verbatim (a REF at
     /// position 0 is never resolved).
     Wrap,
-    /// Root-anchored Replace: the payload root is kept as-is — even a ROOT —
+    /// Root-anchored Replace: the payload root is kept as-is (even a ROOT)
     /// because it lands on node 0 instead of being spliced into a sibling
     /// list. REF roots still resolve.
     KeepRoot,
@@ -383,19 +407,19 @@ fn resolve_target<K: ArenaKind>(
         if self_removed {
             return Vec::new();
         }
-        return vec![copy_subtree(arena, anchor)];
+        return vec![copy_subtree(arena, anchor, 0)];
     }
     if let Some(slot) = slots.get(&target) {
         if truly_dead.contains(&target) && adopted_by_id.insert(target) {
             return slot.clone();
         }
         let ids: Vec<u32> = slot.clone();
-        return ids.iter().map(|&id| copy_subtree(arena, id)).collect();
+        return ids.iter().map(|&id| copy_subtree(arena, id, 0)).collect();
     }
     if truly_dead.contains(&target) && adopted_by_id.insert(target) {
         return vec![target];
     }
-    vec![copy_subtree(arena, target)]
+    vec![copy_subtree(arena, target, 0)]
 }
 
 /// Resolve a grafted payload's placeholder refs in place and return the final
@@ -466,11 +490,12 @@ fn resolve_grafted<K: ArenaKind>(
 
 /// Materialize the pending grouped sibling splices for `parent`: walk its
 /// current child list once, expanding each anchored slot in place. No-op if
-/// nothing is pending for `parent`.
+/// nothing is pending for `parent`. Slots whose anchor is gone report in `stranded`.
 fn flush_pending_splices<K: ArenaKind>(
     arena: &mut Arena<K>,
     pending: &mut FxHashMap<u32, FxHashMap<u32, Vec<u32>>>,
     parent: u32,
+    stranded: &mut Vec<u32>,
 ) {
     let Some(slots) = pending.remove(&parent) else {
         return;
@@ -478,11 +503,18 @@ fn flush_pending_splices<K: ArenaKind>(
     let current = arena.get_children(parent).to_vec();
     let grown: usize = slots.values().map(Vec::len).sum();
     let mut new_list: Vec<u32> = Vec::with_capacity(current.len() + grown);
+    let mut spliced = 0usize;
     for &child in &current {
         match slots.get(&child) {
-            Some(slot) => new_list.extend_from_slice(slot),
+            Some(slot) => {
+                new_list.extend_from_slice(slot);
+                spliced += 1;
+            }
             None => new_list.push(child),
         }
+    }
+    if spliced != slots.len() {
+        stranded.extend(slots.keys().copied().filter(|a| !current.contains(a)));
     }
     arena.set_children(parent, &new_list);
 }
@@ -516,9 +548,9 @@ fn overwrite_root_with<K: ArenaKind>(arena: &mut Arena<K>, src: u32) {
     }
 }
 
-/// Make node 0 an empty root: no children, no data, zeroed position — the
-/// in-place equivalent of the old rebuild's empty arena for `Remove` on the
-/// root. The node type is kept so the document still serializes (as empty).
+/// Make node 0 an empty root (no children, no data, zeroed position) for a
+/// `Remove` on the root. The node type is kept so the document still
+/// serializes (as empty).
 fn clear_root<K: ArenaKind>(arena: &mut Arena<K>) {
     {
         let root = arena.get_node_mut(0);
@@ -576,12 +608,13 @@ fn copy_root_shallow<K: ArenaKind>(arena: &mut Arena<K>) -> u32 {
 /// Validate-then-mutate contract: every fallible check runs before the first
 /// arena mutation, so on `Err` the arena is untouched.
 ///
-/// Returns the anchors whose patch landed inside a subtree that an ancestor's
-/// `Remove`/`Replace` genuinely discarded, so the patch could not be applied —
-/// and is moot, since the plugin chose to drop that subtree. A *passed-through*
-/// child is not dropped this way: it is spliced back by a `REF_NODE_TYPE` node
-/// (see [`REF_NODE_TYPE`]), keeping its id so a patch queued on it still
-/// applies.
+/// Returns the anchors whose patch could not be applied: those inside a subtree
+/// that an ancestor's `Remove`/`Replace` genuinely discarded (moot, since the
+/// plugin chose to drop that subtree), and those an earlier apply already
+/// detached from their parent, whose sibling splice has nowhere to land. A
+/// *passed-through* child is not dropped this way: it is spliced back by a
+/// `REF_NODE_TYPE` node (see [`REF_NODE_TYPE`]), keeping its id so a patch
+/// queued on it still applies.
 pub fn apply_patches_in_place<K: ArenaKind>(
     arena: &mut Arena<K>,
     patches: &[Patch<K>],
@@ -996,7 +1029,7 @@ fn apply_patches_impl<K: ArenaKind>(
     };
 
     // Each anchor splices immediately so later copies observe post-patch
-    // state — except that with no refs in play there is nothing that copies
+    // state, except that with no refs in play there is nothing that copies
     // spliced subtrees, so sibling splices are grouped per parent and each
     // parent's child list is rebuilt once at the end (a per-anchor rebuild is
     // O(anchors × siblings) and grows the flat children vec unboundedly).
@@ -1007,6 +1040,7 @@ fn apply_patches_impl<K: ArenaKind>(
     let mut wrap_resolved: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut adopted_by_id: FxHashSet<u32> = FxHashSet::default();
     let mut redirect: FxHashMap<u32, u32> = FxHashMap::default();
+    let mut stranded: Vec<u32> = Vec::new();
 
     for anchor in order {
         let plan = &plans[&anchor];
@@ -1119,7 +1153,7 @@ fn apply_patches_impl<K: ArenaKind>(
                 }
                 // A child anchor's pending splice must land before this
                 // anchor's children move to the replacement node.
-                flush_pending_splices(arena, &mut pending_splices, anchor);
+                flush_pending_splices(arena, &mut pending_splices, anchor, &mut stranded);
                 let original_children = arena.get_children(anchor).to_vec();
                 let new_id = arena.alloc_node(node.node_type);
                 if let Some(data) = new_tree.get_node_data(0) {
@@ -1219,7 +1253,7 @@ fn apply_patches_impl<K: ArenaKind>(
             if has_own_edit {
                 // A child anchor's pending splice must land before this
                 // anchor's own child list is read and rebuilt.
-                flush_pending_splices(arena, &mut pending_splices, anchor);
+                flush_pending_splices(arena, &mut pending_splices, anchor, &mut stranded);
                 let mut new_list: Vec<u32> = Vec::new();
                 for &pi in group {
                     if let Patch::PrependChild { .. } = &patches[pi] {
@@ -1256,7 +1290,7 @@ fn apply_patches_impl<K: ArenaKind>(
             };
             if anchor == 0 {
                 // The wrapper takes over node 0 so the tree keeps its root id.
-                flush_pending_splices(arena, &mut pending_splices, 0);
+                flush_pending_splices(arena, &mut pending_splices, 0, &mut stranded);
                 let old_root = copy_root_shallow(arena);
                 match parent_tree {
                     PatchContent::Grafted(roots) => {
@@ -1333,6 +1367,7 @@ fn apply_patches_impl<K: ArenaKind>(
                                 source_base,
                                 &wrap_resolved,
                                 &mut wrapper_children,
+                                0,
                             );
                         }
                         arena.set_children(0, &wrapper_children);
@@ -1387,6 +1422,7 @@ fn apply_patches_impl<K: ArenaKind>(
                         source_base,
                         &wrap_resolved,
                         &mut wrapper_children,
+                        0,
                     );
                 }
                 arena.set_children(wrapper_id, &wrapper_children);
@@ -1439,12 +1475,17 @@ fn apply_patches_impl<K: ArenaKind>(
             }
             let current = arena.get_children(parent).to_vec();
             let mut new_list: Vec<u32> = Vec::with_capacity(current.len() + slot.len());
+            let mut found = false;
             for &child in &current {
                 if child == anchor {
                     new_list.extend_from_slice(&slot);
+                    found = true;
                 } else {
                     new_list.push(child);
                 }
+            }
+            if !found {
+                stranded.push(anchor);
             }
             arena.set_children(parent, &new_list);
         }
@@ -1455,7 +1496,7 @@ fn apply_patches_impl<K: ArenaKind>(
 
     let parents: Vec<u32> = pending_splices.keys().copied().collect();
     for parent in parents {
-        flush_pending_splices(arena, &mut pending_splices, parent);
+        flush_pending_splices(arena, &mut pending_splices, parent, &mut stranded);
     }
 
     // `rebuild` never carried utf16_offsets into the new arena; match it.
@@ -1466,6 +1507,7 @@ fn apply_patches_impl<K: ArenaKind>(
         .filter(|(_, plan)| plan.dropped)
         .map(|(&a, _)| a)
         .collect();
+    dropped.extend(stranded);
     dropped.sort_unstable();
 
     Ok(dropped)
@@ -2159,7 +2201,7 @@ mod tests {
 
     /// Multiple `Replace` patches on the same anchor: last-wins. The HAST
     /// `setProperty` path for MDX JSX elements emits a fresh `replaceNode`
-    /// for every prop set, each carrying the accumulated attribute list — so
+    /// for every prop set, each carrying the accumulated attribute list, so
     /// the final replacement is the one with the full state.
     #[test]
     fn multiple_replace_same_anchor_last_wins() {
@@ -2245,7 +2287,7 @@ mod tests {
         );
     }
 
-    /// `wrapNode(N) + removeNode(N)` has no defined meaning — the node won't
+    /// `wrapNode(N) + removeNode(N)` has no defined meaning: the node won't
     /// exist to wrap. Surface as an error rather than silently dropping the
     /// wrap.
     #[test]
@@ -2344,7 +2386,7 @@ mod tests {
         let text_in_heading = orig.get_children(heading_id)[0];
 
         // Replace the heading (dropping its subtree), and also replace the text
-        // inside it — the kind of pair a nested-directive transform produces.
+        // inside it, the kind of pair a nested-directive transform produces.
         let mut replacement = ArenaBuilder::<Mdast>::new(orig.string_pool().to_string());
         replacement.open_node(MdastNodeType::Paragraph as u8);
         replacement.close_node();
@@ -2375,7 +2417,7 @@ mod tests {
 
     /// Same shape as the stranding test, but the replacement *references* the
     /// original child via a `REF_NODE_TYPE` node instead of discarding it. The
-    /// child's own patch then applies (text → Break) and nothing strands — this
+    /// child's own patch then applies (text → Break) and nothing strands. This
     /// is how a passed-through child keeps its identity so a nested transform
     /// queued on it runs in the same pass.
     #[test]
@@ -2707,7 +2749,7 @@ mod tests {
     }
 
     /// A patch on a kept child still applies under a keep_children root
-    /// replace — including when the child's patch is issued first.
+    /// replace, including when the child's patch is issued first.
     #[test]
     fn replace_root_keep_children_applies_descendant_patch() {
         let orig = build_hello_world();
@@ -2864,7 +2906,7 @@ mod tests {
         );
     }
 
-    /// Sibling inserts on the root stay rejected — the root has no siblings.
+    /// Sibling inserts on the root stay rejected: the root has no siblings.
     #[test]
     fn insert_before_root_errors() {
         let orig = build_hello_world();

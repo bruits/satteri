@@ -1,4 +1,5 @@
 import { serializeHandle } from "#binding";
+import type { NodeRefs } from "./visitor-shared.js";
 import type { AnyHandle } from "./handles.js";
 
 /** Rebuild count per handle: bumped whenever a command buffer lands and
@@ -13,6 +14,18 @@ export function registerEpochCacheSlot<T extends object>(
 ): WeakMap<AnyHandle, T> {
   EPOCH_CACHE_SLOTS.push(slot);
   return slot;
+}
+
+/** Per handle, not per epoch: an id stale within its own handle is the epoch machinery's to drop with a warning. */
+const HANDLE_NODE_REFS = new WeakMap<AnyHandle, NodeRefs>();
+
+function nodeRefsOfHandle(handle: AnyHandle): NodeRefs {
+  let refs = HANDLE_NODE_REFS.get(handle);
+  if (refs === undefined) {
+    refs = new WeakMap();
+    HANDLE_NODE_REFS.set(handle, refs);
+  }
+  return refs;
 }
 
 /** Record that `handle`'s arena was rebuilt. Resolvers created before the bump
@@ -46,16 +59,18 @@ export interface EpochCache<TReader> {
 export abstract class LazyChildResolver<TReader, TNode> {
   #handle: AnyHandle;
   #epoch: number;
+  readonly refs: NodeRefs;
   /** Strong pin: retained nodes keep their pass snapshot alive after later epochs evict the slot. */
   #cache: EpochCache<TReader> | undefined;
 
   constructor(handle: AnyHandle) {
     this.#handle = handle;
     this.#epoch = HANDLE_EPOCHS.get(handle) ?? 0;
+    this.refs = nodeRefsOfHandle(handle);
   }
 
   protected abstract createReader(wire: Uint8Array): TReader;
-  protected abstract materializeNode(reader: TReader, nodeId: number): TNode;
+  protected abstract materializeNode(reader: TReader, nodeId: number, refs: NodeRefs): TNode;
   protected abstract readParentId(reader: TReader, nodeId: number): number;
   protected abstract readChildIds(reader: TReader, nodeId: number): number[];
   /** Kind-specific `(handle → cache)` slot, supplied as a module-level WeakMap
@@ -112,7 +127,7 @@ export abstract class LazyChildResolver<TReader, TNode> {
    *  materializers memoize per `(reader, id)`, so overlapping subtrees and
    *  later passes share the same materialized objects. */
   materializeOne(nodeId: number): TNode {
-    return this.materializeNode(this.#ensureCache().reader, nodeId);
+    return this.materializeNode(this.#ensureCache().reader, nodeId, this.refs);
   }
 
   /** Arena id of `nodeId`'s parent in the pass snapshot, or undefined at the root. */

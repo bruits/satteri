@@ -6,6 +6,7 @@ use crate::hast::HastNodeType;
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
 };
+use crate::hast::escape::{escape_html_attr_value, escape_html_body_text};
 use crate::hast::properties::property_to_attribute;
 use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
@@ -20,23 +21,6 @@ pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
         out.push('\n');
     }
     out
-}
-
-/// Escape a string to appear inside a double-quoted HTML attribute value,
-/// matching hast-util-to-html's default "safe" serialization. Encodes `&`,
-/// `"`, `'`, and `` ` `` (backtick is escaped because some legacy browsers
-/// treat it as an attribute-value delimiter). Unlike body-text escaping,
-/// `<` and `>` are kept as-is since they're valid inside attribute values.
-fn escape_html_attr_value(out: &mut String, value: &str) {
-    for c in value.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            '`' => out.push_str("&#x60;"),
-            _ => out.push(c),
-        }
-    }
 }
 
 /// Render a HAST node subtree to HTML.
@@ -55,7 +39,7 @@ pub fn render_node(
     in_raw_text: bool,
     in_svg: bool,
 ) {
-    render_node_inner(node_id, view, out, in_raw_text, in_svg, None);
+    render_node_inner(node_id, view, out, in_raw_text, in_svg, None, 0);
 }
 
 /// Raw-HTML reparse hook: receives the output buffer and the MDX node's id.
@@ -69,7 +53,22 @@ pub(crate) fn render_node_inner<'cb>(
     out: &mut String,
     in_raw_text: bool,
     in_svg: bool,
+    on_mdx: Option<&mut OnMdx<'cb>>,
+    depth: u32,
+) {
+    crate::stack::with_headroom(depth, || {
+        render_node_at(node_id, view, out, in_raw_text, in_svg, on_mdx, depth);
+    });
+}
+
+fn render_node_at<'cb>(
+    node_id: u32,
+    view: &Arena<Hast>,
+    out: &mut String,
+    in_raw_text: bool,
+    in_svg: bool,
     mut on_mdx: Option<&mut OnMdx<'cb>>,
+    depth: u32,
 ) {
     let node = view.get_node(node_id);
 
@@ -82,6 +81,7 @@ pub(crate) fn render_node_inner<'cb>(
                 in_raw_text,
                 in_svg,
                 on_mdx.as_deref_mut(),
+                depth + 1,
             );
         }
         return;
@@ -97,6 +97,7 @@ pub(crate) fn render_node_inner<'cb>(
                     in_raw_text,
                     in_svg,
                     on_mdx.as_deref_mut(),
+                    depth + 1,
                 );
             }
         }
@@ -133,7 +134,7 @@ pub(crate) fn render_node_inner<'cb>(
                         out.push(' ');
                         out.push_str(&attr_name);
                         out.push_str("=\"");
-                        escape_html_attr_value(&mut *out, value);
+                        escape_html_attr_value(out, value);
                         out.push('"');
                     }
                     _ => {}
@@ -153,6 +154,7 @@ pub(crate) fn render_node_inner<'cb>(
                         child_in_raw_text,
                         element_in_svg,
                         on_mdx.as_deref_mut(),
+                        depth + 1,
                     );
                 }
                 out.push_str("</");
@@ -169,7 +171,7 @@ pub(crate) fn render_node_inner<'cb>(
                 if in_raw_text {
                     out.push_str(text);
                 } else {
-                    pulldown_cmark_escape::escape_html_body_text(&mut *out, text).unwrap();
+                    escape_html_body_text(out, text);
                 }
             }
         }

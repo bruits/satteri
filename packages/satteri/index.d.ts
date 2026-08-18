@@ -79,9 +79,12 @@ export declare function createHastHandle(source: string, features?: JsFeatures |
 
 /**
  * Parse an HTML string into structured HAST (elements, text, comments).
+ * Parses as a fragment when `fragment` is set, keeping the top-level nodes as
+ * they are instead of implying `<html>`/`<head>`/`<body>`. `space` picks the
+ * namespace a fragment's own top-level content parses in: "html" or "svg".
  * Returns an opaque handle; the arena stays in Rust memory.
  */
-export declare function createHastHandleFromHtml(html: string): HastHandle
+export declare function createHastHandleFromHtml(html: string, fragment?: boolean | undefined | null, space?: string | undefined | null): HastHandle
 
 /**
  * Parse + frontmatter + HAST conversion in one crossing (HAST-plugin path

@@ -72,6 +72,9 @@ import {
   ROOT_NODE_ID,
   requireRootReplacement,
   rootReplacementError,
+  crossPipelineForeign,
+  FOREIGN_REF,
+  type NodeRefs,
   unencodableContentError,
 } from "../visitor-shared.js";
 import {
@@ -89,9 +92,6 @@ type NapiParseFn = (source: string) => string | null;
 
 /** ESTree-compatible Program node returned by `parseExpression()`. */
 export type EstreeProgram = Program;
-
-/** Maps HastNode objects to their arena node IDs without Object.defineProperty overhead. */
-const nodeIdMap: WeakMap<object, number> = new WeakMap();
 
 /** Attach `parseExpression()` to an MDX expression or ESM node. */
 function attachParseExpression(node: HastNode, parseFn: NapiParseFn): void {
@@ -151,10 +151,13 @@ export interface HastVisitorContext {
    * Wrap `node` in `parentNode`, making it `parentNode`'s first child. Any
    * children `parentNode` declares are kept after it, so a `div` with an anchor
    * child wraps a heading as `div > [heading, anchor]`. `parentNode` is an
-   * element, an MDX JSX element, or `{ rawHtml }` parsing to exactly one
-   * element — never a void element, whose children would not render.
+   * element, an MDX JSX element, or `{ raw }` HTML parsing to exactly one
+   * element, never a void element, whose children would not render.
    */
-  wrapNode(node: Readonly<HastNode>, parentNode: HastParentContent | RawHtmlHastContent): void;
+  wrapNode(
+    node: Readonly<HastNode>,
+    parentNode: HastParentContent | RawHastContent | RawHtmlHastContent,
+  ): void;
   prependChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   appendChild(node: Readonly<HastNode>, childNode: HastContent | HastContent[]): void;
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -200,13 +203,14 @@ export interface HastVisitorContext {
  * the WeakMap or a NON-enumerable `_nodeId` (the materializers' convention,
  * which spread cannot copy).
  */
-function nid(node: HastNode): number | undefined {
-  if (node instanceof WalkElement) return node._nid;
-  if (node instanceof HastChildStub) return node._id;
-  const id = nodeIdMap.get(node);
+function nid(node: HastNode, refs: NodeRefs): number | undefined {
+  if (node instanceof WalkElement) return node._refs === refs ? node._nid : FOREIGN_REF;
+  if (node instanceof HastChildStub) return node._refs === refs ? node._id : FOREIGN_REF;
+  const id = refs.get(node);
   if (id !== undefined) return id;
   const d = Object.getOwnPropertyDescriptor(node, "_nodeId");
-  return d !== undefined && !d.enumerable ? (d.value as number) : undefined;
+  if (d !== undefined && !d.enumerable) return FOREIGN_REF;
+  return crossPipelineForeign(node);
 }
 
 const requireNid = makeRequireNid(nid);
@@ -218,9 +222,17 @@ export type HastContent = HastNode;
 /** A `wrapNode` wrapper: node types that can hold children. */
 export type HastParentContent = Exclude<Extract<HastNode, { children: unknown[] }>, HastRoot>;
 
-/** Raw HTML `wrapNode` wrapper: parsed at apply time (not call time); must
- *  yield exactly one non-void element, which becomes the wrapper. */
+/** Raw `wrapNode` wrapper: the HTML is parsed at apply time (not call time)
+ *  and must yield exactly one non-void element, which becomes the wrapper.
+ *  `mdxExpressions` is accepted for parity with the MDAST phase and has no
+ *  effect: braces in HTML text are always literal. */
+export interface RawHastContent {
+  raw: string;
+  mdxExpressions?: boolean;
+}
+
 export interface RawHtmlHastContent {
+  /** @deprecated Use the equivalent `{ raw }`. */
   rawHtml: string;
 }
 
@@ -245,24 +257,24 @@ function assertHastWrapParent(parentNode: HastContent): void {
   throw new Error(
     `wrapNode: "${String(type)}" nodes cannot hold children, so they cannot wrap a node. ` +
       'Wrap in an element instead, e.g. { type: "element", tagName: "div", properties: {}, children: [] } ' +
-      'or { rawHtml: "<div></div>" }.',
+      'or { raw: "<div></div>" }.',
   );
 }
 
-function hastReusedId(node: unknown): number | undefined {
+function hastReusedId(node: unknown, refs: NodeRefs): number | undefined {
   if (node === null || typeof node !== "object") return undefined;
-  const id = nid(node as HastNode);
-  return typeof id === "number" ? id : undefined;
+  const id = nid(node as HastNode, refs);
+  return id !== undefined && id !== FOREIGN_REF ? id : undefined;
 }
 
 /** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown): boolean {
+function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown, refs: NodeRefs): boolean {
   if (!Array.isArray(children)) return false;
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
     for (const c of children) {
-      if (!emitHastOp(buffer, c, false)) return false;
+      if (!emitHastOp(buffer, c, false, refs)) return false;
     }
     buffer.close();
     return true;
@@ -273,36 +285,36 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
  *  payload directly into the command buffer (no intermediate copy). HAST
  *  content is always a declarative node (no raw escape hatch), so it
  *  compiles or it's a hard error. */
-function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode): void {
+function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode, refs: NodeRefs): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitHastOp(buffer, node, true),
+    emitHastOp(buffer, node, true, refs),
   );
   if (!ok) throw unencodableContentError(node);
 }
 
 /** Separate from the per-node encoder, which rejects a `root` payload. */
-function emitHastRootReplace(buffer: CommandBuffer, root: HastContent): void {
+function emitHastRootReplace(buffer: CommandBuffer, root: HastContent, refs: NodeRefs): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
-    emitHastRootOp(buffer, root as unknown as Record<string, unknown>),
+    emitHastRootOp(buffer, root as unknown as Record<string, unknown>, refs),
   );
   if (!ok) throw unencodableContentError(root);
 }
 
-function emitHastRootOp(w: OpWriter, n: Record<string, unknown>): boolean {
+function emitHastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs): boolean {
   w.open(HAST_ROOT);
   if (n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false)) return false;
+    for (const c of children) if (!emitHastOp(w, c, false, refs)) return false;
   }
   w.close();
   return true;
 }
 
-function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
+function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, refs: NodeRefs): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
-    const id = hastReusedId(node);
+    const id = hastReusedId(node, refs);
     if (id !== undefined) {
       w.ref(id);
       return true;
@@ -337,7 +349,7 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean): boolean {
   if (n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false)) return false;
+    for (const c of children) if (!emitHastOp(w, c, false, refs)) return false;
   }
   w.close();
   return true;
@@ -362,6 +374,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #handle: HastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
+  readonly #refs: NodeRefs;
   /** One canonical object per parent id, so visitors can dedupe by identity.
    *  Null until the first `parent()` call; most passes never make one. */
   #parentsById: Map<number, HastNode> | null = null;
@@ -382,6 +395,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#getSource = getSource;
     this.fileURL = fileURL;
     this.#resolver = resolver;
+    this.#refs = resolver.refs;
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;
@@ -394,68 +408,74 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   removeNode(node: HastNode): void {
-    this.#commandBuffer.removeNode(requireNid(node, "removeNode"));
+    this.#commandBuffer.removeNode(requireNid(node, "removeNode", this.#refs));
   }
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "replaceNode");
+    const id = requireNid(node, "replaceNode", this.#refs);
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // The last node carries the `replace` so refs back to the target still splice.
       let previous: HastContent | undefined;
       for (const n of newNode) {
-        if (previous !== undefined) emitHastTree(this.#commandBuffer, "insertBefore", id, previous);
+        if (previous !== undefined) emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
         previous = n;
       }
       if (previous === undefined) {
         // Replacing with nothing drops the node, like removeNode.
         this.removeNode(node);
       } else if (id === ROOT_NODE_ID) {
-        emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous));
+        emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
       } else {
-        emitHastTree(this.#commandBuffer, "replace", id, previous);
+        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs);
       }
       // A stale queued replacement would win: setProperty folds into it, landing last.
       this.#pendingNodes.delete(id);
       return;
     }
     if (id === ROOT_NODE_ID) {
-      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode));
+      emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
       return;
     }
-    emitHastTree(this.#commandBuffer, "replace", id, newNode);
+    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs);
     // Track the replacement so a later mdxJsx setProperty can fold into it.
     this.#pendingNodes.set(id, newNode);
   }
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "insertBefore");
-    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertBefore", id, n);
+    const id = requireNid(node, "insertBefore", this.#refs);
+    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "insertAfter");
-    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertAfter", id, n);
+    const id = requireNid(node, "insertAfter", this.#refs);
+    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
   }
 
-  wrapNode(node: HastNode, parentNode: HastParentContent | RawHtmlHastContent): void {
-    const id = requireNid(node, "wrapNode");
-    if (typeof (parentNode as RawHtmlHastContent).rawHtml === "string") {
-      this.#commandBuffer.wrapNode(id, parentNode as RawHtmlHastContent);
+  wrapNode(
+    node: HastNode,
+    parentNode: HastParentContent | RawHastContent | RawHtmlHastContent,
+  ): void {
+    const id = requireNid(node, "wrapNode", this.#refs);
+    if (
+      typeof (parentNode as RawHastContent).raw === "string" ||
+      typeof (parentNode as RawHtmlHastContent).rawHtml === "string"
+    ) {
+      this.#commandBuffer.wrapNode(id, parentNode as RawHastContent | RawHtmlHastContent);
       return;
     }
     assertHastWrapParent(parentNode as HastContent);
-    emitHastTree(this.#commandBuffer, "wrapNode", id, parentNode as HastContent);
+    emitHastTree(this.#commandBuffer, "wrapNode", id, parentNode as HastContent, this.#refs);
   }
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "prependChild");
-    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "prependChild", id, n);
+    const id = requireNid(node, "prependChild", this.#refs);
+    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "appendChild");
-    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "appendChild", id, n);
+    const id = requireNid(node, "appendChild", this.#refs);
+    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
@@ -475,11 +495,11 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   setProperty(node: HastNode, key: string, value: unknown): void {
-    const id = requireNid(node, "setProperty");
+    const id = requireNid(node, "setProperty", this.#refs);
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
-      if (!emitHastChildrenCommand(this.#commandBuffer, id, value)) {
+      if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
       return;
@@ -536,13 +556,15 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   textContent(node: HastNode): string {
-    return textContentHandle(this.#handle, requireNid(node, "textContent"));
+    return textContentHandle(this.#handle, requireNid(node, "textContent", this.#refs));
   }
 
   parent<N extends Exclude<HastNode, HastRoot>>(node: Readonly<N>): Readonly<HastParents>;
   parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined;
   parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined {
-    const parentId = this.#resolver.parentIdOf(requireNid(node as HastNode, "parent"));
+    const parentId = this.#resolver.parentIdOf(
+      requireNid(node as HastNode, "parent", this.#refs),
+    );
     if (parentId === undefined) return undefined;
     const byId = (this.#parentsById ??= new Map());
     let parent = byId.get(parentId);
@@ -554,7 +576,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   indexOf(node: Readonly<HastNode>): number | undefined {
-    return this.#resolver.indexInParent(requireNid(node as HastNode, "indexOf"));
+    return this.#resolver.indexInParent(requireNid(node as HastNode, "indexOf", this.#refs));
   }
 
   report({
@@ -566,7 +588,12 @@ class HastVisitorContextImpl implements HastVisitorContext {
     node?: HastNode;
     severity?: "error" | "warning" | "info";
   }): void {
-    this.#diagnostics.push({ message, nodeId: node ? nid(node) : undefined, severity });
+    const id = node ? nid(node, this.#refs) : undefined;
+    this.#diagnostics.push({
+      message,
+      nodeId: id === FOREIGN_REF ? undefined : id,
+      severity,
+    });
   }
 
   getCommandBuffer(): CommandBuffer {
@@ -660,6 +687,26 @@ function getRustSubs(plugin: HastVisitorInstance): { nodeType: number; tagFilter
   return built.rustSubs;
 }
 
+function isFilteredVisitor(value: unknown): value is HastFilteredVisitor {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Array.isArray((value as { filter?: unknown }).filter) &&
+    typeof (value as { visit?: unknown }).visit === "function"
+  );
+}
+
+/** Caught pre-wire so the failure names the API shape, not the internal `tagFilter` field. */
+function malformedFilteredVisitorError(plugin: HastVisitorInstance, methodName: string): Error {
+  const name = (plugin as { name?: unknown }).name;
+  const pluginName = typeof name === "string" && name !== "" ? name : "(unnamed)";
+  return new Error(
+    `hast plugin "${pluginName}": "${methodName}" visitors filter by tag/component name, ` +
+      `so each must be an object { filter: string[], visit: function } (or an array of those). ` +
+      `Use filter: [] to visit every "${methodName}" node.`,
+  );
+}
+
 function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
   const subs: ResolvedSubscription[] = [];
 
@@ -669,7 +716,8 @@ function buildSubscriptions(plugin: HastVisitorInstance): CachedSubs {
 
     if (FILTERED_METHODS.has(methodName)) {
       const items = Array.isArray(value) ? value : [value];
-      for (const fv of items as HastFilteredVisitor[]) {
+      for (const fv of items) {
+        if (!isFilteredVisitor(fv)) throw malformedFilteredVisitorError(plugin, methodName);
         subs.push({
           nodeType,
           tagFilter: fv.filter,
@@ -818,6 +866,11 @@ class WalkElement {
     return this.#nodeId;
   }
 
+  /** @internal */
+  get _refs(): NodeRefs {
+    return this.#wire.resolver.refs;
+  }
+
   static {
     WALK_PROPS_DESC = {
       enumerable: true,
@@ -910,6 +963,7 @@ function readTextFromBinary(
   nodeType: number,
   position: Position | undefined,
   data: Record<string, unknown> | null,
+  refs: NodeRefs,
 ): HastNode {
   const valLen = view.getUint32(offset, true);
   const rawValue = rstr(buf, offset + 4, valLen);
@@ -923,7 +977,7 @@ function readTextFromBinary(
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   const node = base as unknown as HastNode;
-  nodeIdMap.set(node, nodeId);
+  refs.set(node, nodeId);
   if (nodeType === HAST_MDX_FLOW_EXPRESSION || nodeType === HAST_MDX_TEXT_EXPRESSION) {
     attachParseExpression(node, napiParseExpression);
   } else if (nodeType === HAST_MDX_ESM) {
@@ -974,7 +1028,7 @@ function readMdxJsxFromBinary(
   const base: Record<string, unknown> = { type: typeName, name, attributes };
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
-  nodeIdMap.set(base, nodeId);
+  resolver.refs.set(base, nodeId);
   makeLazyChildren(base, view, buf, childIdsPos, childTypesPos, childCount, resolver);
   return base as unknown as HastNode;
 }
@@ -1036,7 +1090,7 @@ function readMatchedNode(
     nodeType === HAST_MDX_TEXT_EXPRESSION ||
     nodeType === HAST_MDX_ESM
   ) {
-    return readTextFromBinary(view, buf, pos, nodeId, nodeType, position, data);
+    return readTextFromBinary(view, buf, pos, nodeId, nodeType, position, data, resolver.refs);
   } else if (nodeType === HAST_MDX_JSX_ELEMENT || nodeType === HAST_MDX_JSX_TEXT_ELEMENT) {
     return readMdxJsxFromBinary(
       view,
@@ -1065,7 +1119,7 @@ function readMatchedNode(
     }
   }
   const node = base as unknown as HastNode;
-  nodeIdMap.set(node, nodeId);
+  resolver.refs.set(node, nodeId);
   return node;
 }
 
@@ -1080,8 +1134,12 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
     return new HastReader(wire);
   }
 
-  protected override materializeNode(reader: HastReader, nodeId: number): HastNode {
-    return materializeHastNode(reader, nodeId, true);
+  protected override materializeNode(
+    reader: HastReader,
+    nodeId: number,
+    refs: NodeRefs,
+  ): HastNode {
+    return materializeHastNode(reader, nodeId, true, refs);
   }
 
   protected override readParentId(reader: HastReader, nodeId: number): number {
@@ -1128,25 +1186,36 @@ function makeLazyChildren(
  *  A same-type text-like node carrying only a new `value` becomes a
  *  setProperty("value") rather than a structural replace, which would force
  *  the arena into a full rebuild for a shape that didn't change. */
+function applyHastVisitResult(
+  result: HastNode | void,
+  nodeId: number,
+  returnBuffer: CommandBuffer,
+  originalNode: HastNode,
+  refs: NodeRefs,
+): void {
+  if (result == null) return;
+  if (result === originalNode) return;
+  if (isTextValueSwap(result, originalNode)) {
+    returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
+    return;
+  }
+  emitHastTree(returnBuffer, "replace", nodeId, result, refs);
+}
+
 function handleVisitResult(
   result: HastNode | void | Promise<HastNode | void>,
   nodeId: number,
   returnBuffer: CommandBuffer,
   deferred: { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null,
   originalNode: HastNode,
+  refs: NodeRefs,
 ): { nodeId: number; promise: Promise<HastNode | void>; originalNode: HastNode }[] | null {
-  if (result == null) return deferred;
-  if (result === originalNode) return deferred;
   if (result instanceof Promise) {
     const list = deferred ?? [];
     list.push({ nodeId, promise: result, originalNode });
     return list;
   }
-  if (isTextValueSwap(result, originalNode)) {
-    returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
-    return deferred;
-  }
-  emitHastTree(returnBuffer, "replace", nodeId, result);
+  applyHastVisitResult(result, nodeId, returnBuffer, originalNode, refs);
   return deferred;
 }
 
@@ -1192,7 +1261,7 @@ function dispatchMatches(
     const sub = subs[subIndex]!;
     const node = readMatchedNode(wire, dataOffset, nodeId, sub.nodeType);
     const result = sub.visitFn(node, ctx);
-    deferred = handleVisitResult(result, nodeId, returnBuffer, deferred, node);
+    deferred = handleVisitResult(result, nodeId, returnBuffer, deferred, node, resolver.refs);
   }
 
   return deferred;
@@ -1278,9 +1347,7 @@ export function visitHastHandleCollect(
       ),
     ).then((results) => {
       for (const { nodeId, result, originalNode } of results) {
-        if (result != null && result !== originalNode) {
-          emitHastTree(returnBuffer, "replace", nodeId, result);
-        }
+        applyHastVisitResult(result, nodeId, returnBuffer, originalNode, resolver.refs);
       }
       return collectCommands(returnBuffer, ctx);
     });

@@ -3,6 +3,7 @@
 //! These were originally defined in the markdown-rs crate. They're extracted
 //! here so mdxjs-rs doesn't depend on the old parser.
 
+use crate::line_index::LineIndex;
 use core::fmt;
 
 /// One place in a source file.
@@ -108,53 +109,35 @@ impl fmt::Display for Place {
 /// Each stop represents a new slice: (relative_offset, absolute_offset).
 pub type Stop = (usize, usize);
 
-#[derive(Debug)]
-pub struct Location {
-    indices: Vec<usize>,
+/// Byte offset to `Point` lookup; columns and offsets count UTF-16 code units.
+pub struct Location<'a> {
+    index: LineIndex<'a>,
+    len: usize,
 }
 
-impl Location {
+impl<'a> Location<'a> {
     #[must_use]
-    pub fn new(bytes: &[u8]) -> Self {
-        let mut indices = Vec::new();
-        let mut index = 0;
-        while index < bytes.len() {
-            if bytes[index] == b'\r' {
-                if index + 1 < bytes.len() && bytes[index + 1] == b'\n' {
-                    indices.push(index + 2);
-                    index += 1;
-                } else {
-                    indices.push(index + 1);
-                }
-            } else if bytes[index] == b'\n' {
-                indices.push(index + 1);
-            }
-            index += 1;
+    pub fn new(source: &'a str) -> Self {
+        Location {
+            index: LineIndex::from_source(source),
+            len: source.len(),
         }
-        indices.push(index + 1);
-        Location { indices }
     }
 
     #[must_use]
     pub fn to_point(&self, offset: usize) -> Option<Point> {
-        if let Some(end) = self.indices.last()
-            && offset < *end
-        {
-            let mut index = 0;
-            while index < self.indices.len() {
-                if self.indices[index] > offset {
-                    break;
-                }
-                index += 1;
-            }
-            let previous = if index > 0 {
-                self.indices[index - 1]
-            } else {
-                0
-            };
-            return Some(Point::new(index + 1, offset + 1 - previous, offset));
+        if offset > self.len {
+            return None;
         }
-        None
+        let byte_offset = u32::try_from(offset).ok()?;
+        let mut cursor = self.index.cursor();
+        let (line, column) = cursor.offset_to_line_col(byte_offset);
+        let utf16_offset = cursor.byte_to_utf16_offset(byte_offset);
+        Some(Point::new(
+            line as usize,
+            column as usize,
+            utf16_offset as usize,
+        ))
     }
 
     #[must_use]

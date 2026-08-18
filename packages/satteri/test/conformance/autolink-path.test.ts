@@ -175,7 +175,7 @@ describe("divergence: astral characters before a GFM autolink", () => {
     { prefix: "\u{1F468}\u{200d}\u{1F4BB}", name: "a ZWJ sequence ending in U+1F4BB (So)" },
   ];
 
-  // `Nd`, so both sides reject it — for different reasons, which is the point.
+  // `Nd`, so both sides reject it, for different reasons, which is the point.
   const REJECTED = [{ prefix: "\u{1FBF0}", name: "U+1FBF0 SEGMENTED DIGIT ZERO (Nd)" }];
 
   // The overlapping trigger is left out: remark's find-and-replace finds the

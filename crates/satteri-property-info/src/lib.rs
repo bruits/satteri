@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn reverse_direction_matches_the_table_for_every_entry() {
         // For every row, `property_to_attribute(property)` must reproduce the
-        // stored attribute — the algorithmic aria/xlink/xml branches included.
+        // stored attribute, the algorithmic aria/xlink/xml branches included.
         for (table, in_svg) in [(super::HTML_TABLE, false), (super::SVG_TABLE, true)] {
             for (_, property, attribute, _) in table {
                 assert_eq!(

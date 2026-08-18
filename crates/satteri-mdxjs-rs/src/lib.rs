@@ -172,9 +172,8 @@ pub fn compile_hast_arena(
     arena: &satteri_arena::Arena<satteri_arena::Hast>,
     options: &Options,
 ) -> Result<String, message::Message> {
-    let source_bytes = arena.string_pool().as_bytes();
     let allocator = Allocator::default();
-    let location = Location::new(source_bytes);
+    let location = Location::new(arena.string_pool());
     let mut explicit_jsxs = FxHashSet::default();
     let mut program = hast_util_to_oxc(
         arena,
@@ -198,7 +197,11 @@ pub fn compile_hast_arena(
         transform_program_to_function_body(&mut program, &allocator);
     }
     let mut code = jsx_pragma_comments(options);
-    code.push_str(&serialize(&program.program));
+    let serialized = serialize(&program.program);
+    if code.is_empty() {
+        return Ok(serialized);
+    }
+    code.push_str(&serialized);
     Ok(code)
 }
 
@@ -599,34 +602,15 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
 #[must_use]
 pub fn parse_error_to_message(source: &str, offset: usize, reason: &str) -> message::Message {
     let source = satteri_pulldown_cmark::strip_leading_bom(source);
+    let location = Location::new(source);
     message::Message {
-        place: Some(Box::new(message::Place::Point(byte_offset_to_point(
-            source, offset,
-        )))),
+        place: location
+            .to_point(offset)
+            .map(|point| Box::new(message::Place::Point(point))),
         reason: reason.to_string(),
         rule_id: Box::new("unexpected-character".into()),
         source: Box::new("mdx-jsx".into()),
     }
-}
-
-/// Convert a byte offset in source text to a `Point` (line, column, offset).
-fn byte_offset_to_point(value: &str, offset: usize) -> message::Point {
-    let mut line = 1;
-    let mut col = 1;
-    let bytes = value.as_bytes();
-    for (i, ch) in value.char_indices() {
-        if i >= offset {
-            break;
-        }
-        // The `\r` of a CRLF defers to its `\n` so the pair counts one ending.
-        if ch == '\n' || (ch == '\r' && bytes.get(i + 1) != Some(&b'\n')) {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    message::Point::new(line, col, offset)
 }
 
 /// Expand tab characters to spaces for indentation purposes.

@@ -14,7 +14,7 @@ import type { HastNode } from "../src/hast/hast-materializer.js";
  *  - Sätteri: `markdownToHast(md, { features: { rawHtml: true } })`
  *  - unified: remark-parse → remark-rehype (allowDangerousHtml) → rehype-raw
  *
- * and compared two ways — serialized HTML (via rehype-stringify) and the hast
+ * and compared two ways: serialized HTML (via rehype-stringify) and the hast
  * tree itself (structure + normalized properties, positions stripped). The
  * inputs are chosen so Sätteri's baseline Markdown→hast already matches
  * remark-rehype's; the feature under test is the raw-HTML reparsing.

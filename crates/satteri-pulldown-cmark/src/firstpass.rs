@@ -180,8 +180,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         // Before processing new containers: if we arrive here with a
         // non-blank line pending, the previous line was a non-trailing blank
-        // that belongs to the currently-open list item. Mark the item as
-        // spread (loose). Must happen before the new-containers loop, which
+        // that belongs to the currently-open list item or definition. Mark it
+        // as spread (loose). Must happen before the new-containers loop, which
         // could open a deeper nested list item and shift the spine tip.
         if self.last_line_blank {
             let content_probe = start_ix + line_start.bytes_scanned();
@@ -189,10 +189,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 content_probe < bytes.len() && scan_blank_line(&bytes[content_probe..]).is_none();
             if has_content
                 && let Some(up) = self.tree.peek_up()
-                && let ItemBody::ListItem(_, _) = self.tree[up].item.body
                 && self.tree[up].child.is_some()
             {
-                self.mark_enclosing_listitem_spread();
+                match self.tree[up].item.body {
+                    ItemBody::ListItem(_, _) => self.mark_enclosing_listitem_spread(),
+                    ItemBody::DefinitionListDefinition(indent, _) => {
+                        self.tree[up].item.body = ItemBody::DefinitionListDefinition(indent, true);
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -854,7 +859,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
                 // If the scanned ESM block is incomplete (e.g. an export
                 // spanning a blank line), retry across blank lines using
-                // oxc — matching the reference mdxjs behavior.
+                // oxc, matching the reference mdxjs behavior.
                 let candidate = self.text[ix..ix + final_end].trim_end();
                 if !candidate.is_empty() {
                     use crate::mdx::EsmParseResult;
@@ -2015,7 +2020,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
                 c @ b'*' | c @ b'_' | c @ b'~' | c @ b'^' => {
                     // GFM precedence: an email literal starting at this `_`
-                    // wins over the attention sequence — skipping MaybeEmphasis
+                    // wins over the attention sequence; skipping MaybeEmphasis
                     // keeps `_-_@…` from forming a pair that hides the email.
                     if c == b'_' && self.options.contains(Options::ENABLE_GFM) {
                         let paragraph_floor = self
@@ -2481,7 +2486,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     // `gfm_autolink_literal_pass` is the backstop for the rest.
                     //
                     // `start` is the current *line* start, so take the floor
-                    // from the Paragraph on the spine — a `[` on an earlier
+                    // from the Paragraph on the spine: a `[` on an earlier
                     // line still has to count.
                     let paragraph_floor = self
                         .tree
@@ -3679,40 +3684,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         // Cheap pre-filter: a delimiter row must contain at least one `-`.
         // Container paragraphs hit this path on every continuation line, so
-        // skipping the pipe-counting loop / scan_table_head when the next
-        // line obviously can't be a delimiter row matters for parse perf.
-        // Use SIMD-backed `memchr2` rather than a `position` closure — this
+        // skipping `scan_table_head` when the next line obviously can't be a
+        // delimiter row matters for parse perf.
+        // Use SIMD-backed `memchr` rather than a `position` closure — this
         // path runs on every paragraph continuation line.
         let Some(eol_off) = memchr::memchr2(b'\n', b'\r', bytes) else {
             return false;
         };
         let next_line_ix = eol_off + scan_eol(&bytes[eol_off..]).unwrap();
-        let next_line_end = memchr::memchr2(b'\n', b'\r', &bytes[next_line_ix..])
-            .map(|p| next_line_ix + p)
-            .unwrap_or(bytes.len());
-        if memchr::memchr(b'-', &bytes[next_line_ix..next_line_end]).is_none() {
+        // One pass: a `-` reached before any line ending is a `-` on the next line.
+        if memchr::memchr3(b'-', b'\n', b'\r', &bytes[next_line_ix..])
+            .is_none_or(|p| bytes[next_line_ix + p] != b'-')
+        {
             return false;
-        }
-
-        // First line, count unescaped pipes. A run of consecutive backslashes
-        // toggles the escape state: `\|` escapes the pipe, `\\|` is a literal
-        // `\` followed by an unescaped separator pipe.
-        let mut pipes = 0;
-        let mut bsesc = false;
-        let mut last_pipe_ix = 0;
-        for (i, &byte) in bytes[..eol_off].iter().enumerate() {
-            match byte {
-                b'\\' => {
-                    bsesc = !bsesc;
-                    continue;
-                }
-                b'|' if !bsesc => {
-                    pipes += 1;
-                    last_pipe_ix = i;
-                }
-                _ => {}
-            }
-            bsesc = false;
         }
 
         // Scan the table head. The part that looks like:
@@ -3745,6 +3729,27 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return false;
         }
 
+        // First line, count unescaped pipes. A run of consecutive backslashes
+        // toggles the escape state: `\|` escapes the pipe, `\\|` is a literal
+        // `\` followed by an unescaped separator pipe.
+        let mut pipes = 0;
+        let mut bsesc = false;
+        let mut last_pipe_ix = 0;
+        for (i, &byte) in bytes[..eol_off].iter().enumerate() {
+            match byte {
+                b'\\' => {
+                    bsesc = !bsesc;
+                    continue;
+                }
+                b'|' if !bsesc => {
+                    pipes += 1;
+                    last_pipe_ix = i;
+                }
+                _ => {}
+            }
+            bsesc = false;
+        }
+
         // computing header count from number of pipes
         let header_count = count_header_cols(bytes, pipes, 0, last_pipe_ix);
 
@@ -3774,7 +3779,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             extract_attribute_block_content_from_header_text(header_bytes);
         let range = attr_block_range_rel?;
 
-        // Claim as attributes only when the body isn't valid JS — otherwise MDX
+        // Claim as attributes only when the body isn't valid JS; otherwise MDX
         // treats `{...}` as an expression. try_parse_expression_body returns None
         // when it parses, so `?` bails and leaves real expressions alone.
         #[cfg(feature = "mdx")]
@@ -5159,7 +5164,7 @@ fn email_addr(full_url: String) -> String {
 }
 
 /// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
-/// only — committing or deferring is the caller's call, since it turns on
+/// only: committing or deferring is the caller's call, since it turns on
 /// state this function cannot see.
 fn detect_gfm_autolink(
     bytes: &[u8],
@@ -5208,7 +5213,7 @@ fn detect_gfm_autolink(
         b'@' => {
             // The local-part walkback can start the link before `ix`. If it
             // would cross an already-emitted Maybe* item, that construct owns
-            // the bytes — leave the email to the post-pass.
+            // the bytes, so leave the email to the post-pass.
             let (email_start, email_end, full_url, retry_needed) =
                 scan_email_autolink(bytes, ix, true)?;
             if retry_needed {

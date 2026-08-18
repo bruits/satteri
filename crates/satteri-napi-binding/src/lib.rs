@@ -462,6 +462,24 @@ fn release_hast_arena(arena: satteri_arena::Arena<Hast>) {
     });
 }
 
+/// The two-stage fallback goes through a pooled HAST arena; the direct emitter needs none.
+fn mdast_to_html_pooled(
+    mdast: &satteri_arena::Arena<Mdast>,
+    convert_opts: &satteri_ast::hast::ConvertOptions,
+) -> String {
+    if let Some(html) = satteri_ast::try_mdast_to_html_fused(mdast, convert_opts) {
+        return html;
+    }
+    let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        mdast,
+        convert_opts,
+        acquire_hast_arena(),
+    );
+    let html = satteri_ast::hast::hast_arena_to_html(&hast);
+    release_hast_arena(hast);
+    html
+}
+
 fn make_parse_fn(mdx: bool, parse_options: u32) -> impl Fn(&str) -> satteri_arena::Arena<Mdast> {
     move |source: &str| -> satteri_arena::Arena<Mdast> {
         let opts = satteri_pulldown_cmark::Options::from_bits_truncate(parse_options);
@@ -481,7 +499,7 @@ pub struct JsSubscription {
 
 /// Shared head of the handle-creation pipelines: acquire a pooled MDAST arena,
 /// parse `source` into it (with or without position tracking), surface the
-/// first MDX parse error (MDX callers only — plain-markdown parses never
+/// first MDX parse error (MDX callers only; plain-markdown parses never
 /// produce any, so those entry points ignore the list), and stamp
 /// `parse_options` on the arena.
 ///
@@ -873,14 +891,8 @@ pub fn apply_mdast_commands_and_convert_and_render(
     )
     .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let frontmatter = extract_mdast_frontmatter(&mutated);
-    let hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mutated,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
+    let html = mdast_to_html_pooled(&mutated, &convert_opts);
     release_mdast_arena(mutated);
-    let html = satteri_ast::hast::hast_arena_to_html(&hast_arena);
-    release_hast_arena(hast_arena);
     Ok(MarkdownHtmlOneShot {
         html,
         frontmatter,
@@ -969,11 +981,31 @@ pub fn create_hast_handle(
 }
 
 /// Parse an HTML string into structured HAST (elements, text, comments).
+/// Parses as a fragment when `fragment` is set, keeping the top-level nodes as
+/// they are instead of implying `<html>`/`<head>`/`<body>`. `space` picks the
+/// namespace a fragment's own top-level content parses in: "html" or "svg".
 /// Returns an opaque handle; the arena stays in Rust memory.
 #[cfg(feature = "from-html")]
 #[napi]
-pub fn create_hast_handle_from_html(html: String) -> Result<HastHandle> {
-    let mut hast = satteri_ast::hast::html_to_hast_arena(&html);
+pub fn create_hast_handle_from_html(
+    html: String,
+    fragment: Option<bool>,
+    space: Option<String>,
+) -> Result<HastHandle> {
+    let space = match space.as_deref() {
+        None | Some("html") => satteri_ast::hast::HtmlSpace::Html,
+        Some("svg") => satteri_ast::hast::HtmlSpace::Svg,
+        Some(other) => {
+            return Err(Error::from_reason(format!(
+                "`space` must be \"html\" or \"svg\", got {other:?}"
+            )));
+        }
+    };
+    let mut hast = if fragment.unwrap_or(false) {
+        satteri_ast::hast::html_fragment_to_hast_arena(&html, space)
+    } else {
+        satteri_ast::hast::html_to_hast_arena(&html)
+    };
     hast.mdx = false;
     hast.parse_options = 0;
     Ok(External::new(Mutex::new(hast)))
@@ -1206,10 +1238,7 @@ pub fn markdown_to_html_fast(
     let mdast_reuse = acquire_mdast_arena();
     let (mdast, _) = satteri_pulldown_cmark::parse_no_positions_into(&source, opts, mdast_reuse);
     let frontmatter = extract_mdast_frontmatter(&mdast);
-    let hast_reuse = acquire_hast_arena();
-    let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(&mdast, &convert_opts, hast_reuse);
-    let html = satteri_ast::hast::hast_arena_to_html(&hast);
-    release_hast_arena(hast);
+    let html = mdast_to_html_pooled(&mdast, &convert_opts);
     release_mdast_arena(mdast);
     Ok(MarkdownHtmlOneShot {
         html,

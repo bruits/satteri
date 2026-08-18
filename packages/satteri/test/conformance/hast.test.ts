@@ -310,3 +310,39 @@ describe("HAST conformance: edge cases", () => {
     assertHastConformance("uau>(\t  \nr");
   });
 });
+
+// One multibyte character shifts every string the reader slices after it.
+describe("HAST conformance: multibyte string pool", () => {
+  test("curly quotes and emoji mid-text", () => {
+    assertHastConformance("A “quoted” word, then 🎉 an emoji, then a plain tail.");
+  });
+
+  test("two-, three- and four-byte characters in one paragraph", () => {
+    assertHastConformance("café 你好 😀 then *emphasis* and `code` and a [link](/x).");
+  });
+
+  test("multibyte in href, title and alt properties", () => {
+    assertHastConformance('“pre” [läbel](/pá†h "Tí†le") and ![älт 😀](/ïmg.png "Tïtle") tail');
+  });
+
+  test("mostly CJK document", () => {
+    assertHastConformance(
+      "# 見出しの例\n\n本文の段落です。**強調**と*斜体*、それに[リンク](/日本語)。\n\n" +
+        "- 一つ目の項目\n- 二つ目の項目\n\n> 引用文の例です。\n\n最後の段落。",
+    );
+  });
+
+  test("CJK table cells keep their alignment properties", () => {
+    assertHastConformance(
+      "| 見出し | 説明 |\n| :-- | ---: |\n| 一 | 日本語の説明 |\n| 二 | 例 |\n",
+    );
+  });
+
+  test("multibyte in a fenced code block language class", () => {
+    assertHastConformance('😀 lead\n\n```jsé\nconst s = "日本語";\n```\n');
+  });
+
+  test("multibyte before a task list", () => {
+    assertHastConformance("“q” 😀\n\n- [x] 一\n- [ ] 二\n");
+  });
+});

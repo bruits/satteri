@@ -22,6 +22,7 @@
 
 use alloc::{borrow::ToOwned, boxed::Box, collections::VecDeque, string::String, vec::Vec};
 use core::{
+    cell::Cell,
     cmp::{max, min},
     iter::FusedIterator,
     num::NonZeroUsize,
@@ -264,6 +265,9 @@ pub(crate) struct ParserInner<'input> {
     // To prevent this, track how much it's expanded and limit it.
     link_ref_expansion_limit: usize,
 
+    /// Earliest `(`-title start whose scan hit the block end with no `)`: later starts share that tail.
+    unclosed_paren_title_floor: Cell<usize>,
+
     /// MDX validation errors collected during inline parsing.
     pub(crate) mdx_errors: Vec<(usize, String)>,
 
@@ -358,6 +362,7 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
                 html_scan_guard,
                 // always allow 100KiB
                 link_ref_expansion_limit: text.len().max(100_000),
+                unclosed_paren_title_floor: Cell::new(usize::MAX),
                 mdx_errors: Vec::new(),
                 code_delims: CodeDelims::new(),
                 math_delims: MathDelims::new(),
@@ -420,6 +425,7 @@ impl<'input> ParserInner<'input> {
             wikilink_stack: Default::default(),
             html_scan_guard: Default::default(),
             link_ref_expansion_limit: text.len().max(100_000),
+            unclosed_paren_title_floor: Cell::new(usize::MAX),
             mdx_errors: firstpass_mdx_errors,
             code_delims: CodeDelims::new(),
             math_delims: MathDelims::new(),
@@ -668,6 +674,7 @@ impl<'input> ParserInner<'input> {
 
         let block_end = self.tree[self.tree.peek_up().unwrap()].item.end;
         let block_text = &self.text[..block_end];
+        self.unclosed_paren_title_floor.set(usize::MAX);
 
         while let Some(mut cur_ix) = cur {
             match self.tree[cur_ix].item.body {
@@ -1338,8 +1345,12 @@ impl<'input> ParserInner<'input> {
                             continue;
                         }
                         let next = self.tree[cur_ix].next;
-                        if let Some((next_ix, url, title)) =
-                            self.scan_inline_link(block_text, self.tree[cur_ix].item.end, next)
+                        // remark's image label start eats the `[`, so `![^x](y)` stays an image.
+                        let footnote_first = tos.ty == LinkStackTy::Link
+                            && self.defined_footnote_label(tos.node, cur_ix);
+                        if !footnote_first
+                            && let Some((next_ix, url, title)) =
+                                self.scan_inline_link(block_text, self.tree[cur_ix].item.end, next)
                         {
                             let next_node = scan_nodes_to_ix(&self.tree, next, next_ix);
                             if let Some(prev_ix) = prev {
@@ -2142,6 +2153,26 @@ impl<'input> ParserInner<'input> {
         self.wikilink_stack.disable_all_links();
     }
 
+    fn defined_footnote_label(&self, open_ix: TreeIndex, close_ix: TreeIndex) -> bool {
+        let start = self.tree[open_ix].item.start;
+        if !self.options.contains(Options::ENABLE_FOOTNOTES)
+            || self.text.as_bytes().get(start + 1) != Some(&b'^')
+        {
+            return false;
+        }
+        let label_text = &self.text[start..self.tree[close_ix].item.end];
+        let Some((len, ReferenceLabel::Footnote(label))) =
+            scan_link_label(&self.tree, label_text, self.options)
+        else {
+            return false;
+        };
+        // micromark ends a footnote call at whitespace, where the shared label scan collapses it.
+        !label_text.as_bytes()[..len]
+            .iter()
+            .any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+            && self.allocs.footdefs.contains(&label)
+    }
+
     /// Returns next byte index, url and title.
     fn scan_inline_link(
         &self,
@@ -2206,6 +2237,9 @@ impl<'input> ParserInner<'input> {
             Some(b @ b'\'') | Some(b @ b'\"') | Some(b @ b'(') => *b,
             _ => return None,
         };
+        if open == b'(' && start_ix >= self.unclosed_paren_title_floor.get() {
+            return None;
+        }
         // Unlike CommonMark, remark keeps an unescaped `(` inside a paren title as content.
         let close = if open == b'(' { b')' } else { open };
 
@@ -2271,6 +2305,10 @@ impl<'input> ParserInner<'input> {
             i += 1;
         }
 
+        if open == b'(' {
+            let floor = self.unclosed_paren_title_floor.get();
+            self.unclosed_paren_title_floor.set(floor.min(start_ix));
+        }
         None
     }
 

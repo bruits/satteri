@@ -10,10 +10,14 @@ import {
   getHandleSource,
 } from "../index.js";
 import { defineHastPlugin } from "../src/plugin.js";
-import { dropHandle } from "../src/index.js";
+import { dropHandle, markdownToHtml } from "../src/index.js";
 import { collect } from "./fixtures.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
-import type { HastParentContent, HastVisitorContext } from "../src/hast/hast-visitor.js";
+import type {
+  HastHandle,
+  HastParentContent,
+  HastVisitorContext,
+} from "../src/hast/hast-visitor.js";
 import type { Element, ElementContent, Text } from "hast";
 import type { Position } from "unist";
 
@@ -96,6 +100,35 @@ describe("visitHastHandle - basic behaviour", () => {
     visitHastHandle(handle, plugin, subs, source, undefined);
     expect(positions.Hello?.start.line).toBe(1);
     expect(positions.World?.start.line).toBe(3);
+  });
+});
+
+describe("resolveSubscriptions - malformed filtered visitors", () => {
+  test("an element visitor without filter is rejected, naming the plugin and the shape", () => {
+    const plugin = { name: "x", element: { visit() {} } };
+    expect(() => resolveSubscriptions(plugin as never)).toThrowError(
+      /^hast plugin "x": "element" visitors filter by tag\/component name, so each must be an object \{ filter: string\[\], visit: function \}/,
+    );
+  });
+
+  test("the element function shorthand is rejected", () => {
+    const plugin = { name: "shorthand", element() {} };
+    expect(() => resolveSubscriptions(plugin as never)).toThrowError(
+      /^hast plugin "shorthand": "element" visitors/,
+    );
+  });
+
+  test("a filtered visitor without visit is rejected, naming the visitor key", () => {
+    const plugin = { name: "x", mdxJsxFlowElement: { filter: ["Note"] } };
+    expect(() => resolveSubscriptions(plugin as never)).toThrowError(
+      /^hast plugin "x": "mdxJsxFlowElement" visitors/,
+    );
+  });
+
+  test("the error surfaces from markdownToHtml before the compile starts", () => {
+    expect(() =>
+      markdownToHtml("# Hi", { hastPlugins: [{ name: "x", element: { visit() {} } } as never] }),
+    ).toThrowError(/^hast plugin "x": "element" visitors/);
   });
 });
 
@@ -309,66 +342,87 @@ describe("visitHastHandle - mutations", () => {
     );
   });
 
-  test("context.wrapNode() accepts a rawHtml wrapper, parsed to an element", () => {
+  test("context.wrapNode() accepts a raw wrapper, parsed to an element", () => {
     const { handle, source } = setup("# Hello");
-    const plugin = {
+    const plugin = defineHastPlugin({
+      name: "wrap-h1-in-raw-callout",
       element: {
         filter: ["h1"],
-        visit(node: HastNode, ctx: HastVisitorContext) {
-          ctx.wrapNode(node, { rawHtml: '<div class="callout"></div>' });
+        visit(node, ctx) {
+          ctx.wrapNode(node, { raw: '<div class="callout"></div>' });
         },
       },
-    };
+    });
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain('<div class="callout"><h1>Hello</h1></div>');
   });
 
-  test("context.wrapNode() keeps a rawHtml wrapper's own children after the wrapped node", () => {
+  test("context.wrapNode() accepts the deprecated rawHtml wrapper", () => {
     const { handle, source } = setup("# Hello");
-    const plugin = {
+    const plugin = defineHastPlugin({
+      name: "wrap-h1-in-raw-html-callout",
       element: {
         filter: ["h1"],
-        visit(node: HastNode, ctx: HastVisitorContext) {
-          ctx.wrapNode(node, { rawHtml: '<div><a href="#hello">#</a></div>' });
+        visit(node, ctx) {
+          ctx.wrapNode(node, { rawHtml: '<div class="callout"></div>' });
         },
       },
-    };
+    });
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, undefined);
+    const html = renderHandle(handle);
+    expect(html).toContain('<div class="callout"><h1>Hello</h1></div>');
+  });
+
+  test("context.wrapNode() keeps a raw wrapper's own children after the wrapped node", () => {
+    const { handle, source } = setup("# Hello");
+    const plugin = defineHastPlugin({
+      name: "wrap-h1-with-anchor",
+      element: {
+        filter: ["h1"],
+        visit(node, ctx) {
+          ctx.wrapNode(node, { raw: '<div><a href="#hello">#</a></div>' });
+        },
+      },
+    });
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
     const html = renderHandle(handle);
     expect(html).toContain('<div><h1>Hello</h1><a href="#hello">#</a></div>');
   });
 
-  test("context.wrapNode() rejects rawHtml that is not exactly one element", () => {
-    for (const rawHtml of ["just text", "<i></i><b></b>", ""]) {
+  test("context.wrapNode() rejects raw HTML that is not exactly one element", () => {
+    for (const raw of ["just text", "<i></i><b></b>", ""]) {
       const { handle, source } = setup("# Hello");
-      const plugin = {
+      const plugin = defineHastPlugin({
+        name: "wrap-h1-in-raw",
         element: {
           filter: ["h1"],
-          visit(node: HastNode, ctx: HastVisitorContext) {
-            ctx.wrapNode(node, { rawHtml });
+          visit(node, ctx) {
+            ctx.wrapNode(node, { raw });
           },
         },
-      };
+      });
       const subs = resolveSubscriptions(plugin);
-      expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(
+      expect(() => visitHastHandle(handle, plugin, subs, source, undefined), raw).toThrow(
         /exactly one element/,
       );
     }
   });
 
-  test("context.wrapNode() rejects a void element as rawHtml wrapper", () => {
+  test("context.wrapNode() rejects a void element as raw wrapper", () => {
     const { handle, source } = setup("# Hello");
-    const plugin = {
+    const plugin = defineHastPlugin({
+      name: "wrap-h1-in-void",
       element: {
         filter: ["h1"],
-        visit(node: HastNode, ctx: HastVisitorContext) {
-          ctx.wrapNode(node, { rawHtml: '<img src="x.png">' });
+        visit(node, ctx) {
+          ctx.wrapNode(node, { raw: '<img src="x.png">' });
         },
       },
-    };
+    });
     const subs = resolveSubscriptions(plugin);
     expect(() => visitHastHandle(handle, plugin, subs, source, undefined)).toThrow(/void element/);
   });
@@ -1179,7 +1233,7 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain("<h1>A B Hello</h1>");
   });
 
-  test("context mutations reject plugin-built nodes with no arena id", () => {
+  test("context mutations reject plugin-built nodes, which have no id here", () => {
     const { handle, source } = setup();
     const plugin = defineHastPlugin({
       name: "remove-fresh-node",
@@ -1192,7 +1246,7 @@ describe("visitHastHandle - mutations", () => {
     });
     expect(() =>
       visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined),
-    ).toThrow(/no arena id/);
+    ).toThrow(/invalid node id/);
   });
 });
 
@@ -1609,6 +1663,47 @@ describe("visitHastHandle - lazy children lifecycle", () => {
   });
 });
 
+describe("visitHastHandle - text value swap", () => {
+  function readTextPosition(handle: HastHandle, source: string): Position | undefined {
+    let position: Position | undefined;
+    const reader = defineHastPlugin({
+      name: "read-text-position",
+      text(node) {
+        position ??= node.position;
+      },
+    });
+    visitHastHandle(handle, reader, resolveSubscriptions(reader), source, undefined);
+    return position;
+  }
+
+  test("a sync swap keeps the text node's position", () => {
+    const { handle, source } = setup("Hello");
+    const shout = defineHastPlugin({
+      name: "shout-text",
+      text(node) {
+        return { type: "text", value: node.value.toUpperCase() } satisfies Text;
+      },
+    });
+    visitHastHandle(handle, shout, resolveSubscriptions(shout), source, undefined);
+    expect(readTextPosition(handle, source)).toMatchObject({ start: { line: 1, column: 1 } });
+    expect(renderHandle(handle)).toContain("HELLO");
+  });
+
+  test("an async swap keeps the text node's position", async () => {
+    const { handle, source } = setup("Hello");
+    const shout = defineHastPlugin({
+      name: "shout-text-async",
+      async text(node) {
+        await new Promise((r) => setTimeout(r, 1));
+        return { type: "text", value: node.value.toUpperCase() } satisfies Text;
+      },
+    });
+    await visitHastHandle(handle, shout, resolveSubscriptions(shout), source, undefined);
+    expect(readTextPosition(handle, source)).toMatchObject({ start: { line: 1, column: 1 } });
+    expect(renderHandle(handle)).toContain("HELLO");
+  });
+});
+
 // Ref-stub children: `.children` of a matched node returns id+type stubs that
 // defer the arena snapshot until a real field is read, so passthrough children
 // compile to one-word refs without ever materializing.
@@ -1900,7 +1995,7 @@ test("parent and indexOf work on child stubs, not just visited nodes", () => {
   expect(stubIndex).toBe(0);
 });
 
-test("parent throws on plugin-built nodes (no arena id)", () => {
+test("parent throws on plugin-built nodes, which have no id here", () => {
   const { handle, source } = setup("hello\n");
   let error: Error | undefined;
   const plugin = defineHastPlugin({
@@ -1917,5 +2012,5 @@ test("parent throws on plugin-built nodes (no arena id)", () => {
     },
   });
   visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
-  expect(error?.message).toMatch(/no arena id/);
+  expect(error?.message).toMatch(/invalid node id/);
 });

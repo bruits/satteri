@@ -10,6 +10,7 @@ import type { MdastReader } from "./mdast-reader.js";
 import { MDAST_LAYOUT_KEYS } from "./generated/layout.js";
 import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
 import { LEAF_TYPES } from "./mdast-materializer.js";
+import type { NodeRefs } from "../visitor-shared.js";
 
 type MdastResolver = LazyChildResolver<MdastReader, MdastNode>;
 
@@ -43,7 +44,8 @@ for (const tag of Object.keys(TYPE_NAMES)) {
     nodeType === MDAST_CUSTOM
       ? ["value"]
       : [...(MDAST_LAYOUT_KEYS[nodeType] ?? HAND_WRITTEN_FIELDS[nodeType] ?? [])];
-  if (!LEAF_TYPES.has(nodeType)) fields.push("children");
+  // `custom` gets its own `children` getter: leafness is per node, not per type.
+  if (nodeType !== MDAST_CUSTOM && !LEAF_TYPES.has(nodeType)) fields.push("children");
   MDAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(fields);
 }
 
@@ -70,11 +72,42 @@ export class MdastChildStub {
     this._id = id;
     if (nodeType === MDAST_CUSTOM) {
       installLazyCustomType(this);
+      installLazyCustomChildren(this);
     } else {
       this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
     }
     installStubDescriptors(this, MDAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
   }
+
+  /** @internal */
+  get _refs(): NodeRefs {
+    return this._resolver.refs;
+  }
+}
+
+/** `children` as a self-replacing accessor, and self-*removing* for a leaf: the
+ *  stub only knows the tag, so it cannot tell a leaf from a parent until the
+ *  arena snapshot says which shape this node has. */
+function installLazyCustomChildren(stub: MdastChildStub): void {
+  Object.defineProperty(stub, "children", {
+    get(this: MdastChildStub): MdastNode[] | undefined {
+      const real = this._resolver.materializeOne(this._id) as { children?: MdastNode[] };
+      const value = real.children;
+      if (value === undefined) {
+        delete (this as { children?: MdastNode[] }).children;
+        return undefined;
+      }
+      Object.defineProperty(this, "children", {
+        value,
+        writable: false,
+        enumerable: true,
+        configurable: false,
+      });
+      return value;
+    },
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 /** `type` as a self-replacing accessor: the materialized node folds the stored

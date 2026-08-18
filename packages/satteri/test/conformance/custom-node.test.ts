@@ -14,7 +14,7 @@ import type { MdastNode } from "../../src/types.js";
 // hast text node, anything else becomes a `<div>` (renamed via `data.hName`,
 // merged with `data.hProperties`) whose children are recursed. These tests
 // inject the *same* custom node into a remark-rehype reference pipeline and
-// into satteri, and assert the HTML matches — so the mainline paths stay
+// into satteri, and assert the HTML matches, so the mainline paths stay
 // observably identical to remark rather than to hand-written expectations.
 //
 // Behaviors that are satteri's own call (the reserved `"custom"` type string,
@@ -40,8 +40,8 @@ async function satteriHtml(md: string, plugin: MdastPluginInstance): Promise<str
 }
 
 function normalize(html: string): string {
-  // Canonicalize entity encoding style — remark+rehype favours hex (`&#x26;`)
-  // while satteri uses named entities — then collapse `&gt;`/`&quot;` to their
+  // Canonicalize entity encoding style: remark+rehype favours hex (`&#x26;`)
+  // while satteri uses named entities. Then collapse `&gt;`/`&quot;` to their
   // raw forms (rehype-stringify doesn't encode `>` or `"` outside contexts
   // that require it). All produce semantically identical HTML. Same
   // normalization as `commonmark-spec-json.test.ts`.
@@ -59,7 +59,7 @@ function normalize(html: string): string {
 
 type Build = (node: MdastNodes) => MdastNodes;
 
-/** Splice `build(node)` in place of every node matching `predicate` — the
+/** Splice `build(node)` in place of every node matching `predicate`, the
  *  remark idiom of mutating the shared tree. */
 function replaceOnRemark(
   predicate: (node: MdastNodes) => boolean,

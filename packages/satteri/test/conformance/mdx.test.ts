@@ -1,7 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { createElement } from "react";
-import { assertMdxConformance, assertMdxMathConformance, assertBothReject } from "./helpers.js";
-import { mdxToMdast } from "../../src/index.js";
+import {
+  assertMdxConformance,
+  assertMdxDevPositionConformance,
+  assertMdxMathConformance,
+  assertBothReject,
+} from "./helpers.js";
+import { mdxToJs, mdxToMdast } from "../../src/index.js";
 
 const Foo = (props: any) => createElement("div", null, `bar=${props.bar}`);
 const Bar = (props: any) => createElement("em", null, `baz=${props.baz}`);
@@ -1185,5 +1190,38 @@ describe("MDX conformance: math interaction", () => {
   // before a display-math block.
   test("inline `$$` does not pair across a display-math fence", async () => {
     await assertMdxMathConformance("See:$$\n\\frac{1}{2}\n$$");
+  });
+});
+
+describe("MDX conformance: development positions", () => {
+  test("ascii source", async () => {
+    await assertMdxDevPositionConformance("ascii <Foo />\n");
+  });
+
+  test("multibyte characters before a JSX element", async () => {
+    await assertMdxDevPositionConformance("# Café été\n\né <Foo />\n");
+  });
+
+  test("astral characters count as two columns", async () => {
+    await assertMdxDevPositionConformance("😀 <Foo />\n");
+  });
+
+  test("astral characters on an earlier line", async () => {
+    await assertMdxDevPositionConformance("😀 emoji\n\n<Foo>🎉 <Bar /></Foo>\n");
+  });
+
+  test("__source column matches the mdast position", () => {
+    const source = "# Café été\n\né <Foo />\n";
+    const tree = mdxToMdast(source);
+    if (tree.type !== "root") throw new Error("expected a root");
+    const paragraph = tree.children[1];
+    if (paragraph?.type !== "paragraph") throw new Error("expected a paragraph");
+    const jsx = paragraph.children.find((child) => child.type === "mdxJsxTextElement");
+    const { code } = mdxToJs(source, { development: true });
+    expect(code).toContain(`columnNumber: ${jsx?.position?.start.column}`);
+  });
+
+  test("parse error column counts UTF-16 code units", () => {
+    expect(() => mdxToJs("😀 <Foo>\n")).toThrow(/^1:4: Expected a closing tag for `<Foo>` \(1:4\)/);
   });
 });

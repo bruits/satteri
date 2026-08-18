@@ -1,5 +1,18 @@
 # satteri
 
+## 0.2.10 — 2026-08-18
+
+### Patch changes
+
+- Updated dependencies: satteri-ast (Cargo)@0.5.1, satteri-mdxjs (Cargo)@0.3.10, satteri-pulldown-cmark (Cargo)@0.6.1
+
+## 0.2.9 — 2026-08-18
+
+### Patch changes
+
+- [0d26ea6](https://github.com/bruits/satteri/commit/0d26ea6d68a29d4de8419423e030076244348c22) Changed the minimum supported Rust version to 1.85, as these crates now build on the 2024 edition. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.5.0, satteri-mdxjs (Cargo)@0.3.9, satteri-pulldown-cmark (Cargo)@0.6.0
+
 ## 0.2.8 — 2026-07-08
 
 ### Patch changes

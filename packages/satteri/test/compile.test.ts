@@ -861,6 +861,68 @@ describe("mdxToJs", () => {
     expect(liveCode).toContain("children: foo");
   });
 
+  test("{ raw, mdxExpressions: false } keeps braces literal after a bare `<`", () => {
+    const rawParagraph = (html: string) =>
+      defineMdastPlugin({
+        name: "raw-bare-lt",
+        paragraph() {
+          return { raw: html, mdxExpressions: false };
+        },
+      });
+
+    const tagged = mdxToJs("x\n", {
+      mdastPlugins: [rawParagraph("<span>5 < 6 and {literal} here</span>")],
+    }).code;
+    expect(tagged).toContain('"5 < 6 and "');
+    expect(tagged).toContain('"{"');
+    expect(tagged).toContain('"literal"');
+    expect(tagged).toContain('"}"');
+
+    const tagless = mdxToJs("x\n", {
+      mdastPlugins: [rawParagraph("a < b {notExpr} tail")],
+    }).code;
+    expect(tagless).toContain('"a < b "');
+    expect(tagless).toContain('"{"');
+    expect(tagless).toContain('"notExpr"');
+
+    const attributeBraces = mdxToJs("x\n", {
+      mdastPlugins: [rawParagraph('<span data-x="{a}">{b}</span>')],
+    }).code;
+    expect(attributeBraces).toContain('"data-x": "{a}"');
+    expect(attributeBraces).toContain('"b"');
+
+    const { html } = markdownToHtml("x\n", {
+      mdastPlugins: [rawParagraph("<span>5 < 6 and {literal} here</span>")],
+    });
+    expect(html).toContain("<span>5 &lt; 6 and {literal} here</span>");
+  });
+
+  test("wrapNode({ raw, mdxExpressions: false }) keeps the wrapper's braces literal", () => {
+    const quote = "> {foo}";
+    const literal = defineMdastPlugin({
+      name: "wrap-literal",
+      paragraph(node, ctx) {
+        ctx.wrapNode(node, { raw: quote, mdxExpressions: false });
+      },
+    });
+    const live = defineMdastPlugin({
+      name: "wrap-live",
+      paragraph(node, ctx) {
+        ctx.wrapNode(node, { raw: quote });
+      },
+    });
+
+    const literalCode = mdxToJs("x\n", { mdastPlugins: [literal] }).code;
+    expect(literalCode).toContain("blockquote");
+    expect(literalCode).toContain('"{"');
+    expect(literalCode).toContain('"}"');
+
+    const liveCode = mdxToJs("x\n", { mdastPlugins: [live] }).code;
+    expect(liveCode).toContain("blockquote");
+    expect(liveCode).not.toContain('"{"');
+    expect(liveCode).toMatch(/^\s*foo,$/m);
+  });
+
   test("html node compiling to MDX throws (raw HTML has no JSX representation)", () => {
     const plugin = defineMdastPlugin({
       name: "html-node",
@@ -1142,6 +1204,46 @@ describe("mdxToJs", () => {
       elementAttributeNameCase: "html",
     });
     expect(js).toContain('className: "x"');
+  });
+
+  test("elementAttributeNameCase: 'html' converts a nested appended <svg>'s own attributes (#208)", () => {
+    const plugin = defineHastPlugin({
+      name: "svg-append",
+      element: {
+        filter: ["p"],
+        visit(node, ctx) {
+          ctx.appendChild(node, {
+            type: "element",
+            tagName: "span",
+            properties: {},
+            children: [
+              {
+                type: "element",
+                tagName: "svg",
+                properties: { strokeWidth: "1.2", strokeLinecap: "round" },
+                children: [
+                  {
+                    type: "element",
+                    tagName: "path",
+                    properties: { fillRule: "evenodd" },
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          });
+        },
+      },
+    });
+    const { code: js } = mdxToJs("hello", {
+      hastPlugins: [plugin],
+      elementAttributeNameCase: "html",
+    });
+    // The SVG schema covers the <svg> element's own attributes, not just descendants.
+    expect(js).toContain('"stroke-width": "1.2"');
+    expect(js).toContain('"stroke-linecap": "round"');
+    expect(js).not.toContain("strokeWidth");
+    expect(js).toContain('"fill-rule": "evenodd"');
   });
 
   test("style attribute parses into an object by default (DOM casing)", () => {
@@ -1773,16 +1875,16 @@ describe("markdownToJs", () => {
     ];
 
     for (const [name, options] of paths) {
-      test(`${name}: returns frontmatter and drops raw HTML`, () => {
-        const { code: js, frontmatter } = markdownToJs(src, options);
+      test(`${name}: returns frontmatter and drops raw HTML`, async () => {
+        const { code: js, frontmatter } = await markdownToJs(src, options);
         expect(frontmatter).toEqual({ kind: "yaml", value: "title: T" });
         expect(js).toContain("para");
         expect(js).not.toContain('b: "b"');
         expect(js).not.toContain("<b>");
       });
 
-      test(`${name}: applies rawHtml`, () => {
-        const { code: js } = markdownToJs("a <b>x</b>", {
+      test(`${name}: applies rawHtml`, async () => {
+        const { code: js } = await markdownToJs("a <b>x</b>", {
           ...options,
           features: { rawHtml: true },
         });
@@ -2228,6 +2330,70 @@ describe("per-plugin position opt-in", () => {
     expect(hastSeen?.start.line).toBe(1);
   });
 
+  test("mdast nodes spliced in from a raw string have no position", () => {
+    const spliced: unknown[] = [];
+    let headingSeen: { start: { line: number } } | undefined;
+    markdownToHtml(SOURCE, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "splice",
+          paragraph() {
+            return { raw: "**bold 😀 text**" };
+          },
+        }),
+        defineMdastPlugin({
+          name: "reader",
+          options: { position: true },
+          heading(node) {
+            headingSeen = node.position;
+          },
+          paragraph(node) {
+            spliced.push(node.position);
+          },
+          strong(node) {
+            spliced.push(node.position);
+          },
+          text(node) {
+            if (node.value === "bold 😀 text") spliced.push(node.position);
+          },
+        }),
+      ],
+    });
+    expect(spliced).toHaveLength(3);
+    expect(spliced.every((position) => position === undefined)).toBe(true);
+    expect(headingSeen?.start.line).toBe(1);
+  });
+
+  test("hast elements converted from a raw splice have no position", () => {
+    let strongSeen: unknown = "unset";
+    let headingSeen: { start: { line: number } } | undefined;
+    markdownToHtml(SOURCE, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "splice",
+          paragraph() {
+            return { raw: "**bold 😀 text**" };
+          },
+        }),
+      ],
+      hastPlugins: [
+        defineHastPlugin({
+          name: "reader",
+          options: { position: true },
+          element: {
+            filter: ["h1", "strong"],
+            visit(node) {
+              if (node.tagName === "strong") strongSeen = node.position;
+              else headingSeen = node.position;
+            },
+          },
+        }),
+      ],
+    });
+    expect(strongSeen).toBeUndefined();
+    expect(headingSeen?.start.line).toBe(1);
+  });
+
   // Issue #172: the walk path leaked byte offsets, so
   // `ctx.source.slice(start.offset, end.offset)` drifted right after any
   // multibyte character. Offsets and columns are UTF-16 code units, so
@@ -2380,6 +2546,26 @@ describe("MDX source positions without a position opt-in", () => {
     expect(result.code).toContain("columnNumber: 1");
   });
 
+  test("dev __source reports no line for JSX built from a raw splice", () => {
+    const src = "# Title\n\nsome `code` here\n";
+    const result = mdxToJs(src, {
+      development: true,
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "splice",
+          inlineCode() {
+            return { raw: "**bold 😀 text**" };
+          },
+        }),
+      ],
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.code).toContain("_components.strong");
+    const emitted = [...result.code.matchAll(/lineNumber: (\d+)/g)].map((m) => Number(m[1]));
+    expect(emitted.length).toBeGreaterThan(0);
+    expect(Math.max(...emitted)).toBeLessThanOrEqual(src.trimEnd().split("\n").length);
+  });
+
   test("MDX parse errors report line:col (not a byte offset) on the fast path", () => {
     const src = "# Title\n\nSome text.\n\n{invalid ++ ++ syntax}\n";
     let message = "";
@@ -2390,5 +2576,142 @@ describe("MDX source positions without a position opt-in", () => {
     }
     expect(message).toMatch(/^5:\d+:/);
     expect(message).not.toMatch(/byte \d+/);
+  });
+});
+
+describe("nodes kept from another compile", () => {
+  function keepFirstParagraph(source: string): MdastNode {
+    let kept: MdastNode | undefined;
+    const capture = defineMdastPlugin({
+      name: "capture-paragraph",
+      paragraph(node) {
+        kept ??= node;
+      },
+    });
+    markdownToHtml(source, { mdastPlugins: [capture] });
+    if (kept === undefined) throw new Error("no paragraph was visited");
+    return kept;
+  }
+
+  test("removeNode on a node kept from an identically shaped document is rejected", () => {
+    const kept = keepFirstParagraph("Document A paragraph.");
+    const edit = defineMdastPlugin({
+      name: "remove-kept",
+      paragraph(_node, ctx) {
+        ctx.removeNode(kept);
+      },
+    });
+
+    expect(() => markdownToHtml("Document B paragraph.", { mdastPlugins: [edit] })).toThrow(
+      /invalid node id/,
+    );
+  });
+
+  test("replaceNode on a node kept from a differently shaped document is rejected", () => {
+    const kept = keepFirstParagraph("Alpha.\n\nBravo.\n\n- one\n- two\n\nCharlie.");
+    const edit = defineMdastPlugin({
+      name: "replace-kept",
+      heading(_node, ctx) {
+        ctx.replaceNode(kept, {
+          type: "paragraph",
+          children: [{ type: "text", value: "injected" }],
+        });
+      },
+    });
+
+    expect(() =>
+      markdownToHtml("# Title\n\n> Quoted line.\n\nTail paragraph.", { mdastPlugins: [edit] }),
+    ).toThrow(/invalid node id/);
+  });
+
+  test("setProperty on a node kept from a previous compile is rejected", () => {
+    const kept = keepFirstParagraph("Document A paragraph.");
+    const edit = defineMdastPlugin({
+      name: "set-property-on-kept",
+      paragraph(_node, ctx) {
+        ctx.setProperty(kept, "data", { hName: "section" });
+      },
+    });
+
+    expect(() => markdownToHtml("Document B paragraph.", { mdastPlugins: [edit] })).toThrow(
+      /invalid node id/,
+    );
+  });
+
+  test("a hast element kept from a previous compile is rejected", () => {
+    let kept: HastNode | undefined;
+    const capture = defineHastPlugin({
+      name: "capture-element",
+      element: {
+        filter: ["p"],
+        visit(node) {
+          kept ??= node;
+        },
+      },
+    });
+    markdownToHtml("Document A paragraph.", { hastPlugins: [capture] });
+    if (kept === undefined) throw new Error("no element was visited");
+    const foreign = kept;
+
+    const edit = defineHastPlugin({
+      name: "remove-kept-element",
+      element: {
+        filter: ["p"],
+        visit(_node, ctx) {
+          ctx.removeNode(foreign);
+        },
+      },
+    });
+
+    expect(() => markdownToHtml("Document B paragraph.", { hastPlugins: [edit] })).toThrow(
+      /invalid node id/,
+    );
+  });
+
+  test("an mdast node handed to a hast plugin is rejected", () => {
+    let captured: MdastNode | undefined;
+    const capture = defineMdastPlugin({
+      name: "capture-for-hast",
+      paragraph(node) {
+        captured ??= node;
+      },
+    });
+    const edit = defineHastPlugin({
+      name: "remove-mdast-node",
+      element: {
+        filter: ["p"],
+        visit(_node, ctx) {
+          // @ts-expect-error an mdast node is not a hast node; the runtime guard is what is tested
+          const foreign: HastNode = captured;
+          ctx.removeNode(foreign);
+        },
+      },
+    });
+
+    expect(() =>
+      markdownToHtml("A paragraph.", { mdastPlugins: [capture], hastPlugins: [edit] }),
+    ).toThrow(/invalid node id/);
+  });
+
+  test("a kept node that is only read still reads as the tree looked in its pass", () => {
+    let kept: MdastNode | undefined;
+    const capture = defineMdastPlugin({
+      name: "capture-and-read",
+      paragraph(node) {
+        kept ??= node;
+        const first = node.children[0];
+        // Reading content in-pass pins the snapshot the retained node reads from.
+        if (first?.type === "text") void first.value;
+      },
+    });
+    markdownToHtml("Kept paragraph text.", { mdastPlugins: [capture] });
+    markdownToHtml("A later, unrelated compile.", {
+      mdastPlugins: [defineMdastPlugin({ name: "noop", paragraph() {} })],
+    });
+
+    if (kept?.type !== "paragraph") throw new Error("expected a paragraph");
+    const first = kept.children[0];
+    expect(first?.type).toBe("text");
+    expect(first?.type === "text" ? first.value : "").toBe("Kept paragraph text.");
   });
 });

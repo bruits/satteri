@@ -217,7 +217,7 @@ describe("find-and-replace autolink positions", () => {
 
 // Smart punctuation rewrites the text a find-and-replace autolink is found in,
 // so the decoded value no longer matches its source span byte for byte. The
-// alignment undoes the three rewrites, and these pin that it lands exactly —
+// alignment undoes the three rewrites, and these pin that it lands exactly:
 // an approximate span would be worse than the absent one it replaces.
 describe("smart punctuation does not cost the autolink its position", () => {
   const smart = (md: string) =>

@@ -36,6 +36,10 @@ export class ByteWriter {
     return this.n;
   }
 
+  get capacity(): number {
+    return this.buf.length;
+  }
+
   /** Reset for reuse; the grown buffer is retained so steady state is alloc-free. */
   reset(): void {
     this.n = 0;

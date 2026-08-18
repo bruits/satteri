@@ -1619,3 +1619,14 @@ fn blockquote_interrupts_after_lt_inside_math() {
         open_jsx
     );
 }
+
+#[test]
+fn unclosed_jsx_error_columns_count_utf16_code_units() {
+    use satteri_pulldown_cmark::{MDX_OPTIONS, parse};
+    let (_arena, errors) = parse("\u{1F600} <Foo>\n", MDX_OPTIONS);
+    assert_eq!(errors.len(), 1, "expected one error: {errors:?}");
+    assert!(
+        errors[0].1.contains("(1:4)"),
+        "astral char is two UTF-16 units: {errors:?}"
+    );
+}

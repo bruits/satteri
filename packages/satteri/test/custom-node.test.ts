@@ -86,7 +86,7 @@ test("custom type round-trips as node.type and content stays visible to other pl
 });
 
 test("GFM content survives inside a custom node (the #125 repro, fixed)", () => {
-  // Replace a blockquote with a section wrapping its children — a GFM table
+  // Replace a blockquote with a section wrapping its children, a GFM table
   // among them. A directive wrapper drops all of it without an `hName`.
   const wrap = defineMdastPlugin({
     name: "wrap-block",
@@ -109,7 +109,7 @@ test("custom leaf node (value, no children) renders as an escaped text node", ()
   const wrap = defineMdastPlugin({
     name: "leaf",
     paragraph(node, ctx) {
-      // Replace the paragraph with a value-bearing leaf — no children, no hName.
+      // Replace the paragraph with a value-bearing leaf: no children, no hName.
       ctx.replaceNode(node, { type: "token", value: "a < b & c" });
     },
   });
@@ -283,7 +283,7 @@ test("fields outside the node shape are dropped; data carries metadata", () => {
 
 test("a custom node can be mutated from the custom visitor", () => {
   // The node handed to `custom` goes straight back into the mutation API,
-  // without a cast — the type-level half of this test is the compile.
+  // without a cast; the type-level half of this test is the compile.
   const create = defineMdastPlugin({
     name: "create",
     paragraph(node, ctx) {
@@ -333,6 +333,88 @@ test("nested custom nodes render and nest", () => {
   });
   const { html } = markdownToHtml("Hello **bold**", { mdastPlugins: [nest] });
   expect(html).toContain("<outer><inner>Hello <strong>bold</strong></inner></outer>");
+});
+
+test("a custom leaf keeps no children key however it is reached", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "kbd", value: "Ctrl" });
+    },
+  });
+  let fromMatch: unknown = "UNSET";
+  let fromParent: unknown = "UNSET";
+  let fromStub: unknown = "UNSET";
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node, ctx) {
+      fromMatch = "children" in node;
+      const parent = ctx.parent(node);
+      fromParent = parent === undefined ? "NO PARENT" : "children" in parent.children[0]!;
+    },
+    blockquote(node) {
+      const child = node.children[0]!;
+      // A stub resolves `children` against the arena on read, then drops the key.
+      expect((child as { children?: unknown }).children).toBeUndefined();
+      fromStub = "children" in child;
+    },
+  });
+  markdownToHtml("> placeholder", { mdastPlugins: [create, inspect] });
+  expect(fromMatch).toBe(false);
+  expect(fromParent).toBe(false);
+  expect(fromStub).toBe(false);
+});
+
+test("a custom parent keeps its real children however it is reached", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    paragraph(node, ctx) {
+      ctx.replaceNode(node, { type: "section", children: node.children });
+    },
+  });
+  let fromMatch: string[] = [];
+  let fromParent: string[] = [];
+  let fromStub: string[] = [];
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node, ctx) {
+      fromMatch = (node.children ?? []).map((c) => c.type);
+      const parent = ctx.parent(node);
+      const viaParent = parent?.children[0] as { children?: { type: string }[] } | undefined;
+      fromParent = (viaParent?.children ?? []).map((c) => c.type);
+    },
+    blockquote(node) {
+      const child = node.children[0] as { children?: { type: string }[] };
+      fromStub = (child.children ?? []).map((c) => c.type);
+    },
+  });
+  markdownToHtml("> Hello **bold**", { mdastPlugins: [create, inspect] });
+  expect(fromMatch).toEqual(["text", "strong"]);
+  expect(fromParent).toEqual(["text", "strong"]);
+  expect(fromStub).toEqual(["text", "strong"]);
+});
+
+test("a custom node inside replacement content keeps its type and value", () => {
+  const create = defineMdastPlugin({
+    name: "create",
+    blockquote(node, ctx) {
+      ctx.replaceNode(node, {
+        type: "section",
+        data: { hName: "section" },
+        children: [{ type: "kbd", value: "Ctrl" }],
+      });
+    },
+  });
+  let seen: Record<string, unknown> = {};
+  const inspect = defineMdastPlugin({
+    name: "inspect",
+    custom(node) {
+      if (node.type === "kbd") seen = { type: node.type, value: node.value };
+    },
+  });
+  const { html } = markdownToHtml("> placeholder", { mdastPlugins: [create, inspect] });
+  expect(seen).toEqual({ type: "kbd", value: "Ctrl" });
+  expect(html).toContain("<section>Ctrl</section>");
 });
 
 test("a custom child's type is readable from a parent's children", () => {

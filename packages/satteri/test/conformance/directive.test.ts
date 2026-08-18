@@ -216,6 +216,40 @@ describe("Directive MDAST conformance", () => {
     });
   });
 
+  describe("text directives: ports after a bare URL", () => {
+    test("underscore in the penultimate label keeps the port directive", () => {
+      assertExtMdastConformance("http://a_b.c:4321/x", DIR);
+    });
+
+    test("underscored host with a real port keeps the port directive", () => {
+      assertExtMdastConformance("http://my_app.localhost:3000/admin", DIR);
+    });
+
+    test("underscored host in running prose", () => {
+      assertExtMdastConformance("see http://a_b.c:4321/x end", DIR);
+    });
+
+    test("unknown scheme keeps the port directive", () => {
+      assertExtMdastConformance("foo://bar:80/x", DIR);
+    });
+
+    test("letter before the scheme keeps the port directive", () => {
+      assertExtMdastConformance("xhttp://example.com:3000/x", DIR);
+    });
+
+    test("linkable host swallows the port into the URL", () => {
+      assertExtMdastConformance("http://example.com:3000/x", DIR);
+    });
+
+    test("dotless linkable host swallows the port into the URL", () => {
+      assertExtMdastConformance("http://localhost:3000/x", DIR);
+    });
+
+    test("numeric directive with no URL before it", () => {
+      assertExtMdastConformance("Port :3000 here.", DIR);
+    });
+  });
+
   describe("edge cases", () => {
     test("directive at start of paragraph", () => {
       assertExtMdastConformance(":name[label]{key=val} at start.", DIR);

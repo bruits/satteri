@@ -1,5 +1,209 @@
 # satteri
 
+## 0.10.1 — 2026-08-18
+
+### Patch changes
+
+- [1b09752](https://github.com/bruits/satteri/commit/1b09752d04b7e5494b583250330089a6401b377d) Added `{ fragment: true }` to `htmlToHast`, which parses the string as a fragment so the returned `root` holds its own top-level nodes instead of an implied `<html>`/`<head>`/`<body>`.
+  
+  Pass `space: "svg"` alongside it to read the fragment as foreign content, so `<circle />` self-closes and camel-cased tags like `clipPath` keep their casing instead of parsing as unknown HTML elements.
+  
+  ```ts
+  import { htmlToHast } from "satteri";
+  
+  const tree = htmlToHast("<p>hi</p>", { fragment: true });
+  // { type: "root", children: [{ type: "element", tagName: "p", ... }] }
+  
+  const icon = htmlToHast(`<circle cx="1" />`, { fragment: true, space: "svg" });
+  ```
+   — Thanks @Princesseuh!
+
+## 0.10.0 — 2026-08-18
+
+### Minor changes
+
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Nodes handed to plugins are shared and now frozen: writing to a node's fields, `position`, `properties`/`attributes`, or `children` throws a `TypeError` instead of silently corrupting what later plugins see; go through the context methods to make changes.
+  
+  Keeping a node around after your visitor ran now works: it reads as the tree looked at that moment, instead of always throwing. The error only remains if you never read the node's content before the tree changed. Trees returned by `markdownToMdast`/`mdxToMdast`/`markdownToHast`/`mdxToHast` are your own data and stay fully mutable. — Thanks @Princesseuh!
+- [e53e725](https://github.com/bruits/satteri/commit/e53e725e3eca758b5c65364b583c06a96d515510) Added a way to run a plugin only on some documents: a plugin factory now receives the file's `fileURL`, `sourceFormat`, `source` and `data`, and can return `null`, `undefined` or `false` to be left out for that document. Those skip values are also accepted anywhere a plugin entry can appear.
+  
+  ```js
+  const onlyChangelogs = (ctx) =>
+    ctx.fileURL?.pathname.endsWith("/CHANGELOG.md") ? rewriteVersions : null;
+  
+  markdownToHtml(source, { mdastPlugins: [onlyChangelogs, myPlugin] });
+  ```
+  
+  Anything else in a plugin list now fails with an error naming the option and what it expected. — Thanks @Princesseuh!
+- [2b85f56](https://github.com/bruits/satteri/commit/2b85f5602fc3340eef9faa3e41c66ff0a03ec8af) Adds `{ raw }` support to `wrapNode()` in HAST plugins: the HTML is parsed and the node is wrapped in the resulting element. — Thanks @Princesseuh!
+- [d8b7172](https://github.com/bruits/satteri/commit/d8b71724ba3a6bfcad24265c5b1d021b1de1eaa0) Adds a `definitionList` feature (off by default) that renders definition lists to `<dl>`/`<dt>`/`<dd>`.
+  
+  New `descriptionList` / `descriptionTerm` / `descriptionDetails` nodes are available to plugins when this option is enabled.
+  
+  ```text
+  Apple
+  :   Pomaceous fruit.
+  :   A tech company.
+  ```
+   — Thanks @lolifamily for your first contribution 🎉!
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added a `rawHtml` feature that reparses raw HTML embedded in Markdown into real HAST nodes. Enable it with `features: { rawHtml: true }` on any entry point; it is applied during the MDAST→HAST conversion, so `markdownToHast`, `markdownToHtml`, and the plugin pipelines all reparse identically, and hast plugins always see the reparsed elements.
+  
+  The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalized into typed hast properties (`class` → `className: [...]`, `disabled` → `true`, `tabindex` → number, `data-foo-bar` → `dataFooBar`). `htmlToHast` normalizes properties the same way.
+  
+  MDX nodes are passed through the reparse rather than dropped: each JSX element/expression is preserved in place while the surrounding raw HTML is still resolved around it. So `mdxToHast(source, { features: { rawHtml: true } })` keeps its MDX content.
+  
+  ```ts
+  import { markdownToHast } from "satteri";
+  
+  const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
+    features: { rawHtml: true },
+  });
+  // <div> is a real element wrapping <p><strong>hi</strong></p>
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+- [166419c](https://github.com/bruits/satteri/commit/166419cf912b3639abedfcb87ee8059920e5b221) Added `markdownToJs`, the plain-Markdown counterpart to `mdxToJs`: MDX syntax like `{...}` stays literal text.
+  
+  ```ts
+  import { markdownToJs } from "satteri";
+  
+  const { code } = markdownToJs("Hello {world}");
+  ```
+  
+  HTML in the source is dropped. Pass `features: { rawHtml: true }` to parse it into real elements instead. — Thanks @Princesseuh!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Source positions are now opt-in per plugin via `options: { position: true }`, and `node.position` is `undefined` in visitors otherwise. — Thanks @Princesseuh!
+- [c9ea0c9](https://github.com/bruits/satteri/commit/c9ea0c9e59d7e71afb6be97b378e787b0f3c96a8) Adds user-defined MDAST node types. A plugin can create a node with any `type` string, render it as an element through `data.hName` (or as text from a `value`), and reach every one of them from the new `custom` visitor key. Content nested inside a custom node stays visible to other plugins and to the HTML output. — Thanks @Princesseuh!
+- [8df3f76](https://github.com/bruits/satteri/commit/8df3f765b2df9cbfa1aa4130a126b9315e431c14) Added support for nested arrays in `mdastPlugins` and `hastPlugins`, so a package can export a bundle of plugins that you pass without spreading it. A bundle's plugins run in their own order, at the bundle's position. A factory can return a bundle as well as a single plugin, giving its plugins state they share with each other and reset per document.
+  
+  ```js
+  import { typography } from "some-package"; // an array of plugins
+  
+  markdownToHtml(source, { mdastPlugins: [typography, myPlugin] });
+  ```
+   — Thanks @Princesseuh!
+- [53fa9a9](https://github.com/bruits/satteri/commit/53fa9a9575f41eb858cf50b4298aea3a0c5f0f73) `ctx.replaceNode(node, newNode)` now accepts an array of nodes as well as a single node, matching `insertBefore`, `insertAfter`, `prependChild`, `appendChild` and `insertChildAt`. The nodes take the target's place in order, so `ctx.replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. This works on both the MDAST and HAST visitor contexts. — Thanks @Princesseuh!
+- [2ac113e](https://github.com/bruits/satteri/commit/2ac113e9851dfd15340a999f9a1e829a9d2b0f8f) Added `position: false` to `markdownToMdast`, `mdxToMdast`, `markdownToHast`, and `mdxToHast`, which skips recording `node.position`. On a 1 MB document that halves both the time to build a tree and the memory it occupies, so it is worth passing whenever nothing downstream reads positions.
+  
+  ```ts
+  const tree = markdownToMdast(source, { position: false });
+  ```
+   — Thanks @Princesseuh!
+- [63fbb77](https://github.com/bruits/satteri/commit/63fbb77a16b88d4df4928ed07e943752e87fff17) Plugins now splice strings with a single shape, `{ raw: string, mdxExpressions?: boolean }`, accepted by visitor return values and every structural mutator (`replace`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, `wrapNode`). The string is re-parsed in place of the node.
+  
+  `mdxExpressions` (default `true`) controls what `{…}` means when the document is MDX: live expressions by default, or literal text with `mdxExpressions: false` — the right choice when injecting generated HTML whose braces are not expressions, like a Mermaid decision node `C{JWT valid?}` or math renderer output. Plain Markdown has no expressions, so the option is a no-op there.
+  
+  `{ rawHtml: string }` is deprecated; it keeps working and behaves exactly like `{ raw, mdxExpressions: false }`.
+  
+  ```ts
+  defineMdastPlugin({
+    code(node) {
+      if (node.lang !== "mermaid") return;
+      return { raw: renderMermaid(node.value), mdxExpressions: false };
+    },
+  });
+  ```
+   — Thanks @Princesseuh!
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added `htmlToHast`, which parses an HTML string into a HAST tree (elements, text, comments, doctype) with the same spec-compliant parsing a browser does. The result is a `root` wrapping the implied `<html>` subtree.
+  
+  ```ts
+  import { htmlToHast } from "satteri";
+  
+  const tree = htmlToHast("<p>hi</p>");
+  // { type: "root", children: [{ type: "element", tagName: "html", ... }] }
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+- [6050fc4](https://github.com/bruits/satteri/commit/6050fc40a3b546f08817277c9adb816ec9bfe938) Adds `before`/`after` lifecycle hooks to plugins that run exactly once per document. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [ac99c4f](https://github.com/bruits/satteri/commit/ac99c4f9ecf4e2fa3b5eb1dbf069160f1ba7a6f1) Improved HTML rendering performance with faster character escaping. — Thanks @Princesseuh!
+- [5a581ad](https://github.com/bruits/satteri/commit/5a581ad8eae90a7eef102d7727b7fe9f6a7d1893) Fixed a line holding only a vertical tab or form feed counting as a blank line, which split paragraphs and let a definition run past its destination. — Thanks @Princesseuh!
+- [ac99c4f](https://github.com/bruits/satteri/commit/ac99c4f9ecf4e2fa3b5eb1dbf069160f1ba7a6f1) Improved Markdown to HTML performance when no HAST plugins run and nothing sets `hName`, `hProperties`, or `hChildren` (which heading attributes do). — Thanks @Princesseuh!
+- [88fbb7e](https://github.com/bruits/satteri/commit/88fbb7e45482f9ba53d4478e6565c3e75b0350fd) Fixes a crash in the browser and bundler builds where loading Sätteri could fail with `WebAssembly.Compile is disallowed on the main thread, if the buffer size is larger than 4KB`. The WebAssembly module now initializes asynchronously instead of compiling synchronously on the main thread. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed GFM autolinks sometimes missing position information, such as a bare URL after an unclosed `[`. — Thanks @Princesseuh!
+- [c9985d9](https://github.com/bruits/satteri/commit/c9985d93b5ee23aff07491360be83d4a3412f18b) Fixed `development: true` line and column numbers, missing-component references, and MDX parse error locations being wrong in documents with multibyte or emoji characters. — Thanks @Princesseuh!
+- [f868e26](https://github.com/bruits/satteri/commit/f868e26e8c07a5e30b90b16b554835f73f37d0c0) Fixed React-cased SVG property names like `strokeLinecap` and `strokeLinejoin` leaking into HTML output as-is instead of serializing as `stroke-linecap` / `stroke-linejoin`. — Thanks @gtritchie!
+- [7441ecd](https://github.com/bruits/satteri/commit/7441ecd029d800c567d5c5c9d102bd0bfc0a9e9e) Fixed a defined footnote reference like `[^x](y)` parsing as a link instead of a footnote reference followed by text. — Thanks @Princesseuh!
+- [7e9ac4c](https://github.com/bruits/satteri/commit/7e9ac4c38b7cd4ede2eaf4353765d74e905e45ba) Fixed very deeply nested documents crashing the process instead of compiling. — Thanks @Princesseuh!
+- [a27c06d](https://github.com/bruits/satteri/commit/a27c06db317606172a4dab5675de0b265793acb8) Fixed MDX expressions failing to parse when a string inside them is continued over a CRLF line ending with a backslash. — Thanks @Princesseuh!
+- [ac99c4f](https://github.com/bruits/satteri/commit/ac99c4f9ecf4e2fa3b5eb1dbf069160f1ba7a6f1) Improved parsing performance for documents with few or no autolink candidates. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed a bare URL or email not linking when a character reference supplies its first character, as in `&#104;ttp://example.com`. — Thanks @Princesseuh!
+- [a27c06d](https://github.com/bruits/satteri/commit/a27c06db317606172a4dab5675de0b265793acb8) Fixed MDX line comments and `import`/`export` blocks swallowing the lines after them in files that use lone carriage returns as line endings. — Thanks @Princesseuh!
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Editing a node that belongs to a different document (a node kept from a previous compile, or an mdast node used in a hast plugin) now fails the compile with `invalid node id`. A few pathological edits now throw `unsupported patch shape`, most notably replacing a node with new content that reuses that same node while another plugin edits something inside it in the same pass, and inserting a sibling next to the root.
+  
+  Edits to nodes that another plugin removed in the same pass are still just dropped with a warning, and replacing, removing, or wrapping the root keeps working. — Thanks @Princesseuh!
+- [d6dbbad](https://github.com/bruits/satteri/commit/d6dbbad1d47e43f10391b3e00792078da49bdfc7) Fixed an email overlapping a `www.` link swallowing the link, like `user@www.example.org` after an unclosed bracket. — Thanks @Princesseuh!
+- [be2c1a1](https://github.com/bruits/satteri/commit/be2c1a168fdcc548b0c39980a3e4be1634acae8d) Fixed emphasis being parsed around a `~` when GFM is disabled, so `a*~*` now stays plain text. — Thanks @Princesseuh!
+- [a27c06d](https://github.com/bruits/satteri/commit/a27c06db317606172a4dab5675de0b265793acb8) Fixed GFM autolinks losing their positions when smart punctuation is enabled. — Thanks @Princesseuh!
+- [18d123b](https://github.com/bruits/satteri/commit/18d123bb749d4f6fb0fca4fc1e79129761958873) Fixed a `{` inside an MDX link destination or title raising a parse error when the link tail spans more than one line, as in `[a](/u\n"ti{tle")`. — Thanks @Princesseuh!
+- [5a581ad](https://github.com/bruits/satteri/commit/5a581ad8eae90a7eef102d7727b7fe9f6a7d1893) Fixed a vertical tab or form feed at the end of a line being dropped from the text. — Thanks @Princesseuh!
+- [39bc97f](https://github.com/bruits/satteri/commit/39bc97fdd2ae4d65baf4f42930b383c9a1cb7185) Fixed a Promise in a plugin list being silently ignored instead of failing with a clear error, and gave malformed hast element visitors a real error message. — Thanks @Princesseuh!
+- [5c4cd17](https://github.com/bruits/satteri/commit/5c4cd170b2e4d0db4fb9f610fc15802aa2757fd9) Fixed `elementAttributeNameCase: "html"` leaving a nested `<svg>` element's own React-cased attributes (like `strokeWidth`) unconverted on the MDX compile path; the SVG schema now covers the `<svg>` element itself, not just its descendants. — Thanks @gtritchie!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed inline code ending at the wrong backtick when its content looks like a URL. — Thanks @Princesseuh!
+- [a27c06d](https://github.com/bruits/satteri/commit/a27c06db317606172a4dab5675de0b265793acb8) Fixed emphasis and character references being lost after a GFM autolink whose URL ends in a backslash. — Thanks @Princesseuh!
+- [9094edd](https://github.com/bruits/satteri/commit/9094edd70cbf49f28444838afc7c489ddf068c09) Improved `markdownToMdast` and `markdownToHast` performance by reading each node from the wire buffer once while building the tree. — Thanks @Princesseuh!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Faster parsing, MDX compilation, and plugin execution. — Thanks @Princesseuh!
+- [f0c24d7](https://github.com/bruits/satteri/commit/f0c24d768f151fd1d171a1ebc1dd5170820588f8) Improved HAST property types in plugins: `node.properties.href`, `className`, `start` and every other known property are now typed individually, so reading one no longer needs a `typeof` guard to narrow it.
+  
+  ```ts
+  element: {
+    filter: ["a"],
+    visit(node, ctx) {
+      if (node.properties.href?.startsWith("http")) {
+        // ...
+      }
+    },
+  }
+  ```
+   — Thanks @Princesseuh!
+- [2ac113e](https://github.com/bruits/satteri/commit/2ac113e9851dfd15340a999f9a1e829a9d2b0f8f) Walking a tree from `markdownToMdast`, `mdxToMdast`, `markdownToHast`, `mdxToHast`, or `htmlToHast` is roughly 4x faster. — Thanks @Princesseuh!
+- [1126ad0](https://github.com/bruits/satteri/commit/1126ad0dc303de1f3f3eeccfb8355bd0b99d2eb9) Fixed a tight definition list gluing a definition's continuation paragraph onto the first block with no separator. — Thanks @Princesseuh!
+- [5a581ad](https://github.com/bruits/satteri/commit/5a581ad8eae90a7eef102d7727b7fe9f6a7d1893) Fixed a vertical tab or form feed standing in for a space in an ATX heading opener, a task list marker, an HTML tag, or a link or footnote label. — Thanks @Princesseuh!
+- [6a1eaec](https://github.com/bruits/satteri/commit/6a1eaecb25e442d26bc6ee90ac63bdd28c4bd465) Fixed `wrapNode()` not accepting the `{ raw }` shape that every other structural mutator takes. — Thanks @Princesseuh!
+- [204fb3a](https://github.com/bruits/satteri/commit/204fb3aac413201e6a99bc0bfc54c4e8d199d425) Fixed documents with many unclosed parenthesized link titles taking quadratic time to parse. — Thanks @Princesseuh!
+- [a27c06d](https://github.com/bruits/satteri/commit/a27c06db317606172a4dab5675de0b265793acb8) Fixed a zero-width no-break space being dropped when it starts a text value. — Thanks @Princesseuh!
+- [166419c](https://github.com/bruits/satteri/commit/166419cf912b3639abedfcb87ee8059920e5b221) Fixed `jsx: true` output not saying which JSX runtime to use, so a bundler compiling the JSX ignored `jsxImportSource` and the pragma options. — Thanks @Princesseuh!
+- [c16f684](https://github.com/bruits/satteri/commit/c16f684995079b4dc9d62c29ef7a599f2f7b4303) Fixes an issue with MDAST plugin visitors receiving `undefined` instead of an empty array for the `children` property of empty parent nodes. — Thanks @HiDeoo!
+- [35913b9](https://github.com/bruits/satteri/commit/35913b9694a3d5cf461382e55ac4470ee52be22c) Fixed compiles that produced very large plugin output permanently retaining tens of megabytes of buffer memory. — Thanks @Princesseuh!
+- [2e3ed23](https://github.com/bruits/satteri/commit/2e3ed23aa0e2489c4ce667cb39eb29259664692d) Faster Markdown-to-HTML rendering, most noticeably on prose-heavy documents where GFM autolink scanning dominated: a 200KB CommonMark document renders about 7% faster end to end. — Thanks @Princesseuh!
+- [3068358](https://github.com/bruits/satteri/commit/30683586e758d13c77c3c7dfc0f5ca421600852b) Fixed compile results being typed as synchronous when options come through a variable typed as the general options interface. — Thanks @Princesseuh!
+- [64f3d5f](https://github.com/bruits/satteri/commit/64f3d5f8666851494195ebd150bfa47df4da56e9) Fixes inline code being mangled when it contains directive-like syntax. With directives enabled, writing something like `` `:foo[` `` followed by more inline code no longer merges the two code spans or drops a backtick: a `:` inside a code span is now treated as literal text, so you can safely show directive syntax in code. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed a `www.` URL linking when the character right before it is U+0085, which does not separate words. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed GFM autolinks getting the wrong URL, or being dropped entirely, when a `[` earlier in the paragraph belongs to a code span, inline HTML, a pointed autolink, or a link that never resolves. — Thanks @Princesseuh!
+- [a27c06d](https://github.com/bruits/satteri/commit/a27c06db317606172a4dab5675de0b265793acb8) Fixed text being dropped when an MDX expression contains the `]` that ends a reference label. — Thanks @Princesseuh!
+- [7e28d6c](https://github.com/bruits/satteri/commit/7e28d6cd1251b92e337a6ab57b75aa55d923fad2) Fixed a `:directive` after an invalid bare URL being destroyed instead of parsed, as in `http://my_app.localhost:3000/admin`. — Thanks @Princesseuh!
+- [166419c](https://github.com/bruits/satteri/commit/166419cf912b3639abedfcb87ee8059920e5b221) Fixed `development: true` leaving out the line and column of elements that came from Markdown rather than from JSX written by hand. — Thanks @Princesseuh!
+- [9094edd](https://github.com/bruits/satteri/commit/9094edd70cbf49f28444838afc7c489ddf068c09) Improved parsing performance for documents with many link reference definitions inside lists or blockquotes. — Thanks @Princesseuh!
+- [47768aa](https://github.com/bruits/satteri/commit/47768aaf8cb3566cbd0e231124bb0beff7212ded) Fixed whitespace between adjacent components disappearing in MDX compiled with static optimization enabled. — Thanks @Princesseuh!
+- [abe1ee9](https://github.com/bruits/satteri/commit/abe1ee90dfe25dca52d98169c170d9ed138e28ea) Fixed a hard line break inside an image label adding a stray newline to the image's alt text. — Thanks @Princesseuh!
+- [8df3f76](https://github.com/bruits/satteri/commit/8df3f765b2df9cbfa1aa4130a126b9315e431c14) Fixed `markdownToHtml`, `mdxToJs` and `markdownToJs` being typed as synchronous when a plugin list mixed sync and async plugins. The result is now correctly typed as a `Promise`. — Thanks @Princesseuh!
+- [9a164f1](https://github.com/bruits/satteri/commit/9a164f110f2d01c525f9f5c03376508bd227e860) Fixes footnotes being ignored inside directives. A footnote reference nested in a rendered directive (e.g. `:::note … [^id] … :::`) now works like anywhere else (it renders as a footnote link and its definition appears in the footnotes section) instead of being left as literal `[^id]` text. — Thanks @Princesseuh!
+- [2b85f56](https://github.com/bruits/satteri/commit/2b85f5602fc3340eef9faa3e41c66ff0a03ec8af) Fixed `wrapNode()` silently misplacing or dropping the node when given a parent that cannot hold children: an `html` node, a leaf-shaped custom node, or a void element like `<img>`. These now throw an error explaining what to use instead, and `parentNode` only accepts parent-capable nodes in TypeScript, so most of them are caught before running.
+  
+  Wrapping in a container is unchanged: `blockquote` and friends, a HAST element, an MDX JSX element, a custom node declaring a `children` array, and the root itself all keep working. — Thanks @Princesseuh!
+- [46e2572](https://github.com/bruits/satteri/commit/46e25721656ec01fe494b62a3c2a5a48f1e45dfb) Fixed a `{` inside an MDX link destination or title raising a parse error when the tail holds an escaped or quoted `)`, as in `[a](\){)`, and stopped a link tail forming from a `[` that is backslash-escaped, inside a code span, already wrapped by another link, or in an earlier block. — Thanks @Princesseuh!
+- [58add58](https://github.com/bruits/satteri/commit/58add589d8d9dc1c9a774e07519f0e3e7119df34) Fixed nodes created from raw string splices reporting garbage positions; they now report no position, like other plugin-created nodes. — Thanks @Princesseuh!
+- [9bb585d](https://github.com/bruits/satteri/commit/9bb585d90298f647c4b85babe520e92b5b40c527) Fixed edits to a node another plugin removed being dropped silently instead of with the documented warning. — Thanks @Princesseuh!
+- [9094edd](https://github.com/bruits/satteri/commit/9094edd70cbf49f28444838afc7c489ddf068c09) Improved parsing performance for documents with paragraphs inside lists, blockquotes, and other containers. — Thanks @Princesseuh!
+- [2c14a38](https://github.com/bruits/satteri/commit/2c14a38e56d4903ccc2e933bb74c63d4c1426147) Fixed links and reference definitions whose parenthesized title holds an unescaped `(`, as in `[a](* (())`, not being parsed as links, and in MDX a `{` inside such a title no longer raises a parse error. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed two bare URLs separated by a `]` being merged into one over-long link, as in `[www.a.com]www.b.com`. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed a bare URL swallowing the text after it when the two are separated by a non-breaking space or other Unicode whitespace. — Thanks @Princesseuh!
+- [9094edd](https://github.com/bruits/satteri/commit/9094edd70cbf49f28444838afc7c489ddf068c09) Improved MDX to JavaScript compilation performance. — Thanks @Princesseuh!
+- [acee492](https://github.com/bruits/satteri/commit/acee492ddc0e703eaaed5169f52f7e7c7cf971ac) Fixed a link title being accepted with no whitespace after a `<...>` destination, so `[a](<u>"t")` is now plain text like in remark. — Thanks @Princesseuh!
+- [6696c1c](https://github.com/bruits/satteri/commit/6696c1c28b3024c5c8df760cc5af51dd713663fc) Fixed `position` offsets being wrong in documents with multibyte characters. — Thanks @Princesseuh!
+- [291369a](https://github.com/bruits/satteri/commit/291369a71fddf3fc6be272ca799d51422fcb88e3) Fixed edits to a node kept from a previous compile silently changing an unrelated node instead of failing with `invalid node id`. — Thanks @Princesseuh!
+- [abe1ee9](https://github.com/bruits/satteri/commit/abe1ee90dfe25dca52d98169c170d9ed138e28ea) Fixed documents that use standalone carriage returns (`\r`) as line endings parsing differently from documents that use `\n`. Values such as inline code and definition titles now keep the document's own line endings instead of always reporting `\n`. — Thanks @Princesseuh!
+- [fdaa021](https://github.com/bruits/satteri/commit/fdaa0219966afee3b5d49e95feaa96318b857cf5) Fixed a node losing its position when an async HAST visitor returns a new text value. — Thanks @Princesseuh!
+- [5a581ad](https://github.com/bruits/satteri/commit/5a581ad8eae90a7eef102d7727b7fe9f6a7d1893) Fixed the start offset of text in a table cell when it begins with an escaped pipe. — Thanks @Princesseuh!
+- [a27c06d](https://github.com/bruits/satteri/commit/a27c06db317606172a4dab5675de0b265793acb8) Fixed an email address starting with `www.` linking as a URL instead of an email. — Thanks @Princesseuh!
+- [9094edd](https://github.com/bruits/satteri/commit/9094edd70cbf49f28444838afc7c489ddf068c09) Improved `markdownToMdast` and `markdownToHast` performance on documents containing non-ASCII characters, which previously fell off a fast path and cost more than twice as much to decode. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed the text after a GFM autolink being mangled when the URL ends on a character reference or a backslash, which could decode the wrong character, report an overlapping position, or swallow the inline HTML or emphasis that followed. — Thanks @Princesseuh!
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Faster across the board: parsing is ~10% cheaper, editing the tree from plugins now costs proportionally to how much you change rather than how big the document is (3 edits on a 115KB document: ~160µs → under 50µs), reading nodes inside plugins is 40-75% faster, and memory stays flat under sustained workloads. — Thanks @Princesseuh!
+- [c9f0757](https://github.com/bruits/satteri/commit/c9f07579e26a92f19d58afbc09336787f25e3587) Fixed MDX error messages reporting two different locations for documents that use lone carriage returns as line endings. — Thanks @Princesseuh!
+- [50824f3](https://github.com/bruits/satteri/commit/50824f3dfbd8b67a2aaac0b643725fa9e3b624ba) Fixed every position being shifted by one in documents that start with a byte-order mark. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed fenced code block `lang` and `meta` splitting on whitespace that a character reference produced. — Thanks @Princesseuh!
+- [419e711](https://github.com/bruits/satteri/commit/419e711fd4e3092c84fff462d3bbbae406a09472) With smart punctuation enabled, an unmatched close-flanking double quote (like the inch mark in `24" monitor`) now renders as a closing curly quote instead of an opening one. A double quote after a digit no longer opens a quotation, so dimension notation like `24"x36"` closes throughout. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed a bare URL or email not linking when the character just before it is an emoji or other astral punctuation. — Thanks @Princesseuh!
+
 ## 0.9.5 — 2026-07-08
 
 ### Patch changes

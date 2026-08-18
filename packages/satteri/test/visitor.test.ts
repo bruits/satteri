@@ -5,6 +5,8 @@ import {
   type MdastHandle,
   type MdastParentContent,
   type MdastVisitorContext,
+  type RawMdastContent,
+  type RawHtmlMdastContent,
 } from "../src/mdast/mdast-visitor.js";
 import type { HastHandle } from "../src/hast/hast-visitor.js";
 import {
@@ -15,6 +17,7 @@ import {
 } from "../index.js";
 import type { DirectiveAttributes, MdastNode } from "../src/types.js";
 import type { Heading, Paragraph, Text } from "mdast";
+import type { Position } from "unist";
 import { defineMdastPlugin } from "../src/plugin.js";
 import { markdownToHtml, applyCommandsToMdastHandle } from "../src/index.js";
 
@@ -321,22 +324,35 @@ test("context.wrapNode() rejects a leaf node as the wrapper", () => {
   expect(html).toMatch(/<h1>Hello<\/h1>/);
 });
 
-// Regression #182: a raw payload wrapped in the parse root, landing the
-// parsed content after the node.
-test("context.wrapNode() rejects raw content as the wrapper", () => {
-  const html = visitAndRender("# Hello\n\nWorld", {
-    heading(node: MdastNode, ctx: MdastVisitorContext) {
-      expect(() =>
-        // @ts-expect-error raw content is not a wrapNode parent
-        ctx.wrapNode(node, { rawHtml: "<div></div>" }),
-      ).toThrow(/raw content cannot wrap/);
-      expect(() =>
-        // @ts-expect-error raw content is not a wrapNode parent
-        ctx.wrapNode(node, { raw: "> quoted" }),
-      ).toThrow(/raw content cannot wrap/);
+function wrapInRaw(parentNode: RawMdastContent | RawHtmlMdastContent) {
+  return defineMdastPlugin({
+    name: "wrap-heading-in-raw",
+    heading(node, ctx) {
+      ctx.wrapNode(node, parentNode);
     },
   });
-  expect(html).toMatch(/<h1>Hello<\/h1>/);
+}
+
+test("context.wrapNode() accepts a raw markdown wrapper", () => {
+  const html = visitAndRender("# Hello\n\nWorld", wrapInRaw({ raw: "> quoted" }));
+  expect(html).toContain("<blockquote>\n<h1>Hello</h1>\n<p>quoted</p>\n</blockquote>");
+});
+
+// The parsed string is the wrapper itself, so anything but one block is ambiguous.
+test("context.wrapNode() rejects a raw wrapper that is not exactly one block", () => {
+  for (const raw of ["", "one\n\ntwo"]) {
+    expect(() => visitAndRender("# Hello", wrapInRaw({ raw })), raw).toThrow(/exactly one block/);
+  }
+});
+
+test("context.wrapNode() rejects a raw wrapper that cannot hold children", () => {
+  expect(() => visitAndRender("# Hello", wrapInRaw({ raw: "***" }))).toThrow(
+    /thematicBreak, which cannot hold the wrapped node/,
+  );
+  // The deprecated shape is markdown too, where `<div>` is a leaf html node.
+  expect(() => visitAndRender("# Hello", wrapInRaw({ rawHtml: "<div></div>" }))).toThrow(
+    /cannot hold the wrapped node/,
+  );
 });
 
 test("context.wrapNode() accepts a user-defined parent node", () => {
@@ -361,7 +377,7 @@ test("context.wrapNode() wraps a node in a bare user-defined parent", () => {
   expect(html).toContain("<div><h1>Hello</h1></div>");
 });
 
-// Lists are hand-written on purpose — independent of the LEAF_TYPES the check
+// Lists are hand-written on purpose, independent of the LEAF_TYPES the check
 // reads, so a misclassified type surfaces here.
 test("context.wrapNode() accepts built-in parents and rejects built-in leaves", () => {
   const parents: MdastParentContent[] = [
@@ -1056,14 +1072,14 @@ test("a replacement nested past the replay depth cap fails loudly", () => {
   expect(() => visitAndRender("Hello", plugin)).toThrow(/nests deeper/);
 });
 
-test("context mutations reject plugin-built nodes with no arena id", () => {
+test("context mutations reject plugin-built nodes, which have no id here", () => {
   const plugin = defineMdastPlugin({
     name: "remove-fresh-node",
     heading(_node, ctx) {
       ctx.removeNode({ type: "text", value: "x" });
     },
   });
-  expect(() => visitAndRender("# Hello", plugin)).toThrow(/no arena id/);
+  expect(() => visitAndRender("# Hello", plugin)).toThrow(/invalid node id/);
 });
 
 test("setProperty(node, 'children', ...) rides the op-stream", () => {
@@ -1082,9 +1098,8 @@ test("setProperty(node, 'children', ...) rides the op-stream", () => {
   expect(result.commandBuffer[5]).toBe(0x14); // PAYLOAD_OPSTREAM
 });
 
-// Lazy-children lifecycle: matched nodes resolve `.children` from a snapshot
-// taken during the pass; after the pass the arena may be rebuilt with new ids,
-// so a first-time read must fail loudly instead of mapping stale ids.
+// Matched nodes resolve `.children` from the pass snapshot, so a first read
+// after a mutating pass must fail loudly rather than serve a stale tree.
 
 test("async visitor reads `.children` in a deferred callback", async () => {
   const { handle, source } = setup();
@@ -1134,6 +1149,35 @@ test("a retained node keeps `.children` readable after an async pass settles", a
   });
   await visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
   expect(retained!.children[0]).toMatchObject({ type: "text", value: "Hello" });
+});
+
+test("an async text swap keeps the text node's position", async () => {
+  const { handle, source } = setup("Hello");
+  const shout = defineMdastPlugin({
+    name: "shout-text-async",
+    async text(node) {
+      await new Promise((r) => setTimeout(r, 1));
+      return { type: "text", value: node.value.toUpperCase() } satisfies Text;
+    },
+  });
+  const swap = (await visitMdastHandle(
+    handle,
+    shout,
+    resolveMdastSubscriptions(shout),
+    source,
+    undefined,
+  )) as { commandBuffer: Uint8Array };
+  applyCommandsToMdastHandle(handle, swap.commandBuffer);
+
+  let position: Position | undefined;
+  const reader = defineMdastPlugin({
+    name: "read-text-position",
+    text(node) {
+      position ??= node.position;
+    },
+  });
+  visitMdastHandle(handle, reader, resolveMdastSubscriptions(reader), source, undefined);
+  expect(position).toMatchObject({ start: { line: 1, column: 1 } });
 });
 
 test("an in-pass deep read pins the snapshot: retained nodes survive a later mutating pass", () => {
@@ -1272,8 +1316,7 @@ test("stub `.type` stays readable after the pass; first materialization throws",
     name: "retain-heading-children",
     heading(node, ctx) {
       retained = node.children;
-      // A mutation: the arena rebuilds after the pass, so stale ids must
-      // refuse to materialize.
+      // Mutating invalidates the pass snapshot, so the retained stub must throw.
       ctx.setProperty(node, "depth", 2);
     },
   });
@@ -1411,7 +1454,7 @@ test("parent works on child stubs, not just visited nodes", () => {
   expect(stubParentType).toBe("heading");
 });
 
-test("parent throws on plugin-built nodes (no arena id)", () => {
+test("parent throws on plugin-built nodes, which have no id here", () => {
   const { handle, source } = setup();
   let error: Error | undefined;
   const plugin = defineMdastPlugin({
@@ -1425,7 +1468,7 @@ test("parent throws on plugin-built nodes (no arena id)", () => {
     },
   });
   visitMdastHandle(handle, plugin, resolveMdastSubscriptions(plugin), source, undefined);
-  expect(error?.message).toMatch(/no arena id/);
+  expect(error?.message).toMatch(/invalid node id/);
 });
 
 test("parent called after a non-mutating pass resolves from the pass snapshot", () => {
@@ -1638,7 +1681,7 @@ test("the plugin-built object itself stays id-less across passes", () => {
   });
   markdownToHtml("# Title\n", { mdastPlugins: [inserted, observe] });
   // The built object never gets an arena id; the tree holds a node derived from it.
-  expect(error?.message).toMatch(/no arena id/);
+  expect(error?.message).toMatch(/invalid node id/);
 });
 
 test("indexOf ignores buffered mutations within the same pass", () => {

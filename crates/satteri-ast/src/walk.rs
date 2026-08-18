@@ -176,7 +176,7 @@ fn walk_and_collect_inner<K: ArenaKind>(
 
                 if matched {
                     // A zero start line marks a synthesized node with no
-                    // source range — nothing to convert (JS surfaces
+                    // source range, nothing to convert (JS surfaces
                     // `position: undefined`).
                     let utf16_offsets = if node.start_line == 0 {
                         (node.start_offset, node.end_offset)

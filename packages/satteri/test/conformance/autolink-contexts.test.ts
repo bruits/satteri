@@ -4,8 +4,8 @@
 // other kept case repeats: where the matrix enumerated a rule over a vocabulary,
 // only the members that sit on a boundary of that rule survive.
 //
-// Each row carries the URLs satteri must produce, so a row that stops linking —
-// or starts linking something new — fails on its own terms and not only through
+// Each row carries the URLs satteri must produce, so a row that stops linking
+// (or starts linking something new) fails on its own terms and not only through
 // the tree comparison.
 //
 // This half covers autolinks in context: the constructs that contain them, the
@@ -24,7 +24,7 @@ import {
 } from "./helpers.js";
 import type { UrlNode } from "./helpers.js";
 
-// Family D — containing constructs. One case per construct, with a second inner
+// Family D: containing constructs. One case per construct, with a second inner
 // only where the inner changes the answer.
 //
 // The two `_`-delimited rows wrap an email whose local part starts with `_`, so the
@@ -186,7 +186,7 @@ describe("family D: containing constructs — math", () => {
   });
 });
 
-// Family E — shapes where an autolink meets another construct.
+// Family E: shapes where an autolink meets another construct.
 describe("family E: adjacent autolinks", () => {
   test.each([
     ["www.a.com www.b.com", ["http://www.a.com", "http://www.b.com"]],
@@ -227,6 +227,19 @@ describe("family E: brackets around a trigger", () => {
     ["[a][b] www.example.com", ["http://www.example.com"]],
     ["[](www.example.com)", ["www.example.com"]],
     ["[ www.example.com ]", ["http://www.example.com"]],
+  ])("%j", conforms);
+});
+
+describe("family E: trigger casing on the bracket-blocked path", () => {
+  test.each([
+    ["[WWW.EXAMPLE.COM", ["http://WWW.EXAMPLE.COM"]],
+    ["[Www.Example.Com", ["http://Www.Example.Com"]],
+    ["[wWw.example.com", ["http://wWw.example.com"]],
+    ["[HTTP://EXAMPLE.COM", ["HTTP://EXAMPLE.COM"]],
+    ["[HtTp://Example.com/a", ["HtTp://Example.com/a"]],
+    ["[HTTPS://EXAMPLE.COM", ["HTTPS://EXAMPLE.COM"]],
+    ["[hTtPs://example.com", ["hTtPs://example.com"]],
+    ["[A.B@C.DE", ["mailto:A.B@C.DE"]],
   ])("%j", conforms);
 });
 
@@ -296,7 +309,7 @@ describe("family E: the deferred splice", () => {
   ])("%j", conforms);
 });
 
-// Family F — line endings.
+// Family F: line endings.
 describe("family F: line endings", () => {
   test.each([
     ["www.example.com\r\n", ["http://www.example.com"]],
@@ -309,7 +322,7 @@ describe("family F: line endings", () => {
   ])("%j", conforms);
 });
 
-// Family I — constructs that shift offsets before the link, including the ones
+// Family I: constructs that shift offsets before the link, including the ones
 // that push it onto the find-and-replace path.
 describe("family I: position stress", () => {
   test.each([
@@ -336,7 +349,7 @@ describe("family I: position stress", () => {
   ])("%j", conforms);
 });
 
-// Family K — bracket state and the deferred-autolink decision: a closed `[…]`
+// Family K covers bracket state and the deferred-autolink decision: a closed `[…]`
 // stops blocking a later trigger even when it resolved to nothing, so the URL
 // before it must not run on. The separator decides whether the second trigger is
 // reachable at all, so the rows below are the label/separator/trigger
@@ -437,7 +450,7 @@ describe("family K: a closed label and a second trigger", () => {
   ])("%j", conforms);
 });
 
-// Family L — reference definitions and footnote definitions.
+// Family L: reference definitions and footnote definitions.
 describe("family L: definitions", () => {
   test.each([
     ["[a]: /x 'www.example.com'\n\n[a]\n", []],

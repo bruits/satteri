@@ -43,7 +43,7 @@ pub struct Arena<K: ArenaKind> {
     /// UTF-16 offset equals the byte offset). Read by `to_raw_buffer` and the
     /// walk to skip the second `LineIndex` build + per-node
     /// `byte_to_utf16_offset` lookup that would otherwise re-traverse the
-    /// source. Empty means "not precomputed" — readers fall back to live
+    /// source. Empty means "not precomputed": readers fall back to live
     /// conversion.
     pub utf16_offsets: Vec<(u32, u32)>,
     pub(crate) _kind: PhantomData<fn() -> K>,
@@ -288,6 +288,14 @@ impl<K: ArenaKind> Arena<K> {
         let start = node.data_offset as usize;
         let end = start + node.data_len as usize;
         &self.type_data[start..end]
+    }
+
+    /// For same-length fixups; `set_type_data` appends a copy and orphans the old bytes.
+    pub fn get_type_data_mut(&mut self, node_id: u32) -> &mut [u8] {
+        let node = &self.nodes[node_id as usize];
+        let start = node.data_offset as usize;
+        let end = start + node.data_len as usize;
+        &mut self.type_data[start..end]
     }
 }
 

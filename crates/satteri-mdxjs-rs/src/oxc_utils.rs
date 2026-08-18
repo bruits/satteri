@@ -494,6 +494,51 @@ pub fn is_literal_name(name: &str) -> bool {
 
 /// Check if a name is a valid identifier name.
 pub fn is_identifier_name(name: &str) -> bool {
+    let Some((&first, rest)) = name.as_bytes().split_first() else {
+        return true;
+    };
+
+    let mut seen = ID_BYTES[first as usize];
+    if seen & ID_START == 0 {
+        return false;
+    }
+
+    for &byte in rest {
+        let flags = ID_BYTES[byte as usize];
+        if flags & ID_CONTINUE == 0 {
+            return false;
+        }
+        seen |= flags;
+    }
+
+    seen & NON_ASCII == 0 || is_identifier_name_unicode(name)
+}
+
+const ID_START: u8 = 1;
+const ID_CONTINUE: u8 = 2;
+const NON_ASCII: u8 = 4;
+
+/// Non-ASCII bytes count as valid so the scan defers to Unicode once, not per byte.
+static ID_BYTES: [u8; 256] = {
+    let mut table = [0u8; 256];
+    let mut byte = 0usize;
+    while byte < 256 {
+        table[byte] = if byte > 127 {
+            NON_ASCII | ID_START | ID_CONTINUE
+        } else {
+            let byte = byte as u8;
+            match byte {
+                b'$' | b'_' | b'a'..=b'z' | b'A'..=b'Z' => ID_START | ID_CONTINUE,
+                b'0'..=b'9' => ID_CONTINUE,
+                _ => 0,
+            }
+        };
+        byte += 1;
+    }
+    table
+};
+
+fn is_identifier_name_unicode(name: &str) -> bool {
     // `$` and `_` are ECMAScript IdentifierStart chars not in Unicode ID_Start.
     for (index, char) in name.chars().enumerate() {
         let valid = if index == 0 {
@@ -530,9 +575,16 @@ pub enum JsxName<'a> {
 /// Parse a JavaScript member expression or name.
 pub fn parse_js_name(name: &str) -> JsName<'_> {
     let bytes = name.as_bytes();
-    let mut index = 0;
-    let mut start = 0;
-    let mut parts = vec![];
+
+    // `a`
+    let Some(first_dot) = bytes.iter().position(|byte| *byte == b'.') else {
+        return JsName::Normal(name);
+    };
+
+    // `a.b.c`
+    let mut parts = vec![&name[..first_dot]];
+    let mut start = first_dot + 1;
+    let mut index = start;
 
     while index < bytes.len() {
         if bytes[index] == b'.' {
@@ -543,15 +595,8 @@ pub fn parse_js_name(name: &str) -> JsName<'_> {
         index += 1;
     }
 
-    // `a`
-    if parts.is_empty() {
-        JsName::Normal(name)
-    }
-    // `a.b.c`
-    else {
-        parts.push(&name[start..]);
-        JsName::Member(parts)
-    }
+    parts.push(&name[start..]);
+    JsName::Member(parts)
 }
 
 /// Parse a JSX name from a string.
@@ -616,4 +661,40 @@ pub fn inter_element_whitespace(value: &str) -> bool {
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_identifier_name, is_identifier_name_unicode};
+
+    #[test]
+    fn ascii_fast_path_matches_unicode_path() {
+        for byte in 0u8..=127 {
+            let char = char::from(byte);
+            let start = char.to_string();
+            let continues = format!("a{char}");
+
+            assert_eq!(
+                is_identifier_name(&start),
+                is_identifier_name_unicode(&start),
+                "start position disagrees for {byte:#04x}"
+            );
+            assert_eq!(
+                is_identifier_name(&continues),
+                is_identifier_name_unicode(&continues),
+                "continue position disagrees for {byte:#04x}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_ascii_names_still_use_the_unicode_path() {
+        for name in ["café", "λ", "aλ", "日本語", "a\u{200b}", "\u{200b}a", ""] {
+            assert_eq!(
+                is_identifier_name(name),
+                is_identifier_name_unicode(name),
+                "disagrees for {name:?}"
+            );
+        }
+    }
 }

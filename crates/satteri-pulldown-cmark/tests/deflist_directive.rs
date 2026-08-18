@@ -21,7 +21,7 @@ fn deflist_renders_description_list() {
 #[test]
 fn directive_parse_is_unaffected_by_deflist() {
     // A `:::` directive fence must parse identically whether or not the
-    // definition-list extension is also enabled — the deflist marker must not
+    // definition-list extension is also enabled: the deflist marker must not
     // swallow the run of colons.
     let dir = Options::ENABLE_DIRECTIVE;
     let dl = Options::ENABLE_DEFINITION_LIST;
@@ -46,7 +46,7 @@ fn deflist_and_directive_coexist_in_one_document() {
 #[test]
 fn deflist_only_leaves_directive_fences_as_paragraphs() {
     // deflist ON, directive OFF: a run of colons (`::`, `:::`) is never a
-    // definition marker — the scanner only claims a lone colon. With no
+    // definition marker; the scanner only claims a lone colon. With no
     // directive extension to consume them, they stay literal paragraph text
     // instead of turning into a stray `<dl>`/`<dd>`.
     let dl = Options::ENABLE_DEFINITION_LIST;

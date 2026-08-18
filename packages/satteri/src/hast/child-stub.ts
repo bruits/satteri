@@ -9,6 +9,7 @@ import type { HastNode } from "../types.js";
 import type { HastReader } from "./hast-reader.js";
 import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
 import { HAST_CONTAINER_TYPES } from "./hast-materializer.js";
+import type { NodeRefs } from "../visitor-shared.js";
 
 type HastResolver = LazyChildResolver<HastReader, HastNode>;
 
@@ -58,5 +59,10 @@ export class HastChildStub {
     this._id = id;
     this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
     installStubDescriptors(this, HAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
+  }
+
+  /** @internal */
+  get _refs(): NodeRefs {
+    return this._resolver.refs;
   }
 }

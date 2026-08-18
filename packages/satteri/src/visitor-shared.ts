@@ -54,24 +54,40 @@ export function unencodableContentError(content: unknown): Error {
   );
 }
 
+/** Per handle, so membership alone proves ownership and the read path needs no marker of its own. */
+export type NodeRefs = WeakMap<object, number>;
+
+/** Separates "belongs to another tree" from "never had an id"; arena ids are never negative. */
+export const FOREIGN_REF = -1;
+
+/** `_refs` rides on the prototype, surviving neither a spread copy nor an object literal. */
+export function crossPipelineForeign(node: object): number | undefined {
+  // Probed before the own-property call: plugin-built content misses here, and that is the hot case.
+  if ((node as { _refs?: unknown })._refs === undefined) return undefined;
+  return Object.hasOwn(node, "_refs") ? undefined : FOREIGN_REF;
+}
+
 /**
  * Arena id for a node passed to a context method, via a per-kind `nid` lookup
- * (closure keeps each kind's call site monomorphic). Plugin-built nodes have
- * no id; without this check the id would coerce to 0 in the command buffer
- * and the mutation would silently target the document root.
+ * (closure keeps each kind's call site monomorphic) resolved against the
+ * edited tree's own refs. Plugin-built nodes have no id; without this check
+ * the id would coerce to 0 in the command buffer and the mutation would
+ * silently target the document root. A node read from another tree has an id
+ * that is meaningless here, and one that happens to be in range would edit an
+ * unrelated node.
  */
 export function makeRequireNid<TNode>(
-  nid: (node: TNode) => number | undefined,
-): (node: TNode, method: string) => number {
-  return (node, method) => {
-    const id = nid(node);
-    if (id === undefined) {
-      throw new Error(
-        `${method}: node has no arena id — it was built in JS, not read from this tree. ` +
-          `Pass plugin-built nodes as new content (e.g. the second argument of insertAfter).`,
-      );
-    }
-    return id;
+  nid: (node: TNode, refs: NodeRefs) => number | undefined,
+): (node: TNode, method: string, refs: NodeRefs) => number {
+  return (node, method, refs) => {
+    const id = nid(node, refs);
+    if (id !== undefined && id !== FOREIGN_REF) return id;
+    throw new Error(
+      `${method}: invalid node id — this node has no id in the tree being edited. Either it was ` +
+        `built in JS, in which case pass it as new content (e.g. the second argument of ` +
+        `insertAfter), or it was read from another tree (a different document, the mdast phase of ` +
+        `this one, or an earlier compile), in which case match it again in this pass.`,
+    );
   };
 }
 

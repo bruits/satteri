@@ -523,8 +523,8 @@ export function reconcileFnrPositions(actual: unknown, expected: unknown, input:
     const expectedChildren = e.children;
     if (!Array.isArray(actualChildren) || !Array.isArray(expectedChildren)) return;
     if (actualChildren.length !== expectedChildren.length) return;
-    // Scoped to the shape `findAndReplace` produces — a parent holding a
-    // position-less link — so a stray position anywhere else still fails.
+    // Scoped to the shape `findAndReplace` produces (a parent holding a
+    // position-less link), so a stray position anywhere else still fails.
     const inFnrScope = expectedChildren.some((c) => isAutolinkNode(c) && !c.position);
     if (inFnrScope) assertSpanSet(a, label);
     for (const [ix, expectedChild] of expectedChildren.entries()) {
@@ -863,7 +863,7 @@ export async function assertMarkdownJsModuleConformance(
       }),
     ),
   );
-  const { code } = markdownToJs(input, {
+  const { code } = await markdownToJs(input, {
     ...jsOptions,
     features: { frontmatter, math: false, ...features },
   });
@@ -895,6 +895,29 @@ export async function assertMarkdownJsDevPositionConformance(input: string): Pro
   });
   expect(expected.length).toBeGreaterThan(0);
   expect(positions(code)).toEqual(expected);
+}
+
+/**
+ * Compare development-mode source locations against @mdx-js/mdx: the `__source`
+ * `line:column` of every JSX call and every `_missingMdxReference` range.
+ */
+export async function assertMdxDevPositionConformance(input: string): Promise<void> {
+  const positions = (code: string): string[] =>
+    [...code.matchAll(/lineNumber: (\d+),\s*columnNumber: (\d+)/g)].map(
+      (match) => `${match[1]}:${match[2]}`,
+    );
+  // Sorted: the two pipelines emit the reference guards in different orders.
+  const missingRefPlaces = (code: string): string[] =>
+    [...code.matchAll(/_missingMdxReference\("[^"]*", \w+, "([^"]*)"\)/g)]
+      .map((match) => match[1]!)
+      .sort();
+
+  const expected = String(await mdxCompile(input, { development: true }));
+  const { code } = mdxToJs(input, { development: true });
+
+  expect(positions(expected).length).toBeGreaterThan(0);
+  expect(positions(code)).toEqual(positions(expected));
+  expect(missingRefPlaces(code)).toEqual(missingRefPlaces(expected));
 }
 
 // Like `assertMdxConformance`, but with math enabled on both pipelines

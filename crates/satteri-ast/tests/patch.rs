@@ -1,6 +1,4 @@
-//! Integration tests for arena rebuild.
-//!
-//! Tests apply patches to the "# Hello\n\nWorld" arena and verify the resulting structure.
+//! Integration tests for in-place arena patching, over the "# Hello\n\nWorld" arena.
 
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
 use satteri_ast::hast::HastNodeType;
@@ -777,6 +775,25 @@ fn math_string_refs_round_trip() {
 }
 
 #[test]
+fn custom_string_refs_round_trip() {
+    use satteri_ast::mdast::codec::decode_custom_data;
+
+    let rebuilt = replace_para_with(MdastNodeType::Custom, |sub| {
+        let name = sub.alloc_string("kbd");
+        let value = sub.alloc_string("Ctrl");
+        // No public encoder for `custom`: name(0..8), value(8..16).
+        let mut data = name.as_bytes().to_vec();
+        data.extend_from_slice(&value.as_bytes());
+        sub.set_data_current(&data);
+    });
+
+    let id = first_node_of(&rebuilt, MdastNodeType::Custom);
+    let c = decode_custom_data(rebuilt.get_type_data(id));
+    assert_eq!(rebuilt.get_str(c.name), "kbd");
+    assert_eq!(rebuilt.get_str(c.value), "Ctrl");
+}
+
+#[test]
 fn expression_string_refs_round_trip() {
     use satteri_ast::mdast::codec::{decode_expression_data, encode_expression_data};
 
@@ -977,6 +994,64 @@ fn position_preserved_after_remove_sibling() {
     assert_eq!(nt.start_column, orig_text.start_column);
     assert_eq!(nt.end_line, orig_text.end_line);
     assert_eq!(nt.end_column, orig_text.end_column);
+}
+
+#[test]
+fn grafted_payload_nodes_get_no_position() {
+    use satteri_ast::mdast::codec::{decode_string_ref_data, encode_string_ref_data};
+
+    let orig = build_hello_world();
+    let heading_id = orig.get_children(0)[0];
+    let orig_para = *orig.get_node(orig.get_children(0)[1]);
+
+    let mut b = ArenaBuilder::<Mdast>::new("**bold**".to_string());
+    b.open_node(MdastNodeType::Root as u8);
+    b.set_position_current(0, 8, 1, 1, 1, 9);
+    b.open_node(MdastNodeType::Strong as u8);
+    b.set_position_current(0, 8, 1, 1, 1, 9);
+    b.open_node(MdastNodeType::Text as u8);
+    b.set_position_current(2, 6, 1, 3, 1, 7);
+    let value = b.alloc_string("bold");
+    b.set_data_current(&encode_string_ref_data(value));
+    b.close_node();
+    b.close_node();
+    b.close_node();
+    let replacement = b.finish();
+
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: heading_id,
+            new_tree: PatchContent::Tree(replacement),
+            keep_children: false,
+        }],
+    );
+
+    let strong_id = rebuilt.get_children(0)[0];
+    let text_id = rebuilt.get_children(strong_id)[0];
+    for id in [strong_id, text_id] {
+        let n = rebuilt.get_node(id);
+        assert_eq!(
+            (
+                n.start_offset,
+                n.end_offset,
+                n.start_line,
+                n.start_column,
+                n.end_line,
+                n.end_column
+            ),
+            (0, 0, 0, 0, 0, 0),
+            "grafted node {id} kept a fragment position"
+        );
+    }
+
+    let text_value = decode_string_ref_data(rebuilt.get_type_data(text_id));
+    assert_eq!(rebuilt.get_str(text_value), "bold");
+
+    let new_para = rebuilt.get_node(rebuilt.get_children(0)[1]);
+    assert_eq!(new_para.start_offset, orig_para.start_offset);
+    assert_eq!(new_para.start_line, orig_para.start_line);
+    assert_eq!(new_para.end_column, orig_para.end_column);
 }
 
 #[test]
@@ -2322,4 +2397,151 @@ fn repro_dropped_divergence() {
     let mut arena = orig;
     let dropped = apply_patches_in_place(&mut arena, &patches).unwrap();
     assert_eq!(dropped, vec![20]);
+}
+
+/// Chain of `depth` nested Blockquotes under a Root, built without recursing.
+fn deeply_nested_arena(depth: usize) -> Arena<Mdast> {
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(MdastNodeType::Root as u8);
+    for _ in 0..depth {
+        b.open_node(MdastNodeType::Blockquote as u8);
+    }
+    for _ in 0..depth {
+        b.close_node();
+    }
+    b.close_node();
+    b.finish()
+}
+
+fn chain_len<K: ArenaKind>(arena: &Arena<K>, from: u32) -> usize {
+    let mut len = 1;
+    let mut id = from;
+    while let Some(&child) = arena.get_children(id).first() {
+        len += 1;
+        id = child;
+    }
+    len
+}
+
+#[test]
+fn grafting_a_deeply_nested_tree_does_not_overflow_the_stack() {
+    let orig = build_hello_world();
+    let para_id = orig.get_children(0)[1];
+
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::InsertAfter {
+            node_id: para_id,
+            new_tree: PatchContent::Tree(deeply_nested_arena(3000)),
+        }],
+    );
+
+    let grafted = *rebuilt.get_children(0).last().unwrap();
+    assert_eq!(chain_len(&rebuilt, grafted), 3000);
+}
+
+#[test]
+fn copying_a_deeply_nested_subtree_does_not_overflow_the_stack() {
+    let deep = deeply_nested_arena(3000);
+    let anchor = deep.get_children(0)[0];
+
+    let mut wrapper = ArenaBuilder::<Mdast>::new(String::new());
+    wrapper.open_node(MdastNodeType::Blockquote as u8);
+    wrapper.close_node();
+
+    let rebuilt = rebuild(
+        &deep,
+        &[Patch::Replace {
+            node_id: anchor,
+            new_tree: PatchContent::Tree(wrapper.finish()),
+            keep_children: true,
+        }],
+    );
+
+    assert_eq!(chain_len(&rebuilt, rebuilt.get_children(0)[0]), 3000);
+}
+
+/// A node an earlier apply removed keeps a stale parent, so its splice strands.
+#[test]
+fn insert_after_node_removed_by_an_earlier_apply_is_dropped() {
+    let mut arena = build_hello_world();
+    let heading = arena.get_children(0)[0];
+    apply_patches_in_place(&mut arena, &[Patch::Remove { node_id: heading }]).expect("remove");
+    assert_eq!(arena.get_children(0).len(), 1);
+
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[Patch::InsertAfter {
+            node_id: heading,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+        }],
+    )
+    .expect("apply failed");
+
+    assert_eq!(dropped, vec![heading]);
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 1);
+    assert_eq!(
+        arena.get_node(kids[0]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+}
+
+#[test]
+fn replace_of_node_removed_by_an_earlier_apply_is_dropped() {
+    let mut arena = build_hello_world();
+    let heading = arena.get_children(0)[0];
+    apply_patches_in_place(&mut arena, &[Patch::Remove { node_id: heading }]).expect("remove");
+
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[Patch::Replace {
+            node_id: heading,
+            new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            keep_children: false,
+        }],
+    )
+    .expect("apply failed");
+
+    assert_eq!(dropped, vec![heading]);
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 1);
+    assert_eq!(
+        arena.get_node(kids[0]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+}
+
+/// A ref anywhere in the batch switches splices to the immediate path.
+#[test]
+fn stranded_splice_is_dropped_on_the_immediate_path() {
+    let mut arena = build_hello_world();
+    let heading = arena.get_children(0)[0];
+    let paragraph = arena.get_children(0)[1];
+    let text = arena.get_children(paragraph)[0];
+    apply_patches_in_place(&mut arena, &[Patch::Remove { node_id: heading }]).expect("remove");
+
+    let dropped = apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+            Patch::InsertBefore {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(ref_payload_mdast(text)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    assert_eq!(dropped, vec![heading]);
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 2);
+    assert_eq!(arena.get_node(kids[0]).node_type, MdastNodeType::Text as u8);
+    assert_eq!(
+        arena.get_node(kids[1]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
 }
