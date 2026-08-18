@@ -64,6 +64,26 @@ describe("htmlToHast", () => {
     );
   });
 
+  test("parses a fragment as foreign content with `space: 'svg'`", () => {
+    const tree = htmlToHast(`<circle cx="1" /><clipPath id="c"></clipPath>`, {
+      fragment: true,
+      space: "svg",
+    });
+    expect(tags(tree)).toEqual(["circle", "clipPath"]);
+    expect(stringify(tree)).toBe(`<circle cx="1"></circle><clipPath id="c"></clipPath>`);
+  });
+
+  test("reads SVG tags as unknown HTML elements without `space: 'svg'`", () => {
+    const tree = htmlToHast(`<circle cx="1" /><clipPath id="c"></clipPath>`, { fragment: true });
+    expect(tags(tree)).toEqual(["circle", "clippath"]);
+  });
+
+  test("rejects an unknown space", () => {
+    expect(() =>
+      htmlToHast("<p>hi</p>", { fragment: true, space: "mathml" as never }),
+    ).toThrowError(/must be "html" or "svg"/);
+  });
+
   test("materializes structured element and text nodes", () => {
     const tree = htmlToHast("<p>hi</p>");
     const p = findElement(tree, "p");

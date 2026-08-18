@@ -1294,6 +1294,16 @@ export interface HtmlToHastOptions {
    * @default false
    */
   fragment?: boolean;
+  /**
+   * The namespace a fragment's own top-level content parses in. `"svg"` reads
+   * it as foreign content, so `<circle />` self-closes and lands in the SVG
+   * namespace instead of being treated as an unknown HTML element.
+   *
+   * Ignored without `fragment: true`: a document always starts in HTML.
+   *
+   * @default "html"
+   */
+  space?: "html" | "svg";
 }
 
 /**
@@ -1303,7 +1313,7 @@ export interface HtmlToHastOptions {
  * include the `from-html` feature.
  */
 export function htmlToHast(html: string, options: HtmlToHastOptions = {}): HastNode {
-  const handle = createHastHandleFromHtml(html, options.fragment);
+  const handle = createHastHandleFromHtml(html, options.fragment, options.space);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {

@@ -34,6 +34,30 @@ use crate::shared::{
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 
+/// The namespace a fragment's own top-level content is parsed in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum HtmlSpace {
+    #[default]
+    Html,
+    Svg,
+}
+
+impl HtmlSpace {
+    /// `<template>` is the most permissive insertion mode, so table parts survive outside a table.
+    fn context_element(self) -> QualName {
+        match self {
+            HtmlSpace::Html => QualName::new(
+                None,
+                Namespace::from(HTML_NAMESPACE),
+                LocalName::from("template"),
+            ),
+            HtmlSpace::Svg => {
+                QualName::new(None, Namespace::from(SVG_NAMESPACE), LocalName::from("svg"))
+            }
+        }
+    }
+}
+
 /// Handles are indices into `HtmlSink::nodes`; the document is always index 0.
 struct Node {
     parent: Option<usize>,
@@ -615,7 +639,7 @@ fn reparse_children_into(src: &Arena<Hast>, parent: u32, builder: &mut ArenaBuil
         }
     }
     let recognizer = StitchRecognizer::new(prefix, stitches.len());
-    let (nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer));
+    let (nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer), HtmlSpace::Html);
     emit(&nodes, &roots, builder, Some(src), &stitches, &leaked);
 }
 
@@ -734,9 +758,9 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
 
 /// Parse an HTML fragment into a HAST arena: a `root` whose children are the
 /// fragment's own top-level nodes, with no synthesised `<html>`/`<head>`/
-/// `<body>` wrapper.
-pub fn html_fragment_to_hast_arena(html: &str) -> Arena<Hast> {
-    let (nodes, roots, _) = parse_fragment_nodes(html, None);
+/// `<body>` wrapper. `space` picks the namespace that content parses in.
+pub fn html_fragment_to_hast_arena(html: &str, space: HtmlSpace) -> Arena<Hast> {
+    let (nodes, roots, _) = parse_fragment_nodes(html, None, space);
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node_raw(HastNodeType::Root as u8);
@@ -750,7 +774,7 @@ pub fn html_fragment_to_hast_arena(html: &str) -> Arena<Hast> {
 /// around it is ignored; anything else (no element, extra top-level nodes, a
 /// void element) errors with the reason.
 pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
-    let (nodes, roots, _) = parse_fragment_nodes(html, None);
+    let (nodes, roots, _) = parse_fragment_nodes(html, None, HtmlSpace::Html);
     let mut wrapper: Option<usize> = None;
     for &r in &roots {
         match &nodes[r].data {
@@ -793,25 +817,20 @@ pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
     builder.finish()
 }
 
-/// Parse an HTML fragment in a `<template>` context, the most permissive
-/// insertion mode, so table parts (`<td>`, `<tr>`, ...) survive outside a
-/// table instead of being dropped. Returns the node list, the top-level node
-/// indices, and the markers of any swallowed stitches. The fragment algorithm
-/// wraps content in a synthesised `<html>` root; the returned roots are that
-/// wrapper's children.
+/// Parse an HTML fragment in `space`'s context element, the insertion mode the
+/// fragment's top-level content is read in. Returns the node list, the
+/// top-level node indices, and the markers of any swallowed stitches. The
+/// fragment algorithm wraps content in a synthesised `<html>` root; the
+/// returned roots are that wrapper's children.
 fn parse_fragment_nodes(
     html: &str,
     stitch: Option<StitchRecognizer>,
+    space: HtmlSpace,
 ) -> (Vec<Node>, Vec<usize>, Vec<String>) {
-    let context = QualName::new(
-        None,
-        Namespace::from(HTML_NAMESPACE),
-        LocalName::from("template"),
-    );
     let sink = parse_fragment(
         HtmlSink::new(stitch),
         parse_opts(),
-        context,
+        space.context_element(),
         Vec::new(),
         false,
     )
@@ -866,7 +885,7 @@ mod tests {
 
     #[test]
     fn fragment_keeps_top_level_nodes_under_root() {
-        let arena = html_fragment_to_hast_arena("<p>hi</p>");
+        let arena = html_fragment_to_hast_arena("<p>hi</p>", HtmlSpace::Html);
         assert_eq!(arena.get_node(0).node_type, HastNodeType::Root as u8);
         assert_eq!(tags(&arena), ["p"]);
     }
@@ -874,7 +893,10 @@ mod tests {
     #[test]
     fn fragment_keeps_every_sibling() {
         assert_eq!(
-            tags(&html_fragment_to_hast_arena("<p>a</p><p>b</p>")),
+            tags(&html_fragment_to_hast_arena(
+                "<p>a</p><p>b</p>",
+                HtmlSpace::Html
+            )),
             ["p", "p"]
         );
     }
@@ -882,7 +904,10 @@ mod tests {
     #[test]
     fn fragment_keeps_table_parts_outside_a_table() {
         assert_eq!(
-            tags(&html_fragment_to_hast_arena("<tr><td>a</td></tr>")),
+            tags(&html_fragment_to_hast_arena(
+                "<tr><td>a</td></tr>",
+                HtmlSpace::Html
+            )),
             ["tr", "td"]
         );
     }
@@ -890,8 +915,32 @@ mod tests {
     #[test]
     fn fragment_round_trips_without_document_wrapper() {
         assert_eq!(
-            hast_arena_to_html(&html_fragment_to_hast_arena("<p>hi</p>")).trim_end(),
+            hast_arena_to_html(&html_fragment_to_hast_arena("<p>hi</p>", HtmlSpace::Html))
+                .trim_end(),
             "<p>hi</p>"
+        );
+    }
+
+    #[test]
+    fn svg_space_self_closes_and_keeps_camel_cased_tags() {
+        assert_eq!(
+            hast_arena_to_html(&html_fragment_to_hast_arena(
+                r#"<circle cx="1" /><clipPath id="c"></clipPath>"#,
+                HtmlSpace::Svg
+            ))
+            .trim_end(),
+            r#"<circle cx="1"></circle><clipPath id="c"></clipPath>"#
+        );
+    }
+
+    #[test]
+    fn html_space_does_not_self_close_svg_children() {
+        assert_eq!(
+            tags(&html_fragment_to_hast_arena(
+                r#"<circle cx="1" /><clipPath id="c"></clipPath>"#,
+                HtmlSpace::Html
+            )),
+            ["circle", "clippath"]
         );
     }
 

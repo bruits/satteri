@@ -15,7 +15,8 @@ pub use crate::convert::{
 };
 #[cfg(feature = "from-html")]
 pub use from_html::{
-    html_fragment_to_hast_arena, html_fragment_to_wrap_arena, html_to_hast_arena, raw_to_hast_arena,
+    HtmlSpace, html_fragment_to_hast_arena, html_fragment_to_wrap_arena, html_to_hast_arena,
+    raw_to_hast_arena,
 };
 pub use node::HastNodeType;
 pub use render::{hast_arena_to_html, is_void_element, render_node};

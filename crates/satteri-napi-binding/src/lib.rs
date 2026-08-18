@@ -982,13 +982,27 @@ pub fn create_hast_handle(
 
 /// Parse an HTML string into structured HAST (elements, text, comments).
 /// Parses as a fragment when `fragment` is set, keeping the top-level nodes as
-/// they are instead of implying `<html>`/`<head>`/`<body>`.
+/// they are instead of implying `<html>`/`<head>`/`<body>`. `space` picks the
+/// namespace a fragment's own top-level content parses in: "html" or "svg".
 /// Returns an opaque handle; the arena stays in Rust memory.
 #[cfg(feature = "from-html")]
 #[napi]
-pub fn create_hast_handle_from_html(html: String, fragment: Option<bool>) -> Result<HastHandle> {
+pub fn create_hast_handle_from_html(
+    html: String,
+    fragment: Option<bool>,
+    space: Option<String>,
+) -> Result<HastHandle> {
+    let space = match space.as_deref() {
+        None | Some("html") => satteri_ast::hast::HtmlSpace::Html,
+        Some("svg") => satteri_ast::hast::HtmlSpace::Svg,
+        Some(other) => {
+            return Err(Error::from_reason(format!(
+                "`space` must be \"html\" or \"svg\", got {other:?}"
+            )));
+        }
+    };
     let mut hast = if fragment.unwrap_or(false) {
-        satteri_ast::hast::html_fragment_to_hast_arena(&html)
+        satteri_ast::hast::html_fragment_to_hast_arena(&html, space)
     } else {
         satteri_ast::hast::html_to_hast_arena(&html)
     };
