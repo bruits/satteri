@@ -1286,13 +1286,24 @@ export function mdxToHast(source: string, options: TreeOptions = {}): HastNode {
   }
 }
 
+export interface HtmlToHastOptions {
+  /**
+   * Parse as a fragment, so the returned `root` holds the string's own
+   * top-level nodes instead of an implied `<html>`/`<head>`/`<body>`.
+   *
+   * @default false
+   */
+  fragment?: boolean;
+}
+
 /**
  * Parse an HTML string into a materialized hast tree: a `root` whose children
- * are the doctype (if any) and the implied `<html>` subtree. Only available
- * in builds that include the `from-html` feature.
+ * are the doctype (if any) and the implied `<html>` subtree, or the string's
+ * own top-level nodes with `{ fragment: true }`. Only available in builds that
+ * include the `from-html` feature.
  */
-export function htmlToHast(html: string): HastNode {
-  const handle = createHastHandleFromHtml(html);
+export function htmlToHast(html: string, options: HtmlToHastOptions = {}): HastNode {
+  const handle = createHastHandleFromHtml(html, options.fragment);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {

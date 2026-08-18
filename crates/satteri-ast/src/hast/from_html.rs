@@ -732,6 +732,19 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
     builder.finish()
 }
 
+/// Parse an HTML fragment into a HAST arena: a `root` whose children are the
+/// fragment's own top-level nodes, with no synthesised `<html>`/`<head>`/
+/// `<body>` wrapper.
+pub fn html_fragment_to_hast_arena(html: &str) -> Arena<Hast> {
+    let (nodes, roots, _) = parse_fragment_nodes(html, None);
+
+    let mut builder = ArenaBuilder::<Hast>::new(String::new());
+    builder.open_node_raw(HastNodeType::Root as u8);
+    emit(&nodes, &roots, &mut builder, None, &[], &[]);
+    builder.close_node();
+    builder.finish()
+}
+
 /// Parse an HTML fragment into a wrap-payload arena: the single element
 /// becomes node 0, the shape `Patch::Wrap` takes as the wrapper. Whitespace
 /// around it is ignored; anything else (no element, extra top-level nodes, a
@@ -849,6 +862,37 @@ mod tests {
         let arena = html_to_hast_arena("<p>hi</p>");
         assert_eq!(arena.get_node(0).node_type, HastNodeType::Root as u8);
         assert_eq!(tags(&arena), ["html", "head", "body", "p"]);
+    }
+
+    #[test]
+    fn fragment_keeps_top_level_nodes_under_root() {
+        let arena = html_fragment_to_hast_arena("<p>hi</p>");
+        assert_eq!(arena.get_node(0).node_type, HastNodeType::Root as u8);
+        assert_eq!(tags(&arena), ["p"]);
+    }
+
+    #[test]
+    fn fragment_keeps_every_sibling() {
+        assert_eq!(
+            tags(&html_fragment_to_hast_arena("<p>a</p><p>b</p>")),
+            ["p", "p"]
+        );
+    }
+
+    #[test]
+    fn fragment_keeps_table_parts_outside_a_table() {
+        assert_eq!(
+            tags(&html_fragment_to_hast_arena("<tr><td>a</td></tr>")),
+            ["tr", "td"]
+        );
+    }
+
+    #[test]
+    fn fragment_round_trips_without_document_wrapper() {
+        assert_eq!(
+            hast_arena_to_html(&html_fragment_to_hast_arena("<p>hi</p>")).trim_end(),
+            "<p>hi</p>"
+        );
     }
 
     #[test]

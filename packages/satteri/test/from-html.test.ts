@@ -44,6 +44,26 @@ describe("htmlToHast", () => {
     expect(tags(tree)).toEqual(["html", "head", "body", "p"]);
   });
 
+  test("keeps the fragment's own top-level nodes with `fragment: true`", () => {
+    const tree = htmlToHast("<p>hi</p>", { fragment: true });
+    expect(tree.type).toBe("root");
+    expect(tags(tree)).toEqual(["p"]);
+  });
+
+  test("keeps every sibling of a fragment", () => {
+    expect(tags(htmlToHast("<p>a</p><p>b</p>", { fragment: true }))).toEqual(["p", "p"]);
+  });
+
+  test("keeps table parts in a fragment outside a table", () => {
+    expect(tags(htmlToHast("<tr><td>a</td></tr>", { fragment: true }))).toEqual(["tr", "td"]);
+  });
+
+  test("round-trips a fragment without a document wrapper", () => {
+    expect(stringify(htmlToHast(`<a href="/x">z</a>`, { fragment: true }))).toBe(
+      `<a href="/x">z</a>`,
+    );
+  });
+
   test("materializes structured element and text nodes", () => {
     const tree = htmlToHast("<p>hi</p>");
     const p = findElement(tree, "p");

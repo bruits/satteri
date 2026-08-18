@@ -981,11 +981,17 @@ pub fn create_hast_handle(
 }
 
 /// Parse an HTML string into structured HAST (elements, text, comments).
+/// Parses as a fragment when `fragment` is set, keeping the top-level nodes as
+/// they are instead of implying `<html>`/`<head>`/`<body>`.
 /// Returns an opaque handle; the arena stays in Rust memory.
 #[cfg(feature = "from-html")]
 #[napi]
-pub fn create_hast_handle_from_html(html: String) -> Result<HastHandle> {
-    let mut hast = satteri_ast::hast::html_to_hast_arena(&html);
+pub fn create_hast_handle_from_html(html: String, fragment: Option<bool>) -> Result<HastHandle> {
+    let mut hast = if fragment.unwrap_or(false) {
+        satteri_ast::hast::html_fragment_to_hast_arena(&html)
+    } else {
+        satteri_ast::hast::html_to_hast_arena(&html)
+    };
     hast.mdx = false;
     hast.parse_options = 0;
     Ok(External::new(Mutex::new(hast)))
