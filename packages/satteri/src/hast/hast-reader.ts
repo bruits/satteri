@@ -10,6 +10,7 @@ import {
   MDX_ATTR_SPREAD,
 } from "../op-stream.js";
 import { decodeElementProp } from "./element-props.js";
+import { PoolOffsets } from "../string-pool.js";
 import { NAME_TO_TYPE } from "./generated/node-types.js";
 import { ARENA_MAGIC, KIND_HAST, FIELD, HEADER } from "../generated/arena-layout.js";
 
@@ -36,7 +37,8 @@ export class HastReader {
   readonly #header: BufferHeader;
   readonly #textDecoder: TextDecoder;
   #stringPoolCache: string | null = null;
-  #poolIsAscii: boolean | null = null;
+  #poolChecked = false;
+  #poolOffsets: PoolOffsets | null = null;
 
   constructor(buffer: ArrayBuffer | Uint8Array) {
     if (buffer instanceof Uint8Array) {
@@ -128,21 +130,25 @@ export class HastReader {
   /** Read a substring from the string pool by byte offset and length. */
   getString(offset: number, len: number): string {
     if (len === 0) return "";
-    if (this.#poolIsAscii === null) {
-      this.#poolIsAscii = this.getStringPool().length === this.#header.stringPoolLen;
+    const pool = this.getStringPool();
+    if (!this.#poolChecked) {
+      this.#poolChecked = true;
+      const { stringPoolOffset, stringPoolLen } = this.#header;
+      const extraBytes = stringPoolLen - pool.length;
+      if (extraBytes > 0) {
+        const bytes = new Uint8Array(
+          this.#view.buffer,
+          this.#view.byteOffset + stringPoolOffset,
+          stringPoolLen,
+        );
+        this.#poolOffsets = new PoolOffsets(bytes, extraBytes);
+      }
     }
-    // An all-ASCII pool has byte offsets equal to its UTF-16 indices, so one
-    // decode plus substrings beats a TextDecoder call per string.
-    if (this.#poolIsAscii) {
-      return this.getStringPool().substring(offset, offset + len);
-    }
-    const { stringPoolOffset } = this.#header;
-    const bytes = new Uint8Array(
-      this.#view.buffer,
-      this.#view.byteOffset + stringPoolOffset + offset,
-      len,
-    );
-    return this.#textDecoder.decode(bytes);
+    // An all-ASCII pool has byte offsets equal to its UTF-16 indices.
+    const offsets = this.#poolOffsets;
+    return offsets === null
+      ? pool.substring(offset, offset + len)
+      : offsets.slice(pool, offset, len);
   }
 
   /** Get position data for a node. */
@@ -233,6 +239,32 @@ export class HastReader {
 
   #stringAt(at: number): string {
     return this.getString(this.#view.getUint32(at, true), this.#view.getUint32(at + 4, true));
+  }
+
+  /** @internal Both element fields in one pass; the per-field accessors below
+   *  each re-resolve the node's `type_data` position. */
+  readElementInto(
+    nodeId: number,
+    node: { tagName: string; properties: Record<string, HastProperty["value"]> },
+  ): void {
+    const at = this.#typeDataAt(nodeId, 16);
+    if (at === -1) {
+      node.tagName = "";
+      node.properties = {};
+      return;
+    }
+    const v = this.#view;
+    node.tagName = this.#stringAt(at);
+    const count = v.getUint32(at + 8, true);
+    const properties: Record<string, HastProperty["value"]> = {};
+    for (let i = 0; i < count; i++) {
+      const base = at + 16 + i * 20;
+      properties[this.#stringAt(base)] = decodeElementProp(
+        v.getUint8(base + 8),
+        this.#stringAt(base + 12),
+      );
+    }
+    node.properties = properties;
   }
 
   /** Element `tagName`, `properties` count, and the i-th property, read without

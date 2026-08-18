@@ -2076,17 +2076,18 @@ fn emit_refdefs_in_container(
     container_end: usize,
 ) -> bool {
     let mut any = false;
-    for &i in order {
+    // `order` is sorted by span start, so the container's refdefs are one slice.
+    let lo = order.partition_point(|&i| refdefs[i as usize].1.span.start < container_start);
+    let hi = order.partition_point(|&i| refdefs[i as usize].1.span.start < container_end);
+    for &i in order.get(lo..hi).unwrap_or_default() {
         let i = i as usize;
         if emitted[i] {
             continue;
         }
         let (label, def) = &refdefs[i];
-        if def.span.start >= container_start && def.span.start < container_end {
-            emit_pending_refdef(builder, cursor, source, label, def);
-            emitted[i] = true;
-            any = true;
-        }
+        emit_pending_refdef(builder, cursor, source, label, def);
+        emitted[i] = true;
+        any = true;
     }
     any
 }

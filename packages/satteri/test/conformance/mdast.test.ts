@@ -763,6 +763,46 @@ describe("MDAST conformance: astral characters in positions", () => {
   });
 });
 
+// One multibyte character shifts every string the reader slices after it.
+describe("MDAST conformance: multibyte string pool", () => {
+  test("curly quotes and emoji mid-text", () => {
+    assertMdastConformance("A “quoted” word, then 🎉 an emoji, then a plain tail.");
+  });
+
+  test("two-, three- and four-byte characters in one paragraph", () => {
+    assertMdastConformance("café 你好 😀 then *emphasis* and `code` and a [link](/x).");
+  });
+
+  test("multibyte inside link destinations, titles and image alt", () => {
+    assertMdastConformance('“pre” [läbel](/pá†h "Tí†le") and ![älт 😀](/ïmg.png "Tïtle") tail');
+  });
+
+  test("multibyte in reference definitions read from the interning heap", () => {
+    assertMdastConformance('“q” [réf] and ![ïmg][réf]\n\n[réf]: /ü†l "Tí†le"');
+  });
+
+  test("multibyte in code spans and fenced code", () => {
+    assertMdastConformance('`你好 😀` and\n\n```jsé\nconst s = "日本語";\n😀\n```\n');
+  });
+
+  test("mostly CJK document", () => {
+    assertMdastConformance(
+      "# 見出しの例\n\n本文の段落です。**強調**と*斜体*、それに[リンク](/日本語)。\n\n" +
+        "- 一つ目の項目\n- 二つ目の項目\n\n> 引用文の例です。\n\n最後の段落。",
+    );
+  });
+
+  test("CJK table cells", () => {
+    assertMdastConformance(
+      "| 見出し | 説明 |\n| --- | ---: |\n| 一 | 日本語の説明 |\n| 二 | 例 |\n",
+    );
+  });
+
+  test("multibyte at the very end of the document", () => {
+    assertMdastConformance("text then [a](/x) 見出し");
+  });
+});
+
 describe("MDAST conformance: fuzz regressions", () => {
   // GFM strikethrough requires the opening `~~` to be left-flanking per
   // CommonMark emphasis rules: a `~~` preceded by an alphanumeric and

@@ -3684,40 +3684,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         // Cheap pre-filter: a delimiter row must contain at least one `-`.
         // Container paragraphs hit this path on every continuation line, so
-        // skipping the pipe-counting loop / scan_table_head when the next
-        // line obviously can't be a delimiter row matters for parse perf.
-        // Use SIMD-backed `memchr2` rather than a `position` closure — this
+        // skipping `scan_table_head` when the next line obviously can't be a
+        // delimiter row matters for parse perf.
+        // Use SIMD-backed `memchr` rather than a `position` closure — this
         // path runs on every paragraph continuation line.
         let Some(eol_off) = memchr::memchr2(b'\n', b'\r', bytes) else {
             return false;
         };
         let next_line_ix = eol_off + scan_eol(&bytes[eol_off..]).unwrap();
-        let next_line_end = memchr::memchr2(b'\n', b'\r', &bytes[next_line_ix..])
-            .map(|p| next_line_ix + p)
-            .unwrap_or(bytes.len());
-        if memchr::memchr(b'-', &bytes[next_line_ix..next_line_end]).is_none() {
+        // One pass: a `-` reached before any line ending is a `-` on the next line.
+        if memchr::memchr3(b'-', b'\n', b'\r', &bytes[next_line_ix..])
+            .is_none_or(|p| bytes[next_line_ix + p] != b'-')
+        {
             return false;
-        }
-
-        // First line, count unescaped pipes. A run of consecutive backslashes
-        // toggles the escape state: `\|` escapes the pipe, `\\|` is a literal
-        // `\` followed by an unescaped separator pipe.
-        let mut pipes = 0;
-        let mut bsesc = false;
-        let mut last_pipe_ix = 0;
-        for (i, &byte) in bytes[..eol_off].iter().enumerate() {
-            match byte {
-                b'\\' => {
-                    bsesc = !bsesc;
-                    continue;
-                }
-                b'|' if !bsesc => {
-                    pipes += 1;
-                    last_pipe_ix = i;
-                }
-                _ => {}
-            }
-            bsesc = false;
         }
 
         // Scan the table head. The part that looks like:
@@ -3748,6 +3727,27 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         if table_head_bytes == 0 {
             return false;
+        }
+
+        // First line, count unescaped pipes. A run of consecutive backslashes
+        // toggles the escape state: `\|` escapes the pipe, `\\|` is a literal
+        // `\` followed by an unescaped separator pipe.
+        let mut pipes = 0;
+        let mut bsesc = false;
+        let mut last_pipe_ix = 0;
+        for (i, &byte) in bytes[..eol_off].iter().enumerate() {
+            match byte {
+                b'\\' => {
+                    bsesc = !bsesc;
+                    continue;
+                }
+                b'|' if !bsesc => {
+                    pipes += 1;
+                    last_pipe_ix = i;
+                }
+                _ => {}
+            }
+            bsesc = false;
         }
 
         // computing header count from number of pipes

@@ -485,8 +485,8 @@ fn all<'a>(
     parent_id: u32,
     explicit_jsxs: &mut FxHashSet<Span>,
 ) -> Result<OxcVec<'a, JSXChild<'a>>, message::Message> {
-    let mut result = OxcVec::new_in(context.allocator);
     let child_count = context.view.get_children(parent_id).len();
+    let mut result = OxcVec::with_capacity_in(child_count, context.allocator);
 
     if let Some(config) = context.optimize_static.clone() {
         // Optimization enabled: group consecutive static siblings into raw HTML.
@@ -601,9 +601,9 @@ fn transform_element<'a>(
     context.space = space;
 
     let alloc = context.allocator;
-    let mut attrs = OxcVec::new_in(alloc);
-
     let prop_count = decode_element_prop_count(data);
+    let mut attrs = OxcVec::with_capacity_in(prop_count as usize, alloc);
+
     // The schema switch covers the <svg> element's own attributes too, not
     // just its descendants (mirrors the HTML serializer in hast/render.rs).
     let in_svg = space == Space::Svg || tag_name == "svg";
@@ -721,9 +721,9 @@ fn transform_mdx_jsx_element<'a>(
     context.space = space;
 
     let alloc = context.allocator;
-    let mut attrs = OxcVec::new_in(alloc);
-
     let attr_count = decode_mdx_jsx_attr_count(data);
+    let mut attrs = OxcVec::with_capacity_in(attr_count as usize, alloc);
+
     for i in 0..attr_count {
         let (kind, attr_name_ref, attr_value_ref) = decode_mdx_jsx_attr(data, i);
 

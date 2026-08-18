@@ -197,7 +197,11 @@ pub fn compile_hast_arena(
         transform_program_to_function_body(&mut program, &allocator);
     }
     let mut code = jsx_pragma_comments(options);
-    code.push_str(&serialize(&program.program));
+    let serialized = serialize(&program.program);
+    if code.is_empty() {
+        return Ok(serialized);
+    }
+    code.push_str(&serialized);
     Ok(code)
 }
 
