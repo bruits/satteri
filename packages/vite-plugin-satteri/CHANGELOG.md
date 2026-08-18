@@ -11,23 +11,25 @@
 ### Minor changes
 
 - [e53e725](https://github.com/bruits/satteri/commit/e53e725e3eca758b5c65364b583c06a96d515510) Added a way to run a plugin only on some documents: a plugin factory now receives the file's `fileURL`, `sourceFormat`, `source` and `data`, and can return `null`, `undefined` or `false` to be left out for that document. Those skip values are also accepted anywhere a plugin entry can appear.
-  
+
   ```js
   const onlyChangelogs = (ctx) =>
     ctx.fileURL?.pathname.endsWith("/CHANGELOG.md") ? rewriteVersions : null;
-  
+
   markdownToHtml(source, { mdastPlugins: [onlyChangelogs, myPlugin] });
   ```
-  
+
   Anything else in a plugin list now fails with an error naming the option and what it expected. — Thanks @Princesseuh!
+
 - [8df3f76](https://github.com/bruits/satteri/commit/8df3f765b2df9cbfa1aa4130a126b9315e431c14) Added support for nested arrays in `mdastPlugins` and `hastPlugins`, so a package can export a bundle of plugins that you pass without spreading it. A bundle's plugins run in their own order, at the bundle's position. A factory can return a bundle as well as a single plugin, giving its plugins state they share with each other and reset per document.
-  
+
   ```js
   import { typography } from "some-package"; // an array of plugins
-  
+
   markdownToHtml(source, { mdastPlugins: [typography, myPlugin] });
   ```
-   — Thanks @Princesseuh!
+
+  — Thanks @Princesseuh!
 
 ### Patch changes
 

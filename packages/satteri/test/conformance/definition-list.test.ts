@@ -521,7 +521,10 @@ function satteriMdastShape(md: string): NodeShape[] {
 }
 
 function collapseTagWhitespace(h: string): string {
-  return h.replace(/>\s+</g, "><").replace(/\s+<\//g, "</").trim();
+  return h
+    .replace(/>\s+</g, "><")
+    .replace(/\s+<\//g, "</")
+    .trim();
 }
 
 describe("definition list: conformance vs remark-definition-list", () => {
