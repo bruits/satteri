@@ -227,12 +227,19 @@ fn parse_inner(
                 }
 
                 let item = inner.tree[ix].item;
-                let parent_body = inner.tree.peek_up().map(|p| inner.tree[p].item.body);
-                let end = crate::firstpass::mdast_position_end(
-                    &item,
-                    source.as_bytes(),
-                    parent_body.as_ref(),
-                );
+                // Every branch of `mdast_position_end` hands back `item.end` untouched unless a line terminator precedes it.
+                let end = if item.end > 0
+                    && matches!(source.as_bytes().get(item.end - 1), Some(b'\n' | b'\r'))
+                {
+                    let parent_body = inner.tree.peek_up().map(|p| inner.tree[p].item.body);
+                    crate::firstpass::mdast_position_end(
+                        &item,
+                        source.as_bytes(),
+                        parent_body.as_ref(),
+                    )
+                } else {
+                    item.end as u32
+                };
                 let (end_line, end_col) = cursor.offset_to_line_col(end);
 
                 match &inner.tree[ix].item.body {

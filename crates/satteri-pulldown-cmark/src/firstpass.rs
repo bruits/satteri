@@ -6310,46 +6310,9 @@ pub(crate) fn mdast_position_end(
         return end;
     }
     let is_math = matches!(item.body, ItemBody::MathBlock(_));
-    let math_at_eof = is_math && end as usize >= source.len();
     let is_fenced = matches!(item.body, ItemBody::FencedCodeBlock(..));
-    let fenced_at_eof = is_fenced && end as usize >= source.len();
-    let parent_is_bq = matches!(parent_body, Some(ItemBody::BlockQuote(_)));
-    let parent_is_listitem = matches!(parent_body, Some(ItemBody::ListItem(..)));
-    // Blockquote-parented fenced/math at EOF: the blockquote closed
-    // because the next non-existent line carries no `>` marker, so
-    // the trailing `\n` belongs to neither the inner block nor the
-    // blockquote (`>$$\\\n` / `>\`\`\`\n` — both end before the `\n`).
-    let fenced_at_eof_in_bq = fenced_at_eof && parent_is_bq;
-    let math_at_eof_in_bq = math_at_eof && parent_is_bq;
-    // Unclosed fenced/math in a list-item ended by container outdent:
-    // the trailing `\n` at end-1 belongs to the inner block ONLY when
-    // the outdent line opens a new container (list marker or `>`).
-    // When the next block is a leaf (paragraph, heading, indented
-    // code), remark drops the `\n`.
-    let next_line_opens_container = end > 1
-        && matches!(source.get(end as usize - 1), Some(b'\n' | b'\r'))
-        && !matches!(source.get(end as usize - 2), Some(b'\n' | b'\r'))
-        && parent_is_listitem
-        && {
-            match source.get(end as usize).copied() {
-                Some(b'-' | b'*' | b'+' | b'>') => true,
-                Some(c) if c.is_ascii_digit() => {
-                    let mut p = end as usize + 1;
-                    while p < source.len() && source[p].is_ascii_digit() {
-                        p += 1;
-                    }
-                    matches!(source.get(p), Some(b'.' | b')'))
-                }
-                _ => false,
-            }
-        };
-    let fenced_unclosed_in_listitem = is_fenced && !fenced_at_eof && next_line_opens_container;
-    let math_unclosed_in_listitem = is_math && !math_at_eof && next_line_opens_container;
-    let skip_trim =
-        (math_at_eof || fenced_at_eof || fenced_unclosed_in_listitem || math_unclosed_in_listitem)
-            && !fenced_at_eof_in_bq
-            && !math_at_eof_in_bq;
-    if skip_trim {
+    // Every carve-out is about a fence, so nothing else can keep the terminator.
+    if (is_math || is_fenced) && fence_keeps_trailing_terminator(item, source, parent_body) {
         return end;
     }
     let mut e = end;
@@ -6361,6 +6324,42 @@ pub(crate) fn mdast_position_end(
         }
     }
     e
+}
+
+/// Whether a fenced code or math block keeps the line terminator at `item.end`.
+fn fence_keeps_trailing_terminator(
+    item: &Item,
+    source: &[u8],
+    parent_body: Option<&ItemBody>,
+) -> bool {
+    let end = item.end as u32;
+    if end as usize >= source.len() {
+        // Blockquote-parented fenced/math at EOF: the blockquote closed
+        // because the next non-existent line carries no `>` marker, so
+        // the trailing `\n` belongs to neither the inner block nor the
+        // blockquote (`>$$\\\n` / `>\`\`\`\n` — both end before the `\n`).
+        return !matches!(parent_body, Some(ItemBody::BlockQuote(_)));
+    }
+    // Unclosed fenced/math in a list-item ended by container outdent:
+    // the trailing `\n` at end-1 belongs to the inner block ONLY when
+    // the outdent line opens a new container (list marker or `>`).
+    // When the next block is a leaf (paragraph, heading, indented
+    // code), remark drops the `\n`.
+    end > 1
+        && matches!(source.get(end as usize - 1), Some(b'\n' | b'\r'))
+        && !matches!(source.get(end as usize - 2), Some(b'\n' | b'\r'))
+        && matches!(parent_body, Some(ItemBody::ListItem(..)))
+        && match source.get(end as usize).copied() {
+            Some(b'-' | b'*' | b'+' | b'>') => true,
+            Some(c) if c.is_ascii_digit() => {
+                let mut p = end as usize + 1;
+                while p < source.len() && source[p].is_ascii_digit() {
+                    p += 1;
+                }
+                matches!(source.get(p), Some(b'.' | b')'))
+            }
+            _ => false,
+        }
 }
 
 type LookupTable = [bool; 256];
