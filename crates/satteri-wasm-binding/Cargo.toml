@@ -1,0 +1,25 @@
+[package]
+name = "satteri-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "WebAssembly bindings for Sätteri"
+license = "MIT"
+repository = "https://github.com/bruits/satteri"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+satteri-arena = { workspace = true }
+satteri = { workspace = true }
+satteri-ast = { workspace = true }
+satteri-mdxjs = { workspace = true, optional = true }
+satteri-pulldown-cmark = { workspace = true, features = ["std", "mdx"] }
+wasm-bindgen = { workspace = true }
+
+[features]
+default = ["build-js"]
+build-js = ["dep:satteri-mdxjs", "satteri/mdx"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

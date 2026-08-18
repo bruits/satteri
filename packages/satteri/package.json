@@ -29,6 +29,11 @@
       "browser": "./dist/index.js",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./hast": {
+      "types": "./dist/hast/index.d.ts",
+      "import": "./dist/hast/index.js",
+      "default": "./dist/hast/index.js"
     }
   },
   "scripts": {

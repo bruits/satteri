@@ -13,6 +13,9 @@
         "mdast-util-mdx"
       ]
     },
+    "packages/satteri-wasm": {
+      "ignoreBinaries": ["wasm-pack"]
+    },
     "examples": {
       "entry": ["*.ts"]
     },
