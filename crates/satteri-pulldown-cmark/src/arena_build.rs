@@ -991,8 +991,8 @@ fn parse_inner(
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
                     }
-                    ItemBody::FencedCodeBlock(cow_ix, lang_len) => {
-                        let info_cow = inner.allocs.take_cow(cow_ix);
+                    ItemBody::FencedCodeBlock(info_ix) => {
+                        let (info_cow, lang_len) = inner.allocs.take_fenced_info(info_ix);
                         let info_str = info_cow.as_ref();
                         // The boundary was taken on raw source; whitespace a
                         // character reference decodes to stays in the language.
@@ -1042,7 +1042,7 @@ fn parse_inner(
                     }
                     ItemBody::List(_is_tight, c, listitem_start) => {
                         let ordered = c == b'.' || c == b')';
-                        let start_num = if ordered { listitem_start as u32 } else { 0 };
+                        let start_num = if ordered { listitem_start } else { 0 };
                         builder.open_node(MdastNodeType::List as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,

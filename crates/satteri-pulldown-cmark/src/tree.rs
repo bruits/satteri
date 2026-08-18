@@ -8,22 +8,22 @@
 
 use alloc::vec::Vec;
 use core::{
-    num::NonZeroUsize,
+    num::NonZeroU32,
     ops::{Add, Sub},
 };
 
 use crate::parse::{Item, ItemBody};
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone, PartialOrd)]
-pub(crate) struct TreeIndex(NonZeroUsize);
+pub(crate) struct TreeIndex(NonZeroU32);
 
 impl TreeIndex {
     fn new(i: usize) -> Self {
-        TreeIndex(NonZeroUsize::new(i).unwrap())
+        TreeIndex(NonZeroU32::new(i as u32).unwrap())
     }
 
     pub fn get(self) -> usize {
-        self.0.get()
+        self.0.get() as usize
     }
 }
 
@@ -31,7 +31,7 @@ impl Add<usize> for TreeIndex {
     type Output = TreeIndex;
 
     fn add(self, rhs: usize) -> Self {
-        let inner = self.0.get() + rhs;
+        let inner = self.get() + rhs;
         TreeIndex::new(inner)
     }
 }
@@ -40,7 +40,7 @@ impl Sub<usize> for TreeIndex {
     type Output = TreeIndex;
 
     fn sub(self, rhs: usize) -> Self {
-        let inner = self.0.get().checked_sub(rhs).unwrap();
+        let inner = self.get().checked_sub(rhs).unwrap();
         TreeIndex::new(inner)
     }
 }
@@ -280,7 +280,7 @@ where
         }
 
         if self.nodes.len() > 1 {
-            let cur = TreeIndex(NonZeroUsize::new(1).unwrap());
+            let cur = TreeIndex::new(1);
             debug_tree(self, cur, 0, f)
         } else {
             write!(f, "Empty tree")

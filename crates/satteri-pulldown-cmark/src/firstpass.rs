@@ -321,7 +321,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.tree.append(Item {
                     start: container_start,
                     end: after_marker_index, // will get updated later if item not empty
-                    body: ItemBody::ListItem(indent, false),
+                    body: ItemBody::ListItem(indent as u32, false),
                 });
                 self.tree.push();
                 if let Some(n) = scan_blank_line(&bytes[after_marker_index..]) {
@@ -516,7 +516,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.tree.append(Item {
                     start: container_start - outer_indent,
                     end: after_marker_index, // will get updated later if item not empty
-                    body: ItemBody::DefinitionListDefinition(indent, loose),
+                    body: ItemBody::DefinitionListDefinition(indent as u32, loose),
                 });
                 if let Some(ItemBody::DefinitionList(is_tight)) =
                     self.tree.peek_up().map(|cur| &mut self.tree[cur].item.body)
@@ -1946,7 +1946,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         self.tree.append(Item {
                             start: ix + 1,
                             end: ix + count + 1,
-                            body: ItemBody::MaybeCode(count, true),
+                            body: ItemBody::MaybeCode(count as u32, true),
                         });
                         begin_text = ix + 1 + count;
                         backslash_escaped = false;
@@ -2000,13 +2000,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         self.tree.append(Item {
                             start: ix + 1,
                             end: ix + 2,
-                            body: ItemBody::MaybeEmphasisEscaped(count, fired.0, fired.1),
+                            body: ItemBody::MaybeEmphasisEscaped(count as u32, fired.0, fired.1),
                         });
                         for i in 1..count {
                             self.tree.append(Item {
                                 start: ix + 1 + i,
                                 end: ix + 2 + i,
-                                body: ItemBody::MaybeEmphasis(count - i, blocked.0, blocked.1),
+                                body: ItemBody::MaybeEmphasis(
+                                    (count - i) as u32,
+                                    blocked.0,
+                                    blocked.1,
+                                ),
                             });
                         }
                         begin_text = ix + 1 + count;
@@ -2090,7 +2094,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             self.tree.append(Item {
                                 start: ix + i,
                                 end: ix + i + 1,
-                                body: ItemBody::MaybeEmphasis(count - i, can_open, can_close),
+                                body: ItemBody::MaybeEmphasis(
+                                    (count - i) as u32,
+                                    can_open,
+                                    can_close,
+                                ),
                             });
                         }
                         begin_text = ix + count;
@@ -2280,7 +2288,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     self.tree.append(Item {
                         start: ix,
                         end: ix + count,
-                        body: ItemBody::MaybeCode(count, false),
+                        body: ItemBody::MaybeCode(count as u32, false),
                     });
                     begin_text = ix + count;
                     LoopInstruction::ContinueAndSkip(count - 1)
@@ -2890,7 +2898,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree.append(Item {
             start: start_ix,
             end: 0, // will get set later
-            body: ItemBody::FencedCodeBlock(self.allocs.allocate_cow(info_string), lang_len),
+            body: ItemBody::FencedCodeBlock(
+                self.allocs.allocate_fenced_info(info_string, lang_len),
+            ),
         });
         self.tree.push();
         loop {
@@ -3206,7 +3216,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree.append(Item {
             start,
             end: 0, // will get set later
-            body: ItemBody::List(true, ch, index),
+            // An ordered marker scans at most 9 digits, so this always fits.
+            body: ItemBody::List(true, ch, index as u32),
         });
         self.tree.push();
         self.last_line_blank = false;

@@ -2016,7 +2016,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             match self.tree[node_ix].item.body {
                 ItemBody::BlockQuote(..) => col += 2, // `>` + space
                 ItemBody::ListItem(indent, _) | ItemBody::DefinitionListDefinition(indent, _) => {
-                    col += indent
+                    col += indent as usize
                 }
                 ItemBody::FootnoteDefinition(..)
                     if self.options.contains(crate::Options::ENABLE_FOOTNOTES) =>
