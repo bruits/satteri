@@ -318,22 +318,22 @@ describe("features.gfm.footnotes", () => {
   });
 
   test("can customize footnote clobber prefix", () => {
-	const result = markdownToHtml(SRC, {
-		features: {
-			gfm: {
-				footnotes: {
-					clobberPrefix: "prefix-"
-				},
-			},
-		},
-	});
-	if (result instanceof Promise) throw new Error("expected sync");
-	expect(result.html).toContain('href="#prefix-fn-a"');
-	expect(result.html).toContain('id="prefix-fnref-a"');
-	expect(result.html).toContain('id="prefix-fnref-a-2"');
-	expect(result.html).toContain('id="prefix-fn-a"');
-	expect(result.html).toContain('href="#prefix-fnref-a"');
-	expect(result.html).toContain('href="#prefix-fnref-a-2"');
+    const result = markdownToHtml(SRC, {
+      features: {
+        gfm: {
+          footnotes: {
+            clobberPrefix: "prefix-",
+          },
+        },
+      },
+    });
+    if (result instanceof Promise) throw new Error("expected sync");
+    expect(result.html).toContain('href="#prefix-fn-a"');
+    expect(result.html).toContain('id="prefix-fnref-a"');
+    expect(result.html).toContain('id="prefix-fnref-a-2"');
+    expect(result.html).toContain('id="prefix-fn-a"');
+    expect(result.html).toContain('href="#prefix-fnref-a"');
+    expect(result.html).toContain('href="#prefix-fnref-a-2"');
   });
 
   // The compile pipeline picks a different NAPI shape per plugin mix (no-plugin

@@ -84,8 +84,8 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
             convertOptions.footnoteBackContent = g.footnotes.backContent;
           if (g.footnotes.backLabel !== undefined)
             convertOptions.footnoteBackLabel = g.footnotes.backLabel;
-		  if (g.footnotes.clobberPrefix !== undefined)
-			convertOptions.clobberPrefix = g.footnotes.clobberPrefix;
+          if (g.footnotes.clobberPrefix !== undefined)
+            convertOptions.clobberPrefix = g.footnotes.clobberPrefix;
         } else {
           gfmOpts.footnotes = g.footnotes;
         }

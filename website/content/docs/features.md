@@ -91,7 +91,7 @@ markdownToHtml(source, {
   features: {
     gfm: {
       footnotes: {
-        clobberPrefix: "custom-prefix-"
+        clobberPrefix: "custom-prefix-",
       },
     },
   },
