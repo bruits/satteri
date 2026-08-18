@@ -209,17 +209,21 @@ fn list_item_data_of(node_id: u32, view: &Arena<Mdast>) -> Option<ListItemData> 
     (data.len() >= size_of::<ListItemData>()).then(|| decode_list_item_data(data))
 }
 
+fn list_is_loose(list_id: u32, view: &Arena<Mdast>) -> bool {
+    list_data_of(list_id, view).is_some_and(|d| d.spread)
+        || view
+            .get_children(list_id)
+            .iter()
+            .any(|&item_id| list_item_data_of(item_id, view).is_some_and(|d| d.spread))
+}
+
 /// A list item can be reparented onto anything, including nothing.
 fn enclosing_list_is_loose(node_id: u32, view: &Arena<Mdast>) -> bool {
     let parent_id = view.get_node(node_id).parent;
     if parent_id as usize >= view.len() {
         return false;
     }
-    list_data_of(parent_id, view).is_some_and(|d| d.spread)
-        || view
-            .get_children(parent_id)
-            .iter()
-            .any(|&sibling_id| list_item_data_of(sibling_id, view).is_some_and(|d| d.spread))
+    list_is_loose(parent_id, view)
 }
 
 pub(crate) fn emit_node<S: ConvertSink>(
@@ -291,25 +295,19 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
                 sink.attr(CLASS_NAME, AttrValue::class_list("contains-task-list"));
             }
             if sink.finish_source_attrs() == Children::Recurse {
-                emit_children_with_newlines(node_id, ctx, sink, depth);
+                emit_list_items(node_id, ctx, sink, depth);
             }
             sink.close_element(tag);
         }
 
         Some(MdastNodeType::ListItem) => {
-            let task = list_item_data_of(node_id, view).filter(|d| d.checked != 2);
-            sink.open_source_element("li", node_id);
-            if task.is_some() {
-                sink.attr(CLASS_NAME, AttrValue::class_list("task-list-item"));
-            }
-            if sink.finish_source_attrs() == Children::Recurse {
-                if enclosing_list_is_loose(node_id, view) {
-                    emit_children_with_newlines_task(node_id, task, ctx, sink, depth);
-                } else {
-                    emit_children_unwrap_paragraphs_task(node_id, task, ctx, sink, depth);
-                }
-            }
-            sink.close_element("li");
+            emit_list_item(
+                node_id,
+                enclosing_list_is_loose(node_id, view),
+                ctx,
+                sink,
+                depth,
+            );
         }
 
         Some(MdastNodeType::Html) => {
@@ -608,6 +606,50 @@ fn emit_children_with_newlines<S: ConvertSink>(
         emit_node(child_id, ctx, sink, depth + 1);
         sink.newline();
     }
+}
+
+/// Looseness is a property of the list, so resolving it per item would be quadratic.
+fn emit_list_items<S: ConvertSink>(list_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
+    let view = ctx.view;
+    let items_are_loose = list_is_loose(list_id, view);
+    sink.newline();
+    for &child_id in view.get_children(list_id) {
+        if !sink.produces_output(child_id) {
+            continue;
+        }
+        if MdastNodeType::from_u8(view.get_node(child_id).node_type)
+            == Some(MdastNodeType::ListItem)
+        {
+            crate::stack::with_headroom(depth + 1, || {
+                emit_list_item(child_id, items_are_loose, ctx, sink, depth + 1)
+            });
+        } else {
+            emit_node(child_id, ctx, sink, depth + 1);
+        }
+        sink.newline();
+    }
+}
+
+fn emit_list_item<S: ConvertSink>(
+    node_id: u32,
+    list_is_loose: bool,
+    ctx: &EmitCtx<'_, '_>,
+    sink: &mut S,
+    depth: u32,
+) {
+    let task = list_item_data_of(node_id, ctx.view).filter(|d| d.checked != 2);
+    sink.open_source_element("li", node_id);
+    if task.is_some() {
+        sink.attr(CLASS_NAME, AttrValue::class_list("task-list-item"));
+    }
+    if sink.finish_source_attrs() == Children::Recurse {
+        if list_is_loose {
+            emit_children_with_newlines_task(node_id, task, ctx, sink, depth);
+        } else {
+            emit_children_unwrap_paragraphs_task(node_id, task, ctx, sink, depth);
+        }
+    }
+    sink.close_element("li");
 }
 
 fn emit_children_wrapped<S: ConvertSink>(

@@ -203,7 +203,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         // Process new containers
         loop {
-            let save = line_start.clone();
+            let save = line_start.save_cursor();
             let mut outer_indent = line_start.scan_space_upto(4);
             if outer_indent >= 4 {
                 if self.options.contains(Options::ENABLE_MDX) {
@@ -236,14 +236,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // as the first non-whitespace byte.
                             break;
                         }
-                        line_start = save;
+                        line_start.restore_cursor(save);
                         break;
                     }
                     // The deeper list marker's continuation indent must account
                     // for the whitespace we just consumed past the initial 4.
                     outer_indent += extra;
                 } else {
-                    line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
@@ -281,7 +281,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 {
                     self.list_interrupted_paragraph = false;
                     self.refdef_interrupted_paragraph = false;
-                    line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
                 // micromark's list construct rejects start != 1 when
@@ -314,7 +314,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 {
                     self.list_interrupted_paragraph = false;
                     self.refdef_interrupted_paragraph = false;
-                    line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
                 self.continue_list(container_start, ch, index);
@@ -329,7 +329,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     return after_marker_index + n;
                 }
                 if self.options.contains(Options::ENABLE_TASKLISTS) {
-                    let saved_line_start = line_start.clone();
+                    let saved_line_start = line_start.save_cursor();
                     let task_list_marker =
                         line_start.scan_task_list_marker().map(|is_checked| Item {
                             start: after_marker_index,
@@ -404,7 +404,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // either the next line is a paragraph interrupt
                             // (so it can't lazily continue the task item) or
                             // the next line is blank.
-                            line_start = saved_line_start;
+                            line_start.restore_cursor(saved_line_start);
                         } else {
                             return self
                                 .parse_paragraph(task_list_marker.end, Some(task_list_marker));
@@ -656,7 +656,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     break;
                 }
             } else {
-                line_start = save;
+                line_start.restore_cursor(save);
                 break;
             }
         }
@@ -3922,6 +3922,23 @@ fn mdx_block_interrupts(_bytes: &[u8], _mdx: bool) -> bool {
     false
 }
 
+#[inline]
+fn listitem_interrupts(bytes: &[u8], current_container: bool, tree: &Tree<Item>) -> bool {
+    let Some((ix, delim, _index, _)) = scan_listitem(bytes) else {
+        return false;
+    };
+    !current_container
+        || tree.is_in_table()
+        // We don't allow interruption by either empty lists or numbered
+        // lists whose marker isn't *textually* the single character `1`
+        // (so `01.`, `001.`, `10.` all stay paragraph text — micromark
+        // matches the literal marker, not the parsed integer value).
+        || (matches!(delim, b'*' | b'-' | b'+')
+            || (bytes.first() == Some(&b'1')
+                && matches!(bytes.get(1), Some(b'.') | Some(b')'))))
+            && scan_blank_line(&bytes[ix..]).is_none()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn scan_paragraph_interrupt_no_table(
     bytes: &[u8],
@@ -3941,18 +3958,7 @@ fn scan_paragraph_interrupt_no_table(
         || (math && scan_math_fence(bytes).is_some())
         || (directive && scan_interrupting_container_extensions_fence(bytes))
         || scan_blockquote_start(bytes).is_some()
-        || scan_listitem(bytes).is_some_and(|(ix, delim, _index, _)| {
-            ! current_container ||
-            tree.is_in_table() ||
-            // We don't allow interruption by either empty lists or numbered
-            // lists whose marker isn't *textually* the single character `1`
-            // (so `01.`, `001.`, `10.` all stay paragraph text — micromark
-            // matches the literal marker, not the parsed integer value).
-            (delim == b'*' || delim == b'-' || delim == b'+'
-                || (bytes.first() == Some(&b'1')
-                    && matches!(bytes.get(1), Some(b'.') | Some(b')'))))
-                && (scan_blank_line(&bytes[ix..]).is_none())
-        })
+        || listitem_interrupts(bytes, current_container, tree)
         // HTML types 1–6 interrupt paragraphs. MDX disables HTML blocks
         // entirely (everything `<…>` is JSX), so the type-1/6 gate
         // shouldn't fire — a line like `</div>after` is just paragraph

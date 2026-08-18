@@ -2548,7 +2548,7 @@ pub(crate) fn scan_containers(
     for &node_ix in tree.walk_spine() {
         match tree[node_ix].item.body {
             ItemBody::BlockQuote(..) => {
-                let save = line_start.clone();
+                let save = line_start.save_cursor();
                 // In MDX mode indented code blocks are disabled, so the
                 // ≤3-space cap on blockquote prefix indent doesn't apply —
                 // tab- or 4+-space-indented `>` should still continue the
@@ -2559,28 +2559,28 @@ pub(crate) fn scan_containers(
                     let _ = line_start.scan_space(3);
                 }
                 if !line_start.scan_blockquote_marker() {
-                    *line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
             ItemBody::ListItem(indent, _) => {
-                let save = line_start.clone();
+                let save = line_start.save_cursor();
                 if !line_start.scan_space(indent as usize) && !line_start.is_at_eol() {
-                    *line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
             ItemBody::DefinitionListDefinition(indent, _) => {
-                let save = line_start.clone();
+                let save = line_start.save_cursor();
                 if !line_start.scan_space(indent as usize) && !line_start.is_at_eol() {
-                    *line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
             ItemBody::FootnoteDefinition(..) if options.contains(Options::ENABLE_FOOTNOTES) => {
-                let save = line_start.clone();
+                let save = line_start.save_cursor();
                 if !line_start.scan_space(4) && !line_start.is_at_eol() {
-                    *line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
