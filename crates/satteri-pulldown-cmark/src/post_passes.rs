@@ -818,7 +818,16 @@ pub(crate) fn gfm_autolink_literal_pass(
         if node.node_type != text_ty {
             continue;
         }
-        if node.parent == u32::MAX || node.parent >= len {
+        let parent = node.parent;
+        if parent == u32::MAX || parent >= len {
+            continue;
+        }
+        let data = arena.get_type_data(id);
+        if data.is_empty() {
+            continue;
+        }
+        let sr = StringRef::from_bytes(data);
+        if !has_autolink_trigger(arena.get_str(sr).as_bytes()) {
             continue;
         }
         // `findAndReplace`'s `{ignore: ['link', 'linkReference']}` skips a
@@ -826,7 +835,7 @@ pub(crate) fn gfm_autolink_literal_pass(
         // inside `[<del>www</del>](/x)` (parent `delete`, grandparent `link`)
         // must be skipped too. Image alt-text and code/expression/frontmatter
         // subtrees likewise never autolink.
-        let mut ancestor = node.parent;
+        let mut ancestor = parent;
         let mut inside_ignored = false;
         while ancestor != u32::MAX && ancestor < len {
             if matches!(
@@ -850,16 +859,7 @@ pub(crate) fn gfm_autolink_literal_pass(
             }
             ancestor = arena.get_node(ancestor).parent;
         }
-        if inside_ignored {
-            continue;
-        }
-        let data = arena.get_type_data(id);
-        if data.is_empty() {
-            continue;
-        }
-        let sr = StringRef::from_bytes(data);
-        let text = arena.get_str(sr);
-        if has_autolink_trigger(text.as_bytes()) {
+        if !inside_ignored {
             candidates.push(id);
         }
     }
@@ -873,14 +873,40 @@ pub(crate) fn gfm_autolink_literal_pass(
     }
 }
 
-/// One AVX2 vector; below it `next_autolink_trigger` scans scalar instead.
+/// One AVX2 vector; below it the trigger scans go scalar instead.
 const MEMCHR_MIN_LEN: usize = 32;
 
-/// Whether any byte can open an autolink literal, in either case.
+/// Keying `www.` on its dot keeps the needle set at three case-exact bytes.
 #[inline]
 fn has_autolink_trigger(bytes: &[u8]) -> bool {
-    memchr::memchr3(b'h', b'w', b'@', bytes).is_some()
-        || memchr::memchr2(b'H', b'W', bytes).is_some()
+    let mut from = 0;
+    while let Some(off) = next_trigger_byte(&bytes[from..]) {
+        let at = from + off;
+        match bytes[at] {
+            b'@' => return true,
+            b':' => {
+                if matches!(bytes.get(at + 1..at + 3), Some([b'/', b'/'])) {
+                    return true;
+                }
+            }
+            _ => {
+                if at >= 3 && match_autolink_scheme(bytes, at - 3).is_some() {
+                    return true;
+                }
+            }
+        }
+        from = at + 1;
+    }
+    false
+}
+
+#[inline]
+fn next_trigger_byte(hay: &[u8]) -> Option<usize> {
+    if hay.len() < MEMCHR_MIN_LEN {
+        hay.iter().position(|&b| matches!(b, b'@' | b':' | b'.'))
+    } else {
+        memchr::memchr3(b'@', b':', b'.', hay)
+    }
 }
 
 /// Triggers are case-insensitive and memchr takes three needles at a time, so
