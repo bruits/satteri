@@ -575,9 +575,16 @@ pub enum JsxName<'a> {
 /// Parse a JavaScript member expression or name.
 pub fn parse_js_name(name: &str) -> JsName<'_> {
     let bytes = name.as_bytes();
-    let mut index = 0;
-    let mut start = 0;
-    let mut parts = vec![];
+
+    // `a`
+    let Some(first_dot) = bytes.iter().position(|byte| *byte == b'.') else {
+        return JsName::Normal(name);
+    };
+
+    // `a.b.c`
+    let mut parts = vec![&name[..first_dot]];
+    let mut start = first_dot + 1;
+    let mut index = start;
 
     while index < bytes.len() {
         if bytes[index] == b'.' {
@@ -588,15 +595,8 @@ pub fn parse_js_name(name: &str) -> JsName<'_> {
         index += 1;
     }
 
-    // `a`
-    if parts.is_empty() {
-        JsName::Normal(name)
-    }
-    // `a.b.c`
-    else {
-        parts.push(&name[start..]);
-        JsName::Member(parts)
-    }
+    parts.push(&name[start..]);
+    JsName::Member(parts)
 }
 
 /// Parse a JSX name from a string.
