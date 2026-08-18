@@ -82,20 +82,29 @@ export type {
 } from "./types.js";
 
 // Visitor pipeline (for manual plugin execution)
-export { visitMdastHandle, resolveMdastSubscriptions } from "./mdast/mdast-visitor.js";
+export { normalizePlugins } from "./plugin.js";
+export {
+  visitMdastHandle,
+  visitMdastHook,
+  resolveMdastSubscriptions,
+} from "./mdast/mdast-visitor.js";
 export type {
   MdastPluginInstance,
   MdastVisitorContext,
   MdastContent,
   MdastTarget,
   MdastParentContent,
+  MdastDiagnostic,
+  MdastHookFn,
   RawMdastContent,
   RawHtmlMdastContent,
 } from "./mdast/mdast-visitor.js";
 export {
   visitHastHandle,
+  visitHastHook,
   resolveSubscriptions as resolveHastSubscriptions,
 } from "./hast/hast-visitor.js";
+export type { HastDiagnostic, HastHookFn } from "./hast/hast-visitor.js";
 
 // Step-by-step API: readers, materializers, and handle functions
 export { MdastReader } from "./mdast/mdast-reader.js";
