@@ -4,6 +4,7 @@ use satteri_arena::{Arena, Mdast};
 use satteri_ast::hast::{
     Backref, ConvertOptions, hast_arena_to_html, mdast_arena_to_hast_arena_with_options,
 };
+use satteri_ast::mdast::{ListItemData, MdastNodeType};
 use satteri_ast::try_mdast_to_html_fused;
 use satteri_pulldown_cmark::Options;
 
@@ -450,6 +451,102 @@ fn node_data_falls_back_to_two_stage() {
         satteri_ast::mdast_to_html(&arena).contains("<section>Hello</section>"),
         "two-stage fallback lost the hName override"
     );
+}
+
+fn text_node(arena: &mut Arena<Mdast>, value: &str) -> u32 {
+    let id = arena.alloc_node(MdastNodeType::Text as u8);
+    let text = arena.alloc_string(value);
+    arena.set_type_data(id, &text.as_bytes());
+    id
+}
+
+fn list_item(arena: &mut Arena<Mdast>, data: &[u8], value: &str) -> u32 {
+    let id = arena.alloc_node(MdastNodeType::ListItem as u8);
+    arena.set_type_data(id, data);
+    let para = arena.alloc_node(MdastNodeType::Paragraph as u8);
+    let child = text_node(arena, value);
+    arena.set_children(para, &[child]);
+    arena.set_children(id, &[para]);
+    id
+}
+
+fn tight_item() -> [u8; 2] {
+    ListItemData {
+        checked: 2,
+        spread: false,
+    }
+    .to_bytes()
+}
+
+fn both_paths(label: &str, arena: &Arena<Mdast>) -> String {
+    let convert = ConvertOptions::default();
+    let expected = two_stage(arena, &convert);
+    let fused = try_mdast_to_html_fused(arena, &convert)
+        .unwrap_or_else(|| panic!("{label}: fused path declined without h data"));
+    assert_eq!(expected, fused, "{label}");
+    expected
+}
+
+/// Plugins hand-build list nodes, so a missing or short `type_data` blob must render, not panic.
+#[test]
+fn undersized_list_type_data_renders_on_both_paths() {
+    let mut arena: Arena<Mdast> = Arena::new(String::new());
+    let root = arena.alloc_node(MdastNodeType::Root as u8);
+    let list = arena.alloc_node(MdastNodeType::List as u8);
+    let item = list_item(&mut arena, &tight_item(), "a");
+    arena.set_children(list, &[item]);
+    arena.set_children(root, &[list]);
+    assert_eq!(
+        both_paths("list without type data", &arena),
+        "<ul>\n<li>a</li>\n</ul>\n"
+    );
+
+    let mut arena: Arena<Mdast> = Arena::new(String::new());
+    let root = arena.alloc_node(MdastNodeType::Root as u8);
+    let list = arena.alloc_node(MdastNodeType::List as u8);
+    arena.set_type_data(list, &[1u8]);
+    let item = list_item(&mut arena, &[7u8], "b");
+    arena.set_children(list, &[item]);
+    arena.set_children(root, &[list]);
+    assert_eq!(
+        both_paths("one-byte list and item data", &arena),
+        "<ul>\n<li>b</li>\n</ul>\n"
+    );
+}
+
+/// `parent` is a raw id: a reparented item can land under a non-list, and a root item has none at all.
+#[test]
+fn list_item_without_a_list_parent_renders_on_both_paths() {
+    let mut arena: Arena<Mdast> = Arena::new(String::new());
+    let root = arena.alloc_node(MdastNodeType::Root as u8);
+    let outer = arena.alloc_node(MdastNodeType::ListItem as u8);
+    arena.set_type_data(outer, &tight_item());
+    let inner = list_item(&mut arena, &tight_item(), "nested");
+    arena.set_children(outer, &[inner]);
+    arena.set_children(root, &[outer]);
+    assert_eq!(
+        both_paths("item under an item", &arena),
+        "<li>\n<li>nested</li>\n</li>\n"
+    );
+
+    let mut arena: Arena<Mdast> = Arena::new(String::new());
+    let orphan = list_item(&mut arena, &tight_item(), "orphan");
+    assert_eq!(
+        orphan, 0,
+        "the orphan has to be the node the walk starts at"
+    );
+    assert_eq!(
+        both_paths("item with no parent", &arena),
+        "<li>orphan</li>\n"
+    );
+
+    let mut arena: Arena<Mdast> = Arena::new(String::new());
+    let root = arena.alloc_node(MdastNodeType::Root as u8);
+    let para = arena.alloc_node(MdastNodeType::Paragraph as u8);
+    let item = list_item(&mut arena, &tight_item(), "c");
+    arena.set_children(para, &[item]);
+    arena.set_children(root, &[para]);
+    both_paths("item under a paragraph", &arena);
 }
 
 /// Only h-shaped `data` needs the HAST pipeline; plugin-private blobs stay on the fused path.

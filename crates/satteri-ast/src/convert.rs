@@ -6,8 +6,8 @@ use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, StringRef, decode_string_r
 use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
 use crate::hast::HastNodeType;
 use crate::mdast::{
-    MdastNodeType, decode_definition_data, decode_footnote_definition_data, decode_list_item_data,
-    decode_reference_data,
+    ListItemData, MdastNodeType, decode_definition_data, decode_footnote_definition_data,
+    decode_list_item_data, decode_reference_data,
 };
 #[cfg(feature = "mdx")]
 use crate::mdast::{
@@ -672,7 +672,7 @@ pub(crate) fn list_contains_task_item(list_id: u32, view: &Arena<Mdast>) -> bool
             continue;
         }
         let data = view.get_type_data(child_id);
-        if data.is_empty() {
+        if data.len() < size_of::<ListItemData>() {
             continue;
         }
         if decode_list_item_data(data).checked != 2 {

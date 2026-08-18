@@ -7,7 +7,7 @@ use crate::convert::{
     list_contains_task_item, normalize_url, resolve_backref,
 };
 use crate::mdast::{
-    ColumnAlign, ListItemData, MdastNodeType, decode_code_data, decode_custom_data,
+    ColumnAlign, ListData, ListItemData, MdastNodeType, decode_code_data, decode_custom_data,
     decode_description_details_data, decode_footnote_definition_data, decode_heading_data,
     decode_image_data, decode_image_reference_alt, decode_link_data, decode_list_data,
     decode_list_item_data, decode_math_data, decode_reference_data, decode_table_alignments,
@@ -199,6 +199,32 @@ fn open_plain<S: ConvertSink>(sink: &mut S, tag: &'static str, pos: Pos) {
     sink.finish_attrs();
 }
 
+/// Plugins build list nodes by hand, so every list decode is sized before it reads.
+#[inline]
+fn list_data_of(node_id: u32, view: &Arena<Mdast>) -> Option<ListData> {
+    let data = view.get_type_data(node_id);
+    (data.len() >= size_of::<ListData>()).then(|| decode_list_data(data))
+}
+
+#[inline]
+fn list_item_data_of(node_id: u32, view: &Arena<Mdast>) -> Option<ListItemData> {
+    let data = view.get_type_data(node_id);
+    (data.len() >= size_of::<ListItemData>()).then(|| decode_list_item_data(data))
+}
+
+/// A list item can be reparented onto anything, including nothing.
+fn enclosing_list_is_loose(node_id: u32, view: &Arena<Mdast>) -> bool {
+    let parent_id = view.get_node(node_id).parent;
+    if parent_id as usize >= view.len() {
+        return false;
+    }
+    list_data_of(parent_id, view).is_some_and(|d| d.spread)
+        || view
+            .get_children(parent_id)
+            .iter()
+            .any(|&sibling_id| list_item_data_of(sibling_id, view).is_some_and(|d| d.spread))
+}
+
 pub(crate) fn emit_node<S: ConvertSink>(
     node_id: u32,
     ctx: &EmitCtx<'_, '_>,
@@ -252,12 +278,16 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
         }
 
         Some(MdastNodeType::List) => {
-            let list_data = decode_list_data(view.get_type_data(node_id));
-            let tag = if list_data.ordered { "ol" } else { "ul" };
+            let list_data = list_data_of(node_id, view);
+            let tag = if list_data.is_some_and(|d| d.ordered) {
+                "ol"
+            } else {
+                "ul"
+            };
             let has_task_items = list_contains_task_item(node_id, view);
             sink.open_source_element(tag, node_id);
-            if list_data.ordered && list_data.start != 1 {
-                let start = list_data.start.to_string();
+            if let Some(d) = list_data.filter(|d| d.ordered && d.start != 1) {
+                let start = d.start.to_string();
                 sink.attr(START, AttrValue::number(&start));
             }
             if has_task_items {
@@ -270,26 +300,13 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
         }
 
         Some(MdastNodeType::ListItem) => {
-            let data = view.get_type_data(node_id);
-            let item_data = if data.is_empty() {
-                None
-            } else {
-                Some(decode_list_item_data(data))
-            };
-            let task = item_data.filter(|d| d.checked != 2);
+            let task = list_item_data_of(node_id, view).filter(|d| d.checked != 2);
             sink.open_source_element("li", node_id);
             if task.is_some() {
                 sink.attr(CLASS_NAME, AttrValue::class_list("task-list-item"));
             }
             if sink.finish_source_attrs() == Children::Recurse {
-                let parent_id = view.get_node(node_id).parent;
-                let parent_data = view.get_type_data(parent_id);
-                let loose = (!parent_data.is_empty() && decode_list_data(parent_data).spread)
-                    || view.get_children(parent_id).iter().any(|&sibling_id| {
-                        let sd = view.get_type_data(sibling_id);
-                        !sd.is_empty() && decode_list_item_data(sd).spread
-                    });
-                if loose {
+                if enclosing_list_is_loose(node_id, view) {
                     emit_children_with_newlines_task(node_id, task, ctx, sink, depth);
                 } else {
                     emit_children_unwrap_paragraphs_task(node_id, task, ctx, sink, depth);
