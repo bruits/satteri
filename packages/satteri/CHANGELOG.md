@@ -1,5 +1,23 @@
 # satteri
 
+## 0.10.1 — 2026-08-18
+
+### Patch changes
+
+- [1b09752](https://github.com/bruits/satteri/commit/1b09752d04b7e5494b583250330089a6401b377d) Added `{ fragment: true }` to `htmlToHast`, which parses the string as a fragment so the returned `root` holds its own top-level nodes instead of an implied `<html>`/`<head>`/`<body>`.
+  
+  Pass `space: "svg"` alongside it to read the fragment as foreign content, so `<circle />` self-closes and camel-cased tags like `clipPath` keep their casing instead of parsing as unknown HTML elements.
+  
+  ```ts
+  import { htmlToHast } from "satteri";
+  
+  const tree = htmlToHast("<p>hi</p>", { fragment: true });
+  // { type: "root", children: [{ type: "element", tagName: "p", ... }] }
+  
+  const icon = htmlToHast(`<circle cx="1" />`, { fragment: true, space: "svg" });
+  ```
+   — Thanks @Princesseuh!
+
 ## 0.10.0 — 2026-08-18
 
 ### Minor changes
