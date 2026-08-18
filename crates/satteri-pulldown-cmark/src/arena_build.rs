@@ -191,13 +191,12 @@ fn parse_inner(
     // source range lies inside it; the rest get emitted at root.
     //
     // We take ownership of `refdefs_all` instead of cloning each field; the
-    // parser doesn't read it again after this point. Indexes (`refdef_order`)
-    // give source-order traversal without rebuilding string fields. Saves up
-    // to 3 heap allocs per refdef on the parse hot path.
-    let refdefs_owned: Vec<(LinkLabel<'_>, LinkDef<'_>)> =
+    // parser doesn't read it again after this point. Saves up to 3 heap allocs
+    // per refdef on the parse hot path.
+    let mut refdefs_owned: Vec<(LinkLabel<'_>, LinkDef<'_>)> =
         core::mem::take(&mut inner.allocs.refdefs_all);
-    let mut refdef_order: Vec<u32> = (0..refdefs_owned.len() as u32).collect();
-    refdef_order.sort_by_key(|&i| refdefs_owned[i as usize].1.span.start);
+    refdefs_owned.sort_by_key(|(_, def)| def.span.start);
+    let refdef_starts: Vec<usize> = refdefs_owned.iter().map(|(_, d)| d.span.start).collect();
     let mut refdef_emitted: Vec<bool> = vec![false; refdefs_owned.len()];
 
     // An unclosed MDX JSX tag can leave a container's node open past its own tree pop, so its end never gets fixed up.
@@ -477,12 +476,16 @@ fn parse_inner(
                         let orig_start_offset = node.start_offset;
                         // Pull in any refdefs whose source range falls inside
                         // this list item before we evaluate spread / position.
-                        if emit_refdefs_in_container(
+                        if container_may_hold_refdef(
+                            &refdef_starts,
+                            orig_start_offset as usize,
+                            item.end,
+                        ) && emit_refdefs_in_container(
                             &mut builder,
                             &mut cursor,
                             source,
                             &refdefs_owned,
-                            &refdef_order,
+                            &refdef_starts,
                             &mut refdef_emitted,
                             orig_start_offset as usize,
                             item.end,
@@ -733,12 +736,16 @@ fn parse_inner(
                             ItemBody::BlockQuote(..)
                                 | ItemBody::ContainerDirective(..)
                                 | ItemBody::FootnoteDefinition(..)
+                        ) && container_may_hold_refdef(
+                            &refdef_starts,
+                            orig_start as usize,
+                            item.end,
                         ) && emit_refdefs_in_container(
                             &mut builder,
                             &mut cursor,
                             source,
                             &refdefs_owned,
-                            &refdef_order,
+                            &refdef_starts,
                             &mut refdef_emitted,
                             orig_start as usize,
                             item.end,
@@ -1937,12 +1944,10 @@ fn parse_inner(
     // Root-level refdefs: anything not already emitted inside a container.
     // Interleaved with the other root children in source order.
     let mut emitted_any_at_root = false;
-    for &i in &refdef_order {
-        let i = i as usize;
+    for (i, (label, def)) in refdefs_owned.iter().enumerate() {
         if refdef_emitted[i] {
             continue;
         }
-        let (label, def) = &refdefs_owned[i];
         emit_pending_refdef(&mut builder, &mut cursor, source, label, def);
         emitted_any_at_root = true;
     }
@@ -2111,17 +2116,16 @@ fn emit_refdefs_in_container(
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
     refdefs: &[(LinkLabel<'_>, LinkDef<'_>)],
-    order: &[u32],
+    starts: &[usize],
     emitted: &mut [bool],
     container_start: usize,
     container_end: usize,
 ) -> bool {
     let mut any = false;
-    // `order` is sorted by span start, so the container's refdefs are one slice.
-    let lo = order.partition_point(|&i| refdefs[i as usize].1.span.start < container_start);
-    let hi = order.partition_point(|&i| refdefs[i as usize].1.span.start < container_end);
-    for &i in order.get(lo..hi).unwrap_or_default() {
-        let i = i as usize;
+    // `starts` is sorted, so the container's refdefs are one slice.
+    let lo = starts.partition_point(|&s| s < container_start);
+    let hi = starts.partition_point(|&s| s < container_end);
+    for i in lo..hi {
         if emitted[i] {
             continue;
         }
@@ -2131,6 +2135,18 @@ fn emit_refdefs_in_container(
         any = true;
     }
     any
+}
+
+/// Cheap reject before the claim scan: most containers close nowhere near a refdef.
+fn container_may_hold_refdef(
+    starts: &[usize],
+    container_start: usize,
+    container_end: usize,
+) -> bool {
+    match (starts.first(), starts.last()) {
+        (Some(&lo), Some(&hi)) => container_end > lo && container_start <= hi,
+        _ => false,
+    }
 }
 
 /// Normalize wrapped-line leading whitespace inside an inline HTML span:
