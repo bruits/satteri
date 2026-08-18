@@ -130,11 +130,6 @@ impl<'a> AttrValue<'a> {
     pub(crate) fn pooled(value: StringRef) -> Self {
         AttrValue::Pooled(PROP_STRING, value)
     }
-
-    #[inline]
-    pub(crate) fn prefixed(prefix: &'static str, tail: &'a str) -> Self {
-        AttrValue::Prefixed(PROP_STRING, prefix, tail)
-    }
 }
 
 /// Opening is split into `open` / `attr`* / `finish` so one sink can collect a property list while the other streams bytes.
@@ -840,13 +835,17 @@ fn emit_footnote_reference<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, 
         .unwrap_or(1);
     open_plain(sink, "sup", Pos::Node(node_id));
     sink.open_element("a", Pos::Node(node_id));
-    sink.attr(HREF, AttrValue::prefixed("#user-content-fn-", &safe_id));
-    if occurrence > 1 {
-        let id_attr = format!("user-content-fnref-{}-{}", safe_id, occurrence);
-        sink.attr(ID, AttrValue::text(&id_attr));
+    let href = format!("#{}fn-{}", ctx.options.clobber_prefix, safe_id);
+    sink.attr(HREF, AttrValue::text(&href));
+    let id_attr = if occurrence > 1 {
+        format!(
+            "{}fnref-{}-{}",
+            ctx.options.clobber_prefix, safe_id, occurrence
+        )
     } else {
-        sink.attr(ID, AttrValue::prefixed("user-content-fnref-", &safe_id));
-    }
+        format!("{}fnref-{}", ctx.options.clobber_prefix, safe_id)
+    };
+    sink.attr(ID, AttrValue::text(&id_attr));
     sink.attr(DATA_FOOTNOTE_REF, AttrValue::Flag(true));
     sink.attr(ARIA_DESCRIBED_BY, AttrValue::class_list("footnote-label"));
     sink.finish_attrs();
@@ -890,7 +889,8 @@ fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, d
             .expect("footnote identifier missing from collected numbers");
         let safe_id = footnote_fragment_id(identifier);
         sink.open_element("li", Pos::Node(def_id));
-        sink.attr(ID, AttrValue::prefixed("user-content-fn-", &safe_id));
+        let id_attr = format!("{}fn-{}", ctx.options.clobber_prefix, safe_id);
+        sink.attr(ID, AttrValue::text(&id_attr));
         sink.finish_attrs();
         sink.newline();
 
@@ -994,15 +994,12 @@ fn emit_footnote_backrefs<S: ConvertSink>(
         let aria = resolve_backref(&ctx.options.footnote_back_label, number, k);
         let back_content = resolve_backref(&ctx.options.footnote_back_content, number, k);
         sink.open_element("a", Pos::None);
-        if k > 1 {
-            let href = format!("#user-content-fnref-{}-{}", identifier, k);
-            sink.attr(HREF, AttrValue::text(&href));
+        let href = if k > 1 {
+            format!("#{}fnref-{}-{}", ctx.options.clobber_prefix, identifier, k)
         } else {
-            sink.attr(
-                HREF,
-                AttrValue::prefixed("#user-content-fnref-", identifier),
-            );
-        }
+            format!("#{}fnref-{}", ctx.options.clobber_prefix, identifier)
+        };
+        sink.attr(HREF, AttrValue::text(&href));
         sink.attr(DATA_FOOTNOTE_BACKREF, AttrValue::text(""));
         sink.attr(ARIA_LABEL, AttrValue::text(&aria));
         sink.attr(CLASS_NAME, AttrValue::class_list("data-footnote-backref"));

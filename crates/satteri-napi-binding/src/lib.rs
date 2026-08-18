@@ -228,6 +228,9 @@ pub struct JsConvertOptions {
     /// footnote number (`1`) or `number-K` (`1-2`) for repeated references.
     /// Default: `"Back to reference {reference}"`.
     pub footnote_back_label: Option<Either<String, FunctionRef<FnArgs<(u32, u32)>, String>>>,
+    /// Prefix applied to footnote IDs to prevent DOM clobbering.
+    /// Default: `"user-content-"`.
+    pub clobber_prefix: Option<String>,
     /// Reparse raw HTML embedded in markdown into real HAST nodes. Default:
     /// false. Only effective in builds with the `from-html` feature.
     pub raw_html: Option<bool>,
@@ -264,6 +267,9 @@ fn js_convert_options_to_rust(
         }
         if let Some(v) = js.footnote_back_label {
             out.footnote_back_label = js_backref_to_rust(env, v);
+        }
+        if let Some(v) = js.clobber_prefix {
+            out.clobber_prefix = v;
         }
         #[cfg(feature = "from-html")]
         if let Some(v) = js.raw_html {
