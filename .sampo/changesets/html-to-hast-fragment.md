@@ -1,7 +1,7 @@
 ---
-cargo/satteri-ast: minor
-cargo/satteri-napi: minor
-npm/satteri: minor
+cargo/satteri-ast: patch
+cargo/satteri-napi: patch
+npm/satteri: patch
 ---
 
 Added `{ fragment: true }` to `htmlToHast`, which parses the string as a fragment so the returned `root` holds its own top-level nodes instead of an implied `<html>`/`<head>`/`<body>`.
