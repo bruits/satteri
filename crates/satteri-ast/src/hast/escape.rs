@@ -1,4 +1,24 @@
 //! HTML escaping for the HAST renderer.
+//!
+//! The SWAR scanner, the needle folds, and the overlapping tail read are ported
+//! from ox-content and adapted to the needle sets `hast-util-to-html` uses:
+//! <https://github.com/ubugeeei-prod/ox-content/blob/30d64f2b5daec595150c58f4a47aa96bf9b2b056/crates/ox_content_renderer/src/html/escape.rs>
+//!
+//! Copyright (c) 2024 ubugeeei, MIT License. Permission is hereby granted, free
+//! of charge, to any person obtaining a copy of this software and associated
+//! documentation files (the "Software"), to deal in the Software without
+//! restriction, including without limitation the rights to use, copy, modify,
+//! merge, publish, distribute, sublicense, and/or sell copies of the Software,
+//! and to permit persons to whom the Software is furnished to do so, subject to
+//! the following conditions: The above copyright notice and this permission
+//! notice shall be included in all copies or substantial portions of the
+//! Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+//! EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//! MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+//! EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
+//! OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+//! ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+//! DEALINGS IN THE SOFTWARE.
 
 const ONES: u64 = 0x0101_0101_0101_0101;
 const HIGH: u64 = 0x8080_8080_8080_8080;
