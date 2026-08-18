@@ -140,14 +140,14 @@ impl LineIndexCursor<'_, '_> {
         if self.disabled {
             return (0, 0);
         }
+        if offset == self.last_line_col.0 {
+            return self.last_line_col.1;
+        }
         self.offset_to_line_col_tracked(offset)
     }
 
     #[inline(never)]
     fn offset_to_line_col_tracked(&mut self, offset: u32) -> (u32, u32) {
-        if offset == self.last_line_col.0 {
-            return self.last_line_col.1;
-        }
         let (idx, line_start) = self.find_line_idx(offset);
         let col = if self.index.all_ascii || self.index.line_meta[idx].is_ascii {
             offset - line_start + 1
