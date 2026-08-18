@@ -152,6 +152,11 @@ export interface JsConvertOptions {
    */
   footnoteBackLabel?: string | ((arg0: number, arg1: number) => string)
   /**
+   * Prefix applied to footnote IDs to prevent DOM clobbering.
+   * Default: `"user-content-"`.
+   */
+  clobberPrefix?: string
+  /**
    * Reparse raw HTML embedded in markdown into real HAST nodes. Default:
    * false. Only effective in builds with the `from-html` feature.
    */

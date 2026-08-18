@@ -84,6 +84,8 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
             convertOptions.footnoteBackContent = g.footnotes.backContent;
           if (g.footnotes.backLabel !== undefined)
             convertOptions.footnoteBackLabel = g.footnotes.backLabel;
+		  if (g.footnotes.clobberPrefix !== undefined)
+			convertOptions.clobberPrefix = g.footnotes.clobberPrefix;
         } else {
           gfmOpts.footnotes = g.footnotes;
         }
@@ -479,6 +481,8 @@ export interface FootnoteOptions {
    * for each backref.
    */
   backLabel?: string | FootnoteBackrefCallback;
+  /** Prefix applied to footnote IDs to prevent DOM clobbering. Default: `"user-content-"`. */
+  clobberPrefix?: string;
 }
 
 /** Granular GFM toggles, nested under {@link Features.gfm}. */

@@ -84,6 +84,20 @@ markdownToHtml(source, {
 
 Both arguments are 1-based. `referenceNumber` is the footnote number a reader sees; `rerunIndex` is `1` for the first backref to a given definition, `2` for the second, and so on. Callback mode skips the auto-`<sup>K</sup>`: the callback returns the final content for each backref.
 
+Separately, a `clobberPrefix` can be specified (default: `user-content-`) that prefixes all footnote IDs:
+
+```js
+markdownToHtml(source, {
+  features: {
+    gfm: {
+      footnotes: {
+        clobberPrefix: "custom-prefix-"
+      },
+    },
+  },
+});
+```
+
 ## Math
 
 Default: `false`.

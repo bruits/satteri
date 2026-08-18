@@ -291,6 +291,9 @@ pub struct ConvertOptions {
     /// to the same definition, matching remark-rehype's default.
     /// Default: `"Back to reference {reference}"`.
     pub footnote_back_label: Backref,
+	/// Prefix applied to footnote IDs to prevent DOM clobbering.
+    /// Default: `"user-content-"`.
+    pub clobber_prefix: String,
     /// Reparse raw HTML embedded in the converted tree into real HAST nodes
     /// (see [`raw_to_hast_arena`](crate::hast::from_html::raw_to_hast_arena)).
     /// Applied as the final conversion step so every pipeline that converts
@@ -316,6 +319,7 @@ impl Default for ConvertOptions {
             footnote_label: "Footnotes".to_string(),
             footnote_back_content: Backref::Template("\u{21a9}".to_string()),
             footnote_back_label: Backref::Template("Back to reference {reference}".to_string()),
+			clobber_prefix: "user-content-".to_string(),
             #[cfg(feature = "from-html")]
             raw_html: false,
         }
