@@ -295,11 +295,9 @@ fn parse_inner(
                             }
                             let sr = builder.alloc_string(&content);
                             let id = builder.current_node_id();
-                            let existing_data = builder.arena_ref().get_type_data(id).to_vec();
-                            if existing_data.len() >= 16 {
-                                let mut data = existing_data;
+                            let data = builder.arena_mut().get_type_data_mut(id);
+                            if data.len() >= 24 {
                                 data[16..24].copy_from_slice(&sr.as_bytes());
-                                builder.set_data_current(&data);
                             }
                             let mut code_end = end;
                             let mut code_end_line = end_line;
@@ -318,22 +316,19 @@ fn parse_inner(
                                 let (el, ec) = cursor.offset_to_line_col(code_end);
                                 code_end_line = el;
                                 code_end_col = ec;
-                                if ext.extra_blank_lines > 0 {
-                                    let id = builder.current_node_id();
-                                    let mut data = builder.arena_ref().get_type_data(id).to_vec();
-                                    if data.len() >= 24 {
-                                        let mut extended = String::with_capacity(
-                                            content.len() + ext.extra_blank_lines,
-                                        );
-                                        extended.push_str(&content);
-                                        for _ in 0..ext.extra_blank_lines {
-                                            extended.push('\n');
-                                        }
-                                        let sr2 = builder.alloc_string(&extended);
-                                        data = builder.arena_ref().get_type_data(id).to_vec();
-                                        data[16..24].copy_from_slice(&sr2.as_bytes());
-                                        builder.set_data_current(&data);
+                                if ext.extra_blank_lines > 0
+                                    && builder.arena_ref().get_type_data(id).len() >= 24
+                                {
+                                    let mut extended = String::with_capacity(
+                                        content.len() + ext.extra_blank_lines,
+                                    );
+                                    extended.push_str(&content);
+                                    for _ in 0..ext.extra_blank_lines {
+                                        extended.push('\n');
                                     }
+                                    let sr2 = builder.alloc_string(&extended);
+                                    builder.arena_mut().get_type_data_mut(id)[16..24]
+                                        .copy_from_slice(&sr2.as_bytes());
                                 }
                             }
                             let node = builder.arena_ref().get_node(id);
@@ -428,16 +423,14 @@ fn parse_inner(
                             let alt_ref = builder.alloc_string(&alt_text);
                             let id = builder.current_node_id();
                             let node_type = builder.arena_ref().get_node(id).node_type;
-                            let existing_data = builder.arena_ref().get_type_data(id).to_vec();
                             let is_image_ref = node_type == MdastNodeType::ImageReference as u8;
-                            if is_image_ref && existing_data.len() >= 28 {
-                                let mut data = existing_data;
-                                data[20..28].copy_from_slice(&alt_ref.as_bytes());
-                                builder.set_data_current(&data);
-                            } else if !is_image_ref && existing_data.len() >= 24 {
-                                let mut data = existing_data;
+                            let data = builder.arena_mut().get_type_data_mut(id);
+                            if is_image_ref {
+                                if data.len() >= 28 {
+                                    data[20..28].copy_from_slice(&alt_ref.as_bytes());
+                                }
+                            } else if data.len() >= 24 {
                                 data[8..16].copy_from_slice(&alt_ref.as_bytes());
-                                builder.set_data_current(&data);
                             }
                         }
                         let id = builder.current_node_id();
@@ -520,11 +513,9 @@ fn parse_inner(
                             found
                         };
                         if is_spread {
-                            let existing = builder.arena_ref().get_type_data(id).to_vec();
-                            if existing.len() >= 2 {
-                                let mut data = existing;
-                                data[1] = 1; // spread = true
-                                builder.set_data_current(&data);
+                            let data = builder.arena_mut().get_type_data_mut(id);
+                            if data.len() >= 2 {
+                                data[1] = 1;
                             }
                         }
                         let node = builder.arena_ref().get_node(id);
@@ -631,11 +622,9 @@ fn parse_inner(
                             found
                         };
                         if has_blank_between_items {
-                            let existing = builder.arena_ref().get_type_data(id).to_vec();
-                            if existing.len() >= 8 && existing[5] == 0 {
-                                let mut data = existing;
+                            let data = builder.arena_mut().get_type_data_mut(id);
+                            if data.len() >= 8 {
                                 data[5] = 1;
-                                builder.arena_mut().set_type_data(id, &data);
                             }
                         }
                         // Already closed above; skip the common close_node path.
@@ -1729,14 +1718,17 @@ fn parse_inner(
                                 && builder.arena_ref().get_node(node_id).node_type
                                     == MdastNodeType::ListItem as u8
                             {
-                                let prev = builder.arena_ref().get_type_data(node_id).to_vec();
-                                let prev_spread = prev.get(1).copied().unwrap_or(0) != 0;
-                                let data = ListItemData {
-                                    checked: checked_val,
-                                    spread: prev_spread,
+                                let data = builder.arena_mut().get_type_data_mut(node_id);
+                                if data.len() >= 2 {
+                                    data[0] = checked_val;
+                                } else {
+                                    let fresh = ListItemData {
+                                        checked: checked_val,
+                                        spread: false,
+                                    }
+                                    .to_bytes();
+                                    builder.arena_mut().set_type_data(node_id, &fresh);
                                 }
-                                .to_bytes();
-                                builder.arena_mut().set_type_data(node_id, &data);
                                 break;
                             }
                         }
