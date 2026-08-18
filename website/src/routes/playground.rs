@@ -135,6 +135,8 @@ fn features_fieldset() -> Markup {
             label.pg-label { input type="checkbox" #feat-superscript; " Superscript" }
             label.pg-label { input type="checkbox" #feat-subscript; " Subscript" }
             label.pg-label { input type="checkbox" #feat-wikilinks; " Wikilinks" }
+            label.pg-label { input type="checkbox" #feat-definition-list; " Definition lists" }
+            label.pg-label { input type="checkbox" #feat-raw-html; " Raw HTML" }
             label.pg-label { input type="checkbox" #feat-smart-punctuation; " Smart punctuation" }
             fieldset #smart-punct-options .pg-subfieldset.hidden {
                 label.pg-label { input type="checkbox" #feat-smart-quotes checked; " Quotes" }
@@ -173,10 +175,36 @@ fn mdx_options_fieldset() -> Markup {
                 input type="text" #mdx-provider-import-source value="" placeholder="none" .pg-input;
             }
             label.pg-label-stack {
+                "pragma"
+                input type="text" #mdx-pragma value="" placeholder="React.createElement (default)" .pg-input;
+            }
+            label.pg-label-stack {
+                "pragmaFrag"
+                input type="text" #mdx-pragma-frag value="" placeholder="React.Fragment (default)" .pg-input;
+            }
+            label.pg-label-stack {
+                "pragmaImportSource"
+                input type="text" #mdx-pragma-import-source value="" placeholder="react (default)" .pg-input;
+            }
+            label.pg-label-stack {
                 "outputFormat"
                 select #mdx-output-format .pg-input {
                     option value="program" selected { "program" }
                     option value="function-body" { "function-body" }
+                }
+            }
+            label.pg-label-stack {
+                "elementAttributeNameCase"
+                select #mdx-element-attribute-name-case .pg-input {
+                    option value="react" selected { "react" }
+                    option value="html" { "html" }
+                }
+            }
+            label.pg-label-stack {
+                "stylePropertyNameCase"
+                select #mdx-style-property-name-case .pg-input {
+                    option value="dom" selected { "dom" }
+                    option value="css" { "css" }
                 }
             }
         }
