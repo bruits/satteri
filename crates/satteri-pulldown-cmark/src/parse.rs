@@ -1403,8 +1403,10 @@ impl<'input> ParserInner<'input> {
                             let first_bracket_end = self.tree[cur_ix].item.end;
                             let first_bracket_text =
                                 &self.text[first_bracket_start..first_bracket_end];
-                            if let Some((_, ReferenceLabel::Footnote(footlabel))) =
+                            if let Some((label_len, ReferenceLabel::Footnote(footlabel))) =
                                 scan_link_label(&self.tree, first_bracket_text, self.options)
+                                // A code span can swallow the label's `]`, leaving `cur_ix` on a later one.
+                                && label_len == first_bracket_text.len()
                                 && self.allocs.footdefs.contains(&footlabel)
                             {
                                 let footref = self.allocs.allocate_cow(footlabel);
@@ -2167,9 +2169,10 @@ impl<'input> ParserInner<'input> {
             return false;
         };
         // micromark ends a footnote call at whitespace, where the shared label scan collapses it.
-        !label_text.as_bytes()[..len]
-            .iter()
-            .any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+        len == label_text.len()
+            && !label_text.as_bytes()[..len]
+                .iter()
+                .any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
             && self.allocs.footdefs.contains(&label)
     }
 
