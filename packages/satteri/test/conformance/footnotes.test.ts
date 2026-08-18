@@ -142,9 +142,26 @@ describe("GFM footnote identifier conformance (vs remark-rehype)", () => {
     assertFootnoteHastConformance("One[^a<b] two[^a>b].\n\n[^a<b]: Less.\n\n[^a>b]: Greater.\n");
   });
 
-  // The paired backticks become a code span for satteri, losing the second reference.
+  test("identifier punctuation that opens an inline construct stays inert", () => {
+    for (const id of ["a*b", "a_b", "a~b", "a[b", "a]b", "a<b", "a>b", "a$b", "a!b", "a\\b"]) {
+      assertFootnoteHastConformance(`Once[^${id}] and twice[^${id}].\n\n[^${id}]: Note.\n`);
+    }
+  });
+
+  test("emphasis around two references on one line keeps both", () => {
+    assertFootnoteHastConformance("*Once[^a*b] and twice[^a*b]*.\n\n[^a*b]: Note.\n");
+  });
+
+  // Divergence: CommonMark gives code spans precedence, so the backticks pair and
+  // satteri emits `Once[^a<code>b] and twice[^a</code>b].` — GitHub also produces no
+  // reference here. remark scans footnote calls before code spans, so it keeps both.
   test.fails("two backtick identifiers on one line keep both references", () => {
     assertFootnoteHastConformance("Once[^a`b] and twice[^a`b].\n\n[^a`b]: Note.\n");
+  });
+
+  test("a backtick identifier is a reference when the backticks cannot pair", () => {
+    assertFootnoteHastConformance("Once[^a`b] end.\n\n[^a`b]: Note.\n");
+    assertFootnoteHastConformance("A `code` then[^a`b].\n\n[^a`b]: Note.\n");
   });
 });
 
