@@ -10,7 +10,7 @@
   "dependencies": {
     "@pagefind/component-ui": "^1.5.2",
     "@tailwindcss/cli": "^4.1.18",
-    "satteri": "^0.9.4",
+    "satteri": "^0.10.1",
     "shiki": "^4.0.2",
     "tailwindcss": "^4.1.18"
   },

@@ -10,6 +10,10 @@ allowBuilds:
   sharp: true
   workerd: true
 
+minimumReleaseAgeExclude:
+  - satteri
+  - '@bruits/*'
+
 supportedArchitectures:
   cpu:
     - current
