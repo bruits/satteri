@@ -1,5 +1,72 @@
 # satteri-ast
 
+## 0.5.0 — 2026-08-18
+
+### Minor changes
+
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Editing a node that belongs to a different document (a node kept from a previous compile, or an mdast node used in a hast plugin) now fails the compile with `invalid node id`. A few pathological edits now throw `unsupported patch shape`, most notably replacing a node with new content that reuses that same node while another plugin edits something inside it in the same pass, and inserting a sibling next to the root.
+  
+  Edits to nodes that another plugin removed in the same pass are still just dropped with a warning, and replacing, removing, or wrapping the root keeps working. — Thanks @Princesseuh!
+- [2b85f56](https://github.com/bruits/satteri/commit/2b85f5602fc3340eef9faa3e41c66ff0a03ec8af) Adds `{ raw }` support to `wrapNode()` in HAST plugins: the HTML is parsed and the node is wrapped in the resulting element. — Thanks @Princesseuh!
+- [eeb7f07](https://github.com/bruits/satteri/commit/eeb7f0778a7af229fd592dd027ddfe0723ba2b26) Faster parsing, MDX compilation, and plugin execution. — Thanks @Princesseuh!
+- [d8b7172](https://github.com/bruits/satteri/commit/d8b71724ba3a6bfcad24265c5b1d021b1de1eaa0) Adds a `definitionList` feature (off by default) that renders definition lists to `<dl>`/`<dt>`/`<dd>`.
+  
+  New `descriptionList` / `descriptionTerm` / `descriptionDetails` nodes are available to plugins when this option is enabled.
+  
+  ```text
+  Apple
+  :   Pomaceous fruit.
+  :   A tech company.
+  ```
+   — Thanks @lolifamily for your first contribution 🎉!
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added a `rawHtml` feature that reparses raw HTML embedded in Markdown into real HAST nodes. Enable it with `features: { rawHtml: true }` on any entry point; it is applied during the MDAST→HAST conversion, so `markdownToHast`, `markdownToHtml`, and the plugin pipelines all reparse identically, and hast plugins always see the reparsed elements.
+  
+  The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Attributes are normalized into typed hast properties (`class` → `className: [...]`, `disabled` → `true`, `tabindex` → number, `data-foo-bar` → `dataFooBar`). `htmlToHast` normalizes properties the same way.
+  
+  MDX nodes are passed through the reparse rather than dropped: each JSX element/expression is preserved in place while the surrounding raw HTML is still resolved around it. So `mdxToHast(source, { features: { rawHtml: true } })` keeps its MDX content.
+  
+  ```ts
+  import { markdownToHast } from "satteri";
+  
+  const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
+    features: { rawHtml: true },
+  });
+  // <div> is a real element wrapping <p><strong>hi</strong></p>
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+- [d8639d6](https://github.com/bruits/satteri/commit/d8639d64efa50f2adf2f88f6a4928559d2a30836) Added `htmlToHast`, which parses an HTML string into a HAST tree (elements, text, comments, doctype) with the same spec-compliant parsing a browser does. The result is a `root` wrapping the implied `<html>` subtree.
+  
+  ```ts
+  import { htmlToHast } from "satteri";
+  
+  const tree = htmlToHast("<p>hi</p>");
+  // { type: "root", children: [{ type: "element", tagName: "html", ... }] }
+  ```
+   — Thanks @IEvangelist for your first contribution 🎉!
+- [137ff48](https://github.com/bruits/satteri/commit/137ff48da7d4a7422cadb3c82b9b7e987aa87e23) Faster across the board: parsing is ~10% cheaper, editing the tree from plugins now costs proportionally to how much you change rather than how big the document is (3 edits on a 115KB document: ~160µs → under 50µs), reading nodes inside plugins is 40-75% faster, and memory stays flat under sustained workloads. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [ac99c4f](https://github.com/bruits/satteri/commit/ac99c4f9ecf4e2fa3b5eb1dbf069160f1ba7a6f1) Improved HTML rendering performance with faster character escaping. — Thanks @Princesseuh!
+- [ac99c4f](https://github.com/bruits/satteri/commit/ac99c4f9ecf4e2fa3b5eb1dbf069160f1ba7a6f1) Improved Markdown to HTML performance when no HAST plugins run and nothing sets `hName`, `hProperties`, or `hChildren` (which heading attributes do). — Thanks @Princesseuh!
+- [f868e26](https://github.com/bruits/satteri/commit/f868e26e8c07a5e30b90b16b554835f73f37d0c0) Fixed React-cased SVG property names like `strokeLinecap` and `strokeLinejoin` leaking into HTML output as-is instead of serializing as `stroke-linecap` / `stroke-linejoin`. — Thanks @gtritchie!
+- [7e9ac4c](https://github.com/bruits/satteri/commit/7e9ac4c38b7cd4ede2eaf4353765d74e905e45ba) Fixed very deeply nested documents crashing the process instead of compiling. — Thanks @Princesseuh!
+- [0d26ea6](https://github.com/bruits/satteri/commit/0d26ea6d68a29d4de8419423e030076244348c22) Changed the minimum supported Rust version to 1.85, as these crates now build on the 2024 edition. — Thanks @Princesseuh!
+- [6a1eaec](https://github.com/bruits/satteri/commit/6a1eaecb25e442d26bc6ee90ac63bdd28c4bd465) Fixed `wrapNode()` not accepting the `{ raw }` shape that every other structural mutator takes. — Thanks @Princesseuh!
+- [2e3ed23](https://github.com/bruits/satteri/commit/2e3ed23aa0e2489c4ce667cb39eb29259664692d) Faster Markdown-to-HTML rendering, most noticeably on prose-heavy documents where GFM autolink scanning dominated: a 200KB CommonMark document renders about 7% faster end to end. — Thanks @Princesseuh!
+- [c9ea0c9](https://github.com/bruits/satteri/commit/c9ea0c9e59d7e71afb6be97b378e787b0f3c96a8) Adds user-defined MDAST node types. A plugin can create a node with any `type` string, render it as an element through `data.hName` (or as text from a `value`), and reach every one of them from the new `custom` visitor key. Content nested inside a custom node stays visible to other plugins and to the HTML output. — Thanks @Princesseuh!
+- [9a164f1](https://github.com/bruits/satteri/commit/9a164f110f2d01c525f9f5c03376508bd227e860) Fixes footnotes being ignored inside directives. A footnote reference nested in a rendered directive (e.g. `:::note … [^id] … :::`) now works like anywhere else (it renders as a footnote link and its definition appears in the footnotes section) instead of being left as literal `[^id]` text. — Thanks @Princesseuh!
+- [2b85f56](https://github.com/bruits/satteri/commit/2b85f5602fc3340eef9faa3e41c66ff0a03ec8af) Fixed `wrapNode()` silently misplacing or dropping the node when given a parent that cannot hold children: an `html` node, a leaf-shaped custom node, or a void element like `<img>`. These now throw an error explaining what to use instead, and `parentNode` only accepts parent-capable nodes in TypeScript, so most of them are caught before running.
+  
+  Wrapping in a container is unchanged: `blockquote` and friends, a HAST element, an MDX JSX element, a custom node declaring a `children` array, and the root itself all keep working. — Thanks @Princesseuh!
+- [58add58](https://github.com/bruits/satteri/commit/58add589d8d9dc1c9a774e07519f0e3e7119df34) Fixed nodes created from raw string splices reporting garbage positions; they now report no position, like other plugin-created nodes. — Thanks @Princesseuh!
+- [9bb585d](https://github.com/bruits/satteri/commit/9bb585d90298f647c4b85babe520e92b5b40c527) Fixed edits to a node another plugin removed being dropped silently instead of with the documented warning. — Thanks @Princesseuh!
+- [6696c1c](https://github.com/bruits/satteri/commit/6696c1c28b3024c5c8df760cc5af51dd713663fc) Fixed `position` offsets being wrong in documents with multibyte characters. — Thanks @Princesseuh!
+- [291369a](https://github.com/bruits/satteri/commit/291369a71fddf3fc6be272ca799d51422fcb88e3) Fixed edits to a node kept from a previous compile silently changing an unrelated node instead of failing with `invalid node id`. — Thanks @Princesseuh!
+- [abe1ee9](https://github.com/bruits/satteri/commit/abe1ee90dfe25dca52d98169c170d9ed138e28ea) Fixed documents that use standalone carriage returns (`\r`) as line endings parsing differently from documents that use `\n`. Values such as inline code and definition titles now keep the document's own line endings instead of always reporting `\n`. — Thanks @Princesseuh!
+- [ac2b172](https://github.com/bruits/satteri/commit/ac2b17274772147a15863439c0484861f656cc13) Fixed fenced code block `lang` and `meta` splitting on whitespace that a character reference produced. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.0, satteri-property-info (Cargo)@0.2.0
+
 ## 0.4.2 — 2026-07-08
 
 ### Patch changes
