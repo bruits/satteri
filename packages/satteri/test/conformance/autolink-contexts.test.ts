@@ -230,6 +230,19 @@ describe("family E: brackets around a trigger", () => {
   ])("%j", conforms);
 });
 
+describe("family E: trigger casing on the bracket-blocked path", () => {
+  test.each([
+    ["[WWW.EXAMPLE.COM", ["http://WWW.EXAMPLE.COM"]],
+    ["[Www.Example.Com", ["http://Www.Example.Com"]],
+    ["[wWw.example.com", ["http://wWw.example.com"]],
+    ["[HTTP://EXAMPLE.COM", ["HTTP://EXAMPLE.COM"]],
+    ["[HtTp://Example.com/a", ["HtTp://Example.com/a"]],
+    ["[HTTPS://EXAMPLE.COM", ["HTTPS://EXAMPLE.COM"]],
+    ["[hTtPs://example.com", ["hTtPs://example.com"]],
+    ["[A.B@C.DE", ["mailto:A.B@C.DE"]],
+  ])("%j", conforms);
+});
+
 describe("family E: escapes", () => {
   test.each([
     ["\\www.example.com", ["http://www.example.com"]],
