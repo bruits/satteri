@@ -84,6 +84,7 @@ impl<T: Default> Tree<T> {
     }
 
     /// Append one item to the current position in the tree.
+    #[inline]
     pub(crate) fn append(&mut self, item: T) -> TreeIndex {
         let ix = self.create_node(item);
         let this = Some(ix);
@@ -98,6 +99,7 @@ impl<T: Default> Tree<T> {
     }
 
     /// Create an isolated node.
+    #[inline]
     pub(crate) fn create_node(&mut self, item: T) -> TreeIndex {
         let this = self.nodes.len();
         self.nodes.push(Node {
