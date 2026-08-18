@@ -221,6 +221,11 @@ fn emit_h_child(builder: &mut ArenaBuilder<Hast>, child: &serde_json::Value) {
     }
 }
 
+/// remark lowercases the identifier so fragment targets resist collisions across source casing.
+pub(crate) fn footnote_fragment_id(identifier: &str) -> String {
+    normalize_url(&identifier.to_ascii_lowercase()).into_owned()
+}
+
 #[inline]
 pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
     let bytes = url.as_bytes();

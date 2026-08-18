@@ -4,7 +4,7 @@ use satteri_arena::{Arena, Mdast, StringRef, decode_string_ref_data};
 
 use crate::convert::{
     Backref, CollectedRefs, ConvertOptions, code_span_line_endings_to_spaces, extract_text_content,
-    list_contains_task_item, normalize_url, resolve_backref,
+    footnote_fragment_id, list_contains_task_item, normalize_url, resolve_backref,
 };
 use crate::mdast::{
     ColumnAlign, ListData, ListItemData, MdastNodeType, decode_code_data, decode_custom_data,
@@ -831,8 +831,7 @@ fn emit_footnote_reference<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, 
         sink.text(&format!("[^{}]", identifier), Pos::None);
         return;
     };
-    // remark lowercases the identifier so fragment targets resist collisions across source casing.
-    let safe_id = identifier.to_ascii_lowercase();
+    let safe_id = footnote_fragment_id(identifier);
     let occurrence = ctx
         .refs
         .footnote_ref_occurrence
@@ -889,7 +888,7 @@ fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, d
             .as_ref()
             .and_then(|m| m.get(identifier).copied())
             .expect("footnote identifier missing from collected numbers");
-        let safe_id = identifier.to_ascii_lowercase();
+        let safe_id = footnote_fragment_id(identifier);
         sink.open_element("li", Pos::Node(def_id));
         sink.attr(ID, AttrValue::prefixed("user-content-fn-", &safe_id));
         sink.finish_attrs();
