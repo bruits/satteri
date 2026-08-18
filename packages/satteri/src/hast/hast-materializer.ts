@@ -11,6 +11,7 @@ import {
   HAST_MDX_TEXT_EXPRESSION,
   HAST_MDX_ESM,
 } from "./hast-reader.js";
+import type { HastProperty } from "./hast-reader.js";
 import type { Root } from "hast";
 import type { HastNode } from "../types.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
@@ -33,16 +34,12 @@ const hastMaterializer = createMaterializer<HastReader, HastNode>({
   hasChildren: (nodeType) => HAST_CONTAINER_TYPES.has(nodeType),
   populate(node, reader, nodeId, nodeType) {
     switch (nodeType) {
-      case HAST_ELEMENT: {
-        (node as { tagName: string }).tagName = reader.getElementTagName(nodeId);
-        const count = reader.getElementPropCount(nodeId);
-        const properties: Record<string, unknown> = {};
-        for (let i = 0; i < count; i++) {
-          properties[reader.getElementPropName(nodeId, i)] = reader.getElementPropValue(nodeId, i);
-        }
-        (node as { properties: unknown }).properties = properties;
+      case HAST_ELEMENT:
+        reader.readElementInto(
+          nodeId,
+          node as { tagName: string; properties: Record<string, HastProperty["value"]> },
+        );
         break;
-      }
 
       case HAST_TEXT:
       case HAST_COMMENT:

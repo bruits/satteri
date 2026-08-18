@@ -10,10 +10,8 @@ import type { NodeRefs } from "./visitor-shared.js";
 
 /** The reader surface the shared machinery needs; both `HastReader` and `MdastReader` satisfy it. */
 export interface MaterializerReader {
-  readonly nodeCount: number;
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
-  pushChildIds(nodeId: number, stack: number[]): void;
   getPosition(nodeId: number): Position | undefined;
   getNodeData(nodeId: number): string | null;
 }
@@ -67,7 +65,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     const cache = readerCache(reader, frozen, refs);
     let node = cache.nodes.get(nodeId);
     if (node === undefined) {
-      node = buildNode(reader, cache, nodeId);
+      node = buildNode(reader, cache, nodeId, reader.getNodeType(nodeId));
       cache.nodes.set(nodeId, node);
     }
     return node;
@@ -144,9 +142,9 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     reader: TReader,
     cache: ReaderCache<TNode>,
     nodeId: number,
+    nodeType: number,
     eager = false,
   ): TNode {
-    const nodeType = reader.getNodeType(nodeId);
     const typeName = spec.typeNames[nodeType] ?? `unknown(${nodeType})`;
 
     // Plain object, not a class: unified's `assertNode` rejects any other prototype.
@@ -218,42 +216,36 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
    * Iterative on purpose: recursing to full document depth overflows on deeply
    * nested input, and nothing else here descends more than one level.
    *
-   * Node ids are dense, so nodes live in a flat array rather than the memo Map:
-   * one Map entry per node would outlive the whole build and reach old space,
-   * where the tree is already the dominant cost.
+   * Breadth-first over the parents still to fill, so every node is built and
+   * every child list decoded exactly once, and a child is wired into its
+   * parent's array as it is built rather than in a second pass.
    */
   function fillTree(reader: TReader, cache: ReaderCache<TNode>, rootId: number): TNode {
-    const byId = new Array<TNode | undefined>(reader.nodeCount);
-    const parents: number[] = [];
-    const stack: number[] = [rootId];
-    const root = buildNode(reader, cache, rootId, true);
-    byId[rootId] = root;
+    const rootType = reader.getNodeType(rootId);
+    const root = buildNode(reader, cache, rootId, rootType, true);
+    if (!spec.hasChildren(rootType, root, reader, rootId)) return root;
 
-    for (;;) {
-      const id = stack.pop();
-      if (id === undefined) break;
-      let node = byId[id];
-      if (node === undefined) {
-        node = buildNode(reader, cache, id, true);
-        byId[id] = node;
-      }
-      if (spec.hasChildren(reader.getNodeType(id), node, reader, id)) {
-        parents.push(id);
-        reader.pushChildIds(id, stack);
-      }
-    }
-
-    for (const id of parents) {
-      const ids = reader.getChildIds(id);
+    const parents: TNode[] = [root];
+    const parentIds: number[] = [rootId];
+    for (let p = 0; p < parentIds.length; p++) {
+      const parent = parents[p];
+      const parentId = parentIds[p];
+      if (parent === undefined || parentId === undefined) continue;
+      const ids = reader.getChildIds(parentId);
       const kids = new Array<TNode>(ids.length);
-      let i = 0;
-      for (const childId of ids) {
-        const kid = byId[childId];
-        if (kid !== undefined) kids[i] = kid;
-        i++;
+      for (let i = 0; i < ids.length; i++) {
+        const childId = ids[i];
+        if (childId === undefined) continue;
+        const childType = reader.getNodeType(childId);
+        const child = buildNode(reader, cache, childId, childType, true);
+        kids[i] = child;
+        if (spec.hasChildren(childType, child, reader, childId)) {
+          parents.push(child);
+          parentIds.push(childId);
+        }
       }
       // Assignment beats defineProperty here; `eager` left `children` uninstalled.
-      (byId[id] as { children?: TNode[] }).children = kids;
+      (parent as { children?: TNode[] }).children = kids;
     }
 
     return root;

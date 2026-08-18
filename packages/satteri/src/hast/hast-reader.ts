@@ -241,6 +241,32 @@ export class HastReader {
     return this.getString(this.#view.getUint32(at, true), this.#view.getUint32(at + 4, true));
   }
 
+  /** @internal Both element fields in one pass; the per-field accessors below
+   *  each re-resolve the node's `type_data` position. */
+  readElementInto(
+    nodeId: number,
+    node: { tagName: string; properties: Record<string, HastProperty["value"]> },
+  ): void {
+    const at = this.#typeDataAt(nodeId, 16);
+    if (at === -1) {
+      node.tagName = "";
+      node.properties = {};
+      return;
+    }
+    const v = this.#view;
+    node.tagName = this.#stringAt(at);
+    const count = v.getUint32(at + 8, true);
+    const properties: Record<string, HastProperty["value"]> = {};
+    for (let i = 0; i < count; i++) {
+      const base = at + 16 + i * 20;
+      properties[this.#stringAt(base)] = decodeElementProp(
+        v.getUint8(base + 8),
+        this.#stringAt(base + 12),
+      );
+    }
+    node.properties = properties;
+  }
+
   /** Element `tagName`, `properties` count, and the i-th property, read without
    *  building the intermediate views and records `getElementData` allocates. */
   getElementTagName(nodeId: number): string {
