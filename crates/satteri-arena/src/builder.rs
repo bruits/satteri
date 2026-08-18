@@ -84,9 +84,12 @@ impl<K: ArenaKind> ArenaBuilder<K> {
         let node = &mut self.arena.nodes[node_id as usize];
         node.children_start = arena_start;
         node.children_count = (self.pending_children.len() - children_start) as u32;
-        for i in children_start..self.pending_children.len() {
-            self.arena.nodes[self.pending_children[i] as usize].parent = node_id;
-        }
+        debug_assert!(
+            self.pending_children[children_start..]
+                .iter()
+                .all(|&child| self.arena.nodes[child as usize].parent == node_id),
+            "a pending child is registered with its parent when it is added"
+        );
 
         // Truncate the pending buffer back to where this frame started.
         self.pending_children.truncate(children_start);
