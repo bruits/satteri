@@ -200,6 +200,9 @@ fn parse_inner(
     refdef_order.sort_by_key(|&i| refdefs_owned[i as usize].1.span.start);
     let mut refdef_emitted: Vec<bool> = vec![false; refdefs_owned.len()];
 
+    // An unclosed MDX JSX tag can leave a container's node open past its own tree pop, so its end never gets fixed up.
+    let defer_container_end = track_positions && !options.contains(Options::ENABLE_MDX);
+
     // Walk the tree iteratively.
     loop {
         match inner.tree.cur() {
@@ -817,7 +820,12 @@ fn parse_inner(
                 let start = item.start as u32;
                 let end = item.end as u32;
                 let (start_line, start_col) = cursor.offset_to_line_col(start);
-                let (end_line, end_col) = cursor.offset_to_line_col(end);
+                let (end_line, end_col) =
+                    if defer_container_end && opens_repositioned_node(&item.body) {
+                        (0, 0)
+                    } else {
+                        cursor.offset_to_line_col(end)
+                    };
 
                 // If we're accumulating content for an HTML/code block, handle it.
                 if let Some(buf) = html_block_buf.as_mut() {
@@ -2008,6 +2016,45 @@ fn parse_inner(
 
     (arena, mdx_errors)
 }
+
+/// Nodes the walk opens and descends into: the tree pop rewrites their end, so an open-time end line/column is dead.
+fn opens_repositioned_node(body: &ItemBody) -> bool {
+    use ItemBody::*;
+    matches!(
+        body,
+        Paragraph
+            | TightParagraph
+            | DirectiveLabel
+            | Heading(..)
+            | BlockQuote(_)
+            | MathBlock(_)
+            | FencedCodeBlock(_)
+            | IndentCodeBlock(_)
+            | List(..)
+            | ListItem(..)
+            | Table(_)
+            | TableHead
+            | TableRow
+            | TableCell
+            | Emphasis
+            | Strong
+            | Strikethrough
+            | Superscript
+            | Subscript
+            | Link(_)
+            | Image(_)
+            | FootnoteDefinition(_)
+            | HtmlBlock(_)
+            | MetadataBlock(_)
+            | DefinitionList(_)
+            | DefinitionListTitle
+            | DefinitionListDefinition(..)
+            | ContainerDirective(..)
+            | LeafDirective(_)
+            | TextDirective(_)
+    )
+}
+
 fn emit_pending_refdef(
     builder: &mut ArenaBuilder<Mdast>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
