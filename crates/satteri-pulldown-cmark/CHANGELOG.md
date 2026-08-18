@@ -1,5 +1,12 @@
 # satteri-pulldown-cmark
 
+## 0.6.2 — 2026-08-18
+
+### Patch changes
+
+- [c363b97](https://github.com/bruits/satteri/commit/c363b97ed83c548662eabf3d81011744a7915d6b) Fixed text being dropped when one paragraph held two footnote references whose identifier contains a backtick, or a `$` with the math feature enabled. The words between the two references, and the second reference itself, are no longer swallowed. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.5.2
+
 ## 0.6.1 — 2026-08-18
 
 ### Patch changes
