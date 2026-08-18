@@ -199,8 +199,9 @@ fn parse_inner(
     let refdef_starts: Vec<usize> = refdefs_owned.iter().map(|(_, d)| d.span.start).collect();
     let mut refdef_emitted: Vec<bool> = vec![false; refdefs_owned.len()];
 
+    let mdx = options.contains(Options::ENABLE_MDX);
     // An unclosed MDX JSX tag can leave a container's node open past its own tree pop, so its end never gets fixed up.
-    let defer_container_end = track_positions && !options.contains(Options::ENABLE_MDX);
+    let defer_container_end = track_positions && !mdx;
 
     // Walk the tree iteratively.
     loop {
@@ -961,7 +962,9 @@ fn parse_inner(
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        paragraph_open_depth.push(builder.stack_depth());
+                        if mdx {
+                            paragraph_open_depth.push(builder.stack_depth());
+                        }
                         inner.tree.push();
                     }
                     ItemBody::DirectiveLabel => {
@@ -976,7 +979,9 @@ fn parse_inner(
                         builder
                             .arena_mut()
                             .set_node_data(para_id, b"{\"directiveLabel\":true}".to_vec());
-                        paragraph_open_depth.push(builder.stack_depth());
+                        if mdx {
+                            paragraph_open_depth.push(builder.stack_depth());
+                        }
                         inner.tree.push();
                     }
                     ItemBody::Heading(level, heading_ix) => {
@@ -1002,7 +1007,10 @@ fn parse_inner(
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        container_jsx_snapshot.push((MdastNodeType::Blockquote, jsx_stack.len()));
+                        if mdx {
+                            container_jsx_snapshot
+                                .push((MdastNodeType::Blockquote, jsx_stack.len()));
+                        }
                         inner.tree.push();
                     }
                     ItemBody::MathBlock(_) => {
@@ -1084,7 +1092,9 @@ fn parse_inner(
                             start, end, start_line, start_col, end_line, end_col,
                         );
                         builder.set_data_current(&ListItemData { checked: 2, spread }.to_bytes());
-                        container_jsx_snapshot.push((MdastNodeType::ListItem, jsx_stack.len()));
+                        if mdx {
+                            container_jsx_snapshot.push((MdastNodeType::ListItem, jsx_stack.len()));
+                        }
                         inner.tree.push();
                     }
                     ItemBody::Table(align_ix) => {
