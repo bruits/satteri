@@ -3,14 +3,11 @@
 use rustc_hash::FxHashMap;
 use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, StringRef, decode_string_ref_data};
 
+use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
 use crate::hast::HastNodeType;
-use crate::hast::codec::encode_element_data_into;
 use crate::mdast::{
-    ColumnAlign, ListItemData, MdastNodeType, decode_code_data, decode_custom_data,
-    decode_definition_data, decode_description_details_data, decode_footnote_definition_data,
-    decode_heading_data, decode_image_data, decode_image_reference_alt, decode_link_data,
-    decode_list_data, decode_list_item_data, decode_math_data, decode_reference_data,
-    decode_table_alignments,
+    MdastNodeType, decode_definition_data, decode_footnote_definition_data, decode_list_item_data,
+    decode_reference_data,
 };
 #[cfg(feature = "mdx")]
 use crate::mdast::{
@@ -169,65 +166,6 @@ fn merged_h_props(
         .collect()
 }
 
-/// Whether the caller still needs to emit the mdast node's children, or
-/// whether `hChildren` already replaced them.
-enum ChildrenAction {
-    Recurse,
-    Replaced,
-}
-
-/// Open an HTML element honouring `hName` / `hProperties` / `hChildren` on the
-/// source mdast node. The caller is responsible for `close_node` and
-/// `copy_position` afterwards.
-fn open_h_element(
-    builder: &mut ArenaBuilder<Hast>,
-    view: &Arena<Mdast>,
-    src_id: u32,
-    default_tag: &str,
-    default_specs: &[(&str, u8, StringRef)],
-) -> ChildrenAction {
-    let h = HData::read(view, src_id);
-    if h.is_empty() {
-        if default_specs.is_empty() {
-            open_element(builder, default_tag);
-        } else {
-            open_element_with_specs(builder, default_tag, default_specs);
-        }
-        return ChildrenAction::Recurse;
-    }
-    let tag = h.h_name().unwrap_or(default_tag);
-    let props = merged_h_props(builder, default_specs, h.h_properties());
-    open_element_with_props(builder, tag, &props);
-    if let Some(children) = h.h_children() {
-        emit_h_children(builder, children);
-        ChildrenAction::Replaced
-    } else {
-        ChildrenAction::Recurse
-    }
-}
-
-/// Same as `open_h_element` but for void elements (no children, builder closes
-/// the node automatically). `hChildren` is ignored on void elements.
-fn add_h_void_element(
-    builder: &mut ArenaBuilder<Hast>,
-    view: &Arena<Mdast>,
-    src_id: u32,
-    default_tag: &str,
-    default_specs: &[(&str, u8, StringRef)],
-) -> u32 {
-    let h = HData::read(view, src_id);
-    if h.is_empty() {
-        return if default_specs.is_empty() {
-            add_void_element(builder, default_tag)
-        } else {
-            add_void_element_with_specs(builder, default_tag, default_specs)
-        };
-    }
-    let tag = h.h_name().unwrap_or(default_tag);
-    let props = merged_h_props(builder, default_specs, h.h_properties());
-    add_void_element_with_props(builder, tag, &props)
-}
-
 /// Emit a list of hast nodes (from `data.hChildren`) into the builder. The
 /// children are JSON-encoded hast nodes — `element` / `text` / `comment` /
 /// `raw` are supported; anything else is silently skipped.
@@ -280,13 +218,6 @@ fn emit_h_child(builder: &mut ArenaBuilder<Hast>, child: &serde_json::Value) {
             add_raw_node(builder, value);
         }
         _ => {}
-    }
-}
-
-fn encode_url(builder: &mut ArenaBuilder<Hast>, url: &str) -> StringRef {
-    match normalize_url(url) {
-        std::borrow::Cow::Borrowed(s) => builder.alloc_string(s),
-        std::borrow::Cow::Owned(s) => builder.alloc_string(&s),
     }
 }
 
@@ -450,51 +381,21 @@ fn mdast_arena_to_hast_arena_impl(
     // Reuses the MDAST pool (heap included) so StringRefs stay valid; the
     // original-input prefix is identical, so carry the boundary over.
     hast_arena.source_len = source.source_len;
-    let mut builder: ArenaBuilder<Hast> = ArenaBuilder::from_arena(hast_arena);
-    let newline_ref = builder.alloc_string("\n");
+    let builder: ArenaBuilder<Hast> = ArenaBuilder::from_arena(hast_arena);
     let refs = collect_refs(source);
-    let ctx = ConvertCtx {
-        defs: &refs.defs,
-        footnotes: refs.footnotes.as_ref(),
-        footnote_defs: &refs.footnote_defs,
-        footnote_ref_occurrence: &refs.footnote_ref_occurrence,
-        footnote_ref_totals: &refs.footnote_ref_totals,
-        newline_ref,
+    let ctx = EmitCtx {
+        view: source,
+        refs: &refs,
         options,
     };
-    convert_node(0, source, &mut builder, &ctx, 0);
-    let arena = builder.finish();
+    let mut sink = HastSink::new(builder, source);
+    emit_node(0, &ctx, &mut sink, 0);
+    let arena = sink.finish();
     #[cfg(feature = "from-html")]
     if options.raw_html {
         return crate::hast::from_html::raw_to_hast_arena(&arena);
     }
     arena
-}
-
-/// Shared read-only context threaded through the conversion.
-///
-/// `footnotes` is only materialized when the document actually contains a
-/// FootnoteReference or FootnoteDefinition, so documents without footnotes
-/// don't allocate a HashMap at all.
-struct ConvertCtx<'a, 'src> {
-    defs: &'a FxHashMap<&'src str, Definition>,
-    footnotes: Option<&'a FxHashMap<&'src str, usize>>,
-    /// Pre-allocated `"\n"` StringRef shared by every block separator inserted
-    /// during conversion; avoids re-pushing a single byte into the source pool.
-    newline_ref: StringRef,
-    /// Node IDs of FootnoteDefinition nodes in the order their identifiers
-    /// are first referenced. This matches remark-gfm's `state.footnoteOrder`
-    /// and drives the order of `<li>`s in the emitted `<section>`.
-    footnote_defs: &'a [u32],
-    /// For each FootnoteReference node id: the 1-based occurrence index of
-    /// that reference within its identifier. First ref = 1, second = 2, etc.
-    /// Used to emit `id="user-content-fnref-ID[-K]"` on the anchor.
-    footnote_ref_occurrence: &'a FxHashMap<u32, usize>,
-    /// Per-identifier total number of references (for the backref links in
-    /// the section).
-    footnote_ref_totals: &'a FxHashMap<&'src str, usize>,
-    /// Conversion-time options (currently only footnote i18n strings).
-    options: &'a ConvertOptions,
 }
 
 /// Definition data stored as StringRefs into the MDAST source, avoids cloning strings.
@@ -756,82 +657,11 @@ pub(crate) fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     }
 }
 
-fn find_def<'a>(
-    defs: &'a FxHashMap<&str, Definition>,
-    _view: &Arena<Mdast>,
-    identifier: &str,
-) -> Option<&'a Definition> {
-    defs.get(identifier)
-}
-
 /// Pre-built property data: refs already interned in the builder's string pool.
 struct PropData {
     name_ref: StringRef,
     value_kind: u8,
     value_ref: StringRef,
-}
-
-fn build_props(builder: &mut ArenaBuilder<Hast>, specs: &[(&str, u8, StringRef)]) -> Vec<PropData> {
-    specs
-        .iter()
-        .map(|&(name, kind, value_ref)| {
-            let name_ref = builder.alloc_string(name);
-            PropData {
-                name_ref,
-                value_kind: kind,
-                value_ref,
-            }
-        })
-        .collect()
-}
-
-/// Open an element and emit its props without an intermediate `Vec<PropData>`.
-fn open_element_with_specs(
-    builder: &mut ArenaBuilder<Hast>,
-    tag: &str,
-    specs: &[(&str, u8, StringRef)],
-) -> u32 {
-    let tag_ref = builder.alloc_string(tag);
-    let id = builder.open_node_raw(HastNodeType::Element as u8);
-    write_element_data_specs(builder, tag_ref, specs);
-    id
-}
-
-fn add_void_element_with_specs(
-    builder: &mut ArenaBuilder<Hast>,
-    tag: &str,
-    specs: &[(&str, u8, StringRef)],
-) -> u32 {
-    let id = open_element_with_specs(builder, tag, specs);
-    builder.close_node();
-    id
-}
-
-fn write_element_data_specs(
-    builder: &mut ArenaBuilder<Hast>,
-    tag_ref: StringRef,
-    specs: &[(&str, u8, StringRef)],
-) {
-    let name_refs: [StringRef; 8] = {
-        let mut arr = [StringRef::empty(); 8];
-        debug_assert!(specs.len() <= arr.len(), "too many props for inline buffer");
-        for (i, &(name, _, _)) in specs.iter().enumerate() {
-            arr[i] = builder.alloc_string(name);
-        }
-        arr
-    };
-    let writer = builder.begin_data_current();
-    let out = &mut builder.arena_mut().type_data;
-    out.extend_from_slice(&tag_ref.as_bytes());
-    out.extend_from_slice(&(specs.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    for (i, &(_, kind, value_ref)) in specs.iter().enumerate() {
-        out.extend_from_slice(&name_refs[i].as_bytes());
-        out.push(kind);
-        out.extend_from_slice(&[0u8; 3]);
-        out.extend_from_slice(&value_ref.as_bytes());
-    }
-    builder.finish_data_current(writer);
 }
 
 #[inline]
@@ -867,41 +697,10 @@ fn write_element_data(builder: &mut ArenaBuilder<Hast>, tag_ref: StringRef, prop
     builder.finish_data_current(writer);
 }
 
-fn open_element(builder: &mut ArenaBuilder<Hast>, tag: &str) -> u32 {
-    let id = builder.open_node_raw(HastNodeType::Element as u8);
-    let tag_ref = builder.alloc_string(tag);
-    let writer = builder.begin_data_current();
-    encode_element_data_into(tag_ref, &[], &mut builder.arena_mut().type_data);
-    builder.finish_data_current(writer);
-    id
-}
-
 fn open_element_with_props(builder: &mut ArenaBuilder<Hast>, tag: &str, props: &[PropData]) -> u32 {
     let id = builder.open_node_raw(HastNodeType::Element as u8);
     let tag_ref = builder.alloc_string(tag);
     write_element_data(builder, tag_ref, props);
-    id
-}
-
-fn add_void_element(builder: &mut ArenaBuilder<Hast>, tag: &str) -> u32 {
-    let id = builder.open_node_raw(HastNodeType::Element as u8);
-    let tag_ref = builder.alloc_string(tag);
-    let writer = builder.begin_data_current();
-    encode_element_data_into(tag_ref, &[], &mut builder.arena_mut().type_data);
-    builder.finish_data_current(writer);
-    builder.close_node();
-    id
-}
-
-fn add_void_element_with_props(
-    builder: &mut ArenaBuilder<Hast>,
-    tag: &str,
-    props: &[PropData],
-) -> u32 {
-    let id = builder.open_node_raw(HastNodeType::Element as u8);
-    let tag_ref = builder.alloc_string(tag);
-    write_element_data(builder, tag_ref, props);
-    builder.close_node();
     id
 }
 
@@ -1095,754 +894,6 @@ fn copy_position(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<H
     }
 }
 
-fn convert_node(
-    node_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    depth: u32,
-) {
-    crate::stack::with_headroom(depth, || {
-        convert_node_inner(node_id, view, builder, ctx, depth)
-    });
-}
-
-fn convert_node_inner(
-    node_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    depth: u32,
-) {
-    let node = view.get_node(node_id);
-    let raw_type = node.node_type;
-
-    match MdastNodeType::from_u8(raw_type) {
-        Some(MdastNodeType::Root) => {
-            builder.open_node_raw(HastNodeType::Root as u8);
-            copy_position(node_id, view, builder);
-            convert_children_wrapped(node_id, view, builder, ctx, depth);
-            emit_gfm_footnotes_section(view, builder, ctx, depth);
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Paragraph) => {
-            // Note: MDX paragraph unraveling is handled by convert_children_wrapped
-            // at the parent level, so by the time we get here it's a normal <p>.
-            let action = open_h_element(builder, view, node_id, "p", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Heading) => {
-            let data = view.get_type_data(node_id);
-            let level = if data.is_empty() {
-                1
-            } else {
-                decode_heading_data(data).depth
-            };
-            let tag = match level {
-                1 => "h1",
-                2 => "h2",
-                3 => "h3",
-                4 => "h4",
-                5 => "h5",
-                _ => "h6",
-            };
-            let action = open_h_element(builder, view, node_id, tag, &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::ThematicBreak) => {
-            let id = add_h_void_element(builder, view, node_id, "hr", &[]);
-            copy_position_to(id, node_id, view, builder);
-        }
-
-        Some(MdastNodeType::Blockquote) => {
-            let action = open_h_element(builder, view, node_id, "blockquote", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children_with_newlines(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::List) => {
-            let data = view.get_type_data(node_id);
-            let list_data = decode_list_data(data);
-            let tag = if list_data.ordered { "ol" } else { "ul" };
-            let has_task_items = list_contains_task_item(node_id, view);
-
-            let mut prop_specs: Vec<(&str, u8, StringRef)> = Vec::new();
-            let start_str;
-            let start_ref;
-            let class_ref;
-            if list_data.ordered && list_data.start != 1 {
-                start_str = list_data.start.to_string();
-                start_ref = builder.alloc_string(&start_str);
-                prop_specs.push(("start", PROP_INT, start_ref));
-            }
-            if has_task_items {
-                class_ref = builder.alloc_string("contains-task-list");
-                prop_specs.push(("className", PROP_SPACE_SEP, class_ref));
-            }
-
-            let action = open_h_element(builder, view, node_id, tag, &prop_specs);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children_with_newlines(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::ListItem) => {
-            let data = view.get_type_data(node_id);
-            let item_data = if data.is_empty() {
-                None
-            } else {
-                Some(decode_list_item_data(data))
-            };
-            let is_task = item_data.is_some_and(|d| d.checked != 2);
-
-            let task_class_ref;
-            let task_specs: [(&str, u8, StringRef); 1];
-            let li_specs: &[(&str, u8, StringRef)] = if is_task {
-                task_class_ref = builder.alloc_string("task-list-item");
-                task_specs = [("className", PROP_SPACE_SEP, task_class_ref)];
-                &task_specs
-            } else {
-                &[]
-            };
-            // hChildren replaces the rendered children; skip task-checkbox /
-            // paragraph-unwrap behavior in that case.
-            let action = open_h_element(builder, view, node_id, "li", li_specs);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Replaced) {
-                builder.close_node();
-                return;
-            }
-
-            let parent_id = view.get_node(node_id).parent;
-            let loose = {
-                let pd = view.get_type_data(parent_id);
-                if !pd.is_empty() && decode_list_data(pd).spread {
-                    true
-                } else {
-                    view.get_children(parent_id).iter().any(|&sibling_id| {
-                        let sd = view.get_type_data(sibling_id);
-                        !sd.is_empty() && decode_list_item_data(sd).spread
-                    })
-                }
-            };
-            if loose {
-                convert_children_with_newlines_task(
-                    node_id,
-                    view,
-                    builder,
-                    ctx,
-                    is_task.then(|| item_data.unwrap()),
-                    depth,
-                );
-            } else {
-                convert_children_unwrap_paragraphs_task(
-                    node_id,
-                    view,
-                    builder,
-                    ctx,
-                    is_task.then(|| item_data.unwrap()),
-                    depth,
-                );
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Html) => {
-            let data = view.get_type_data(node_id);
-            let string_ref = decode_string_ref_data(data);
-            let value = view.get_str(string_ref);
-            let id = add_raw_node(builder, value);
-            copy_position_to(id, node_id, view, builder);
-        }
-
-        Some(MdastNodeType::Code) => {
-            let data = view.get_type_data(node_id);
-            let code_data = decode_code_data(data);
-            let value = view.get_str(code_data.value);
-
-            // hName/hProperties on the code mdast node override the outer
-            // <pre>; the inner <code> remains as remark-rehype emits it.
-            // hChildren on a code node replaces the pre's children entirely
-            // (no <code>, just whatever the user provided).
-            let action = open_h_element(builder, view, node_id, "pre", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Replaced) {
-                builder.close_node();
-                return;
-            }
-            let code_id = if code_data.lang.len > 0 {
-                let lang = view.get_str(code_data.lang);
-                // A character reference can decode to whitespace, so only the
-                // first word of the info string names the language.
-                let class_val = format!(
-                    "language-{}",
-                    lang.split(char::is_whitespace).next().unwrap_or("")
-                );
-                let class_ref = builder.alloc_string(&class_val);
-                let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
-                open_element_with_props(builder, "code", &props)
-            } else {
-                open_element(builder, "code")
-            };
-
-            copy_position(node_id, view, builder);
-
-            let lang = view.get_str(code_data.lang);
-            let meta = view.get_str(code_data.meta);
-            if !lang.is_empty() || !meta.is_empty() {
-                let json = encode_code_node_data(lang, meta);
-                builder.arena_mut().set_node_data(code_id, json);
-            }
-
-            if value.is_empty() {
-                add_text_node(builder, value);
-            } else {
-                let mut buf = String::with_capacity(value.len() + 1);
-                buf.push_str(value);
-                buf.push('\n');
-                add_text_node(builder, &buf);
-            }
-            builder.close_node(); // code
-            builder.close_node(); // pre
-        }
-
-        Some(MdastNodeType::Text) => {
-            let data = view.get_type_data(node_id);
-            let string_ref = decode_string_ref_data(data);
-            // mdast-util-to-hast applies `trim-lines`: strip spaces/tabs at
-            // line-break boundaries inside the text value (interior line
-            // ends and starts), but preserve leading whitespace of the first
-            // line and trailing whitespace of the last line. Handles soft-
-            // wraps where a continuation line starts with `&#9;` (decoded
-            // to a tab in mdast) — the tab vanishes in hast.
-            let raw_value = view.get_str(string_ref);
-            let id = match trim_lines_for_hast(raw_value) {
-                std::borrow::Cow::Borrowed(_) => add_text_node_with_ref(builder, string_ref),
-                std::borrow::Cow::Owned(s) => add_text_node(builder, &s),
-            };
-            copy_position_to(id, node_id, view, builder);
-        }
-
-        Some(MdastNodeType::Emphasis) => {
-            let action = open_h_element(builder, view, node_id, "em", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Strong) => {
-            let action = open_h_element(builder, view, node_id, "strong", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::InlineCode) => {
-            let data = view.get_type_data(node_id);
-            let string_ref = decode_string_ref_data(data);
-            let action = open_h_element(builder, view, node_id, "code", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                let value = view.get_str(string_ref);
-                if value.contains(['\n', '\r']) {
-                    let normalized = code_span_line_endings_to_spaces(value);
-                    let text_id = add_text_node(builder, &normalized);
-                    copy_position_to(text_id, node_id, view, builder);
-                } else {
-                    let text_id = add_text_node(builder, value);
-                    copy_position_to(text_id, node_id, view, builder);
-                }
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Break) => {
-            let id = add_h_void_element(builder, view, node_id, "br", &[]);
-            copy_position_to(id, node_id, view, builder);
-            add_text_node_with_ref(builder, ctx.newline_ref);
-        }
-
-        Some(MdastNodeType::Link) => {
-            let data = view.get_type_data(node_id);
-            let link_data = decode_link_data(data);
-            let url_ref = encode_url(builder, view.get_str(link_data.url));
-            let specs: Vec<(&str, u8, StringRef)> = if link_data.title.len > 0 {
-                vec![
-                    ("href", PROP_STRING, url_ref),
-                    ("title", PROP_STRING, link_data.title),
-                ]
-            } else {
-                vec![("href", PROP_STRING, url_ref)]
-            };
-            let action = open_h_element(builder, view, node_id, "a", &specs);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Image) => {
-            let data = view.get_type_data(node_id);
-            let img_data = decode_image_data(data);
-            let url_ref = encode_url(builder, view.get_str(img_data.url));
-            let specs: Vec<(&str, u8, StringRef)> = if img_data.title.len > 0 {
-                vec![
-                    ("src", PROP_STRING, url_ref),
-                    ("alt", PROP_STRING, img_data.alt),
-                    ("title", PROP_STRING, img_data.title),
-                ]
-            } else {
-                vec![
-                    ("src", PROP_STRING, url_ref),
-                    ("alt", PROP_STRING, img_data.alt),
-                ]
-            };
-            let id = add_h_void_element(builder, view, node_id, "img", &specs);
-            copy_position_to(id, node_id, view, builder);
-        }
-
-        Some(MdastNodeType::Delete) => {
-            let action = open_h_element(builder, view, node_id, "del", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Superscript) => {
-            let action = open_h_element(builder, view, node_id, "sup", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Subscript) => {
-            let action = open_h_element(builder, view, node_id, "sub", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::DescriptionList) => {
-            let action = open_h_element(builder, view, node_id, "dl", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children_with_newlines(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::DescriptionTerm) => {
-            let action = open_h_element(builder, view, node_id, "dt", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                convert_children(node_id, view, builder, ctx, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::DescriptionDetails) => {
-            // Tight `<dd>`s unwrap their paragraph via ListItem's path (no task
-            // checkbox, hence `None`); loose ones keep it.
-            let action = open_h_element(builder, view, node_id, "dd", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Replaced) {
-                builder.close_node();
-                return;
-            }
-            let data = view.get_type_data(node_id);
-            let loose = !data.is_empty() && decode_description_details_data(data).spread;
-            if loose {
-                convert_children_with_newlines(node_id, view, builder, ctx, depth);
-            } else {
-                convert_children_unwrap_paragraphs_task(node_id, view, builder, ctx, None, depth);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Table) => {
-            let alignments = decode_table_alignments(view.get_type_data(node_id));
-            let action = open_h_element(builder, view, node_id, "table", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Replaced) {
-                builder.close_node();
-                return;
-            }
-            let child_ids = view.get_children(node_id);
-            if !child_ids.is_empty() {
-                add_text_node_with_ref(builder, ctx.newline_ref);
-                open_element(builder, "thead");
-                copy_position(child_ids[0], view, builder);
-                add_text_node_with_ref(builder, ctx.newline_ref);
-                convert_table_row(child_ids[0], view, builder, ctx, true, &alignments, depth);
-                add_text_node_with_ref(builder, ctx.newline_ref);
-                builder.close_node(); // thead
-                add_text_node_with_ref(builder, ctx.newline_ref);
-
-                if child_ids.len() > 1 {
-                    open_element(builder, "tbody");
-                    // tbody spans from first body row to last body row
-                    let first_body = child_ids[1];
-                    let last_body = *child_ids.last().unwrap();
-                    let fb = view.get_node(first_body);
-                    let lb = view.get_node(last_body);
-                    builder.set_position_current(
-                        fb.start_offset,
-                        lb.end_offset,
-                        fb.start_line,
-                        fb.start_column,
-                        lb.end_line,
-                        lb.end_column,
-                    );
-                    add_text_node_with_ref(builder, ctx.newline_ref);
-                    for &row_id in &child_ids[1..] {
-                        convert_table_row(row_id, view, builder, ctx, false, &alignments, depth);
-                        add_text_node_with_ref(builder, ctx.newline_ref);
-                    }
-                    builder.close_node(); // tbody
-                    add_text_node_with_ref(builder, ctx.newline_ref);
-                }
-            }
-            builder.close_node(); // table
-        }
-
-        Some(MdastNodeType::Math) => {
-            let data = view.get_type_data(node_id);
-            let math_data = decode_math_data(data);
-            let value = view.get_str(math_data.value);
-            // hName/hProperties on math affect the outer <pre>; the inner
-            // <code> is left as-is. hChildren replaces all children.
-            let action = open_h_element(builder, view, node_id, "pre", &[]);
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Replaced) {
-                builder.close_node();
-                return;
-            }
-            let class_ref = builder.alloc_string("language-math math-display");
-            let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
-            open_element_with_props(builder, "code", &props);
-            add_text_node(builder, value);
-            builder.close_node(); // code
-            builder.close_node(); // pre
-        }
-
-        Some(MdastNodeType::InlineMath) => {
-            let data = view.get_type_data(node_id);
-            let math_data = decode_math_data(data);
-            let value = view.get_str(math_data.value);
-            let class_ref = builder.alloc_string("language-math math-inline");
-            let action = open_h_element(
-                builder,
-                view,
-                node_id,
-                "code",
-                &[("className", PROP_SPACE_SEP, class_ref)],
-            );
-            copy_position(node_id, view, builder);
-            if matches!(action, ChildrenAction::Recurse) {
-                add_text_node(builder, value);
-            }
-            builder.close_node();
-        }
-
-        Some(MdastNodeType::Definition) | Some(MdastNodeType::Yaml) | Some(MdastNodeType::Toml) => {
-            // No HAST output
-        }
-
-        Some(MdastNodeType::LinkReference) => {
-            let data = view.get_type_data(node_id);
-            if data.len() >= 20 {
-                let rd = decode_reference_data(data);
-                let identifier = view.get_str(rd.identifier);
-                if let Some(def) = find_def(ctx.defs, view, identifier) {
-                    let url_ref = encode_url(builder, view.get_str(def.url));
-                    let specs: Vec<(&str, u8, StringRef)> = if !def.title.is_empty() {
-                        vec![
-                            ("href", PROP_STRING, url_ref),
-                            ("title", PROP_STRING, def.title),
-                        ]
-                    } else {
-                        vec![("href", PROP_STRING, url_ref)]
-                    };
-                    let action = open_h_element(builder, view, node_id, "a", &specs);
-                    copy_position(node_id, view, builder);
-                    if matches!(action, ChildrenAction::Recurse) {
-                        convert_children(node_id, view, builder, ctx, depth);
-                    }
-                    builder.close_node();
-                } else {
-                    // Unresolved: output children as-is
-                    convert_children(node_id, view, builder, ctx, depth);
-                }
-            }
-        }
-
-        Some(MdastNodeType::ImageReference) => {
-            let data = view.get_type_data(node_id);
-            if data.len() >= 20 {
-                let rd = decode_reference_data(data);
-                let identifier = view.get_str(rd.identifier);
-                if let Some(def) = find_def(ctx.defs, view, identifier) {
-                    // Parser-emitted ImageReferences store alt inline (the
-                    // node has no children — alt is accumulated from the
-                    // bracket text at parse time). Plugin-synthesized ones
-                    // may lack this byte range and carry the text as
-                    // children, so fall back to extracting from those.
-                    let stored_alt = decode_image_reference_alt(data);
-                    let alt = if !stored_alt.is_empty() {
-                        view.get_str(stored_alt).to_string()
-                    } else {
-                        extract_text_content(node_id, view)
-                    };
-                    let url_ref = encode_url(builder, view.get_str(def.url));
-                    let alt_ref = builder.alloc_string(&alt);
-                    let specs: Vec<(&str, u8, StringRef)> = if !def.title.is_empty() {
-                        vec![
-                            ("src", PROP_STRING, url_ref),
-                            ("alt", PROP_STRING, alt_ref),
-                            ("title", PROP_STRING, def.title),
-                        ]
-                    } else {
-                        vec![("src", PROP_STRING, url_ref), ("alt", PROP_STRING, alt_ref)]
-                    };
-                    let id = add_h_void_element(builder, view, node_id, "img", &specs);
-                    copy_position_to(id, node_id, view, builder);
-                }
-            }
-        }
-
-        Some(MdastNodeType::FootnoteReference) => {
-            let data = view.get_type_data(node_id);
-            if data.len() >= 20 {
-                let rd = decode_reference_data(data);
-                let identifier = view.get_str(rd.identifier);
-                let Some(number) = ctx.footnotes.and_then(|m| m.get(identifier).copied()) else {
-                    // Orphan reference (no matching definition): remark keeps
-                    // these as literal `[^id]` text.
-                    let literal = format!("[^{}]", identifier);
-                    add_text_node(builder, &literal);
-                    return;
-                };
-                // remark lowercases the identifier when building URL/id
-                // attributes so fragment targets collide-resist regardless of
-                // how the author cased the source label.
-                let safe_id = identifier.to_ascii_lowercase();
-                let occurrence = ctx
-                    .footnote_ref_occurrence
-                    .get(&node_id)
-                    .copied()
-                    .unwrap_or(1);
-                open_element(builder, "sup");
-                copy_position(node_id, view, builder);
-                let href = format!("#user-content-fn-{}", safe_id);
-                // Reuses of the same footnote get a `-K` suffix on the id so
-                // backrefs can target the specific call site.
-                let id_attr = if occurrence > 1 {
-                    format!("user-content-fnref-{}-{}", safe_id, occurrence)
-                } else {
-                    format!("user-content-fnref-{}", safe_id)
-                };
-                let href_ref = builder.alloc_string(&href);
-                let id_ref = builder.alloc_string(&id_attr);
-                let empty_ref = StringRef::empty();
-                let aria_ref = builder.alloc_string("footnote-label");
-                let a_props = build_props(
-                    builder,
-                    &[
-                        ("href", PROP_STRING, href_ref),
-                        ("id", PROP_STRING, id_ref),
-                        ("dataFootnoteRef", PROP_BOOL_TRUE, empty_ref),
-                        ("ariaDescribedBy", PROP_SPACE_SEP, aria_ref),
-                    ],
-                );
-                open_element_with_props(builder, "a", &a_props);
-                copy_position(node_id, view, builder);
-                add_text_node(builder, &number.to_string());
-                builder.close_node(); // a
-                builder.close_node(); // sup
-            }
-        }
-
-        Some(MdastNodeType::FootnoteDefinition) => {
-            // Skipped inline — GFM renders all definitions together in the
-            // trailing `<section class="footnotes">` block that's emitted by
-            // `emit_gfm_footnotes_section` after the root's other children.
-        }
-
-        #[cfg(feature = "mdx")]
-        Some(MdastNodeType::MdxJsxFlowElement) => {
-            convert_mdx_jsx_element(
-                node_id,
-                view,
-                builder,
-                ctx,
-                HastNodeType::MdxJsxElement as u8,
-                depth,
-            );
-        }
-        #[cfg(feature = "mdx")]
-        Some(MdastNodeType::MdxJsxTextElement) => {
-            convert_mdx_jsx_element(
-                node_id,
-                view,
-                builder,
-                ctx,
-                HastNodeType::MdxJsxTextElement as u8,
-                depth,
-            );
-        }
-
-        #[cfg(feature = "mdx")]
-        Some(MdastNodeType::MdxFlowExpression) => {
-            let data = view.get_type_data(node_id);
-            let value = if data.is_empty() {
-                ""
-            } else {
-                let d = decode_expression_data(data);
-                view.get_str(d.value)
-            };
-            let value_ref = builder.alloc_string(value);
-            let leaf_id = builder.add_leaf_raw(HastNodeType::MdxFlowExpression as u8);
-            builder
-                .arena_mut()
-                .set_type_data(leaf_id, &value_ref.as_bytes());
-            let mdast_node = view.get_node(node_id);
-            builder.arena_mut().set_position(
-                leaf_id,
-                mdast_node.start_offset,
-                mdast_node.end_offset,
-                mdast_node.start_line,
-                mdast_node.start_column,
-                mdast_node.end_line,
-                mdast_node.end_column,
-            );
-        }
-
-        #[cfg(feature = "mdx")]
-        Some(MdastNodeType::MdxTextExpression) => {
-            let data = view.get_type_data(node_id);
-            let value = if data.is_empty() {
-                ""
-            } else {
-                let d = decode_expression_data(data);
-                view.get_str(d.value)
-            };
-            let value_ref = builder.alloc_string(value);
-            let leaf_id = builder.add_leaf_raw(HastNodeType::MdxTextExpression as u8);
-            builder
-                .arena_mut()
-                .set_type_data(leaf_id, &value_ref.as_bytes());
-            let mdast_node = view.get_node(node_id);
-            builder.arena_mut().set_position(
-                leaf_id,
-                mdast_node.start_offset,
-                mdast_node.end_offset,
-                mdast_node.start_line,
-                mdast_node.start_column,
-                mdast_node.end_line,
-                mdast_node.end_column,
-            );
-        }
-
-        #[cfg(feature = "mdx")]
-        Some(MdastNodeType::MdxjsEsm) => {
-            let data = view.get_type_data(node_id);
-            let value = if data.is_empty() {
-                ""
-            } else {
-                let d = decode_expression_data(data);
-                view.get_str(d.value)
-            };
-            let value_ref = builder.alloc_string(value);
-            let leaf_id = builder.add_leaf_raw(HastNodeType::MdxEsm as u8);
-            builder
-                .arena_mut()
-                .set_type_data(leaf_id, &value_ref.as_bytes());
-            let mdast_node = view.get_node(node_id);
-            builder.arena_mut().set_position(
-                leaf_id,
-                mdast_node.start_offset,
-                mdast_node.end_offset,
-                mdast_node.start_line,
-                mdast_node.start_column,
-                mdast_node.end_line,
-                mdast_node.end_column,
-            );
-        }
-
-        Some(MdastNodeType::ContainerDirective)
-        | Some(MdastNodeType::LeafDirective)
-        | Some(MdastNodeType::TextDirective) => {
-            // Directives have no built-in HAST representation; the only way
-            // to render one is to set `data.hName` (and optionally
-            // `data.hProperties` / `data.hChildren`) on the mdast node from a
-            // plugin. Without `hName`, drop the node — matching the empty
-            // `containerDirective` handler we install on the reference side.
-            let h = HData::read(view, node_id);
-            if let Some(name) = h.h_name() {
-                let props = merged_h_props(builder, &[], h.h_properties());
-                open_element_with_props(builder, name, &props);
-                copy_position(node_id, view, builder);
-                if let Some(children) = h.h_children() {
-                    emit_h_children(builder, children);
-                } else {
-                    convert_children(node_id, view, builder, ctx, depth);
-                }
-                builder.close_node();
-            }
-        }
-
-        Some(MdastNodeType::Custom) => {
-            // Only a bare `value` leaf renders as text; everything else stays an
-            // element so children are never dropped for want of an `hName`.
-            let value = decode_custom_data(view.get_type_data(node_id)).value;
-            let has_children = !view.get_children(node_id).is_empty();
-            if value.len > 0 && !has_children && HData::read(view, node_id).is_empty() {
-                let id = add_text_node_with_ref(builder, value);
-                copy_position_to(id, node_id, view, builder);
-            } else {
-                let action = open_h_element(builder, view, node_id, "div", &[]);
-                copy_position(node_id, view, builder);
-                if matches!(action, ChildrenAction::Recurse) {
-                    convert_children(node_id, view, builder, ctx, depth);
-                }
-                builder.close_node();
-            }
-        }
-
-        _ => {
-            // Unknown: recurse into children
-            convert_children(node_id, view, builder, ctx, depth);
-        }
-    }
-}
-
 /// Each line ending in a code span renders as one space, so a `\r\n` collapses
 /// to a single space rather than two.
 pub(crate) fn code_span_line_endings_to_spaces(value: &str) -> String {
@@ -1856,30 +907,6 @@ pub(crate) fn code_span_line_endings_to_spaces(value: &str) -> String {
     }
     out.push_str(rest);
     out
-}
-
-fn convert_children(
-    node_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    depth: u32,
-) {
-    let children = view.get_children(node_id);
-    let mut prev_was_break = false;
-    let break_ty = MdastNodeType::Break as u8;
-    for &child_id in children {
-        let before_count = builder.current_pending_children().len();
-        convert_node(child_id, view, builder, ctx, depth + 1);
-        if prev_was_break {
-            let pending = builder.current_pending_children();
-            if pending.len() > before_count {
-                let first_new = pending[before_count];
-                trim_leading_ws_after_break(builder, first_new);
-            }
-        }
-        prev_was_break = view.get_node(child_id).node_type == break_ty;
-    }
 }
 
 /// After a `Break` mdast sibling, trim leading spaces and tabs from the text
@@ -1932,363 +959,6 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     arena.type_data[data_off..data_off + 8].copy_from_slice(&new_ref.as_bytes());
 }
 
-/// Convert children with `\n` text nodes between them.
-/// Matches `remark-rehype`'s behavior for block containers.
-fn convert_children_with_newlines(
-    node_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    depth: u32,
-) {
-    let children = view.get_children(node_id);
-    add_text_node_with_ref(builder, ctx.newline_ref);
-    if children.is_empty() {
-        return;
-    }
-    for &child_id in children {
-        if !produces_hast_output(child_id, view) {
-            continue;
-        }
-        convert_node(child_id, view, builder, ctx, depth + 1);
-        add_text_node_with_ref(builder, ctx.newline_ref);
-    }
-}
-
-fn emit_checkbox(builder: &mut ArenaBuilder<Hast>, item_data: ListItemData) {
-    let type_ref = builder.alloc_string("checkbox");
-    if item_data.checked == 1 {
-        let props = build_props(
-            builder,
-            &[
-                ("type", PROP_STRING, type_ref),
-                ("checked", PROP_BOOL_TRUE, StringRef::empty()),
-                ("disabled", PROP_BOOL_TRUE, StringRef::empty()),
-            ],
-        );
-        add_void_element_with_props(builder, "input", &props);
-    } else {
-        let props = build_props(
-            builder,
-            &[
-                ("type", PROP_STRING, type_ref),
-                ("checked", PROP_BOOL_FALSE, StringRef::empty()),
-                ("disabled", PROP_BOOL_TRUE, StringRef::empty()),
-            ],
-        );
-        add_void_element_with_props(builder, "input", &props);
-    }
-    add_text_node(builder, " ");
-}
-
-fn convert_children_with_newlines_task(
-    node_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    task: Option<ListItemData>,
-    depth: u32,
-) {
-    let children = view.get_children(node_id);
-    if children.is_empty() {
-        if let Some(td) = task {
-            add_text_node_with_ref(builder, ctx.newline_ref);
-            open_element(builder, "p");
-            copy_position(node_id, view, builder);
-            emit_checkbox(builder, td);
-            builder.close_node();
-            add_text_node_with_ref(builder, ctx.newline_ref);
-        }
-        return;
-    }
-    add_text_node_with_ref(builder, ctx.newline_ref);
-    let mut first = true;
-    for &child_id in children {
-        let child_node = view.get_node(child_id);
-        let is_para =
-            MdastNodeType::from_u8(child_node.node_type) == Some(MdastNodeType::Paragraph);
-        if let (true, true, Some(td)) = (first, is_para, task) {
-            open_element(builder, "p");
-            copy_position(child_id, view, builder);
-            emit_checkbox(builder, td);
-            convert_children(child_id, view, builder, ctx, depth + 1);
-            builder.close_node();
-        } else if let (true, Some(td)) = (first, task) {
-            emit_checkbox(builder, td);
-            convert_node(child_id, view, builder, ctx, depth + 1);
-        } else {
-            convert_node(child_id, view, builder, ctx, depth + 1);
-        }
-        // Skip the trailing separator for children that render to nothing
-        // (e.g. directives without a handler) so we don't leave stray `\n`s.
-        if produces_hast_output(child_id, view) {
-            add_text_node_with_ref(builder, ctx.newline_ref);
-        }
-        first = false;
-    }
-}
-
-fn convert_children_unwrap_paragraphs_task(
-    node_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    task: Option<ListItemData>,
-    depth: u32,
-) {
-    let children = view.get_children(node_id);
-    let mut first = true;
-    let mut prev_was_block = false;
-    for &child_id in children {
-        let child = view.get_node(child_id);
-        // Children that render to nothing (e.g. directives) shouldn't
-        // introduce extra `\n` separators.
-        if !produces_hast_output(child_id, view) {
-            continue;
-        }
-        if MdastNodeType::from_u8(child.node_type) == Some(MdastNodeType::Paragraph) {
-            if let (true, Some(td)) = (first, task) {
-                emit_checkbox(builder, td);
-            }
-            convert_children(child_id, view, builder, ctx, depth + 1);
-            prev_was_block = false;
-        } else {
-            if !prev_was_block {
-                add_text_node_with_ref(builder, ctx.newline_ref);
-            }
-            if let (true, Some(td)) = (first, task) {
-                emit_checkbox(builder, td);
-            }
-            convert_node(child_id, view, builder, ctx, depth + 1);
-            add_text_node_with_ref(builder, ctx.newline_ref);
-            prev_was_block = true;
-        }
-        first = false;
-    }
-}
-
-/// Convert children with `\n` text nodes inserted between them.
-/// These are needed by the MDX compilation path (JSX children spacing).
-/// The HTML renderer skips whitespace-only text nodes between block elements.
-/// Emit the `<section class="footnotes">` block that remark-gfm appends to
-/// the end of a document whenever it contains any footnote definitions.
-fn emit_gfm_footnotes_section(
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    depth: u32,
-) {
-    if ctx.footnote_defs.is_empty() {
-        return;
-    }
-
-    // "\n" separator between the document content and the section, matching
-    // `convert_children_wrapped`'s output for adjacent siblings.
-    add_text_node_with_ref(builder, ctx.newline_ref);
-
-    let empty_ref = StringRef::empty();
-    let footnotes_class = builder.alloc_string("footnotes");
-    let section_props = build_props(
-        builder,
-        &[
-            ("dataFootnotes", PROP_BOOL_TRUE, empty_ref),
-            ("className", PROP_SPACE_SEP, footnotes_class),
-        ],
-    );
-    open_element_with_props(builder, "section", &section_props);
-
-    let sronly_class = builder.alloc_string("sr-only");
-    let label_id_ref = builder.alloc_string("footnote-label");
-    let h2_props = build_props(
-        builder,
-        &[
-            ("className", PROP_SPACE_SEP, sronly_class),
-            ("id", PROP_STRING, label_id_ref),
-        ],
-    );
-    open_element_with_props(builder, "h2", &h2_props);
-    add_text_node(builder, &ctx.options.footnote_label);
-    builder.close_node(); // h2
-
-    add_text_node_with_ref(builder, ctx.newline_ref);
-
-    open_element(builder, "ol");
-    add_text_node_with_ref(builder, ctx.newline_ref);
-
-    for &def_id in ctx.footnote_defs {
-        let def_data = view.get_type_data(def_id);
-        if def_data.len() < 16 {
-            continue;
-        }
-        let fd = decode_footnote_definition_data(def_data);
-        let identifier = view.get_str(fd.identifier);
-        let number = ctx
-            .footnotes
-            .and_then(|m| m.get(identifier).copied())
-            .expect("footnote identifier missing from collected numbers");
-
-        let safe_id = identifier.to_ascii_lowercase();
-        let li_id = format!("user-content-fn-{}", safe_id);
-        let li_id_ref = builder.alloc_string(&li_id);
-        let li_props = build_props(builder, &[("id", PROP_STRING, li_id_ref)]);
-        open_element_with_props(builder, "li", &li_props);
-        // Carry position from the source FootnoteDefinition so the
-        // generated `<li>` lines up with the original `[^id]: ...` span.
-        copy_position(def_id, view, builder);
-        add_text_node_with_ref(builder, ctx.newline_ref);
-
-        let children: Vec<u32> = view.get_children(def_id).to_vec();
-        let last_para_idx = children
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|&(_, &cid)| view.get_node(cid).node_type == MdastNodeType::Paragraph as u8)
-            .map(|(i, _)| i);
-
-        let total_refs = ctx
-            .footnote_ref_totals
-            .get(identifier)
-            .copied()
-            .unwrap_or(1)
-            .max(1);
-
-        if children.is_empty() {
-            // Empty definition: emit the backref directly in the <li>.
-            emit_footnote_backrefs(builder, ctx, &safe_id, number, total_refs);
-        } else {
-            for (i, &child_id) in children.iter().enumerate() {
-                if i > 0 {
-                    add_text_node_with_ref(builder, ctx.newline_ref);
-                }
-                if Some(i) == last_para_idx {
-                    emit_paragraph_with_backrefs(
-                        child_id,
-                        view,
-                        builder,
-                        ctx,
-                        &safe_id,
-                        number,
-                        total_refs,
-                        depth + 1,
-                    );
-                } else {
-                    convert_node(child_id, view, builder, ctx, depth + 1);
-                }
-            }
-            // Fallback: definition contained no paragraph at all. Append the
-            // backref as a trailing sibling so it still reaches readers.
-            if last_para_idx.is_none() {
-                add_text_node_with_ref(builder, ctx.newline_ref);
-                emit_footnote_backrefs(builder, ctx, &safe_id, number, total_refs);
-            }
-        }
-
-        add_text_node_with_ref(builder, ctx.newline_ref);
-        builder.close_node(); // li
-        add_text_node_with_ref(builder, ctx.newline_ref);
-    }
-
-    builder.close_node(); // ol
-    add_text_node_with_ref(builder, ctx.newline_ref);
-    builder.close_node(); // section
-}
-
-/// Emit a `<p>` for `para_id`, converting its inline children and then
-/// appending the GFM footnote backref(s). Matches remark-gfm's behaviour of
-/// merging the separator space into the trailing text node when possible
-/// (so the output has one text "foo " instead of two nodes "foo" + " ").
-#[allow(clippy::too_many_arguments)]
-fn emit_paragraph_with_backrefs(
-    para_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    identifier: &str,
-    number: usize,
-    total_refs: usize,
-    depth: u32,
-) {
-    open_element(builder, "p");
-    copy_position(para_id, view, builder);
-
-    let inline_children = view.get_children(para_id);
-    if let Some((&last_id, prefix)) = inline_children.split_last() {
-        for &cid in prefix {
-            convert_node(cid, view, builder, ctx, depth + 1);
-        }
-        let last_is_text = view.get_node(last_id).node_type == MdastNodeType::Text as u8;
-        if last_is_text {
-            let data = view.get_type_data(last_id);
-            if data.len() >= 8 {
-                let sr = StringRef::from_bytes(data);
-                let value = view.get_str(sr);
-                let with_space = format!("{} ", value);
-                let leaf_id = add_text_node(builder, &with_space);
-                // Position comes from the original text node (the synthesized
-                // trailing space is not represented in source).
-                copy_position_to(leaf_id, last_id, view, builder);
-            } else {
-                convert_node(last_id, view, builder, ctx, depth + 1);
-                add_text_node(builder, " ");
-            }
-        } else {
-            convert_node(last_id, view, builder, ctx, depth + 1);
-            add_text_node(builder, " ");
-        }
-    }
-
-    emit_footnote_backrefs(builder, ctx, identifier, number, total_refs);
-    builder.close_node(); // p
-}
-
-/// Emit one or more backref `<a>` tags inside the footnotes section. With N
-/// references to the same definition, remark emits N anchor tags separated
-/// by single-space text nodes; the first uses the bare identifier, subsequent
-/// ones use `-K` suffixes matching the `id`s stamped on the reference sups.
-fn emit_footnote_backrefs(
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    identifier: &str,
-    number: usize,
-    total_refs: usize,
-) {
-    for k in 1..=total_refs.max(1) {
-        if k > 1 {
-            add_text_node(builder, " ");
-        }
-        let href = if k > 1 {
-            format!("#user-content-fnref-{}-{}", identifier, k)
-        } else {
-            format!("#user-content-fnref-{}", identifier)
-        };
-        let aria = resolve_backref(&ctx.options.footnote_back_label, number, k);
-        let back_content = resolve_backref(&ctx.options.footnote_back_content, number, k);
-        let href_ref = builder.alloc_string(&href);
-        let aria_ref = builder.alloc_string(&aria);
-        let empty_ref = StringRef::empty();
-        let backref_class = builder.alloc_string("data-footnote-backref");
-        let props = build_props(
-            builder,
-            &[
-                ("href", PROP_STRING, href_ref),
-                ("dataFootnoteBackref", PROP_STRING, empty_ref),
-                ("ariaLabel", PROP_STRING, aria_ref),
-                ("className", PROP_SPACE_SEP, backref_class),
-            ],
-        );
-        open_element_with_props(builder, "a", &props);
-        add_text_node(builder, &back_content);
-        // Template mode auto-appends <sup>K</sup> for k > 1; callback mode
-        // lets the callback emit the marker itself.
-        if k > 1 && matches!(ctx.options.footnote_back_content, Backref::Template(_)) {
-            open_element(builder, "sup");
-            add_text_node(builder, &k.to_string());
-            builder.close_node();
-        }
-        builder.close_node(); // a
-    }
-}
-
 fn produces_hast_output(child_id: u32, view: &Arena<Mdast>) -> bool {
     let raw_type = view.get_node(child_id).node_type;
     match MdastNodeType::from_u8(raw_type) {
@@ -2311,156 +981,6 @@ fn produces_hast_output(child_id: u32, view: &Arena<Mdast>) -> bool {
     }
 }
 
-fn convert_children_wrapped(
-    node_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    depth: u32,
-) {
-    let children = view.get_children(node_id);
-    let mut has_output = false;
-    for &child_id in children {
-        if produces_hast_output(child_id, view) {
-            if has_output {
-                add_text_node_with_ref(builder, ctx.newline_ref);
-            }
-            has_output = true;
-        }
-        convert_node(child_id, view, builder, ctx, depth + 1);
-    }
-}
-
-fn convert_table_row(
-    row_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    is_header: bool,
-    alignments: &[ColumnAlign],
-    depth: u32,
-) {
-    open_element(builder, "tr");
-    copy_position(row_id, view, builder);
-    add_text_node_with_ref(builder, ctx.newline_ref);
-    let all_cells = view.get_children(row_id);
-    // mdast-util-to-hast truncates source cells past the header column count
-    // (HAST padding fills underflow; this drops overflow). The MDAST tree
-    // keeps all source cells per `mdast-util-gfm-table`. With no alignment
-    // info, it falls back to the row's own cell count rather than dropping
-    // every cell.
-    let column_count = if alignments.is_empty() {
-        all_cells.len()
-    } else {
-        alignments.len()
-    };
-    let max_cells = all_cells.len().min(column_count);
-    let cell_ids = &all_cells[..max_cells];
-    let cell_tag = if is_header { "th" } else { "td" };
-    for (col_idx, &cell_id) in cell_ids.iter().enumerate() {
-        let align = alignments
-            .get(col_idx)
-            .copied()
-            .unwrap_or(ColumnAlign::None);
-        let style = match align {
-            ColumnAlign::None => None,
-            ColumnAlign::Left => Some("text-align: left"),
-            ColumnAlign::Right => Some("text-align: right"),
-            ColumnAlign::Center => Some("text-align: center"),
-        };
-        if let Some(style) = style {
-            let style_ref = builder.alloc_string(style);
-            let props = build_props(builder, &[("style", PROP_STRING, style_ref)]);
-            open_element_with_props(builder, cell_tag, &props);
-        } else {
-            open_element(builder, cell_tag);
-        }
-        copy_position(cell_id, view, builder);
-        convert_children(cell_id, view, builder, ctx, depth);
-        builder.close_node();
-        add_text_node_with_ref(builder, ctx.newline_ref);
-    }
-    // Pad to the header width — mdast-util-to-hast emits empty `<th>`/`<td>`
-    // for any missing cells so the rendered table is rectangular, even though
-    // the MDAST table row only stores the source cell count.
-    for col_idx in cell_ids.len()..column_count {
-        let align = alignments
-            .get(col_idx)
-            .copied()
-            .unwrap_or(ColumnAlign::None);
-        let style = match align {
-            ColumnAlign::None => None,
-            ColumnAlign::Left => Some("text-align: left"),
-            ColumnAlign::Right => Some("text-align: right"),
-            ColumnAlign::Center => Some("text-align: center"),
-        };
-        if let Some(style) = style {
-            let style_ref = builder.alloc_string(style);
-            let props = build_props(builder, &[("style", PROP_STRING, style_ref)]);
-            open_element_with_props(builder, cell_tag, &props);
-        } else {
-            open_element(builder, cell_tag);
-        }
-        builder.close_node();
-        add_text_node_with_ref(builder, ctx.newline_ref);
-    }
-    builder.close_node(); // tr
-}
-
-#[cfg(feature = "mdx")]
-fn convert_mdx_jsx_element(
-    node_id: u32,
-    view: &Arena<Mdast>,
-    builder: &mut ArenaBuilder<Hast>,
-    ctx: &ConvertCtx<'_, '_>,
-    hast_type: u8,
-    depth: u32,
-) {
-    let mdast_data = view.get_type_data(node_id);
-
-    let name_ref_mdast = if mdast_data.len() >= 8 {
-        decode_mdx_jsx_element_name(mdast_data)
-    } else {
-        StringRef::empty()
-    };
-    let name_str = if name_ref_mdast.len > 0 {
-        view.get_str(name_ref_mdast)
-    } else {
-        ""
-    };
-    let name_ref = builder.alloc_string(name_str);
-
-    // MDAST and HAST share the same attribute binary layout
-    let attr_count = if mdast_data.len() >= 12 {
-        decode_mdx_jsx_attr_count(mdast_data)
-    } else {
-        0
-    };
-    let explicit_jsx = decode_mdx_jsx_explicit(mdast_data);
-    let mut attr_tuples = Vec::with_capacity(attr_count as usize);
-    for i in 0..attr_count {
-        let (kind, attr_name_ref, attr_value_ref) = decode_mdx_jsx_attr(mdast_data, i);
-        attr_tuples.push((kind, attr_name_ref, attr_value_ref));
-    }
-
-    builder.open_node_raw(hast_type);
-    let encoded = encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit_jsx);
-    builder.set_data_current(&encoded);
-    // Propagate `node_data` (e.g. `_mdxExplicitJsx` for source-parsed nodes,
-    // or any other plugin-attached metadata) from mdast to hast.
-    if let Some(mdast_nd) = view.get_node_data(node_id)
-        && !mdast_nd.is_empty()
-    {
-        let id = builder.current_node_id();
-        let copy = mdast_nd.to_vec();
-        builder.arena_mut().set_node_data(id, copy);
-    }
-    copy_position(node_id, view, builder);
-
-    convert_children(node_id, view, builder, ctx, depth);
-    builder.close_node();
-}
-
 pub(crate) fn extract_text_content(node_id: u32, view: &Arena<Mdast>) -> String {
     let mut out = String::new();
     extract_text_recursive(node_id, view, &mut out);
@@ -2478,6 +998,437 @@ fn extract_text_recursive(node_id: u32, view: &Arena<Mdast>, out: &mut String) {
     }
     for &child_id in view.get_children(node_id) {
         extract_text_recursive(child_id, view, out);
+    }
+}
+
+const MAX_INLINE_ATTRS: usize = 8;
+
+#[derive(Clone, Copy)]
+struct PendingAttr {
+    name: &'static str,
+    name_ref: StringRef,
+    kind: u8,
+    value: StringRef,
+}
+
+/// The sink that materializes property lists, positions, and `hName` overrides.
+struct HastSink<'a> {
+    builder: ArenaBuilder<Hast>,
+    view: &'a Arena<Mdast>,
+    /// Shared by every block separator; avoids re-pushing a single byte into the pool.
+    newline_ref: StringRef,
+    attrs: [PendingAttr; MAX_INLINE_ATTRS],
+    attr_count: usize,
+    tag: &'static str,
+    pos: Pos,
+    h: Option<HData>,
+}
+
+impl<'a> HastSink<'a> {
+    fn new(mut builder: ArenaBuilder<Hast>, view: &'a Arena<Mdast>) -> Self {
+        let newline_ref = builder.alloc_string("\n");
+        let empty = PendingAttr {
+            name: "",
+            name_ref: StringRef::empty(),
+            kind: 0,
+            value: StringRef::empty(),
+        };
+        Self {
+            builder,
+            view,
+            newline_ref,
+            attrs: [empty; MAX_INLINE_ATTRS],
+            attr_count: 0,
+            tag: "",
+            pos: Pos::None,
+            h: None,
+        }
+    }
+
+    fn finish(self) -> Arena<Hast> {
+        self.builder.finish()
+    }
+
+    fn apply_pos_current(&mut self, pos: Pos) {
+        match pos {
+            Pos::None => {}
+            Pos::Node(src_id) => copy_position(src_id, self.view, &mut self.builder),
+            Pos::Span(first, last) => {
+                let f = self.view.get_node(first);
+                let l = self.view.get_node(last);
+                self.builder.set_position_current(
+                    f.start_offset,
+                    l.end_offset,
+                    f.start_line,
+                    f.start_column,
+                    l.end_line,
+                    l.end_column,
+                );
+            }
+        }
+    }
+
+    fn apply_pos_to(&mut self, node_id: u32, pos: Pos) {
+        match pos {
+            Pos::None => {}
+            Pos::Node(src_id) => copy_position_to(node_id, src_id, self.view, &mut self.builder),
+            Pos::Span(first, last) => {
+                let f = self.view.get_node(first);
+                let l = self.view.get_node(last);
+                self.builder.arena_mut().set_position(
+                    node_id,
+                    f.start_offset,
+                    l.end_offset,
+                    f.start_line,
+                    f.start_column,
+                    l.end_line,
+                    l.end_column,
+                );
+            }
+        }
+    }
+
+    fn write_element(&mut self, tag: &str) {
+        let count = self.attr_count;
+        for i in 0..count {
+            let name = self.attrs[i].name;
+            self.attrs[i].name_ref = self.builder.alloc_string(name);
+        }
+        let tag_ref = self.builder.alloc_string(tag);
+        let writer = self.builder.begin_data_current();
+        let Self { attrs, builder, .. } = self;
+        let out = &mut builder.arena_mut().type_data;
+        out.extend_from_slice(&tag_ref.as_bytes());
+        out.extend_from_slice(&(count as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        for attr in &attrs[..count] {
+            out.extend_from_slice(&attr.name_ref.as_bytes());
+            out.push(attr.kind);
+            out.extend_from_slice(&[0u8; 3]);
+            out.extend_from_slice(&attr.value.as_bytes());
+        }
+        builder.finish_data_current(writer);
+    }
+
+    fn finish_plain(&mut self) {
+        let tag = self.tag;
+        self.write_element(tag);
+        let pos = self.pos;
+        self.apply_pos_current(pos);
+    }
+
+    /// Outlined so the common h-less element keeps a straight-line finish.
+    #[inline(never)]
+    fn finish_h_element(&mut self, h: HData, allow_h_children: bool) -> Children {
+        let count = self.attr_count;
+        let defaults: Vec<(&str, u8, StringRef)> = self.attrs[..count]
+            .iter()
+            .map(|a| (a.name, a.kind, a.value))
+            .collect();
+        let props = merged_h_props(&mut self.builder, &defaults, h.h_properties());
+        let tag = h.h_name().unwrap_or(self.tag);
+        let tag_ref = self.builder.alloc_string(tag);
+        write_element_data(&mut self.builder, tag_ref, &props);
+        let pos = self.pos;
+        self.apply_pos_current(pos);
+        match h.h_children() {
+            Some(children) if allow_h_children => {
+                emit_h_children(&mut self.builder, children);
+                Children::Replaced
+            }
+            _ => Children::Recurse,
+        }
+    }
+
+    fn add_text_ref(&mut self, text_ref: StringRef, pos: Pos) {
+        let id = add_text_node_with_ref(&mut self.builder, text_ref);
+        self.apply_pos_to(id, pos);
+    }
+}
+
+impl ConvertSink for HastSink<'_> {
+    type BreakMark = usize;
+
+    fn open_root(&mut self, pos: Pos) {
+        self.builder.open_node_raw(HastNodeType::Root as u8);
+        self.apply_pos_current(pos);
+    }
+
+    fn close_root(&mut self) {
+        self.builder.close_node();
+    }
+
+    #[inline]
+    fn open_element(&mut self, tag: &'static str, pos: Pos) {
+        debug_assert!(self.h.is_none());
+        self.builder.open_node_raw(HastNodeType::Element as u8);
+        self.tag = tag;
+        self.pos = pos;
+        self.attr_count = 0;
+    }
+
+    #[inline]
+    fn open_source_element(&mut self, tag: &'static str, src_id: u32) {
+        self.builder.open_node_raw(HastNodeType::Element as u8);
+        self.tag = tag;
+        self.pos = Pos::Node(src_id);
+        self.attr_count = 0;
+        let h = HData::read(self.view, src_id);
+        if !h.is_empty() {
+            self.h = Some(h);
+        }
+    }
+
+    #[inline]
+    fn open_void(&mut self, tag: &'static str, pos: Pos) {
+        self.open_element(tag, pos);
+    }
+
+    #[inline]
+    fn open_source_void(&mut self, tag: &'static str, src_id: u32) {
+        self.open_source_element(tag, src_id);
+    }
+
+    #[inline]
+    fn attr(&mut self, name: AttrName, value: AttrValue<'_>) {
+        let (kind, value_ref) = match value {
+            AttrValue::Pooled(kind, sref) => (kind, sref),
+            AttrValue::Text(kind, text) => (kind, self.builder.alloc_string(text)),
+            AttrValue::Prefixed(kind, prefix, tail) => {
+                let head = self.builder.alloc_string(prefix);
+                (kind, self.builder.arena_mut().append_string(head, tail))
+            }
+            AttrValue::Flag(true) => (PROP_BOOL_TRUE, StringRef::empty()),
+            AttrValue::Flag(false) => (PROP_BOOL_FALSE, StringRef::empty()),
+        };
+        let i = self.attr_count;
+        debug_assert!(i < MAX_INLINE_ATTRS, "too many props for the inline buffer");
+        self.attrs[i].name = name.property;
+        self.attrs[i].kind = kind;
+        self.attrs[i].value = value_ref;
+        self.attr_count = i + 1;
+    }
+
+    #[inline]
+    fn finish_attrs(&mut self) {
+        self.finish_plain();
+    }
+
+    #[inline]
+    fn finish_source_attrs(&mut self) -> Children {
+        match self.h.take() {
+            None => {
+                self.finish_plain();
+                Children::Recurse
+            }
+            Some(h) => self.finish_h_element(h, true),
+        }
+    }
+
+    #[inline]
+    fn finish_void(&mut self) {
+        self.finish_plain();
+        self.builder.close_node();
+    }
+
+    #[inline]
+    fn finish_source_void(&mut self) {
+        match self.h.take() {
+            None => self.finish_plain(),
+            Some(h) => {
+                self.finish_h_element(h, false);
+            }
+        }
+        self.builder.close_node();
+    }
+
+    #[inline]
+    fn close_element(&mut self, _tag: &'static str) {
+        self.builder.close_node();
+    }
+
+    fn text(&mut self, value: &str, pos: Pos) {
+        let text_ref = self.builder.alloc_string(value);
+        self.add_text_ref(text_ref, pos);
+    }
+
+    fn text_pooled(&mut self, value: StringRef, pos: Pos) {
+        self.add_text_ref(value, pos);
+    }
+
+    fn text_trimmed(&mut self, value: StringRef, pos: Pos) {
+        let raw = self.view.get_str(value);
+        match trim_lines_for_hast(raw) {
+            std::borrow::Cow::Borrowed(_) => self.add_text_ref(value, pos),
+            std::borrow::Cow::Owned(trimmed) => {
+                let text_ref = self.builder.alloc_string(&trimmed);
+                self.add_text_ref(text_ref, pos);
+            }
+        }
+    }
+
+    fn text_with_trailing_space(&mut self, value: StringRef, pos: Pos) {
+        let text_ref = self.builder.arena_mut().append_string(value, " ");
+        self.add_text_ref(text_ref, pos);
+    }
+
+    fn code_block_text(&mut self, value: &str, pos: Pos) {
+        let text_ref = self.builder.alloc_string(value);
+        let text_ref = if value.is_empty() {
+            text_ref
+        } else {
+            self.builder.arena_mut().append_string(text_ref, "\n")
+        };
+        self.add_text_ref(text_ref, pos);
+    }
+
+    fn raw_html(&mut self, value: &str, pos: Pos) {
+        let id = add_raw_node(&mut self.builder, value);
+        self.apply_pos_to(id, pos);
+    }
+
+    #[inline]
+    fn newline(&mut self) {
+        let newline_ref = self.newline_ref;
+        self.add_text_ref(newline_ref, Pos::None);
+    }
+
+    fn code_info(&mut self, lang: StringRef, meta: StringRef) {
+        let view = self.view;
+        let lang = view.get_str(lang);
+        let meta = view.get_str(meta);
+        if lang.is_empty() && meta.is_empty() {
+            return;
+        }
+        let json = encode_code_node_data(lang, meta);
+        let id = self.builder.current_node_id();
+        self.builder.arena_mut().set_node_data(id, json);
+    }
+
+    #[inline]
+    fn mark_break_boundary(&mut self, after_break: bool) -> usize {
+        if after_break {
+            self.builder.current_pending_children().len()
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    fn apply_break_trim(&mut self, after_break: bool, mark: usize) {
+        if !after_break {
+            return;
+        }
+        let pending = self.builder.current_pending_children();
+        if pending.len() > mark {
+            let first_new = pending[mark];
+            trim_leading_ws_after_break(&mut self.builder, first_new);
+        }
+    }
+
+    fn produces_output(&self, child_id: u32) -> bool {
+        produces_hast_output(child_id, self.view)
+    }
+
+    fn has_no_h_data(&self, node_id: u32) -> bool {
+        HData::read(self.view, node_id).is_empty()
+    }
+
+    fn open_directive(&mut self, node_id: u32) -> Option<Children> {
+        let h = HData::read(self.view, node_id);
+        let name = h.h_name()?;
+        let props = merged_h_props(&mut self.builder, &[], h.h_properties());
+        open_element_with_props(&mut self.builder, name, &props);
+        copy_position(node_id, self.view, &mut self.builder);
+        match h.h_children() {
+            Some(children) => {
+                emit_h_children(&mut self.builder, children);
+                Some(Children::Replaced)
+            }
+            None => Some(Children::Recurse),
+        }
+    }
+
+    fn close_dynamic_element(&mut self) {
+        self.builder.close_node();
+    }
+
+    #[cfg(feature = "mdx")]
+    fn open_mdx_jsx_element(&mut self, node_id: u32, node_type: MdastNodeType) -> bool {
+        let hast_type = if node_type == MdastNodeType::MdxJsxTextElement {
+            HastNodeType::MdxJsxTextElement as u8
+        } else {
+            HastNodeType::MdxJsxElement as u8
+        };
+        let view = self.view;
+        let mdast_data = view.get_type_data(node_id);
+        let name_ref_mdast = if mdast_data.len() >= 8 {
+            decode_mdx_jsx_element_name(mdast_data)
+        } else {
+            StringRef::empty()
+        };
+        let name_str = if name_ref_mdast.len > 0 {
+            view.get_str(name_ref_mdast)
+        } else {
+            ""
+        };
+        let name_ref = self.builder.alloc_string(name_str);
+
+        // MDAST and HAST share the same attribute binary layout.
+        let attr_count = if mdast_data.len() >= 12 {
+            decode_mdx_jsx_attr_count(mdast_data)
+        } else {
+            0
+        };
+        let explicit_jsx = decode_mdx_jsx_explicit(mdast_data);
+        let mut attr_tuples = Vec::with_capacity(attr_count as usize);
+        for i in 0..attr_count {
+            attr_tuples.push(decode_mdx_jsx_attr(mdast_data, i));
+        }
+
+        self.builder.open_node_raw(hast_type);
+        let encoded = encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit_jsx);
+        self.builder.set_data_current(&encoded);
+        if let Some(mdast_nd) = view.get_node_data(node_id)
+            && !mdast_nd.is_empty()
+        {
+            let id = self.builder.current_node_id();
+            let copy = mdast_nd.to_vec();
+            self.builder.arena_mut().set_node_data(id, copy);
+        }
+        copy_position(node_id, view, &mut self.builder);
+        true
+    }
+
+    #[cfg(feature = "mdx")]
+    fn mdx_leaf(&mut self, node_id: u32, node_type: MdastNodeType) {
+        let hast_type = match node_type {
+            MdastNodeType::MdxFlowExpression => HastNodeType::MdxFlowExpression as u8,
+            MdastNodeType::MdxTextExpression => HastNodeType::MdxTextExpression as u8,
+            _ => HastNodeType::MdxEsm as u8,
+        };
+        let view = self.view;
+        let data = view.get_type_data(node_id);
+        let value = if data.is_empty() {
+            ""
+        } else {
+            view.get_str(decode_expression_data(data).value)
+        };
+        let value_ref = self.builder.alloc_string(value);
+        let leaf_id = self.builder.add_leaf_raw(hast_type);
+        self.builder
+            .arena_mut()
+            .set_type_data(leaf_id, &value_ref.as_bytes());
+        let node = view.get_node(node_id);
+        self.builder.arena_mut().set_position(
+            leaf_id,
+            node.start_offset,
+            node.end_offset,
+            node.start_line,
+            node.start_column,
+            node.end_line,
+            node.end_column,
+        );
     }
 }
 

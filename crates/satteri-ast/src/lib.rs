@@ -2,6 +2,7 @@
 
 pub mod commands;
 pub mod convert;
+mod emit;
 mod fused_html;
 mod generated;
 pub mod hast;
