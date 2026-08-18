@@ -1,10 +1,12 @@
 //! The mdast → element mapping, written once and driven into either a HAST arena or an HTML string.
 
+use core::fmt::Write;
+
 use satteri_arena::{Arena, Mdast, StringRef, decode_string_ref_data};
 
 use crate::convert::{
     Backref, CollectedRefs, ConvertOptions, code_span_line_endings_to_spaces, extract_text_content,
-    footnote_fragment_id, list_contains_task_item, normalize_url, resolve_backref,
+    footnote_fragment_id, list_contains_task_item, normalize_url,
 };
 use crate::mdast::{
     ColumnAlign, ListData, ListItemData, MdastNodeType, decode_code_data, decode_custom_data,
@@ -972,6 +974,49 @@ fn emit_paragraph_with_backrefs<S: ConvertSink>(
     sink.close_element("p");
 }
 
+/// A [`Backref`] pre-split on `{reference}`, so the per-reference loop never re-scans it.
+enum BackrefTemplate<'a> {
+    Literal(&'a str),
+    Split(&'a str, &'a str),
+    Callback(&'a dyn Fn(usize, usize) -> String),
+}
+
+impl<'a> BackrefTemplate<'a> {
+    fn new(backref: &'a Backref) -> Self {
+        match backref {
+            Backref::Template(tpl) => match tpl.split_once("{reference}") {
+                Some((before, after)) => BackrefTemplate::Split(before, after),
+                None => BackrefTemplate::Literal(tpl),
+            },
+            Backref::Callback(cb) => BackrefTemplate::Callback(cb),
+        }
+    }
+
+    fn is_template(&self) -> bool {
+        !matches!(self, BackrefTemplate::Callback(_))
+    }
+
+    fn write(&self, out: &mut String, number: usize, k: usize) {
+        out.clear();
+        match self {
+            BackrefTemplate::Literal(text) => out.push_str(text),
+            BackrefTemplate::Split(before, after) => {
+                out.push_str(before);
+                write_reference_token(out, number, k);
+                out.push_str(after);
+            }
+            BackrefTemplate::Callback(cb) => out.push_str(&cb(number, k)),
+        }
+    }
+}
+
+fn write_reference_token(out: &mut String, number: usize, k: usize) {
+    let _ = write!(out, "{number}");
+    if k > 1 {
+        let _ = write!(out, "-{k}");
+    }
+}
+
 /// remark's loose wrap newlines the separator when the backrefs are `<li>` children.
 fn emit_footnote_backrefs<S: ConvertSink>(
     identifier: &str,
@@ -981,6 +1026,13 @@ fn emit_footnote_backrefs<S: ConvertSink>(
     ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
 ) {
+    let label = BackrefTemplate::new(&ctx.options.footnote_back_label);
+    let content = BackrefTemplate::new(&ctx.options.footnote_back_content);
+    let content_is_template = content.is_template();
+    let mut aria_buf = String::new();
+    let mut content_buf = String::new();
+    let mut tail_buf = String::new();
+
     for k in 1..=total_refs.max(1) {
         if k > 1 {
             if li_children {
@@ -991,24 +1043,29 @@ fn emit_footnote_backrefs<S: ConvertSink>(
                 sink.newline();
             }
         }
-        let aria = resolve_backref(&ctx.options.footnote_back_label, number, k);
-        let back_content = resolve_backref(&ctx.options.footnote_back_content, number, k);
+        label.write(&mut aria_buf, number, k);
+        content.write(&mut content_buf, number, k);
         sink.open_element("a", Pos::None);
-        let href = if k > 1 {
-            format!("#{}fnref-{}-{}", ctx.options.clobber_prefix, identifier, k)
-        } else {
-            format!("#{}fnref-{}", ctx.options.clobber_prefix, identifier)
-        };
-        sink.attr(HREF, AttrValue::text(&href));
+        tail_buf.clear();
+        tail_buf.push('#');
+        tail_buf.push_str(&ctx.options.clobber_prefix);
+        tail_buf.push_str("fnref-");
+        tail_buf.push_str(identifier);
+        if k > 1 {
+            let _ = write!(tail_buf, "-{k}");
+        }
+        sink.attr(HREF, AttrValue::text(&tail_buf));
         sink.attr(DATA_FOOTNOTE_BACKREF, AttrValue::text(""));
-        sink.attr(ARIA_LABEL, AttrValue::text(&aria));
+        sink.attr(ARIA_LABEL, AttrValue::text(&aria_buf));
         sink.attr(CLASS_NAME, AttrValue::class_list("data-footnote-backref"));
         sink.finish_attrs();
-        sink.text(&back_content, Pos::None);
+        sink.text(&content_buf, Pos::None);
         // Template mode auto-appends <sup>K</sup>; callbacks emit their own.
-        if k > 1 && matches!(ctx.options.footnote_back_content, Backref::Template(_)) {
+        if k > 1 && content_is_template {
             open_plain(sink, "sup", Pos::None);
-            sink.text(&k.to_string(), Pos::None);
+            tail_buf.clear();
+            let _ = write!(tail_buf, "{k}");
+            sink.text(&tail_buf, Pos::None);
             sink.close_element("sup");
         }
         sink.close_element("a");

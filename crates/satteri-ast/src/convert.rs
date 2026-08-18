@@ -348,20 +348,6 @@ impl Default for ConvertOptions {
     }
 }
 
-pub(crate) fn resolve_backref(backref: &Backref, number: usize, k: usize) -> String {
-    match backref {
-        Backref::Template(tpl) => {
-            let token = if k > 1 {
-                format!("{}-{}", number, k)
-            } else {
-                number.to_string()
-            };
-            tpl.replace("{reference}", &token)
-        }
-        Backref::Callback(cb) => cb(number, k),
-    }
-}
-
 /// Convert an MDAST arena directly to a HAST arena using default options.
 pub fn mdast_arena_to_hast_arena(source: &Arena<Mdast>) -> Arena<Hast> {
     mdast_arena_to_hast_arena_impl(source, &ConvertOptions::default(), None)
