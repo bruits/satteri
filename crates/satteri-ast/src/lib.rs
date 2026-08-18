@@ -10,6 +10,7 @@ pub mod mdast;
 pub mod patch;
 pub mod shared;
 mod stack;
+mod swar;
 pub mod text_content;
 pub mod walk;
 

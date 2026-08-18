@@ -15,6 +15,7 @@ use crate::mdast::{
     decode_mdx_jsx_element_name, decode_mdx_jsx_explicit, encode_mdx_jsx_element_data,
 };
 use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
+use crate::swar::{has_zero, splat};
 
 /// Owned view over `data.hName` / `data.hProperties` / `data.hChildren` for a
 /// single mdast node. Mirrors mdast-util-to-hast's `applyData` semantics: a JS
@@ -237,13 +238,17 @@ pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
             && bytes[i + 1].is_ascii_alphanumeric()
             && bytes[i + 2].is_ascii_alphanumeric()
     };
-    let needs_encode = bytes.iter().enumerate().any(|(i, &b)| {
-        if b == b'%' {
-            !pct_safe(i)
-        } else {
-            !is_url_safe(b)
+    let mut from = 0;
+    let needs_encode = loop {
+        let Some(offset) = bytes[from..].iter().position(|&b| !URL_SAFE[b as usize]) else {
+            break false;
+        };
+        let at = from + offset;
+        if bytes[at] != b'%' || !pct_safe(at) {
+            break true;
         }
-    });
+        from = at + 1;
+    };
     if !needs_encode {
         return std::borrow::Cow::Borrowed(url);
     }
@@ -265,7 +270,19 @@ pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(encoded)
 }
 
-fn is_url_safe(b: u8) -> bool {
+const fn url_safe_table() -> [bool; 256] {
+    let mut table = [false; 256];
+    let mut byte = 0usize;
+    while byte < 256 {
+        table[byte] = is_url_safe(byte as u8);
+        byte += 1;
+    }
+    table
+}
+
+static URL_SAFE: [bool; 256] = url_safe_table();
+
+const fn is_url_safe(b: u8) -> bool {
     matches!(b,
         b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
         | b'-' | b'.' | b'_' | b'~'
@@ -731,30 +748,45 @@ pub(crate) fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(trim_lines_rewrite(value))
 }
 
+const fn is_line_break(byte: u8) -> bool {
+    byte == b'\n' || byte == b'\r'
+}
+
+const fn is_space_or_tab(byte: u8) -> bool {
+    byte == b' ' || byte == b'\t'
+}
+
+const fn line_break_mask(word: u64) -> u64 {
+    has_zero(word ^ splat(b'\n')) | has_zero(word ^ splat(b'\r'))
+}
+
+fn line_break_touches_space_or_tab(bytes: &[u8], at: usize) -> bool {
+    (at > 0 && is_space_or_tab(bytes[at - 1]))
+        || bytes.get(at + 1).is_some_and(|&next| is_space_or_tab(next))
+}
+
 /// Every text node pays this scan, so it stays separate from the rewrite it guards.
+/// A trimmed space or tab always sits beside a line break, so an adjacent pair
+/// is the whole condition and `\r\n` needs no case of its own.
 #[inline]
 fn needs_line_trim(bytes: &[u8]) -> bool {
     let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'\n' || b == b'\r' {
-            if i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+    while let Some(chunk) = bytes[i..].first_chunk::<8>() {
+        let mut mask = line_break_mask(u64::from_le_bytes(*chunk));
+        while mask != 0 {
+            // Only `has_zero`'s lowest lane is trustworthy, so confirm each one.
+            let at = i + (mask.trailing_zeros() / 8) as usize;
+            if is_line_break(bytes[at]) && line_break_touches_space_or_tab(bytes, at) {
                 return true;
             }
-            let after = if b == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
-                i + 2
-            } else {
-                i + 1
-            };
-            if after < bytes.len() && (bytes[after] == b' ' || bytes[after] == b'\t') {
-                return true;
-            }
-            i = after;
-            continue;
+            mask &= mask - 1;
         }
-        i += 1;
+        i += 8;
     }
-    false
+
+    bytes[i..].iter().enumerate().any(|(offset, &byte)| {
+        is_line_break(byte) && line_break_touches_space_or_tab(bytes, i + offset)
+    })
 }
 
 fn trim_lines_rewrite(value: &str) -> String {
@@ -1738,6 +1770,174 @@ mod hast_convert_tests {
         set_data(&mut mdast, para_id, r#"{"someOther":"value"}"#);
         let html = hast_arena_to_html(&mdast_arena_to_hast_arena(&mdast));
         assert!(html.contains("<p>Hi</p>"), "got {html}");
+    }
+
+    /// Reference oracle: the straightforward byte-at-a-time form of the predicate.
+    fn needs_line_trim_scalar(bytes: &[u8]) -> bool {
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'\n' || b == b'\r' {
+                if i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+                    return true;
+                }
+                let after = if b == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                    i + 2
+                } else {
+                    i + 1
+                };
+                if after < bytes.len() && (bytes[after] == b' ' || bytes[after] == b'\t') {
+                    return true;
+                }
+                i = after;
+                continue;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn check_line_trim(value: &str) {
+        let bytes = value.as_bytes();
+        assert_eq!(
+            super::needs_line_trim(bytes),
+            needs_line_trim_scalar(bytes),
+            "needs_line_trim disagrees on {value:?}"
+        );
+    }
+
+    #[test]
+    fn line_trim_scan_matches_scalar_on_every_short_arrangement_at_every_alignment() {
+        // 0x0b and 0x0e are the bytes a `\n` or `\r` lane can spuriously light up above itself.
+        let alphabet = [b'\n', b'\r', b' ', b'\t', b'x', 0x0b, 0x0e];
+        for len in 0..=4u32 {
+            for encoded in 0..alphabet.len().pow(len) {
+                let mut rest = encoded;
+                let suffix: Vec<u8> = (0..len)
+                    .map(|_| {
+                        let byte = alphabet[rest % alphabet.len()];
+                        rest /= alphabet.len();
+                        byte
+                    })
+                    .collect();
+                let suffix = std::str::from_utf8(&suffix).unwrap();
+                for lead in 0..=8usize {
+                    check_line_trim(&("x".repeat(lead) + suffix));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn line_trim_scan_matches_scalar_at_every_offset_and_length() {
+        for pair in [
+            "\n ", " \n", "\r\t", "\t\r", "\r\n", "\n\r", " \r\n", "\r\n ", "\n\u{b}", "\r\u{e}",
+            "\n\u{b} ", "\r\u{e} ",
+        ] {
+            for len in pair.len()..=40usize {
+                for at in 0..=len - pair.len() {
+                    let mut s = "x".repeat(len);
+                    s.replace_range(at..at + pair.len(), pair);
+                    check_line_trim(&s);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn line_trim_scan_matches_scalar_on_multibyte_utf8() {
+        let pieces = ["é", "€", "🎉", "日", "x", "\n", "\r", " ", "\t"];
+        for lead in 0..12usize {
+            for a in pieces {
+                for b in pieces {
+                    let mut s = "z".repeat(lead);
+                    s.push_str(a);
+                    s.push_str(b);
+                    s.push_str(a);
+                    check_line_trim(&s);
+                    s.push_str("tail");
+                    check_line_trim(&s);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn line_trim_scan_matches_scalar_on_pseudorandom_bytes() {
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let alphabet = b"\n\r \tabc.\x0b\x0e";
+        for len in 0..300usize {
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                s.push(alphabet[(state % alphabet.len() as u64) as usize] as char);
+            }
+            check_line_trim(&s);
+        }
+    }
+
+    /// Reference oracle: the straightforward per-byte form of the encode decision.
+    fn url_needs_encode_scalar(url: &str) -> bool {
+        let bytes = url.as_bytes();
+        bytes.iter().enumerate().any(|(i, &b)| {
+            let pct_safe = i + 2 < bytes.len()
+                && bytes[i + 1].is_ascii_alphanumeric()
+                && bytes[i + 2].is_ascii_alphanumeric();
+            if b == b'%' {
+                !pct_safe
+            } else {
+                !is_url_safe(b)
+            }
+        })
+    }
+
+    fn check_normalize_url(url: &str) {
+        let borrowed = matches!(normalize_url(url), std::borrow::Cow::Borrowed(_));
+        assert_eq!(
+            !borrowed,
+            url_needs_encode_scalar(url),
+            "normalize_url borrow decision disagrees on {url:?}"
+        );
+    }
+
+    #[test]
+    fn normalize_url_matches_scalar_on_percent_sequences() {
+        for tail in ["", "a", "ab", "abc", "%", "%a", "%ab", "2f", "2g", " ", "é"] {
+            for head in ["", "x", "https://a.b/", "%", "%2f"] {
+                check_normalize_url(&format!("{head}%{tail}"));
+                check_normalize_url(&format!("{head}{tail}"));
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_url_matches_scalar_on_pseudorandom_urls() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let alphabet = b"%abZ09-._~:/?#@!$&'()*+,;= <>\"{}|\\^`\n\t";
+        for len in 0..200usize {
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                s.push(alphabet[(state % alphabet.len() as u64) as usize] as char);
+            }
+            check_normalize_url(&s);
+        }
+    }
+
+    #[test]
+    fn trim_lines_borrows_when_nothing_changes() {
+        for value in [
+            "", "x", "a\nb", "a\r\nb", "\n", "\r\n", "a b", " lead", "end ",
+        ] {
+            assert!(
+                matches!(trim_lines_for_hast(value), std::borrow::Cow::Borrowed(_)),
+                "expected a borrow for {value:?}"
+            );
+        }
     }
 
     #[test]
