@@ -546,9 +546,9 @@ impl<'input> ParserInner<'input> {
     fn resolve_inline_scope(&mut self, start: Option<TreeIndex>, strikethrough_first: bool) {
         if strikethrough_first {
             self.resolve_tildes_carets_in_scope(start, false);
-            self.resolve_emphasis_at_scope(start);
+            self.handle_emphasis_in_scope(start);
         } else {
-            self.resolve_emphasis_at_scope(start);
+            self.handle_emphasis_in_scope(start);
             self.resolve_tildes_carets_in_scope(start, false);
         }
         let mut cur = start;
@@ -565,18 +565,25 @@ impl<'input> ParserInner<'input> {
                     | ItemBody::Image(_)
             ) {
                 let child = self.tree[cur_ix].child;
-                self.resolve_inline_scope(child, true);
+                if self.scope_has_unresolved(child) {
+                    self.resolve_inline_scope(child, true);
+                }
             }
             cur = next;
         }
     }
 
-    /// Resolve `*`/`_` at this scope only (no descent), with a fresh
-    /// `inline_stack`.
-    fn resolve_emphasis_at_scope(&mut self, start: Option<TreeIndex>) {
-        let saved = core::mem::take(&mut self.inline_stack);
-        self.handle_emphasis_in_scope(start);
-        self.inline_stack = saved;
+    /// An all-`Text` scope is inert: resolvers and descent only touch other bodies.
+    #[inline]
+    fn scope_has_unresolved(&self, start: Option<TreeIndex>) -> bool {
+        let mut cur = start;
+        while let Some(cur_ix) = cur {
+            if !matches!(self.tree[cur_ix].item.body, ItemBody::Text { .. }) {
+                return true;
+            }
+            cur = self.tree[cur_ix].next;
+        }
+        false
     }
 
     /// Find the first emphasis/strikethrough marker (`*` `_` `~` `^`) in
@@ -633,12 +640,7 @@ impl<'input> ParserInner<'input> {
     }
 
     fn resolve_emphasis_recursive(&mut self, start: Option<TreeIndex>) {
-        // Save and reset the shared inline_stack so each scope works
-        // with a fresh one. Smart-quote state is local to
-        // `handle_emphasis_in_scope`, no save needed.
-        let saved = core::mem::take(&mut self.inline_stack);
         self.handle_emphasis_in_scope(start);
-        self.inline_stack = saved;
 
         let mut cur = start;
         while let Some(cur_ix) = cur {
@@ -652,7 +654,9 @@ impl<'input> ParserInner<'input> {
                 | ItemBody::Link(_)
                 | ItemBody::Image(_) => {
                     let child = self.tree[cur_ix].child;
-                    self.resolve_emphasis_recursive(child);
+                    if self.scope_has_unresolved(child) {
+                        self.resolve_emphasis_recursive(child);
+                    }
                 }
                 _ => {}
             }
@@ -1800,7 +1804,9 @@ impl<'input> ParserInner<'input> {
         None
     }
 
+    /// Leaves `inline_stack` reset, so the next scope reuses it and its capacity.
     fn handle_emphasis_in_scope(&mut self, start: Option<TreeIndex>) {
+        debug_assert!(self.inline_stack.is_reset());
         let mut prev = None;
         let mut prev_ix: TreeIndex;
         let mut cur = start;
@@ -2725,6 +2731,10 @@ impl InlineStack {
     const TILDES: usize = 5;
     const UNDERSCORE_BASE: usize = 6;
     const CIRCUMFLEXES: usize = 9;
+
+    fn is_reset(&self) -> bool {
+        self.stack.is_empty() && self.lower_bounds == [0; 10]
+    }
 
     fn pop_all(&mut self, tree: &mut Tree<Item>) {
         for el in self.stack.drain(..) {
