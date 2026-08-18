@@ -376,9 +376,25 @@ fn edge_cases_are_byte_identical() {
     }
 }
 
+/// Past the ninth reference the backref id, href, and `{reference}` substitution all grow a digit.
+const BACKREF_SOURCES: &[(&str, &str)] = &[
+    (
+        "two definitions",
+        "One[^a] two[^a] three[^b].\n\n[^a]: First.\n\n[^b]: Second.\n",
+    ),
+    (
+        "twelve references",
+        "a[^r] b[^r] c[^r] d[^r] e[^r] f[^r] g[^r] h[^r] i[^r] j[^r] k[^r] l[^r].\n\n[^r]: Many.\n",
+    ),
+    (
+        "no paragraph to hang backrefs on",
+        "x[^n] y[^n] z[^n].\n\n[^n]:\n    - list only\n",
+    ),
+    ("empty definition", "p[^e] q[^e].\n\n[^e]:\n"),
+];
+
 #[test]
 fn custom_convert_options_are_byte_identical() {
-    let source = "One[^a] two[^a] three[^b].\n\n[^a]: First.\n\n[^b]: Second.\n";
     let cases: Vec<(&str, ConvertOptions)> = vec![
         (
             "custom label",
@@ -405,12 +421,14 @@ fn custom_convert_options_are_byte_identical() {
         ),
     ];
     for (label, convert) in &cases {
-        assert_parity(
-            label,
-            source,
-            satteri_pulldown_cmark::DEFAULT_OPTIONS,
-            convert,
-        );
+        for (source_label, source) in BACKREF_SOURCES {
+            assert_parity(
+                &format!("{label} / {source_label}"),
+                source,
+                satteri_pulldown_cmark::DEFAULT_OPTIONS,
+                convert,
+            );
+        }
     }
 }
 
