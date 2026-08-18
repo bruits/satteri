@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::arena::{Arena, TypeDataWriter};
 use crate::kind::ArenaKind;
-use crate::node::StringRef;
+use crate::node::{ArenaNode, StringRef};
 
 /// Builds an `Arena<K>` using an open/close node pattern suitable for
 /// depth-first tree construction (e.g. SAX-style parsers).
@@ -135,29 +135,34 @@ impl<K: ArenaKind> ArenaBuilder<K> {
         end_column: u32,
         data: &[u8],
     ) -> u32 {
-        let node_id = self.arena.alloc_node(node_type);
-
-        // Set position directly.
-        let node = &mut self.arena.nodes[node_id as usize];
-        node.start_offset = start_offset;
-        node.end_offset = end_offset;
-        node.start_line = start_line;
-        node.start_column = start_column;
-        node.end_line = end_line;
-        node.end_column = end_column;
-
-        // Set type data.
-        if !data.is_empty() {
+        let node_id = self.arena.nodes.len() as u32;
+        let (data_offset, data_len) = if data.is_empty() {
+            (0, 0)
+        } else {
             let offset = self.arena.type_data.len() as u32;
             self.arena.type_data.extend_from_slice(data);
-            let node = &mut self.arena.nodes[node_id as usize];
-            node.data_offset = offset;
-            node.data_len = data.len() as u32;
-        }
+            (offset, data.len() as u32)
+        };
+        let parent = self.stack.last().map_or(u32::MAX, |&(id, _)| id);
 
-        // Register as child of parent.
-        if let Some((parent_id, _)) = self.stack.last() {
-            self.arena.nodes[node_id as usize].parent = *parent_id;
+        self.arena.nodes.push(ArenaNode {
+            id: node_id,
+            node_type,
+            _pad: [0; 3],
+            parent,
+            start_offset,
+            end_offset,
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+            children_start: 0,
+            children_count: 0,
+            data_offset,
+            data_len,
+        });
+
+        if parent != u32::MAX {
             self.pending_children.push(node_id);
         }
 
