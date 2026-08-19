@@ -199,15 +199,15 @@ function getFeatures() {
     subscript: featSubscript.checked,
     wikilinks: featWikilinks.checked,
     definitionList: featDefinitionList.checked,
-    smartPunctuation: featSmartPunctuation.checked,
-    ...(featSmartPunctuation.checked &&
-      !(featSmartQuotes.checked && featSmartDashes.checked && featSmartEllipses.checked) && {
-        smartPunctuationOptions: {
-          quotes: featSmartQuotes.checked,
-          dashes: featSmartDashes.checked,
-          ellipses: featSmartEllipses.checked,
-        },
-      }),
+    smartPunctuation:
+      featSmartPunctuation.checked &&
+      !(featSmartQuotes.checked && featSmartDashes.checked && featSmartEllipses.checked)
+        ? {
+            quotes: featSmartQuotes.checked,
+            dashes: featSmartDashes.checked,
+            ellipses: featSmartEllipses.checked,
+          }
+        : featSmartPunctuation.checked,
   };
 }
 
