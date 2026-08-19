@@ -119,11 +119,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     };
   }
 
-  function readerCache(
-    reader: TReader,
-    frozen: boolean,
-    refs: NodeRefs | undefined,
-  ): ReaderCache<TNode> {
+  function readerCache(reader: TReader, frozen: boolean, refs: NodeRefs | undefined): ReaderCache<TNode> {
     let cache = readerCaches.get(reader);
     if (cache === undefined) {
       cache = {

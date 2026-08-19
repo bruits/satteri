@@ -269,12 +269,7 @@ function hastReusedId(node: unknown, refs: NodeRefs): number | undefined {
 
 /** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function emitHastChildrenCommand(
-  buffer: CommandBuffer,
-  id: number,
-  children: unknown,
-  refs: NodeRefs,
-): boolean {
+function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown, refs: NodeRefs): boolean {
   if (!Array.isArray(children)) return false;
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
@@ -290,13 +285,7 @@ function emitHastChildrenCommand(
  *  payload directly into the command buffer (no intermediate copy). HAST
  *  content is always a declarative node (no raw escape hatch), so it
  *  compiles or it's a hard error. */
-function emitHastTree(
-  buffer: CommandBuffer,
-  op: StructuralOp,
-  id: number,
-  node: HastNode,
-  refs: NodeRefs,
-): void {
+function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode, refs: NodeRefs): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
     emitHastOp(buffer, node, true, refs),
   );
@@ -429,8 +418,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
       // The last node carries the `replace` so refs back to the target still splice.
       let previous: HastContent | undefined;
       for (const n of newNode) {
-        if (previous !== undefined)
-          emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
+        if (previous !== undefined) emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
         previous = n;
       }
       if (previous === undefined) {
@@ -456,14 +444,12 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertBefore", this.#refs);
-    for (const n of asArray(newNode))
-      emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
+    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertAfter", this.#refs);
-    for (const n of asArray(newNode))
-      emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
+    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
   }
 
   wrapNode(
@@ -484,14 +470,12 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "prependChild", this.#refs);
-    for (const n of asArray(childNode))
-      emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
+    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "appendChild", this.#refs);
-    for (const n of asArray(childNode))
-      emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
+    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
@@ -578,7 +562,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
   parent<N extends Exclude<HastNode, HastRoot>>(node: Readonly<N>): Readonly<HastParents>;
   parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined;
   parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined {
-    const parentId = this.#resolver.parentIdOf(requireNid(node as HastNode, "parent", this.#refs));
+    const parentId = this.#resolver.parentIdOf(
+      requireNid(node as HastNode, "parent", this.#refs),
+    );
     if (parentId === undefined) return undefined;
     const byId = (this.#parentsById ??= new Map());
     let parent = byId.get(parentId);
@@ -1148,7 +1134,11 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
     return new HastReader(wire);
   }
 
-  protected override materializeNode(reader: HastReader, nodeId: number, refs: NodeRefs): HastNode {
+  protected override materializeNode(
+    reader: HastReader,
+    nodeId: number,
+    refs: NodeRefs,
+  ): HastNode {
     return materializeHastNode(reader, nodeId, true, refs);
   }
 

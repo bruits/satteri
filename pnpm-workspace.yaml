@@ -12,7 +12,7 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - satteri
-  - "@bruits/*"
+  - '@bruits/*'
 
 supportedArchitectures:
   cpu:
