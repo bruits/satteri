@@ -1,11 +1,5 @@
 # satteri-arena
 
-## 0.3.1 — 2026-08-19
-
-### Patch changes
-
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown parsing speed across the board: tables parse about 14% faster, lists about 10-12%, and general prose about 6-9%, with the same gains carrying through to HTML output. — Thanks @Princesseuh!
-
 ## 0.3.0 — 2026-08-18
 
 ### Minor changes

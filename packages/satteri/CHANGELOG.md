@@ -1,32 +1,5 @@
 # satteri
 
-## 0.11.0 — 2026-08-19
-
-### Minor changes
-
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved compile performance when a `features` object is passed to `markdownToHtml`, `mdxToJs`, or `markdownToJs`: roughly 1 µs less per call, about 25% faster on a small document.
-  
-  Changed `createMdastHandle`, `createMdxMdastHandle`, `createHastHandle`, and `createMdxHastHandle` to take the public `Features` shape. Granular options move from the flat `gfmOptions`, `mathOptions`, and `smartPunctuationOptions` fields into the `gfm`, `math`, and `smartPunctuation` ones:
-  
-  ```ts
-  createMdastHandle(source, { smartPunctuationOptions: { quotes: false } }); // before
-  createMdastHandle(source, { smartPunctuation: { quotes: false } }); // after
-  ```
-   — Thanks @Princesseuh!
-
-### Patch changes
-
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown parsing and rendering speed on list-heavy documents. Tight lists no longer slow down quadratically with item count — a 1000-item list renders about 4.5x faster — and line-dense documents parse roughly 6-9% faster overall. — Thanks @Princesseuh!
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved rendering performance for documents with many footnote references. — Thanks @Princesseuh!
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown to HTML performance with faster text line-trimming and URL normalization scans. — Thanks @Princesseuh!
-- [3a6ec24](https://github.com/bruits/satteri/commit/3a6ec24889481819506dd952988bca48465ab7b8) Added `clobberPrefix` option to footnotes, mirroring `remark-rehype` — Thanks @stephenlrandall!
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved parsing performance for documents dense in inline markup, such as emphasis, strong, strikethrough, and links. — Thanks @Princesseuh!
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown parsing speed on prose-heavy documents, where long stretches of plain text between markup now scan up to 5% faster. — Thanks @Princesseuh!
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown and MDX parsing performance, with the largest gains on long documents. — Thanks @Princesseuh!
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown parsing speed across the board: tables parse about 14% faster, lists about 10-12%, and general prose about 6-9%, with the same gains carrying through to HTML output. — Thanks @Princesseuh!
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown parsing speed by roughly 3-7% on documents that contain no bare URLs or email addresses. — Thanks @Princesseuh!
-- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved performance on link-heavy documents: inline links parse about 10% faster and bare-URL autolinks about 20% faster, with HTML rendering of both around 9% faster. — Thanks @Princesseuh!
-
 ## 0.10.2 — 2026-08-18
 
 ### Patch changes
