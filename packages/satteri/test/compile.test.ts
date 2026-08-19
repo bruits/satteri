@@ -15,7 +15,11 @@ import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { MdastNode } from "../src/types.js";
 import type { Element } from "hast";
-import type { MdxJsxTextElementHast } from "../src/mdx-types.js";
+import type {
+  MdxJsxFlowElement,
+  MdxJsxFlowElementData,
+  MdxJsxTextElementHast,
+} from "../src/mdx-types.js";
 
 describe("frontmatter extraction", () => {
   test("returns null when there is no frontmatter", () => {
@@ -795,6 +799,12 @@ describe("markdownToHtml", () => {
 
 // mdxToJs
 
+// Declared locally because `_mdxExplicitJsx` is private to the Data interfaces.
+interface ExplicitJsxData extends MdxJsxFlowElementData {
+  _mdxExplicitJsx: true;
+}
+const explicitJsxData: ExplicitJsxData = { _mdxExplicitJsx: true };
+
 describe("mdxToJs", () => {
   test("basic MDX compilation", () => {
     const { code: js } = mdxToJs("# Hello\n\nWorld");
@@ -1072,6 +1082,72 @@ describe("mdxToJs", () => {
     const pluginInserted = mdxToJs("# hi\n", { hastPlugins: [insertAstroImage] }).code;
     expect(pluginInserted).toContain('"astro-image": "astro-image"');
     expect(pluginInserted).toContain('_components["astro-image"]');
+  });
+
+  test("explicit JSX from one plugin-inserted node doesn't leak to the others", () => {
+    const insertExplicit = defineMdastPlugin({
+      name: "insert-explicit",
+      paragraph(node, ctx) {
+        ctx.replaceNode(node, {
+          type: "mdxJsxFlowElement",
+          name: "Building",
+          attributes: [],
+          children: [],
+          data: explicitJsxData,
+        } satisfies MdxJsxFlowElement);
+      },
+    });
+    const highlight = defineHastPlugin({
+      name: "highlight",
+      element: {
+        filter: ["pre"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, {
+            type: "element",
+            tagName: "pre",
+            properties: { className: ["shiki"] },
+            children: [{ type: "text", value: "highlighted" }],
+          } satisfies Element);
+        },
+      },
+    });
+
+    const { code } = mdxToJs("# Title\n\n```js\nconsole.log('hi');\n```\n\nSome paragraph.\n", {
+      mdastPlugins: [insertExplicit],
+      hastPlugins: [highlight],
+    });
+
+    expect(code).toContain('pre: "pre"');
+    expect(code).toContain("_components.pre");
+    expect(code).not.toContain('_jsx("pre"');
+  });
+
+  test("explicit JSX is honoured per node, not per span", () => {
+    const insertWidgets = defineMdastPlugin({
+      name: "insert-widgets",
+      paragraph(node, ctx) {
+        ctx.replaceNode(node, {
+          type: "mdxJsxFlowElement",
+          name: "my-widget",
+          attributes: [{ type: "mdxJsxAttribute", name: "foo", value: "bar" }],
+          children: [],
+          data: explicitJsxData,
+        } satisfies MdxJsxFlowElement);
+      },
+      heading(node, ctx) {
+        ctx.insertAfter(node, {
+          type: "mdxJsxFlowElement",
+          name: "other-widget",
+          attributes: [{ type: "mdxJsxAttribute", name: "foo", value: "bar" }],
+          children: [],
+        } satisfies MdxJsxFlowElement);
+      },
+    });
+
+    const { code } = mdxToJs("# hi\n\npara\n", { mdastPlugins: [insertWidgets] });
+
+    expect(code).toContain('_jsx("my-widget"');
+    expect(code).toContain('_components["other-widget"]');
   });
 
   test("HAST plugin setProperty on MDX JSX element preserves existing attributes", () => {

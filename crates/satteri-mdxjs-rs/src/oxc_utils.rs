@@ -9,13 +9,14 @@ use std::cell::Cell;
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
 use oxc_ast::ast::{
     Argument, BindingIdentifier, BooleanLiteral, CallExpression, ComputedMemberExpression,
-    Expression, IdentifierName, IdentifierReference, JSXAttributeName, JSXElementName,
+    Expression, IdentifierName, IdentifierReference, JSXAttributeName, JSXElement, JSXElementName,
     JSXIdentifier, JSXMemberExpression, JSXMemberExpressionObject, JSXNamespacedName,
     MemberExpression, NullLiteral, NumericLiteral, ObjectExpression, ObjectPropertyKind,
     PropertyKey, StaticMemberExpression, StringLiteral, ThisExpression,
 };
 use oxc_span::{Atom, SPAN, Span};
 use oxc_syntax::node::NodeId;
+use rustc_hash::FxHashSet;
 
 /// Turn an OXC span, of two byte positions, into a unist position.
 ///
@@ -485,6 +486,15 @@ pub fn create_prop_name<'a>(alloc: &'a Allocator, name: &str) -> PropertyKey<'a>
     } else {
         PropertyKey::StringLiteral(OxcBox::new_in(create_string_literal(alloc, name), alloc))
     }
+}
+
+/// Elements written as JSX in the source (`_mdxExplicitJsx`), by identity.
+pub type ExplicitJsxs = FxHashSet<usize>;
+
+/// Identify a JSX element by its address, stable for the allocator's lifetime.
+/// Spans alias: every plugin-inserted node carries the same dummy span.
+pub fn explicit_jsx_key(elem: &JSXElement) -> usize {
+    std::ptr::from_ref(elem) as usize
 }
 
 /// Check if a name is a literal tag name or an identifier to a component.

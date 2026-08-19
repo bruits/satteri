@@ -5,10 +5,10 @@
 
 use crate::hast_util_to_oxc::MdxProgram;
 use crate::oxc_utils::{
-    create_binding_ident, create_bool_expression, create_call_expression, create_ident_expression,
-    create_ident_name, create_member, create_object_expression, create_prop_name,
-    create_str_expression, create_string_literal, is_literal_name, jsx_member_to_parts,
-    span_to_position,
+    ExplicitJsxs, create_binding_ident, create_bool_expression, create_call_expression,
+    create_ident_expression, create_ident_name, create_member, create_object_expression,
+    create_prop_name, create_str_expression, create_string_literal, explicit_jsx_key,
+    is_literal_name, jsx_member_to_parts, span_to_position,
 };
 use satteri_arena::mdx_types::Location;
 
@@ -68,7 +68,7 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
     program: &mut MdxProgram<'a>,
     options: &Options,
     location: Option<&Location>,
-    explicit_jsxs: &FxHashSet<Span>,
+    explicit_jsxs: &ExplicitJsxs,
     allocator: &'a Allocator,
 ) {
     let has_provider = options.provider_import_source.is_some();
@@ -327,7 +327,7 @@ fn get_function_body_mut<'a, 'b>(stmt: &'b mut Statement<'a>) -> Option<&'b mut 
 }
 
 /// Collect information about JSX references in a function body.
-fn collect_scope_info(body: &FunctionBody, explicit_jsxs: &FxHashSet<Span>) -> ScopeInfo {
+fn collect_scope_info(body: &FunctionBody, explicit_jsxs: &ExplicitJsxs) -> ScopeInfo {
     let mut info = ScopeInfo::default();
 
     // Collect defined names from declarations in the body
@@ -435,11 +435,7 @@ fn collect_binding_names(pattern: &BindingPattern, names: &mut FxHashSet<String>
 }
 
 /// Recursively collect JSX references in a statement.
-fn collect_jsx_refs_in_stmt(
-    stmt: &Statement,
-    explicit_jsxs: &FxHashSet<Span>,
-    info: &mut ScopeInfo,
-) {
+fn collect_jsx_refs_in_stmt(stmt: &Statement, explicit_jsxs: &ExplicitJsxs, info: &mut ScopeInfo) {
     match stmt {
         Statement::ReturnStatement(ret) => {
             if let Some(expr) = &ret.argument {
@@ -481,11 +477,7 @@ fn collect_jsx_refs_in_stmt(
 }
 
 /// Recursively collect JSX references in an expression.
-fn collect_jsx_refs_in_expr(
-    expr: &Expression,
-    explicit_jsxs: &FxHashSet<Span>,
-    info: &mut ScopeInfo,
-) {
+fn collect_jsx_refs_in_expr(expr: &Expression, explicit_jsxs: &ExplicitJsxs, info: &mut ScopeInfo) {
     match expr {
         Expression::JSXElement(elem) => {
             collect_jsx_refs_in_element(elem, explicit_jsxs, info);
@@ -595,10 +587,10 @@ fn record_literal_tag(literal_tags: &mut FxHashMap<String, bool>, name: &str, is
 /// Collect JSX refs from a JSX element.
 fn collect_jsx_refs_in_element(
     elem: &JSXElement,
-    explicit_jsxs: &FxHashSet<Span>,
+    explicit_jsxs: &ExplicitJsxs,
     info: &mut ScopeInfo,
 ) {
-    let is_explicit = explicit_jsxs.contains(&elem.span);
+    let is_explicit = explicit_jsxs.contains(&explicit_jsx_key(elem));
 
     match &elem.opening_element.name {
         JSXElementName::Identifier(ident) => {
@@ -671,11 +663,7 @@ fn collect_jsx_refs_in_element(
 }
 
 /// Collect JSX refs from a JSX child.
-fn collect_jsx_refs_in_child(
-    child: &JSXChild,
-    explicit_jsxs: &FxHashSet<Span>,
-    info: &mut ScopeInfo,
-) {
+fn collect_jsx_refs_in_child(child: &JSXChild, explicit_jsxs: &ExplicitJsxs, info: &mut ScopeInfo) {
     match child {
         JSXChild::Element(elem) => {
             collect_jsx_refs_in_element(elem, explicit_jsxs, info);
@@ -702,7 +690,7 @@ fn collect_jsx_refs_in_child(
 fn rewrite_jsx_tags_in_body<'a>(
     body: &mut FunctionBody<'a>,
     scope: &ScopeInfo,
-    explicit_jsxs: &FxHashSet<Span>,
+    explicit_jsxs: &ExplicitJsxs,
     allocator: &'a Allocator,
 ) {
     for stmt in &mut body.statements {
@@ -714,7 +702,7 @@ fn rewrite_jsx_tags_in_body<'a>(
 fn rewrite_jsx_tags_in_stmt<'a>(
     stmt: &mut Statement<'a>,
     scope: &ScopeInfo,
-    explicit_jsxs: &FxHashSet<Span>,
+    explicit_jsxs: &ExplicitJsxs,
     allocator: &'a Allocator,
 ) {
     match stmt {
@@ -752,7 +740,7 @@ fn rewrite_jsx_tags_in_stmt<'a>(
 fn rewrite_jsx_tags_in_expr<'a>(
     expr: &mut Expression<'a>,
     scope: &ScopeInfo,
-    explicit_jsxs: &FxHashSet<Span>,
+    explicit_jsxs: &ExplicitJsxs,
     allocator: &'a Allocator,
 ) {
     match expr {
@@ -846,10 +834,10 @@ fn rewrite_jsx_tags_in_expr<'a>(
 fn rewrite_jsx_element<'a>(
     elem: &mut OxcBox<'a, JSXElement<'a>>,
     scope: &ScopeInfo,
-    explicit_jsxs: &FxHashSet<Span>,
+    explicit_jsxs: &ExplicitJsxs,
     allocator: &'a Allocator,
 ) {
-    let is_explicit = explicit_jsxs.contains(&elem.span);
+    let is_explicit = explicit_jsxs.contains(&explicit_jsx_key(elem));
 
     if !is_explicit {
         let tag_name = get_jsx_element_tag_name(&elem.opening_element.name);
@@ -907,7 +895,7 @@ fn rewrite_jsx_element<'a>(
 fn rewrite_jsx_child<'a>(
     child: &mut JSXChild<'a>,
     scope: &ScopeInfo,
-    explicit_jsxs: &FxHashSet<Span>,
+    explicit_jsxs: &ExplicitJsxs,
     allocator: &'a Allocator,
 ) {
     match child {
