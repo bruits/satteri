@@ -8,7 +8,7 @@ import {
   serializeHandle,
   renderHandle,
   getHandleSource,
-} from "../index.js";
+} from "../src/index.js";
 import { defineHastPlugin } from "../src/plugin.js";
 import { dropHandle, markdownToHtml } from "../src/index.js";
 import { collect } from "./fixtures.js";

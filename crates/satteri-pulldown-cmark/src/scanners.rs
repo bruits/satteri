@@ -301,7 +301,7 @@ impl<'a> LineStart<'a> {
         &mut self,
         indent: usize,
     ) -> Option<usize> {
-        let save = self.clone();
+        let save = self.save_cursor();
         if self.scan_ch(b':') {
             // A marker is a lone colon followed by whitespace or end-of-line
             // (matching pandoc / mdast-util-definition-list). This rejects a
@@ -310,20 +310,20 @@ impl<'a> LineStart<'a> {
             match self.bytes.get(self.ix) {
                 None | Some(&(b' ' | b'\t' | b'\r' | b'\n')) => {}
                 _ => {
-                    *self = save;
+                    self.restore_cursor(save);
                     return None;
                 }
             }
-            let save = self.clone();
+            let save = self.save_cursor();
             if self.scan_space(5) {
-                *self = save;
+                self.restore_cursor(save);
                 Some(indent + 1 + self.scan_space_upto(1))
             } else {
-                *self = save;
+                self.restore_cursor(save);
                 Some(indent + 1 + self.scan_space_upto(5))
             }
         } else {
-            *self = save;
+            self.restore_cursor(save);
             None
         }
     }
@@ -343,7 +343,7 @@ impl<'a> LineStart<'a> {
         indent: usize,
         clamp: bool,
     ) -> Option<(u8, u64, usize)> {
-        let save = self.clone();
+        let save = self.save_cursor();
         if self.ix < self.bytes.len() {
             let c = self.bytes[self.ix];
             if c == b'-' || c == b'+' || c == b'*' {
@@ -352,7 +352,7 @@ impl<'a> LineStart<'a> {
                     if let Err(min_offset) = scan_hrule(&self.bytes[self.ix..]) {
                         self.min_hrule_offset = min_offset;
                     } else {
-                        *self = save;
+                        self.restore_cursor(save);
                         return None;
                     }
                 }
@@ -387,7 +387,7 @@ impl<'a> LineStart<'a> {
                 }
             }
         }
-        *self = save;
+        self.restore_cursor(save);
         None
     }
 
@@ -398,7 +398,7 @@ impl<'a> LineStart<'a> {
         mut indent: usize,
         clamp: bool,
     ) -> Option<(u8, u64, usize)> {
-        let save = self.clone();
+        let save = self.save_cursor();
 
         // skip the rest of the line if it's blank
         if scan_blank_line(&self.bytes[self.ix..]).is_some() {
@@ -410,7 +410,7 @@ impl<'a> LineStart<'a> {
             if post_indent < 4 {
                 indent += post_indent;
             } else {
-                *self = save;
+                self.restore_cursor(save);
             }
         } else {
             // MDX: no indented code blocks, so the full run of post-marker
@@ -427,11 +427,11 @@ impl<'a> LineStart<'a> {
     /// Returns Some(is_checked) when a task list marker was found. Resets itself
     /// to original state otherwise.
     pub(crate) fn scan_task_list_marker(&mut self) -> Option<bool> {
-        let save = self.clone();
+        let save = self.save_cursor();
         self.scan_space_upto(3);
 
         if !self.scan_ch(b'[') {
-            *self = save;
+            self.restore_cursor(save);
             return None;
         }
         let is_checked = match self.bytes.get(self.ix) {
@@ -444,12 +444,12 @@ impl<'a> LineStart<'a> {
                 true
             }
             _ => {
-                *self = save;
+                self.restore_cursor(save);
                 return None;
             }
         };
         if !self.scan_ch(b']') {
-            *self = save;
+            self.restore_cursor(save);
             return None;
         }
         if !self
@@ -458,7 +458,7 @@ impl<'a> LineStart<'a> {
             .map(|&b| is_space_tab_or_eol(b))
             .unwrap_or(false)
         {
-            *self = save;
+            self.restore_cursor(save);
             return None;
         }
         self.ix += 1;
@@ -472,6 +472,32 @@ impl<'a> LineStart<'a> {
     pub(crate) fn remaining_space(&self) -> usize {
         self.spaces_remaining
     }
+
+    /// Narrower than cloning `LineStart`, whose wider copy stalls store-to-load forwarding.
+    pub(crate) fn save_cursor(&self) -> LineStartCursor {
+        LineStartCursor {
+            ix: self.ix,
+            tab_start: self.tab_start,
+            spaces_remaining: self.spaces_remaining,
+            min_hrule_offset: self.min_hrule_offset,
+        }
+    }
+
+    pub(crate) fn restore_cursor(&mut self, cursor: LineStartCursor) {
+        self.ix = cursor.ix;
+        self.tab_start = cursor.tab_start;
+        self.spaces_remaining = cursor.spaces_remaining;
+        self.min_hrule_offset = cursor.min_hrule_offset;
+    }
+}
+
+/// Every `LineStart` field except the source slice, which no scan rebinds.
+#[derive(Clone, Copy)]
+pub(crate) struct LineStartCursor {
+    ix: usize,
+    tab_start: usize,
+    spaces_remaining: usize,
+    min_hrule_offset: usize,
 }
 
 pub(crate) fn is_ascii_whitespace(c: u8) -> bool {

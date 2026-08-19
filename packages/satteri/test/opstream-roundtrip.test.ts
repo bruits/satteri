@@ -18,8 +18,8 @@ import {
   getHandleSource,
   serializeHandle,
   applyCommandsToMdastHandle,
-  type JsFeatures,
-} from "../index.js";
+  type Features,
+} from "../src/index.js";
 import { visitMdastHandle, resolveMdastSubscriptions } from "../src/mdast/mdast-visitor.js";
 import { visitHastHandle, resolveSubscriptions } from "../src/hast/hast-visitor.js";
 import { MdastReader } from "../src/mdast/mdast-reader.js";
@@ -37,7 +37,7 @@ const PAYLOAD_OPSTREAM = 0x14;
 
 interface MdastCaseOpts {
   mdx?: boolean;
-  features?: JsFeatures;
+  features?: Features;
 }
 
 /** Replace the doc's single paragraph with `replacement` through the op-stream,

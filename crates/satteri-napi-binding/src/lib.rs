@@ -7,158 +7,19 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-// Parsing feature flags (JS-facing)
+mod generated;
 
-/// Granular smart-punctuation toggles.
-#[napi(object)]
-pub struct JsSmartPunctuationOptions {
-    /// Replace straight quotes with curly/smart quotes. Default: true.
-    pub quotes: Option<bool>,
-    /// Replace `--`/`---` with en-dash/em-dash. Default: true.
-    pub dashes: Option<bool>,
-    /// Replace `...` with ellipsis (`…`). Default: true.
-    pub ellipses: Option<bool>,
-}
-
-/// Granular math toggles, nested under `features.math`.
-#[napi(object)]
-pub struct JsMathOptions {
-    /// Treat single-dollar runs (`$ ... $`) as inline math. Default: true.
-    /// Set `false` to keep single `$` as literal text (prose with currency)
-    /// while still parsing double-dollar (`$$ ... $$`) display math.
-    pub single_dollar_text_math: Option<bool>,
-}
-
-/// Granular GFM toggles, nested under `features.gfm`. The footnote i18n
-/// strings (label, back-content, back-label) travel separately via the
-/// `JsConvertOptions` argument on conversion entry points; the JS package
-/// extracts them from `features.gfm.footnotes` before calling in.
-#[napi(object)]
-pub struct JsGfmOptions {
-    /// Enable GFM footnotes (`[^id]`). Default: true. Set `false` to drop
-    /// footnote parsing while keeping the rest of the GFM bundle.
-    pub footnotes: Option<bool>,
-}
-
-/// Feature toggles for the Markdown/MDX parser, passed from JavaScript.
-#[napi(object)]
-pub struct JsFeatures {
-    /// GFM: tables, footnotes, strikethrough, task lists. Default: true.
-    pub gfm: Option<bool>,
-    /// Granular GFM control (overrides `gfm`).
-    pub gfm_options: Option<JsGfmOptions>,
-    /// Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true.
-    pub frontmatter: Option<bool>,
-    /// Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: false.
-    pub math: Option<bool>,
-    /// Granular math control (overrides `math`).
-    pub math_options: Option<JsMathOptions>,
-    /// Heading attributes (`# text { #id .class }`). Default: false.
-    pub heading_attributes: Option<bool>,
-    /// Colon-delimited container directive blocks (`:::`). Default: false.
-    pub directive: Option<bool>,
-    /// Superscript (`^super^`). Default: false.
-    pub superscript: Option<bool>,
-    /// Subscript (`~sub~`). Default: false.
-    pub subscript: Option<bool>,
-    /// Obsidian-style wikilinks (`[[link]]`). Default: false.
-    pub wikilinks: Option<bool>,
-    /// Definition lists (`Term` then `: definition`). Default: false.
-    pub definition_list: Option<bool>,
-    /// Smart punctuation: all categories on. Default: false.
-    pub smart_punctuation: Option<bool>,
-    /// Granular smart-punctuation control (overrides `smart_punctuation`).
-    pub smart_punctuation_options: Option<JsSmartPunctuationOptions>,
-}
-
-fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulldown_cmark::Options {
+/// The JS package packs `Features` into these bits itself: unpacking an options
+/// object here costs ~790 ns per call in named-property lookups, an integer ~0.
+fn parser_options(parse_options: u32, mdx: bool) -> satteri_pulldown_cmark::Options {
     use satteri_pulldown_cmark::Options;
 
-    let f = features.unwrap_or(JsFeatures {
-        gfm: None,
-        gfm_options: None,
-        frontmatter: None,
-        math: None,
-        math_options: None,
-        heading_attributes: None,
-        directive: None,
-        superscript: None,
-        subscript: None,
-        wikilinks: None,
-        definition_list: None,
-        smart_punctuation: None,
-        smart_punctuation_options: None,
-    });
-
-    let mut opts = Options::empty();
-
-    let (gfm_enabled, footnotes_enabled) = match &f.gfm_options {
-        Some(g) => (f.gfm.unwrap_or(true), g.footnotes.unwrap_or(true)),
-        None => (f.gfm.unwrap_or(true), true),
-    };
-    if gfm_enabled {
-        opts |= Options::ENABLE_TABLES
-            | Options::ENABLE_STRIKETHROUGH
-            | Options::ENABLE_TASKLISTS
-            | Options::ENABLE_GFM;
-        if footnotes_enabled {
-            opts |= Options::ENABLE_FOOTNOTES;
-        }
-    }
-    if f.frontmatter.unwrap_or(true) {
-        opts |= Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
-            | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS;
-    }
-    // Math is on when `math: true` or when a granular options object is passed
-    // (the object overrides the umbrella toggle). `single_dollar_text_math`
-    // then picks between umbrella-mode (single + multi) and multi-only: opting
-    // out of single-dollar sets the multi-dollar sub-flag directly so the
-    // parser skips lone `$` entirely.
-    if f.math_options.is_some() || f.math.unwrap_or(false) {
-        match f
-            .math_options
-            .as_ref()
-            .and_then(|m| m.single_dollar_text_math)
-        {
-            Some(false) => opts |= Options::ENABLE_MATH_MULTI_DOLLAR,
-            _ => opts |= Options::ENABLE_MATH,
-        }
-    }
-    if f.heading_attributes.unwrap_or(false) {
-        opts |= Options::ENABLE_HEADING_ATTRIBUTES;
-    }
-    if f.directive.unwrap_or(false) {
-        opts |= Options::ENABLE_DIRECTIVE;
-    }
-    if f.superscript.unwrap_or(false) {
-        opts |= Options::ENABLE_SUPERSCRIPT;
-    }
-    if f.subscript.unwrap_or(false) {
-        opts |= Options::ENABLE_SUBSCRIPT;
-    }
-    if f.wikilinks.unwrap_or(false) {
-        opts |= Options::ENABLE_WIKILINKS;
-    }
-    if f.definition_list.unwrap_or(false) {
-        opts |= Options::ENABLE_DEFINITION_LIST;
-    }
-    if let Some(sp) = f.smart_punctuation_options {
-        if sp.quotes.unwrap_or(true) {
-            opts |= Options::ENABLE_SMART_QUOTES;
-        }
-        if sp.dashes.unwrap_or(true) {
-            opts |= Options::ENABLE_SMART_DASHES;
-        }
-        if sp.ellipses.unwrap_or(true) {
-            opts |= Options::ENABLE_SMART_ELLIPSES;
-        }
-    } else if f.smart_punctuation.unwrap_or(false) {
-        opts |= Options::ENABLE_SMART_PUNCTUATION;
-    }
+    let opts = Options::from_bits_truncate(parse_options);
     if mdx {
-        opts |= Options::ENABLE_MDX;
+        opts | Options::ENABLE_MDX
+    } else {
+        opts
     }
-    opts
 }
 
 // MDX compilation options (JS-facing)
@@ -349,11 +210,11 @@ pub fn compile_mdx(
     env: Env,
     source: String,
     options: Option<JsMdxOptions>,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     convert_options: Option<JsConvertOptions>,
 ) -> Result<String> {
     let opts = js_options_to_rust(options);
-    let parse_opts = features_to_options(features, true);
+    let parse_opts = parser_options(parse_options, true);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     satteri_mdxjs::compile_with_convert_options(&source, &opts, parse_opts, &convert_opts)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
@@ -366,10 +227,10 @@ pub fn compile_mdx(
 pub fn parse_to_html(
     env: Env,
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     convert_options: Option<JsConvertOptions>,
 ) -> Result<String> {
-    let opts = features_to_options(features, false);
+    let opts = parser_options(parse_options, false);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     let (arena, _) = satteri_pulldown_cmark::parse(&source, opts);
     Ok(satteri_ast::mdast_to_html_with_options(
@@ -542,13 +403,13 @@ fn parse_mdast_pooled(
 fn create_hast_handle_impl(
     env: Env,
     source: &str,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     convert_options: Option<JsConvertOptions>,
     mdx: bool,
     track_positions: bool,
     want_frontmatter: bool,
 ) -> Result<(HastHandle, Option<JsFrontmatter>)> {
-    let opts = features_to_options(features, mdx);
+    let opts = parser_options(parse_options, mdx);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     let mdast = parse_mdast_pooled(source, opts, mdx, track_positions)?;
     let frontmatter = if want_frontmatter {
@@ -575,10 +436,10 @@ fn create_hast_handle_impl(
 #[napi]
 pub fn create_mdast_handle(
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     track_positions: Option<bool>,
 ) -> Result<MdastHandle> {
-    let opts = features_to_options(features, false);
+    let opts = parser_options(parse_options, false);
     let mut arena = parse_mdast_pooled(&source, opts, false, track_positions.unwrap_or(true))?;
     arena.mdx = false;
     Ok(External::new(Mutex::new(arena)))
@@ -589,10 +450,10 @@ pub fn create_mdast_handle(
 #[napi]
 pub fn create_mdx_mdast_handle(
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     track_positions: Option<bool>,
 ) -> Result<MdastHandle> {
-    let opts = features_to_options(features, true);
+    let opts = parser_options(parse_options, true);
     let mut arena = parse_mdast_pooled(&source, opts, true, track_positions.unwrap_or(true))?;
     arena.mdx = true;
     Ok(External::new(Mutex::new(arena)))
@@ -970,14 +831,14 @@ pub fn apply_mdast_commands_and_convert_and_compile(
 pub fn create_hast_handle(
     env: Env,
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     convert_options: Option<JsConvertOptions>,
     track_positions: Option<bool>,
 ) -> Result<HastHandle> {
     let (handle, _) = create_hast_handle_impl(
         env,
         &source,
-        features,
+        parse_options,
         convert_options,
         false,
         track_positions.unwrap_or(true),
@@ -1023,14 +884,14 @@ pub fn create_hast_handle_from_html(
 pub fn create_mdx_hast_handle(
     env: Env,
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     convert_options: Option<JsConvertOptions>,
     track_positions: Option<bool>,
 ) -> Result<HastHandle> {
     let (handle, _) = create_hast_handle_impl(
         env,
         &source,
-        features,
+        parse_options,
         convert_options,
         true,
         track_positions.unwrap_or(true),
@@ -1045,14 +906,14 @@ pub fn create_mdx_hast_handle(
 pub fn create_hast_handle_with_frontmatter(
     env: Env,
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     convert_options: Option<JsConvertOptions>,
     track_positions: Option<bool>,
 ) -> Result<(HastHandle, Option<JsFrontmatter>)> {
     create_hast_handle_impl(
         env,
         &source,
-        features,
+        parse_options,
         convert_options,
         false,
         track_positions.unwrap_or(true),
@@ -1066,14 +927,14 @@ pub fn create_hast_handle_with_frontmatter(
 pub fn create_mdx_hast_handle_with_frontmatter(
     env: Env,
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     convert_options: Option<JsConvertOptions>,
     track_positions: Option<bool>,
 ) -> Result<(HastHandle, Option<JsFrontmatter>)> {
     create_hast_handle_impl(
         env,
         &source,
-        features,
+        parse_options,
         convert_options,
         true,
         track_positions.unwrap_or(true),
@@ -1233,10 +1094,10 @@ pub struct MarkdownHtmlOneShot {
 pub fn markdown_to_html_fast(
     env: Env,
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     convert_options: Option<JsConvertOptions>,
 ) -> Result<MarkdownHtmlOneShot> {
-    let opts = features_to_options(features, false);
+    let opts = parser_options(parse_options, false);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     // Skip position tracking entirely: HTML output never reads positions, so
     // the per-node `cursor.offset_to_line_col` calls + `LineIndex` per-line
@@ -1269,12 +1130,12 @@ pub struct MdxJsOneShot {
 fn to_js_fast_impl(
     env: Env,
     source: &str,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     options: Option<JsMdxOptions>,
     convert_options: Option<JsConvertOptions>,
     mdx: bool,
 ) -> Result<MdxJsOneShot> {
-    let opts = features_to_options(features, mdx);
+    let opts = parser_options(parse_options, mdx);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     // Skip the LineIndex + per-node line/col work; byte offsets still flow to
     // the HAST arena, so codegen resolves dev `__source` / error line:col via
@@ -1322,11 +1183,11 @@ fn to_js_fast_impl(
 pub fn mdx_to_js_fast(
     env: Env,
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     options: Option<JsMdxOptions>,
     convert_options: Option<JsConvertOptions>,
 ) -> Result<MdxJsOneShot> {
-    to_js_fast_impl(env, &source, features, options, convert_options, true)
+    to_js_fast_impl(env, &source, parse_options, options, convert_options, true)
 }
 
 /// Plain-Markdown variant of [`mdx_to_js_fast`]: MDX syntax stays literal text.
@@ -1336,11 +1197,11 @@ pub fn mdx_to_js_fast(
 pub fn markdown_to_js_fast(
     env: Env,
     source: String,
-    features: Option<JsFeatures>,
+    parse_options: u32,
     options: Option<JsMdxOptions>,
     convert_options: Option<JsConvertOptions>,
 ) -> Result<MdxJsOneShot> {
-    to_js_fast_impl(env, &source, features, options, convert_options, false)
+    to_js_fast_impl(env, &source, parse_options, options, convert_options, false)
 }
 
 /// Compile a HAST handle's arena to MDX JavaScript. Does not consume the handle.

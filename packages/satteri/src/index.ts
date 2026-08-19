@@ -112,25 +112,81 @@ export { materializeMdastTree } from "./mdast/mdast-materializer.js";
 export { HastReader } from "./hast/hast-reader.js";
 export { materializeHastTree } from "./hast/hast-materializer.js";
 
-export {
-  createMdastHandle,
-  createMdxMdastHandle,
-  createHastHandle,
-  createMdxHastHandle,
-  serializeHandle,
-  renderHandle,
-  compileHandle,
-  getHandleSource,
-} from "#binding";
+export { serializeHandle, renderHandle, compileHandle, getHandleSource } from "#binding";
 
 import {
   applyCommandsToMdastHandle as napiApplyCommandsToMdastHandle,
   applyCommandsAndConvertToHastHandle as napiApplyCommandsAndConvertToHastHandle,
   convertMdastToHastHandle as napiConvertMdastToHastHandle,
+  createHastHandle as napiCreateHastHandle,
+  createMdastHandle as napiCreateMdastHandle,
+  createMdxHastHandle as napiCreateMdxHastHandle,
+  createMdxMdastHandle as napiCreateMdxMdastHandle,
   dropHandle as napiDropHandle,
 } from "#binding";
+import { featuresToNative } from "./compile.js";
+import type { Features } from "./compile.js";
 import type { AnyHandle } from "./handles.js";
 import { markHandleMutated } from "./lazy-child-resolver.js";
+
+type NativeConvertOptions = NonNullable<Parameters<typeof napiCreateHastHandle>[2]>;
+
+// The napi creators take pre-packed parser bits; these keep `Features` the public shape.
+
+export function createMdastHandle(
+  source: string,
+  features?: Features,
+  trackPositions?: boolean,
+): MdastHandle {
+  return napiCreateMdastHandle(source, featuresToNative(features).parseOptions, trackPositions);
+}
+
+export function createMdxMdastHandle(
+  source: string,
+  features?: Features,
+  trackPositions?: boolean,
+): MdastHandle {
+  return napiCreateMdxMdastHandle(source, featuresToNative(features).parseOptions, trackPositions);
+}
+
+export function createHastHandle(
+  source: string,
+  features?: Features,
+  convertOptions?: NativeConvertOptions,
+  trackPositions?: boolean,
+): HastHandle {
+  const native = featuresToNative(features);
+  return napiCreateHastHandle(
+    source,
+    native.parseOptions,
+    mergeConvertOptions(native.convertOptions, convertOptions),
+    trackPositions,
+  );
+}
+
+export function createMdxHastHandle(
+  source: string,
+  features?: Features,
+  convertOptions?: NativeConvertOptions,
+  trackPositions?: boolean,
+): HastHandle {
+  const native = featuresToNative(features);
+  return napiCreateMdxHastHandle(
+    source,
+    native.parseOptions,
+    mergeConvertOptions(native.convertOptions, convertOptions),
+    trackPositions,
+  );
+}
+
+function mergeConvertOptions(
+  fromFeatures: NativeConvertOptions | undefined,
+  explicit: NativeConvertOptions | undefined,
+): NativeConvertOptions | undefined {
+  if (fromFeatures === undefined) return explicit;
+  if (explicit === undefined) return fromFeatures;
+  return { ...fromFeatures, ...explicit };
+}
 
 // The raw NAPI mutators renumber or empty the arena; without the epoch bump a
 // child stub retained past a manual-pipeline pass would silently snapshot the

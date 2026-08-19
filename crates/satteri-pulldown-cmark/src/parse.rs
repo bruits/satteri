@@ -25,7 +25,7 @@ use core::{
     cell::Cell,
     cmp::{max, min},
     iter::FusedIterator,
-    num::NonZeroUsize,
+    num::NonZeroU32,
     ops::{Index, Range},
 };
 use rustc_hash::FxHashMap;
@@ -62,18 +62,18 @@ pub(crate) enum ItemBody {
     // These are possible inline items, need to be resolved in second pass.
 
     // repeats, can_open, can_close
-    MaybeEmphasis(usize, bool, bool),
+    MaybeEmphasis(u32, bool, bool),
     /// Head of a run the first pass's escape handler would have swallowed,
     /// sitting on the byte after a deferred autolink candidate's last. Carries
     /// the flags for the run the link firing creates; blocked until it does.
     // repeats, can_open, can_close
-    MaybeEmphasisEscaped(usize, bool, bool),
+    MaybeEmphasisEscaped(u32, bool, bool),
     // preceded_by_backslash, brace context
     MaybeMath(bool, u8),
     // quote byte, can_open, can_close
     MaybeSmartQuote(u8, bool, bool),
-    MaybeCode(usize, bool), // number of backticks, preceded by backslash
-    MaybeHtml(bool),        // preceded by backslash
+    MaybeCode(u32, bool), // number of backticks, preceded by backslash
+    MaybeHtml(bool),      // preceded by backslash
     MaybeLinkOpen,
     // bool indicates whether or not the preceding section could be a reference
     MaybeLinkClose(bool),
@@ -118,10 +118,7 @@ pub(crate) enum ItemBody {
     TightParagraph,
     Rule,
     Heading(HeadingLevel, Option<HeadingIndex>), // heading level
-    // u32: byte length of the `lang` part within the decoded info string. The
-    // split is taken on raw source, so a character reference decoding to
-    // whitespace does not move it.
-    FencedCodeBlock(CowIndex, u32),
+    FencedCodeBlock(FencedInfoIndex),
     MathBlock(CowIndex), // meta string (info after $$)
     // bool: true = lazy/no-extend (block was opened as a single-line
     // synthetic split, e.g. after an empty list item closed via blank
@@ -138,8 +135,8 @@ pub(crate) enum ItemBody {
     // `paragraph` with `data.directiveLabel = true`. Its children are tokenized
     // by the normal inline pass, so emphasis/strong/links resolve naturally.
     DirectiveLabel,
-    List(bool, u8, u64),   // is_tight, list character, list start index
-    ListItem(usize, bool), // indent level, spread (loose item)
+    List(bool, u8, u32), // is_tight, list character, list start index
+    ListItem(u32, bool), // indent level, spread (loose item)
     FootnoteDefinition(CowIndex),
     MetadataBlock(MetadataBlockKind),
 
@@ -149,7 +146,7 @@ pub(crate) enum ItemBody {
     // depending on whether there's a definition after it
     MaybeDefinitionListTitle,
     DefinitionListTitle,
-    DefinitionListDefinition(usize, bool), // indent level, spread (loose definition)
+    DefinitionListDefinition(u32, bool), // indent level, spread (loose definition)
 
     // Tables
     Table(AlignmentIndex),
@@ -549,9 +546,9 @@ impl<'input> ParserInner<'input> {
     fn resolve_inline_scope(&mut self, start: Option<TreeIndex>, strikethrough_first: bool) {
         if strikethrough_first {
             self.resolve_tildes_carets_in_scope(start, false);
-            self.resolve_emphasis_at_scope(start);
+            self.handle_emphasis_in_scope(start);
         } else {
-            self.resolve_emphasis_at_scope(start);
+            self.handle_emphasis_in_scope(start);
             self.resolve_tildes_carets_in_scope(start, false);
         }
         let mut cur = start;
@@ -568,18 +565,25 @@ impl<'input> ParserInner<'input> {
                     | ItemBody::Image(_)
             ) {
                 let child = self.tree[cur_ix].child;
-                self.resolve_inline_scope(child, true);
+                if self.scope_has_unresolved(child) {
+                    self.resolve_inline_scope(child, true);
+                }
             }
             cur = next;
         }
     }
 
-    /// Resolve `*`/`_` at this scope only (no descent), with a fresh
-    /// `inline_stack`.
-    fn resolve_emphasis_at_scope(&mut self, start: Option<TreeIndex>) {
-        let saved = core::mem::take(&mut self.inline_stack);
-        self.handle_emphasis_in_scope(start);
-        self.inline_stack = saved;
+    /// An all-`Text` scope is inert: resolvers and descent only touch other bodies.
+    #[inline]
+    fn scope_has_unresolved(&self, start: Option<TreeIndex>) -> bool {
+        let mut cur = start;
+        while let Some(cur_ix) = cur {
+            if !matches!(self.tree[cur_ix].item.body, ItemBody::Text { .. }) {
+                return true;
+            }
+            cur = self.tree[cur_ix].next;
+        }
+        false
     }
 
     /// Find the first emphasis/strikethrough marker (`*` `_` `~` `^`) in
@@ -636,12 +640,7 @@ impl<'input> ParserInner<'input> {
     }
 
     fn resolve_emphasis_recursive(&mut self, start: Option<TreeIndex>) {
-        // Save and reset the shared inline_stack so each scope works
-        // with a fresh one. Smart-quote state is local to
-        // `handle_emphasis_in_scope`, no save needed.
-        let saved = core::mem::take(&mut self.inline_stack);
         self.handle_emphasis_in_scope(start);
-        self.inline_stack = saved;
 
         let mut cur = start;
         while let Some(cur_ix) = cur {
@@ -655,7 +654,9 @@ impl<'input> ParserInner<'input> {
                 | ItemBody::Link(_)
                 | ItemBody::Image(_) => {
                     let child = self.tree[cur_ix].child;
-                    self.resolve_emphasis_recursive(child);
+                    if self.scope_has_unresolved(child) {
+                        self.resolve_emphasis_recursive(child);
+                    }
                 }
                 _ => {}
             }
@@ -882,7 +883,7 @@ impl<'input> ParserInner<'input> {
                                                     .filter_map(|&ix| {
                                                         match self.tree[ix].item.body {
                                                             ItemBody::ListItem(indent, _) => {
-                                                                Some(indent)
+                                                                Some(indent as usize)
                                                             }
                                                             _ => None,
                                                         }
@@ -1129,7 +1130,8 @@ impl<'input> ParserInner<'input> {
                         }
                     }
                 }
-                ItemBody::MaybeCode(mut search_count, preceded_by_backslash) => {
+                ItemBody::MaybeCode(search_count, preceded_by_backslash) => {
+                    let mut search_count = search_count as usize;
                     if preceded_by_backslash {
                         search_count -= 1;
                         if search_count == 0 {
@@ -1164,6 +1166,7 @@ impl<'input> ParserInner<'input> {
                             if let ItemBody::MaybeCode(delim_count, _) =
                                 self.tree[scan_ix].item.body
                             {
+                                let delim_count = delim_count as usize;
                                 if search_count == delim_count {
                                     self.make_code_span(cur_ix, scan_ix, preceded_by_backslash);
                                     self.code_delims.clear();
@@ -1258,6 +1261,7 @@ impl<'input> ParserInner<'input> {
                     }
                 }
                 ItemBody::MaybeEmphasisEscaped(count, ..) => {
+                    let count = count as usize;
                     // Nothing unblocked it, so the escape stands: the delimiter
                     // it hid is literal and the run after it is one shorter.
                     self.tree[cur_ix].item.body = ItemBody::Text {
@@ -1413,7 +1417,7 @@ impl<'input> ParserInner<'input> {
                                 if let Some(def) = self
                                     .allocs
                                     .footdefs
-                                    .get_mut(self.allocs.cows[footref.0].to_owned())
+                                    .get_mut(self.allocs.cows[footref.0 as usize].to_owned())
                                 {
                                     def.use_count += 1;
                                 }
@@ -1555,11 +1559,15 @@ impl<'input> ParserInner<'input> {
                                 if let Some(def) = self
                                     .allocs
                                     .footdefs
-                                    .get_mut(self.allocs.cows[footref.0].to_owned())
+                                    .get_mut(self.allocs.cows[footref.0 as usize].to_owned())
                                 {
                                     def.use_count += 1;
                                 }
-                                if self.allocs.footdefs.contains(&self.allocs.cows[footref.0]) {
+                                if self
+                                    .allocs
+                                    .footdefs
+                                    .contains(&self.allocs.cows[footref.0 as usize])
+                                {
                                     // If this came from a MaybeImage, then the `!` prefix
                                     // isn't part of the footnote reference.
                                     let footnote_ix = if tos.ty == LinkStackTy::Image {
@@ -1796,7 +1804,9 @@ impl<'input> ParserInner<'input> {
         None
     }
 
+    /// Leaves `inline_stack` reset, so the next scope reuses it and its capacity.
     fn handle_emphasis_in_scope(&mut self, start: Option<TreeIndex>) {
+        debug_assert!(self.inline_stack.is_reset());
         let mut prev = None;
         let mut prev_ix: TreeIndex;
         let mut cur = start;
@@ -1806,7 +1816,8 @@ impl<'input> ParserInner<'input> {
 
         while let Some(mut cur_ix) = cur {
             match self.tree[cur_ix].item.body {
-                ItemBody::MaybeEmphasis(mut count, can_open, can_close) => {
+                ItemBody::MaybeEmphasis(count, can_open, can_close) => {
+                    let mut count = count as usize;
                     let run_length = count;
                     let c = self.text.as_bytes()[self.tree[cur_ix].item.start];
                     let both = can_open && can_close;
@@ -2001,6 +2012,7 @@ impl<'input> ParserInner<'input> {
         while let Some(mut cur_ix) = cur {
             match self.tree[cur_ix].item.body {
                 ItemBody::MaybeEmphasis(count, can_open, can_close) => {
+                    let count = count as usize;
                     let c = self.text.as_bytes()[self.tree[cur_ix].item.start];
                     if c != b'~' && c != b'^' {
                         prev = Some(cur_ix);
@@ -2542,7 +2554,7 @@ pub(crate) fn scan_containers(
     for &node_ix in tree.walk_spine() {
         match tree[node_ix].item.body {
             ItemBody::BlockQuote(..) => {
-                let save = line_start.clone();
+                let save = line_start.save_cursor();
                 // In MDX mode indented code blocks are disabled, so the
                 // ≤3-space cap on blockquote prefix indent doesn't apply —
                 // tab- or 4+-space-indented `>` should still continue the
@@ -2553,28 +2565,28 @@ pub(crate) fn scan_containers(
                     let _ = line_start.scan_space(3);
                 }
                 if !line_start.scan_blockquote_marker() {
-                    *line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
             ItemBody::ListItem(indent, _) => {
-                let save = line_start.clone();
-                if !line_start.scan_space(indent) && !line_start.is_at_eol() {
-                    *line_start = save;
+                let save = line_start.save_cursor();
+                if !line_start.scan_space(indent as usize) && !line_start.is_at_eol() {
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
             ItemBody::DefinitionListDefinition(indent, _) => {
-                let save = line_start.clone();
-                if !line_start.scan_space(indent) && !line_start.is_at_eol() {
-                    *line_start = save;
+                let save = line_start.save_cursor();
+                if !line_start.scan_space(indent as usize) && !line_start.is_at_eol() {
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
             ItemBody::FootnoteDefinition(..) if options.contains(Options::ENABLE_FOOTNOTES) => {
-                let save = line_start.clone();
+                let save = line_start.save_cursor();
                 if !line_start.scan_space(4) && !line_start.is_at_eol() {
-                    *line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
@@ -2719,6 +2731,10 @@ impl InlineStack {
     const TILDES: usize = 5;
     const UNDERSCORE_BASE: usize = 6;
     const CIRCUMFLEXES: usize = 9;
+
+    fn is_reset(&self) -> bool {
+        self.stack.is_empty() && self.lower_bounds == [0; 10]
+    }
 
     fn pop_all(&mut self, tree: &mut Tree<Item>) {
         for el in self.stack.drain(..) {
@@ -3141,26 +3157,29 @@ impl MathDelims {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct LinkIndex(usize);
+pub(crate) struct LinkIndex(u32);
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct CowIndex(usize);
+pub(crate) struct CowIndex(u32);
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct AlignmentIndex(usize);
+pub(crate) struct AlignmentIndex(u32);
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct HeadingIndex(NonZeroUsize);
+pub(crate) struct HeadingIndex(NonZeroU32);
 
 #[cfg(feature = "mdx")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct JsxElementIndex(usize);
+pub(crate) struct JsxElementIndex(u32);
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct DirectiveIndex(usize);
+pub(crate) struct DirectiveIndex(u32);
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct AutolinkCandidateIndex(usize);
+pub(crate) struct AutolinkCandidateIndex(u32);
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct FencedInfoIndex(u32);
 
 /// A GFM autolink literal the first pass found but did not commit to. The
 /// `Link` is allocated up front so firing is only a body swap.
@@ -3257,6 +3276,10 @@ pub(crate) struct Allocations<'a> {
     jsx_elements: Vec<JsxElementData<'a>>,
     directives: Vec<DirectiveAttrData<'a>>,
     autolink_candidates: Vec<AutolinkCandidate>,
+    /// Fence info string paired with the byte length of its `lang` part within
+    /// the decoded string. The split is taken on raw source, so a character
+    /// reference decoding to whitespace does not move it.
+    fenced_infos: Vec<(CowStr<'a>, u32)>,
 }
 
 /// Used by the heading attributes extension.
@@ -3320,20 +3343,31 @@ impl<'a> Allocations<'a> {
             jsx_elements: Vec::new(),
             directives: Vec::new(),
             autolink_candidates: Vec::new(),
+            fenced_infos: Vec::new(),
         }
+    }
+
+    pub fn allocate_fenced_info(&mut self, info: CowStr<'a>, lang_len: u32) -> FencedInfoIndex {
+        let ix = self.fenced_infos.len() as u32;
+        self.fenced_infos.push((info, lang_len));
+        FencedInfoIndex(ix)
+    }
+
+    pub fn take_fenced_info(&mut self, ix: FencedInfoIndex) -> (CowStr<'a>, u32) {
+        core::mem::replace(&mut self.fenced_infos[ix.0 as usize], ("".into(), 0))
     }
 
     pub fn allocate_autolink_candidate(
         &mut self,
         candidate: AutolinkCandidate,
     ) -> AutolinkCandidateIndex {
-        let ix = self.autolink_candidates.len();
+        let ix = self.autolink_candidates.len() as u32;
         self.autolink_candidates.push(candidate);
         AutolinkCandidateIndex(ix)
     }
 
     pub fn allocate_cow(&mut self, cow: CowStr<'a>) -> CowIndex {
-        let ix = self.cows.len();
+        let ix = self.cows.len() as u32;
         self.cows.push(cow);
         CowIndex(ix)
     }
@@ -3345,55 +3379,55 @@ impl<'a> Allocations<'a> {
         title: CowStr<'a>,
         id: CowStr<'a>,
     ) -> LinkIndex {
-        let ix = self.links.len();
+        let ix = self.links.len() as u32;
         self.links.push((ty, url, title, id));
         LinkIndex(ix)
     }
 
     pub fn allocate_alignment(&mut self, alignment: Vec<Alignment>) -> AlignmentIndex {
-        let ix = self.alignments.len();
+        let ix = self.alignments.len() as u32;
         self.alignments.push(alignment);
         AlignmentIndex(ix)
     }
 
     pub fn allocate_heading(&mut self, attrs: HeadingAttributes<'a>) -> HeadingIndex {
-        let ix = self.headings.len();
+        let ix = self.headings.len() as u32;
         self.headings.push(attrs);
-        // This won't panic. `self.headings.len()` can't be `usize::MAX` since
+        // This won't panic. `self.headings.len()` can't be `u32::MAX` since
         // such a long Vec cannot fit in memory.
-        let ix_nonzero = NonZeroUsize::new(ix.wrapping_add(1)).expect("too many headings");
+        let ix_nonzero = NonZeroU32::new(ix.wrapping_add(1)).expect("too many headings");
         HeadingIndex(ix_nonzero)
     }
 
     pub fn take_cow(&mut self, ix: CowIndex) -> CowStr<'a> {
-        core::mem::replace(&mut self.cows[ix.0], "".into())
+        core::mem::replace(&mut self.cows[ix.0 as usize], "".into())
     }
 
     pub fn take_link(&mut self, ix: LinkIndex) -> (LinkType, CowStr<'a>, CowStr<'a>, CowStr<'a>) {
         let default_link = (LinkType::ShortcutUnknown, "".into(), "".into(), "".into());
-        core::mem::replace(&mut self.links[ix.0], default_link)
+        core::mem::replace(&mut self.links[ix.0 as usize], default_link)
     }
 
     pub fn take_alignment(&mut self, ix: AlignmentIndex) -> Vec<Alignment> {
-        core::mem::take(&mut self.alignments[ix.0])
+        core::mem::take(&mut self.alignments[ix.0 as usize])
     }
 
     #[cfg(feature = "mdx")]
     pub fn allocate_jsx_element(&mut self, data: JsxElementData<'a>) -> JsxElementIndex {
-        let ix = self.jsx_elements.len();
+        let ix = self.jsx_elements.len() as u32;
         self.jsx_elements.push(data);
         JsxElementIndex(ix)
     }
 
     pub fn allocate_directive(&mut self, data: DirectiveAttrData<'a>) -> DirectiveIndex {
-        let ix = self.directives.len();
+        let ix = self.directives.len() as u32;
         self.directives.push(data);
         DirectiveIndex(ix)
     }
 
     pub fn take_directive(&mut self, ix: DirectiveIndex) -> DirectiveAttrData<'a> {
         core::mem::replace(
-            &mut self.directives[ix.0],
+            &mut self.directives[ix.0 as usize],
             DirectiveAttrData {
                 name: "".into(),
                 attributes: Vec::new(),
@@ -3405,13 +3439,13 @@ impl<'a> Allocations<'a> {
     }
 
     pub fn directive_ref(&self, ix: DirectiveIndex) -> &DirectiveAttrData<'a> {
-        &self.directives[ix.0]
+        &self.directives[ix.0 as usize]
     }
 
     #[cfg(feature = "mdx")]
     pub fn take_jsx_element(&mut self, ix: JsxElementIndex) -> JsxElementData<'a> {
         core::mem::replace(
-            &mut self.jsx_elements[ix.0],
+            &mut self.jsx_elements[ix.0 as usize],
             JsxElementData {
                 name: "".into(),
                 attrs: Vec::new(),
@@ -3427,7 +3461,7 @@ impl<'a> Index<CowIndex> for Allocations<'a> {
     type Output = CowStr<'a>;
 
     fn index(&self, ix: CowIndex) -> &Self::Output {
-        self.cows.index(ix.0)
+        self.cows.index(ix.0 as usize)
     }
 }
 
@@ -3435,7 +3469,7 @@ impl<'a> Index<LinkIndex> for Allocations<'a> {
     type Output = (LinkType, CowStr<'a>, CowStr<'a>, CowStr<'a>);
 
     fn index(&self, ix: LinkIndex) -> &Self::Output {
-        self.links.index(ix.0)
+        self.links.index(ix.0 as usize)
     }
 }
 
@@ -3443,7 +3477,7 @@ impl<'a> Index<AutolinkCandidateIndex> for Allocations<'a> {
     type Output = AutolinkCandidate;
 
     fn index(&self, ix: AutolinkCandidateIndex) -> &Self::Output {
-        self.autolink_candidates.index(ix.0)
+        self.autolink_candidates.index(ix.0 as usize)
     }
 }
 
@@ -3451,7 +3485,7 @@ impl<'a> Index<AlignmentIndex> for Allocations<'a> {
     type Output = Vec<Alignment>;
 
     fn index(&self, ix: AlignmentIndex) -> &Self::Output {
-        self.alignments.index(ix.0)
+        self.alignments.index(ix.0 as usize)
     }
 }
 
@@ -3459,7 +3493,7 @@ impl<'a> Index<HeadingIndex> for Allocations<'a> {
     type Output = HeadingAttributes<'a>;
 
     fn index(&self, ix: HeadingIndex) -> &Self::Output {
-        self.headings.index(ix.0.get() - 1)
+        self.headings.index(ix.0.get() as usize - 1)
     }
 }
 
@@ -3724,8 +3758,8 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::MathBlock(cow_ix) => {
             Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
         }
-        ItemBody::FencedCodeBlock(cow_ix, _) => {
-            Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_cow(cow_ix)))
+        ItemBody::FencedCodeBlock(info_ix) => {
+            Tag::CodeBlock(CodeBlockKind::Fenced(allocs.take_fenced_info(info_ix).0))
         }
         ItemBody::IndentCodeBlock(..) => Tag::CodeBlock(CodeBlockKind::Indented),
         ItemBody::ContainerDirective(_, dir_ix)
@@ -3746,7 +3780,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::BlockQuote(kind) => Tag::BlockQuote(kind),
         ItemBody::List(is_tight, c, listitem_start) => {
             if c == b'.' || c == b')' {
-                Tag::List(Some(listitem_start), is_tight)
+                Tag::List(Some(listitem_start as u64), is_tight)
             } else {
                 Tag::List(None, is_tight)
             }
@@ -3819,14 +3853,14 @@ mod test {
     #[cfg(target_pointer_width = "64")]
     fn node_size() {
         let node_size = core::mem::size_of::<Node<Item>>();
-        assert_eq!(48, node_size);
+        assert_eq!(32, node_size);
     }
 
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn body_size() {
         let body_size = core::mem::size_of::<ItemBody>();
-        assert_eq!(16, body_size);
+        assert_eq!(8, body_size);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
+import { parseToHtml } from "../index.js";
 import {
-  parseToHtml,
   createHastHandle,
   createMdastHandle,
   serializeHandle,
@@ -8,10 +8,11 @@ import {
   dropHandle,
   convertMdastToHastHandle,
   getHandleSource,
-} from "../index.js";
+} from "../src/index.js";
 import { HastReader } from "../src/hast/hast-reader.js";
 import { visitHastHandle, resolveSubscriptions } from "../src/hast/hast-visitor.js";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
+import { DEFAULT_PARSE_OPTIONS } from "../src/compile.js";
 import type { MdastNode } from "../src/types.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 import type { HastVisitorContext, HastVisitorInstance } from "../src/hast/hast-visitor.js";
@@ -365,7 +366,7 @@ describe("Handle-based HAST pipeline", () => {
 
   test("parseToHtml produces same result as handle pipeline", () => {
     const source = "# Hello\n\nA [link](https://example.com) here.\n\n> blockquote";
-    const singleCall = parseToHtml(source);
+    const singleCall = parseToHtml(source, DEFAULT_PARSE_OPTIONS);
     const handle = createHastHandle(source);
     const handleResult = renderHandle(handle);
     dropHandle(handle);

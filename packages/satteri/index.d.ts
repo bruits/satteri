@@ -66,7 +66,7 @@ export interface CompileJsOneShot {
 }
 
 /** Compile MDX source directly to JavaScript. */
-export declare function compileMdx(source: string, options?: JsMdxOptions | undefined | null, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): string
+export declare function compileMdx(source: string, options: JsMdxOptions | undefined | null, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null): string
 
 /** Convert an MDAST handle to a HAST handle. The MDAST handle is consumed (emptied). */
 export declare function convertMdastToHastHandle(handle: MdastHandle, convertOptions?: JsConvertOptions | undefined | null): HastHandle
@@ -75,7 +75,7 @@ export declare function convertMdastToHastHandle(handle: MdastHandle, convertOpt
  * Parse markdown source and convert to HAST. Returns an opaque handle.
  * The arena stays in Rust memory, no buffer is copied to JS.
  */
-export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): HastHandle
+export declare function createHastHandle(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): HastHandle
 
 /**
  * Parse an HTML string into structured HAST (elements, text, comments).
@@ -90,7 +90,7 @@ export declare function createHastHandleFromHtml(html: string, fragment?: boolea
  * Parse + frontmatter + HAST conversion in one crossing (HAST-plugin path
  * head). Returns a `[handle, frontmatter]` pair.
  */
-export declare function createHastHandleWithFrontmatter(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
+export declare function createHastHandleWithFrontmatter(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
 
 /**
  * Parse markdown source into an MDAST arena handle.
@@ -99,16 +99,16 @@ export declare function createHastHandleWithFrontmatter(source: string, features
  * on nodes. The plugin pipeline passes `false` when no plugin reads positions,
  * skipping the `LineIndex` build + per-node line/column lookups (~15% of parse).
  */
-export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null, trackPositions?: boolean | undefined | null): MdastHandle
+export declare function createMdastHandle(source: string, parseOptions: number, trackPositions?: boolean | undefined | null): MdastHandle
 
 /** Parse MDX source and convert to HAST. Returns an opaque handle. */
-export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): HastHandle
+export declare function createMdxHastHandle(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): HastHandle
 
 /** MDX variant of [`create_hast_handle_with_frontmatter`]. */
-export declare function createMdxHastHandleWithFrontmatter(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
+export declare function createMdxHastHandleWithFrontmatter(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): [HastHandle, JsFrontmatter | undefined | null]
 
 /** Parse MDX source into an MDAST arena handle. */
-export declare function createMdxMdastHandle(source: string, features?: JsFeatures | undefined | null, trackPositions?: boolean | undefined | null): MdastHandle
+export declare function createMdxMdastHandle(source: string, parseOptions: number, trackPositions?: boolean | undefined | null): MdastHandle
 
 /**
  * Empty a handle's arena into the thread-local pool; the handle stays valid
@@ -163,66 +163,12 @@ export interface JsConvertOptions {
   rawHtml?: boolean
 }
 
-/** Feature toggles for the Markdown/MDX parser, passed from JavaScript. */
-export interface JsFeatures {
-  /** GFM: tables, footnotes, strikethrough, task lists. Default: true. */
-  gfm?: boolean
-  /** Granular GFM control (overrides `gfm`). */
-  gfmOptions?: JsGfmOptions
-  /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
-  frontmatter?: boolean
-  /** Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: false. */
-  math?: boolean
-  /** Granular math control (overrides `math`). */
-  mathOptions?: JsMathOptions
-  /** Heading attributes (`# text { #id .class }`). Default: false. */
-  headingAttributes?: boolean
-  /** Colon-delimited container directive blocks (`:::`). Default: false. */
-  directive?: boolean
-  /** Superscript (`^super^`). Default: false. */
-  superscript?: boolean
-  /** Subscript (`~sub~`). Default: false. */
-  subscript?: boolean
-  /** Obsidian-style wikilinks (`[[link]]`). Default: false. */
-  wikilinks?: boolean
-  /** Definition lists (`Term` then `: definition`). Default: false. */
-  definitionList?: boolean
-  /** Smart punctuation: all categories on. Default: false. */
-  smartPunctuation?: boolean
-  /** Granular smart-punctuation control (overrides `smart_punctuation`). */
-  smartPunctuationOptions?: JsSmartPunctuationOptions
-}
-
 /** Frontmatter extracted from an MDAST arena. */
 export interface JsFrontmatter {
   /** Either `"yaml"` or `"toml"`. */
   kind: string
   /** Raw frontmatter content between the delimiters (no `---`/`+++` lines). */
   value: string
-}
-
-/**
- * Granular GFM toggles, nested under `features.gfm`. The footnote i18n
- * strings (label, back-content, back-label) travel separately via the
- * `JsConvertOptions` argument on conversion entry points; the JS package
- * extracts them from `features.gfm.footnotes` before calling in.
- */
-export interface JsGfmOptions {
-  /**
-   * Enable GFM footnotes (`[^id]`). Default: true. Set `false` to drop
-   * footnote parsing while keeping the rest of the GFM bundle.
-   */
-  footnotes?: boolean
-}
-
-/** Granular math toggles, nested under `features.math`. */
-export interface JsMathOptions {
-  /**
-   * Treat single-dollar runs (`$ ... $`) as inline math. Default: true.
-   * Set `false` to keep single `$` as literal text (prose with currency)
-   * while still parsing double-dollar (`$$ ... $$`) display math.
-   */
-  singleDollarTextMath?: boolean
 }
 
 /** MDX compile options passed from JavaScript. */
@@ -282,16 +228,6 @@ export interface JsOptimizeStaticConfig {
   ignoreElements?: Array<string>
 }
 
-/** Granular smart-punctuation toggles. */
-export interface JsSmartPunctuationOptions {
-  /** Replace straight quotes with curly/smart quotes. Default: true. */
-  quotes?: boolean
-  /** Replace `--`/`---` with en-dash/em-dash. Default: true. */
-  dashes?: boolean
-  /** Replace `...` with ellipsis (`…`). Default: true. */
-  ellipses?: boolean
-}
-
 /** A subscription passed from JS. */
 export interface JsSubscription {
   nodeType: number
@@ -324,13 +260,13 @@ export interface MarkdownHtmlOneShot {
  * path makes (createMdast, getFrontmatter, convertToHast, dropMdast, render,
  * dropHast → just one call).
  */
-export declare function markdownToHtmlFast(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MarkdownHtmlOneShot
+export declare function markdownToHtmlFast(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null): MarkdownHtmlOneShot
 
 /**
  * Plain-Markdown variant of [`mdx_to_js_fast`]: MDX syntax stays literal text.
  * Used by `markdownToJs` when the caller didn't configure any plugins.
  */
-export declare function markdownToJsFast(source: string, features?: JsFeatures | undefined | null, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
+export declare function markdownToJsFast(source: string, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
 
 /**
  * Collect the concatenated text content of an MDAST node and all its descendants.
@@ -353,7 +289,7 @@ export interface MdxJsOneShot {
  * single NAPI roundtrip. Used by `mdxToJs` when the caller didn't configure
  * any plugins. Skips 5 of the 6 NAPI crossings the handle-based path makes.
  */
-export declare function mdxToJsFast(source: string, features?: JsFeatures | undefined | null, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
+export declare function mdxToJsFast(source: string, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
 
 /** Parse ESM (import/export statements) and return ESTree-compatible AST as JSON. */
 export declare function parseEsm(source: string): string | null
@@ -365,7 +301,7 @@ export declare function parseEsm(source: string): string | null
 export declare function parseExpression(source: string): string | null
 
 /** Parse Markdown source and return HTML string directly. */
-export declare function parseToHtml(source: string, features?: JsFeatures | undefined | null, convertOptions?: JsConvertOptions | undefined | null): string
+export declare function parseToHtml(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null): string
 
 /** Render a HAST handle's arena to HTML. Does not consume the handle. */
 export declare function renderHandle(handle: HastHandle): string

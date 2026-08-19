@@ -3,7 +3,7 @@ import { MdastReader } from "../src/mdast/mdast-reader.js";
 import { materializeMdastTree, materializeNode } from "../src/mdast/mdast-materializer.js";
 import type { MdastNode, MdastNodeInternal } from "../src/types.js";
 import { buildHelloWorldBuffer } from "./fixtures.js";
-import { createMdastHandle, createMdxMdastHandle, serializeHandle } from "../index.js";
+import { createMdastHandle, createMdxMdastHandle, serializeHandle } from "../src/index.js";
 
 function setup() {
   const buf = buildHelloWorldBuffer();

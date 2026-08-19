@@ -11,7 +11,7 @@ import {
   getHandleSource,
   applyCommandsAndConvertToHastHandle,
   renderHandle,
-} from "../../index.js";
+} from "../../src/index.js";
 import { visitMdastHandle, resolveMdastSubscriptions } from "../../src/mdast/mdast-visitor.js";
 import { defineMdastPlugin } from "../../src/plugin.js";
 

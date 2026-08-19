@@ -191,14 +191,17 @@ fn parse_inner(
     // source range lies inside it; the rest get emitted at root.
     //
     // We take ownership of `refdefs_all` instead of cloning each field; the
-    // parser doesn't read it again after this point. Indexes (`refdef_order`)
-    // give source-order traversal without rebuilding string fields. Saves up
-    // to 3 heap allocs per refdef on the parse hot path.
-    let refdefs_owned: Vec<(LinkLabel<'_>, LinkDef<'_>)> =
+    // parser doesn't read it again after this point. Saves up to 3 heap allocs
+    // per refdef on the parse hot path.
+    let mut refdefs_owned: Vec<(LinkLabel<'_>, LinkDef<'_>)> =
         core::mem::take(&mut inner.allocs.refdefs_all);
-    let mut refdef_order: Vec<u32> = (0..refdefs_owned.len() as u32).collect();
-    refdef_order.sort_by_key(|&i| refdefs_owned[i as usize].1.span.start);
+    refdefs_owned.sort_by_key(|(_, def)| def.span.start);
+    let refdef_starts: Vec<usize> = refdefs_owned.iter().map(|(_, d)| d.span.start).collect();
     let mut refdef_emitted: Vec<bool> = vec![false; refdefs_owned.len()];
+
+    let mdx = options.contains(Options::ENABLE_MDX);
+    // An unclosed MDX JSX tag can leave a container's node open past its own tree pop, so its end never gets fixed up.
+    let defer_container_end = track_positions && !mdx;
 
     // Walk the tree iteratively.
     loop {
@@ -225,12 +228,19 @@ fn parse_inner(
                 }
 
                 let item = inner.tree[ix].item;
-                let parent_body = inner.tree.peek_up().map(|p| inner.tree[p].item.body);
-                let end = crate::firstpass::mdast_position_end(
-                    &item,
-                    source.as_bytes(),
-                    parent_body.as_ref(),
-                );
+                // Every branch of `mdast_position_end` hands back `item.end` untouched unless a line terminator precedes it.
+                let end = if item.end > 0
+                    && matches!(source.as_bytes().get(item.end - 1), Some(b'\n' | b'\r'))
+                {
+                    let parent_body = inner.tree.peek_up().map(|p| inner.tree[p].item.body);
+                    crate::firstpass::mdast_position_end(
+                        &item,
+                        source.as_bytes(),
+                        parent_body.as_ref(),
+                    )
+                } else {
+                    item.end as u32
+                };
                 let (end_line, end_col) = cursor.offset_to_line_col(end);
 
                 match &inner.tree[ix].item.body {
@@ -474,12 +484,16 @@ fn parse_inner(
                         let orig_start_offset = node.start_offset;
                         // Pull in any refdefs whose source range falls inside
                         // this list item before we evaluate spread / position.
-                        if emit_refdefs_in_container(
+                        if container_may_hold_refdef(
+                            &refdef_starts,
+                            orig_start_offset as usize,
+                            item.end,
+                        ) && emit_refdefs_in_container(
                             &mut builder,
                             &mut cursor,
                             source,
                             &refdefs_owned,
-                            &refdef_order,
+                            &refdef_starts,
                             &mut refdef_emitted,
                             orig_start_offset as usize,
                             item.end,
@@ -730,12 +744,16 @@ fn parse_inner(
                             ItemBody::BlockQuote(..)
                                 | ItemBody::ContainerDirective(..)
                                 | ItemBody::FootnoteDefinition(..)
+                        ) && container_may_hold_refdef(
+                            &refdef_starts,
+                            orig_start as usize,
+                            item.end,
                         ) && emit_refdefs_in_container(
                             &mut builder,
                             &mut cursor,
                             source,
                             &refdefs_owned,
-                            &refdef_order,
+                            &refdef_starts,
                             &mut refdef_emitted,
                             orig_start as usize,
                             item.end,
@@ -817,7 +835,12 @@ fn parse_inner(
                 let start = item.start as u32;
                 let end = item.end as u32;
                 let (start_line, start_col) = cursor.offset_to_line_col(start);
-                let (end_line, end_col) = cursor.offset_to_line_col(end);
+                let (end_line, end_col) =
+                    if defer_container_end && opens_repositioned_node(&item.body) {
+                        (0, 0)
+                    } else {
+                        cursor.offset_to_line_col(end)
+                    };
 
                 // If we're accumulating content for an HTML/code block, handle it.
                 if let Some(buf) = html_block_buf.as_mut() {
@@ -939,7 +962,9 @@ fn parse_inner(
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        paragraph_open_depth.push(builder.stack_depth());
+                        if mdx {
+                            paragraph_open_depth.push(builder.stack_depth());
+                        }
                         inner.tree.push();
                     }
                     ItemBody::DirectiveLabel => {
@@ -954,7 +979,9 @@ fn parse_inner(
                         builder
                             .arena_mut()
                             .set_node_data(para_id, b"{\"directiveLabel\":true}".to_vec());
-                        paragraph_open_depth.push(builder.stack_depth());
+                        if mdx {
+                            paragraph_open_depth.push(builder.stack_depth());
+                        }
                         inner.tree.push();
                     }
                     ItemBody::Heading(level, heading_ix) => {
@@ -980,7 +1007,10 @@ fn parse_inner(
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
                         );
-                        container_jsx_snapshot.push((MdastNodeType::Blockquote, jsx_stack.len()));
+                        if mdx {
+                            container_jsx_snapshot
+                                .push((MdastNodeType::Blockquote, jsx_stack.len()));
+                        }
                         inner.tree.push();
                     }
                     ItemBody::MathBlock(_) => {
@@ -991,8 +1021,8 @@ fn parse_inner(
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
                     }
-                    ItemBody::FencedCodeBlock(cow_ix, lang_len) => {
-                        let info_cow = inner.allocs.take_cow(cow_ix);
+                    ItemBody::FencedCodeBlock(info_ix) => {
+                        let (info_cow, lang_len) = inner.allocs.take_fenced_info(info_ix);
                         let info_str = info_cow.as_ref();
                         // The boundary was taken on raw source; whitespace a
                         // character reference decodes to stays in the language.
@@ -1042,7 +1072,7 @@ fn parse_inner(
                     }
                     ItemBody::List(_is_tight, c, listitem_start) => {
                         let ordered = c == b'.' || c == b')';
-                        let start_num = if ordered { listitem_start as u32 } else { 0 };
+                        let start_num = if ordered { listitem_start } else { 0 };
                         builder.open_node(MdastNodeType::List as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
@@ -1062,7 +1092,9 @@ fn parse_inner(
                             start, end, start_line, start_col, end_line, end_col,
                         );
                         builder.set_data_current(&ListItemData { checked: 2, spread }.to_bytes());
-                        container_jsx_snapshot.push((MdastNodeType::ListItem, jsx_stack.len()));
+                        if mdx {
+                            container_jsx_snapshot.push((MdastNodeType::ListItem, jsx_stack.len()));
+                        }
                         inner.tree.push();
                     }
                     ItemBody::Table(align_ix) => {
@@ -1929,12 +1961,10 @@ fn parse_inner(
     // Root-level refdefs: anything not already emitted inside a container.
     // Interleaved with the other root children in source order.
     let mut emitted_any_at_root = false;
-    for &i in &refdef_order {
-        let i = i as usize;
+    for (i, (label, def)) in refdefs_owned.iter().enumerate() {
         if refdef_emitted[i] {
             continue;
         }
-        let (label, def) = &refdefs_owned[i];
         emit_pending_refdef(&mut builder, &mut cursor, source, label, def);
         emitted_any_at_root = true;
     }
@@ -1974,13 +2004,7 @@ fn parse_inner(
         {
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
-        // Triggers are case-insensitive (`HTTP://`, `WWW.`), so check the
-        // uppercase variants too, and `&`: the pass matches decoded text, where
-        // a reference can supply a trigger the raw bytes lack (`&#104;ttp://x.y`).
-        if !skip_fnr_autolink
-            && (memchr::memchr3(b'h', b'w', b'@', source_bytes).is_some()
-                || memchr::memchr3(b'H', b'W', b'&', source_bytes).is_some())
-        {
+        if !skip_fnr_autolink && crate::post_passes::gfm_autolink_literal_may_apply(source_bytes) {
             crate::post_passes::gfm_autolink_literal_pass(
                 &mut arena,
                 source_bytes,
@@ -2014,6 +2038,45 @@ fn parse_inner(
 
     (arena, mdx_errors)
 }
+
+/// Nodes the walk opens and descends into: the tree pop rewrites their end, so an open-time end line/column is dead.
+fn opens_repositioned_node(body: &ItemBody) -> bool {
+    use ItemBody::*;
+    matches!(
+        body,
+        Paragraph
+            | TightParagraph
+            | DirectiveLabel
+            | Heading(..)
+            | BlockQuote(_)
+            | MathBlock(_)
+            | FencedCodeBlock(_)
+            | IndentCodeBlock(_)
+            | List(..)
+            | ListItem(..)
+            | Table(_)
+            | TableHead
+            | TableRow
+            | TableCell
+            | Emphasis
+            | Strong
+            | Strikethrough
+            | Superscript
+            | Subscript
+            | Link(_)
+            | Image(_)
+            | FootnoteDefinition(_)
+            | HtmlBlock(_)
+            | MetadataBlock(_)
+            | DefinitionList(_)
+            | DefinitionListTitle
+            | DefinitionListDefinition(..)
+            | ContainerDirective(..)
+            | LeafDirective(_)
+            | TextDirective(_)
+    )
+}
+
 fn emit_pending_refdef(
     builder: &mut ArenaBuilder<Mdast>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
@@ -2070,17 +2133,16 @@ fn emit_refdefs_in_container(
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
     refdefs: &[(LinkLabel<'_>, LinkDef<'_>)],
-    order: &[u32],
+    starts: &[usize],
     emitted: &mut [bool],
     container_start: usize,
     container_end: usize,
 ) -> bool {
     let mut any = false;
-    // `order` is sorted by span start, so the container's refdefs are one slice.
-    let lo = order.partition_point(|&i| refdefs[i as usize].1.span.start < container_start);
-    let hi = order.partition_point(|&i| refdefs[i as usize].1.span.start < container_end);
-    for &i in order.get(lo..hi).unwrap_or_default() {
-        let i = i as usize;
+    // `starts` is sorted, so the container's refdefs are one slice.
+    let lo = starts.partition_point(|&s| s < container_start);
+    let hi = starts.partition_point(|&s| s < container_end);
+    for i in lo..hi {
         if emitted[i] {
             continue;
         }
@@ -2090,6 +2152,18 @@ fn emit_refdefs_in_container(
         any = true;
     }
     any
+}
+
+/// Cheap reject before the claim scan: most containers close nowhere near a refdef.
+fn container_may_hold_refdef(
+    starts: &[usize],
+    container_start: usize,
+    container_end: usize,
+) -> bool {
+    match (starts.first(), starts.last()) {
+        (Some(&lo), Some(&hi)) => container_end > lo && container_start <= hi,
+        _ => false,
+    }
 }
 
 /// Normalize wrapped-line leading whitespace inside an inline HTML span:
@@ -2716,6 +2790,98 @@ mod autolink_path_probe {
             assert_eq!(
                 satteri_ast::mdast_to_html(&skipped),
                 satteri_ast::mdast_to_html(&full),
+                "{input:?}"
+            );
+        }
+    }
+
+    const NO_POSSIBLE_TRIGGER: &[&str] = &[
+        "how the wind howls",
+        "Web WWW rows, HTTP verbs: what, where, why",
+        "**how** *what* ~~where~~ `hth` w.x ww.x.y wwww http:x.y https:/x.y",
+        "[a w.x](http:foo) ![b](w:x)",
+        "| head h | w col |\n| --- | --- |\n| ha | wo |",
+        "- [ ] winter\n- [x] home\n\n> quote how\n\n# heading with words",
+    ];
+
+    const CONSTRUCT_PATH_LINKS: &[&str] = &[
+        "www.x.y http://x.y a@b.cd",
+        "HTTP://X.Y WWW.X.Y",
+        "*www.x.y* _a@b.cd_",
+    ];
+
+    const FNR_PATH_LINKS: &[&str] = &[
+        "[a www.x.y",
+        ".www.x.y",
+        "[a <http://q.r/]> www.x.y",
+        "<www.x.y> b",
+        "[a] www.a.b x\\* www.c.d",
+        "> [a www.x.y\n> more",
+    ];
+
+    const DECODE_SYNTHESIZED_TRIGGERS: &[&str] = &[
+        "www\\.x.y",
+        "http:\\//x.y",
+        "ww&#119;.x.y",
+        "w&#119;w.x.y",
+        "x&#64;y.zz",
+        "&#104;ttp&#58;//x.y",
+        "w\\ww.x.y",
+    ];
+
+    const IGNORED_OR_TRUNCATED_SHAPES: &[&str] = &[
+        "`www.x.y` [www.x.y](/u) ![w](www.x.y)",
+        "```\nwww.x.y\n```",
+        "www.",
+        "www.x",
+        "a@",
+        "htt",
+        "x@y.zz",
+        "| www.x.y |\n| --- |\n| a@b.cd |",
+        "a[^1]\n\n[^1]: www.x.y ok",
+    ];
+
+    /// A wrong document-level skip is silent; this is the check that catches it.
+    #[test]
+    fn force_running_the_fnr_pass_after_a_parse_changes_nothing() {
+        let smart = PROBE_OPTIONS.union(Options::ENABLE_SMART_PUNCTUATION);
+        for options in [PROBE_OPTIONS, smart] {
+            for input in NO_POSSIBLE_TRIGGER
+                .iter()
+                .chain(CONSTRUCT_PATH_LINKS)
+                .chain(FNR_PATH_LINKS)
+                .chain(DECODE_SYNTHESIZED_TRIGGERS)
+                .chain(IGNORED_OR_TRUNCATED_SHAPES)
+            {
+                let (mut arena, _) = parse_inner(input, options, true, None, false);
+                let before = satteri_ast::mdast_to_html(&arena);
+                crate::post_passes::gfm_autolink_literal_pass(
+                    &mut arena,
+                    input.as_bytes(),
+                    options,
+                    None,
+                );
+                assert_eq!(before, satteri_ast::mdast_to_html(&arena), "{input:?}");
+            }
+        }
+    }
+
+    /// Keeps the corpus honest: an entry drifting to the wrong verdict would void the proof above.
+    #[test]
+    fn the_gate_corpus_exercises_both_verdicts() {
+        for input in NO_POSSIBLE_TRIGGER {
+            assert!(
+                !crate::post_passes::gfm_autolink_literal_may_apply(input.as_bytes()),
+                "{input:?}"
+            );
+        }
+        for input in DECODE_SYNTHESIZED_TRIGGERS
+            .iter()
+            .chain(CONSTRUCT_PATH_LINKS)
+            .chain(FNR_PATH_LINKS)
+        {
+            assert!(
+                crate::post_passes::gfm_autolink_literal_may_apply(input.as_bytes()),
                 "{input:?}"
             );
         }

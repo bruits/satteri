@@ -20,19 +20,7 @@
 //! ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 //! DEALINGS IN THE SOFTWARE.
 
-const ONES: u64 = 0x0101_0101_0101_0101;
-const HIGH: u64 = 0x8080_8080_8080_8080;
-
-const fn splat(byte: u8) -> u64 {
-    (byte as u64) * ONES
-}
-
-/// Sets `0x80` in every zero byte lane of `word`. Only the *lowest* flagged
-/// lane is trustworthy: a lane holding `0x01` also lights up when the lane
-/// below it borrowed, so a spurious lane always sits above a genuine zero.
-const fn has_zero(word: u64) -> u64 {
-    word.wrapping_sub(ONES) & !word & HIGH
-}
+use crate::swar::{has_zero, splat};
 
 /// Flags lanes holding `&`, `<`, or `>`. The fold admits nothing extra because
 /// `y | 0x02 == 0x3E` holds for exactly `<` (0x3C) and `>` (0x3E).

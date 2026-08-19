@@ -210,11 +210,13 @@ fn construct_url_end(bytes: &[u8], start: usize, raw_end: usize) -> usize {
     raw_end
 }
 
+/// Returns `(start, raw_end, end, is_www, fnr_only)`. The URL is left as the
+/// `start..end` span so callers that keep it can borrow the source.
 pub(crate) fn scan_autolink_literal(
     bytes: &[u8],
     ix: usize,
     prev_is_content_start: bool,
-) -> Option<(usize, usize, usize, String, bool)> {
+) -> Option<(usize, usize, usize, bool, bool)> {
     let (proto_len, is_www) = match_autolink_scheme(bytes, ix)?;
 
     // Two preceding-character rules apply, depending on which path of
@@ -430,13 +432,11 @@ pub(crate) fn scan_autolink_literal(
         }
     }
 
-    let url_str = core::str::from_utf8(&bytes[ix..end]).ok()?;
-    let full_url = if is_www {
-        format!("http://{url_str}")
-    } else {
-        url_str.to_string()
-    };
-    Some((ix, raw_end, end, full_url, !construct_ok))
+    // `bytes` is a `&str`'s bytes and `ix` is ASCII, so only `end` can split a scalar.
+    if bytes.get(end).is_some_and(|&b| b & 0xC0 == 0x80) {
+        return None;
+    }
+    Some((ix, raw_end, end, is_www, !construct_ok))
 }
 
 #[inline]
@@ -873,8 +873,31 @@ pub(crate) fn gfm_autolink_literal_pass(
     }
 }
 
+/// `&`/`\` count: an entity or escape can synthesize a decoded trigger the raw bytes lack.
+pub(crate) fn gfm_autolink_literal_may_apply(source_bytes: &[u8]) -> bool {
+    memchr::memchr2_iter(b'@', b':', source_bytes).any(|at| trigger_at(source_bytes, at))
+        || www_prefix_present(source_bytes)
+        || memchr::memchr2(b'&', b'\\', source_bytes).is_some()
+}
+
+/// A `www.` literal needs a dot as well, and ruling one out beats walking every `w`.
+fn www_prefix_present(bytes: &[u8]) -> bool {
+    memchr::memchr(b'.', bytes).is_some()
+        && memchr::memchr2_iter(b'w', b'W', bytes)
+            .any(|at| match_autolink_scheme(bytes, at).is_some())
+}
+
 /// One AVX2 vector; below it the trigger scans go scalar instead.
 const MEMCHR_MIN_LEN: usize = 32;
+
+#[inline]
+fn trigger_at(bytes: &[u8], at: usize) -> bool {
+    match bytes[at] {
+        b'@' => true,
+        b':' => matches!(bytes.get(at + 1..at + 3), Some([b'/', b'/'])),
+        _ => at >= 3 && match_autolink_scheme(bytes, at - 3).is_some(),
+    }
+}
 
 /// Keying `www.` on its dot keeps the needle set at three case-exact bytes.
 #[inline]
@@ -882,18 +905,8 @@ fn has_autolink_trigger(bytes: &[u8]) -> bool {
     let mut from = 0;
     while let Some(off) = next_trigger_byte(&bytes[from..]) {
         let at = from + off;
-        match bytes[at] {
-            b'@' => return true,
-            b':' => {
-                if matches!(bytes.get(at + 1..at + 3), Some([b'/', b'/'])) {
-                    return true;
-                }
-            }
-            _ => {
-                if at >= 3 && match_autolink_scheme(bytes, at - 3).is_some() {
-                    return true;
-                }
-            }
+        if trigger_at(bytes, at) {
+            return true;
         }
         from = at + 1;
     }
