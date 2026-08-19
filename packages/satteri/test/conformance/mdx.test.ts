@@ -4,9 +4,12 @@ import {
   assertMdxConformance,
   assertMdxDevPositionConformance,
   assertMdxMathConformance,
+  assertMdxPluginConformance,
   assertBothReject,
 } from "./helpers.js";
-import { mdxToJs, mdxToMdast } from "../../src/index.js";
+import { mdxToJs, mdxToMdast, defineMdastPlugin, defineHastPlugin } from "../../src/index.js";
+import type { Element } from "hast";
+import type { MdxJsxFlowElement, MdxJsxFlowElementData } from "../../src/mdx-types.js";
 
 const Foo = (props: any) => createElement("div", null, `bar=${props.bar}`);
 const Bar = (props: any) => createElement("em", null, `baz=${props.baz}`);
@@ -1223,5 +1226,134 @@ describe("MDX conformance: development positions", () => {
 
   test("parse error column counts UTF-16 code units", () => {
     expect(() => mdxToJs("😀 <Foo>\n")).toThrow(/^1:4: Expected a closing tag for `<Foo>` \(1:4\)/);
+  });
+});
+
+// Declared locally because `_mdxExplicitJsx` is private to the Data interfaces.
+interface ExplicitJsxData extends MdxJsxFlowElementData {
+  _mdxExplicitJsx: true;
+}
+const explicitJsxData: ExplicitJsxData = { _mdxExplicitJsx: true };
+
+interface TreeNode {
+  type: string;
+  tagName?: string;
+  children?: unknown[];
+}
+
+function mapChildren(tree: TreeNode, fn: (node: TreeNode) => unknown): void {
+  if (!tree.children) return;
+  const next: unknown[] = [];
+  for (const child of tree.children as TreeNode[]) {
+    mapChildren(child, fn);
+    const replacement = fn(child);
+    if (Array.isArray(replacement)) next.push(...replacement);
+    else next.push(replacement ?? child);
+  }
+  tree.children = next;
+}
+
+const widget = (name: string, explicit: boolean) =>
+  ({
+    type: "mdxJsxFlowElement",
+    name,
+    attributes: [{ type: "mdxJsxAttribute", name: "foo", value: "bar" }],
+    children: [],
+    ...(explicit ? { data: explicitJsxData } : {}),
+  }) satisfies MdxJsxFlowElement;
+
+const insertedBuilding = {
+  type: "mdxJsxFlowElement",
+  name: "Building",
+  attributes: [],
+  children: [],
+  data: explicitJsxData,
+} satisfies MdxJsxFlowElement;
+
+const highlightedPre = () =>
+  ({
+    type: "element",
+    tagName: "pre",
+    properties: { className: ["shiki"] },
+    children: [{ type: "text", value: "highlighted" }],
+  }) satisfies Element;
+
+describe("MDX conformance: plugin-inserted explicit JSX", () => {
+  const Building = () => createElement("aside", null, "building");
+  const OverriddenPre = (props: any) =>
+    createElement("pre", { "data-from": "components" }, props.children);
+  const OverriddenWidget = () => createElement("span", null, "overridden");
+
+  test("one explicit inserted node doesn't stop the others reaching _components", async () => {
+    await assertMdxPluginConformance(
+      "# Title\n\n```js\nconsole.log('hi');\n```\n\nSome paragraph.\n",
+      {
+        reference: {
+          remarkPlugins: [
+            () => (tree: TreeNode) =>
+              mapChildren(tree, (node) =>
+                node.type === "paragraph" ? insertedBuilding : undefined,
+              ),
+          ],
+          rehypePlugins: [
+            () => (tree: TreeNode) =>
+              mapChildren(tree, (node) =>
+                node.type === "element" && node.tagName === "pre" ? highlightedPre() : undefined,
+              ),
+          ],
+        },
+        satteri: {
+          mdastPlugins: [
+            defineMdastPlugin({
+              name: "insert-explicit",
+              paragraph(node, ctx) {
+                ctx.replaceNode(node, insertedBuilding);
+              },
+            }),
+          ],
+          hastPlugins: [
+            defineHastPlugin({
+              name: "highlight",
+              element: {
+                filter: ["pre"],
+                visit(node, ctx) {
+                  ctx.replaceNode(node, highlightedPre());
+                },
+              },
+            }),
+          ],
+        },
+        components: { Building, pre: OverriddenPre },
+      },
+    );
+  });
+
+  test("explicit JSX is honoured per node, not per span", async () => {
+    await assertMdxPluginConformance("# hi\n\npara\n", {
+      reference: {
+        remarkPlugins: [
+          () => (tree: TreeNode) =>
+            mapChildren(tree, (node) => {
+              if (node.type === "paragraph") return widget("my-widget", true);
+              if (node.type === "heading") return [node, widget("other-widget", false)];
+              return undefined;
+            }),
+        ],
+      },
+      satteri: {
+        mdastPlugins: [
+          defineMdastPlugin({
+            name: "insert-widgets",
+            paragraph(node, ctx) {
+              ctx.replaceNode(node, widget("my-widget", true));
+            },
+            heading(node, ctx) {
+              ctx.insertAfter(node, widget("other-widget", false));
+            },
+          }),
+        ],
+      },
+      components: { "my-widget": OverriddenWidget, "other-widget": OverriddenWidget },
+    });
   });
 });
