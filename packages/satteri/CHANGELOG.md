@@ -1,5 +1,12 @@
 # satteri
 
+## 0.10.3 — 2026-08-19
+
+### Patch changes
+
+- [1a052cf](https://github.com/bruits/satteri/commit/1a052cfc0a295d7adbbcd3c9a1173d8a1b34598e) Improved performance. — Thanks @Princesseuh!
+- [2cf9aef](https://github.com/bruits/satteri/commit/2cf9aef81dacbc1121a0fbae913215eb7e36838f) Added `clobberPrefix` option to footnotes, mirroring `remark-rehype` — Thanks @Princesseuh!
+
 ## 0.10.2 — 2026-08-18
 
 ### Patch changes

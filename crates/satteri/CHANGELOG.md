@@ -1,5 +1,12 @@
 # satteri
 
+## 0.2.12 — 2026-08-19
+
+### Patch changes
+
+- [2cf9aef](https://github.com/bruits/satteri/commit/2cf9aef81dacbc1121a0fbae913215eb7e36838f) Added `clobberPrefix` option to footnotes, mirroring `remark-rehype` — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.5.3, satteri-mdxjs (Cargo)@0.3.12, satteri-pulldown-cmark (Cargo)@0.6.3
+
 ## 0.2.11 — 2026-08-18
 
 ### Patch changes
