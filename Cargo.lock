@@ -1176,7 +1176,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "satteri"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "satteri-ast",
  "satteri-mdxjs",
@@ -1225,7 +1225,7 @@ version = "0.0.0"
 
 [[package]]
 name = "satteri-mdxjs"
-version = "0.3.12"
+version = "0.3.13"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "satteri-napi"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "napi",
  "napi-build",

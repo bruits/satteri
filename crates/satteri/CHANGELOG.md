@@ -1,5 +1,11 @@
 # satteri
 
+## 0.2.13 — 2026-08-19
+
+### Patch changes
+
+- Updated dependencies: satteri-mdxjs (Cargo)@0.3.13
+
 ## 0.2.12 — 2026-08-19
 
 ### Patch changes
