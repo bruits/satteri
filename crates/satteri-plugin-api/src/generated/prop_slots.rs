@@ -67,10 +67,10 @@ pub(crate) fn mdast_prop_slot(node_type: u8, name: &str) -> Option<MdastPropSlot
         (27, "meta") => MdastPropSlot::Str { offset: 0 },
         (27, "value") => MdastPropSlot::Str { offset: 8 },
         (28, "value") => MdastPropSlot::Str { offset: 8 },
+        (30 | 31 | 32 | 100 | 101, "name") => MdastPropSlot::Str { offset: 0 },
         (37, "spread") => MdastPropSlot::Bool { offset: 0 },
         (38, "name") => MdastPropSlot::Str { offset: 0 },
         (38, "value") => MdastPropSlot::Str { offset: 8 },
-        (100 | 101, "name") => MdastPropSlot::Str { offset: 0 },
         _ => return None,
     })
 }
