@@ -48,6 +48,27 @@ import {
   renderHandle,
   serializeHandle,
 } from "#binding";
+import {
+  ENABLE_DEFINITION_LIST,
+  ENABLE_DIRECTIVE,
+  ENABLE_FOOTNOTES,
+  ENABLE_GFM,
+  ENABLE_HEADING_ATTRIBUTES,
+  ENABLE_MATH,
+  ENABLE_MATH_MULTI_DOLLAR,
+  ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS,
+  ENABLE_SMART_DASHES,
+  ENABLE_SMART_ELLIPSES,
+  ENABLE_SMART_PUNCTUATION,
+  ENABLE_SMART_QUOTES,
+  ENABLE_STRIKETHROUGH,
+  ENABLE_SUBSCRIPT,
+  ENABLE_SUPERSCRIPT,
+  ENABLE_TABLES,
+  ENABLE_TASKLISTS,
+  ENABLE_WIKILINKS,
+  ENABLE_YAML_STYLE_METADATA_BLOCKS,
+} from "./generated/parse-options.js";
 import { MdastReader } from "./mdast/mdast-reader.js";
 import { materializeMdastTree } from "./mdast/mdast-materializer.js";
 import { markHandleMutated } from "./lazy-child-resolver.js";
@@ -55,68 +76,79 @@ import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
 import type { MdastNode, HastNode, Data, SourceFormat } from "./types.js";
 
-type NativeFeaturesPair = {
-  features: Record<string, unknown> | undefined;
-  convertOptions: Record<string, unknown> | undefined;
+const GFM_PARSE_OPTIONS = ENABLE_TABLES | ENABLE_STRIKETHROUGH | ENABLE_TASKLISTS | ENABLE_GFM;
+const FRONTMATTER_PARSE_OPTIONS =
+  ENABLE_YAML_STYLE_METADATA_BLOCKS | ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS;
+
+export const DEFAULT_PARSE_OPTIONS =
+  GFM_PARSE_OPTIONS | ENABLE_FOOTNOTES | FRONTMATTER_PARSE_OPTIONS;
+
+type NativeConvertOptions = NonNullable<Parameters<typeof markdownToHtmlFast>[2]>;
+
+type NativeCompileOptions = {
+  parseOptions: number;
+  convertOptions: NativeConvertOptions | undefined;
 };
 
-/**
- * Split the user-facing `Features` (with nested unions) into the flat napi
- * `JsFeatures` shape plus the conversion-side `JsConvertOptions` carrying
- * the footnote i18n strings. The public API only exposes `features`; the
- * footnote strings are routed to napi internally.
- */
-function featuresToNative(features: Features | undefined): NativeFeaturesPair {
-  if (!features) return { features: undefined, convertOptions: undefined };
-  const result: Record<string, unknown> = {};
-  let convertOptions: Record<string, unknown> | undefined;
+/** Packs into the bit set napi reads straight back as `satteri_pulldown_cmark::Options`. */
+function featuresToParseOptions(features: Features): number {
+  let options = 0;
 
-  if (features.gfm !== undefined) {
-    if (typeof features.gfm === "object") {
-      const g = features.gfm;
-      const gfmOpts: Record<string, unknown> = {};
-      if (g.footnotes !== undefined) {
-        if (typeof g.footnotes === "object") {
-          gfmOpts.footnotes = true;
-          convertOptions = convertOptions ?? {};
-          if (g.footnotes.label !== undefined) convertOptions.footnoteLabel = g.footnotes.label;
-          if (g.footnotes.backContent !== undefined)
-            convertOptions.footnoteBackContent = g.footnotes.backContent;
-          if (g.footnotes.backLabel !== undefined)
-            convertOptions.footnoteBackLabel = g.footnotes.backLabel;
-        } else {
-          gfmOpts.footnotes = g.footnotes;
-        }
-      }
-      result.gfmOptions = gfmOpts;
-    } else {
-      result.gfm = features.gfm;
-    }
+  const { gfm } = features;
+  if (typeof gfm === "object") {
+    options |= GFM_PARSE_OPTIONS;
+    if (gfm.footnotes !== false) options |= ENABLE_FOOTNOTES;
+  } else if (gfm ?? true) {
+    options |= GFM_PARSE_OPTIONS | ENABLE_FOOTNOTES;
   }
-  if (features.frontmatter !== undefined) result.frontmatter = features.frontmatter;
-  if (features.math !== undefined) {
-    if (typeof features.math === "object") {
-      const mathOpts: Record<string, unknown> = {};
-      if (features.math.singleDollarTextMath !== undefined)
-        mathOpts.singleDollarTextMath = features.math.singleDollarTextMath;
-      result.mathOptions = mathOpts;
-    } else {
-      result.math = features.math;
-    }
+
+  if (features.frontmatter ?? true) options |= FRONTMATTER_PARSE_OPTIONS;
+
+  // Opting out of single-dollar math sets the multi-dollar sub-flag so the parser skips lone `$`.
+  const { math } = features;
+  if (typeof math === "object") {
+    options |= math.singleDollarTextMath === false ? ENABLE_MATH_MULTI_DOLLAR : ENABLE_MATH;
+  } else if (math) {
+    options |= ENABLE_MATH;
   }
-  if (features.headingAttributes !== undefined)
-    result.headingAttributes = features.headingAttributes;
-  if (features.directive !== undefined) result.directive = features.directive;
-  if (features.superscript !== undefined) result.superscript = features.superscript;
-  if (features.subscript !== undefined) result.subscript = features.subscript;
-  if (features.wikilinks !== undefined) result.wikilinks = features.wikilinks;
-  if (features.definitionList !== undefined) result.definitionList = features.definitionList;
-  if (features.smartPunctuation !== undefined) {
-    if (typeof features.smartPunctuation === "object") {
-      result.smartPunctuationOptions = features.smartPunctuation;
-    } else {
-      result.smartPunctuation = features.smartPunctuation;
-    }
+
+  if (features.headingAttributes) options |= ENABLE_HEADING_ATTRIBUTES;
+  if (features.directive) options |= ENABLE_DIRECTIVE;
+  if (features.superscript) options |= ENABLE_SUPERSCRIPT;
+  if (features.subscript) options |= ENABLE_SUBSCRIPT;
+  if (features.wikilinks) options |= ENABLE_WIKILINKS;
+  if (features.definitionList) options |= ENABLE_DEFINITION_LIST;
+
+  const smartPunctuation = features.smartPunctuation;
+  if (typeof smartPunctuation === "object") {
+    if (smartPunctuation.quotes ?? true) options |= ENABLE_SMART_QUOTES;
+    if (smartPunctuation.dashes ?? true) options |= ENABLE_SMART_DASHES;
+    if (smartPunctuation.ellipses ?? true) options |= ENABLE_SMART_ELLIPSES;
+  } else if (smartPunctuation) {
+    options |= ENABLE_SMART_PUNCTUATION;
+  }
+
+  return options;
+}
+
+/**
+ * Split the user-facing `Features` into the packed parser options plus the
+ * conversion-side `JsConvertOptions` carrying the footnote i18n strings and the
+ * raw-HTML reparse. The public API only exposes `features`; both halves are
+ * routed to napi internally.
+ */
+export function featuresToNative(features: Features | undefined): NativeCompileOptions {
+  if (!features) return { parseOptions: DEFAULT_PARSE_OPTIONS, convertOptions: undefined };
+  let convertOptions: NativeConvertOptions | undefined;
+
+  const { gfm } = features;
+  if (typeof gfm === "object" && typeof gfm.footnotes === "object") {
+    const { label, backContent, backLabel, clobberPrefix } = gfm.footnotes;
+    convertOptions = {};
+    if (label !== undefined) convertOptions.footnoteLabel = label;
+    if (backContent !== undefined) convertOptions.footnoteBackContent = backContent;
+    if (backLabel !== undefined) convertOptions.footnoteBackLabel = backLabel;
+    if (clobberPrefix !== undefined) convertOptions.clobberPrefix = clobberPrefix;
   }
   if (features.rawHtml !== undefined) {
     // Routed to convert options so every pipeline (fast paths, plugin paths,
@@ -124,7 +156,7 @@ function featuresToNative(features: Features | undefined): NativeFeaturesPair {
     convertOptions = convertOptions ?? {};
     convertOptions.rawHtml = features.rawHtml;
   }
-  return { features: result, convertOptions };
+  return { parseOptions: featuresToParseOptions(features), convertOptions };
 }
 
 type MdastPipelineResult = {
@@ -481,6 +513,8 @@ export interface FootnoteOptions {
    * for each backref.
    */
   backLabel?: string | FootnoteBackrefCallback;
+  /** Prefix applied to footnote IDs to prevent DOM clobbering. Default: `"user-content-"`. */
+  clobberPrefix?: string;
 }
 
 /** Granular GFM toggles, nested under {@link Features.gfm}. */
@@ -770,14 +804,13 @@ export function markdownToHtml(
     data,
   );
   const hastMayHaveStubs = hastPlugins.length > 0;
-  const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
-    featuresToNative(features);
+  const { parseOptions, convertOptions: nativeConvertOptions } = featuresToNative(features);
 
   // Fast path: no plugins → parse, convert, render, and frontmatter all happen
   // inside a single NAPI call. Skips 5 handle-NAPI roundtrips that the
   // plugin-capable path needs to keep the arena live across passes.
   if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
-    const { html, frontmatter } = markdownToHtmlFast(source, nativeFeatures, nativeConvertOptions);
+    const { html, frontmatter } = markdownToHtmlFast(source, parseOptions, nativeConvertOptions);
     return { html, frontmatter: (frontmatter as Frontmatter | null | undefined) ?? null, data };
   }
 
@@ -791,7 +824,7 @@ export function markdownToHtml(
   // happen inside a single NAPI roundtrip. Saves the convert-to-hast handle
   // create + render + drop crossings the generic path makes separately.
   if (hastPlugins.length === 0) {
-    const mdastHandle = createMdastHandle(source, nativeFeatures, trackPositions);
+    const mdastHandle = createMdastHandle(source, parseOptions, trackPositions);
     try {
       const mdastResult = runMdastPluginsOnHandle(
         mdastHandle,
@@ -842,7 +875,7 @@ export function markdownToHtml(
     mdastPlugins,
     false,
     fileURL,
-    nativeFeatures,
+    parseOptions,
     nativeConvertOptions,
     data,
     warnings,
@@ -971,8 +1004,7 @@ function toJsImpl(
   );
   const hastMayHaveStubs = hastPlugins.length > 0;
   const mdxOptions = mdxOptionsToNative(mdxFields);
-  const { features: nativeFeatures, convertOptions: nativeConvertOptions } =
-    featuresToNative(features);
+  const { parseOptions, convertOptions: nativeConvertOptions } = featuresToNative(features);
 
   // Fast path: same trick as `markdownToHtml`. Parse → MDAST → HAST → JS plus
   // frontmatter extraction all happen inside a single NAPI call. Skips 5 of
@@ -980,7 +1012,7 @@ function toJsImpl(
   if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
     const { code, frontmatter } = (mdx ? mdxToJsFast : markdownToJsFast)(
       source,
-      nativeFeatures,
+      parseOptions,
       mdxOptions,
       nativeConvertOptions,
     );
@@ -995,8 +1027,8 @@ function toJsImpl(
   // frontmatter + convert + simplify + compile happen in one NAPI call.
   if (hastPlugins.length === 0) {
     const mdastHandle = mdx
-      ? createMdxMdastHandle(source, nativeFeatures, trackPositions)
-      : createMdastHandle(source, nativeFeatures, trackPositions);
+      ? createMdxMdastHandle(source, parseOptions, trackPositions)
+      : createMdastHandle(source, parseOptions, trackPositions);
     try {
       const mdastResult = runMdastPluginsOnHandle(
         mdastHandle,
@@ -1045,7 +1077,7 @@ function toJsImpl(
     mdastPlugins,
     mdx,
     fileURL,
-    nativeFeatures,
+    parseOptions,
     nativeConvertOptions,
     data,
     warnings,
@@ -1162,10 +1194,8 @@ function createHastHandleFromMdast(
   mdastPlugins: MdastPluginDefinition[],
   mdx: boolean,
   fileURL: URL | undefined,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  nativeFeatures: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  nativeConvertOptions: any,
+  parseOptions: number,
+  nativeConvertOptions: NativeConvertOptions | undefined,
   data: Data,
   warnings: boolean,
   trackPositions: boolean,
@@ -1174,16 +1204,11 @@ function createHastHandleFromMdast(
     const [hastHandle, raw] = mdx
       ? createMdxHastHandleWithFrontmatter(
           source,
-          nativeFeatures,
+          parseOptions,
           nativeConvertOptions,
           trackPositions,
         )
-      : createHastHandleWithFrontmatter(
-          source,
-          nativeFeatures,
-          nativeConvertOptions,
-          trackPositions,
-        );
+      : createHastHandleWithFrontmatter(source, parseOptions, nativeConvertOptions, trackPositions);
     return {
       hastHandle,
       frontmatter: raw ? { kind: raw.kind === "toml" ? "toml" : "yaml", value: raw.value } : null,
@@ -1191,8 +1216,8 @@ function createHastHandleFromMdast(
   }
 
   const mdastHandle = mdx
-    ? createMdxMdastHandle(source, nativeFeatures, trackPositions)
-    : createMdastHandle(source, nativeFeatures, trackPositions);
+    ? createMdxMdastHandle(source, parseOptions, trackPositions)
+    : createMdastHandle(source, parseOptions, trackPositions);
   const sourceFormat: SourceFormat = mdx ? "mdx" : "markdown";
 
   const mdastMayHaveStubs = mdastPlugins.length > 0;
@@ -1253,7 +1278,7 @@ export interface TreeOptions {
 export function markdownToMdast(source: string, options: TreeOptions = {}): MdastNode {
   const handle = createMdastHandle(
     source,
-    featuresToNative(options.features).features,
+    featuresToNative(options.features).parseOptions,
     options.position,
   );
   try {
@@ -1267,7 +1292,7 @@ export function markdownToMdast(source: string, options: TreeOptions = {}): Mdas
 export function mdxToMdast(source: string, options: TreeOptions = {}): MdastNode {
   const handle = createMdxMdastHandle(
     source,
-    featuresToNative(options.features).features,
+    featuresToNative(options.features).parseOptions,
     options.position,
   );
   try {
@@ -1279,8 +1304,8 @@ export function mdxToMdast(source: string, options: TreeOptions = {}): MdastNode
 
 /** Convert Markdown source to a materialized hast tree. */
 export function markdownToHast(source: string, options: TreeOptions = {}): HastNode {
-  const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
-  const handle = createHastHandle(source, nativeFeatures, convertOptions, options.position);
+  const { parseOptions, convertOptions } = featuresToNative(options.features);
+  const handle = createHastHandle(source, parseOptions, convertOptions, options.position);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {
@@ -1290,8 +1315,8 @@ export function markdownToHast(source: string, options: TreeOptions = {}): HastN
 
 /** Convert MDX source to a materialized hast tree. */
 export function mdxToHast(source: string, options: TreeOptions = {}): HastNode {
-  const { features: nativeFeatures, convertOptions } = featuresToNative(options.features);
-  const handle = createMdxHastHandle(source, nativeFeatures, convertOptions, options.position);
+  const { parseOptions, convertOptions } = featuresToNative(options.features);
+  const handle = createMdxHastHandle(source, parseOptions, convertOptions, options.position);
   try {
     return materializeHastTree(new HastReader(serializeHandle(handle)));
   } finally {

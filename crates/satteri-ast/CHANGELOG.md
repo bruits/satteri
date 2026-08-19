@@ -1,5 +1,19 @@
 # satteri-ast
 
+## 0.5.3 — 2026-08-19
+
+### Patch changes
+
+- [1a052cf](https://github.com/bruits/satteri/commit/1a052cfc0a295d7adbbcd3c9a1173d8a1b34598e) Improved performance. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.1
+
+## 0.5.2 — 2026-08-18
+
+### Patch changes
+
+- [c363b97](https://github.com/bruits/satteri/commit/c363b97ed83c548662eabf3d81011744a7915d6b) Fixed the footnote back-reference link landing inside an earlier paragraph when the definition ends in a list, code block, blockquote, table, or heading. It is now appended after that last block, as remark and GitHub do. — Thanks @Princesseuh!
+- [c363b97](https://github.com/bruits/satteri/commit/c363b97ed83c548662eabf3d81011744a7915d6b) Fixed footnote links and IDs for identifiers containing non-ASCII characters or URL punctuation, which are now percent-encoded. `[^café]` links to `#user-content-fn-caf%C3%A9`, and an identifier holding a bare `%` no longer produces an invalid URL. — Thanks @Princesseuh!
+
 ## 0.5.1 — 2026-08-18
 
 ### Patch changes

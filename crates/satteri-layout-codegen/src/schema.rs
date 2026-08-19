@@ -1309,6 +1309,31 @@ pub const TS_WIRE_TABLES: &[&WireTable] = &[
     &MDX_ATTR_KINDS,
 ];
 
+/// Bit positions of the `satteri_pulldown_cmark::Options` flags the JS package
+/// packs into the `parseOptions` integer the NAPI entry points take. Holds only
+/// the flags the public `Features` type reaches; `ENABLE_MDX` is added Rust-side.
+pub const PARSE_OPTION_BITS: &[(&str, u32)] = &[
+    ("ENABLE_TABLES", 1),
+    ("ENABLE_FOOTNOTES", 2),
+    ("ENABLE_STRIKETHROUGH", 3),
+    ("ENABLE_TASKLISTS", 4),
+    ("ENABLE_SMART_PUNCTUATION", 5),
+    ("ENABLE_HEADING_ATTRIBUTES", 6),
+    ("ENABLE_YAML_STYLE_METADATA_BLOCKS", 7),
+    ("ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS", 8),
+    ("ENABLE_MATH", 10),
+    ("ENABLE_GFM", 11),
+    ("ENABLE_DEFINITION_LIST", 12),
+    ("ENABLE_SUPERSCRIPT", 13),
+    ("ENABLE_SUBSCRIPT", 14),
+    ("ENABLE_WIKILINKS", 15),
+    ("ENABLE_DIRECTIVE", 16),
+    ("ENABLE_SMART_QUOTES", 18),
+    ("ENABLE_SMART_DASHES", 19),
+    ("ENABLE_SMART_ELLIPSES", 20),
+    ("ENABLE_MATH_MULTI_DOLLAR", 23),
+];
+
 /// `ArenaNode` `#[repr(C)]` size; pinned to the real struct by the generated
 /// `offset_of!` asserts in satteri-arena.
 pub const ARENA_NODE_SIZE: usize = 52;

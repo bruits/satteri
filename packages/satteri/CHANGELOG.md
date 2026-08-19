@@ -1,5 +1,21 @@
 # satteri
 
+## 0.10.3 — 2026-08-19
+
+### Patch changes
+
+- [1a052cf](https://github.com/bruits/satteri/commit/1a052cfc0a295d7adbbcd3c9a1173d8a1b34598e) Improved performance. — Thanks @Princesseuh!
+- [2cf9aef](https://github.com/bruits/satteri/commit/2cf9aef81dacbc1121a0fbae913215eb7e36838f) Added `clobberPrefix` option to footnotes, mirroring `remark-rehype` — Thanks @Princesseuh!
+
+## 0.10.2 — 2026-08-18
+
+### Patch changes
+
+- [c363b97](https://github.com/bruits/satteri/commit/c363b97ed83c548662eabf3d81011744a7915d6b) Fixed text being dropped when one paragraph held two footnote references whose identifier contains a backtick, or a `$` with the math feature enabled. The words between the two references, and the second reference itself, are no longer swallowed. — Thanks @Princesseuh!
+- [c363b97](https://github.com/bruits/satteri/commit/c363b97ed83c548662eabf3d81011744a7915d6b) Fixed the footnote back-reference link landing inside an earlier paragraph when the definition ends in a list, code block, blockquote, table, or heading. It is now appended after that last block, as remark and GitHub do. — Thanks @Princesseuh!
+- [003158b](https://github.com/bruits/satteri/commit/003158bba41196a16b2ccf013f3260af029a5fc8) Added `visitMdastHook`, `visitHastHook` and `normalizePlugins` to the exports, so a hand-driven plugin pipeline can run `before`/`after` hooks and resolve plugin factories the way `markdownToHtml` does. The diagnostic and hook types (`MdastDiagnostic`, `HastDiagnostic`, `MdastHookFn`, `HastHookFn`) are exported alongside them. — Thanks @Princesseuh!
+- [c363b97](https://github.com/bruits/satteri/commit/c363b97ed83c548662eabf3d81011744a7915d6b) Fixed footnote links and IDs for identifiers containing non-ASCII characters or URL punctuation, which are now percent-encoded. `[^café]` links to `#user-content-fn-caf%C3%A9`, and an identifier holding a bare `%` no longer produces an invalid URL. — Thanks @Princesseuh!
+
 ## 0.10.1 — 2026-08-18
 
 ### Patch changes

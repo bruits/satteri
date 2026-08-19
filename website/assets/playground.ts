@@ -1,12 +1,21 @@
 import {
-  type MdxCompileOptions,
-  type MdastPluginDefinition,
+  type Data,
+  type HastDiagnostic,
+  type HastHookFn,
   type HastPluginDefinition,
+  type HastPluginEntry,
+  type MdastDiagnostic,
+  type MdastHookFn,
+  type MdastPluginDefinition,
+  type MdastPluginEntry,
+  type MdxCompileOptions,
+  type SourceFormat,
   compileHandle,
   convertMdastToHastHandle,
   createMdastHandle,
   createMdxMdastHandle,
   dropHandle,
+  normalizePlugins,
   renderHandle,
   serializeHandle,
   MdastReader,
@@ -14,8 +23,10 @@ import {
   HastReader,
   materializeHastTree,
   visitMdastHandle,
+  visitMdastHook,
   resolveMdastSubscriptions,
   visitHastHandle,
+  visitHastHook,
   resolveHastSubscriptions,
   applyCommandsToMdastHandle,
   getHandleSource,
@@ -77,7 +88,12 @@ const mdxJsxRuntime = $<HTMLSelectElement>("#mdx-jsx-runtime");
 const mdxJsx = $<HTMLInputElement>("#mdx-jsx");
 const mdxDevelopment = $<HTMLInputElement>("#mdx-development");
 const mdxProviderImportSource = $<HTMLInputElement>("#mdx-provider-import-source");
+const mdxPragma = $<HTMLInputElement>("#mdx-pragma");
+const mdxPragmaFrag = $<HTMLInputElement>("#mdx-pragma-frag");
+const mdxPragmaImportSource = $<HTMLInputElement>("#mdx-pragma-import-source");
 const mdxOutputFormat = $<HTMLSelectElement>("#mdx-output-format");
+const mdxElementAttributeNameCase = $<HTMLSelectElement>("#mdx-element-attribute-name-case");
+const mdxStylePropertyNameCase = $<HTMLSelectElement>("#mdx-style-property-name-case");
 const featGfm = $<HTMLInputElement>("#feat-gfm");
 const featFrontmatter = $<HTMLInputElement>("#feat-frontmatter");
 const featMath = $<HTMLInputElement>("#feat-math");
@@ -86,6 +102,8 @@ const featDirective = $<HTMLInputElement>("#feat-directive");
 const featSuperscript = $<HTMLInputElement>("#feat-superscript");
 const featSubscript = $<HTMLInputElement>("#feat-subscript");
 const featWikilinks = $<HTMLInputElement>("#feat-wikilinks");
+const featDefinitionList = $<HTMLInputElement>("#feat-definition-list");
+const featRawHtml = $<HTMLInputElement>("#feat-raw-html");
 const featSmartPunctuation = $<HTMLInputElement>("#feat-smart-punctuation");
 const smartPunctOptions = $<HTMLFieldSetElement>("#smart-punct-options");
 const featSmartQuotes = $<HTMLInputElement>("#feat-smart-quotes");
@@ -98,9 +116,9 @@ let compileGeneration = 0;
 let highlighter: HighlighterCore | null = null;
 
 let cachedMdastSource = "";
-let cachedMdastPlugins: MdastPluginDefinition[] = [];
+let cachedMdastEntries: MdastPluginEntry[] = [];
 let cachedHastSource = "";
-let cachedHastPlugins: HastPluginDefinition[] = [];
+let cachedHastEntries: HastPluginEntry[] = [];
 
 const currentShikiTheme = () =>
   document.documentElement.dataset.theme === "dark" ? "vitesse-dark" : "vitesse-light";
@@ -180,16 +198,22 @@ function getFeatures() {
     superscript: featSuperscript.checked,
     subscript: featSubscript.checked,
     wikilinks: featWikilinks.checked,
-    smartPunctuation: featSmartPunctuation.checked,
-    ...(featSmartPunctuation.checked &&
-      !(featSmartQuotes.checked && featSmartDashes.checked && featSmartEllipses.checked) && {
-        smartPunctuationOptions: {
-          quotes: featSmartQuotes.checked,
-          dashes: featSmartDashes.checked,
-          ellipses: featSmartEllipses.checked,
-        },
-      }),
+    definitionList: featDefinitionList.checked,
+    smartPunctuation:
+      featSmartPunctuation.checked &&
+      !(featSmartQuotes.checked && featSmartDashes.checked && featSmartEllipses.checked)
+        ? {
+            quotes: featSmartQuotes.checked,
+            dashes: featSmartDashes.checked,
+            ellipses: featSmartEllipses.checked,
+          }
+        : featSmartPunctuation.checked,
   };
+}
+
+// Raw HTML is a convert option, not a parse feature: the reparse happens on the way to HAST.
+function getConvertOptions() {
+  return featRawHtml.checked ? { rawHtml: true } : undefined;
 }
 
 function getMdxOptions() {
@@ -203,8 +227,20 @@ function getMdxOptions() {
   if (mdxDevelopment.checked) result.development = true;
   const providerImportSource = mdxProviderImportSource.value.trim();
   if (providerImportSource) result.providerImportSource = providerImportSource;
+  const pragma = mdxPragma.value.trim();
+  if (pragma) result.pragma = pragma;
+  const pragmaFrag = mdxPragmaFrag.value.trim();
+  if (pragmaFrag) result.pragmaFrag = pragmaFrag;
+  const pragmaImportSource = mdxPragmaImportSource.value.trim();
+  if (pragmaImportSource) result.pragmaImportSource = pragmaImportSource;
   const outputFormat = mdxOutputFormat.value;
   if (outputFormat !== "program") result.outputFormat = outputFormat;
+  const elementAttributeNameCase = mdxElementAttributeNameCase.value;
+  if (elementAttributeNameCase !== "react") {
+    result.elementAttributeNameCase = elementAttributeNameCase;
+  }
+  const stylePropertyNameCase = mdxStylePropertyNameCase.value;
+  if (stylePropertyNameCase !== "dom") result.stylePropertyNameCase = stylePropertyNameCase;
 
   const os = getOptimizeStatic();
   if (os) result.optimizeStatic = os;
@@ -238,6 +274,8 @@ type FeatureKey =
   | "superscript"
   | "subscript"
   | "wikilinks"
+  | "definitionList"
+  | "rawHtml"
   | "smartPunctuation"
   | "smartQuotes"
   | "smartDashes"
@@ -249,7 +287,12 @@ interface MdxState {
   jsx: boolean;
   development: boolean;
   providerImportSource: string;
+  pragma: string;
+  pragmaFrag: string;
+  pragmaImportSource: string;
   outputFormat: string;
+  elementAttributeNameCase: string;
+  stylePropertyNameCase: string;
 }
 
 interface OptimizeStaticState {
@@ -287,6 +330,8 @@ function getState(): PlaygroundState {
       superscript: featSuperscript.checked,
       subscript: featSubscript.checked,
       wikilinks: featWikilinks.checked,
+      definitionList: featDefinitionList.checked,
+      rawHtml: featRawHtml.checked,
       smartPunctuation: featSmartPunctuation.checked,
       smartQuotes: featSmartQuotes.checked,
       smartDashes: featSmartDashes.checked,
@@ -298,7 +343,12 @@ function getState(): PlaygroundState {
       jsx: mdxJsx.checked,
       development: mdxDevelopment.checked,
       providerImportSource: mdxProviderImportSource.value,
+      pragma: mdxPragma.value,
+      pragmaFrag: mdxPragmaFrag.value,
+      pragmaImportSource: mdxPragmaImportSource.value,
       outputFormat: mdxOutputFormat.value,
+      elementAttributeNameCase: mdxElementAttributeNameCase.value,
+      stylePropertyNameCase: mdxStylePropertyNameCase.value,
     },
     optimizeStatic: {
       enabled: optimizeToggle.checked,
@@ -326,6 +376,8 @@ function applyState(state: PlaygroundState) {
   featSuperscript.checked = !!features.superscript;
   featSubscript.checked = !!features.subscript;
   featWikilinks.checked = !!features.wikilinks;
+  featDefinitionList.checked = !!features.definitionList;
+  featRawHtml.checked = !!features.rawHtml;
   featSmartPunctuation.checked = !!features.smartPunctuation;
   featSmartQuotes.checked = !!features.smartQuotes;
   featSmartDashes.checked = !!features.smartDashes;
@@ -338,7 +390,12 @@ function applyState(state: PlaygroundState) {
   mdxJsx.checked = !!mdx.jsx;
   mdxDevelopment.checked = !!mdx.development;
   mdxProviderImportSource.value = mdx.providerImportSource ?? "";
+  mdxPragma.value = mdx.pragma ?? "";
+  mdxPragmaFrag.value = mdx.pragmaFrag ?? "";
+  mdxPragmaImportSource.value = mdx.pragmaImportSource ?? "";
   mdxOutputFormat.value = mdx.outputFormat ?? "program";
+  mdxElementAttributeNameCase.value = mdx.elementAttributeNameCase ?? "react";
+  mdxStylePropertyNameCase.value = mdx.stylePropertyNameCase ?? "dom";
 
   const os = state.optimizeStatic ?? {};
   optimizeToggle.checked = !!os.enabled;
@@ -654,7 +711,8 @@ function fmt(ms: number): string {
   return ms < 1 ? `${(ms * 1000).toFixed(0)}us` : `${ms.toFixed(1)}ms`;
 }
 
-async function evaluatePlugins<T extends { name: string }>(code: string): Promise<T[]> {
+// Entries stay unresolved: a factory is handed the document being compiled.
+async function evaluatePluginEntries<T>(code: string): Promise<T[]> {
   const trimmed = code.trim();
   if (!trimmed) return [];
 
@@ -665,33 +723,44 @@ async function evaluatePlugins<T extends { name: string }>(code: string): Promis
     if (mod.default == null) {
       throw new Error("Plugin must use 'export default { ... }' or 'export default [...]'");
     }
-    const raw = mod.default;
-    const plugins = Array.isArray(raw) ? raw : [raw];
-    for (const p of plugins) {
-      if (!p.name) {
-        throw new Error("Each plugin must have a 'name' property");
-      }
-    }
-    return plugins as T[];
+    return [mod.default as T];
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-async function getMdastPlugins(): Promise<MdastPluginDefinition[]> {
+async function getMdastEntries(): Promise<MdastPluginEntry[]> {
   const source = inputMdastPlugin.value;
-  if (source === cachedMdastSource) return cachedMdastPlugins;
+  if (source === cachedMdastSource) return cachedMdastEntries;
   cachedMdastSource = source;
-  cachedMdastPlugins = await evaluatePlugins<MdastPluginDefinition>(source);
-  return cachedMdastPlugins;
+  cachedMdastEntries = await evaluatePluginEntries<MdastPluginEntry>(source);
+  return cachedMdastEntries;
 }
 
-async function getHastPlugins(): Promise<HastPluginDefinition[]> {
+async function getHastEntries(): Promise<HastPluginEntry[]> {
   const source = inputHastPlugin.value;
-  if (source === cachedHastSource) return cachedHastPlugins;
+  if (source === cachedHastSource) return cachedHastEntries;
   cachedHastSource = source;
-  cachedHastPlugins = await evaluatePlugins<HastPluginDefinition>(source);
-  return cachedHastPlugins;
+  cachedHastEntries = await evaluatePluginEntries<HastPluginEntry>(source);
+  return cachedHastEntries;
+}
+
+function requireNames(plugins: { name?: string }[]): void {
+  for (const plugin of plugins) {
+    if (!plugin.name) throw new Error("Each plugin must have a 'name' property");
+  }
+}
+
+/** Mirrors the per-plugin pass order `markdownToHtml` runs. */
+function pluginPasses<H>(
+  plugin: { before?: H; after?: H },
+  subscriptionCount: number,
+): (H | "visitors")[] {
+  const passes: (H | "visitors")[] = [];
+  if (typeof plugin.before === "function") passes.push(plugin.before);
+  if (subscriptionCount > 0) passes.push("visitors");
+  if (typeof plugin.after === "function") passes.push(plugin.after);
+  return passes;
 }
 
 async function compile() {
@@ -706,10 +775,23 @@ async function compile() {
   const timings: string[] = [];
   let overhead = 0;
 
+  // One bag per compile, so both sides share the `ctx.data` they would in `markdownToHtml`.
+  const data: Data = {};
+  const sourceFormat: SourceFormat = isMdx ? "mdx" : "markdown";
+
   let mdastPlugins: MdastPluginDefinition[] = [];
   let hastPlugins: HastPluginDefinition[] = [];
   try {
-    mdastPlugins = await getMdastPlugins();
+    const entries = await getMdastEntries();
+    mdastPlugins = normalizePlugins<MdastPluginDefinition>(
+      entries,
+      "mdastPlugins",
+      source,
+      undefined,
+      sourceFormat,
+      data,
+    );
+    requireNames(mdastPlugins);
   } catch (e) {
     statusBar.innerHTML = `<span class="error">mdast plugin: ${escapeHtml(String(e))}</span>`;
     return;
@@ -718,7 +800,16 @@ async function compile() {
   if (gen !== compileGeneration || hasPendingScripts) return;
 
   try {
-    hastPlugins = await getHastPlugins();
+    const entries = await getHastEntries();
+    hastPlugins = normalizePlugins<HastPluginDefinition>(
+      entries,
+      "hastPlugins",
+      source,
+      undefined,
+      sourceFormat,
+      data,
+    );
+    requireNames(hastPlugins);
   } catch (e) {
     statusBar.innerHTML = `<span class="error">hast plugin: ${escapeHtml(String(e))}</span>`;
     return;
@@ -726,10 +817,16 @@ async function compile() {
 
   if (gen !== compileGeneration || hasPendingScripts) return;
 
-  const activeMdastCount = mdastPlugins.filter(
-    (p) => resolveMdastSubscriptions(p).length > 0,
-  ).length;
-  const activeHastCount = hastPlugins.filter((p) => resolveHastSubscriptions(p).length > 0).length;
+  const mdastRuns = mdastPlugins.map((plugin) => {
+    const subs = resolveMdastSubscriptions(plugin);
+    return { plugin, subs, passes: pluginPasses<MdastHookFn>(plugin, subs.length) };
+  });
+  const hastRuns = hastPlugins.map((plugin) => {
+    const subs = resolveHastSubscriptions(plugin);
+    return { plugin, subs, passes: pluginPasses<HastHookFn>(plugin, subs.length) };
+  });
+  const activeMdastCount = mdastRuns.filter((run) => run.passes.length > 0).length;
+  const activeHastCount = hastRuns.filter((run) => run.passes.length > 0).length;
   updatePluginBadges(activeMdastCount, activeHastCount);
 
   const features = getFeatures();
@@ -742,13 +839,36 @@ async function compile() {
 
     if (activeMdastCount > 0) {
       const pluginStart = performance.now();
-      const handleSource = getHandleSource(mdastHandle);
-      for (const plugin of mdastPlugins) {
-        const subs = resolveMdastSubscriptions(plugin);
-        const result = await visitMdastHandle(mdastHandle, plugin, subs, handleSource, undefined);
-        if (gen !== compileGeneration) return;
-        if (result.hasMutations) {
-          applyCommandsToMdastHandle(mdastHandle, result.commandBuffer);
+      const handleSource = () => getHandleSource(mdastHandle);
+      for (const { plugin, subs, passes } of mdastRuns) {
+        // Shared across the plugin's passes, so `after` sees what `before` reported.
+        const diagnostics: MdastDiagnostic[] = [];
+        for (const pass of passes) {
+          const result = await (pass === "visitors"
+            ? visitMdastHandle(
+                mdastHandle,
+                plugin,
+                subs,
+                handleSource,
+                undefined,
+                data,
+                sourceFormat,
+                diagnostics,
+              )
+            : visitMdastHook(
+                mdastHandle,
+                plugin,
+                pass,
+                handleSource,
+                undefined,
+                data,
+                sourceFormat,
+                diagnostics,
+              ));
+          if (gen !== compileGeneration) return;
+          if (result.hasMutations) {
+            applyCommandsToMdastHandle(mdastHandle, result.commandBuffer);
+          }
         }
       }
       timings.push(`mdast plugins <span>${fmt(performance.now() - pluginStart)}</span>`);
@@ -769,15 +889,39 @@ async function compile() {
     overhead += mdastDomMs;
     pendingHighlights.push({ el: tabMdast, code: mdastJson, lang: "json" });
 
-    const { result: hastHandle, ms: convertMs } = time(() => convertMdastToHastHandle(mdastHandle));
+    const { result: hastHandle, ms: convertMs } = time(() =>
+      convertMdastToHastHandle(mdastHandle, getConvertOptions()),
+    );
     timings.push(`mdast → hast <span>${fmt(convertMs)}</span>`);
 
     if (activeHastCount > 0) {
       const pluginStart = performance.now();
-      for (const plugin of hastPlugins) {
-        const subs = resolveHastSubscriptions(plugin);
-        await visitHastHandle(hastHandle, plugin, subs, source, undefined);
-        if (gen !== compileGeneration) return;
+      for (const { plugin, subs, passes } of hastRuns) {
+        const diagnostics: HastDiagnostic[] = [];
+        for (const pass of passes) {
+          await (pass === "visitors"
+            ? visitHastHandle(
+                hastHandle,
+                plugin,
+                subs,
+                source,
+                undefined,
+                data,
+                sourceFormat,
+                diagnostics,
+              )
+            : visitHastHook(
+                hastHandle,
+                plugin,
+                pass,
+                source,
+                undefined,
+                data,
+                sourceFormat,
+                diagnostics,
+              ));
+          if (gen !== compileGeneration) return;
+        }
       }
       timings.push(`hast plugins <span>${fmt(performance.now() - pluginStart)}</span>`);
     }
@@ -980,6 +1124,8 @@ document.querySelectorAll('input[name="mode"]').forEach((el) => {
   featSuperscript,
   featSubscript,
   featWikilinks,
+  featDefinitionList,
+  featRawHtml,
   featSmartPunctuation,
 ].forEach((el) => el.addEventListener("change", scheduleCompile));
 
@@ -990,10 +1136,23 @@ featSmartPunctuation.addEventListener("change", () => {
   el.addEventListener("change", scheduleCompile),
 );
 
-[mdxJsxImportSource, mdxProviderImportSource].forEach((el) => {
+[
+  mdxJsxImportSource,
+  mdxProviderImportSource,
+  mdxPragma,
+  mdxPragmaFrag,
+  mdxPragmaImportSource,
+].forEach((el) => {
   el.addEventListener("input", scheduleCompile);
 });
-[mdxJsxRuntime, mdxJsx, mdxDevelopment, mdxOutputFormat].forEach((el) => {
+[
+  mdxJsxRuntime,
+  mdxJsx,
+  mdxDevelopment,
+  mdxOutputFormat,
+  mdxElementAttributeNameCase,
+  mdxStylePropertyNameCase,
+].forEach((el) => {
   el.addEventListener("change", scheduleCompile);
 });
 

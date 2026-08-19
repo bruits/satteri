@@ -14,7 +14,7 @@ import {
   getHandleSource,
   applyCommandsAndConvertToHastHandle,
   renderHandle,
-} from "../index.js";
+} from "../src/index.js";
 import type { DirectiveAttributes, MdastNode } from "../src/types.js";
 import type { Heading, Paragraph, Text } from "mdast";
 import type { Position } from "unist";

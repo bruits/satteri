@@ -203,7 +203,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
         // Process new containers
         loop {
-            let save = line_start.clone();
+            let save = line_start.save_cursor();
             let mut outer_indent = line_start.scan_space_upto(4);
             if outer_indent >= 4 {
                 if self.options.contains(Options::ENABLE_MDX) {
@@ -236,14 +236,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // as the first non-whitespace byte.
                             break;
                         }
-                        line_start = save;
+                        line_start.restore_cursor(save);
                         break;
                     }
                     // The deeper list marker's continuation indent must account
                     // for the whitespace we just consumed past the initial 4.
                     outer_indent += extra;
                 } else {
-                    line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
             }
@@ -281,7 +281,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 {
                     self.list_interrupted_paragraph = false;
                     self.refdef_interrupted_paragraph = false;
-                    line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
                 // micromark's list construct rejects start != 1 when
@@ -314,14 +314,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 {
                     self.list_interrupted_paragraph = false;
                     self.refdef_interrupted_paragraph = false;
-                    line_start = save;
+                    line_start.restore_cursor(save);
                     break;
                 }
                 self.continue_list(container_start, ch, index);
                 self.tree.append(Item {
                     start: container_start,
                     end: after_marker_index, // will get updated later if item not empty
-                    body: ItemBody::ListItem(indent, false),
+                    body: ItemBody::ListItem(indent as u32, false),
                 });
                 self.tree.push();
                 if let Some(n) = scan_blank_line(&bytes[after_marker_index..]) {
@@ -329,7 +329,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     return after_marker_index + n;
                 }
                 if self.options.contains(Options::ENABLE_TASKLISTS) {
-                    let saved_line_start = line_start.clone();
+                    let saved_line_start = line_start.save_cursor();
                     let task_list_marker =
                         line_start.scan_task_list_marker().map(|is_checked| Item {
                             start: after_marker_index,
@@ -404,7 +404,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             // either the next line is a paragraph interrupt
                             // (so it can't lazily continue the task item) or
                             // the next line is blank.
-                            line_start = saved_line_start;
+                            line_start.restore_cursor(saved_line_start);
                         } else {
                             return self
                                 .parse_paragraph(task_list_marker.end, Some(task_list_marker));
@@ -516,7 +516,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.tree.append(Item {
                     start: container_start - outer_indent,
                     end: after_marker_index, // will get updated later if item not empty
-                    body: ItemBody::DefinitionListDefinition(indent, loose),
+                    body: ItemBody::DefinitionListDefinition(indent as u32, loose),
                 });
                 if let Some(ItemBody::DefinitionList(is_tight)) =
                     self.tree.peek_up().map(|cur| &mut self.tree[cur].item.body)
@@ -656,7 +656,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     break;
                 }
             } else {
-                line_start = save;
+                line_start.restore_cursor(save);
                 break;
             }
         }
@@ -1740,10 +1740,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     /// Commit a detected autolink. Only sound when nothing can still block it.
-    fn append_autolink_link(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
+    fn append_autolink_link(&mut self, d: AutolinkDetection<'a>, begin_text: usize, escaped: bool) {
         let link_ix = self
             .allocs
-            .allocate_link(d.link_type, d.url.into(), "".into(), "".into());
+            .allocate_link(d.link_type, d.url, "".into(), "".into());
         self.tree.append_text(begin_text, d.start, escaped);
         let link_node_ix = self.tree.append(Item {
             start: d.start,
@@ -1762,10 +1762,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
     /// Record a detected autolink as a zero-width marker: no byte's
     /// tokenization changes, so the candidate can still be dropped.
-    fn append_autolink_marker(&mut self, d: AutolinkDetection, begin_text: usize, escaped: bool) {
+    fn append_autolink_marker(
+        &mut self,
+        d: AutolinkDetection<'a>,
+        begin_text: usize,
+        escaped: bool,
+    ) {
         let link = self
             .allocs
-            .allocate_link(d.link_type, d.url.into(), "".into(), "".into());
+            .allocate_link(d.link_type, d.url, "".into(), "".into());
         let cand = self.allocs.allocate_autolink_candidate(AutolinkCandidate {
             start: d.start,
             end: d.end,
@@ -1946,7 +1951,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         self.tree.append(Item {
                             start: ix + 1,
                             end: ix + count + 1,
-                            body: ItemBody::MaybeCode(count, true),
+                            body: ItemBody::MaybeCode(count as u32, true),
                         });
                         begin_text = ix + 1 + count;
                         backslash_escaped = false;
@@ -2000,13 +2005,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         self.tree.append(Item {
                             start: ix + 1,
                             end: ix + 2,
-                            body: ItemBody::MaybeEmphasisEscaped(count, fired.0, fired.1),
+                            body: ItemBody::MaybeEmphasisEscaped(count as u32, fired.0, fired.1),
                         });
                         for i in 1..count {
                             self.tree.append(Item {
                                 start: ix + 1 + i,
                                 end: ix + 2 + i,
-                                body: ItemBody::MaybeEmphasis(count - i, blocked.0, blocked.1),
+                                body: ItemBody::MaybeEmphasis(
+                                    (count - i) as u32,
+                                    blocked.0,
+                                    blocked.1,
+                                ),
                             });
                         }
                         begin_text = ix + 1 + count;
@@ -2036,10 +2045,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 start: email_start,
                                 end: email_end,
                                 link_type: LinkType::Email,
-                                url: full_url
-                                    .strip_prefix("mailto:")
-                                    .map(str::to_owned)
-                                    .unwrap_or(full_url),
+                                url: email_addr(full_url),
                             };
                             if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
                                 candidate_floor = email_start + 1;
@@ -2090,7 +2096,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             self.tree.append(Item {
                                 start: ix + i,
                                 end: ix + i + 1,
-                                body: ItemBody::MaybeEmphasis(count - i, can_open, can_close),
+                                body: ItemBody::MaybeEmphasis(
+                                    (count - i) as u32,
+                                    can_open,
+                                    can_close,
+                                ),
                             });
                         }
                         begin_text = ix + count;
@@ -2280,7 +2290,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     self.tree.append(Item {
                         start: ix,
                         end: ix + count,
-                        body: ItemBody::MaybeCode(count, false),
+                        body: ItemBody::MaybeCode(count as u32, false),
                     });
                     begin_text = ix + count;
                     LoopInstruction::ContinueAndSkip(count - 1)
@@ -2493,9 +2503,15 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         .peek_up()
                         .map(|ix| self.tree[ix].item.start)
                         .unwrap_or(start);
-                    let detection =
-                        detect_gfm_autolink(bytes, ix, byte, paragraph_floor, begin_text)
-                            .filter(|d| d.start >= candidate_floor);
+                    let detection = detect_gfm_autolink(
+                        self.text,
+                        bytes,
+                        ix,
+                        byte,
+                        paragraph_floor,
+                        begin_text,
+                    )
+                    .filter(|d| d.start >= candidate_floor);
                     if let Some(d) = detection {
                         let (cand_start, cand_end) = (d.start, d.end);
                         if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
@@ -2890,7 +2906,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree.append(Item {
             start: start_ix,
             end: 0, // will get set later
-            body: ItemBody::FencedCodeBlock(self.allocs.allocate_cow(info_string), lang_len),
+            body: ItemBody::FencedCodeBlock(
+                self.allocs.allocate_fenced_info(info_string, lang_len),
+            ),
         });
         self.tree.push();
         loop {
@@ -3206,7 +3224,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree.append(Item {
             start,
             end: 0, // will get set later
-            body: ItemBody::List(true, ch, index),
+            // An ordered marker scans at most 9 digits, so this always fits.
+            body: ItemBody::List(true, ch, index as u32),
         });
         self.tree.push();
         self.last_line_blank = false;
@@ -3903,6 +3922,23 @@ fn mdx_block_interrupts(_bytes: &[u8], _mdx: bool) -> bool {
     false
 }
 
+#[inline]
+fn listitem_interrupts(bytes: &[u8], current_container: bool, tree: &Tree<Item>) -> bool {
+    let Some((ix, delim, _index, _)) = scan_listitem(bytes) else {
+        return false;
+    };
+    !current_container
+        || tree.is_in_table()
+        // We don't allow interruption by either empty lists or numbered
+        // lists whose marker isn't *textually* the single character `1`
+        // (so `01.`, `001.`, `10.` all stay paragraph text — micromark
+        // matches the literal marker, not the parsed integer value).
+        || (matches!(delim, b'*' | b'-' | b'+')
+            || (bytes.first() == Some(&b'1')
+                && matches!(bytes.get(1), Some(b'.') | Some(b')'))))
+            && scan_blank_line(&bytes[ix..]).is_none()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn scan_paragraph_interrupt_no_table(
     bytes: &[u8],
@@ -3922,18 +3958,7 @@ fn scan_paragraph_interrupt_no_table(
         || (math && scan_math_fence(bytes).is_some())
         || (directive && scan_interrupting_container_extensions_fence(bytes))
         || scan_blockquote_start(bytes).is_some()
-        || scan_listitem(bytes).is_some_and(|(ix, delim, _index, _)| {
-            ! current_container ||
-            tree.is_in_table() ||
-            // We don't allow interruption by either empty lists or numbered
-            // lists whose marker isn't *textually* the single character `1`
-            // (so `01.`, `001.`, `10.` all stay paragraph text — micromark
-            // matches the literal marker, not the parsed integer value).
-            (delim == b'*' || delim == b'-' || delim == b'+'
-                || (bytes.first() == Some(&b'1')
-                    && matches!(bytes.get(1), Some(b'.') | Some(b')'))))
-                && (scan_blank_line(&bytes[ix..]).is_none())
-        })
+        || listitem_interrupts(bytes, current_container, tree)
         // HTML types 1–6 interrupt paragraphs. MDX disables HTML blocks
         // entirely (everything `<…>` is JSX), so the type-1/6 gate
         // shouldn't fire — a line like `</div>after` is just paragraph
@@ -5050,11 +5075,11 @@ fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize, options
 
 /// A GFM autolink literal the scanner accepted, before anything is committed
 /// to the tree.
-struct AutolinkDetection {
+struct AutolinkDetection<'a> {
     start: usize,
     end: usize,
     link_type: LinkType,
-    url: String,
+    url: CowStr<'a>,
 }
 
 /// `(can_open, can_close)` for the run of `run_len` delimiters at `at`.
@@ -5118,13 +5143,13 @@ fn escaped_delim_run(
 /// GFM resolves in the email construct's favour. `www_end` bounds the search to
 /// the www span, which the committed path skips outright and the deferred path
 /// was already rescanning.
-fn detect_email_inside_www(
+fn detect_email_inside_www<'a>(
     bytes: &[u8],
     ix: usize,
     www_end: usize,
     paragraph_start: usize,
     begin_text: usize,
-) -> Option<AutolinkDetection> {
+) -> Option<AutolinkDetection<'a>> {
     // `_` is the one atext byte that can precede a www literal, and the
     // attention arm's own email hook already owns that case.
     if ix > 0 && bytes[ix - 1] == b'_' {
@@ -5154,25 +5179,33 @@ fn detect_email_inside_www(
     })
 }
 
+/// Out of line: allocating URLs is rare enough that inlining only bloats the loop.
+#[inline(never)]
+fn www_url<'a>(span: &str) -> CowStr<'a> {
+    format!("http://{span}").into()
+}
+
 /// `scan_email_autolink` returns `mailto:<addr>`; arena_build's Email-link path
 /// prepends `mailto:` again, so strip it here.
-fn email_addr(full_url: String) -> String {
-    full_url
-        .strip_prefix("mailto:")
-        .map(str::to_owned)
-        .unwrap_or(full_url)
+#[inline(never)]
+fn email_addr<'a>(mut full_url: String) -> CowStr<'a> {
+    if full_url.starts_with("mailto:") {
+        full_url.drain(.."mailto:".len());
+    }
+    full_url.into()
 }
 
 /// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
 /// only: committing or deferring is the caller's call, since it turns on
 /// state this function cannot see.
-fn detect_gfm_autolink(
+fn detect_gfm_autolink<'a>(
+    text: &'a str,
     bytes: &[u8],
     ix: usize,
     byte: u8,
     paragraph_start: usize,
     begin_text: usize,
-) -> Option<AutolinkDetection> {
+) -> Option<AutolinkDetection<'a>> {
     // Cheap reject first: most triggers in prose can't start an autolink.
     let is_www = match byte {
         b'h' | b'H' | b'w' | b'W' => crate::post_passes::match_autolink_scheme(bytes, ix)?.1,
@@ -5190,7 +5223,7 @@ fn detect_gfm_autolink(
         b'h' | b'H' | b'w' | b'W' => {
             // `fnr_only`: only the find-and-replace fallback would accept,
             // which is the post-pass's job.
-            let (start, _raw_end, end, full_url, fnr_only) =
+            let (start, _raw_end, end, _, fnr_only) =
                 scan_autolink_literal(bytes, ix, ix == paragraph_start)?;
             if fnr_only {
                 return None;
@@ -5203,11 +5236,16 @@ fn detect_gfm_autolink(
             {
                 return Some(email);
             }
+            let span = text.get(ix..end)?;
             Some(AutolinkDetection {
                 start,
                 end,
                 link_type: LinkType::Autolink,
-                url: full_url,
+                url: if is_www {
+                    www_url(span)
+                } else {
+                    CowStr::Borrowed(span)
+                },
             })
         }
         b'@' => {
@@ -6272,46 +6310,9 @@ pub(crate) fn mdast_position_end(
         return end;
     }
     let is_math = matches!(item.body, ItemBody::MathBlock(_));
-    let math_at_eof = is_math && end as usize >= source.len();
     let is_fenced = matches!(item.body, ItemBody::FencedCodeBlock(..));
-    let fenced_at_eof = is_fenced && end as usize >= source.len();
-    let parent_is_bq = matches!(parent_body, Some(ItemBody::BlockQuote(_)));
-    let parent_is_listitem = matches!(parent_body, Some(ItemBody::ListItem(..)));
-    // Blockquote-parented fenced/math at EOF: the blockquote closed
-    // because the next non-existent line carries no `>` marker, so
-    // the trailing `\n` belongs to neither the inner block nor the
-    // blockquote (`>$$\\\n` / `>\`\`\`\n` — both end before the `\n`).
-    let fenced_at_eof_in_bq = fenced_at_eof && parent_is_bq;
-    let math_at_eof_in_bq = math_at_eof && parent_is_bq;
-    // Unclosed fenced/math in a list-item ended by container outdent:
-    // the trailing `\n` at end-1 belongs to the inner block ONLY when
-    // the outdent line opens a new container (list marker or `>`).
-    // When the next block is a leaf (paragraph, heading, indented
-    // code), remark drops the `\n`.
-    let next_line_opens_container = end > 1
-        && matches!(source.get(end as usize - 1), Some(b'\n' | b'\r'))
-        && !matches!(source.get(end as usize - 2), Some(b'\n' | b'\r'))
-        && parent_is_listitem
-        && {
-            match source.get(end as usize).copied() {
-                Some(b'-' | b'*' | b'+' | b'>') => true,
-                Some(c) if c.is_ascii_digit() => {
-                    let mut p = end as usize + 1;
-                    while p < source.len() && source[p].is_ascii_digit() {
-                        p += 1;
-                    }
-                    matches!(source.get(p), Some(b'.' | b')'))
-                }
-                _ => false,
-            }
-        };
-    let fenced_unclosed_in_listitem = is_fenced && !fenced_at_eof && next_line_opens_container;
-    let math_unclosed_in_listitem = is_math && !math_at_eof && next_line_opens_container;
-    let skip_trim =
-        (math_at_eof || fenced_at_eof || fenced_unclosed_in_listitem || math_unclosed_in_listitem)
-            && !fenced_at_eof_in_bq
-            && !math_at_eof_in_bq;
-    if skip_trim {
+    // Every carve-out is about a fence, so nothing else can keep the terminator.
+    if (is_math || is_fenced) && fence_keeps_trailing_terminator(item, source, parent_body) {
         return end;
     }
     let mut e = end;
@@ -6323,6 +6324,42 @@ pub(crate) fn mdast_position_end(
         }
     }
     e
+}
+
+/// Whether a fenced code or math block keeps the line terminator at `item.end`.
+fn fence_keeps_trailing_terminator(
+    item: &Item,
+    source: &[u8],
+    parent_body: Option<&ItemBody>,
+) -> bool {
+    let end = item.end as u32;
+    if end as usize >= source.len() {
+        // Blockquote-parented fenced/math at EOF: the blockquote closed
+        // because the next non-existent line carries no `>` marker, so
+        // the trailing `\n` belongs to neither the inner block nor the
+        // blockquote (`>$$\\\n` / `>\`\`\`\n` — both end before the `\n`).
+        return !matches!(parent_body, Some(ItemBody::BlockQuote(_)));
+    }
+    // Unclosed fenced/math in a list-item ended by container outdent:
+    // the trailing `\n` at end-1 belongs to the inner block ONLY when
+    // the outdent line opens a new container (list marker or `>`).
+    // When the next block is a leaf (paragraph, heading, indented
+    // code), remark drops the `\n`.
+    end > 1
+        && matches!(source.get(end as usize - 1), Some(b'\n' | b'\r'))
+        && !matches!(source.get(end as usize - 2), Some(b'\n' | b'\r'))
+        && matches!(parent_body, Some(ItemBody::ListItem(..)))
+        && match source.get(end as usize).copied() {
+            Some(b'-' | b'*' | b'+' | b'>') => true,
+            Some(c) if c.is_ascii_digit() => {
+                let mut p = end as usize + 1;
+                while p < source.len() && source[p].is_ascii_digit() {
+                    p += 1;
+                }
+                matches!(source.get(p), Some(b'.' | b')'))
+            }
+            _ => false,
+        }
 }
 
 type LookupTable = [bool; 256];
@@ -6349,6 +6386,8 @@ where
     scalar_iterate_special_bytes(lut, bytes, ix, callback)
 }
 
+const SCAN_BLOCK: usize = 16;
+
 fn scalar_iterate_special_bytes<F, T>(
     lut: &[bool; 256],
     bytes: &[u8],
@@ -6369,8 +6408,20 @@ where
                     return (ix, val);
                 }
             }
+            ix += 1;
+        } else {
+            ix += 1;
+            // Byte by byte the callback's live state spills `lut`; a block keeps it in a register.
+            'skip: while ix + SCAN_BLOCK <= bytes.len() {
+                for offset in 0..SCAN_BLOCK {
+                    if lut[bytes[ix + offset] as usize] {
+                        ix += offset;
+                        break 'skip;
+                    }
+                }
+                ix += SCAN_BLOCK;
+            }
         }
-        ix += 1;
     }
 
     (ix, None)
