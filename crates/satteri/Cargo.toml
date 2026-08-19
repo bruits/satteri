@@ -1,6 +1,6 @@
 [package]
 name = "satteri"
-version = "0.2.11"
+version = "0.2.12"
 edition = "2024"
 description = "High-level Rust API for the Sätteri markdown/MDX pipeline"
 license = "MIT"

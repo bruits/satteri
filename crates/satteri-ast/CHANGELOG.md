@@ -1,5 +1,15 @@
 # satteri-ast
 
+## 0.5.3 — 2026-08-19
+
+### Patch changes
+
+- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown parsing and rendering speed on list-heavy documents. Tight lists no longer slow down quadratically with item count — a 1000-item list renders about 4.5x faster — and line-dense documents parse roughly 6-9% faster overall. — Thanks @Princesseuh!
+- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved rendering performance for documents with many footnote references. — Thanks @Princesseuh!
+- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved Markdown to HTML performance with faster text line-trimming and URL normalization scans. — Thanks @Princesseuh!
+- [d21f486](https://github.com/bruits/satteri/commit/d21f486ce8150be15c25570442be47295f1baaa1) Improved performance on link-heavy documents: inline links parse about 10% faster and bare-URL autolinks about 20% faster, with HTML rendering of both around 9% faster. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.1
+
 ## 0.5.2 — 2026-08-18
 
 ### Patch changes
