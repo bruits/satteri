@@ -1,5 +1,11 @@
 # satteri
 
+## 0.10.5 — 2026-08-19
+
+### Patch changes
+
+- [393aed7](https://github.com/bruits/satteri/commit/393aed7d9bb4ea9dc1e6f2979968cc86fc8192dd) Fixed `satteri` failing to load on Apple Silicon macOS and musl Linux x64, where the native bindings were missing from the 0.10.4 release. — Thanks @Princesseuh!
+
 ## 0.10.4 — 2026-08-19
 
 ### Patch changes
