@@ -1,5 +1,12 @@
 # satteri-ast
 
+## 0.5.3 — 2026-08-19
+
+### Patch changes
+
+- [1a052cf](https://github.com/bruits/satteri/commit/1a052cfc0a295d7adbbcd3c9a1173d8a1b34598e) Improved performance. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.1
+
 ## 0.5.2 — 2026-08-18
 
 ### Patch changes
