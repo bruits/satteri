@@ -176,13 +176,30 @@ jobs:
       - name: Publish NAPI platform packages
         if: steps.check.outputs.is_release == 'true'
         run: |
+          set -euo pipefail
           pnpm napi version
+          log=$(mktemp)
+          failed=""
           for dir in ./npm/*/; do
-            if [ -f "$dir/package.json" ]; then
-              echo "Publishing $(basename "$dir")..."
-              npm publish "$dir" --access public --provenance || echo "Skipped (may already exist)"
+            if [ ! -f "$dir/package.json" ]; then
+              continue
             fi
+            name=$(basename "$dir")
+            echo "Publishing $name..."
+            if npm publish "$dir" --access public --provenance 2>&1 | tee "$log"; then
+              continue
+            fi
+            # Tolerated so a re-run after a partial publish can finish the remaining bindings.
+            if grep -q EPUBLISHCONFLICT "$log"; then
+              echo "$name is already published at this version, skipping."
+              continue
+            fi
+            failed="$failed $name"
           done
+          if [ -n "$failed" ]; then
+            echo "::error::Native bindings failed to publish:$failed"
+            exit 1
+          fi
         working-directory: packages/satteri
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
