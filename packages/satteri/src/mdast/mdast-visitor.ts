@@ -290,6 +290,37 @@ export class MdastVisitorContext {
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs);
   }
 
+  setField<N extends MdastTarget, K extends keyof N & string>(
+    node: Readonly<N>,
+    key: K,
+    value: N[K],
+  ): void;
+  /** `children` is structural and every parent accepts it, including node-type unions. */
+  setField(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
+  /** `data` is an open per-node bag serialized to JSON. `null` clears it. */
+  setField(node: Readonly<MdastTarget>, key: "data", value: Record<string, unknown> | null): void;
+  setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
+    const id = requireNid(node as MdastNode, "setField", this.#refs);
+    if (key === "children") {
+      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+        throw unencodableContentError(value);
+      }
+      return;
+    }
+    if (key === "data") value = value != null ? JSON.stringify(value) : null;
+    this.#commandBuffer.setField(id, key, value);
+  }
+
+  /** Set one entry in a directive's or MDX JSX element's `attributes`. */
+  setAttribute(node: Readonly<MdastTarget>, name: string, value: unknown): void {
+    this.#commandBuffer.setAttribute(
+      requireNid(node as MdastNode, "setAttribute", this.#refs),
+      name,
+      value,
+    );
+  }
+
+  /** @deprecated MDAST has no property container; use `setField`. */
   setProperty<N extends MdastTarget, K extends keyof N & string>(
     node: Readonly<N>,
     key: K,

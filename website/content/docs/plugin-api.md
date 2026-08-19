@@ -320,7 +320,7 @@ const toc = () => {
 };
 ```
 
-The child operations (`appendChild`, `prependChild`, `insertChildAt`, `removeChildAt`) work on the root as they do on any node, as do `removeNode`, `setProperty` and `wrapNode`. The sibling ones do not: the root has no siblings, so `insertBefore` and `insertAfter` throw on it.
+The child operations (`appendChild`, `prependChild`, `insertChildAt`, `removeChildAt`) work on the root as they do on any node, as do `removeNode`, `setField` and `wrapNode`. The sibling ones do not: the root has no siblings, so `insertBefore` and `insertAfter` throw on it.
 
 `replaceNode` works on the root too, and it is how a hook swaps the whole document for a tree it built itself. The root is the one place a `root` node is accepted as content. That and the `{ raw }` escape hatch, which parses to a root of its own, are all it accepts: a document headed by anything else stops firing hooks. Children taken from the old root are reused as they are, rather than rebuilt:
 
@@ -381,8 +381,8 @@ Mutate through the context, not the node. A node is a read-only view over the Ru
 
 ```ts
 heading(node, ctx) {
-  // node.depth = 2;                 // ignored
-  ctx.setProperty(node, "depth", 2); // do this
+  // node.depth = 2;              // ignored
+  ctx.setField(node, "depth", 2); // do this
 }
 ```
 
@@ -418,7 +418,9 @@ declare module "satteri" {
 | `appendChild(node, childNode)`          | Insert `childNode` as the last child of `node`          |
 | `insertChildAt(node, index, childNode)` | Insert `childNode` as the `index`-th child of `node`    |
 | `removeChildAt(node, index)`            | Remove the `index`-th child of `node`                   |
-| `setProperty(node, key, value)`         | Replace one field on the node                           |
+| `setField(node, key, value)`            | Replace one field on the node itself                    |
+| `setAttribute(node, name, value)`       | Set one entry in the node's `attributes`                |
+| `setProperty(node, key, value)`         | Set one entry in a HAST element's `properties`          |
 
 `wrapNode` places the wrapped node as `parentNode`'s **first** child. If `parentNode` declares its own children, they are kept after it. Wrapping a heading in a `<div>` that holds an anchor link yields `<div><h2>…</h2><a>…</a></div>`. To put the node at an arbitrary position instead, return a replacement from the visitor.
 
@@ -439,9 +441,15 @@ ctx.replaceNode(node, [{ type: "html", value: "<div>" }, node, { type: "html", v
 
 `replaceNode`, `insertBefore`, `insertAfter`, `prependChild`, `appendChild`, and `insertChildAt` each accept either a single node or an array of nodes. An array is inserted in order at the target position, so `replaceNode(node, [a, b])` leaves `a` and `b` where `node` was. Passing `replaceNode` an empty array removes the node.
 
-For MDAST, `key` must be a field of the node type and `value` must match that field's type. For HAST, `key` is a `string` and `value` is `unknown`.
+The three setters address three different places, and which one you want depends on where the value lives rather than on which tree you are in.
 
-For HAST elements, `setProperty` takes a HAST property key (e.g. `"className"`, `"href"`). For MDX JSX nodes (`mdxJsxFlowElement` / `mdxJsxTextElement`), it sets the named JSX attribute on the `attributes` array.
+`setField` writes a field of the node itself. `key` must be a field of the node type and `value` must match that field's type, on both MDAST and HAST. This is how you rename a node: `setField(node, "tagName", "App.Link")` turns a HAST `<a>` into `<App.Link>`, and `setField(node, "name", "warning")` renames an MDX JSX element or a directive. `children` and `data` are fields too, so they go here on every node type. `data` is an open bag serialized to JSON, and `null` clears it.
+
+`setAttribute` writes one entry in a node's `attributes`: MDX JSX elements in either tree, and MDAST directives. Names are stored and emitted verbatim, so an intrinsic element takes React prop names (`className`, not `class`) and a component takes whatever prop it declares. Directive attributes hold only strings; a boolean or number is rejected rather than stringified. Spread attributes (`{...props}`) have no name, so they are not reachable this way — rebuild the node with `replaceNode` for those.
+
+`setProperty` writes one entry in a HAST element's `properties`, using HAST property names (`"className"`, `"htmlFor"`, `"href"`). Only `element` has that container.
+
+For now `setProperty` still accepts node fields and MDX JSX attribute names as well, so existing plugins keep working, but those uses are deprecated and will be removed. `setProperty` on MDAST is deprecated outright, since MDAST has no property container and the key was always a field.
 
 ### Inspection
 
@@ -494,7 +502,7 @@ To share state across visits within a document, close over a variable in the sur
 Each Sätteri plugin walks the tree **once** — there is no re-walking until the tree stops changing. Within that single pass:
 
 - **Passed-through children keep their identity.** When a visitor returns a replacement that reuses the original children (e.g. `{ ...node, children: [...node.children] }`), those children are spliced back unchanged, so a transform queued on a nested one in the same pass still applies. This is what lets a single `containerDirective` visitor turn both an outer `:::note` and a nested `:::tip` into asides in one go.
-- **A plugin's own freshly-built nodes are not re-walked by that plugin.** A brand-new node a visitor returns isn't visited again by the same plugin. Produce its final shape directly, or hand it to a later plugin — every plugin runs over the fully materialized output of the ones before it. A `before` hook is the exception: it lands before the walk, so nodes it builds *are* visited.
+- **A plugin's own freshly-built nodes are not re-walked by that plugin.** A brand-new node a visitor returns isn't visited again by the same plugin. Produce its final shape directly, or hand it to a later plugin — every plugin runs over the fully materialized output of the ones before it. A `before` hook is the exception: it lands before the walk, so nodes it builds _are_ visited.
 - **Dropping a subtree drops the transforms queued inside it.** If one visitor removes or replaces a node while another queued a transform on something inside that subtree, the orphaned transform is dropped and a warning is logged. Usually that's intended; the warning catches the cases where it isn't.
 - **Nodes from another document throw.** Handing a context method a node kept from a previous compile — or an mdast node inside a hast plugin — fails the compile. Keep nodes around within a document freely; don't carry them across.
 - **A few contradictory combinations throw.** Replacing a node with new content that reuses that same node while another plugin edits something inside it in the same pass, two replacements that each reuse the other's node, and inserting a sibling next to the root. Replacing, removing, or wrapping the root itself — say, via `ctx.parent()` on a top-level node — works fine.

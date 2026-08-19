@@ -129,6 +129,24 @@ export interface HastVisitorContext {
   ): void;
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<HastNode>, index: number): void;
+  /** Replace a field on the node itself, such as `tagName`, `name`, `value`, `children`, or `data`. */
+  setField<N extends HastNode, K extends keyof N & string>(
+    node: Readonly<N>,
+    key: K,
+    value: N[K],
+  ): void;
+  /** `children` is structural and every parent accepts it, including node-type unions. */
+  setField(node: Readonly<HastNode>, key: "children", value: readonly HastContent[]): void;
+  /** `data` is an open per-node bag serialized to JSON. `null` clears it. */
+  setField(node: Readonly<HastNode>, key: "data", value: Record<string, unknown> | null): void;
+  /** Set one entry in an MDX JSX element's `attributes`. */
+  setAttribute(node: Readonly<HastNode>, name: string, value: unknown): void;
+  /**
+   * Set one entry in a hast element's `properties`.
+   *
+   * Using this for node fields or MDX JSX attributes is deprecated; use
+   * `setField` or `setAttribute` respectively.
+   */
   setProperty(node: Readonly<HastNode>, key: string, value: unknown): void;
   /** Collect the concatenated text of all descendant text nodes (like DOM textContent). */
   textContent(node: Readonly<HastNode>): string;
@@ -496,33 +514,58 @@ class HastVisitorContextImpl implements HastVisitorContext {
     }
 
     if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
-      // Fold attributes into queued replacements so the rebuild cannot overwrite later setProperty calls.
-      const pending = this.#pendingNodes.get(id) as
-        | MdxJsxFlowElementHast
-        | MdxJsxTextElementHast
-        | undefined;
-      if (pending !== undefined) {
-        const updated = { ...pending };
-        const attrs: MdxJsxAttributeUnion[] = [...(updated.attributes ?? [])];
-        const idx = attrs.findIndex((a) => a.type === "mdxJsxAttribute" && a.name === key);
-        if (idx !== -1) attrs.splice(idx, 1);
-        // Space-join arrays to match the binary path’s list-valued property encoding.
-        const attrValue =
-          value === true || value === null || value === undefined
-            ? null
-            : typeof value === "string"
-              ? value
-              : Array.isArray(value)
-                ? value.join(" ")
-                : String(value);
-        attrs.push({ type: "mdxJsxAttribute", name: key, value: attrValue });
-        updated.attributes = attrs;
-        this.replaceNode(node, updated);
-        return;
-      }
+      if (this.#foldPendingJsxAttribute(node, id, key, value)) return;
     }
 
     this.#commandBuffer.setProperty(id, key, value);
+  }
+
+  setField(node: HastNode, key: string, value: unknown): void {
+    const id = requireNid(node, "setField", this.#refs);
+    if (key === "children") {
+      if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+        throw unencodableContentError(value);
+      }
+      return;
+    }
+    if (key === "data") {
+      this.#commandBuffer.setField(id, key, value != null ? JSON.stringify(value) : null);
+      return;
+    }
+    this.#commandBuffer.setField(id, key, value);
+  }
+
+  setAttribute(node: HastNode, name: string, value: unknown): void {
+    const id = requireNid(node, "setAttribute", this.#refs);
+    if (this.#foldPendingJsxAttribute(node, id, name, value)) return;
+    this.#commandBuffer.setAttribute(id, name, value);
+  }
+
+  /** A queued replacement would discard the attribute, so fold it in instead. */
+  #foldPendingJsxAttribute(node: HastNode, id: number, name: string, value: unknown): boolean {
+    if (node.type !== "mdxJsxFlowElement" && node.type !== "mdxJsxTextElement") return false;
+    const pending = this.#pendingNodes.get(id) as
+      | MdxJsxFlowElementHast
+      | MdxJsxTextElementHast
+      | undefined;
+    if (pending === undefined) return false;
+
+    const updated = { ...pending };
+    const attrs: MdxJsxAttributeUnion[] = [...(updated.attributes ?? [])];
+    const idx = attrs.findIndex((a) => a.type === "mdxJsxAttribute" && a.name === name);
+    if (idx !== -1) attrs.splice(idx, 1);
+    const attrValue =
+      value === true || value === null || value === undefined
+        ? null
+        : typeof value === "string"
+          ? value
+          : Array.isArray(value)
+            ? value.join(" ")
+            : String(value);
+    attrs.push({ type: "mdxJsxAttribute", name, value: attrValue });
+    updated.attributes = attrs;
+    this.replaceNode(node, updated);
+    return true;
   }
 
   textContent(node: HastNode): string {

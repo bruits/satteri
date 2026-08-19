@@ -20,7 +20,7 @@ const emojis = defineMdastPlugin({
   name: "emojis",
   text(node, ctx) {
     if (node.value.includes(":wave:")) {
-      ctx.setProperty(node, "value", node.value.replaceAll(":wave:", "\u{1F44B}"));
+      ctx.setField(node, "value", node.value.replaceAll(":wave:", "\u{1F44B}"));
     }
   },
 });
@@ -83,7 +83,7 @@ const sectionize = () => {
       const parent = ctx.parent(node);
       if (!parent || !("children" in parent) || done.has(parent)) return;
       done.add(parent);
-      ctx.setProperty(parent, "children", groupIntoSections(parent.children));
+      ctx.setField(parent, "children", groupIntoSections(parent.children));
     },
   });
 };
