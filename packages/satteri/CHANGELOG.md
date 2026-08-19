@@ -1,5 +1,11 @@
 # satteri
 
+## 0.10.4 — 2026-08-19
+
+### Patch changes
+
+- [72d4710](https://github.com/bruits/satteri/commit/72d4710d34e54f0e4eb65cd217a1ac48f2d31e14) Fixed plugin-inserted elements being emitted as literal JSX tags, instead of going through `_components`, when another plugin-inserted node was marked as explicit JSX. — Thanks @Princesseuh!
+
 ## 0.10.3 — 2026-08-19
 
 ### Patch changes
