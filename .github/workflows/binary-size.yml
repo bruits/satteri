@@ -1,0 +1,67 @@
+name: Binary size
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/binary-size.yml"
+      - "scripts/binary-size.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  size:
+    name: Native binary size
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: moonrepo/setup-rust@abb2d32350334249b178c401e5ec5836e0cd88d3 # v1.3.0
+        with:
+          cache-target: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: latest
+
+      # Kept outside the tree so it survives the checkout of the base commit,
+      # which predates this script.
+      - name: Stage the measuring script
+        run: cp scripts/binary-size.mjs "$RUNNER_TEMP/binary-size.mjs"
+
+      - name: Build this PR
+        run: cargo build --release -p satteri-napi
+
+      - name: Measure this PR
+        run: node "$RUNNER_TEMP/binary-size.mjs" measure target/release/libsatteri_napi.so --out "$RUNNER_TEMP/head.json"
+
+      - name: Build the base commit
+        run: |
+          git checkout --detach ${{ github.event.pull_request.base.sha }}
+          cargo build --release -p satteri-napi
+
+      - name: Measure the base commit
+        run: node "$RUNNER_TEMP/binary-size.mjs" measure target/release/libsatteri_napi.so --out "$RUNNER_TEMP/base.json"
+
+      - name: Compare
+        run: |
+          node "$RUNNER_TEMP/binary-size.mjs" compare \
+            "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" \
+            --max-growth 5 | tee -a "$GITHUB_STEP_SUMMARY"
