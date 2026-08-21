@@ -164,6 +164,21 @@ export class MdastReader {
     return this.#view.getUint32(nodesOffset + nodeId * nodeStructSize + FIELD.parent, true);
   }
 
+  getChildrenStart(nodeId: number): number {
+    const { nodesOffset, nodeStructSize } = this.#header;
+    return this.#view.getUint32(nodesOffset + nodeId * nodeStructSize + FIELD.children_start, true);
+  }
+
+  getChildrenCount(nodeId: number): number {
+    const { nodesOffset, nodeStructSize } = this.#header;
+    return this.#view.getUint32(nodesOffset + nodeId * nodeStructSize + FIELD.children_count, true);
+  }
+
+  /** Indexed off a `getChildrenStart` result so a walk reads the node struct once. */
+  childIdAt(childrenStart: number, index: number): number {
+    return this.#view.getUint32(this.#header.childrenOffset + (childrenStart + index) * 4, true);
+  }
+
   getChildIds(nodeId: number): number[] {
     const { nodesOffset, nodeStructSize, childrenOffset } = this.#header;
     const base = nodesOffset + nodeId * nodeStructSize;

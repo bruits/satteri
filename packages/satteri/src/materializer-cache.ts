@@ -12,6 +12,9 @@ import type { NodeRefs } from "./visitor-shared.js";
 export interface MaterializerReader {
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
+  getChildrenStart(nodeId: number): number;
+  getChildrenCount(nodeId: number): number;
+  childIdAt(childrenStart: number, index: number): number;
   getPosition(nodeId: number): Position | undefined;
   getNodeData(nodeId: number): string | null;
 }
@@ -227,15 +230,18 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
 
     const parents: TNode[] = [root];
     const parentIds: number[] = [rootId];
+    let tail = 1;
     for (let p = 0; p < parentIds.length; p++) {
       const parent = parents[p];
       const parentId = parentIds[p];
-      if (parent === undefined || parentId === undefined) continue;
-      const ids = reader.getChildIds(parentId);
-      const kids = new Array<TNode>(ids.length);
-      for (let i = 0; i < ids.length; i++) {
-        const childId = ids[i];
-        if (childId === undefined) continue;
+      if (parent === undefined || parentId === undefined) {
+        throw new Error(`${spec.label}: parent queue hole at ${p}`);
+      }
+      const childrenStart = reader.getChildrenStart(parentId);
+      const count = reader.getChildrenCount(parentId);
+      const kids = new Array<TNode>(count);
+      for (let i = 0; i < count; i++) {
+        const childId = reader.childIdAt(childrenStart, i);
         const childType = reader.getNodeType(childId);
         const child = buildNode(reader, cache, childId, childType, true);
         kids[i] = child;

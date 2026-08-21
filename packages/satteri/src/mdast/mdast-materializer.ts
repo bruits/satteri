@@ -122,7 +122,7 @@ const mdastMaterializer = createMaterializer<MdastReader, MdastNode>({
   typeNames: TYPE_NAMES,
   hasChildren: (nodeType, node, reader, nodeId) =>
     nodeType === MDAST_CUSTOM
-      ? !isCustomLeaf(node, reader.getChildIds(nodeId).length)
+      ? !isCustomLeaf(node, reader.getChildrenCount(nodeId))
       : !LEAF_TYPES.has(nodeType),
   populate: addTypeProperties,
 });
