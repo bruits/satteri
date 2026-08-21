@@ -11,8 +11,8 @@
 
 use std::borrow::Cow;
 
-mod tables;
-use tables::{HTML_TABLE, Row, STRINGS, SVG_TABLE};
+mod generated;
+use generated::tables::{HTML_TABLE, Row, STRINGS, SVG_TABLE};
 
 type Table = &'static [Row];
 
