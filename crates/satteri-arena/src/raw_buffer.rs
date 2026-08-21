@@ -19,7 +19,6 @@ use std::mem::offset_of;
 use crate::arena::Arena;
 use crate::generated::layout::header;
 use crate::kind::ArenaKind;
-use crate::line_index::LineIndex;
 use crate::node::{ArenaNode, NODE_STRUCT_SIZE};
 
 pub(crate) const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
@@ -146,26 +145,27 @@ impl<K: ArenaKind> Arena<K> {
                     buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
                         .copy_from_slice(&utf16_end.to_le_bytes());
                 }
-            } else if self.nodes.iter().any(|n| n.start_line != 0) {
-                // Fallback: no precomputed cache (e.g. arena assembled
-                // outside `arena_build`, or after plugin mutation). Build
-                // a one-shot LineIndex and convert per node.
-                let line_index = LineIndex::from_source(&self.string_pool);
-                let mut cursor = line_index.cursor();
+            } else {
+                // The multibyte table already maps byte offsets to UTF-16 ones,
+                // so a `LineIndex` here would rebuild what we just computed.
+                let to_utf16 = |byte_offset: u32| -> u32 {
+                    let seen = multibyte_starts.partition_point(|&start| start < byte_offset);
+                    byte_offset
+                        - if seen == 0 {
+                            0
+                        } else {
+                            multibyte_shifts[seen - 1]
+                        }
+                };
                 for (i, node) in self.nodes.iter().enumerate() {
-                    // A zero start line marks a synthesized node with no source
-                    // range (lines are 1-based), even when a patch splice left it a
-                    // non-zero spliced offset — nothing to convert.
                     if node.start_line == 0 {
                         continue;
                     }
-                    let utf16_start = cursor.byte_to_utf16_offset(node.start_offset);
-                    let utf16_end = cursor.byte_to_utf16_offset(node.end_offset);
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
                     buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                        .copy_from_slice(&utf16_start.to_le_bytes());
+                        .copy_from_slice(&to_utf16(node.start_offset).to_le_bytes());
                     buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                        .copy_from_slice(&utf16_end.to_le_bytes());
+                        .copy_from_slice(&to_utf16(node.end_offset).to_le_bytes());
                 }
             }
         }
