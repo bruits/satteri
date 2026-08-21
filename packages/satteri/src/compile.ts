@@ -27,25 +27,27 @@ import type {
 import {
   applyCommandsAndCompileHandle,
   applyCommandsAndRenderHandle,
+  applyCommandsToHandle,
   applyCommandsToMdastHandle,
   applyMdastCommandsAndConvertAndCompile,
   applyMdastCommandsAndConvertAndRender,
   compileHandle,
   convertMdastToHastHandle,
-  createHastHandle,
   createHastHandleFromHtml,
   createMdastHandle,
-  createMdxHastHandle,
   createMdxMdastHandle,
   dropHandle,
   getHandleSource,
   createHastHandleWithFrontmatter,
   createMdxHastHandleWithFrontmatter,
   getMdastFrontmatter,
+  markdownToHastFast,
   markdownToHtmlFast,
   markdownToJsFast,
   markdownToMdastFast,
+  mdxToHastFast,
   mdxToJsFast,
+  mdxToMdastFast,
   renderHandle,
   serializeHandle,
 } from "#binding";
@@ -763,12 +765,17 @@ type ResolveInput<P, D extends readonly unknown[] = [0, 0, 0, 0, 0, 0, 0, 0]> = 
   : never;
 type AnyInputAsync<Ps> =
   Ps extends ReadonlyArray<infer P> ? CombineAsync<IsPluginAsync<ResolveInput<P>>> : "sync";
+type PluginBearingOptions = {
+  mdastPlugins?: MdastPluginList;
+  hastPlugins?: HastPluginList;
+};
+
 // Indexed access, not `O extends { mdastPlugins: infer Ps }`: that is false for an optional property.
-type OptionsAsync<O extends CompileOptions> = CombineAsync<
+type OptionsAsync<O extends PluginBearingOptions> = CombineAsync<
   AnyInputAsync<NonNullable<O["mdastPlugins"]>> | AnyInputAsync<NonNullable<O["hastPlugins"]>>
 >;
 
-type ResultFor<O extends CompileOptions, R> = {
+type ResultFor<O extends PluginBearingOptions, R> = {
   sync: R;
   async: Promise<R>;
   maybe: R | Promise<R>;
@@ -1262,50 +1269,224 @@ export interface TreeOptions {
   position?: boolean;
 }
 
-/** Parse Markdown source into a materialized mdast tree. */
-export function markdownToMdast(source: string, options: TreeOptions = {}): MdastNode {
-  const wire = markdownToMdastFast(
+/** Options for the tree functions that stop at mdast. */
+export interface MdastTreeOptions extends TreeOptions {
+  /** MDAST plugins, in run order. A nested array runs its own plugins, in
+   *  their own order, at the array's position. */
+  mdastPlugins?: MdastPluginList;
+  /** The document being processed, surfaced to plugins as `ctx.fileURL`. */
+  fileURL?: URL;
+  /** Initial document-level data bag, seeding `ctx.data` before any plugin
+   *  runs. Used by reference and mutated in place. */
+  data?: Data;
+}
+
+/** Options for the tree functions that run through to hast. */
+export interface HastTreeOptions extends MdastTreeOptions {
+  /** HAST plugins, in run order. Nests like `mdastPlugins`. */
+  hastPlugins?: HastPluginList;
+}
+
+function toMdastImpl(
+  source: string,
+  options: MdastTreeOptions,
+  mdx: boolean,
+): MdastNode | Promise<MdastNode> {
+  const { features, fileURL, data = {} } = options;
+  const sourceFormat: SourceFormat = mdx ? "mdx" : "markdown";
+  const mdastPlugins = normalizePlugins(
+    options.mdastPlugins ?? [],
+    "mdastPlugins",
     source,
-    featuresToNative(options.features).parseOptions,
-    options.position,
+    fileURL,
+    sourceFormat,
+    data,
   );
-  return materializeMdastTree(new MdastReader(wire));
+  const { parseOptions } = featuresToNative(features);
+
+  if (mdastPlugins.length === 0) {
+    const wire = mdx
+      ? mdxToMdastFast(source, parseOptions, options.position)
+      : markdownToMdastFast(source, parseOptions, options.position);
+    return materializeMdastTree(new MdastReader(wire));
+  }
+
+  // The returned tree carries positions, so the caller decides, not the plugins.
+  const trackPositions = options.position ?? true;
+  const handle = mdx
+    ? createMdxMdastHandle(source, parseOptions, trackPositions)
+    : createMdastHandle(source, parseOptions, trackPositions);
+
+  const finalize = (r: MdastPipelineResult): MdastNode => {
+    try {
+      return materializeMdastTree(new MdastReader(serializeHandle(r.handle)));
+    } finally {
+      releaseHandle(r.handle, true);
+    }
+  };
+
+  try {
+    const result = runMdastPluginsOnHandle(handle, mdastPlugins, fileURL, data, sourceFormat);
+    if (result instanceof Promise) {
+      return result.then(finalize, (err) => {
+        releaseHandle(handle, true);
+        throw err;
+      });
+    }
+    return finalize(result);
+  } catch (err) {
+    releaseHandle(handle, true);
+    throw err;
+  }
+}
+
+function toHastImpl(
+  source: string,
+  options: HastTreeOptions,
+  mdx: boolean,
+): HastNode | Promise<HastNode> {
+  const { features, fileURL, data = {} } = options;
+  const sourceFormat: SourceFormat = mdx ? "mdx" : "markdown";
+  const mdastPlugins = normalizePlugins(
+    options.mdastPlugins ?? [],
+    "mdastPlugins",
+    source,
+    fileURL,
+    sourceFormat,
+    data,
+  );
+  const hastPlugins = normalizePlugins(
+    options.hastPlugins ?? [],
+    "hastPlugins",
+    source,
+    fileURL,
+    sourceFormat,
+    data,
+  );
+  const { parseOptions, convertOptions } = featuresToNative(features);
+
+  if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
+    const wire = mdx
+      ? mdxToHastFast(source, parseOptions, convertOptions, options.position)
+      : markdownToHastFast(source, parseOptions, convertOptions, options.position);
+    return materializeHastTree(new HastReader(wire));
+  }
+
+  const trackPositions = options.position ?? true;
+  const hastMayHaveStubs = hastPlugins.length > 0;
+
+  const materialize = (handle: HastHandle): HastNode => {
+    try {
+      return materializeHastTree(new HastReader(serializeHandle(handle)));
+    } finally {
+      releaseHandle(handle, hastMayHaveStubs);
+    }
+  };
+
+  const finishHast = (handle: HastHandle): HastNode | Promise<HastNode> => {
+    if (hastPlugins.length === 0) return materialize(handle);
+
+    const applyThenMaterialize = (collected: CollectedHastCommands): HastNode => {
+      if (collected.commands.length > 0) {
+        try {
+          const dropped = applyCommandsToHandle(handle, collected.commands);
+          if (dropped && collected.lastPlugin)
+            warnDroppedTransforms(collected.lastPlugin, dropped, "hast");
+        } catch (err) {
+          releaseHandle(handle, hastMayHaveStubs);
+          throw err;
+        }
+      }
+      return materialize(handle);
+    };
+
+    let collected: CollectedHastCommands | Promise<CollectedHastCommands>;
+    try {
+      collected = runHastPluginsCollectLast(
+        handle,
+        hastPlugins,
+        source,
+        fileURL,
+        data,
+        sourceFormat,
+      );
+    } catch (err) {
+      releaseHandle(handle, hastMayHaveStubs);
+      throw err;
+    }
+    if (collected instanceof Promise) {
+      return collected.then(applyThenMaterialize, (err) => {
+        releaseHandle(handle, hastMayHaveStubs);
+        throw err;
+      });
+    }
+    return applyThenMaterialize(collected);
+  };
+
+  const result = createHastHandleFromMdast(
+    source,
+    mdastPlugins,
+    mdx,
+    fileURL,
+    parseOptions,
+    convertOptions,
+    data,
+    trackPositions,
+  );
+  if (result instanceof Promise) return result.then((r) => finishHast(r.hastHandle));
+  return finishHast(result.hastHandle);
+}
+
+/** Parse Markdown source into a materialized mdast tree. */
+export function markdownToMdast(source: string): MdastNode;
+export function markdownToMdast<O extends MdastTreeOptions>(
+  source: string,
+  options?: O,
+): ResultFor<O, MdastNode>;
+export function markdownToMdast(
+  source: string,
+  options: MdastTreeOptions = {},
+): MdastNode | Promise<MdastNode> {
+  return toMdastImpl(source, options, false);
 }
 
 /** Parse MDX source into a materialized mdast tree. */
-export function mdxToMdast(source: string, options: TreeOptions = {}): MdastNode {
-  const handle = createMdxMdastHandle(
-    source,
-    featuresToNative(options.features).parseOptions,
-    options.position,
-  );
-  try {
-    return materializeMdastTree(new MdastReader(serializeHandle(handle)));
-  } finally {
-    releaseHandle(handle, true);
-  }
+export function mdxToMdast(source: string): MdastNode;
+export function mdxToMdast<O extends MdastTreeOptions>(
+  source: string,
+  options?: O,
+): ResultFor<O, MdastNode>;
+export function mdxToMdast(
+  source: string,
+  options: MdastTreeOptions = {},
+): MdastNode | Promise<MdastNode> {
+  return toMdastImpl(source, options, true);
 }
 
 /** Convert Markdown source to a materialized hast tree. */
-export function markdownToHast(source: string, options: TreeOptions = {}): HastNode {
-  const { parseOptions, convertOptions } = featuresToNative(options.features);
-  const handle = createHastHandle(source, parseOptions, convertOptions, options.position);
-  try {
-    return materializeHastTree(new HastReader(serializeHandle(handle)));
-  } finally {
-    releaseHandle(handle, true);
-  }
+export function markdownToHast(source: string): HastNode;
+export function markdownToHast<O extends HastTreeOptions>(
+  source: string,
+  options?: O,
+): ResultFor<O, HastNode>;
+export function markdownToHast(
+  source: string,
+  options: HastTreeOptions = {},
+): HastNode | Promise<HastNode> {
+  return toHastImpl(source, options, false);
 }
 
 /** Convert MDX source to a materialized hast tree. */
-export function mdxToHast(source: string, options: TreeOptions = {}): HastNode {
-  const { parseOptions, convertOptions } = featuresToNative(options.features);
-  const handle = createMdxHastHandle(source, parseOptions, convertOptions, options.position);
-  try {
-    return materializeHastTree(new HastReader(serializeHandle(handle)));
-  } finally {
-    releaseHandle(handle, true);
-  }
+export function mdxToHast(source: string): HastNode;
+export function mdxToHast<O extends HastTreeOptions>(
+  source: string,
+  options?: O,
+): ResultFor<O, HastNode>;
+export function mdxToHast(
+  source: string,
+  options: HastTreeOptions = {},
+): HastNode | Promise<HastNode> {
+  return toHastImpl(source, options, true);
 }
 
 export interface HtmlToHastOptions {

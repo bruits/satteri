@@ -254,6 +254,13 @@ export interface MarkdownHtmlOneShot {
 }
 
 /**
+ * Fast path: parse markdown, convert to HAST, and serialize the arena to the
+ * wire buffer in one NAPI roundtrip. Used by `markdownToHast` when neither
+ * MDAST nor HAST plugins are configured.
+ */
+export declare function markdownToHastFast(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): Uint8Array
+
+/**
  * Fast path: parse markdown → MDAST → HAST → HTML, plus extract frontmatter,
  * in a single NAPI roundtrip. Used by `markdownToHtml` when the caller didn't
  * configure any plugins. Skips 5 of the 6 NAPI crossings the handle-based
@@ -291,12 +298,18 @@ export interface MdxJsOneShot {
   droppedTransforms: number
 }
 
+/** MDX counterpart of [`markdown_to_hast_fast`], backing `mdxToHast`. */
+export declare function mdxToHastFast(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null, trackPositions?: boolean | undefined | null): Uint8Array
+
 /**
  * Fast path: parse MDX → MDAST → HAST → JS, plus extract frontmatter, in a
  * single NAPI roundtrip. Used by `mdxToJs` when the caller didn't configure
  * any plugins. Skips 5 of the 6 NAPI crossings the handle-based path makes.
  */
 export declare function mdxToJsFast(source: string, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
+
+/** MDX counterpart of [`markdown_to_mdast_fast`], backing `mdxToMdast`. */
+export declare function mdxToMdastFast(source: string, parseOptions: number, trackPositions?: boolean | undefined | null): Uint8Array
 
 /** Parse ESM (import/export statements) and return ESTree-compatible AST as JSON. */
 export declare function parseEsm(source: string): string | null

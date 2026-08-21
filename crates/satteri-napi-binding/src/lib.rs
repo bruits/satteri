@@ -1075,6 +1075,44 @@ pub fn apply_commands_and_compile_handle(
     })
 }
 
+fn to_mdast_wire(
+    source: &str,
+    parse_options: u32,
+    mdx: bool,
+    track_positions: bool,
+) -> Result<Uint8Array> {
+    let opts = parser_options(parse_options, mdx);
+    let mut arena = parse_mdast_pooled(source, opts, mdx, track_positions)?;
+    arena.mdx = mdx;
+    let buf = arena.to_raw_buffer();
+    release_mdast_arena(arena);
+    Ok(Uint8Array::new(buf))
+}
+
+fn to_hast_wire(
+    env: Env,
+    source: &str,
+    parse_options: u32,
+    convert_options: Option<JsConvertOptions>,
+    mdx: bool,
+    track_positions: bool,
+) -> Result<Uint8Array> {
+    let opts = parser_options(parse_options, mdx);
+    let convert_opts = js_convert_options_to_rust(env, convert_options);
+    let mdast = parse_mdast_pooled(source, opts, mdx, track_positions)?;
+    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
+    hast.mdx = mdx;
+    hast.parse_options = opts.bits();
+    let buf = hast.to_raw_buffer();
+    release_hast_arena(hast);
+    Ok(Uint8Array::new(buf))
+}
+
 /// Fast path: parse markdown and serialize the arena to the wire buffer in one
 /// NAPI roundtrip. Used by `markdownToMdast` when no plugins are configured,
 /// where the handle only exists to stay live across plugin passes.
@@ -1084,12 +1122,69 @@ pub fn markdown_to_mdast_fast(
     parse_options: u32,
     track_positions: Option<bool>,
 ) -> Result<Uint8Array> {
-    let opts = parser_options(parse_options, false);
-    let mut arena = parse_mdast_pooled(&source, opts, false, track_positions.unwrap_or(true))?;
-    arena.mdx = false;
-    let buf = arena.to_raw_buffer();
-    release_mdast_arena(arena);
-    Ok(Uint8Array::new(buf))
+    to_mdast_wire(
+        &source,
+        parse_options,
+        false,
+        track_positions.unwrap_or(true),
+    )
+}
+
+/// MDX counterpart of [`markdown_to_mdast_fast`], backing `mdxToMdast`.
+#[cfg(feature = "mdx")]
+#[napi]
+pub fn mdx_to_mdast_fast(
+    source: String,
+    parse_options: u32,
+    track_positions: Option<bool>,
+) -> Result<Uint8Array> {
+    to_mdast_wire(
+        &source,
+        parse_options,
+        true,
+        track_positions.unwrap_or(true),
+    )
+}
+
+/// Fast path: parse markdown, convert to HAST, and serialize the arena to the
+/// wire buffer in one NAPI roundtrip. Used by `markdownToHast` when neither
+/// MDAST nor HAST plugins are configured.
+#[napi]
+pub fn markdown_to_hast_fast(
+    env: Env,
+    source: String,
+    parse_options: u32,
+    convert_options: Option<JsConvertOptions>,
+    track_positions: Option<bool>,
+) -> Result<Uint8Array> {
+    to_hast_wire(
+        env,
+        &source,
+        parse_options,
+        convert_options,
+        false,
+        track_positions.unwrap_or(true),
+    )
+}
+
+/// MDX counterpart of [`markdown_to_hast_fast`], backing `mdxToHast`.
+#[cfg(feature = "mdx")]
+#[napi]
+pub fn mdx_to_hast_fast(
+    env: Env,
+    source: String,
+    parse_options: u32,
+    convert_options: Option<JsConvertOptions>,
+    track_positions: Option<bool>,
+) -> Result<Uint8Array> {
+    to_hast_wire(
+        env,
+        &source,
+        parse_options,
+        convert_options,
+        true,
+        track_positions.unwrap_or(true),
+    )
 }
 
 /// One-shot result returned by the no-plugin fast path and the MDAST-plugin
