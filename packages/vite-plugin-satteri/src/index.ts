@@ -43,8 +43,6 @@ export interface VitePluginSatteriOptions {
   hastPlugins?: HastPluginList;
   /** Parser feature toggles (gfm, frontmatter, math, …). Shared across .md and .mdx. */
   features?: Features;
-  /** Display warnings about dropped transforms. Default: true. */
-  warnings?: boolean;
 }
 
 const MD_RE = /\.md(?:\?|$)/;
@@ -58,14 +56,7 @@ function parseFrontmatter(fm: Frontmatter | null): unknown {
 }
 
 export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}): Plugin {
-  const {
-    markdown = true,
-    mdx = true,
-    mdastPlugins,
-    hastPlugins,
-    features,
-    warnings = true,
-  } = options;
+  const { markdown = true, mdx = true, mdastPlugins, hastPlugins, features } = options;
 
   const mdxEnabled = mdx !== false;
   const mdxOptions: MdxOptions = typeof mdx === "object" ? mdx : {};
@@ -90,7 +81,6 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
         const isDev = mdxOptions.development ?? viteConfig?.command === "serve";
         const opts: MdxCompileOptions = {
           fileURL,
-          warnings,
           development: isDev,
           ...(mdastPlugins ? { mdastPlugins } : {}),
           ...(hastPlugins ? { hastPlugins } : {}),
@@ -118,7 +108,6 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
 
       const opts: CompileOptions = {
         fileURL,
-        warnings,
         ...(mdastPlugins ? { mdastPlugins } : {}),
         ...(hastPlugins ? { hastPlugins } : {}),
         ...(features ? { features } : {}),
