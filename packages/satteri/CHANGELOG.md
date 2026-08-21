@@ -1,5 +1,17 @@
 # satteri
 
+## 0.10.5 — 2026-08-19
+
+### Patch changes
+
+- [393aed7](https://github.com/bruits/satteri/commit/393aed7d9bb4ea9dc1e6f2979968cc86fc8192dd) Fixed `satteri` failing to load on Apple Silicon macOS and musl Linux x64, where the native bindings were missing from the 0.10.4 release. — Thanks @Princesseuh!
+
+## 0.10.4 — 2026-08-19
+
+### Patch changes
+
+- [72d4710](https://github.com/bruits/satteri/commit/72d4710d34e54f0e4eb65cd217a1ac48f2d31e14) Fixed plugin-inserted elements being emitted as literal JSX tags, instead of going through `_components`, when another plugin-inserted node was marked as explicit JSX. — Thanks @Princesseuh!
+
 ## 0.10.3 — 2026-08-19
 
 ### Patch changes

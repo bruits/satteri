@@ -25,8 +25,8 @@ use crate::{
     oxc::serialize,
     oxc_util_build_jsx::{Options as BuildOptions, oxc_util_build_jsx},
     oxc_utils::{
-        create_binding_ident, create_ident_expression, create_ident_name, create_num_expression,
-        create_object_expression, create_string_literal,
+        ExplicitJsxs, create_binding_ident, create_ident_expression, create_ident_name,
+        create_num_expression, create_object_expression, create_string_literal,
     },
 };
 use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
@@ -38,9 +38,8 @@ use oxc_ast::ast::{
 };
 use oxc_estree::{CompactJSSerializer, ESTree};
 use oxc_parser::{ParseOptions, Parser};
-use oxc_span::{Atom, SPAN, SourceType, Span};
+use oxc_span::{Atom, SPAN, SourceType};
 use oxc_syntax::node::NodeId;
-use rustc_hash::FxHashSet;
 use satteri_arena::mdx_types::{self as message, Location};
 use std::cell::Cell;
 
@@ -174,7 +173,7 @@ pub fn compile_hast_arena(
 ) -> Result<String, message::Message> {
     let allocator = Allocator::default();
     let location = Location::new(arena.string_pool());
-    let mut explicit_jsxs = FxHashSet::default();
+    let mut explicit_jsxs = ExplicitJsxs::default();
     let mut program = hast_util_to_oxc(
         arena,
         options.filepath.clone(),
@@ -568,7 +567,7 @@ pub fn mdx_plugin_recma_jsx_rewrite<'a>(
     program: &mut MdxProgram<'a>,
     options: &Options,
     location: Option<&Location>,
-    explicit_jsxs: &FxHashSet<Span>,
+    explicit_jsxs: &ExplicitJsxs,
     allocator: &'a Allocator,
 ) -> Result<(), message::Message> {
     let rewrite_options = RewriteOptions {

@@ -5,8 +5,9 @@
 use crate::configuration::{ElementAttributeNameCase, OptimizeStaticConfig, StylePropertyNameCase};
 use crate::oxc::{parse_esm_to_tree, parse_expression_to_tree, serialize};
 use crate::oxc_utils::{
-    create_jsx_attr_name_from_str, create_jsx_name_from_str, create_object_expression,
-    create_prop_name, create_string_literal, inter_element_whitespace, is_literal_name,
+    ExplicitJsxs, create_jsx_attr_name_from_str, create_jsx_name_from_str,
+    create_object_expression, create_prop_name, create_string_literal, explicit_jsx_key,
+    inter_element_whitespace, is_literal_name,
 };
 use core::str;
 use std::borrow::Cow;
@@ -23,7 +24,7 @@ use oxc_ast::ast::{
 };
 use oxc_span::{Atom, SPAN, Span};
 use oxc_syntax::node::NodeId;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use satteri_arena::mdx_types::{self as message, Location, MdxExpressionKind, Stop};
 use satteri_arena::{Arena, Hast};
 use satteri_ast::hast::HastNodeType;
@@ -132,7 +133,7 @@ pub fn hast_util_to_oxc<'a>(
     view: &'a Arena<Hast>,
     path: Option<String>,
     location: Option<&'a Location<'a>>,
-    explicit_jsxs: &mut FxHashSet<Span>,
+    explicit_jsxs: &mut ExplicitJsxs,
     allocator: &'a Allocator,
     optimize_static: Option<&OptimizeStaticConfig>,
     element_attribute_name_case: ElementAttributeNameCase,
@@ -315,7 +316,7 @@ fn extract_component_override_keys(program: &Program<'_>, keys: &mut Vec<String>
 fn one<'a>(
     context: &mut Context<'a>,
     node_id: u32,
-    explicit_jsxs: &mut FxHashSet<Span>,
+    explicit_jsxs: &mut ExplicitJsxs,
 ) -> Result<Option<JSXChild<'a>>, message::Message> {
     let node = context.view.get_node(node_id);
     let raw_type = node.node_type;
@@ -483,7 +484,7 @@ fn create_raw_html_jsx<'a>(
 fn all<'a>(
     context: &mut Context<'a>,
     parent_id: u32,
-    explicit_jsxs: &mut FxHashSet<Span>,
+    explicit_jsxs: &mut ExplicitJsxs,
 ) -> Result<OxcVec<'a, JSXChild<'a>>, message::Message> {
     let child_count = context.view.get_children(parent_id).len();
     let mut result = OxcVec::with_capacity_in(child_count, context.allocator);
@@ -582,7 +583,7 @@ fn transform_comment<'a>(context: &mut Context<'a>, node_id: u32) -> JSXChild<'a
 fn transform_element<'a>(
     context: &mut Context<'a>,
     node_id: u32,
-    explicit_jsxs: &mut FxHashSet<Span>,
+    explicit_jsxs: &mut ExplicitJsxs,
 ) -> Result<Option<JSXChild<'a>>, message::Message> {
     let data = context.view.get_type_data(node_id);
     if data.len() < 16 {
@@ -674,15 +675,7 @@ fn transform_element<'a>(
         )));
     }
 
-    // The span feeds development `__source`. `explicit_jsxs` is keyed by span,
-    // so an MDX descendant covering the identical range would make this element
-    // read as author-written JSX; children are already transformed by here.
     let span = node_span(context.view, node_id);
-    let span = if explicit_jsxs.contains(&span) {
-        SPAN
-    } else {
-        span
-    };
 
     Ok(Some(JSXChild::Element(OxcBox::new_in(
         create_element(alloc, tag_name, attrs, children, span),
@@ -694,7 +687,7 @@ fn transform_element<'a>(
 fn transform_mdx_jsx_element<'a>(
     context: &mut Context<'a>,
     node_id: u32,
-    explicit_jsxs: &mut FxHashSet<Span>,
+    explicit_jsxs: &mut ExplicitJsxs,
 ) -> Result<Option<JSXChild<'a>>, message::Message> {
     let data = context.view.get_type_data(node_id);
     if data.len() < 16 {
@@ -828,13 +821,11 @@ fn transform_mdx_jsx_element<'a>(
     // Fast-path mirror of `node.data._mdxExplicitJsx`; see codec.rs.
     let explicit_jsx = decode_mdx_jsx_explicit(data);
     Ok(Some(if let Some(n) = name {
+        let elem = OxcBox::new_in(create_element(alloc, n, attrs, children, span), alloc);
         if explicit_jsx {
-            explicit_jsxs.insert(span);
+            explicit_jsxs.insert(explicit_jsx_key(&elem));
         }
-        JSXChild::Element(OxcBox::new_in(
-            create_element(alloc, n, attrs, children, span),
-            alloc,
-        ))
+        JSXChild::Element(elem)
     } else {
         JSXChild::Fragment(OxcBox::new_in(
             create_fragment(alloc, children, span),
@@ -929,7 +920,7 @@ fn transform_mdxjs_esm<'a>(
 fn transform_root<'a>(
     context: &mut Context<'a>,
     node_id: u32,
-    explicit_jsxs: &mut FxHashSet<Span>,
+    explicit_jsxs: &mut ExplicitJsxs,
 ) -> Result<Option<JSXChild<'a>>, message::Message> {
     let alloc = context.allocator;
     let children_vec = all(context, node_id, explicit_jsxs)?;

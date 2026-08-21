@@ -707,6 +707,38 @@ export async function assertMdxConformance(
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }
 
+export interface MdxPluginConformanceOptions {
+  reference: Pick<MdxCompileOptions, "remarkPlugins" | "rehypePlugins">;
+  satteri: Pick<MarkdownToJsOptions, "mdastPlugins" | "hastPlugins">;
+  components?: Record<string, unknown>;
+}
+
+// Pass `components` overrides: a tag that skips `_components` ignores them.
+export async function assertMdxPluginConformance(
+  input: string,
+  options: MdxPluginConformanceOptions,
+): Promise<void> {
+  const { reference, satteri, components = {} } = options;
+
+  const { default: MdxComponent } = (await mdxEvaluate(input, {
+    ...mdxRuntime,
+    ...reference,
+  })) as { default: Function };
+  const mdxHtml = renderToStaticMarkup(
+    createElement(MdxComponent as React.FC<Record<string, unknown>>, { components }),
+  );
+
+  const { default: SatComponent } = await satteriEvaluate(input, {
+    ...satteriRuntime,
+    ...satteri,
+  });
+  const satHtml = renderToStaticMarkup(
+    createElement(SatComponent as React.FC<Record<string, unknown>>, { components }),
+  );
+
+  expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
+}
+
 // Reference is @mdx-js/mdx with `format: "md"`. Both sides evaluate to a
 // component and render through react-dom/server, so escaping is identical and
 // only structural differences survive.
