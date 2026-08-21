@@ -816,6 +816,31 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
         }
     }
     out.push_str("};\n\n");
+    out.push_str(
+        "/** Tags whose whole layout is one plain string at offset 0, mapped to that\n \
+         *  property name. Lets the materializer store the field directly instead of\n \
+         *  driving the descriptor loop, whose polymorphic reads dominate its cost. */\n",
+    );
+    out.push_str("const MDAST_PLAIN_STRING: Readonly<Record<number, string>> = {\n");
+    for layout in layouts {
+        let fields = layout
+            .fields
+            .iter()
+            .filter(|f| !matches!(f.js_kind, Js::Const(_)))
+            .collect::<Vec<_>>();
+        let [field] = fields.as_slice() else { continue };
+        if field.offset != 0
+            || field.phantom
+            || !matches!(field.wire, Wire::Str16 | Wire::Str32)
+            || !matches!(field.js_kind, Js::Str)
+        {
+            continue;
+        }
+        for tag in &layout.tags {
+            let _ = writeln!(out, "  {tag}: {:?},", field.js);
+        }
+    }
+    out.push_str("};\n\n");
     out.push_str("/** Materialized property names per tag (the non-skip `js` names above),\n");
     out.push_str(" *  exported for the child-stub field tables. */\n");
     out.push_str(
@@ -1024,9 +1049,14 @@ export function materializeMdastFields(
   nodeId: number,
   nodeType: number,
 ): boolean {
+  const out = node as Record<string, unknown>;
+  const plain = MDAST_PLAIN_STRING[nodeType];
+  if (plain !== undefined) {
+    out[plain] = reader.fieldString(nodeId, 0);
+    return true;
+  }
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields === undefined) return false;
-  const out = node as Record<string, unknown>;
   for (const f of fields) {
     if (f.skip) continue;
     if (f.kind === "u8") {

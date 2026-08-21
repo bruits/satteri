@@ -81,6 +81,17 @@ const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {
   104: [{ js: "value", offset: 0, kind: "str32", phantom: true }],
 };
 
+/** Tags whose whole layout is one plain string at offset 0, mapped to that
+ *  property name. Lets the materializer store the field directly instead of
+ *  driving the descriptor loop, whose polymorphic reads dominate its cost. */
+const MDAST_PLAIN_STRING: Readonly<Record<number, string>> = {
+  7: "value",
+  10: "value",
+  13: "value",
+  25: "value",
+  26: "value",
+};
+
 /** Materialized property names per tag (the non-skip `js` names above),
  *  exported for the child-stub field tables. */
 export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
@@ -288,9 +299,14 @@ export function materializeMdastFields(
   nodeId: number,
   nodeType: number,
 ): boolean {
+  const out = node as Record<string, unknown>;
+  const plain = MDAST_PLAIN_STRING[nodeType];
+  if (plain !== undefined) {
+    out[plain] = reader.fieldString(nodeId, 0);
+    return true;
+  }
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields === undefined) return false;
-  const out = node as Record<string, unknown>;
   for (const f of fields) {
     if (f.skip) continue;
     if (f.kind === "u8") {
