@@ -146,7 +146,7 @@ impl<K: ArenaKind> Arena<K> {
                     buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
                         .copy_from_slice(&utf16_end.to_le_bytes());
                 }
-            } else {
+            } else if self.nodes.iter().any(|n| n.start_line != 0) {
                 // Fallback: no precomputed cache (e.g. arena assembled
                 // outside `arena_build`, or after plugin mutation). Build
                 // a one-shot LineIndex and convert per node.
