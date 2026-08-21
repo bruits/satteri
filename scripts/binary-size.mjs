@@ -1,8 +1,12 @@
 //   node scripts/binary-size.mjs measure <binary> [--out file.json]
-//   node scripts/binary-size.mjs compare <base.json> <head.json> [--max-growth 5]
+//   node scripts/binary-size.mjs compare <base.json> <head.json>
+//     [--max-growth 5] [--comment-threshold 1] [--status status.json]
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
+
+// Lets the workflow update its own comment rather than post one per push.
+const COMMENT_MARKER = "<!-- binary-size -->";
 
 // `.rela.dyn` and `.data.rel.ro` grow with static pointer tables, not with code.
 const TRACKED_SECTIONS = [".text", ".rodata", ".rela.dyn", ".data.rel.ro", ".eh_frame"];
@@ -43,6 +47,7 @@ function delta(before, after) {
 function compare(base, head, maxGrowth) {
   const grew = ((head.total - base.total) / base.total) * 100;
   const lines = [
+    COMMENT_MARKER,
     "## Native binary size",
     "",
     "| | Base | This PR | Change |",
@@ -66,7 +71,7 @@ function compare(base, head, maxGrowth) {
       ? `Grew by ${grew.toFixed(2)}%, over the ${maxGrowth}% budget. Raise \`--max-growth\` in \`.github/workflows/binary-size.yml\` if this is expected.`
       : `Within the ${maxGrowth}% growth budget.`,
   );
-  return { report: lines.join("\n"), over };
+  return { report: lines.join("\n"), over, percent: grew };
 }
 
 function flag(args, name, fallback) {
@@ -85,8 +90,17 @@ if (command === "measure") {
 } else if (command === "compare") {
   const base = JSON.parse(readFileSync(args[0], "utf8"));
   const head = JSON.parse(readFileSync(args[1], "utf8"));
-  const { report, over } = compare(base, head, Number(flag(args, "--max-growth", 5)));
+  const { report, over, percent } = compare(base, head, Number(flag(args, "--max-growth", 5)));
   console.log(report);
+
+  const status = flag(args, "--status", null);
+  if (status) {
+    const threshold = Number(flag(args, "--comment-threshold", 1));
+    writeFileSync(
+      status,
+      JSON.stringify({ significant: Math.abs(percent) >= threshold, over, percent }),
+    );
+  }
   if (over) process.exitCode = 1;
 } else {
   console.error("usage: binary-size.mjs measure <binary> | compare <base.json> <head.json>");

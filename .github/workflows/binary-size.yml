@@ -62,6 +62,21 @@ jobs:
 
       - name: Compare
         run: |
+          mkdir -p "$RUNNER_TEMP/report"
+          echo "${{ github.event.pull_request.number }}" > "$RUNNER_TEMP/report/pr-number"
           node "$RUNNER_TEMP/binary-size.mjs" compare \
             "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" \
-            --max-growth 5 | tee -a "$GITHUB_STEP_SUMMARY"
+            --max-growth 5 \
+            --comment-threshold 1 \
+            --status "$RUNNER_TEMP/report/status.json" \
+            | tee "$RUNNER_TEMP/report/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # Uploaded even when the budget check fails, so the comment still lands.
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-size-report
+          path: ${{ runner.temp }}/report
+          retention-days: 1
+          if-no-files-found: ignore
