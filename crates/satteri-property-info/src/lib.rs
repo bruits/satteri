@@ -12,9 +12,14 @@
 use std::borrow::Cow;
 
 mod tables;
-use tables::{HTML_TABLE, SVG_TABLE};
+use tables::{HTML_TABLE, Row, STRINGS, SVG_TABLE};
 
-type Table = &'static [(&'static str, &'static str, &'static str, u8)];
+type Table = &'static [Row];
+
+fn text(offset: u16, len: u8) -> &'static str {
+    let offset = offset as usize;
+    &STRINGS[offset..offset + len as usize]
+}
 
 /// How an attribute's string value is coerced into a hast property value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,7 +71,9 @@ fn normalize(name: &str) -> Cow<'_, str> {
 }
 
 fn lookup(table: Table, key: &str) -> Option<usize> {
-    table.binary_search_by(|(k, ..)| (*k).cmp(key)).ok()
+    table
+        .binary_search_by(|&(offset, len, ..)| text(offset, len).cmp(key))
+        .ok()
 }
 
 /// Resolve an HTML/SVG attribute name to its hast property name and value
@@ -76,7 +83,10 @@ pub fn find_property(local: &str, in_svg: bool) -> (Cow<'_, str>, PropKind) {
     let t = table(in_svg);
     let key = normalize(local);
     if let Some(i) = lookup(t, key.as_ref()) {
-        return (Cow::Borrowed(t[i].1), PropKind::from_class(t[i].3));
+        return (
+            Cow::Borrowed(text(t[i].2, t[i].3)),
+            PropKind::from_class(t[i].6),
+        );
     }
     if let Some(property) = data_to_property(key.as_ref()) {
         return (Cow::Owned(property), PropKind::String);
@@ -130,7 +140,7 @@ pub fn property_to_attribute(name: &str, in_svg: bool) -> Cow<'_, str> {
 /// unknown / custom properties (which pass through unchanged).
 fn attribute_of(name: &str, in_svg: bool) -> Option<&'static str> {
     let t = table(in_svg);
-    lookup(t, normalize(name).as_ref()).map(|i| t[i].2)
+    lookup(t, normalize(name).as_ref()).map(|i| text(t[i].4, t[i].5))
 }
 
 /// Turn a `data-*` attribute name into its hast property name
@@ -485,10 +495,12 @@ mod tests {
         // For every row, `property_to_attribute(property)` must reproduce the
         // stored attribute, the algorithmic aria/xlink/xml branches included.
         for (table, in_svg) in [(super::HTML_TABLE, false), (super::SVG_TABLE, true)] {
-            for (_, property, attribute, _) in table {
+            for &(_, _, prop_at, prop_len, attr_at, attr_len, _) in table {
+                let property = super::text(prop_at, prop_len);
+                let attribute = super::text(attr_at, attr_len);
                 assert_eq!(
                     &property_to_attribute(property, in_svg),
-                    attribute,
+                    &attribute,
                     "{} property {property}",
                     if in_svg { "svg" } else { "html" }
                 );
