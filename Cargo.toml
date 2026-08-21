@@ -18,9 +18,9 @@ memchr = { version = "2.5", default-features = false }
 oxc_allocator = "0.121.0"
 oxc_ast = "0.121.0"
 oxc_ast_visit = "0.121.0"
-oxc_codegen = "0.121.0"
+oxc_codegen = { version = "0.121.0", default-features = false }
 oxc_estree = "0.121.0"
-oxc_parser = "0.121.0"
+oxc_parser = { version = "0.121.0", default-features = false }
 oxc_span = "0.121.0"
 oxc_syntax = "0.121.0"
 rustc-hash = "2"
