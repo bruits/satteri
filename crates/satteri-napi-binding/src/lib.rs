@@ -1075,6 +1075,23 @@ pub fn apply_commands_and_compile_handle(
     })
 }
 
+/// Fast path: parse markdown and serialize the arena to the wire buffer in one
+/// NAPI roundtrip. Used by `markdownToMdast` when no plugins are configured,
+/// where the handle only exists to stay live across plugin passes.
+#[napi]
+pub fn markdown_to_mdast_fast(
+    source: String,
+    parse_options: u32,
+    track_positions: Option<bool>,
+) -> Result<Uint8Array> {
+    let opts = parser_options(parse_options, false);
+    let mut arena = parse_mdast_pooled(&source, opts, false, track_positions.unwrap_or(true))?;
+    arena.mdx = false;
+    let buf = arena.to_raw_buffer();
+    release_mdast_arena(arena);
+    Ok(Uint8Array::new(buf))
+}
+
 /// One-shot result returned by the no-plugin fast path and the MDAST-plugin
 /// fused tail. `dropped_transforms` is only ever non-zero on the fused-tail
 /// path (the fast path applies no commands).

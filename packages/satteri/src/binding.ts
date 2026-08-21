@@ -22,6 +22,7 @@ export {
   getNodeData,
   markdownToHtmlFast,
   markdownToJsFast,
+  markdownToMdastFast,
   mdastTextContentHandle,
   mdxToJsFast,
   parseEsm,

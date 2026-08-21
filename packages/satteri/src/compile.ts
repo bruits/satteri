@@ -44,6 +44,7 @@ import {
   getMdastFrontmatter,
   markdownToHtmlFast,
   markdownToJsFast,
+  markdownToMdastFast,
   mdxToJsFast,
   renderHandle,
   serializeHandle,
@@ -1263,16 +1264,12 @@ export interface TreeOptions {
 
 /** Parse Markdown source into a materialized mdast tree. */
 export function markdownToMdast(source: string, options: TreeOptions = {}): MdastNode {
-  const handle = createMdastHandle(
+  const wire = markdownToMdastFast(
     source,
     featuresToNative(options.features).parseOptions,
     options.position,
   );
-  try {
-    return materializeMdastTree(new MdastReader(serializeHandle(handle)));
-  } finally {
-    releaseHandle(handle, true);
-  }
+  return materializeMdastTree(new MdastReader(wire));
 }
 
 /** Parse MDX source into a materialized mdast tree. */

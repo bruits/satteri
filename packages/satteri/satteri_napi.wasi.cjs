@@ -131,6 +131,7 @@ module.exports.getMdastFrontmatter = __napiModule.exports.getMdastFrontmatter
 module.exports.getNodeData = __napiModule.exports.getNodeData
 module.exports.markdownToHtmlFast = __napiModule.exports.markdownToHtmlFast
 module.exports.markdownToJsFast = __napiModule.exports.markdownToJsFast
+module.exports.markdownToMdastFast = __napiModule.exports.markdownToMdastFast
 module.exports.mdastTextContentHandle = __napiModule.exports.mdastTextContentHandle
 module.exports.mdxToJsFast = __napiModule.exports.mdxToJsFast
 module.exports.parseEsm = __napiModule.exports.parseEsm

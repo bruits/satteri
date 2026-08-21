@@ -269,6 +269,13 @@ export declare function markdownToHtmlFast(source: string, parseOptions: number,
 export declare function markdownToJsFast(source: string, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
 
 /**
+ * Fast path: parse markdown and serialize the arena to the wire buffer in one
+ * NAPI roundtrip. Used by `markdownToMdast` when no plugins are configured,
+ * where the handle only exists to stay live across plugin passes.
+ */
+export declare function markdownToMdastFast(source: string, parseOptions: number, trackPositions?: boolean | undefined | null): Uint8Array
+
+/**
  * Collect the concatenated text content of an MDAST node and all its descendants.
  * Mirrors `mdast-util-to-string`: collects value from text nodes, alt from images.
  */

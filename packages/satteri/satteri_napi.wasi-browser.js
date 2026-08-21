@@ -80,6 +80,7 @@ export const getMdastFrontmatter = __napiModule.exports.getMdastFrontmatter
 export const getNodeData = __napiModule.exports.getNodeData
 export const markdownToHtmlFast = __napiModule.exports.markdownToHtmlFast
 export const markdownToJsFast = __napiModule.exports.markdownToJsFast
+export const markdownToMdastFast = __napiModule.exports.markdownToMdastFast
 export const mdastTextContentHandle = __napiModule.exports.mdastTextContentHandle
 export const mdxToJsFast = __napiModule.exports.mdxToJsFast
 export const parseEsm = __napiModule.exports.parseEsm
