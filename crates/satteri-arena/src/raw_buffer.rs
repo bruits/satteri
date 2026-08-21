@@ -43,13 +43,57 @@ impl<K: ArenaKind> Arena<K> {
             .map(|(_, v)| 4 /* id */ + 4 /* len */ + v.len())
             .sum();
 
+        // Built here because the JS reader would otherwise rescan the whole pool.
+        let mut multibyte_starts: Vec<u32> = Vec::new();
+        let mut multibyte_shifts: Vec<u32> = Vec::new();
+        if !self.string_pool.is_ascii() {
+            let bytes = self.string_pool.as_bytes();
+            let mut shift = 0u32;
+            let mut i = 0;
+            while i < bytes.len() {
+                // Pools are overwhelmingly ASCII; striding beats decoding each char.
+                while i + 8 <= bytes.len() {
+                    let chunk = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+                    if chunk & 0x8080_8080_8080_8080 != 0 {
+                        break;
+                    }
+                    i += 8;
+                }
+                if i >= bytes.len() {
+                    break;
+                }
+                let lead = bytes[i];
+                if lead < 0x80 {
+                    i += 1;
+                    continue;
+                }
+                let (utf8_len, utf16_len) = if lead < 0xe0 {
+                    (2, 1)
+                } else if lead < 0xf0 {
+                    (3, 1)
+                } else {
+                    (4, 2)
+                };
+                multibyte_starts.push(i as u32);
+                shift += utf8_len - utf16_len;
+                multibyte_shifts.push(shift);
+                i += utf8_len as usize;
+            }
+        }
+        let multibyte_count = multibyte_starts.len() as u32;
+
         let nodes_offset = header::SIZE as u32;
         let children_offset = nodes_offset + nodes_bytes as u32;
         let type_data_offset = children_offset + children_bytes as u32;
         let string_pool_offset = type_data_offset + type_data_bytes as u32;
         let node_data_offset = string_pool_offset + string_pool_bytes as u32;
 
-        let total = node_data_offset as usize + node_data_section_bytes;
+        let node_data_end = node_data_offset as usize + node_data_section_bytes;
+        // The JS reader takes u32 views straight over these, so align to 4.
+        let multibyte_pad = (4 - (node_data_end & 3)) & 3;
+        let multibyte_offset = (node_data_end + multibyte_pad) as u32;
+
+        let total = multibyte_offset as usize + multibyte_count as usize * 8;
         let mut buf = Vec::with_capacity(total);
 
         // Header fields (little-endian u32s) at the generated layout offsets,
@@ -69,6 +113,8 @@ impl<K: ArenaKind> Arena<K> {
         put(header::STRING_POOL_OFFSET, string_pool_offset);
         put(header::NODE_DATA_COUNT, node_data_count);
         put(header::NODE_DATA_OFFSET, node_data_offset);
+        put(header::MULTIBYTE_COUNT, multibyte_count);
+        put(header::MULTIBYTE_OFFSET, multibyte_offset);
         buf.extend_from_slice(&hdr);
 
         // The arena tracks `start_offset`/`end_offset` as **byte** offsets
@@ -142,6 +188,14 @@ impl<K: ArenaKind> Arena<K> {
             buf.extend_from_slice(&id.to_le_bytes());
             buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
             buf.extend_from_slice(data);
+        }
+
+        buf.resize(buf.len() + multibyte_pad, 0);
+        for &start in &multibyte_starts {
+            buf.extend_from_slice(&start.to_le_bytes());
+        }
+        for &shift in &multibyte_shifts {
+            buf.extend_from_slice(&shift.to_le_bytes());
         }
 
         buf

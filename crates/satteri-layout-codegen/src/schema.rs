@@ -1373,6 +1373,8 @@ pub const ARENA_HEADER_FIELDS: &[&str] = &[
     "string_pool_offset",
     "node_data_count",
     "node_data_offset",
+    "multibyte_count",
+    "multibyte_offset",
 ];
 
 /// `b"MDAR"` read as a little-endian u32 (how the JS readers check it).

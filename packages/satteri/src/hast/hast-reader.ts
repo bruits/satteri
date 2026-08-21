@@ -75,6 +75,8 @@ export class HastReader {
       stringPoolOffset: v.getUint32(HEADER.string_pool_offset, true),
       nodeDataCount: v.getUint32(HEADER.node_data_count, true),
       nodeDataOffset: v.getUint32(HEADER.node_data_offset, true),
+      multibyteCount: v.getUint32(HEADER.multibyte_count, true),
+      multibyteOffset: v.getUint32(HEADER.multibyte_offset, true),
     };
   }
 
@@ -133,15 +135,13 @@ export class HastReader {
     const pool = this.getStringPool();
     if (!this.#poolChecked) {
       this.#poolChecked = true;
-      const { stringPoolOffset, stringPoolLen } = this.#header;
-      const extraBytes = stringPoolLen - pool.length;
-      if (extraBytes > 0) {
-        const bytes = new Uint8Array(
-          this.#view.buffer,
-          this.#view.byteOffset + stringPoolOffset,
-          stringPoolLen,
+      const { multibyteCount, multibyteOffset } = this.#header;
+      if (multibyteCount > 0) {
+        const base = this.#view.byteOffset + multibyteOffset;
+        this.#poolOffsets = new PoolOffsets(
+          new Uint32Array(this.#view.buffer, base, multibyteCount),
+          new Uint32Array(this.#view.buffer, base + multibyteCount * 4, multibyteCount),
         );
-        this.#poolOffsets = new PoolOffsets(bytes, extraBytes);
       }
     }
     // An all-ASCII pool has byte offsets equal to its UTF-16 indices.

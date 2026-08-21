@@ -221,4 +221,8 @@ export interface BufferHeader {
   nodeDataCount: number;
   /** Offset of the node-data section: `[id u32][len u32][bytes...]` repeated. */
   nodeDataOffset: number;
+  /** Number of multibyte characters in the string pool. */
+  multibyteCount: number;
+  /** Offset of the pool's byte-to-UTF-16 remap: `count` starts then `count` shifts, both u32. */
+  multibyteOffset: number;
 }

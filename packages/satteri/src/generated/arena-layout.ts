@@ -43,4 +43,6 @@ export const HEADER = {
   string_pool_offset: 40,
   node_data_count: 44,
   node_data_offset: 48,
+  multibyte_count: 52,
+  multibyte_offset: 56,
 } as const;
