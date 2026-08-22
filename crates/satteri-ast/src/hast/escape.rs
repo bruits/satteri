@@ -85,14 +85,23 @@ fn next_escape(
     let len = bytes.len();
     debug_assert!(len >= 8, "the tail re-read needs a whole word behind `i`");
     let mut i = from;
-    while let Some(chunk) = bytes[i..].first_chunk::<8>() {
-        let mut mask = mask_of(u64::from_le_bytes(*chunk));
-        while mask != 0 {
-            let at = i + (mask.trailing_zeros() / 8) as usize;
-            if let Some(escaped) = escape_of(bytes[at]) {
-                return Some((at, escaped));
+    while let Some(chunk) = bytes[i..].first_chunk::<16>() {
+        let m0 = mask_of(u64::from_le_bytes(chunk[0..8].try_into().unwrap()));
+        let m1 = mask_of(u64::from_le_bytes(chunk[8..16].try_into().unwrap()));
+        if m0 | m1 != 0 {
+            if let Some(hit) = first_flagged(bytes, i, m0, &escape_of) {
+                return Some(hit);
             }
-            mask &= mask - 1;
+            if let Some(hit) = first_flagged(bytes, i + 8, m1, &escape_of) {
+                return Some(hit);
+            }
+        }
+        i += 16;
+    }
+    while let Some(chunk) = bytes[i..].first_chunk::<8>() {
+        let mask = mask_of(u64::from_le_bytes(*chunk));
+        if let Some(hit) = first_flagged(bytes, i, mask, &escape_of) {
+            return Some(hit);
         }
         i += 8;
     }
@@ -105,7 +114,17 @@ fn next_escape(
     let base = len - 8;
     let mut tail = [0u8; 8];
     tail.copy_from_slice(&bytes[base..]);
-    let mut mask = mask_of(u64::from_le_bytes(tail)) & (u64::MAX << ((i - base) * 8));
+    let mask = mask_of(u64::from_le_bytes(tail)) & (u64::MAX << ((i - base) * 8));
+    first_flagged(bytes, base, mask, &escape_of)
+}
+
+#[inline]
+fn first_flagged(
+    bytes: &[u8],
+    base: usize,
+    mut mask: u64,
+    escape_of: impl Fn(u8) -> Option<&'static str>,
+) -> Option<(usize, &'static str)> {
     while mask != 0 {
         let at = base + (mask.trailing_zeros() / 8) as usize;
         if let Some(escaped) = escape_of(bytes[at]) {
