@@ -285,8 +285,8 @@ fn push_newline_starts(bytes: &[u8], offsets: &mut Vec<u32>) {
         }
         base += 32;
     }
-    for j in base..bytes.len() {
-        if bytes[j] == b'\n' {
+    for (j, &b) in bytes.iter().enumerate().skip(base) {
+        if b == b'\n' {
             offsets.push(j as u32 + 1);
         }
     }
