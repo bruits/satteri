@@ -120,10 +120,12 @@ fn mdast_type_name(node_type: u8) -> String {
     }
 }
 
-/// MDAST set-property: writes a typed field (or `data` JSON) onto an MDAST
+/// MDAST set-field: writes a typed field (or `data` JSON) onto an MDAST
 /// node. Kind-tight to `Arena<Mdast>` — the HAST element-properties writer
 /// can no longer be reached from here.
-fn apply_mdast_set_property(
+///
+/// MDAST has no property container, so `CMD_SET_PROPERTY` routes here too.
+fn apply_mdast_set_field(
     arena: &mut Arena<Mdast>,
     node_id: u32,
     prop_name: &str,
@@ -409,7 +411,7 @@ fn apply_hast_set_property(
 
         #[cfg(feature = "mdx")]
         HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => {
-            apply_hast_mdx_jsx_attribute(arena, node_id, prop_name, value_type, value_str)
+            apply_mdx_jsx_attribute(arena, node_id, prop_name, value_type, value_str)
         }
 
         _ => Err(CommandError::UnknownField {
@@ -417,6 +419,164 @@ fn apply_hast_set_property(
             name: prop_name.to_string(),
         }),
     }
+}
+
+/// tagName, an MDX JSX name and a literal value all share this head slot.
+fn write_hast_head_string(
+    arena: &mut Arena<Hast>,
+    node_id: u32,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    let sref = arena.alloc_string(value_str);
+    if arena.get_type_data(node_id).len() < 8 {
+        return Err(CommandError::TypeDataTooShort);
+    }
+    let data_offset = arena.get_node(node_id).data_offset as usize;
+    arena.type_data[data_offset..data_offset + 8].copy_from_slice(&sref.as_bytes());
+    Ok(())
+}
+
+fn apply_hast_set_field(
+    arena: &mut Arena<Hast>,
+    node_id: u32,
+    field_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    if node_id as usize >= arena.len() {
+        return Err(CommandError::InvalidNodeId(node_id));
+    }
+    if field_name == "data" {
+        apply_data_property(arena, node_id, value_type, value_str);
+        return Ok(());
+    }
+
+    let raw_type = arena.get_node(node_id).node_type;
+    let node_type = HastNodeType::from_u8(raw_type)
+        .ok_or_else(|| CommandError::UnknownNodeType(format!("hast type 0x{raw_type:02x}")))?;
+
+    let settable = match node_type {
+        HastNodeType::Element => field_name == "tagName",
+        HastNodeType::Text
+        | HastNodeType::Comment
+        | HastNodeType::Raw
+        | HastNodeType::MdxFlowExpression
+        | HastNodeType::MdxTextExpression
+        | HastNodeType::MdxEsm => field_name == "value",
+        #[cfg(feature = "mdx")]
+        HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => field_name == "name",
+        _ => false,
+    };
+    if !settable {
+        return Err(CommandError::UnknownField {
+            node_type: node_type.name().to_string(),
+            name: field_name.to_string(),
+        });
+    }
+
+    // An element named by an empty or non-string value would render as `<>`.
+    if field_name != "value" && (value_type != PROP_STRING || value_str.is_empty()) {
+        return Err(CommandError::InvalidPropertyValue {
+            node_type: node_type.name().to_string(),
+            name: field_name.to_string(),
+        });
+    }
+    write_hast_head_string(arena, node_id, value_str)
+}
+
+/// Only MDX JSX elements carry `attributes`; `element` uses `properties`.
+fn apply_hast_set_attribute(
+    arena: &mut Arena<Hast>,
+    node_id: u32,
+    attr_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    if node_id as usize >= arena.len() {
+        return Err(CommandError::InvalidNodeId(node_id));
+    }
+    let raw_type = arena.get_node(node_id).node_type;
+    let node_type = HastNodeType::from_u8(raw_type)
+        .ok_or_else(|| CommandError::UnknownNodeType(format!("hast type 0x{raw_type:02x}")))?;
+
+    match node_type {
+        #[cfg(feature = "mdx")]
+        HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => {
+            apply_mdx_jsx_attribute(arena, node_id, attr_name, value_type, value_str)
+        }
+        _ => Err(CommandError::UnknownField {
+            node_type: node_type.name().to_string(),
+            name: attr_name.to_string(),
+        }),
+    }
+}
+
+/// Directives store `attributes` as a flat string map, MDX JSX as a typed list.
+fn apply_mdast_set_attribute(
+    arena: &mut Arena<Mdast>,
+    node_id: u32,
+    attr_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    if node_id as usize >= arena.len() {
+        return Err(CommandError::InvalidNodeId(node_id));
+    }
+    let raw_type = arena.get_node(node_id).node_type;
+    match MdastNodeType::from_u8(raw_type) {
+        Some(
+            MdastNodeType::ContainerDirective
+            | MdastNodeType::LeafDirective
+            | MdastNodeType::TextDirective,
+        ) => apply_mdast_directive_attribute(arena, node_id, attr_name, value_type, value_str),
+        #[cfg(feature = "mdx")]
+        Some(MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement) => {
+            apply_mdx_jsx_attribute(arena, node_id, attr_name, value_type, value_str)
+        }
+        _ => Err(CommandError::UnknownField {
+            node_type: mdast_type_name(raw_type),
+            name: attr_name.to_string(),
+        }),
+    }
+}
+
+/// The stored form holds only strings, so non-string values are rejected.
+fn apply_mdast_directive_attribute(
+    arena: &mut Arena<Mdast>,
+    node_id: u32,
+    attr_name: &str,
+    value_type: u8,
+    value_str: &str,
+) -> Result<(), CommandError> {
+    if !matches!(value_type, PROP_STRING | PROP_SPACE_SEP) {
+        return Err(CommandError::InvalidPropertyValue {
+            node_type: mdast_type_name(arena.get_node(node_id).node_type),
+            name: attr_name.to_string(),
+        });
+    }
+    let old_data = arena.get_type_data(node_id).to_vec();
+    if old_data.len() < 16 {
+        return Err(CommandError::TypeDataTooShort);
+    }
+    let name = decode_directive_name(&old_data);
+    let attr_count = decode_directive_attr_count(&old_data);
+    let value_ref = arena.alloc_string(value_str);
+
+    let mut attrs: Vec<(StringRef, StringRef)> = Vec::with_capacity(attr_count as usize + 1);
+    let mut key_ref: Option<StringRef> = None;
+    for i in 0..attr_count {
+        let (existing_key, existing_value) = decode_directive_attr(&old_data, i);
+        if arena.get_str(existing_key) == attr_name {
+            key_ref = Some(existing_key);
+            continue;
+        }
+        attrs.push((existing_key, existing_value));
+    }
+    let key_ref = key_ref.unwrap_or_else(|| arena.alloc_string(attr_name));
+    attrs.push((key_ref, value_ref));
+
+    arena.set_type_data(node_id, &encode_directive_data(name, &attrs));
+    Ok(())
 }
 
 /// Upsert a single attribute on an MDX JSX flow/text element. Avoids
@@ -432,9 +592,11 @@ fn apply_hast_set_property(
 ///   bool-true / null -> boolean attribute (no value)
 ///   bool-false       -> literal `"false"`
 ///   string / int / … -> literal attribute carrying the value
+///
+/// Generic despite the module's kind-tight rule: both trees share this layout.
 #[cfg(feature = "mdx")]
-fn apply_hast_mdx_jsx_attribute(
-    arena: &mut Arena<Hast>,
+fn apply_mdx_jsx_attribute<K: ArenaKind>(
+    arena: &mut Arena<K>,
     node_id: u32,
     attr_name: &str,
     value_type: u8,
@@ -1322,14 +1484,24 @@ pub fn apply_mdast_commands_lenient_with_options(
                 patches.push(Patch::Remove { node_id });
             }
 
-            CMD_SET_PROPERTY => {
+            CMD_SET_PROPERTY | CMD_SET_FIELD => {
                 let node_id = reader.read_anchor(original_len)?;
                 let value_type = reader.read_u8()?;
                 let name_len = reader.read_u32()? as usize;
                 let name = reader.read_str(name_len)?;
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
-                apply_mdast_set_property(builder.arena_mut(), node_id, name, value_type, value)?;
+                apply_mdast_set_field(builder.arena_mut(), node_id, name, value_type, value)?;
+            }
+
+            CMD_SET_ATTRIBUTE => {
+                let node_id = reader.read_anchor(original_len)?;
+                let value_type = reader.read_u8()?;
+                let name_len = reader.read_u32()? as usize;
+                let name = reader.read_str(name_len)?;
+                let value_len = reader.read_u32()? as usize;
+                let value = reader.read_str(value_len)?;
+                apply_mdast_set_attribute(builder.arena_mut(), node_id, name, value_type, value)?;
             }
 
             CMD_INSERT_BEFORE => {
@@ -1524,6 +1696,26 @@ pub fn apply_hast_commands_lenient(
                 let value_len = reader.read_u32()? as usize;
                 let value = reader.read_str(value_len)?;
                 apply_hast_set_property(builder.arena_mut(), node_id, name, value_type, value)?;
+            }
+
+            CMD_SET_FIELD => {
+                let node_id = reader.read_anchor(original_len)?;
+                let value_type = reader.read_u8()?;
+                let name_len = reader.read_u32()? as usize;
+                let name = reader.read_str(name_len)?;
+                let value_len = reader.read_u32()? as usize;
+                let value = reader.read_str(value_len)?;
+                apply_hast_set_field(builder.arena_mut(), node_id, name, value_type, value)?;
+            }
+
+            CMD_SET_ATTRIBUTE => {
+                let node_id = reader.read_anchor(original_len)?;
+                let value_type = reader.read_u8()?;
+                let name_len = reader.read_u32()? as usize;
+                let name = reader.read_str(name_len)?;
+                let value_len = reader.read_u32()? as usize;
+                let value = reader.read_str(value_len)?;
+                apply_hast_set_attribute(builder.arena_mut(), node_id, name, value_type, value)?;
             }
 
             CMD_INSERT_BEFORE => {
@@ -1915,7 +2107,7 @@ mod tests {
 
         // Replaces the expression-valued `foo` (no duplicate) and appends
         // after the spread so the write wins.
-        apply_hast_mdx_jsx_attribute(&mut arena, 1, "foo", PROP_STRING, "x").unwrap();
+        apply_mdx_jsx_attribute(&mut arena, 1, "foo", PROP_STRING, "x").unwrap();
         let data = arena.get_type_data(1).to_vec();
         assert_eq!(decode_mdx_jsx_attr_count(&data), 2);
         assert!(decode_mdx_jsx_explicit(&data));
@@ -1927,10 +2119,162 @@ mod tests {
         assert_eq!(arena.get_str(v1), "x");
 
         // Appending a brand-new attribute must not clear the explicit flag.
-        apply_hast_mdx_jsx_attribute(&mut arena, 1, "id", PROP_STRING, "intro").unwrap();
+        apply_mdx_jsx_attribute(&mut arena, 1, "id", PROP_STRING, "intro").unwrap();
         let data = arena.get_type_data(1).to_vec();
         assert_eq!(decode_mdx_jsx_attr_count(&data), 3);
         assert!(decode_mdx_jsx_explicit(&data));
+    }
+
+    fn hast_element_with_href() -> Arena<Hast> {
+        use satteri_ast::hast::codec::encode_element_data;
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Element as u8);
+        let tag = b.alloc_string("a");
+        let href = b.alloc_string("href");
+        let target = b.alloc_string("/x");
+        b.set_data_current(&encode_element_data(tag, &[(href, PROP_STRING, target)]));
+        b.close_node();
+        b.close_node();
+        b.finish()
+    }
+
+    #[test]
+    fn hast_set_field_renames_an_element_and_keeps_its_properties() {
+        use satteri_ast::hast::codec::{decode_element_prop, decode_element_prop_count};
+
+        let mut arena = hast_element_with_href();
+        apply_hast_set_field(&mut arena, 1, "tagName", PROP_STRING, "App.Link").unwrap();
+
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(arena.get_str(decode_element_tag(&data)), "App.Link");
+        assert_eq!(decode_element_prop_count(&data), 1);
+        let (name, _, value) = decode_element_prop(&data, 0);
+        assert_eq!(arena.get_str(name), "href");
+        assert_eq!(arena.get_str(value), "/x");
+
+        // Appending a property relocates type_data; the new tag must travel.
+        apply_hast_set_property(&mut arena, 1, "id", PROP_STRING, "intro").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(arena.get_str(decode_element_tag(&data)), "App.Link");
+        assert_eq!(decode_element_prop_count(&data), 2);
+    }
+
+    #[test]
+    fn hast_set_field_rejects_values_that_cannot_name_an_element() {
+        let mut arena = hast_element_with_href();
+        for (value_type, value_str) in [
+            (PROP_BOOL_TRUE, ""),
+            (PROP_BOOL_FALSE, ""),
+            (PROP_NULL, ""),
+            (PROP_INT, "1"),
+            (PROP_SPACE_SEP, "a b"),
+            (PROP_STRING, ""),
+        ] {
+            assert!(matches!(
+                apply_hast_set_field(&mut arena, 1, "tagName", value_type, value_str),
+                Err(CommandError::InvalidPropertyValue { ref name, ref node_type })
+                    if name == "tagName" && node_type == "element"
+            ));
+        }
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(arena.get_str(decode_element_tag(&data)), "a");
+    }
+
+    #[test]
+    fn hast_set_field_rejects_a_property_name() {
+        let mut arena = hast_element_with_href();
+        assert!(matches!(
+            apply_hast_set_field(&mut arena, 1, "className", PROP_STRING, "x"),
+            Err(CommandError::UnknownField { ref name, ref node_type })
+                if name == "className" && node_type == "element"
+        ));
+    }
+
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn hast_set_field_renames_an_mdx_jsx_element_and_keeps_its_attributes() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::MdxJsxElement as u8);
+        let elem_name = b.alloc_string("Box");
+        let foo = b.alloc_string("foo");
+        let bar = b.alloc_string("bar");
+        b.set_data_current(&encode_mdx_jsx_element_data(
+            elem_name,
+            &[(MDX_ATTR_LITERAL_PROP, foo, bar)],
+            true,
+        ));
+        b.close_node();
+        b.close_node();
+        let mut arena = b.finish();
+
+        apply_hast_set_field(&mut arena, 1, "name", PROP_STRING, "Card").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(arena.get_str(decode_mdx_jsx_element_name(&data)), "Card");
+        assert_eq!(decode_mdx_jsx_attr_count(&data), 1);
+        assert!(decode_mdx_jsx_explicit(&data));
+    }
+
+    fn mdast_leaf_directive() -> Arena<Mdast> {
+        let mut b = ArenaBuilder::<Mdast>::new(String::new());
+        b.open_node(MdastNodeType::Root as u8);
+        b.open_node(MdastNodeType::LeafDirective as u8);
+        let name = b.alloc_string("note");
+        let key = b.alloc_string("class");
+        let value = b.alloc_string("tip");
+        b.set_data_current(&encode_directive_data(name, &[(key, value)]));
+        b.close_node();
+        b.close_node();
+        b.finish()
+    }
+
+    #[test]
+    fn mdast_set_field_renames_a_directive() {
+        let mut arena = mdast_leaf_directive();
+        apply_mdast_set_field(&mut arena, 1, "name", PROP_STRING, "warning").unwrap();
+
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(arena.get_str(decode_directive_name(&data)), "warning");
+        assert_eq!(decode_directive_attr_count(&data), 1);
+    }
+
+    #[test]
+    fn mdast_set_attribute_upserts_a_directive_attribute() {
+        let mut arena = mdast_leaf_directive();
+
+        apply_mdast_set_attribute(&mut arena, 1, "id", PROP_STRING, "intro").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(decode_directive_attr_count(&data), 2);
+        assert_eq!(arena.get_str(decode_directive_name(&data)), "note");
+
+        // Writing an existing name replaces it rather than duplicating.
+        apply_mdast_set_attribute(&mut arena, 1, "class", PROP_STRING, "warn").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert_eq!(decode_directive_attr_count(&data), 2);
+        let found: Vec<(String, String)> = (0..decode_directive_attr_count(&data))
+            .map(|i| {
+                let (k, v) = decode_directive_attr(&data, i);
+                (arena.get_str(k).to_string(), arena.get_str(v).to_string())
+            })
+            .collect();
+        assert!(found.contains(&("class".to_string(), "warn".to_string())));
+        assert!(found.contains(&("id".to_string(), "intro".to_string())));
+    }
+
+    #[test]
+    fn mdast_set_attribute_rejects_non_string_directive_values() {
+        let mut arena = mdast_leaf_directive();
+        for value_type in [PROP_BOOL_TRUE, PROP_BOOL_FALSE, PROP_NULL, PROP_INT] {
+            assert!(matches!(
+                apply_mdast_set_attribute(&mut arena, 1, "id", value_type, "1"),
+                Err(CommandError::InvalidPropertyValue { ref name, .. }) if name == "id"
+            ));
+        }
+        assert_eq!(
+            decode_directive_attr_count(&arena.get_type_data(1).to_vec()),
+            1
+        );
     }
 
     fn test_parse_markdown(source: &str) -> Arena<Mdast> {

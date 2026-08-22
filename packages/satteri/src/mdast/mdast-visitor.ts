@@ -220,12 +220,14 @@ export class MdastVisitorContext {
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "insertBefore", this.#refs);
-    for (const n of asArray(newNode)) emitMdastTree(this.#commandBuffer, "insertBefore", id, n, false, this.#refs);
+    for (const n of asArray(newNode))
+      emitMdastTree(this.#commandBuffer, "insertBefore", id, n, false, this.#refs);
   }
 
   insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "insertAfter", this.#refs);
-    for (const n of asArray(newNode)) emitMdastTree(this.#commandBuffer, "insertAfter", id, n, false, this.#refs);
+    for (const n of asArray(newNode))
+      emitMdastTree(this.#commandBuffer, "insertAfter", id, n, false, this.#refs);
   }
 
   /**
@@ -247,12 +249,14 @@ export class MdastVisitorContext {
 
   prependChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "prependChild", this.#refs);
-    for (const n of asArray(childNode)) emitMdastTree(this.#commandBuffer, "prependChild", id, n, false, this.#refs);
+    for (const n of asArray(childNode))
+      emitMdastTree(this.#commandBuffer, "prependChild", id, n, false, this.#refs);
   }
 
   appendChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "appendChild", this.#refs);
-    for (const n of asArray(childNode)) emitMdastTree(this.#commandBuffer, "appendChild", id, n, false, this.#refs);
+    for (const n of asArray(childNode))
+      emitMdastTree(this.#commandBuffer, "appendChild", id, n, false, this.#refs);
   }
 
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -312,6 +316,46 @@ export class MdastVisitorContext {
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs);
   }
 
+  setField<N extends MdastTarget, K extends keyof N & string>(
+    node: Readonly<N>,
+    key: K,
+    value: N[K],
+  ): void;
+  /** `children` is structural and every parent accepts it, so the key also
+   *  works on node-type unions (e.g. a node returned by `parent()`). */
+  setField(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
+  /** `data` is an open per-node bag serialized to JSON on the wire, so it
+   *  accepts any record (hName/hProperties/custom fields), not just the node's
+   *  declared `data` shape. `null` clears it. */
+  setField(node: Readonly<MdastTarget>, key: "data", value: Record<string, unknown> | null): void;
+  setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
+    const id = requireNid(node as MdastNode, "setField", this.#refs);
+    if (key === "children") {
+      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+        throw unencodableContentError(value);
+      }
+      return;
+    }
+    if (key === "data") {
+      this.#commandBuffer.setField(id, key, value != null ? JSON.stringify(value) : null);
+      return;
+    }
+    this.#commandBuffer.setField(id, key, value);
+  }
+
+  /**
+   * Set one entry in a node's `attributes`: a directive's flat string map, or
+   * an MDX JSX element's attribute list. Directive values must be strings.
+   */
+  setAttribute(node: Readonly<MdastTarget>, name: string, value: unknown): void {
+    this.#commandBuffer.setAttribute(
+      requireNid(node as MdastNode, "setAttribute", this.#refs),
+      name,
+      value,
+    );
+  }
+
+  /** @deprecated MDAST has no property container; use `setField`. */
   setProperty<N extends MdastTarget, K extends keyof N & string>(
     node: Readonly<N>,
     key: K,
@@ -374,9 +418,7 @@ export class MdastVisitorContext {
   parent<N extends Exclude<MdastNode, MdastRoot>>(node: Readonly<N>): Readonly<MdastParents>;
   parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined;
   parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined {
-    const parentId = this.#resolver.parentIdOf(
-      requireNid(node as MdastNode, "parent", this.#refs),
-    );
+    const parentId = this.#resolver.parentIdOf(requireNid(node as MdastNode, "parent", this.#refs));
     if (parentId === undefined) return undefined;
     const byId = (this.#parentsById ??= new Map());
     let parent = byId.get(parentId);
@@ -765,7 +807,12 @@ function reusedId(node: unknown, refs: NodeRefs): number | undefined {
 
 /** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown, refs: NodeRefs): boolean {
+function emitMdastChildrenCommand(
+  buffer: CommandBuffer,
+  id: number,
+  children: unknown,
+  refs: NodeRefs,
+): boolean {
   if (!Array.isArray(children)) return false;
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(MDAST_ROOT);
@@ -800,7 +847,13 @@ function emitMdastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs
   return true;
 }
 
-function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean, refs: NodeRefs): boolean {
+function emitMdastOp(
+  w: OpWriter,
+  node: unknown,
+  isRoot: boolean,
+  forReplace: boolean,
+  refs: NodeRefs,
+): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
     const id = reusedId(node, refs);
@@ -1084,7 +1137,13 @@ export function visitMdastHandle(
       deferred ??= [];
       deferred.push({ nodeId, promise: result, originalNode: node });
     } else {
-      applyMdastVisitResult(result as MdastVisitorResult, nodeId, returnBuffer, resolver.refs, node);
+      applyMdastVisitResult(
+        result as MdastVisitorResult,
+        nodeId,
+        returnBuffer,
+        resolver.refs,
+        node,
+      );
     }
   }
 

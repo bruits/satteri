@@ -168,6 +168,38 @@ export interface HastVisitorContext {
   ): void;
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<HastNode>, index: number): void;
+  /**
+   * Replace one field on the node itself: `tagName` on an element, `name` on
+   * an MDX JSX element, `value` on a text-like node, plus `children` and
+   * `data` on any node. Renaming an element is a field write, so it goes here
+   * rather than through `setProperty`, which addresses `properties`.
+   */
+  setField<N extends HastNode, K extends keyof N & string>(
+    node: Readonly<N>,
+    key: K,
+    value: N[K],
+  ): void;
+  /** `children` is structural and every parent accepts it, so the key also
+   *  works on node-type unions (e.g. a node returned by `parent()`). */
+  setField(node: Readonly<HastNode>, key: "children", value: readonly HastContent[]): void;
+  /** `data` is an open per-node bag serialized to JSON on the wire, so it
+   *  accepts any record, not just the node's declared `data` shape. `null`
+   *  clears it. */
+  setField(node: Readonly<HastNode>, key: "data", value: Record<string, unknown> | null): void;
+  /**
+   * Set one entry in an MDX JSX element's `attributes`. Names are stored and
+   * emitted verbatim, so intrinsics take React prop names (`className`, not
+   * `class`) and components take whatever prop they declare.
+   */
+  setAttribute(node: Readonly<HastNode>, name: string, value: unknown): void;
+  /**
+   * Set one entry in a hast element's `properties`, using hast property names
+   * (`className`, `htmlFor`).
+   *
+   * Node fields (`tagName`, `value`, `children`, `data`) and MDX JSX
+   * attributes still resolve here for now, but those uses are deprecated: they
+   * belong to `setField` and `setAttribute` respectively.
+   */
   setProperty(node: Readonly<HastNode>, key: string, value: unknown): void;
   /** Collect the concatenated text of all descendant text nodes (like DOM textContent). */
   textContent(node: Readonly<HastNode>): string;
@@ -269,7 +301,12 @@ function hastReusedId(node: unknown, refs: NodeRefs): number | undefined {
 
 /** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown, refs: NodeRefs): boolean {
+function emitHastChildrenCommand(
+  buffer: CommandBuffer,
+  id: number,
+  children: unknown,
+  refs: NodeRefs,
+): boolean {
   if (!Array.isArray(children)) return false;
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
@@ -285,7 +322,13 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
  *  payload directly into the command buffer (no intermediate copy). HAST
  *  content is always a declarative node (no raw escape hatch), so it
  *  compiles or it's a hard error. */
-function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode, refs: NodeRefs): void {
+function emitHastTree(
+  buffer: CommandBuffer,
+  op: StructuralOp,
+  id: number,
+  node: HastNode,
+  refs: NodeRefs,
+): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
     emitHastOp(buffer, node, true, refs),
   );
@@ -418,7 +461,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
       // The last node carries the `replace` so refs back to the target still splice.
       let previous: HastContent | undefined;
       for (const n of newNode) {
-        if (previous !== undefined) emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
+        if (previous !== undefined)
+          emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
         previous = n;
       }
       if (previous === undefined) {
@@ -444,12 +488,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertBefore", this.#refs);
-    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
+    for (const n of asArray(newNode))
+      emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertAfter", this.#refs);
-    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
+    for (const n of asArray(newNode))
+      emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
   }
 
   wrapNode(
@@ -470,12 +516,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "prependChild", this.#refs);
-    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
+    for (const n of asArray(childNode))
+      emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "appendChild", this.#refs);
-    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
+    for (const n of asArray(childNode))
+      emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
@@ -514,38 +562,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
     }
 
     if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
-      // MDX JSX nodes carry `attributes`, not `properties`. If a replacement is
-      // already queued for this node, fold the attribute into it so the change
-      // survives the rebuild. This spreads the queued replacement object, not
-      // the matched node, so it never forces the matched node's children to
-      // materialize.
-      const pending = this.#pendingNodes.get(id) as
-        | MdxJsxFlowElementHast
-        | MdxJsxTextElementHast
-        | undefined;
-      if (pending !== undefined) {
-        const updated = { ...pending };
-        const attrs: MdxJsxAttributeUnion[] = [...(updated.attributes ?? [])];
-        const idx = attrs.findIndex((a) => a.type === "mdxJsxAttribute" && a.name === key);
-        if (idx !== -1) attrs.splice(idx, 1);
-        // Arrays space-join, matching the binary path's PROP_SPACE_SEP encoding
-        // (hast convention for list-valued properties like className).
-        const attrValue =
-          value === true || value === null || value === undefined
-            ? null
-            : typeof value === "string"
-              ? value
-              : Array.isArray(value)
-                ? value.join(" ")
-                : String(value);
-        attrs.push({ type: "mdxJsxAttribute", name: key, value: attrValue });
-        updated.attributes = attrs;
-        this.replaceNode(node, updated);
-        return;
-      }
-      // Binary attribute upsert in the arena's type_data — no child
-      // materialization. Rust maps the value-type to a boolean (true/null) or
-      // literal (string/number/false) attribute, mirroring the fold path above.
+      if (this.#foldPendingJsxAttribute(node, id, key, value)) return;
       this.#commandBuffer.setProperty(id, key, value);
       return;
     }
@@ -555,6 +572,55 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#commandBuffer.setProperty(id, key, value);
   }
 
+  setField(node: HastNode, key: string, value: unknown): void {
+    const id = requireNid(node, "setField", this.#refs);
+    if (key === "children") {
+      if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+        throw unencodableContentError(value);
+      }
+      return;
+    }
+    if (key === "data") {
+      this.#commandBuffer.setField(id, key, value != null ? JSON.stringify(value) : null);
+      return;
+    }
+    this.#commandBuffer.setField(id, key, value);
+  }
+
+  setAttribute(node: HastNode, name: string, value: unknown): void {
+    const id = requireNid(node, "setAttribute", this.#refs);
+    if (this.#foldPendingJsxAttribute(node, id, name, value)) return;
+    this.#commandBuffer.setAttribute(id, name, value);
+  }
+
+  /** A queued replacement would discard the attribute, so fold it in instead. */
+  #foldPendingJsxAttribute(node: HastNode, id: number, name: string, value: unknown): boolean {
+    if (node.type !== "mdxJsxFlowElement" && node.type !== "mdxJsxTextElement") return false;
+    const pending = this.#pendingNodes.get(id) as
+      | MdxJsxFlowElementHast
+      | MdxJsxTextElementHast
+      | undefined;
+    if (pending === undefined) return false;
+
+    const updated = { ...pending };
+    const attrs: MdxJsxAttributeUnion[] = [...(updated.attributes ?? [])];
+    const idx = attrs.findIndex((a) => a.type === "mdxJsxAttribute" && a.name === name);
+    if (idx !== -1) attrs.splice(idx, 1);
+    // Arrays space-join, matching the binary path's PROP_SPACE_SEP encoding.
+    const attrValue =
+      value === true || value === null || value === undefined
+        ? null
+        : typeof value === "string"
+          ? value
+          : Array.isArray(value)
+            ? value.join(" ")
+            : String(value);
+    attrs.push({ type: "mdxJsxAttribute", name, value: attrValue });
+    updated.attributes = attrs;
+    this.replaceNode(node, updated);
+    return true;
+  }
+
   textContent(node: HastNode): string {
     return textContentHandle(this.#handle, requireNid(node, "textContent", this.#refs));
   }
@@ -562,9 +628,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   parent<N extends Exclude<HastNode, HastRoot>>(node: Readonly<N>): Readonly<HastParents>;
   parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined;
   parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined {
-    const parentId = this.#resolver.parentIdOf(
-      requireNid(node as HastNode, "parent", this.#refs),
-    );
+    const parentId = this.#resolver.parentIdOf(requireNid(node as HastNode, "parent", this.#refs));
     if (parentId === undefined) return undefined;
     const byId = (this.#parentsById ??= new Map());
     let parent = byId.get(parentId);
@@ -1134,11 +1198,7 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
     return new HastReader(wire);
   }
 
-  protected override materializeNode(
-    reader: HastReader,
-    nodeId: number,
-    refs: NodeRefs,
-  ): HastNode {
+  protected override materializeNode(reader: HastReader, nodeId: number, refs: NodeRefs): HastNode {
     return materializeHastNode(reader, nodeId, true, refs);
   }
 
