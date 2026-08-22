@@ -21,13 +21,6 @@ export class PoolOffsets {
   #seek(byteOffset: number): number {
     const starts = this.#starts;
     const count = this.#count;
-    const hint = this.#hint;
-    if (
-      (hint === count || (starts[hint] ?? 0) >= byteOffset) &&
-      (hint === 0 || (starts[hint - 1] ?? 0) < byteOffset)
-    ) {
-      return hint;
-    }
     let lo = 0;
     let hi = count;
     while (lo < hi) {
@@ -39,21 +32,27 @@ export class PoolOffsets {
     return lo;
   }
 
-  #shiftAt(index: number): number {
-    return index === 0 ? 0 : (this.#shifts[index - 1] ?? 0);
-  }
-
   /** Both ends of a string ref sit on character boundaries, so the remap is exact. */
   slice(text: string, offset: number, len: number): string {
     const endByte = offset + len;
     if (endByte <= this.#first) return text.substring(offset, endByte);
-    const index = this.#seek(offset);
-    const shift = this.#shiftAt(index);
+    const starts = this.#starts;
+    const shifts = this.#shifts;
+    const count = this.#count;
+    const hint = this.#hint;
+    const index =
+      (hint === count || (starts[hint] ?? 0) >= offset) &&
+      (hint === 0 || (starts[hint - 1] ?? 0) < offset)
+        ? hint
+        : this.#seek(offset);
+    const shift = index === 0 ? 0 : (shifts[index - 1] ?? 0);
     const start = offset - shift;
     // A ref spanning no multibyte character shifts equally at both ends.
-    if (index === this.#count || (this.#starts[index] ?? 0) >= endByte) {
+    if (index === count || (starts[index] ?? 0) >= endByte) {
       return text.substring(start, endByte - shift);
     }
-    return text.substring(start, endByte - this.#shiftAt(this.#seek(endByte)));
+    const endIndex = this.#seek(endByte);
+    const endShift = endIndex === 0 ? 0 : (shifts[endIndex - 1] ?? 0);
+    return text.substring(start, endByte - endShift);
   }
 }
