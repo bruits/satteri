@@ -2,6 +2,9 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": ["crates/**", "packages/satteri/bench/fixtures/**"],
   "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"]
+    },
     "packages/satteri": {
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],
       "project": ["src/**/*.ts"],
