@@ -881,14 +881,47 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
         }
     }
     out.push_str("};\n\n");
-    out.push_str(DECODER_TS);
+    out.push_str(DECODER_PRELUDE_TS);
+    out.push_str(&walk_plain_string_fast_path_ts(layouts));
+    out.push_str(DECODER_BODY_TS);
     out.push_str(&stored_decoder_ts(layouts));
     out
 }
 
-/// The generic decoder is type-agnostic, so it is emitted verbatim — its only
-/// per-type input is `MDAST_LAYOUTS` above.
-const DECODER_TS: &str = r#"interface TailField {
+/// Single-`str32` layouts dominate walks; one named store skips the descriptor loop the unoptimized tiers pay for.
+fn walk_plain_string_fast_path_ts(layouts: &[Layout]) -> String {
+    let mut out = String::new();
+    for layout in layouts {
+        if !is_plain_string_layout(layout) {
+            continue;
+        }
+        let fields: Vec<&Field> = layout
+            .fields
+            .iter()
+            .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+            .collect();
+        let [field] = fields.as_slice() else {
+            continue;
+        };
+        if !matches!(field.wire, Wire::Str32) {
+            continue;
+        }
+        let cond = layout
+            .tags
+            .iter()
+            .map(|t| format!("nodeType === {t}"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        let js = field.js;
+        let _ = writeln!(out, "  if ({cond}) {{");
+        out.push_str("    const len = ru32(view, start);\n");
+        let _ = writeln!(out, "    node.{js} = rstr(buf, start + 4, len);");
+        out.push_str("    return true;\n  }\n");
+    }
+    out
+}
+
+const DECODER_PRELUDE_TS: &str = r#"interface TailField {
   readonly js: string;
   readonly kind: FieldKind;
   readonly phantom?: boolean;
@@ -918,7 +951,9 @@ export function decodeMdastTypeData(
   nodeType: number,
   node: Record<string, unknown>,
 ): boolean {
-  const fields = MDAST_LAYOUTS[nodeType];
+"#;
+
+const DECODER_BODY_TS: &str = r#"  const fields = MDAST_LAYOUTS[nodeType];
   if (fields !== undefined) {
     let pos = start;
     for (const f of fields) {

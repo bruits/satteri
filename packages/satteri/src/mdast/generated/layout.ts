@@ -186,6 +186,11 @@ export function decodeMdastTypeData(
   nodeType: number,
   node: Record<string, unknown>,
 ): boolean {
+  if (nodeType === 7 || nodeType === 10 || nodeType === 13 || nodeType === 25 || nodeType === 26) {
+    const len = ru32(view, start);
+    node.value = rstr(buf, start + 4, len);
+    return true;
+  }
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields !== undefined) {
     let pos = start;
