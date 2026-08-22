@@ -2021,7 +2021,10 @@ fn parse_inner(
     // source matters because entities and smart punctuation add multibyte to it.
     // Skip-positions mode skips too: downstream paths don't read utf16_offsets.
     if track_positions && !arena.string_pool.is_ascii() {
-        let mut utf16_offsets = Vec::with_capacity(arena.nodes.len());
+        // Taken, not allocated: `reset` keeps the capacity for a pooled refill.
+        let mut utf16_offsets = core::mem::take(&mut arena.utf16_offsets);
+        utf16_offsets.clear();
+        utf16_offsets.reserve(arena.nodes.len());
         for node in &arena.nodes {
             let pair = if node.start_line == 0 && node.start_offset == 0 {
                 (0u32, 0u32)

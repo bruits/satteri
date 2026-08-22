@@ -42,10 +42,12 @@ impl<K: ArenaKind> Arena<K> {
             .map(|(_, v)| 4 /* id */ + 4 /* len */ + v.len())
             .sum();
 
+        let pool_is_ascii = self.string_pool.is_ascii();
+
         // Built here because the JS reader would otherwise rescan the whole pool.
         let mut multibyte_starts: Vec<u32> = Vec::new();
         let mut multibyte_shifts: Vec<u32> = Vec::new();
-        if !self.string_pool.is_ascii() {
+        if !pool_is_ascii {
             let bytes = self.string_pool.as_bytes();
             let mut shift = 0u32;
             let mut i = 0;
@@ -126,7 +128,7 @@ impl<K: ArenaKind> Arena<K> {
             unsafe { std::slice::from_raw_parts(self.nodes.as_ptr() as *const u8, nodes_bytes) };
         let nodes_buf_start = buf.len();
         buf.extend_from_slice(nodes_slice);
-        if !self.string_pool.is_ascii() {
+        if !pool_is_ascii {
             const START_OFF_FIELD: usize = offset_of!(ArenaNode, start_offset);
             const END_OFF_FIELD: usize = offset_of!(ArenaNode, end_offset);
             let cached = self.utf16_offsets.len() == self.nodes.len();
