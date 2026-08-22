@@ -598,7 +598,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { applyCommandsAndCompileHandle, applyCommandsAndConvertToHastHandle, applyCommandsAndRenderHandle, applyCommandsToHandle, applyCommandsToMdastHandle, applyMdastCommandsAndConvertAndCompile, applyMdastCommandsAndConvertAndRender, compileHandle, compileMdx, convertMdastToHastHandle, createHastHandle, createHastHandleFromHtml, createHastHandleWithFrontmatter, createMdastHandle, createMdxHastHandle, createMdxHastHandleWithFrontmatter, createMdxMdastHandle, dropHandle, getHandleSource, getMdastFrontmatter, getNodeData, markdownToHtmlFast, markdownToJsFast, mdastTextContentHandle, mdxToJsFast, parseEsm, parseExpression, parseToHtml, renderHandle, serializeHandle, setNodeData, textContentHandle, walkHandle, walkMdastHandle } = nativeBinding
+const { applyCommandsAndCompileHandle, applyCommandsAndConvertToHastHandle, applyCommandsAndRenderHandle, applyCommandsToHandle, applyCommandsToMdastHandle, applyMdastCommandsAndConvertAndCompile, applyMdastCommandsAndConvertAndRender, compileHandle, compileMdx, convertMdastToHastHandle, createHastHandle, createHastHandleFromHtml, createHastHandleWithFrontmatter, createMdastHandle, createMdxHastHandle, createMdxHastHandleWithFrontmatter, createMdxMdastHandle, dropHandle, getHandleSource, getMdastFrontmatter, getNodeData, markdownToHastFast, markdownToHtmlFast, markdownToJsFast, markdownToMdastFast, mdastTextContentHandle, mdxToHastFast, mdxToJsFast, mdxToMdastFast, parseEsm, parseExpression, parseToHtml, renderHandle, serializeHandle, setNodeData, textContentHandle, walkHandle, walkMdastHandle } = nativeBinding
 export { applyCommandsAndCompileHandle }
 export { applyCommandsAndConvertToHastHandle }
 export { applyCommandsAndRenderHandle }
@@ -620,10 +620,14 @@ export { dropHandle }
 export { getHandleSource }
 export { getMdastFrontmatter }
 export { getNodeData }
+export { markdownToHastFast }
 export { markdownToHtmlFast }
 export { markdownToJsFast }
+export { markdownToMdastFast }
 export { mdastTextContentHandle }
+export { mdxToHastFast }
 export { mdxToJsFast }
+export { mdxToMdastFast }
 export { parseEsm }
 export { parseExpression }
 export { parseToHtml }

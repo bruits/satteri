@@ -2872,3 +2872,111 @@ describe("nodes kept from another compile", () => {
     expect(first?.type === "text" ? first.value : "").toBe("Kept paragraph text.");
   });
 });
+
+describe("plugins on the tree functions", () => {
+  const noopMdast = defineMdastPlugin({ name: "noop-mdast" });
+  const noopHast = defineHastPlugin({ name: "noop-hast" });
+  const source = "# Title\n\nsome *text*\n";
+
+  test("markdownToMdast runs mdast plugins", () => {
+    let seen = 0;
+    const counter = defineMdastPlugin({
+      name: "counter",
+      heading() {
+        seen++;
+      },
+    });
+    const tree = markdownToMdast(source, { mdastPlugins: [counter] });
+    expect(seen).toBe(1);
+    expect(tree.type).toBe("root");
+  });
+
+  test("markdownToHast runs hast plugins", () => {
+    const setId = defineHastPlugin({
+      name: "set-id",
+      element: { filter: ["h1"], visit: (node, ctx) => ctx.setProperty(node, "id", "intro") },
+    });
+    const tree = markdownToHast(source, { hastPlugins: [setId] });
+    if (tree.type !== "root") throw new Error("expected a root");
+    const first = tree.children[0];
+    expect(first?.type === "element" ? first.properties.id : undefined).toBe("intro");
+  });
+
+  test("markdownToHast runs mdast plugins before hast plugins", () => {
+    const order: string[] = [];
+    const tree = markdownToHast(source, {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "m",
+          heading() {
+            order.push("mdast");
+          },
+        }),
+      ],
+      hastPlugins: [
+        defineHastPlugin({
+          name: "h",
+          element: {
+            filter: [],
+            visit: () => {
+              order.push("hast");
+            },
+          },
+        }),
+      ],
+    });
+    expect(order[0]).toBe("mdast");
+    expect(order).toContain("hast");
+    expect(tree.type).toBe("root");
+  });
+
+  test("an async plugin makes the tree functions return a promise", async () => {
+    const data: Record<string, unknown> = {};
+    const slow = defineMdastPlugin({
+      name: "slow",
+      async heading(_node, ctx) {
+        await Promise.resolve();
+        ctx.data.ran = true;
+      },
+    });
+    const pending = markdownToMdast(source, { mdastPlugins: [slow], data });
+    expect(pending).toBeInstanceOf(Promise);
+    expect((await pending).type).toBe("root");
+    expect(data.ran).toBe(true);
+  });
+
+  test("the plugin-free fast path matches the plugin path", () => {
+    const options = { features: { gfm: true, math: true } } satisfies Parameters<
+      typeof markdownToMdast
+    >[1];
+    expect(markdownToMdast(source, options)).toEqual(
+      markdownToMdast(source, { ...options, mdastPlugins: [noopMdast] }),
+    );
+    expect(markdownToHast(source, options)).toEqual(
+      markdownToHast(source, { ...options, mdastPlugins: [noopMdast] }),
+    );
+    expect(markdownToHast(source, options)).toEqual(
+      markdownToHast(source, { ...options, hastPlugins: [noopHast] }),
+    );
+  });
+
+  test("the mdx tree functions take plugins too", () => {
+    let seen = 0;
+    const counter = defineMdastPlugin({
+      name: "mdx-counter",
+      heading() {
+        seen++;
+      },
+    });
+    expect(mdxToMdast("# x\n", { mdastPlugins: [counter] }).type).toBe("root");
+    expect(mdxToHast("# x\n", { mdastPlugins: [counter] }).type).toBe("root");
+    expect(seen).toBe(2);
+    expect(mdxToMdast("# x\n")).toEqual(mdxToMdast("# x\n", { mdastPlugins: [noopMdast] }));
+    expect(mdxToHast("# x\n")).toEqual(mdxToHast("# x\n", { mdastPlugins: [noopMdast] }));
+  });
+
+  test("position: false is honoured on the plugin path", () => {
+    const tree = markdownToMdast(source, { position: false, mdastPlugins: [noopMdast] });
+    expect(tree.position).toBeUndefined();
+  });
+});
