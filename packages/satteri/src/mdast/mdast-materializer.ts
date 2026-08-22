@@ -16,6 +16,9 @@ export const LEAF_TYPES: ReadonlySet<number> = new Set([
   9, 10, 13, 7, 8, 14, 3, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104,
 ]);
 
+const IS_LEAF = new Uint8Array(256);
+for (const t of LEAF_TYPES) IS_LEAF[t] = 1;
+
 /** A `custom` node is a leaf when it has a non-empty `value` and no children or
  *  `data.h*`. Leafness is per node there, not per type, so the read paths ask
  *  this instead of {@link LEAF_TYPES}.
@@ -60,27 +63,27 @@ function addTypeProperties(
   switch (nodeType) {
     case 5: {
       // list
-      const d = reader.getListData(nodeId);
       const n = node as { ordered: boolean; start: number | null; spread: boolean };
-      n.ordered = d.ordered;
-      n.start = d.ordered ? d.start : null;
-      n.spread = d.spread;
+      const ordered = reader.fieldU8(nodeId, 4, 0) !== 0;
+      n.ordered = ordered;
+      n.start = ordered ? reader.fieldU32(nodeId, 0, 0) : null;
+      n.spread = reader.fieldU8(nodeId, 5, 0) !== 0;
       break;
     }
 
     case 6: {
       // listItem
-      const d = reader.getListItemData(nodeId);
       const n = node as { spread: boolean; checked: boolean | null };
-      n.spread = d.spread;
-      n.checked = d.checked;
+      // checked: 0=unchecked, 1=checked, 2=not-a-task-item.
+      const checked = reader.fieldU8(nodeId, 0, 2);
+      n.spread = reader.fieldU8(nodeId, 1, 0) !== 0;
+      n.checked = checked === 2 ? null : checked === 1;
       break;
     }
 
     case 37: {
       // descriptionDetails
-      const d = reader.getDescriptionDetailsData(nodeId);
-      (node as { spread: boolean }).spread = d.spread;
+      (node as { spread: boolean }).spread = reader.fieldU8(nodeId, 0, 0) !== 0;
       break;
     }
 
@@ -122,8 +125,8 @@ const mdastMaterializer = createMaterializer<MdastReader, MdastNode>({
   typeNames: TYPE_NAMES,
   hasChildren: (nodeType, node, reader, nodeId) =>
     nodeType === MDAST_CUSTOM
-      ? !isCustomLeaf(node, reader.getChildIds(nodeId).length)
-      : !LEAF_TYPES.has(nodeType),
+      ? !isCustomLeaf(node, reader.getChildrenCount(nodeId))
+      : IS_LEAF[nodeType] === 0,
   populate: addTypeProperties,
 });
 

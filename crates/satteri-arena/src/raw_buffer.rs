@@ -19,7 +19,6 @@ use std::mem::offset_of;
 use crate::arena::Arena;
 use crate::generated::layout::header;
 use crate::kind::ArenaKind;
-use crate::line_index::LineIndex;
 use crate::node::{ArenaNode, NODE_STRUCT_SIZE};
 
 pub(crate) const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
@@ -43,6 +42,45 @@ impl<K: ArenaKind> Arena<K> {
             .map(|(_, v)| 4 /* id */ + 4 /* len */ + v.len())
             .sum();
 
+        let pool_is_ascii = self.string_pool.is_ascii();
+
+        // Backs every byte-to-UTF-16 conversion below without a `LineIndex` rebuild.
+        let mut multibyte_starts: Vec<u32> = Vec::new();
+        let mut multibyte_shifts: Vec<u32> = Vec::new();
+        if !pool_is_ascii {
+            let bytes = self.string_pool.as_bytes();
+            let mut shift = 0u32;
+            let mut i = 0;
+            while i < bytes.len() {
+                // Pools are overwhelmingly ASCII; striding beats decoding each char.
+                while i + 8 <= bytes.len() {
+                    let chunk = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+                    if chunk & 0x8080_8080_8080_8080 != 0 {
+                        break;
+                    }
+                    i += 8;
+                }
+                if i >= bytes.len() {
+                    break;
+                }
+                let lead = bytes[i];
+                if lead < 0x80 {
+                    i += 1;
+                    continue;
+                }
+                let (utf8_len, utf16_len) = if lead < 0xe0 {
+                    (2, 1)
+                } else if lead < 0xf0 {
+                    (3, 1)
+                } else {
+                    (4, 2)
+                };
+                multibyte_starts.push(i as u32);
+                shift += utf8_len - utf16_len;
+                multibyte_shifts.push(shift);
+                i += utf8_len as usize;
+            }
+        }
         let nodes_offset = header::SIZE as u32;
         let children_offset = nodes_offset + nodes_bytes as u32;
         let type_data_offset = children_offset + children_bytes as u32;
@@ -51,6 +89,17 @@ impl<K: ArenaKind> Arena<K> {
 
         let total = node_data_offset as usize + node_data_section_bytes;
         let mut buf = Vec::with_capacity(total);
+
+        // The wire carries only UTF-16 units, so JS never needs a byte remap of its own.
+        let to_utf16 = |byte_offset: u32| -> u32 {
+            let seen = multibyte_starts.partition_point(|&start| start < byte_offset);
+            byte_offset
+                - if seen == 0 {
+                    0
+                } else {
+                    multibyte_shifts[seen - 1]
+                }
+        };
 
         // Header fields (little-endian u32s) at the generated layout offsets,
         // so the JS readers' generated `HEADER` table reads the same bytes.
@@ -81,7 +130,7 @@ impl<K: ArenaKind> Arena<K> {
             unsafe { std::slice::from_raw_parts(self.nodes.as_ptr() as *const u8, nodes_bytes) };
         let nodes_buf_start = buf.len();
         buf.extend_from_slice(nodes_slice);
-        if !self.string_pool.is_ascii() {
+        if !pool_is_ascii {
             const START_OFF_FIELD: usize = offset_of!(ArenaNode, start_offset);
             const END_OFF_FIELD: usize = offset_of!(ArenaNode, end_offset);
             let cached = self.utf16_offsets.len() == self.nodes.len();
@@ -101,25 +150,15 @@ impl<K: ArenaKind> Arena<K> {
                         .copy_from_slice(&utf16_end.to_le_bytes());
                 }
             } else {
-                // Fallback: no precomputed cache (e.g. arena assembled
-                // outside `arena_build`, or after plugin mutation). Build
-                // a one-shot LineIndex and convert per node.
-                let line_index = LineIndex::from_source(&self.string_pool);
-                let mut cursor = line_index.cursor();
                 for (i, node) in self.nodes.iter().enumerate() {
-                    // A zero start line marks a synthesized node with no source
-                    // range (lines are 1-based), even when a patch splice left it a
-                    // non-zero spliced offset — nothing to convert.
                     if node.start_line == 0 {
                         continue;
                     }
-                    let utf16_start = cursor.byte_to_utf16_offset(node.start_offset);
-                    let utf16_end = cursor.byte_to_utf16_offset(node.end_offset);
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
                     buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                        .copy_from_slice(&utf16_start.to_le_bytes());
+                        .copy_from_slice(&to_utf16(node.start_offset).to_le_bytes());
                     buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                        .copy_from_slice(&utf16_end.to_le_bytes());
+                        .copy_from_slice(&to_utf16(node.end_offset).to_le_bytes());
                 }
             }
         }
@@ -134,7 +173,24 @@ impl<K: ArenaKind> Arena<K> {
         };
         buf.extend_from_slice(children_slice);
 
-        buf.extend_from_slice(&self.type_data);
+        if !pool_is_ascii {
+            let type_data_start = buf.len();
+            buf.extend_from_slice(&self.type_data);
+            let type_data = &mut buf[type_data_start..];
+            let mut remap = to_utf16;
+            // A patch rebuild can leave several nodes sharing one blob; remap it exactly once.
+            let mut seen_blobs = rustc_hash::FxHashSet::default();
+            for node in &self.nodes {
+                if node.data_len == 0 || !seen_blobs.insert(node.data_offset) {
+                    continue;
+                }
+                let start = node.data_offset as usize;
+                let end = start + node.data_len as usize;
+                K::remap_string_refs(node.node_type, &mut type_data[start..end], &mut remap);
+            }
+        } else {
+            buf.extend_from_slice(&self.type_data);
+        }
         buf.extend_from_slice(self.string_pool.as_bytes());
 
         // node_data entries: [id:u32][len:u32][bytes...]

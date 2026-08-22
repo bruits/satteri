@@ -186,6 +186,11 @@ export function decodeMdastTypeData(
   nodeType: number,
   node: Record<string, unknown>,
 ): boolean {
+  if (nodeType === 7 || nodeType === 10 || nodeType === 13 || nodeType === 25 || nodeType === 26) {
+    const len = ru32(view, start);
+    node.value = rstr(buf, start + 4, len);
+    return true;
+  }
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields !== undefined) {
     let pos = start;
@@ -275,11 +280,12 @@ export function decodeMdastTypeData(
 
   return false;
 }
+const MDAST_ENUM_0 = ["shortcut", "collapsed", "full"] as const;
 
 /**
  * Attach a node's fixed `type_data` fields, materialized from the arena
- * snapshot, driven by `MDAST_LAYOUTS`. Returns `false` for tags with no entry,
- * so the materializer falls through to its hand-written cases (list, table,
+ * snapshot. Returns `false` for tags with no fixed layout, so the
+ * materializer falls through to its hand-written cases (list, table,
  * directives, MDX JSX). Fields are eager plain stores.
  */
 export function materializeMdastFields(
@@ -288,23 +294,85 @@ export function materializeMdastFields(
   nodeId: number,
   nodeType: number,
 ): boolean {
-  const fields = MDAST_LAYOUTS[nodeType];
-  if (fields === undefined) return false;
-  const out = node as Record<string, unknown>;
-  for (const f of fields) {
-    if (f.skip) continue;
-    if (f.kind === "u8") {
-      // Short type_data falls back to the layout's declared default,
-      // matching the Rust walk serializer.
-      const b = reader.fieldU8(nodeId, f.offset, f.default ?? 0);
-      out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
-    } else {
-      // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
-      // reads as empty, mirroring the Rust decoders' bounds checks.
-      const raw = reader.fieldString(nodeId, f.offset);
-      const s = f.nullable && raw === "" ? null : raw;
-      out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;
+  const n = node as Record<string, unknown>;
+  switch (nodeType) {
+    case 7:
+    case 10:
+    case 13:
+    case 25:
+    case 26:
+      n.value = reader.fieldString(nodeId, 0);
+      return true;
+    case 2:
+      n.depth = reader.fieldU8(nodeId, 0, 1);
+      return true;
+    case 8: {
+      const s0 = reader.fieldString(nodeId, 0);
+      n.lang = s0 === "" ? null : s0;
+      const s1 = reader.fieldString(nodeId, 8);
+      n.meta = s1 === "" ? null : s1;
+      n.value = reader.fieldString(nodeId, 16);
+      return true;
     }
+    case 9: {
+      n.url = reader.fieldString(nodeId, 0);
+      const s1 = reader.fieldString(nodeId, 8);
+      n.title = s1 === "" ? null : s1;
+      n.identifier = reader.fieldString(nodeId, 16);
+      n.label = reader.fieldString(nodeId, 24);
+      return true;
+    }
+    case 15: {
+      n.url = reader.fieldString(nodeId, 0);
+      const s1 = reader.fieldString(nodeId, 8);
+      n.title = s1 === "" ? null : s1;
+      return true;
+    }
+    case 16: {
+      n.url = reader.fieldString(nodeId, 0);
+      n.alt = reader.fieldString(nodeId, 8);
+      const s2 = reader.fieldString(nodeId, 16);
+      n.title = s2 === "" ? null : s2;
+      return true;
+    }
+    case 17:
+      n.identifier = reader.fieldString(nodeId, 0);
+      n.label = reader.fieldString(nodeId, 8);
+      n.referenceType = MDAST_ENUM_0[reader.fieldU8(nodeId, 16, 0)] ?? MDAST_ENUM_0[0];
+      return true;
+    case 18:
+      n.identifier = reader.fieldString(nodeId, 0);
+      n.label = reader.fieldString(nodeId, 8);
+      n.referenceType = MDAST_ENUM_0[reader.fieldU8(nodeId, 16, 0)] ?? MDAST_ENUM_0[0];
+      n.alt = reader.fieldString(nodeId, 20);
+      return true;
+    case 19:
+      n.identifier = reader.fieldString(nodeId, 0);
+      n.label = reader.fieldString(nodeId, 8);
+      return true;
+    case 20:
+      n.identifier = reader.fieldString(nodeId, 0);
+      n.label = reader.fieldString(nodeId, 8);
+      return true;
+    case 27: {
+      const s0 = reader.fieldString(nodeId, 0);
+      n.meta = s0 === "" ? null : s0;
+      n.value = reader.fieldString(nodeId, 8);
+      return true;
+    }
+    case 28:
+      n.value = reader.fieldString(nodeId, 8);
+      return true;
+    case 38:
+      n.name = reader.fieldString(nodeId, 0);
+      n.value = reader.fieldString(nodeId, 8);
+      return true;
+    case 102:
+    case 103:
+    case 104:
+      n.value = restorePhantomSpaces(reader.fieldString(nodeId, 0));
+      return true;
+    default:
+      return false;
   }
-  return true;
 }

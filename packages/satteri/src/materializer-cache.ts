@@ -12,8 +12,12 @@ import type { NodeRefs } from "./visitor-shared.js";
 export interface MaterializerReader {
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
+  getChildrenStart(nodeId: number): number;
+  getChildrenCount(nodeId: number): number;
+  childIdAt(childrenStart: number, index: number): number;
   getPosition(nodeId: number): Position | undefined;
   getNodeData(nodeId: number): string | null;
+  hasNodeData(): boolean;
 }
 
 /** Node memo + shared lazy `children` descriptor; the memo keeps one object per `(reader, id)` so identity-based plugin dedup works across access paths. */
@@ -119,7 +123,11 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     };
   }
 
-  function readerCache(reader: TReader, frozen: boolean, refs: NodeRefs | undefined): ReaderCache<TNode> {
+  function readerCache(
+    reader: TReader,
+    frozen: boolean,
+    refs: NodeRefs | undefined,
+  ): ReaderCache<TNode> {
     let cache = readerCaches.get(reader);
     if (cache === undefined) {
       cache = {
@@ -144,6 +152,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     nodeId: number,
     nodeType: number,
     eager = false,
+    hasNodeData = true,
   ): TNode {
     const typeName = spec.typeNames[nodeType] ?? `unknown(${nodeType})`;
 
@@ -169,7 +178,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
 
     // Plugins can set `data` on any node type, so rehydrate generically
     // (see website/content/docs/divergences.md for the code-block case).
-    const rawData = reader.getNodeData(nodeId);
+    const rawData = hasNodeData ? reader.getNodeData(nodeId) : null;
     if (rawData !== null) {
       try {
         const parsed = JSON.parse(rawData) as Record<string, unknown>;
@@ -221,23 +230,27 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
    * parent's array as it is built rather than in a second pass.
    */
   function fillTree(reader: TReader, cache: ReaderCache<TNode>, rootId: number): TNode {
+    const hasNodeData = reader.hasNodeData();
     const rootType = reader.getNodeType(rootId);
-    const root = buildNode(reader, cache, rootId, rootType, true);
+    const root = buildNode(reader, cache, rootId, rootType, true, hasNodeData);
     if (!spec.hasChildren(rootType, root, reader, rootId)) return root;
 
     const parents: TNode[] = [root];
     const parentIds: number[] = [rootId];
+    let tail = 1;
     for (let p = 0; p < parentIds.length; p++) {
       const parent = parents[p];
       const parentId = parentIds[p];
-      if (parent === undefined || parentId === undefined) continue;
-      const ids = reader.getChildIds(parentId);
-      const kids = new Array<TNode>(ids.length);
-      for (let i = 0; i < ids.length; i++) {
-        const childId = ids[i];
-        if (childId === undefined) continue;
+      if (parent === undefined || parentId === undefined) {
+        throw new Error(`${spec.label}: parent queue hole at ${p}`);
+      }
+      const childrenStart = reader.getChildrenStart(parentId);
+      const count = reader.getChildrenCount(parentId);
+      const kids = new Array<TNode>(count);
+      for (let i = 0; i < count; i++) {
+        const childId = reader.childIdAt(childrenStart, i);
         const childType = reader.getNodeType(childId);
-        const child = buildNode(reader, cache, childId, childType, true);
+        const child = buildNode(reader, cache, childId, childType, true, hasNodeData);
         kids[i] = child;
         if (spec.hasChildren(childType, child, reader, childId)) {
           parents.push(child);

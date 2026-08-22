@@ -2016,12 +2016,15 @@ fn parse_inner(
 
     // Precompute per-node UTF-16 offsets so `to_raw_buffer` skips a
     // second `LineIndex` build + per-node `byte_to_utf16_offset` lookup.
-    // ASCII sources skip: UTF-16 offsets equal byte offsets and downstream
-    // serializers won't touch the cache. The cursor is already warm from the
-    // arena walk.
+    // An ASCII pool skips: UTF-16 offsets equal byte offsets and downstream
+    // serializers won't touch the cache. Gating on the pool rather than the
+    // source matters because entities and smart punctuation add multibyte to it.
     // Skip-positions mode skips too: downstream paths don't read utf16_offsets.
-    if track_positions && !source.is_ascii() {
-        let mut utf16_offsets = Vec::with_capacity(arena.nodes.len());
+    if track_positions && !arena.string_pool.is_ascii() {
+        // Taken, not allocated: `reset` keeps the capacity for a pooled refill.
+        let mut utf16_offsets = core::mem::take(&mut arena.utf16_offsets);
+        utf16_offsets.clear();
+        utf16_offsets.reserve(arena.nodes.len());
         for node in &arena.nodes {
             let pair = if node.start_line == 0 && node.start_offset == 0 {
                 (0u32, 0u32)

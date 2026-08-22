@@ -126,7 +126,9 @@ export function buildTestBuffer({
 //   Paragraph (id=2, children=[4], parent=0)
 //   Text "Hello" (id=3, parent=1, StringRef offset=2 len=5)
 //   Text "World" (id=4, parent=2, StringRef offset=9 len=5)
-// typeData: [1] (HeadingData.depth) then [2,0,0,0, 5,0,0,0] (StringRef Hello) then [9,0,0,0, 5,0,0,0] (StringRef World)
+// typeData blob starts are 4-byte aligned, matching the writer invariant:
+// [1, pad×3] (HeadingData.depth) then [2,0,0,0, 5,0,0,0] (StringRef Hello)
+// then [9,0,0,0, 5,0,0,0] (StringRef World)
 // children array: [1, 2, 3, 4]
 
 export function buildHelloWorldBuffer(): ArrayBuffer {
@@ -134,6 +136,9 @@ export function buildHelloWorldBuffer(): ArrayBuffer {
 
   const typeData = new Uint8Array([
     1, // HeadingData.depth = 1
+    0,
+    0,
+    0,
     2,
     0,
     0,
@@ -212,7 +217,7 @@ export function buildHelloWorldBuffer(): ArrayBuffer {
         endColumn: 8,
         childrenStart: 0,
         childrenCount: 0,
-        dataOffset: 1,
+        dataOffset: 4,
         dataLen: 8,
       },
       {
@@ -227,7 +232,7 @@ export function buildHelloWorldBuffer(): ArrayBuffer {
         endColumn: 6,
         childrenStart: 0,
         childrenCount: 0,
-        dataOffset: 9,
+        dataOffset: 12,
         dataLen: 8,
       },
     ],

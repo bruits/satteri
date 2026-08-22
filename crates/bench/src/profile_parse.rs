@@ -49,6 +49,34 @@ fn main() {
                 satteri_mdxjs::compile(src, &opts, satteri_pulldown_cmark::MDX_OPTIONS).unwrap();
             std::hint::black_box(out);
         }),
+        "stage-noop" => (md_src, |src, _opts| {
+            std::hint::black_box(src.len());
+        }),
+        "stage-parse" => (md_src, |src, opts| {
+            std::hint::black_box(satteri_pulldown_cmark::parse(src, opts));
+        }),
+        "stage-convert" => (md_src, |src, opts| {
+            let (arena, _) = satteri_pulldown_cmark::parse(src, opts);
+            std::hint::black_box(satteri_ast::hast::mdast_arena_to_hast_arena(&arena));
+        }),
+        "stage-render" => (md_src, |src, opts| {
+            let (arena, _) = satteri_pulldown_cmark::parse(src, opts);
+            let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&arena);
+            std::hint::black_box(satteri_ast::hast::hast_arena_to_html(&hast));
+        }),
+        "stage-fused" => (md_src, |src, opts| {
+            let (arena, _) = satteri_pulldown_cmark::parse(src, opts);
+            std::hint::black_box(satteri_ast::mdast_to_html(&arena));
+        }),
+        "stage-wire-mdast" => (md_src, |src, opts| {
+            let (arena, _) = satteri_pulldown_cmark::parse(src, opts);
+            std::hint::black_box(arena.to_raw_buffer());
+        }),
+        "stage-wire-hast" => (md_src, |src, opts| {
+            let (arena, _) = satteri_pulldown_cmark::parse(src, opts);
+            let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&arena);
+            std::hint::black_box(hast.to_raw_buffer());
+        }),
         "apply" => (md_src, |src, opts| {
             let (mdast, _) = satteri_pulldown_cmark::parse(src, opts);
             let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
