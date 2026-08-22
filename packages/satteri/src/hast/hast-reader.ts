@@ -1,7 +1,6 @@
 import type { BufferHeader } from "../types.js";
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "../mdx-types.js";
 import { restorePhantomSpaces } from "../phantom.js";
-import { readPosition } from "../wire-read.js";
 import type { Position } from "unist";
 import {
   MDX_ATTR_BOOLEAN_PROP,
@@ -32,22 +31,47 @@ export interface HastProperty {
   value: string | number | boolean | (string | number)[];
 }
 
+const W_PARENT = FIELD.parent >> 2;
+const W_START_OFFSET = FIELD.start_offset >> 2;
+const W_CHILDREN_START = FIELD.children_start >> 2;
+const W_CHILDREN_COUNT = FIELD.children_count >> 2;
+const W_DATA_OFFSET = FIELD.data_offset >> 2;
+const W_DATA_LEN = FIELD.data_len >> 2;
+
 export class HastReader {
   readonly #view: DataView;
   readonly #header: BufferHeader;
   readonly #textDecoder: TextDecoder;
+  // Typed-array views over the aligned LE wire: DataView getters cost far more in unoptimized V8 tiers.
+  readonly #u8: Uint8Array;
+  readonly #u32: Uint32Array;
+  readonly #nodesB: number;
+  readonly #nodesW: number;
+  readonly #strideB: number;
+  readonly #strideW: number;
+  readonly #childrenW: number;
+  readonly #typeDataB: number;
+  readonly #nodeDataCount: number;
   #stringPoolCache: string | null = null;
-  #poolChecked = false;
   #poolOffsets: PoolOffsets | null = null;
 
   constructor(buffer: ArrayBuffer | Uint8Array) {
-    if (buffer instanceof Uint8Array) {
-      this.#view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    } else {
-      this.#view = new DataView(buffer);
-    }
+    let u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    // A u32 view needs a 4-byte-aligned base, which a foreign slice may not have.
+    if ((u8.byteOffset & 3) !== 0) u8 = u8.slice();
+    this.#u8 = u8;
+    this.#view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    this.#u32 = new Uint32Array(u8.buffer, u8.byteOffset, u8.byteLength >> 2);
     this.#textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
-    this.#header = this.#readHeader();
+    const header = this.#readHeader();
+    this.#header = header;
+    this.#nodesB = header.nodesOffset;
+    this.#nodesW = header.nodesOffset >> 2;
+    this.#strideB = header.nodeStructSize;
+    this.#strideW = header.nodeStructSize >> 2;
+    this.#childrenW = header.childrenOffset >> 2;
+    this.#typeDataB = header.typeDataOffset;
+    this.#nodeDataCount = header.nodeDataCount;
   }
 
   #readHeader(): BufferHeader {
@@ -89,17 +113,17 @@ export class HastReader {
    * data-heavy tree stays O(nodes) rather than O(nodes × entries).
    */
   getNodeData(nodeId: number): string | null {
-    if (this.#header.nodeDataCount === 0) return null;
+    if (this.#nodeDataCount === 0) return null;
     if (this.#nodeDataTable === null) {
       this.#nodeDataTable = new Map();
       const v = this.#view;
       let pos = this.#header.nodeDataOffset;
-      for (let i = 0; i < this.#header.nodeDataCount; i++) {
+      for (let i = 0; i < this.#nodeDataCount; i++) {
         const id = v.getUint32(pos, true);
         pos += 4;
         const len = v.getUint32(pos, true);
         pos += 4;
-        const slice = new Uint8Array(this.#view.buffer, this.#view.byteOffset + pos, len);
+        const slice = this.#u8.subarray(pos, pos + len);
         this.#nodeDataTable.set(id, this.#textDecoder.decode(slice));
         pos += len;
       }
@@ -117,33 +141,29 @@ export class HastReader {
   /** The full string pool (original input + interning heap). Not the document
    * source as written; for that, read `ctx.source` from a plugin. */
   getStringPool(): string {
-    if (this.#stringPoolCache === null) {
-      const { stringPoolOffset, stringPoolLen } = this.#header;
-      const bytes = new Uint8Array(
-        this.#view.buffer,
-        this.#view.byteOffset + stringPoolOffset,
-        stringPoolLen,
+    return this.#stringPoolCache ?? this.#initPool();
+  }
+
+  #initPool(): string {
+    const { stringPoolOffset, stringPoolLen, multibyteCount, multibyteOffset } = this.#header;
+    const pool = this.#textDecoder.decode(
+      this.#u8.subarray(stringPoolOffset, stringPoolOffset + stringPoolLen),
+    );
+    this.#stringPoolCache = pool;
+    if (multibyteCount > 0) {
+      const base = this.#u8.byteOffset + multibyteOffset;
+      this.#poolOffsets = new PoolOffsets(
+        new Uint32Array(this.#u8.buffer, base, multibyteCount),
+        new Uint32Array(this.#u8.buffer, base + multibyteCount * 4, multibyteCount),
       );
-      this.#stringPoolCache = this.#textDecoder.decode(bytes);
     }
-    return this.#stringPoolCache;
+    return pool;
   }
 
   /** Read a substring from the string pool by byte offset and length. */
   getString(offset: number, len: number): string {
     if (len === 0) return "";
-    const pool = this.getStringPool();
-    if (!this.#poolChecked) {
-      this.#poolChecked = true;
-      const { multibyteCount, multibyteOffset } = this.#header;
-      if (multibyteCount > 0) {
-        const base = this.#view.byteOffset + multibyteOffset;
-        this.#poolOffsets = new PoolOffsets(
-          new Uint32Array(this.#view.buffer, base, multibyteCount),
-          new Uint32Array(this.#view.buffer, base + multibyteCount * 4, multibyteCount),
-        );
-      }
-    }
+    const pool = this.#stringPoolCache ?? this.#initPool();
     // An all-ASCII pool has byte offsets equal to its UTF-16 indices.
     const offsets = this.#poolOffsets;
     return offsets === null
@@ -151,113 +171,101 @@ export class HastReader {
       : offsets.slice(pool, offset, len);
   }
 
-  /** Get position data for a node. */
+  /** A zero start line marks a synthesized node with no source range (unist
+   *  lines are 1-based), surfaced as `undefined`. */
   getPosition(nodeId: number): Position | undefined {
-    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
-    return readPosition(this.#view, base + FIELD.start_offset);
+    const u32 = this.#u32;
+    const b = this.#nodesW + nodeId * this.#strideW + W_START_OFFSET;
+    const startLine = u32[b + 2] ?? 0;
+    if (startLine === 0) return undefined;
+    return {
+      start: { offset: u32[b] ?? 0, line: startLine, column: u32[b + 3] ?? 0 },
+      end: { offset: u32[b + 1] ?? 0, line: u32[b + 4] ?? 0, column: u32[b + 5] ?? 0 },
+    };
   }
 
   /** Get the node_type byte for a given node ID. */
   getNodeType(nodeId: number): number {
-    const { nodesOffset, nodeStructSize } = this.#header;
-    return this.#view.getUint8(nodesOffset + nodeId * nodeStructSize + FIELD.node_type);
+    return this.#u8[this.#nodesB + nodeId * this.#strideB + FIELD.node_type] ?? 0;
   }
 
   /** Get the parent id for a given node (0xffffffff at the root). */
   getParentId(nodeId: number): number {
-    const { nodesOffset, nodeStructSize } = this.#header;
-    return this.#view.getUint32(nodesOffset + nodeId * nodeStructSize + FIELD.parent, true);
+    return this.#u32[this.#nodesW + nodeId * this.#strideW + W_PARENT] ?? 0;
   }
 
-  /** Get child node IDs for a given node. */
   getChildrenStart(nodeId: number): number {
-    const { nodesOffset, nodeStructSize } = this.#header;
-    return this.#view.getUint32(nodesOffset + nodeId * nodeStructSize + FIELD.children_start, true);
+    return this.#u32[this.#nodesW + nodeId * this.#strideW + W_CHILDREN_START] ?? 0;
   }
 
   getChildrenCount(nodeId: number): number {
-    const { nodesOffset, nodeStructSize } = this.#header;
-    return this.#view.getUint32(nodesOffset + nodeId * nodeStructSize + FIELD.children_count, true);
+    return this.#u32[this.#nodesW + nodeId * this.#strideW + W_CHILDREN_COUNT] ?? 0;
   }
 
   /** Indexed off a `getChildrenStart` result so a walk reads the node struct once. */
   childIdAt(childrenStart: number, index: number): number {
-    return this.#view.getUint32(this.#header.childrenOffset + (childrenStart + index) * 4, true);
+    return this.#u32[this.#childrenW + childrenStart + index] ?? 0;
   }
 
   getChildIds(nodeId: number): number[] {
-    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
-    const v = this.#view;
-    const childrenStart = v.getUint32(base + FIELD.children_start, true);
-    const childrenCount = v.getUint32(base + FIELD.children_count, true);
+    const u32 = this.#u32;
+    const w = this.#nodesW + nodeId * this.#strideW;
+    const childrenStart = u32[w + W_CHILDREN_START] ?? 0;
+    const childrenCount = u32[w + W_CHILDREN_COUNT] ?? 0;
     if (childrenCount === 0) return [];
-    const { childrenOffset } = this.#header;
+    const base = this.#childrenW + childrenStart;
     const ids: number[] = [];
     for (let i = 0; i < childrenCount; i++) {
-      ids.push(v.getUint32(childrenOffset + (childrenStart + i) * 4, true));
+      ids.push(u32[base + i] ?? 0);
     }
     return ids;
   }
 
   /** Push child node IDs directly onto a stack array (reverse order for depth-first). */
   pushChildIds(nodeId: number, stack: number[]): void {
-    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
-    const v = this.#view;
-    const childrenStart = v.getUint32(base + FIELD.children_start, true);
-    const childrenCount = v.getUint32(base + FIELD.children_count, true);
-    if (childrenCount === 0) return;
-    const { childrenOffset } = this.#header;
+    const u32 = this.#u32;
+    const w = this.#nodesW + nodeId * this.#strideW;
+    const childrenStart = u32[w + W_CHILDREN_START] ?? 0;
+    const childrenCount = u32[w + W_CHILDREN_COUNT] ?? 0;
+    const base = this.#childrenW + childrenStart;
     for (let i = childrenCount - 1; i >= 0; i--) {
-      stack.push(v.getUint32(childrenOffset + (childrenStart + i) * 4, true));
+      stack.push(u32[base + i] ?? 0);
     }
   }
 
   /** Get the raw type_data bytes for a node. */
   getTypeData(nodeId: number): Uint8Array {
-    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
-    const v = this.#view;
-    const dataOffset = v.getUint32(base + FIELD.data_offset, true);
-    const dataLen = v.getUint32(base + FIELD.data_len, true);
+    const u32 = this.#u32;
+    const w = this.#nodesW + nodeId * this.#strideW;
+    const dataOffset = u32[w + W_DATA_OFFSET] ?? 0;
+    const dataLen = u32[w + W_DATA_LEN] ?? 0;
     if (dataLen === 0) return new Uint8Array(0);
-    return new Uint8Array(
-      this.#view.buffer,
-      this.#view.byteOffset + this.#header.typeDataOffset + dataOffset,
-      dataLen,
-    );
+    const start = this.#typeDataB + dataOffset;
+    return this.#u8.subarray(start, start + dataLen);
   }
 
-  /** Read a StringRef (offset: u32 LE, len: u32 LE) from a byte array at byteOffset. */
-  #readStringRef(data: Uint8Array, byteOffset: number): { offset: number; len: number } {
-    const at = data.byteOffset - this.#view.byteOffset + byteOffset;
-    return {
-      offset: this.#view.getUint32(at, true),
-      len: this.#view.getUint32(at + 4, true),
-    };
+  /** Byte position of a node's `type_data`, relative to this reader's view, or
+   *  `-1` when the node stores fewer than `min` bytes. */
+  #typeDataAt(nodeId: number, min: number): number {
+    const u32 = this.#u32;
+    const w = this.#nodesW + nodeId * this.#strideW;
+    if ((u32[w + W_DATA_LEN] ?? 0) < min) return -1;
+    return this.#typeDataB + (u32[w + W_DATA_OFFSET] ?? 0);
   }
 
-  /**
-   * Get element data for a HAST_ELEMENT node.
+  #stringAt(at: number): string {
+    const w = at >> 2;
+    return this.getString(this.#u32[w] ?? 0, this.#u32[w + 1] ?? 0);
+  }
+
+  /** @internal Both element fields in one pass; the per-field accessors below
+   *  each re-resolve the node's `type_data` position.
    *
    * Element type_data layout:
    *   [tag_name: StringRef(8B)][prop_count: u32(4B)][_pad: u32(4B)] = 16-byte header
    *   then prop_count * 20 bytes:
    *     [name: StringRef(8B)][value_type: u8(1B)][_pad: [u8;3](3B)][value: StringRef(8B)]
    */
-  /** Byte position of a node's `type_data`, relative to this reader's view, or
-   *  `-1` when the node stores fewer than `min` bytes. */
-  #typeDataAt(nodeId: number, min: number): number {
-    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
-    const v = this.#view;
-    if (v.getUint32(base + FIELD.data_len, true) < min) return -1;
-    return this.#header.typeDataOffset + v.getUint32(base + FIELD.data_offset, true);
-  }
-
-  #stringAt(at: number): string {
-    return this.getString(this.#view.getUint32(at, true), this.#view.getUint32(at + 4, true));
-  }
-
-  /** @internal Both element fields in one pass; the per-field accessors below
-   *  each re-resolve the node's `type_data` position. */
   readElementInto(
     nodeId: number,
     node: { tagName: string; properties: Record<string, HastProperty["value"]> },
@@ -268,15 +276,17 @@ export class HastReader {
       node.properties = {};
       return;
     }
-    const v = this.#view;
-    node.tagName = this.#stringAt(at);
-    const count = v.getUint32(at + 8, true);
+    const u32 = this.#u32;
+    const u8 = this.#u8;
+    const w = at >> 2;
+    node.tagName = this.getString(u32[w] ?? 0, u32[w + 1] ?? 0);
+    const count = u32[w + 2] ?? 0;
     const properties: Record<string, HastProperty["value"]> = {};
     for (let i = 0; i < count; i++) {
-      const base = at + 16 + i * 20;
-      properties[this.#stringAt(base)] = decodeElementProp(
-        v.getUint8(base + 8),
-        this.#stringAt(base + 12),
+      const base = w + 4 + i * 5;
+      properties[this.getString(u32[base] ?? 0, u32[base + 1] ?? 0)] = decodeElementProp(
+        u8[(base + 2) << 2] ?? 0,
+        this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0),
       );
     }
     node.properties = properties;
@@ -291,7 +301,7 @@ export class HastReader {
 
   getElementPropCount(nodeId: number): number {
     const at = this.#typeDataAt(nodeId, 16);
-    return at === -1 ? 0 : this.#view.getUint32(at + 8, true);
+    return at === -1 ? 0 : (this.#u32[(at >> 2) + 2] ?? 0);
   }
 
   getElementPropName(nodeId: number, index: number): string {
@@ -303,30 +313,25 @@ export class HastReader {
     const at = this.#typeDataAt(nodeId, 16);
     if (at === -1) return "";
     const base = at + 16 + index * 20;
-    return decodeElementProp(this.#view.getUint8(base + 8), this.#stringAt(base + 12));
+    return decodeElementProp(this.#u8[base + 8] ?? 0, this.#stringAt(base + 12));
   }
 
   getElementData(nodeId: number): { tagName: string; properties: HastProperty[] } {
-    const data = this.getTypeData(nodeId);
-    if (data.length < 16) {
+    const at = this.#typeDataAt(nodeId, 16);
+    if (at === -1) {
       return { tagName: "", properties: [] };
     }
-
-    const tagRef = this.#readStringRef(data, 0);
-    const tagName = this.getString(tagRef.offset, tagRef.len);
-
-    const view = new DataView(data.buffer, data.byteOffset + 8);
-    const propCount = view.getUint32(0, true);
+    const u32 = this.#u32;
+    const w = at >> 2;
+    const tagName = this.getString(u32[w] ?? 0, u32[w + 1] ?? 0);
+    const propCount = u32[w + 2] ?? 0;
 
     const properties: HastProperty[] = [];
     for (let i = 0; i < propCount; i++) {
-      const base = 16 + i * 20;
-      const nameRef = this.#readStringRef(data, base);
-      const name = this.getString(nameRef.offset, nameRef.len);
-      const valueType = data[base + 8];
-      const valueRef = this.#readStringRef(data, base + 12);
-      const valueStr = this.getString(valueRef.offset, valueRef.len);
-      properties.push({ name, value: decodeElementProp(valueType!, valueStr) });
+      const base = w + 4 + i * 5;
+      const name = this.getString(u32[base] ?? 0, u32[base + 1] ?? 0);
+      const valueStr = this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0);
+      properties.push({ name, value: decodeElementProp(this.#u8[(base + 2) << 2] ?? 0, valueStr) });
     }
 
     return { tagName, properties };
@@ -344,53 +349,52 @@ export class HastReader {
     name: string | null;
     attributes: (MdxJsxAttribute | MdxJsxExpressionAttribute)[];
   } {
-    const data = this.getTypeData(nodeId);
-    if (data.length < 16) {
+    const at = this.#typeDataAt(nodeId, 16);
+    if (at === -1) {
       return { name: null, attributes: [] };
     }
-
-    const nameRef = this.#readStringRef(data, 0);
-    const name = nameRef.len > 0 ? this.getString(nameRef.offset, nameRef.len) : null;
-
-    const view = new DataView(data.buffer, data.byteOffset + 8);
-    const attrCount = view.getUint32(0, true);
+    const u32 = this.#u32;
+    const w = at >> 2;
+    const nameLen = u32[w + 1] ?? 0;
+    const name = nameLen > 0 ? this.getString(u32[w] ?? 0, nameLen) : null;
+    const attrCount = u32[w + 2] ?? 0;
 
     const attributes: (MdxJsxAttribute | MdxJsxExpressionAttribute)[] = [];
     for (let i = 0; i < attrCount; i++) {
-      const base = 16 + i * 20;
-      const kind = data[base]!;
-      const attrNameRef = this.#readStringRef(data, base + 4);
-      const attrValueRef = this.#readStringRef(data, base + 12);
+      const base = w + 4 + i * 5;
+      const kind = this.#u8[base << 2] ?? 0;
+      const attrName = () => this.getString(u32[base + 1] ?? 0, u32[base + 2] ?? 0);
+      const attrValue = () => this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0);
 
       switch (kind) {
         case MDX_ATTR_BOOLEAN_PROP:
           attributes.push({
             type: "mdxJsxAttribute",
-            name: this.getString(attrNameRef.offset, attrNameRef.len),
+            name: attrName(),
             value: null,
           });
           break;
         case MDX_ATTR_LITERAL_PROP:
           attributes.push({
             type: "mdxJsxAttribute",
-            name: this.getString(attrNameRef.offset, attrNameRef.len),
-            value: this.getString(attrValueRef.offset, attrValueRef.len),
+            name: attrName(),
+            value: attrValue(),
           });
           break;
         case MDX_ATTR_EXPRESSION_PROP:
           attributes.push({
             type: "mdxJsxAttribute",
-            name: this.getString(attrNameRef.offset, attrNameRef.len),
+            name: attrName(),
             value: {
               type: "mdxJsxAttributeValueExpression",
-              value: restorePhantomSpaces(this.getString(attrValueRef.offset, attrValueRef.len)),
+              value: restorePhantomSpaces(attrValue()),
             },
           });
           break;
         case MDX_ATTR_SPREAD:
           attributes.push({
             type: "mdxJsxExpressionAttribute",
-            value: restorePhantomSpaces(this.getString(attrValueRef.offset, attrValueRef.len)),
+            value: restorePhantomSpaces(attrValue()),
           });
           break;
       }
