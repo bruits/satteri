@@ -459,6 +459,46 @@ pub fn create_mdx_mdast_handle(
     Ok(External::new(Mutex::new(arena)))
 }
 
+/// One boundary crossing instead of create + serialize + drop; only the plugin path needs a live handle.
+#[napi]
+pub fn parse_mdast_wire<'env>(
+    env: &'env Env,
+    source: String,
+    parse_options: u32,
+    mdx: bool,
+    track_positions: Option<bool>,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    let opts = parser_options(parse_options, mdx);
+    let arena = parse_mdast_pooled(&source, opts, mdx, track_positions.unwrap_or(true))?;
+    let buf = arena.to_raw_buffer();
+    release_mdast_arena(arena);
+    wire_out(env, buf)
+}
+
+/// One-crossing parse + convert + serialize for the no-plugin hast tree functions.
+#[napi]
+pub fn parse_hast_wire<'env>(
+    env: &'env Env,
+    source: String,
+    parse_options: u32,
+    convert_options: Option<JsConvertOptions>,
+    mdx: bool,
+    track_positions: Option<bool>,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    let opts = parser_options(parse_options, mdx);
+    let convert_opts = js_convert_options_to_rust(*env, convert_options);
+    let mdast = parse_mdast_pooled(&source, opts, mdx, track_positions.unwrap_or(true))?;
+    let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
+    let buf = hast.to_raw_buffer();
+    release_hast_arena(hast);
+    wire_out(env, buf)
+}
+
 /// Frontmatter extracted from an MDAST arena.
 #[napi(object)]
 pub struct JsFrontmatter {
@@ -506,11 +546,24 @@ pub fn get_mdast_frontmatter(handle: &MdastHandle) -> Result<Option<JsFrontmatte
     Ok(None)
 }
 
+/// Below this, a V8-owned copy beats the ~700 ns external-buffer registration `Uint8Array::new` pays.
+const SMALL_WIRE_LIMIT: usize = 8192;
+
+fn wire_out<'env>(env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    if buf.len() <= SMALL_WIRE_LIMIT {
+        return Ok(Either::A(BufferSlice::copy_from(env, &buf)?));
+    }
+    Ok(Either::B(Uint8Array::new(buf)))
+}
+
 /// Serialize a handle's arena to the wire-format buffer JS instantiates a
 /// reader from. The kind tag in the header tells the JS side whether to
 /// pick `MdastReader` or `HastReader`.
 #[napi]
-pub fn serialize_handle(handle: AnyHandle) -> Result<Uint8Array> {
+pub fn serialize_handle<'env>(
+    env: &'env Env,
+    handle: AnyHandle,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
     let buf = match handle {
         Either::A(h) => h
             .lock()
@@ -521,7 +574,7 @@ pub fn serialize_handle(handle: AnyHandle) -> Result<Uint8Array> {
             .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
             .to_raw_buffer(),
     };
-    Ok(Uint8Array::new(buf))
+    wire_out(env, buf)
 }
 
 /// Get the source string from a handle. Kind-agnostic: source is the
@@ -577,9 +630,7 @@ pub fn walk_mdast_handle(
             tag_filter: s.tag_filter,
         })
         .collect();
-    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(
-        &arena, &subs,
-    )))
+    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(&arena, &subs)))
 }
 
 /// Apply a command buffer to an MDAST handle in-place. Returns how many patches
@@ -944,7 +995,10 @@ pub fn create_mdx_hast_handle_with_frontmatter(
 
 /// Walk a HAST handle's arena and return matched nodes as a flat binary buffer.
 #[napi]
-pub fn walk_handle(handle: &HastHandle, subscriptions: Vec<JsSubscription>) -> Result<Uint8Array> {
+pub fn walk_handle(
+    handle: &HastHandle,
+    subscriptions: Vec<JsSubscription>,
+) -> Result<Uint8Array> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -1173,6 +1227,125 @@ fn to_js_fast_impl(
         frontmatter,
         dropped_transforms: 0,
     })
+}
+
+/// One batch item's outcome: exactly one of `code` or `error` is set.
+#[cfg(feature = "mdx")]
+#[napi(object)]
+pub struct JsBatchJsResult {
+    pub code: Option<String>,
+    pub frontmatter: Option<JsFrontmatter>,
+    pub error: Option<String>,
+}
+
+/// Blocks the calling thread until every item finishes: built for build pipelines, not servers.
+#[cfg(feature = "mdx")]
+#[napi]
+pub fn mdx_to_js_many(
+    sources: Vec<String>,
+    parse_options: u32,
+    options: Option<JsMdxOptions>,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<Vec<JsBatchJsResult>> {
+    use rayon::prelude::*;
+
+    // FunctionRef callbacks are bound to the JS thread and cannot run on workers.
+    let plain = match convert_options {
+        None => None,
+        Some(c) => {
+            let take = |v: Option<Either<String, FunctionRef<FnArgs<(u32, u32)>, String>>>| match v
+            {
+                None => Ok(None),
+                Some(Either::A(s)) => Ok(Some(s)),
+                Some(Either::B(_)) => Err(napi::Error::from_reason(
+                    "mdxToJsMany does not support function-valued footnote options; pass template strings".to_string(),
+                )),
+            };
+            Some((
+                c.footnote_label,
+                take(c.footnote_back_content)?,
+                take(c.footnote_back_label)?,
+                c.clobber_prefix,
+                c.raw_html,
+            ))
+        }
+    };
+    let build_convert_opts = || {
+        let mut out = satteri_ast::hast::ConvertOptions::default();
+        if let Some((label, content, back_label, prefix, raw_html)) = &plain {
+            if let Some(v) = label {
+                out.footnote_label = v.clone();
+            }
+            if let Some(v) = content {
+                out.footnote_back_content = satteri_ast::hast::Backref::Template(v.clone());
+            }
+            if let Some(v) = back_label {
+                out.footnote_back_label = satteri_ast::hast::Backref::Template(v.clone());
+            }
+            if let Some(v) = prefix {
+                out.clobber_prefix = v.clone();
+            }
+            #[cfg(feature = "from-html")]
+            if let Some(v) = raw_html {
+                out.raw_html = *v;
+            }
+            #[cfg(not(feature = "from-html"))]
+            let _ = raw_html;
+        }
+        out
+    };
+
+    let opts = parser_options(parse_options, true);
+    let mdx_opts = js_options_to_rust(options);
+    let ignore = mdx_opts
+        .optimize_static
+        .as_ref()
+        .map(|c| c.ignore_elements.clone())
+        .unwrap_or_default();
+
+    Ok(sources
+        .par_iter()
+        .map(|source| {
+            let convert_opts = build_convert_opts();
+            let (mdast, mdx_errors) = satteri_pulldown_cmark::parse_no_positions_into(
+                source,
+                opts,
+                acquire_mdast_arena(),
+            );
+            if let Some((offset, msg)) = mdx_errors.first() {
+                return JsBatchJsResult {
+                    code: None,
+                    frontmatter: None,
+                    error: Some(
+                        satteri_mdxjs::parse_error_to_message(source, *offset, msg).to_string(),
+                    ),
+                };
+            }
+            let frontmatter = extract_mdast_frontmatter(&mdast);
+            let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+                &mdast,
+                &convert_opts,
+                acquire_hast_arena(),
+            );
+            release_mdast_arena(mdast);
+            hast.mdx = true;
+            satteri_mdxjs::simplify_plain_mdx_nodes(&mut hast, &ignore);
+            let compiled = satteri_mdxjs::compile_hast_arena(&hast, &mdx_opts);
+            release_hast_arena(hast);
+            match compiled {
+                Ok(code) => JsBatchJsResult {
+                    code: Some(code),
+                    frontmatter,
+                    error: None,
+                },
+                Err(e) => JsBatchJsResult {
+                    code: None,
+                    frontmatter,
+                    error: Some(e.to_string()),
+                },
+            }
+        })
+        .collect())
 }
 
 /// Fast path: parse MDX → MDAST → HAST → JS, plus extract frontmatter, in a

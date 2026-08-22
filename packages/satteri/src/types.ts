@@ -222,3 +222,17 @@ export interface BufferHeader {
   /** Offset of the node-data section: `[id u32][len u32][bytes...]` repeated. */
   nodeDataOffset: number;
 }
+
+/** @internal Derived reader state for the fused eager tree fill; `B`/`W` suffixes are byte vs u32-word units. */
+export interface ArenaWire {
+  u8: Uint8Array;
+  u32: Uint32Array;
+  nodesB: number;
+  nodesW: number;
+  strideB: number;
+  strideW: number;
+  childrenW: number;
+  typeDataB: number;
+  /** Refs arrive in UTF-16 units, so substring on the decoded pool is exact. */
+  pool: string;
+}

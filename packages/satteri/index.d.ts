@@ -134,6 +134,13 @@ export declare function getMdastFrontmatter(handle: MdastHandle): JsFrontmatter 
  */
 export declare function getNodeData(handle: AnyHandle, nodeId: number): string | null
 
+/** One batch item's outcome: exactly one of `code` or `error` is set. */
+export interface JsBatchJsResult {
+  code?: string
+  frontmatter?: JsFrontmatter
+  error?: string
+}
+
 /**
  * MDAST→HAST conversion options passed from JavaScript.
  *
@@ -291,6 +298,9 @@ export interface MdxJsOneShot {
  */
 export declare function mdxToJsFast(source: string, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
 
+/** Blocks the calling thread until every item finishes: built for build pipelines, not servers. */
+export declare function mdxToJsMany(sources: Array<string>, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): Array<JsBatchJsResult>
+
 /** Parse ESM (import/export statements) and return ESTree-compatible AST as JSON. */
 export declare function parseEsm(source: string): string | null
 
@@ -299,6 +309,12 @@ export declare function parseEsm(source: string): string | null
  * Returns null if parsing fails. The JS layer calls JSON.parse (faster than serde_json → NAPI).
  */
 export declare function parseExpression(source: string): string | null
+
+/** One-crossing parse + convert + serialize for the no-plugin hast tree functions. */
+export declare function parseHastWire(source: string, parseOptions: number, convertOptions: JsConvertOptions | undefined | null, mdx: boolean, trackPositions?: boolean | undefined | null): Buffer | Uint8Array
+
+/** One boundary crossing instead of create + serialize + drop; only the plugin path needs a live handle. */
+export declare function parseMdastWire(source: string, parseOptions: number, mdx: boolean, trackPositions?: boolean | undefined | null): Buffer | Uint8Array
 
 /** Parse Markdown source and return HTML string directly. */
 export declare function parseToHtml(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null): string
@@ -322,7 +338,7 @@ export interface RenderHtmlOneShot {
  * reader from. The kind tag in the header tells the JS side whether to
  * pick `MdastReader` or `HastReader`.
  */
-export declare function serializeHandle(handle: AnyHandle): Uint8Array
+export declare function serializeHandle(handle: AnyHandle): Buffer | Uint8Array
 
 /**
  * Set the `data` blob (JSON bytes) for a node. Works for both MDAST and

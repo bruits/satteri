@@ -3,6 +3,7 @@ export {
   markdownToHtml,
   markdownToJs,
   mdxToJs,
+  mdxToJsMany,
   evaluate,
   markdownToMdast,
   mdxToMdast,
@@ -25,6 +26,8 @@ export type {
   MarkdownToHtmlResult,
   MarkdownToJsResult,
   MdxToJsResult,
+  MdxToJsManyResult,
+  MdxToJsManyOptions,
 } from "./compile.js";
 
 // Plugin definitions

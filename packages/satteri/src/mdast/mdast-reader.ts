@@ -1,4 +1,10 @@
-import type { MdastNodeRaw, BufferHeader, StringRefRaw, MdxJsxAttributeUnion } from "../types.js";
+import type {
+  ArenaWire,
+  MdastNodeRaw,
+  BufferHeader,
+  StringRefRaw,
+  MdxJsxAttributeUnion,
+} from "../types.js";
 import { restorePhantomSpaces } from "../phantom.js";
 import { decodeColumnAlign } from "./column-align.js";
 import { NodeTypeName } from "./generated/node-types.js";
@@ -84,6 +90,21 @@ export class MdastReader {
   /** Lets tree fills skip the per-node `getNodeData` call on data-free wires. */
   hasNodeData(): boolean {
     return this.#nodeDataCount !== 0;
+  }
+
+  /** @internal */
+  getWire(): ArenaWire {
+    return {
+      u8: this.#u8,
+      u32: this.#u32,
+      nodesB: this.#nodesB,
+      nodesW: this.#nodesW,
+      strideB: this.#strideB,
+      strideW: this.#strideW,
+      childrenW: this.#childrenW,
+      typeDataB: this.#typeDataB,
+      pool: this.getStringPool(),
+    };
   }
 
   /** Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
