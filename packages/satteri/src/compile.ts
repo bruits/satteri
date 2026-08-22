@@ -75,6 +75,7 @@ import { markHandleMutated } from "./lazy-child-resolver.js";
 import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
 import type { MdastNode, HastNode, Data, SourceFormat } from "./types.js";
+import type { PluginOptions } from "./visitor-shared.js";
 
 const GFM_PARSE_OPTIONS = ENABLE_TABLES | ENABLE_STRIKETHROUGH | ENABLE_TASKLISTS | ENABLE_GFM;
 const FRONTMATTER_PARSE_OPTIONS =
@@ -167,7 +168,7 @@ type MdastPipelineResult = {
   pendingCommands?: Uint8Array;
   /** The plugin whose commands were deferred, for dropped-transform warning
    *  attribution after the fused apply. */
-  lastPlugin?: { name?: string };
+  lastPlugin?: { name?: string; options?: PluginOptions };
 };
 
 /** Free a handle's arena. A plugin's visitor can hand child stubs to user code;
@@ -179,10 +180,12 @@ function releaseHandle(handle: AnyHandle, invalidateStubs: boolean): void {
 }
 
 function warnDroppedTransforms(
-  plugin: { name?: string },
+  plugin: { name?: string; options?: PluginOptions },
   dropped: number,
   kind: "mdast" | "hast",
 ): void {
+  if (plugin.options && !plugin.options.warnings) return;
+
   const name = plugin.name ?? "<anonymous>";
   const noun = dropped === 1 ? "transform" : "transforms";
   console.warn(
@@ -233,12 +236,17 @@ function runMdastPluginsOnHandle(
       if (!r.hasMutations) return;
       if (collectLast && isLastPlugin && isFinalPass) {
         out.pendingCommands = r.commandBuffer;
-        out.lastPlugin = plugin as { name?: string };
+        out.lastPlugin = plugin as { name?: string; options?: PluginOptions };
         return;
       }
       markHandleMutated(handle);
       const dropped = applyCommandsToMdastHandle(handle, r.commandBuffer);
-      if (dropped) warnDroppedTransforms(plugin as { name?: string }, dropped, "mdast");
+      if (dropped)
+        warnDroppedTransforms(
+          plugin as { name?: string; options?: PluginOptions },
+          dropped,
+          "mdast",
+        );
     };
 
     const before = typeof plugin.before === "function" ? plugin.before : undefined;
@@ -303,7 +311,7 @@ type CollectedHastCommands = {
   commands: Uint8Array;
   /** The plugin whose commands were collected, for dropped-transform warning
    *  attribution after the fused apply. */
-  lastPlugin: { name?: string } | null;
+  lastPlugin: { name?: string; options?: PluginOptions } | null;
 };
 
 const NO_HAST_COMMANDS: CollectedHastCommands = {

@@ -15,6 +15,8 @@ export interface PluginOptions {
    * (~15% faster parse), and `node.position` is `undefined`.
    */
   position?: boolean;
+  /** Display warnings about dropped transforms. Default: true. */
+  warnings?: boolean;
 }
 
 const EMPTY_BYTES = new Uint8Array(0);
