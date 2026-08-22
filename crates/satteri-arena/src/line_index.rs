@@ -48,7 +48,8 @@ impl<'a> LineIndex<'a> {
     pub fn from_source(source: &'a str) -> Self {
         let bytes = source.as_bytes();
         let all_ascii = bytes.is_ascii();
-        let line_count_estimate = bytes.len() / 40 + 1;
+        // Real markdown averages ~21-27 bytes per line.
+        let line_count_estimate = bytes.len() / 24 + 1;
         let mut offsets = Vec::with_capacity(line_count_estimate);
         offsets.push(0u32);
         if all_ascii {
