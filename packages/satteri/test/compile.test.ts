@@ -1341,6 +1341,29 @@ describe("mdxToJs", () => {
     expect(js).toContain('"fill-rule": "evenodd"');
   });
 
+  test("rawHtml keeps the SVG schema for raw HTML inside a JSX <svg> (#249)", () => {
+    // An `html` node is the only way raw HTML reaches the MDX path: `{ raw }`
+    // is parsed as MDX, where `<path .../>` would already be JSX.
+    const inject = defineMdastPlugin({
+      name: "inject-html-path",
+      paragraph() {
+        return {
+          type: "html" as const,
+          value: '<path fill-rule="evenodd" stroke-width="2"/>',
+        } as MdastNode;
+      },
+    });
+    const { code: js } = mdxToJs('<svg viewBox="0 0 10 10">\n\ntext\n\n</svg>\n', {
+      mdastPlugins: [inject],
+      features: { rawHtml: true },
+    });
+    // The raw <path> reparses in the SVG namespace, so its attributes map to
+    // the canonical SVG property names instead of passing through unknown.
+    expect(js).toContain('fillRule: "evenodd"');
+    expect(js).toContain('strokeWidth: "2"');
+    expect(js).not.toContain("fill-rule");
+  });
+
   test("style attribute parses into an object by default (DOM casing)", () => {
     const { code: js } = mdxToJs("| a | b |\n|:--|--:|\n| c | d |\n", {
       features: { gfm: true },
