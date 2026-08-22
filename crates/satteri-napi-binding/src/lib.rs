@@ -459,6 +459,46 @@ pub fn create_mdx_mdast_handle(
     Ok(External::new(Mutex::new(arena)))
 }
 
+/// One boundary crossing instead of create + serialize + drop; only the plugin path needs a live handle.
+#[napi]
+pub fn parse_mdast_wire<'env>(
+    env: &'env Env,
+    source: String,
+    parse_options: u32,
+    mdx: bool,
+    track_positions: Option<bool>,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    let opts = parser_options(parse_options, mdx);
+    let arena = parse_mdast_pooled(&source, opts, mdx, track_positions.unwrap_or(true))?;
+    let buf = arena.to_raw_buffer();
+    release_mdast_arena(arena);
+    wire_out(env, buf)
+}
+
+/// One-crossing parse + convert + serialize for the no-plugin hast tree functions.
+#[napi]
+pub fn parse_hast_wire<'env>(
+    env: &'env Env,
+    source: String,
+    parse_options: u32,
+    convert_options: Option<JsConvertOptions>,
+    mdx: bool,
+    track_positions: Option<bool>,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    let opts = parser_options(parse_options, mdx);
+    let convert_opts = js_convert_options_to_rust(*env, convert_options);
+    let mdast = parse_mdast_pooled(&source, opts, mdx, track_positions.unwrap_or(true))?;
+    let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
+    let buf = hast.to_raw_buffer();
+    release_hast_arena(hast);
+    wire_out(env, buf)
+}
+
 /// Frontmatter extracted from an MDAST arena.
 #[napi(object)]
 pub struct JsFrontmatter {

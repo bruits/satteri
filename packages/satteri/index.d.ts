@@ -300,6 +300,12 @@ export declare function parseEsm(source: string): string | null
  */
 export declare function parseExpression(source: string): string | null
 
+/** One-crossing parse + convert + serialize for the no-plugin hast tree functions. */
+export declare function parseHastWire(source: string, parseOptions: number, convertOptions: JsConvertOptions | undefined | null, mdx: boolean, trackPositions?: boolean | undefined | null): Buffer | Uint8Array
+
+/** One boundary crossing instead of create + serialize + drop; only the plugin path needs a live handle. */
+export declare function parseMdastWire(source: string, parseOptions: number, mdx: boolean, trackPositions?: boolean | undefined | null): Buffer | Uint8Array
+
 /** Parse Markdown source and return HTML string directly. */
 export declare function parseToHtml(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null): string
 

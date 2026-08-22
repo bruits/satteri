@@ -46,6 +46,8 @@ import {
   markdownToJsFast,
   mdxToJsFast,
   renderHandle,
+  parseHastWire,
+  parseMdastWire,
   serializeHandle,
 } from "#binding";
 import {
@@ -1263,52 +1265,36 @@ export interface TreeOptions {
 
 /** Parse Markdown source into a materialized mdast tree. */
 export function markdownToMdast(source: string, options: TreeOptions = {}): MdastNode {
-  const handle = createMdastHandle(
-    source,
-    featuresToNative(options.features).parseOptions,
-    options.position,
+  return materializeMdastTree(
+    new MdastReader(
+      parseMdastWire(source, featuresToNative(options.features).parseOptions, false, options.position),
+    ),
   );
-  try {
-    return materializeMdastTree(new MdastReader(serializeHandle(handle)));
-  } finally {
-    releaseHandle(handle, true);
-  }
 }
 
 /** Parse MDX source into a materialized mdast tree. */
 export function mdxToMdast(source: string, options: TreeOptions = {}): MdastNode {
-  const handle = createMdxMdastHandle(
-    source,
-    featuresToNative(options.features).parseOptions,
-    options.position,
+  return materializeMdastTree(
+    new MdastReader(
+      parseMdastWire(source, featuresToNative(options.features).parseOptions, true, options.position),
+    ),
   );
-  try {
-    return materializeMdastTree(new MdastReader(serializeHandle(handle)));
-  } finally {
-    releaseHandle(handle, true);
-  }
 }
 
 /** Convert Markdown source to a materialized hast tree. */
 export function markdownToHast(source: string, options: TreeOptions = {}): HastNode {
   const { parseOptions, convertOptions } = featuresToNative(options.features);
-  const handle = createHastHandle(source, parseOptions, convertOptions, options.position);
-  try {
-    return materializeHastTree(new HastReader(serializeHandle(handle)));
-  } finally {
-    releaseHandle(handle, true);
-  }
+  return materializeHastTree(
+    new HastReader(parseHastWire(source, parseOptions, convertOptions, false, options.position)),
+  );
 }
 
 /** Convert MDX source to a materialized hast tree. */
 export function mdxToHast(source: string, options: TreeOptions = {}): HastNode {
   const { parseOptions, convertOptions } = featuresToNative(options.features);
-  const handle = createMdxHastHandle(source, parseOptions, convertOptions, options.position);
-  try {
-    return materializeHastTree(new HastReader(serializeHandle(handle)));
-  } finally {
-    releaseHandle(handle, true);
-  }
+  return materializeHastTree(
+    new HastReader(parseHastWire(source, parseOptions, convertOptions, true, options.position)),
+  );
 }
 
 export interface HtmlToHastOptions {
