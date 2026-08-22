@@ -344,7 +344,7 @@ export declare function setNodeData(handle: AnyHandle, nodeId: number, json: Uin
 export declare function textContentHandle(handle: HastHandle, nodeId: number): string
 
 /** Walk a HAST handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkHandle(handle: HastHandle, subscriptions: Array<JsSubscription>): Buffer | Uint8Array
+export declare function walkHandle(handle: HastHandle, subscriptions: Array<JsSubscription>): Uint8Array
 
 /** Walk an MDAST handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkMdastHandle(handle: MdastHandle, subscriptions: Array<JsSubscription>): Buffer | Uint8Array
+export declare function walkMdastHandle(handle: MdastHandle, subscriptions: Array<JsSubscription>): Uint8Array

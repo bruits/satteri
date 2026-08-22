@@ -616,11 +616,10 @@ pub fn set_node_data(handle: AnyHandle, node_id: u32, json: Uint8Array) -> Resul
 
 /// Walk an MDAST handle's arena and return matched nodes as a flat binary buffer.
 #[napi]
-pub fn walk_mdast_handle<'env>(
-    env: &'env Env,
+pub fn walk_mdast_handle(
     handle: &MdastHandle,
     subscriptions: Vec<JsSubscription>,
-) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+) -> Result<Uint8Array> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -631,7 +630,7 @@ pub fn walk_mdast_handle<'env>(
             tag_filter: s.tag_filter,
         })
         .collect();
-    wire_out(env, satteri_ast::walk::walk_mdast(&arena, &subs))
+    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(&arena, &subs)))
 }
 
 /// Apply a command buffer to an MDAST handle in-place. Returns how many patches
@@ -996,11 +995,10 @@ pub fn create_mdx_hast_handle_with_frontmatter(
 
 /// Walk a HAST handle's arena and return matched nodes as a flat binary buffer.
 #[napi]
-pub fn walk_handle<'env>(
-    env: &'env Env,
+pub fn walk_handle(
     handle: &HastHandle,
     subscriptions: Vec<JsSubscription>,
-) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+) -> Result<Uint8Array> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -1011,7 +1009,7 @@ pub fn walk_handle<'env>(
             tag_filter: s.tag_filter,
         })
         .collect();
-    wire_out(env, satteri_ast::walk::walk_hast(&arena, &subs))
+    Ok(Uint8Array::new(satteri_ast::walk::walk_hast(&arena, &subs)))
 }
 
 /// Apply a command buffer to a HAST handle's arena in-place. Returns how many
