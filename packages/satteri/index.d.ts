@@ -322,7 +322,7 @@ export interface RenderHtmlOneShot {
  * reader from. The kind tag in the header tells the JS side whether to
  * pick `MdastReader` or `HastReader`.
  */
-export declare function serializeHandle(handle: AnyHandle): Uint8Array
+export declare function serializeHandle(handle: AnyHandle): Buffer | Uint8Array
 
 /**
  * Set the `data` blob (JSON bytes) for a node. Works for both MDAST and
@@ -338,7 +338,7 @@ export declare function setNodeData(handle: AnyHandle, nodeId: number, json: Uin
 export declare function textContentHandle(handle: HastHandle, nodeId: number): string
 
 /** Walk a HAST handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkHandle(handle: HastHandle, subscriptions: Array<JsSubscription>): Uint8Array
+export declare function walkHandle(handle: HastHandle, subscriptions: Array<JsSubscription>): Buffer | Uint8Array
 
 /** Walk an MDAST handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkMdastHandle(handle: MdastHandle, subscriptions: Array<JsSubscription>): Uint8Array
+export declare function walkMdastHandle(handle: MdastHandle, subscriptions: Array<JsSubscription>): Buffer | Uint8Array

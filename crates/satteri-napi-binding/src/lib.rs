@@ -506,11 +506,24 @@ pub fn get_mdast_frontmatter(handle: &MdastHandle) -> Result<Option<JsFrontmatte
     Ok(None)
 }
 
+/// Below this, a V8-owned copy beats the ~700 ns external-buffer registration `Uint8Array::new` pays.
+const SMALL_WIRE_LIMIT: usize = 8192;
+
+fn wire_out<'env>(env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    if buf.len() <= SMALL_WIRE_LIMIT {
+        return Ok(Either::A(BufferSlice::copy_from(env, &buf)?));
+    }
+    Ok(Either::B(Uint8Array::new(buf)))
+}
+
 /// Serialize a handle's arena to the wire-format buffer JS instantiates a
 /// reader from. The kind tag in the header tells the JS side whether to
 /// pick `MdastReader` or `HastReader`.
 #[napi]
-pub fn serialize_handle(handle: AnyHandle) -> Result<Uint8Array> {
+pub fn serialize_handle<'env>(
+    env: &'env Env,
+    handle: AnyHandle,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
     let buf = match handle {
         Either::A(h) => h
             .lock()
@@ -521,7 +534,7 @@ pub fn serialize_handle(handle: AnyHandle) -> Result<Uint8Array> {
             .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
             .to_raw_buffer(),
     };
-    Ok(Uint8Array::new(buf))
+    wire_out(env, buf)
 }
 
 /// Get the source string from a handle. Kind-agnostic: source is the
@@ -563,10 +576,11 @@ pub fn set_node_data(handle: AnyHandle, node_id: u32, json: Uint8Array) -> Resul
 
 /// Walk an MDAST handle's arena and return matched nodes as a flat binary buffer.
 #[napi]
-pub fn walk_mdast_handle(
+pub fn walk_mdast_handle<'env>(
+    env: &'env Env,
     handle: &MdastHandle,
     subscriptions: Vec<JsSubscription>,
-) -> Result<Uint8Array> {
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -577,9 +591,7 @@ pub fn walk_mdast_handle(
             tag_filter: s.tag_filter,
         })
         .collect();
-    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(
-        &arena, &subs,
-    )))
+    wire_out(env, satteri_ast::walk::walk_mdast(&arena, &subs))
 }
 
 /// Apply a command buffer to an MDAST handle in-place. Returns how many patches
@@ -944,7 +956,11 @@ pub fn create_mdx_hast_handle_with_frontmatter(
 
 /// Walk a HAST handle's arena and return matched nodes as a flat binary buffer.
 #[napi]
-pub fn walk_handle(handle: &HastHandle, subscriptions: Vec<JsSubscription>) -> Result<Uint8Array> {
+pub fn walk_handle<'env>(
+    env: &'env Env,
+    handle: &HastHandle,
+    subscriptions: Vec<JsSubscription>,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
@@ -955,7 +971,7 @@ pub fn walk_handle(handle: &HastHandle, subscriptions: Vec<JsSubscription>) -> R
             tag_filter: s.tag_filter,
         })
         .collect();
-    Ok(Uint8Array::new(satteri_ast::walk::walk_hast(&arena, &subs)))
+    wire_out(env, satteri_ast::walk::walk_hast(&arena, &subs))
 }
 
 /// Apply a command buffer to a HAST handle's arena in-place. Returns how many
