@@ -34,6 +34,13 @@ use crate::shared::{
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 
+/// SVG elements whose content is parsed as HTML (the spec's HTML integration
+/// points), so SVG content stops at them. MathML's integration points never
+/// arise: MathML is parsed in the HTML context here.
+fn is_html_integration_point(local: &str) -> bool {
+    matches!(local, "foreignObject" | "desc" | "title")
+}
+
 /// The namespace a fragment's own top-level content is parsed in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum HtmlSpace {
@@ -471,9 +478,11 @@ fn emit(
             } => {
                 let tag_ref = builder.alloc_string(&scrub_markers(&name.local, leaked));
                 // The SVG property schema keeps attribute casing (`viewBox`);
-                // the HTML schema normalises it. Children scheduled below
-                // inherit this element's namespace as their context.
+                // the HTML schema normalises it.
                 let in_svg = &*name.ns == SVG_NAMESPACE;
+                // Children scheduled below inherit this element's namespace as
+                // their context, except under an HTML integration point.
+                let child_in_svg = in_svg && !is_html_integration_point(&name.local);
                 let props: Vec<(StringRef, u8, StringRef)> = attrs
                     .iter()
                     // An attribute name containing a leaked marker is junk the
@@ -502,11 +511,11 @@ fn emit(
                 // so emit it as the template's children rather than dropping it.
                 if let Some(contents) = template_contents {
                     for &child in nodes[*contents].children.iter().rev() {
-                        stack.push(EmitTask::Emit(child, in_svg));
+                        stack.push(EmitTask::Emit(child, child_in_svg));
                     }
                 }
                 for &child in nodes[id].children.iter().rev() {
-                    stack.push(EmitTask::Emit(child, in_svg));
+                    stack.push(EmitTask::Emit(child, child_in_svg));
                 }
             }
         }
@@ -569,7 +578,7 @@ fn emit_arena_node(
         }
         Some(HastNodeType::Element) if data.len() >= 16 => {
             let tag = src.get_str(decode_element_tag(data));
-            let child_in_svg = in_svg || tag == "svg";
+            let child_in_svg = (in_svg || tag == "svg") && !is_html_integration_point(tag);
             let tag_ref = builder.alloc_string(tag);
             let props: Vec<(StringRef, u8, StringRef)> = (0..decode_element_prop_count(data))
                 .map(|i| {
@@ -593,8 +602,9 @@ fn emit_arena_node(
         Some(HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement) if data.len() >= 16 => {
             let name = src.get_str(decode_mdx_jsx_element_name(data));
             // Like the serializer's schema switch, an MDX element named `svg`
-            // puts its children in SVG content.
-            let child_in_svg = in_svg || name == "svg";
+            // puts its children in SVG content; unlike it, an HTML integration
+            // point takes them back out, as the parser would.
+            let child_in_svg = (in_svg || name == "svg") && !is_html_integration_point(name);
             let name_ref = builder.alloc_string(name);
             let explicit = decode_mdx_jsx_explicit(data);
             let attrs: Vec<(u8, StringRef, StringRef)> = (0..decode_mdx_jsx_attr_count(data))
@@ -1547,6 +1557,50 @@ mod tests {
         assert_eq!(
             props_of(&reparsed, "path"),
             [("fillRule".into(), PROP_STRING, "evenodd".into())]
+        );
+    }
+
+    /// A raw `<foreignObject>` is an HTML integration point: an MDX element
+    /// stitched back under it parses its own raw children as HTML, just as
+    /// the parser treats the element's direct children.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_exits_svg_schema_for_mdx_element_inside_raw_foreign_object() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(HastNodeType::Root as u8);
+        add_raw_node(&mut b, "<svg><foreignObject>");
+        open_mdx_element(&mut b, "Foo");
+        add_raw_node(&mut b, r#"<path fill-rule="evenodd"/>"#);
+        b.close_node(); // </Foo>
+        add_raw_node(&mut b, "</foreignObject></svg>");
+        b.close_node(); // </root>
+
+        let reparsed = raw_to_hast_arena(&b.finish());
+        assert_eq!(tags(&reparsed), ["svg", "foreignObject", "path"]);
+        assert_eq!(
+            props_of(&reparsed, "path"),
+            [("fill-rule".into(), PROP_STRING, "evenodd".into())]
+        );
+    }
+
+    /// An MDX `<foreignObject>` inside an MDX `<svg>` likewise switches its
+    /// raw children back to the HTML schema.
+    #[cfg(feature = "mdx")]
+    #[test]
+    fn raw_reparse_exits_svg_schema_inside_mdx_foreign_object() {
+        let mut b = ArenaBuilder::<Hast>::new(String::new());
+        b.open_node_raw(HastNodeType::Root as u8);
+        open_mdx_element(&mut b, "svg");
+        open_mdx_element(&mut b, "foreignObject");
+        add_raw_node(&mut b, r#"<path fill-rule="evenodd"/>"#);
+        b.close_node(); // </foreignObject>
+        b.close_node(); // </svg>
+        b.close_node(); // </root>
+
+        let reparsed = raw_to_hast_arena(&b.finish());
+        assert_eq!(
+            props_of(&reparsed, "path"),
+            [("fill-rule".into(), PROP_STRING, "evenodd".into())]
         );
     }
 
