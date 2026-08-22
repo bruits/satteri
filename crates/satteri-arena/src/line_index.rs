@@ -537,6 +537,8 @@ mod tests {
             "é\né\né\né\né\né\né\né\n",
             "seven77\rñ\r\nlong ascii line that spans several words before its end\nð",
             "ascii tail line with the multibyte character é hiding near the end\n1234567",
+            "a long pure ascii line that comfortably crosses one 32-byte block boundary\nsecond line with é multibyte content also crossing a block boundary here\nand a trailing ascii line long enough to cross yet another block boundary\n",
+            "0123456789012345678901234567890\n0123456789012345678901234567890\nx😀\n0123456789012345678901234567890\ntail-é",
         ];
         for src in cases {
             let idx = LineIndex::from_source(src);
