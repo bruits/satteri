@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::schema::{
-    ArenaStruct, Js, Layout, Node, SetSlot, Slot, TailJs, TailLayout, Wire, WireTable,
+    ArenaStruct, Field, Js, Layout, Node, SetSlot, Slot, TailJs, TailLayout, Wire, WireTable,
 };
 
 const HEADER_RS: &str =
@@ -816,31 +816,6 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
         }
     }
     out.push_str("};\n\n");
-    out.push_str(
-        "/** Tags whose whole layout is one plain string at offset 0, mapped to that\n \
-         *  property name. Lets the materializer store the field directly instead of\n \
-         *  driving the descriptor loop, whose polymorphic reads dominate its cost. */\n",
-    );
-    out.push_str("const MDAST_PLAIN_STRING: Readonly<Record<number, string>> = {\n");
-    for layout in layouts {
-        let fields = layout
-            .fields
-            .iter()
-            .filter(|f| !matches!(f.js_kind, Js::Const(_)))
-            .collect::<Vec<_>>();
-        let [field] = fields.as_slice() else { continue };
-        if field.offset != 0
-            || field.phantom
-            || !matches!(field.wire, Wire::Str16 | Wire::Str32)
-            || !matches!(field.js_kind, Js::Str)
-        {
-            continue;
-        }
-        for tag in &layout.tags {
-            let _ = writeln!(out, "  {tag}: {:?},", field.js);
-        }
-    }
-    out.push_str("};\n\n");
     out.push_str("/** Materialized property names per tag (the non-skip `js` names above),\n");
     out.push_str(" *  exported for the child-stub field tables. */\n");
     out.push_str(
@@ -907,7 +882,7 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
     }
     out.push_str("};\n\n");
     out.push_str(DECODER_TS);
-    out.push_str(STORED_DECODER_TS);
+    out.push_str(&stored_decoder_ts(layouts));
     out
 }
 
@@ -1036,45 +1011,120 @@ export function decodeMdastTypeData(
 
 /// The arena-snapshot decoder: the same `MDAST_LAYOUTS`, but resolving each
 /// `StringRef` from the string pool instead of reading an inline wire.
-const STORED_DECODER_TS: &str = r#"
-/**
- * Attach a node's fixed `type_data` fields, materialized from the arena
- * snapshot, driven by `MDAST_LAYOUTS`. Returns `false` for tags with no entry,
- * so the materializer falls through to its hand-written cases (list, table,
- * directives, MDX JSX). Fields are eager plain stores.
- */
-export function materializeMdastFields(
-  reader: MdastReader,
-  node: object,
-  nodeId: number,
-  nodeType: number,
-): boolean {
-  const out = node as Record<string, unknown>;
-  const plain = MDAST_PLAIN_STRING[nodeType];
-  if (plain !== undefined) {
-    out[plain] = reader.fieldString(nodeId, 0);
-    return true;
-  }
-  const fields = MDAST_LAYOUTS[nodeType];
-  if (fields === undefined) return false;
-  for (const f of fields) {
-    if (f.skip) continue;
-    if (f.kind === "u8") {
-      // Short type_data falls back to the layout's declared default,
-      // matching the Rust walk serializer.
-      const b = reader.fieldU8(nodeId, f.offset, f.default ?? 0);
-      out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
-    } else {
-      // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
-      // reads as empty, mirroring the Rust decoders' bounds checks.
-      const raw = reader.fieldString(nodeId, f.offset);
-      const s = f.nullable && raw === "" ? null : raw;
-      out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;
+/// The arena-snapshot decoder: straight-line stores per node type, so each
+/// field is a monomorphic write instead of a descriptor-driven polymorphic one.
+fn stored_decoder_ts(layouts: &[Layout]) -> String {
+    let mut out = String::new();
+    let mut enums: Vec<&'static [&'static str]> = Vec::new();
+    for layout in layouts {
+        for field in layout.fields {
+            if let Js::Enum(values) = field.js_kind
+                && !enums.contains(&values)
+            {
+                enums.push(values);
+            }
+        }
     }
-  }
-  return true;
+    for (i, values) in enums.iter().enumerate() {
+        let list = values
+            .iter()
+            .map(|v| format!("{v:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "const MDAST_ENUM_{i} = [{list}] as const;");
+    }
+    if !enums.is_empty() {
+        out.push('\n');
+    }
+
+    out.push_str(
+        "/**\n\
+         \x20* Attach a node's fixed `type_data` fields, materialized from the arena\n\
+         \x20* snapshot. Returns `false` for tags with no fixed layout, so the\n\
+         \x20* materializer falls through to its hand-written cases (list, table,\n\
+         \x20* directives, MDX JSX). Fields are eager plain stores.\n\
+         \x20*/\n",
+    );
+    out.push_str("export function materializeMdastFields(\n");
+    out.push_str("  reader: MdastReader,\n  node: object,\n  nodeId: number,\n");
+    out.push_str("  nodeType: number,\n): boolean {\n");
+    out.push_str("  const n = node as Record<string, unknown>;\n");
+    out.push_str("  switch (nodeType) {\n");
+
+    // Single plain string first: those tags dominate real documents, and a JS
+    // switch is a compare chain before it tiers up.
+    let mut ordered: Vec<&Layout> = layouts.iter().collect();
+    ordered.sort_by_key(|l| !is_plain_string_layout(l));
+
+    for layout in ordered {
+        let fields: Vec<&Field> = layout
+            .fields
+            .iter()
+            .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+            .collect();
+        if fields.is_empty() {
+            continue;
+        }
+        for tag in &layout.tags {
+            let _ = writeln!(out, "    case {tag}:");
+        }
+        let needs_block = fields.iter().any(|f| matches!(f.js_kind, Js::StrNull));
+        if needs_block {
+            out.push_str("    {\n");
+        }
+        for (i, field) in fields.iter().enumerate() {
+            out.push_str(&stored_field_stmt(field, i, &enums));
+        }
+        out.push_str("      return true;\n");
+        if needs_block {
+            out.push_str("    }\n");
+        }
+    }
+
+    out.push_str("    default:\n      return false;\n  }\n}\n");
+    out
 }
-"#;
+
+fn is_plain_string_layout(layout: &Layout) -> bool {
+    let fields: Vec<&Field> = layout
+        .fields
+        .iter()
+        .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+        .collect();
+    let [field] = fields.as_slice() else {
+        return false;
+    };
+    field.offset == 0 && !field.phantom && matches!(field.js_kind, Js::Str)
+}
+
+fn stored_field_stmt(field: &Field, index: usize, enums: &[&'static [&'static str]]) -> String {
+    let js = field.js;
+    let offset = field.offset;
+    if matches!(field.wire, Wire::U8) {
+        let default = field.u8_default;
+        let read = format!("reader.fieldU8(nodeId, {offset}, {default})");
+        return match field.js_kind {
+            Js::Enum(values) => {
+                let slot = enums.iter().position(|e| *e == values).unwrap_or(0);
+                format!("      n.{js} = MDAST_ENUM_{slot}[{read}] ?? MDAST_ENUM_{slot}[0];\n")
+            }
+            _ => format!("      n.{js} = {read};\n"),
+        };
+    }
+    let read = format!("reader.fieldString(nodeId, {offset})");
+    let read = if field.phantom {
+        format!("restorePhantomSpaces({read})")
+    } else {
+        read
+    };
+    match field.js_kind {
+        Js::StrNull => {
+            let tmp = format!("s{index}");
+            format!("      const {tmp} = {read};\n      n.{js} = {tmp} === \"\" ? null : {tmp};\n")
+        }
+        _ => format!("      n.{js} = {read};\n"),
+    }
+}
 
 fn wire_value(value: u8, hex: bool) -> String {
     if hex {
