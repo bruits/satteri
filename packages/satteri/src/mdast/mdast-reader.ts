@@ -217,6 +217,14 @@ export class MdastReader {
     return v.getUint8(at + offset);
   }
 
+  fieldU32(nodeId: number, offset: number, fallback: number): number {
+    const base = this.#header.nodesOffset + nodeId * this.#header.nodeStructSize;
+    const v = this.#view;
+    if (offset + 4 > v.getUint32(base + FIELD.data_len, true)) return fallback;
+    const at = this.#header.typeDataOffset + v.getUint32(base + FIELD.data_offset, true);
+    return v.getUint32(at + offset, true);
+  }
+
   /** `""` when the field is absent or empty; callers map that to `null` for
    *  nullable fields, matching the Rust decoders' bounds checks. */
   fieldString(nodeId: number, offset: number): string {
@@ -262,12 +270,10 @@ export class MdastReader {
    * Valid for List nodes.
    */
   getListData(nodeId: number): { ordered: boolean; start: number; spread: boolean } {
-    const data = this.getTypeData(nodeId);
-    const view = new DataView(data.buffer, data.byteOffset);
     return {
-      start: view.getUint32(0, true),
-      ordered: data[4] !== 0,
-      spread: data[5] !== 0,
+      start: this.fieldU32(nodeId, 0, 0),
+      ordered: this.fieldU8(nodeId, 4, 0) !== 0,
+      spread: this.fieldU8(nodeId, 5, 0) !== 0,
     };
   }
 
@@ -276,11 +282,10 @@ export class MdastReader {
    * checked: 0=unchecked, 1=checked, 2=not-a-task-item.
    */
   getListItemData(nodeId: number): { checked: boolean | null; spread: boolean } {
-    const data = this.getTypeData(nodeId);
-    const checkedByte = data[0];
+    const checked = this.fieldU8(nodeId, 0, 2);
     return {
-      checked: checkedByte === 2 ? null : checkedByte === 1,
-      spread: data[1] !== 0,
+      checked: checked === 2 ? null : checked === 1,
+      spread: this.fieldU8(nodeId, 1, 0) !== 0,
     };
   }
 
@@ -288,8 +293,7 @@ export class MdastReader {
    * DescriptionDetailsData #[repr(C)]: spread(0). Valid for descriptionDetails.
    */
   getDescriptionDetailsData(nodeId: number): { spread: boolean } {
-    const data = this.getTypeData(nodeId);
-    return { spread: data.length > 0 && data[0] !== 0 };
+    return { spread: this.fieldU8(nodeId, 0, 0) !== 0 };
   }
 
   /**

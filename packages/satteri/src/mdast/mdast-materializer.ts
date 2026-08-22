@@ -60,27 +60,27 @@ function addTypeProperties(
   switch (nodeType) {
     case 5: {
       // list
-      const d = reader.getListData(nodeId);
       const n = node as { ordered: boolean; start: number | null; spread: boolean };
-      n.ordered = d.ordered;
-      n.start = d.ordered ? d.start : null;
-      n.spread = d.spread;
+      const ordered = reader.fieldU8(nodeId, 4, 0) !== 0;
+      n.ordered = ordered;
+      n.start = ordered ? reader.fieldU32(nodeId, 0, 0) : null;
+      n.spread = reader.fieldU8(nodeId, 5, 0) !== 0;
       break;
     }
 
     case 6: {
       // listItem
-      const d = reader.getListItemData(nodeId);
       const n = node as { spread: boolean; checked: boolean | null };
-      n.spread = d.spread;
-      n.checked = d.checked;
+      // checked: 0=unchecked, 1=checked, 2=not-a-task-item.
+      const checked = reader.fieldU8(nodeId, 0, 2);
+      n.spread = reader.fieldU8(nodeId, 1, 0) !== 0;
+      n.checked = checked === 2 ? null : checked === 1;
       break;
     }
 
     case 37: {
       // descriptionDetails
-      const d = reader.getDescriptionDetailsData(nodeId);
-      (node as { spread: boolean }).spread = d.spread;
+      (node as { spread: boolean }).spread = reader.fieldU8(nodeId, 0, 0) !== 0;
       break;
     }
 

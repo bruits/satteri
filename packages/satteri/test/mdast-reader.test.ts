@@ -157,3 +157,20 @@ test("getListData reads correct layout: start(u32)@0, ordered(bool)@4, spread(bo
   expect(d.ordered).toBe(true);
   expect(d.spread).toBe(true);
 });
+
+test("list accessors fall back safely when a node carries no type data", () => {
+  const buf = buildTestBuffer({
+    source: "",
+    nodes: [
+      { id: 0, type: 0, childrenStart: 0, childrenCount: 1, dataOffset: 0, dataLen: 0 },
+      { id: 1, type: 5, childrenStart: 0, childrenCount: 0, dataOffset: 0, dataLen: 0 },
+    ],
+    children: [1],
+    typeData: new Uint8Array(0),
+  });
+  const reader = new MdastReader(buf);
+
+  expect(reader.getListData(1)).toEqual({ start: 0, ordered: false, spread: false });
+  expect(reader.getListItemData(1)).toEqual({ checked: null, spread: false });
+  expect(reader.getDescriptionDetailsData(1)).toEqual({ spread: false });
+});
