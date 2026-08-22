@@ -1341,6 +1341,68 @@ describe("mdxToJs", () => {
     expect(js).toContain('"fill-rule": "evenodd"');
   });
 
+  test("elementAttributeNameCase: 'html' converts an appended root <svg> and setProperty names alike (#192)", () => {
+    const plugin = defineHastPlugin({
+      name: "svg-root-and-setprop",
+      element: {
+        filter: ["p", "svg"],
+        visit(node, ctx) {
+          if (node.tagName === "p") {
+            // The <svg> is the root of the appended subtree, not nested under a wrapper.
+            ctx.appendChild(node, {
+              type: "element",
+              tagName: "svg",
+              properties: { strokeWidth: "ROOT" },
+              children: [
+                {
+                  type: "element",
+                  tagName: "path",
+                  properties: { strokeWidth: "NESTED" },
+                  children: [],
+                },
+              ],
+            });
+            return;
+          }
+          ctx.setProperty(node, "strokeLinecap", "round");
+        },
+      },
+    });
+    const { code: js } = markdownToJs('<svg viewBox="0 0 1 1"></svg>\n', {
+      hastPlugins: [plugin],
+      elementAttributeNameCase: "html",
+      features: { rawHtml: true },
+    });
+    expect(js).toContain('"stroke-width": "ROOT"');
+    expect(js).toContain('"stroke-width": "NESTED"');
+    expect(js).toContain('"stroke-linecap": "round"');
+    expect(js).not.toContain("strokeWidth");
+    expect(js).not.toContain("strokeLinecap");
+  });
+
+  test("elementAttributeNameCase: 'html' resolves setProperty names against the element's own schema", () => {
+    const plugin = defineHastPlugin({
+      name: "p-setprop",
+      element: {
+        filter: ["p"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "ariaHidden", "true");
+          ctx.setProperty(node, "dataFoo", "bar");
+          // An SVG-only property on an HTML element is unknown to the HTML
+          // schema and passes through verbatim, as in property-information.
+          ctx.setProperty(node, "strokeWidth", "1");
+        },
+      },
+    });
+    const { code: js } = mdxToJs("hello", {
+      hastPlugins: [plugin],
+      elementAttributeNameCase: "html",
+    });
+    expect(js).toContain('"aria-hidden": "true"');
+    expect(js).toContain('"data-foo": "bar"');
+    expect(js).toContain('strokeWidth: "1"');
+  });
+
   test("style attribute parses into an object by default (DOM casing)", () => {
     const { code: js } = mdxToJs("| a | b |\n|:--|--:|\n| c | d |\n", {
       features: { gfm: true },
