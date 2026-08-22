@@ -5,4 +5,4 @@ cargo/satteri-ast: patch
 cargo/satteri-pulldown-cmark: patch
 ---
 
-Made parsing and HTML rendering faster, by 3% to 9% depending on the document.
+Made parsing, HTML rendering, and tree building faster, by 3% to 20% depending on the document and output.
