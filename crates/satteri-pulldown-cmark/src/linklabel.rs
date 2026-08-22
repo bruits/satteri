@@ -125,6 +125,14 @@ pub(crate) fn scan_link_label_rest<'t>(
                 ix += 1;
                 if b & 0b1000_0000 != 0 {
                     codepoints += 1;
+                } else {
+                    // A `|` mid-run follows a plain byte, never a backslash, so the table arms can't apply to it.
+                    while ix < bytes.len()
+                        && bytes[ix] < 0x80
+                        && !matches!(bytes[ix], b'[' | b']' | b'\\' | b' ' | b'\t' | b'\r' | b'\n')
+                    {
+                        ix += 1;
+                    }
                 }
             }
         }
