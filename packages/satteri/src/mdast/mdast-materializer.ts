@@ -16,6 +16,9 @@ export const LEAF_TYPES: ReadonlySet<number> = new Set([
   9, 10, 13, 7, 8, 14, 3, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104,
 ]);
 
+const IS_LEAF = new Uint8Array(256);
+for (const t of LEAF_TYPES) IS_LEAF[t] = 1;
+
 /** A `custom` node is a leaf when it has a non-empty `value` and no children or
  *  `data.h*`. Leafness is per node there, not per type, so the read paths ask
  *  this instead of {@link LEAF_TYPES}.
@@ -123,7 +126,7 @@ const mdastMaterializer = createMaterializer<MdastReader, MdastNode>({
   hasChildren: (nodeType, node, reader, nodeId) =>
     nodeType === MDAST_CUSTOM
       ? !isCustomLeaf(node, reader.getChildrenCount(nodeId))
-      : !LEAF_TYPES.has(nodeType),
+      : IS_LEAF[nodeType] === 0,
   populate: addTypeProperties,
 });
 

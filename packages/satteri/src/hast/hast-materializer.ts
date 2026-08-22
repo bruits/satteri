@@ -28,10 +28,13 @@ export const HAST_CONTAINER_TYPES: ReadonlySet<number> = new Set([
   HAST_MDX_JSX_TEXT_ELEMENT,
 ]);
 
+const IS_CONTAINER = new Uint8Array(256);
+for (const t of HAST_CONTAINER_TYPES) IS_CONTAINER[t] = 1;
+
 const hastMaterializer = createMaterializer<HastReader, HastNode>({
   label: "materializeHastNode",
   typeNames: TYPE_NAMES,
-  hasChildren: (nodeType) => HAST_CONTAINER_TYPES.has(nodeType),
+  hasChildren: (nodeType) => IS_CONTAINER[nodeType] === 1,
   populate(node, reader, nodeId, nodeType) {
     switch (nodeType) {
       case HAST_ELEMENT:
