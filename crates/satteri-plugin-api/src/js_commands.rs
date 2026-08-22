@@ -534,6 +534,7 @@ fn apply_hast_element_property(
     } else {
         let name_ref = arena.alloc_string(prop_name);
         let new_offset = arena.type_data.len() as u32;
+        debug_assert_eq!(new_offset & 3, 0);
         let new_prop_count = (old_prop_count + 1) as u32;
 
         // Header: 8 bytes (tag StringRef) + 4 bytes (prop_count) + 4 bytes (pad)
