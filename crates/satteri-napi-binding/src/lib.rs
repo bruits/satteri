@@ -1229,6 +1229,125 @@ fn to_js_fast_impl(
     })
 }
 
+/// One batch item's outcome: exactly one of `code` or `error` is set.
+#[cfg(feature = "mdx")]
+#[napi(object)]
+pub struct JsBatchJsResult {
+    pub code: Option<String>,
+    pub frontmatter: Option<JsFrontmatter>,
+    pub error: Option<String>,
+}
+
+/// Blocks the calling thread until every item finishes: built for build pipelines, not servers.
+#[cfg(feature = "mdx")]
+#[napi]
+pub fn mdx_to_js_many(
+    sources: Vec<String>,
+    parse_options: u32,
+    options: Option<JsMdxOptions>,
+    convert_options: Option<JsConvertOptions>,
+) -> Result<Vec<JsBatchJsResult>> {
+    use rayon::prelude::*;
+
+    // FunctionRef callbacks are bound to the JS thread and cannot run on workers.
+    let plain = match convert_options {
+        None => None,
+        Some(c) => {
+            let take = |v: Option<Either<String, FunctionRef<FnArgs<(u32, u32)>, String>>>| match v
+            {
+                None => Ok(None),
+                Some(Either::A(s)) => Ok(Some(s)),
+                Some(Either::B(_)) => Err(napi::Error::from_reason(
+                    "mdxToJsMany does not support function-valued footnote options; pass template strings".to_string(),
+                )),
+            };
+            Some((
+                c.footnote_label,
+                take(c.footnote_back_content)?,
+                take(c.footnote_back_label)?,
+                c.clobber_prefix,
+                c.raw_html,
+            ))
+        }
+    };
+    let build_convert_opts = || {
+        let mut out = satteri_ast::hast::ConvertOptions::default();
+        if let Some((label, content, back_label, prefix, raw_html)) = &plain {
+            if let Some(v) = label {
+                out.footnote_label = v.clone();
+            }
+            if let Some(v) = content {
+                out.footnote_back_content = satteri_ast::hast::Backref::Template(v.clone());
+            }
+            if let Some(v) = back_label {
+                out.footnote_back_label = satteri_ast::hast::Backref::Template(v.clone());
+            }
+            if let Some(v) = prefix {
+                out.clobber_prefix = v.clone();
+            }
+            #[cfg(feature = "from-html")]
+            if let Some(v) = raw_html {
+                out.raw_html = *v;
+            }
+            #[cfg(not(feature = "from-html"))]
+            let _ = raw_html;
+        }
+        out
+    };
+
+    let opts = parser_options(parse_options, true);
+    let mdx_opts = js_options_to_rust(options);
+    let ignore = mdx_opts
+        .optimize_static
+        .as_ref()
+        .map(|c| c.ignore_elements.clone())
+        .unwrap_or_default();
+
+    Ok(sources
+        .par_iter()
+        .map(|source| {
+            let convert_opts = build_convert_opts();
+            let (mdast, mdx_errors) = satteri_pulldown_cmark::parse_no_positions_into(
+                source,
+                opts,
+                acquire_mdast_arena(),
+            );
+            if let Some((offset, msg)) = mdx_errors.first() {
+                return JsBatchJsResult {
+                    code: None,
+                    frontmatter: None,
+                    error: Some(
+                        satteri_mdxjs::parse_error_to_message(source, *offset, msg).to_string(),
+                    ),
+                };
+            }
+            let frontmatter = extract_mdast_frontmatter(&mdast);
+            let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+                &mdast,
+                &convert_opts,
+                acquire_hast_arena(),
+            );
+            release_mdast_arena(mdast);
+            hast.mdx = true;
+            satteri_mdxjs::simplify_plain_mdx_nodes(&mut hast, &ignore);
+            let compiled = satteri_mdxjs::compile_hast_arena(&hast, &mdx_opts);
+            release_hast_arena(hast);
+            match compiled {
+                Ok(code) => JsBatchJsResult {
+                    code: Some(code),
+                    frontmatter,
+                    error: None,
+                },
+                Err(e) => JsBatchJsResult {
+                    code: None,
+                    frontmatter,
+                    error: Some(e.to_string()),
+                },
+            }
+        })
+        .collect())
+}
+
 /// Fast path: parse MDX → MDAST → HAST → JS, plus extract frontmatter, in a
 /// single NAPI roundtrip. Used by `mdxToJs` when the caller didn't configure
 /// any plugins. Skips 5 of the 6 NAPI crossings the handle-based path makes.

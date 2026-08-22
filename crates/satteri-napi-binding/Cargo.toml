@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi8"] }
 napi-derive = "3"
+rayon = "1"
 satteri-arena = { workspace = true }
 satteri-ast = { workspace = true }
 satteri-mdxjs = { workspace = true, optional = true }

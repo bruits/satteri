@@ -134,6 +134,13 @@ export declare function getMdastFrontmatter(handle: MdastHandle): JsFrontmatter 
  */
 export declare function getNodeData(handle: AnyHandle, nodeId: number): string | null
 
+/** One batch item's outcome: exactly one of `code` or `error` is set. */
+export interface JsBatchJsResult {
+  code?: string
+  frontmatter?: JsFrontmatter
+  error?: string
+}
+
 /**
  * MDAST→HAST conversion options passed from JavaScript.
  *
@@ -290,6 +297,9 @@ export interface MdxJsOneShot {
  * any plugins. Skips 5 of the 6 NAPI crossings the handle-based path makes.
  */
 export declare function mdxToJsFast(source: string, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
+
+/** Blocks the calling thread until every item finishes: built for build pipelines, not servers. */
+export declare function mdxToJsMany(sources: Array<string>, parseOptions: number, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): Array<JsBatchJsResult>
 
 /** Parse ESM (import/export statements) and return ESTree-compatible AST as JSON. */
 export declare function parseEsm(source: string): string | null

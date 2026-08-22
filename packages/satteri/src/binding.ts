@@ -28,6 +28,7 @@ export {
   parseExpression,
   parseToHtml,
   renderHandle,
+  mdxToJsMany,
   parseHastWire,
   parseMdastWire,
   serializeHandle,

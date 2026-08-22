@@ -598,7 +598,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { applyCommandsAndCompileHandle, applyCommandsAndConvertToHastHandle, applyCommandsAndRenderHandle, applyCommandsToHandle, applyCommandsToMdastHandle, applyMdastCommandsAndConvertAndCompile, applyMdastCommandsAndConvertAndRender, compileHandle, compileMdx, convertMdastToHastHandle, createHastHandle, createHastHandleFromHtml, createHastHandleWithFrontmatter, createMdastHandle, createMdxHastHandle, createMdxHastHandleWithFrontmatter, createMdxMdastHandle, dropHandle, getHandleSource, getMdastFrontmatter, getNodeData, markdownToHtmlFast, markdownToJsFast, mdastTextContentHandle, mdxToJsFast, parseEsm, parseExpression, parseHastWire, parseMdastWire, parseToHtml, renderHandle, serializeHandle, setNodeData, textContentHandle, walkHandle, walkMdastHandle } = nativeBinding
+const { applyCommandsAndCompileHandle, applyCommandsAndConvertToHastHandle, applyCommandsAndRenderHandle, applyCommandsToHandle, applyCommandsToMdastHandle, applyMdastCommandsAndConvertAndCompile, applyMdastCommandsAndConvertAndRender, compileHandle, compileMdx, convertMdastToHastHandle, createHastHandle, createHastHandleFromHtml, createHastHandleWithFrontmatter, createMdastHandle, createMdxHastHandle, createMdxHastHandleWithFrontmatter, createMdxMdastHandle, dropHandle, getHandleSource, getMdastFrontmatter, getNodeData, markdownToHtmlFast, markdownToJsFast, mdastTextContentHandle, mdxToJsFast, mdxToJsMany, parseEsm, parseExpression, parseHastWire, parseMdastWire, parseToHtml, renderHandle, serializeHandle, setNodeData, textContentHandle, walkHandle, walkMdastHandle } = nativeBinding
 export { applyCommandsAndCompileHandle }
 export { applyCommandsAndConvertToHastHandle }
 export { applyCommandsAndRenderHandle }
@@ -624,6 +624,7 @@ export { markdownToHtmlFast }
 export { markdownToJsFast }
 export { mdastTextContentHandle }
 export { mdxToJsFast }
+export { mdxToJsMany }
 export { parseEsm }
 export { parseExpression }
 export { parseHastWire }

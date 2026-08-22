@@ -82,6 +82,7 @@ export const markdownToHtmlFast = __napiModule.exports.markdownToHtmlFast
 export const markdownToJsFast = __napiModule.exports.markdownToJsFast
 export const mdastTextContentHandle = __napiModule.exports.mdastTextContentHandle
 export const mdxToJsFast = __napiModule.exports.mdxToJsFast
+export const mdxToJsMany = __napiModule.exports.mdxToJsMany
 export const parseEsm = __napiModule.exports.parseEsm
 export const parseExpression = __napiModule.exports.parseExpression
 export const parseHastWire = __napiModule.exports.parseHastWire

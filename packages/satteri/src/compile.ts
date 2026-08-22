@@ -46,6 +46,7 @@ import {
   markdownToJsFast,
   mdxToJsFast,
   renderHandle,
+  mdxToJsMany as mdxToJsManyNative,
   parseHastWire,
   parseMdastWire,
   serializeHandle,
@@ -945,6 +946,39 @@ export function mdxToJs(
   options: MdxCompileOptions = {},
 ): MdxToJsResult | Promise<MdxToJsResult> {
   return toJsImpl(source, options, true);
+}
+
+/** One item of a {@link mdxToJsMany} batch: `code` and `frontmatter` on success, `error` on failure. */
+export interface MdxToJsManyResult {
+  code?: string;
+  frontmatter?: Frontmatter | null;
+  error?: string;
+}
+
+/** Options for {@link mdxToJsMany}: the plugin-free subset of {@link MdxCompileOptions}. */
+export type MdxToJsManyOptions = Omit<
+  MdxCompileOptions,
+  "mdastPlugins" | "hastPlugins" | "fileURL" | "data"
+>;
+
+/**
+ * Compile many MDX sources to JavaScript modules in parallel on native
+ * threads. Blocks until the whole batch finishes and takes no plugins, so it
+ * fits build pipelines with many files rather than servers. Items fail
+ * independently: a bad document sets `error` on its own result only.
+ */
+export function mdxToJsMany(
+  sources: readonly string[],
+  options: MdxToJsManyOptions = {},
+): MdxToJsManyResult[] {
+  const { features, ...mdxFields } = options;
+  const mdxOptions = mdxOptionsToNative(mdxFields);
+  const { parseOptions, convertOptions } = featuresToNative(features);
+  return mdxToJsManyNative([...sources], parseOptions, mdxOptions, convertOptions).map((r) =>
+    r.error != null
+      ? { error: r.error }
+      : { code: r.code ?? "", frontmatter: (r.frontmatter as Frontmatter | null | undefined) ?? null },
+  );
 }
 
 /**
