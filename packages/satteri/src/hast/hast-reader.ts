@@ -129,6 +129,13 @@ export class HastReader {
    * data-heavy tree stays O(nodes) rather than O(nodes × entries).
    */
   getNodeData(nodeId: number): string | null {
+    const table = this.getNodeDataTable();
+    if (table === null) return null;
+    return table.get(nodeId) ?? null;
+  }
+
+  /** @internal `null` when no node carries a `data` blob. */
+  getNodeDataTable(): ReadonlyMap<number, string> | null {
     if (this.#nodeDataCount === 0) return null;
     if (this.#nodeDataTable === null) {
       this.#nodeDataTable = new Map();
@@ -144,7 +151,7 @@ export class HastReader {
         pos += len;
       }
     }
-    return this.#nodeDataTable.get(nodeId) ?? null;
+    return this.#nodeDataTable;
   }
 
   get nodeCount(): number {

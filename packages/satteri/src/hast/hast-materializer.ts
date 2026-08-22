@@ -99,7 +99,6 @@ function buildHastFused(
   strideW: number,
   typeDataB: number,
   pool: string,
-  hasNodeData: boolean,
   nodeId: number,
   nodeType: number,
 ): HastNode {
@@ -173,9 +172,6 @@ function buildHastFused(
       default:
         break;
     }
-    if (hasNodeData) {
-      installNodeData(node, reader.getNodeData(nodeId), "materializeHastTree", nodeId);
-    }
     return node;
   }
 }
@@ -184,12 +180,14 @@ function buildHastFused(
 export function materializeHastTree(reader: HastReader): Root {
   const { u8, u32, nodesB, nodesW, strideB, strideW, childrenW, typeDataB, pool } =
     reader.getWire();
-  const hasNodeData = reader.hasNodeData();
+  const dataTable = reader.getNodeDataTable();
 
   const rootType = u8[nodesB + FIELD.node_type] ?? 0;
-  const root = buildHastFused(
-    reader, u8, u32, nodesW, strideW, typeDataB, pool, hasNodeData, 0, rootType,
-  );
+  const root = buildHastFused(reader, u8, u32, nodesW, strideW, typeDataB, pool, 0, rootType);
+  if (dataTable !== null) {
+    const raw = dataTable.get(0);
+    if (raw !== undefined) installNodeData(root, raw, "materializeHastTree", 0);
+  }
   if (IS_CONTAINER[rootType] !== 1) return root as Root;
 
   const parents: HastNode[] = [root];
@@ -208,9 +206,13 @@ export function materializeHastTree(reader: HastReader): Root {
       const childId = u32[cbase + i] ?? 0;
       const childType = u8[nodesB + childId * strideB + FIELD.node_type] ?? 0;
       const child = buildHastFused(
-        reader, u8, u32, nodesW, strideW, typeDataB, pool, hasNodeData, childId, childType,
+        reader, u8, u32, nodesW, strideW, typeDataB, pool, childId, childType,
       );
       kids[i] = child;
+      if (dataTable !== null) {
+        const raw = dataTable.get(childId);
+        if (raw !== undefined) installNodeData(child, raw, "materializeHastTree", childId);
+      }
       if (IS_CONTAINER[childType] === 1) {
         parents.push(child);
         parentIds.push(childId);
