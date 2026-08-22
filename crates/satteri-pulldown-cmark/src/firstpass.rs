@@ -3701,20 +3701,23 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return false;
         }
 
-        // Cheap pre-filter: a delimiter row must contain at least one `-`.
-        // Container paragraphs hit this path on every continuation line, so
-        // skipping `scan_table_head` when the next line obviously can't be a
-        // delimiter row matters for parse perf.
-        // Use SIMD-backed `memchr` rather than a `position` closure — this
-        // path runs on every paragraph continuation line.
         let Some(eol_off) = memchr::memchr2(b'\n', b'\r', bytes) else {
             return false;
         };
         let next_line_ix = eol_off + scan_eol(&bytes[eol_off..]).unwrap();
-        // One pass: a `-` reached before any line ending is a `-` on the next line.
-        if memchr::memchr3(b'-', b'\n', b'\r', &bytes[next_line_ix..])
-            .is_none_or(|p| bytes[next_line_ix + p] != b'-')
-        {
+        // A delimiter row plus any continuation-line container prefix holds only `|-:> \t`, so the first other byte disqualifies the line.
+        let mut has_hyphen = false;
+        let mut j = next_line_ix;
+        loop {
+            match bytes.get(j) {
+                None | Some(b'\n' | b'\r') => break,
+                Some(b'-') => has_hyphen = true,
+                Some(b'|' | b':' | b' ' | b'\t' | b'>') => {}
+                Some(_) => return false,
+            }
+            j += 1;
+        }
+        if !has_hyphen {
             return false;
         }
 
