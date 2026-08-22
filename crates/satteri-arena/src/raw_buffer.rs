@@ -44,7 +44,7 @@ impl<K: ArenaKind> Arena<K> {
 
         let pool_is_ascii = self.string_pool.is_ascii();
 
-        // Built here because the JS reader would otherwise rescan the whole pool.
+        // Backs every byte-to-UTF-16 conversion below without a `LineIndex` rebuild.
         let mut multibyte_starts: Vec<u32> = Vec::new();
         let mut multibyte_shifts: Vec<u32> = Vec::new();
         if !pool_is_ascii {
@@ -81,21 +81,25 @@ impl<K: ArenaKind> Arena<K> {
                 i += utf8_len as usize;
             }
         }
-        let multibyte_count = multibyte_starts.len() as u32;
-
         let nodes_offset = header::SIZE as u32;
         let children_offset = nodes_offset + nodes_bytes as u32;
         let type_data_offset = children_offset + children_bytes as u32;
         let string_pool_offset = type_data_offset + type_data_bytes as u32;
         let node_data_offset = string_pool_offset + string_pool_bytes as u32;
 
-        let node_data_end = node_data_offset as usize + node_data_section_bytes;
-        // The JS reader takes u32 views straight over these, so align to 4.
-        let multibyte_pad = (4 - (node_data_end & 3)) & 3;
-        let multibyte_offset = (node_data_end + multibyte_pad) as u32;
-
-        let total = multibyte_offset as usize + multibyte_count as usize * 8;
+        let total = node_data_offset as usize + node_data_section_bytes;
         let mut buf = Vec::with_capacity(total);
+
+        // The wire carries only UTF-16 units, so JS never needs a byte remap of its own.
+        let to_utf16 = |byte_offset: u32| -> u32 {
+            let seen = multibyte_starts.partition_point(|&start| start < byte_offset);
+            byte_offset
+                - if seen == 0 {
+                    0
+                } else {
+                    multibyte_shifts[seen - 1]
+                }
+        };
 
         // Header fields (little-endian u32s) at the generated layout offsets,
         // so the JS readers' generated `HEADER` table reads the same bytes.
@@ -114,8 +118,6 @@ impl<K: ArenaKind> Arena<K> {
         put(header::STRING_POOL_OFFSET, string_pool_offset);
         put(header::NODE_DATA_COUNT, node_data_count);
         put(header::NODE_DATA_OFFSET, node_data_offset);
-        put(header::MULTIBYTE_COUNT, multibyte_count);
-        put(header::MULTIBYTE_OFFSET, multibyte_offset);
         buf.extend_from_slice(&hdr);
 
         // The arena tracks `start_offset`/`end_offset` as **byte** offsets
@@ -148,17 +150,6 @@ impl<K: ArenaKind> Arena<K> {
                         .copy_from_slice(&utf16_end.to_le_bytes());
                 }
             } else {
-                // The multibyte table already maps byte offsets to UTF-16 ones,
-                // so a `LineIndex` here would rebuild what we just computed.
-                let to_utf16 = |byte_offset: u32| -> u32 {
-                    let seen = multibyte_starts.partition_point(|&start| start < byte_offset);
-                    byte_offset
-                        - if seen == 0 {
-                            0
-                        } else {
-                            multibyte_shifts[seen - 1]
-                        }
-                };
                 for (i, node) in self.nodes.iter().enumerate() {
                     if node.start_line == 0 {
                         continue;
@@ -182,7 +173,24 @@ impl<K: ArenaKind> Arena<K> {
         };
         buf.extend_from_slice(children_slice);
 
-        buf.extend_from_slice(&self.type_data);
+        if !pool_is_ascii {
+            let type_data_start = buf.len();
+            buf.extend_from_slice(&self.type_data);
+            let type_data = &mut buf[type_data_start..];
+            let mut remap = to_utf16;
+            // A patch rebuild can leave several nodes sharing one blob; remap it exactly once.
+            let mut seen_blobs = rustc_hash::FxHashSet::default();
+            for node in &self.nodes {
+                if node.data_len == 0 || !seen_blobs.insert(node.data_offset) {
+                    continue;
+                }
+                let start = node.data_offset as usize;
+                let end = start + node.data_len as usize;
+                K::remap_string_refs(node.node_type, &mut type_data[start..end], &mut remap);
+            }
+        } else {
+            buf.extend_from_slice(&self.type_data);
+        }
         buf.extend_from_slice(self.string_pool.as_bytes());
 
         // node_data entries: [id:u32][len:u32][bytes...]
@@ -190,14 +198,6 @@ impl<K: ArenaKind> Arena<K> {
             buf.extend_from_slice(&id.to_le_bytes());
             buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
             buf.extend_from_slice(data);
-        }
-
-        buf.resize(buf.len() + multibyte_pad, 0);
-        for &start in &multibyte_starts {
-            buf.extend_from_slice(&start.to_le_bytes());
-        }
-        for &shift in &multibyte_shifts {
-            buf.extend_from_slice(&shift.to_le_bytes());
         }
 
         buf

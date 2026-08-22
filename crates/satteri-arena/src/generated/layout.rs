@@ -22,9 +22,7 @@ pub(crate) mod header {
     pub(crate) const STRING_POOL_OFFSET: usize = 40;
     pub(crate) const NODE_DATA_COUNT: usize = 44;
     pub(crate) const NODE_DATA_OFFSET: usize = 48;
-    pub(crate) const MULTIBYTE_COUNT: usize = 52;
-    pub(crate) const MULTIBYTE_OFFSET: usize = 56;
-    pub(crate) const SIZE: usize = 60;
+    pub(crate) const SIZE: usize = 52;
 }
 
 const _: () = {

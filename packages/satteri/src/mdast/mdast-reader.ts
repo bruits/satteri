@@ -1,7 +1,6 @@
 import type { MdastNodeRaw, BufferHeader, StringRefRaw, MdxJsxAttributeUnion } from "../types.js";
 import { restorePhantomSpaces } from "../phantom.js";
 import { decodeColumnAlign } from "./column-align.js";
-import { PoolOffsets } from "../string-pool.js";
 import { NodeTypeName } from "./generated/node-types.js";
 import { ARENA_MAGIC, KIND_MDAST, FIELD, HEADER } from "../generated/arena-layout.js";
 import type { Position } from "unist";
@@ -30,7 +29,6 @@ export class MdastReader {
   readonly #typeDataB: number;
   readonly #nodeDataCount: number;
   #stringPoolCache: string | null = null;
-  #poolOffsets: PoolOffsets | null = null;
 
   constructor(buffer: ArrayBuffer | Uint8Array) {
     let u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -78,8 +76,6 @@ export class MdastReader {
       stringPoolOffset: v.getUint32(HEADER.string_pool_offset, true),
       nodeDataCount: v.getUint32(HEADER.node_data_count, true),
       nodeDataOffset: v.getUint32(HEADER.node_data_offset, true),
-      multibyteCount: v.getUint32(HEADER.multibyte_count, true),
-      multibyteOffset: v.getUint32(HEADER.multibyte_offset, true),
     };
   }
 
@@ -126,29 +122,19 @@ export class MdastReader {
   }
 
   #initPool(): string {
-    const { stringPoolOffset, stringPoolLen, multibyteCount, multibyteOffset } = this.#header;
+    const { stringPoolOffset, stringPoolLen } = this.#header;
     const pool = this.#textDecoder.decode(
       this.#u8.subarray(stringPoolOffset, stringPoolOffset + stringPoolLen),
     );
     this.#stringPoolCache = pool;
-    if (multibyteCount > 0) {
-      const base = this.#u8.byteOffset + multibyteOffset;
-      this.#poolOffsets = new PoolOffsets(
-        new Uint32Array(this.#u8.buffer, base, multibyteCount),
-        new Uint32Array(this.#u8.buffer, base + multibyteCount * 4, multibyteCount),
-      );
-    }
     return pool;
   }
 
+  /** String refs arrive in UTF-16 units (the serializer remaps multibyte pools), so a plain substring is exact. */
   getString(offset: number, len: number): string {
     if (len === 0) return "";
     const pool = this.#stringPoolCache ?? this.#initPool();
-    // An all-ASCII pool has byte offsets equal to its UTF-16 indices.
-    const offsets = this.#poolOffsets;
-    return offsets === null
-      ? pool.substring(offset, offset + len)
-      : offsets.slice(pool, offset, len);
+    return pool.substring(offset, offset + len);
   }
 
   getNode(nodeId: number): MdastNodeRaw {

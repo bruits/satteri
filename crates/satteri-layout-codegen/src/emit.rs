@@ -131,6 +131,118 @@ pub fn walk_rs(fn_name: &str, kind: &str, layouts: &[Layout], tails: &[TailLayou
     out
 }
 
+fn remap_arm(out: &mut String, layouts: &[Layout], tails: &[TailLayout]) {
+    for layout in layouts {
+        let refs: Vec<&Field> = layout
+            .fields
+            .iter()
+            .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
+            .collect();
+        if refs.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "        {} => {{", tag_pattern(&layout.tags));
+        for f in &refs {
+            let _ = writeln!(out, "            remap_ref(data, {}, remap);", f.offset);
+        }
+        out.push_str("        }\n");
+    }
+    for t in tails {
+        let tail = &t.tail;
+        let head_refs: Vec<&Field> = tail
+            .head
+            .iter()
+            .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
+            .collect();
+        let item_refs: Vec<&Field> = tail
+            .item
+            .iter()
+            .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
+            .collect();
+        if head_refs.is_empty() && item_refs.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "        {} => {{", tag_pattern(&t.tags));
+        for f in &head_refs {
+            let _ = writeln!(out, "            remap_ref(data, {}, remap);", f.offset);
+        }
+        if !item_refs.is_empty() {
+            let _ = writeln!(out, "            if data.len() >= {} {{", tail.items_offset);
+            let _ = writeln!(
+                out,
+                "                let stored = u32::from_le_bytes(data[{}..{}].try_into().unwrap()) as usize;",
+                tail.count_offset,
+                tail.count_offset + 4
+            );
+            let _ = writeln!(
+                out,
+                "                let count = stored.min((data.len() - {}) / {});",
+                tail.items_offset, tail.stride
+            );
+            out.push_str("                for i in 0..count {\n");
+            let _ = writeln!(
+                out,
+                "                    let base = {} + i * {};",
+                tail.items_offset, tail.stride
+            );
+            for f in &item_refs {
+                if f.offset == 0 {
+                    out.push_str("                    remap_ref(data, base, remap);\n");
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "                    remap_ref(data, base + {}, remap);",
+                        f.offset
+                    );
+                }
+            }
+            out.push_str("                }\n            }\n");
+        }
+        out.push_str("        }\n");
+    }
+}
+
+/// The serialize-time StringRef byte-to-UTF-16 remap over a wire `type_data` copy.
+pub fn remap_refs_rs(
+    mdast_layouts: &[Layout],
+    mdast_tails: &[TailLayout],
+    hast_layouts: &[Layout],
+    hast_tails: &[TailLayout],
+) -> String {
+    let mut out = String::from(HEADER_RS);
+    out.push_str(
+        "/// Both ends of a ref sit on char boundaries, so the UTF-16 remap is exact; absent optional fields are out of bounds and left untouched.\n\
+         fn remap_ref(data: &mut [u8], off: usize, remap: &mut dyn FnMut(u32) -> u32) {\n\
+         \x20   let Some(bytes) = data.get_mut(off..off + 8) else {\n\
+         \x20       return;\n\
+         \x20   };\n\
+         \x20   let start = u32::from_le_bytes(bytes[0..4].try_into().unwrap());\n\
+         \x20   let len = u32::from_le_bytes(bytes[4..8].try_into().unwrap());\n\
+         \x20   let new_start = remap(start);\n\
+         \x20   let new_len = remap(start + len) - new_start;\n\
+         \x20   bytes[0..4].copy_from_slice(&new_start.to_le_bytes());\n\
+         \x20   bytes[4..8].copy_from_slice(&new_len.to_le_bytes());\n\
+         }\n\n",
+    );
+    for (fn_name, layouts, tails) in [
+        ("remap_mdast_string_refs", mdast_layouts, mdast_tails),
+        ("remap_hast_string_refs", hast_layouts, hast_tails),
+    ] {
+        let _ = writeln!(
+            out,
+            "/// Remap every StringRef in one node's wire `type_data` blob.\n\
+             #[allow(clippy::manual_range_patterns)]\n\
+             pub(crate) fn {fn_name}(node_type: u8, data: &mut [u8], remap: &mut dyn FnMut(u32) -> u32) {{\n\
+             \x20   match node_type {{",
+        );
+        remap_arm(&mut out, layouts, tails);
+        out.push_str("        _ => {}\n    }\n}\n\n");
+    }
+    out.truncate(out.trim_end().len());
+    out.push('\n');
+    out
+}
+
 /// The node-type discriminant enum plus `from_u8` / `name`, generated from the
 /// registry so the tag <-> variant <-> name mapping is declared exactly once.
 pub fn node_types_rs(enum_name: &str, nodes: &[Node]) -> String {
