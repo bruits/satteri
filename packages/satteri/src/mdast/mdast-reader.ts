@@ -85,6 +85,11 @@ export class MdastReader {
 
   #nodeDataTable: Map<number, string> | null = null;
 
+  /** Lets tree fills skip the per-node `getNodeData` call on data-free wires. */
+  hasNodeData(): boolean {
+    return this.#nodeDataCount !== 0;
+  }
+
   /** Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
    * side). Lazy-builds a `Map<id, string>` on first call so materialization
    * of a data-heavy tree stays O(nodes) rather than O(nodes × entries). */

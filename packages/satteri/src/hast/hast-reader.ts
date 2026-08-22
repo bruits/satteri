@@ -106,6 +106,11 @@ export class HastReader {
 
   #nodeDataTable: Map<number, string> | null = null;
 
+  /** Lets tree fills skip the per-node `getNodeData` call on data-free wires. */
+  hasNodeData(): boolean {
+    return this.#nodeDataCount !== 0;
+  }
+
   /**
    * Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
    * side). Returns `null` when the node has no entry. Lazy-builds a
@@ -408,7 +413,10 @@ export class HastReader {
    * These store a single StringRef (8 bytes) as their type_data.
    */
   getTextValue(nodeId: number): string {
-    const at = this.#typeDataAt(nodeId, 8);
-    return at === -1 ? "" : this.#stringAt(at);
+    const u32 = this.#u32;
+    const w = this.#nodesW + nodeId * this.#strideW;
+    if ((u32[w + W_DATA_LEN] ?? 0) < 8) return "";
+    const at = (this.#typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
+    return this.getString(u32[at] ?? 0, u32[at + 1] ?? 0);
   }
 }

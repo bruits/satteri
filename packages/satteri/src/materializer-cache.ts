@@ -17,6 +17,7 @@ export interface MaterializerReader {
   childIdAt(childrenStart: number, index: number): number;
   getPosition(nodeId: number): Position | undefined;
   getNodeData(nodeId: number): string | null;
+  hasNodeData(): boolean;
 }
 
 /** Node memo + shared lazy `children` descriptor; the memo keeps one object per `(reader, id)` so identity-based plugin dedup works across access paths. */
@@ -151,6 +152,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     nodeId: number,
     nodeType: number,
     eager = false,
+    hasNodeData = true,
   ): TNode {
     const typeName = spec.typeNames[nodeType] ?? `unknown(${nodeType})`;
 
@@ -176,7 +178,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
 
     // Plugins can set `data` on any node type, so rehydrate generically
     // (see website/content/docs/divergences.md for the code-block case).
-    const rawData = reader.getNodeData(nodeId);
+    const rawData = hasNodeData ? reader.getNodeData(nodeId) : null;
     if (rawData !== null) {
       try {
         const parsed = JSON.parse(rawData) as Record<string, unknown>;
@@ -228,8 +230,9 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
    * parent's array as it is built rather than in a second pass.
    */
   function fillTree(reader: TReader, cache: ReaderCache<TNode>, rootId: number): TNode {
+    const hasNodeData = reader.hasNodeData();
     const rootType = reader.getNodeType(rootId);
-    const root = buildNode(reader, cache, rootId, rootType, true);
+    const root = buildNode(reader, cache, rootId, rootType, true, hasNodeData);
     if (!spec.hasChildren(rootType, root, reader, rootId)) return root;
 
     const parents: TNode[] = [root];
@@ -247,7 +250,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
       for (let i = 0; i < count; i++) {
         const childId = reader.childIdAt(childrenStart, i);
         const childType = reader.getNodeType(childId);
-        const child = buildNode(reader, cache, childId, childType, true);
+        const child = buildNode(reader, cache, childId, childType, true, hasNodeData);
         kids[i] = child;
         if (spec.hasChildren(childType, child, reader, childId)) {
           parents.push(child);
