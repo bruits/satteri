@@ -87,11 +87,28 @@ fn main() {
         }),
         other => panic!("unknown workload: {other}"),
     };
-    let opts = if workload.starts_with("mdx") {
+    let mut opts = if workload.starts_with("mdx") {
         satteri_pulldown_cmark::MDX_OPTIONS
     } else {
         satteri_pulldown_cmark::DEFAULT_OPTIONS
     };
+    // Ablation lever for sizing per-construct costs, e.g. SATTERI_STRIP=TABLES,MATH.
+    if let Ok(strip) = std::env::var("SATTERI_STRIP") {
+        use satteri_pulldown_cmark::Options;
+        for name in strip.split(',') {
+            let flag = match name.trim() {
+                "TABLES" => Options::ENABLE_TABLES,
+                "MATH" => Options::ENABLE_MATH,
+                "FOOTNOTES" => Options::ENABLE_FOOTNOTES,
+                "STRIKETHROUGH" => Options::ENABLE_STRIKETHROUGH,
+                "TASKLISTS" => Options::ENABLE_TASKLISTS,
+                "YAML" => Options::ENABLE_YAML_STYLE_METADATA_BLOCKS,
+                "GFM" => Options::ENABLE_GFM,
+                _ => continue,
+            };
+            opts.remove(flag);
+        }
+    }
 
     // Warm up to avoid cold-start noise.
     for _ in 0..100 {

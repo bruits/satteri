@@ -111,6 +111,8 @@ fn parse_inner(
         options
     };
 
+    let options = strip_absent_constructs(source, options);
+
     let line_index = if track_positions {
         LineIndex::from_source(source)
     } else {
@@ -2089,6 +2091,29 @@ fn parse_inner(
     }
 
     (arena, mdx_errors)
+}
+
+/// Tables can't join this: a `:-` delimiter row makes a single-column table with no pipe anywhere.
+fn strip_absent_constructs(source: &str, options: Options) -> Options {
+    let bytes = source.as_bytes();
+    let mut opts = options;
+    if opts.intersects(
+        Options::ENABLE_MATH | Options::ENABLE_MATH_SINGLE_DOLLAR | Options::ENABLE_MATH_MULTI_DOLLAR,
+    ) && memchr::memchr(b'$', bytes).is_none()
+    {
+        opts.remove(
+            Options::ENABLE_MATH
+                | Options::ENABLE_MATH_SINGLE_DOLLAR
+                | Options::ENABLE_MATH_MULTI_DOLLAR,
+        );
+    }
+    if opts.contains(Options::ENABLE_FOOTNOTES) && memchr::memchr(b'^', bytes).is_none() {
+        opts.remove(Options::ENABLE_FOOTNOTES);
+    }
+    if opts.contains(Options::ENABLE_STRIKETHROUGH) && memchr::memchr(b'~', bytes).is_none() {
+        opts.remove(Options::ENABLE_STRIKETHROUGH);
+    }
+    opts
 }
 
 /// Joins only items whose emitted value equals their own source bytes exactly, so the run's slice is the run's value.
