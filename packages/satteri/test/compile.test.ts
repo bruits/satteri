@@ -1362,6 +1362,8 @@ describe("mdxToJs", () => {
     expect(js).toContain('fillRule: "evenodd"');
     expect(js).toContain('strokeWidth: "2"');
     expect(js).not.toContain("fill-rule");
+  });
+
   test("elementAttributeNameCase: 'html' converts an appended root <svg> and setProperty names alike (#192)", () => {
     const plugin = defineHastPlugin({
       name: "svg-root-and-setprop",
