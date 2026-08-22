@@ -1,9 +1,11 @@
 import type { Root } from "mdast";
+import type { Position } from "unist";
 import type { MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
 import { materializeMdastFields } from "./generated/layout.js";
-import { createMaterializer } from "../materializer-cache.js";
+import { createMaterializer, installNodeData } from "../materializer-cache.js";
+import { FIELD } from "../generated/arena-layout.js";
 
 /** Internal tag for user-defined nodes; its stored `name` field carries the
  *  author's public `type` string. */
@@ -137,7 +139,103 @@ const mdastMaterializer = createMaterializer<MdastReader, MdastNode>({
  */
 export const materializeNode = mdastMaterializer.node;
 
-/** Materialize the full tree from root (nodeId=0). */
+const W_START_OFFSET = FIELD.start_offset >> 2;
+const W_CHILDREN_START = FIELD.children_start >> 2;
+const W_CHILDREN_COUNT = FIELD.children_count >> 2;
+const W_DATA_OFFSET = FIELD.data_offset >> 2;
+const W_DATA_LEN = FIELD.data_len >> 2;
+
+// Not a per-call closure: fresh closures restart type feedback per tree, pinning small-tree calls to the slow tiers.
+function buildMdastFused(
+  reader: MdastReader,
+  u32: Uint32Array,
+  nodesW: number,
+  strideW: number,
+  typeDataB: number,
+  pool: string,
+  hasNodeData: boolean,
+  nodeId: number,
+  nodeType: number,
+): MdastNode {
+  {
+    const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
+    // Plain object, not a class: unified's `assertNode` rejects any other prototype.
+    const node = { type: typeName } as unknown as MdastNode;
+    const w = nodesW + nodeId * strideW + W_START_OFFSET;
+    const startLine = u32[w + 2] ?? 0;
+    if (startLine !== 0) {
+      (node as { position?: Position }).position = {
+        start: { offset: u32[w] ?? 0, line: startLine, column: u32[w + 3] ?? 0 },
+        end: { offset: u32[w + 1] ?? 0, line: u32[w + 4] ?? 0, column: u32[w + 5] ?? 0 },
+      };
+    }
+    switch (nodeType) {
+      case 7:
+      case 10:
+      case 13:
+      case 25:
+      case 26: {
+        const wd = nodesW + nodeId * strideW;
+        let value = "";
+        if ((u32[wd + W_DATA_LEN] ?? 0) >= 8) {
+          const at = (typeDataB + (u32[wd + W_DATA_OFFSET] ?? 0)) >> 2;
+          const off = u32[at] ?? 0;
+          value = pool.substring(off, off + (u32[at + 1] ?? 0));
+        }
+        (node as { value: string }).value = value;
+        break;
+      }
+      default:
+        addTypeProperties(node, reader, nodeId, nodeType);
+        break;
+    }
+    if (hasNodeData) {
+      installNodeData(node, reader.getNodeData(nodeId), "materializeMdastTree", nodeId);
+    }
+    return node;
+  }
+}
+
+/** Materialize the full tree from root (nodeId=0), fused: one-shot walk, so wire loads replace per-node reader calls. */
 export function materializeMdastTree(reader: MdastReader): Root {
-  return mdastMaterializer.tree(reader, 0) as Root;
+  const { u8, u32, nodesB, nodesW, strideB, strideW, childrenW, typeDataB, pool } =
+    reader.getWire();
+  const hasNodeData = reader.hasNodeData();
+
+  const rootType = u8[nodesB + FIELD.node_type] ?? 0;
+  const root = buildMdastFused(
+    reader, u32, nodesW, strideW, typeDataB, pool, hasNodeData, 0, rootType,
+  );
+
+  const parents: MdastNode[] = [root];
+  const parentIds: number[] = [0];
+  for (let p = 0; p < parentIds.length; p++) {
+    const parent = parents[p];
+    const parentId = parentIds[p];
+    if (parent === undefined || parentId === undefined) {
+      throw new Error(`materializeMdastTree: parent queue hole at ${p}`);
+    }
+    const w = nodesW + parentId * strideW;
+    const count = u32[w + W_CHILDREN_COUNT] ?? 0;
+    const cbase = childrenW + (u32[w + W_CHILDREN_START] ?? 0);
+    const kids = new Array<MdastNode>(count);
+    for (let i = 0; i < count; i++) {
+      const childId = u32[cbase + i] ?? 0;
+      const childType = u8[nodesB + childId * strideB + FIELD.node_type] ?? 0;
+      const child = buildMdastFused(
+        reader, u32, nodesW, strideW, typeDataB, pool, hasNodeData, childId, childType,
+      );
+      kids[i] = child;
+      const isContainer =
+        childType === MDAST_CUSTOM
+          ? !isCustomLeaf(child, u32[nodesW + childId * strideW + W_CHILDREN_COUNT] ?? 0)
+          : IS_LEAF[childType] === 0;
+      if (isContainer) {
+        parents.push(child);
+        parentIds.push(childId);
+      }
+    }
+    (parent as { children?: MdastNode[] }).children = kids;
+  }
+  return root as Root;
 }
