@@ -2098,7 +2098,9 @@ fn strip_absent_constructs(source: &str, options: Options) -> Options {
     let bytes = source.as_bytes();
     let mut opts = options;
     if opts.intersects(
-        Options::ENABLE_MATH | Options::ENABLE_MATH_SINGLE_DOLLAR | Options::ENABLE_MATH_MULTI_DOLLAR,
+        Options::ENABLE_MATH
+            | Options::ENABLE_MATH_SINGLE_DOLLAR
+            | Options::ENABLE_MATH_MULTI_DOLLAR,
     ) && memchr::memchr(b'$', bytes).is_none()
     {
         opts.remove(
@@ -2145,8 +2147,8 @@ fn collect_text_run(
             ItemBody::Text {
                 backslash_escaped: false,
             } if it.start < it.end => {}
-            ItemBody::SoftBreak
-                if matches!(&source[it.start..it.end], b"\n" | b"\r" | b"\r\n") => {}
+            ItemBody::SoftBreak if matches!(&source[it.start..it.end], b"\n" | b"\r" | b"\r\n") => {
+            }
             _ => break,
         }
         run_end = it.end;

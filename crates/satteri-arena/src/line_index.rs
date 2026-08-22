@@ -560,8 +560,15 @@ mod tests {
                     .get(i + 1)
                     .map_or(bytes.len(), |&e| e as usize);
                 let line = &bytes[start as usize..end];
-                assert_eq!(idx.line_meta[i].is_ascii, line.is_ascii(), "line {i} of {src:?}");
-                assert_eq!(idx.line_meta[i].utf16_offset, utf16_count, "line {i} of {src:?}");
+                assert_eq!(
+                    idx.line_meta[i].is_ascii,
+                    line.is_ascii(),
+                    "line {i} of {src:?}"
+                );
+                assert_eq!(
+                    idx.line_meta[i].utf16_offset, utf16_count,
+                    "line {i} of {src:?}"
+                );
                 utf16_count += utf16_len_bytes(line);
             }
         }

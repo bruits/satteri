@@ -81,6 +81,23 @@ impl<K: ArenaKind> Arena<K> {
                 i += utf8_len as usize;
             }
         }
+        // Equal adjacent block shifts prove the 256-byte block holds no multibyte boundary, so a lookup there skips the search.
+        let mut block_shifts: Vec<u32> = Vec::new();
+        if !pool_is_ascii {
+            let nblocks = (string_pool_bytes >> 8) + 2;
+            block_shifts = vec![0u32; nblocks];
+            let mut mi = 0usize;
+            let mut cur = 0u32;
+            for (b, slot) in block_shifts.iter_mut().enumerate() {
+                let block_start = (b as u32) << 8;
+                while mi < multibyte_starts.len() && multibyte_starts[mi] < block_start {
+                    cur = multibyte_shifts[mi];
+                    mi += 1;
+                }
+                *slot = cur;
+            }
+        }
+
         let nodes_offset = header::SIZE as u32;
         let children_offset = nodes_offset + nodes_bytes as u32;
         let type_data_offset = children_offset + children_bytes as u32;
@@ -92,6 +109,11 @@ impl<K: ArenaKind> Arena<K> {
 
         // The wire carries only UTF-16 units, so JS never needs a byte remap of its own.
         let to_utf16 = |byte_offset: u32| -> u32 {
+            let b = (byte_offset >> 8) as usize;
+            let shift = block_shifts[b];
+            if shift == block_shifts[b + 1] {
+                return byte_offset - shift;
+            }
             let seen = multibyte_starts.partition_point(|&start| start < byte_offset);
             byte_offset
                 - if seen == 0 {
@@ -134,6 +156,10 @@ impl<K: ArenaKind> Arena<K> {
             const START_OFF_FIELD: usize = offset_of!(ArenaNode, start_offset);
             const END_OFF_FIELD: usize = offset_of!(ArenaNode, end_offset);
             let cached = self.utf16_offsets.len() == self.nodes.len();
+            let put4 = |buf: &mut [u8], off: usize, v: u32| {
+                let dst: &mut [u8; 4] = (&mut buf[off..off + 4]).try_into().unwrap();
+                *dst = v.to_le_bytes();
+            };
             if cached {
                 for (i, &(utf16_start, utf16_end)) in self.utf16_offsets.iter().enumerate() {
                     let node = &self.nodes[i];
@@ -144,10 +170,8 @@ impl<K: ArenaKind> Arena<K> {
                         continue;
                     }
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
-                    buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                        .copy_from_slice(&utf16_start.to_le_bytes());
-                    buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                        .copy_from_slice(&utf16_end.to_le_bytes());
+                    put4(&mut buf, off + START_OFF_FIELD, utf16_start);
+                    put4(&mut buf, off + END_OFF_FIELD, utf16_end);
                 }
             } else {
                 for (i, node) in self.nodes.iter().enumerate() {
@@ -155,10 +179,8 @@ impl<K: ArenaKind> Arena<K> {
                         continue;
                     }
                     let off = nodes_buf_start + i * NODE_STRUCT_SIZE;
-                    buf[off + START_OFF_FIELD..off + START_OFF_FIELD + 4]
-                        .copy_from_slice(&to_utf16(node.start_offset).to_le_bytes());
-                    buf[off + END_OFF_FIELD..off + END_OFF_FIELD + 4]
-                        .copy_from_slice(&to_utf16(node.end_offset).to_le_bytes());
+                    put4(&mut buf, off + START_OFF_FIELD, to_utf16(node.start_offset));
+                    put4(&mut buf, off + END_OFF_FIELD, to_utf16(node.end_offset));
                 }
             }
         }
@@ -178,12 +200,19 @@ impl<K: ArenaKind> Arena<K> {
             buf.extend_from_slice(&self.type_data);
             let type_data = &mut buf[type_data_start..];
             let mut remap = to_utf16;
-            // A patch rebuild can leave several nodes sharing one blob; remap it exactly once.
-            let mut seen_blobs = rustc_hash::FxHashSet::default();
+            // A patch rebuild can leave several nodes sharing one blob; blob starts are 4-aligned, so a bit per slot dedups without hashing.
+            let mut seen_blobs = vec![0u64; self.type_data.len() / 4 / 64 + 1];
             for node in &self.nodes {
-                if node.data_len == 0 || !seen_blobs.insert(node.data_offset) {
+                if node.data_len == 0 {
                     continue;
                 }
+                debug_assert_eq!(node.data_offset % 4, 0);
+                let slot = (node.data_offset / 4) as usize;
+                let (word, bit) = (slot / 64, 1u64 << (slot % 64));
+                if seen_blobs[word] & bit != 0 {
+                    continue;
+                }
+                seen_blobs[word] |= bit;
                 let start = node.data_offset as usize;
                 let end = start + node.data_len as usize;
                 K::remap_string_refs(node.node_type, &mut type_data[start..end], &mut remap);
