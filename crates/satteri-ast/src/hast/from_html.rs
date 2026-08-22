@@ -35,8 +35,9 @@ const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 
 /// SVG elements whose content is parsed as HTML (the spec's HTML integration
-/// points), so SVG content stops at them. MathML's integration points never
-/// arise: MathML is parsed in the HTML context here.
+/// points), so SVG content stops at them. MathML's integration points do not
+/// matter here: the context only tracks SVG content, which html5ever's
+/// MathML-namespace elements never enter.
 fn is_html_integration_point(local: &str) -> bool {
     matches!(local, "foreignObject" | "desc" | "title")
 }
