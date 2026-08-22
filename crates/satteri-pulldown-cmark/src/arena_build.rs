@@ -834,13 +834,6 @@ fn parse_inner(
                 let item = inner.tree[cur_ix].item;
                 let start = item.start as u32;
                 let end = item.end as u32;
-                let (start_line, start_col) = cursor.offset_to_line_col(start);
-                let (end_line, end_col) =
-                    if defer_container_end && opens_repositioned_node(&item.body) {
-                        (0, 0)
-                    } else {
-                        cursor.offset_to_line_col(end)
-                    };
 
                 // If we're accumulating content for an HTML/code block, handle it.
                 if let Some(buf) = html_block_buf.as_mut() {
@@ -954,6 +947,14 @@ fn parse_inner(
                     inner.tree.next_sibling(cur_ix);
                     continue;
                 }
+
+                let (start_line, start_col) = cursor.offset_to_line_col(start);
+                let (end_line, end_col) =
+                    if defer_container_end && opens_repositioned_node(&item.body) {
+                        (0, 0)
+                    } else {
+                        cursor.offset_to_line_col(end)
+                    };
 
                 // Map ItemBody to arena node.
                 match item.body {
