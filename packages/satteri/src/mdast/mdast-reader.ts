@@ -91,9 +91,11 @@ export class MdastReader {
 
   #nodeDataTable: Map<number, string> | null = null;
 
-  /** @internal */
+  #wire: ArenaWire | null = null;
+
+  /** @internal Memoized: the lazy materializer asks once per node. */
   getWire(): ArenaWire {
-    return {
+    return (this.#wire ??= {
       u8: this.#u8,
       u32: this.#u32,
       nodesB: this.#nodesB,
@@ -103,7 +105,7 @@ export class MdastReader {
       childrenW: this.#childrenW,
       typeDataB: this.#typeDataB,
       pool: this.getStringPool(),
-    };
+    });
   }
 
   /** Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust

@@ -106,9 +106,11 @@ export class HastReader {
 
   #nodeDataTable: Map<number, string> | null = null;
 
-  /** @internal */
+  #wire: ArenaWire | null = null;
+
+  /** @internal Memoized: the lazy materializer asks once per node. */
   getWire(): ArenaWire {
-    return {
+    return (this.#wire ??= {
       u8: this.#u8,
       u32: this.#u32,
       nodesB: this.#nodesB,
@@ -118,7 +120,7 @@ export class HastReader {
       childrenW: this.#childrenW,
       typeDataB: this.#typeDataB,
       pool: this.getStringPool(),
-    };
+    });
   }
 
   /**
@@ -260,42 +262,14 @@ export class HastReader {
     return this.getString(this.#u32[w] ?? 0, this.#u32[w + 1] ?? 0);
   }
 
-  /** @internal Both element fields in one pass; the per-field accessors below
-   *  each re-resolve the node's `type_data` position.
+  /** Element `tagName`, `properties` count, and the i-th property, read without
+   *  building the intermediate views and records `getElementData` allocates.
    *
    * Element type_data layout:
    *   [tag_name: StringRef(8B)][prop_count: u32(4B)][_pad: u32(4B)] = 16-byte header
    *   then prop_count * 20 bytes:
    *     [name: StringRef(8B)][value_type: u8(1B)][_pad: [u8;3](3B)][value: StringRef(8B)]
    */
-  readElementInto(
-    nodeId: number,
-    node: { tagName: string; properties: Record<string, HastProperty["value"]> },
-  ): void {
-    const at = this.#typeDataAt(nodeId, 16);
-    if (at === -1) {
-      node.tagName = "";
-      node.properties = {};
-      return;
-    }
-    const u32 = this.#u32;
-    const u8 = this.#u8;
-    const w = at >> 2;
-    node.tagName = this.getString(u32[w] ?? 0, u32[w + 1] ?? 0);
-    const count = u32[w + 2] ?? 0;
-    const properties: Record<string, HastProperty["value"]> = {};
-    for (let i = 0; i < count; i++) {
-      const base = w + 4 + i * 5;
-      properties[this.getString(u32[base] ?? 0, u32[base + 1] ?? 0)] = decodeElementProp(
-        u8[(base + 2) << 2] ?? 0,
-        this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0),
-      );
-    }
-    node.properties = properties;
-  }
-
-  /** Element `tagName`, `properties` count, and the i-th property, read without
-   *  building the intermediate views and records `getElementData` allocates. */
   getElementTagName(nodeId: number): string {
     const at = this.#typeDataAt(nodeId, 16);
     return at === -1 ? "" : this.#stringAt(at);

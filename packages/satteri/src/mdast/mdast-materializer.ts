@@ -2,7 +2,6 @@ import type { Root } from "mdast";
 import type { ArenaWire, MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
-import { materializeMdastFields } from "./generated/layout.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { FIELD, W_CHILDREN_COUNT, W_CHILDREN_START } from "../generated/arena-layout.js";
 import { readMdastWireNode } from "../generated/fused-wire.js";
@@ -40,7 +39,8 @@ export function isCustomLeaf(
 }
 
 /**
- * Add type-specific properties to a node object as eager plain stores.
+ * The reader-path decode for the tags `readMdastWireNode` hands back:
+ * struct-backed scalars, tails with hand assembly, and the user-defined node.
  */
 function addTypeProperties(
   node: MdastNode,
@@ -48,21 +48,16 @@ function addTypeProperties(
   nodeId: number,
   nodeType: number,
 ): void {
-  // Fixed-field types materialize from the generated layout table; the rest
-  // (variable-length / cross-field) stay in the hand-written switch.
-  if (materializeMdastFields(reader, node, nodeId, nodeType)) {
-    // User-defined node: surface the stored `name` as the open `node.type`.
-    // Drop an empty `value` so a parent node isn't given a spurious leaf field.
-    if (nodeType === MDAST_CUSTOM) {
-      const n = node as { type: string; name?: string; value?: string };
-      if (n.name !== undefined) n.type = n.name;
-      delete n.name;
-      if (n.value === "") delete n.value;
-    }
-    return;
-  }
-
   switch (nodeType) {
+    case MDAST_CUSTOM: {
+      // The stored `name` becomes the open `node.type`; an empty `value` is omitted so the node doesn't read as a leaf.
+      const n = node as { type: string; value?: string };
+      n.type = reader.fieldString(nodeId, 0);
+      const value = reader.fieldString(nodeId, 8);
+      if (value !== "") n.value = value;
+      break;
+    }
+
     case 5: {
       // list
       const n = node as { ordered: boolean; start: number | null; spread: boolean };
@@ -114,9 +109,6 @@ function addTypeProperties(
       break;
     }
 
-    // Nodes with no type-specific props:
-    // root(0), paragraph(1), thematicBreak(3), blockquote(4),
-    // emphasis(11), strong(12), break(14), tableRow(22), tableCell(23), delete(24)
     default:
       break;
   }
@@ -129,7 +121,11 @@ const mdastMaterializer = createMaterializer<MdastReader, MdastNode>({
     nodeType === MDAST_CUSTOM
       ? !isCustomLeaf(node, reader.getChildrenCount(nodeId))
       : IS_LEAF[nodeType] === 0,
-  populate: addTypeProperties,
+  populate: (node, reader, nodeId, nodeType) => {
+    if (!readMdastWireNode(reader.getWire(), nodeId, nodeType, node)) {
+      addTypeProperties(node, reader, nodeId, nodeType);
+    }
+  },
 });
 
 /**

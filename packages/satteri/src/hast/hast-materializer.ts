@@ -2,20 +2,12 @@ import {
   HastReader,
   HAST_ROOT,
   HAST_ELEMENT,
-  HAST_TEXT,
-  HAST_COMMENT,
-  HAST_RAW,
   HAST_MDX_JSX_ELEMENT,
   HAST_MDX_JSX_TEXT_ELEMENT,
-  HAST_MDX_FLOW_EXPRESSION,
-  HAST_MDX_TEXT_EXPRESSION,
-  HAST_MDX_ESM,
 } from "./hast-reader.js";
-import type { HastProperty } from "./hast-reader.js";
 import type { Root } from "hast";
 import type { ArenaWire, HastNode } from "../types.js";
 import { TYPE_NAMES } from "./generated/node-types.js";
-import { restorePhantomSpaces } from "../phantom.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { FIELD, W_CHILDREN_COUNT, W_CHILDREN_START } from "../generated/arena-layout.js";
 import { readHastWireNode } from "../generated/fused-wire.js";
@@ -38,40 +30,8 @@ const hastMaterializer = createMaterializer<HastReader, HastNode>({
   typeNames: TYPE_NAMES,
   hasChildren: (nodeType) => IS_CONTAINER[nodeType] === 1,
   populate(node, reader, nodeId, nodeType) {
-    switch (nodeType) {
-      case HAST_ELEMENT:
-        reader.readElementInto(
-          nodeId,
-          node as { tagName: string; properties: Record<string, HastProperty["value"]> },
-        );
-        break;
-
-      case HAST_TEXT:
-      case HAST_COMMENT:
-      case HAST_RAW:
-        (node as { value: string }).value = reader.getTextValue(nodeId);
-        break;
-
-      case HAST_MDX_JSX_ELEMENT:
-      case HAST_MDX_JSX_TEXT_ELEMENT: {
-        const { name, attributes } = reader.getMdxJsxElementData(nodeId);
-        (node as { name: string | null }).name = name;
-        (node as { attributes: unknown }).attributes = attributes;
-        break;
-      }
-
-      case HAST_MDX_FLOW_EXPRESSION:
-      case HAST_MDX_TEXT_EXPRESSION:
-        (node as { value: string }).value = restorePhantomSpaces(reader.getTextValue(nodeId));
-        break;
-
-      case HAST_MDX_ESM:
-        (node as { value: string }).value = reader.getTextValue(nodeId);
-        break;
-
-      // HAST_ROOT / HAST_DOCTYPE: no extra properties
-      default:
-        break;
+    if (!readHastWireNode(reader.getWire(), nodeId, nodeType, node)) {
+      addHastTypeProperties(node, reader, nodeId, nodeType);
     }
   },
 });
@@ -82,6 +42,21 @@ const hastMaterializer = createMaterializer<HastReader, HastNode>({
  * cannot corrupt the shared cache.
  */
 export const materializeHastNode = hastMaterializer.node;
+
+/** The reader-path decode for the tags `readHastWireNode` hands back: MDX JSX
+ *  elements, whose kind-tagged attribute assembly stays on the reader. */
+function addHastTypeProperties(
+  node: HastNode,
+  reader: HastReader,
+  nodeId: number,
+  nodeType: number,
+): void {
+  if (nodeType === HAST_MDX_JSX_ELEMENT || nodeType === HAST_MDX_JSX_TEXT_ELEMENT) {
+    const { name, attributes } = reader.getMdxJsxElementData(nodeId);
+    (node as { name: string | null }).name = name;
+    (node as { attributes: unknown }).attributes = attributes;
+  }
+}
 
 // Not a per-call closure: fresh closures restart type feedback per tree, pinning small-tree calls to the slow tiers.
 function buildHastFused(
@@ -94,13 +69,7 @@ function buildHastFused(
   // Plain object, not a class: unified's `assertNode` rejects any other prototype.
   const node = { type: typeName } as unknown as HastNode;
   if (!readHastWireNode(wire, nodeId, nodeType, node)) {
-    // MDX JSX elements are the one tag pair the wire decode hands back: their
-    // attribute assembly (kind-tagged unions) stays on the reader.
-    if (nodeType === HAST_MDX_JSX_ELEMENT || nodeType === HAST_MDX_JSX_TEXT_ELEMENT) {
-      const { name, attributes } = reader.getMdxJsxElementData(nodeId);
-      (node as { name: string | null }).name = name;
-      (node as { attributes: unknown }).attributes = attributes;
-    }
+    addHastTypeProperties(node, reader, nodeId, nodeType);
   }
   return node;
 }

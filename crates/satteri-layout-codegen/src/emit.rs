@@ -996,7 +996,6 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
     out.push_str(DECODER_PRELUDE_TS);
     out.push_str(&walk_plain_string_fast_path_ts(layouts));
     out.push_str(DECODER_BODY_TS);
-    out.push_str(&stored_decoder_ts(layouts));
     out
 }
 
@@ -1422,82 +1421,6 @@ const DECODER_BODY_TS: &str = r#"  const fields = MDAST_LAYOUTS[nodeType];
 }
 "#;
 
-/// The arena-snapshot decoder: the same `MDAST_LAYOUTS`, but resolving each
-/// `StringRef` from the string pool instead of reading an inline wire.
-/// The arena-snapshot decoder: straight-line stores per node type, so each
-/// field is a monomorphic write instead of a descriptor-driven polymorphic one.
-fn stored_decoder_ts(layouts: &[Layout]) -> String {
-    let mut out = String::new();
-    let mut enums: Vec<&'static [&'static str]> = Vec::new();
-    for layout in layouts {
-        for field in layout.fields {
-            if let Js::Enum(values) = field.js_kind
-                && !enums.contains(&values)
-            {
-                enums.push(values);
-            }
-        }
-    }
-    for (i, values) in enums.iter().enumerate() {
-        let list = values
-            .iter()
-            .map(|v| format!("{v:?}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = writeln!(out, "const MDAST_ENUM_{i} = [{list}] as const;");
-    }
-    if !enums.is_empty() {
-        out.push('\n');
-    }
-
-    out.push_str(
-        "/**\n\
-         \x20* Attach a node's fixed `type_data` fields, materialized from the arena\n\
-         \x20* snapshot. Returns `false` for tags with no fixed layout, so the\n\
-         \x20* materializer falls through to its hand-written cases (list, table,\n\
-         \x20* directives, MDX JSX). Fields are eager plain stores.\n\
-         \x20*/\n",
-    );
-    out.push_str("export function materializeMdastFields(\n");
-    out.push_str("  reader: MdastReader,\n  node: object,\n  nodeId: number,\n");
-    out.push_str("  nodeType: number,\n): boolean {\n");
-    out.push_str("  const n = node as Record<string, unknown>;\n");
-    out.push_str("  switch (nodeType) {\n");
-
-    // Single plain string first: those tags dominate real documents, and a JS
-    // switch is a compare chain before it tiers up.
-    let mut ordered: Vec<&Layout> = layouts.iter().collect();
-    ordered.sort_by_key(|l| !is_plain_string_layout(l));
-
-    for layout in ordered {
-        let fields: Vec<&Field> = layout
-            .fields
-            .iter()
-            .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
-            .collect();
-        if fields.is_empty() {
-            continue;
-        }
-        for tag in &layout.tags {
-            let _ = writeln!(out, "    case {tag}:");
-        }
-        let needs_block = fields.iter().any(|f| matches!(f.js_kind, Js::StrNull));
-        if needs_block {
-            out.push_str("    {\n");
-        }
-        for (i, field) in fields.iter().enumerate() {
-            out.push_str(&stored_field_stmt(field, i, &enums));
-        }
-        out.push_str("      return true;\n");
-        if needs_block {
-            out.push_str("    }\n");
-        }
-    }
-
-    out.push_str("    default:\n      return false;\n  }\n}\n");
-    out
-}
-
 fn is_plain_string_layout(layout: &Layout) -> bool {
     let fields: Vec<&Field> = layout
         .fields
@@ -1508,35 +1431,6 @@ fn is_plain_string_layout(layout: &Layout) -> bool {
         return false;
     };
     field.offset == 0 && !field.phantom && matches!(field.js_kind, Js::Str)
-}
-
-fn stored_field_stmt(field: &Field, index: usize, enums: &[&'static [&'static str]]) -> String {
-    let js = field.js;
-    let offset = field.offset;
-    if matches!(field.wire, Wire::U8) {
-        let default = field.u8_default;
-        let read = format!("reader.fieldU8(nodeId, {offset}, {default})");
-        return match field.js_kind {
-            Js::Enum(values) => {
-                let slot = enums.iter().position(|e| *e == values).unwrap_or(0);
-                format!("      n.{js} = MDAST_ENUM_{slot}[{read}] ?? MDAST_ENUM_{slot}[0];\n")
-            }
-            _ => format!("      n.{js} = {read};\n"),
-        };
-    }
-    let read = format!("reader.fieldString(nodeId, {offset})");
-    let read = if field.phantom {
-        format!("restorePhantomSpaces({read})")
-    } else {
-        read
-    };
-    match field.js_kind {
-        Js::StrNull => {
-            let tmp = format!("s{index}");
-            format!("      const {tmp} = {read};\n      n.{js} = {tmp} === \"\" ? null : {tmp};\n")
-        }
-        _ => format!("      n.{js} = {read};\n"),
-    }
 }
 
 fn wire_value(value: u8, hex: bool) -> String {

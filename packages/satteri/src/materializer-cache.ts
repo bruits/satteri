@@ -4,7 +4,6 @@
  * path) freeze rules.
  */
 
-import type { Position } from "unist";
 import { deepFreeze } from "./freeze.js";
 import type { NodeRefs } from "./visitor-shared.js";
 
@@ -13,7 +12,6 @@ export interface MaterializerReader {
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
   getChildrenCount(nodeId: number): number;
-  getPosition(nodeId: number): Position | undefined;
   getNodeData(nodeId: number): string | null;
 }
 
@@ -38,9 +36,9 @@ export interface MaterializerSpec<TReader extends MaterializerReader, TNode exte
    *  `custom` decides leafness per node rather than per type. */
   hasChildren(nodeType: number, node: TNode, reader: TReader, nodeId: number): boolean;
   /**
-   * Install the type-specific eager fields on `node`. Must not install
-   * `children`, `position`, `data`, or `_nodeId`, and must not freeze:
-   * the shared machinery owns all of those.
+   * Install `position` and the type-specific eager fields on `node`. Must not
+   * install `children`, `data`, or `_nodeId`, and must not freeze: the shared
+   * machinery owns those.
    */
   populate(node: TNode, reader: TReader, nodeId: number, nodeType: number): void;
 }
@@ -172,10 +170,9 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
 
     // Plain object, not a class: unified's `assertNode` rejects any other prototype.
     const node = { type: typeName } as unknown as TNode;
-    const position = reader.getPosition(nodeId);
-    if (position !== undefined) {
-      (node as { position?: Position }).position = position;
-    }
+
+    // Populate before `_nodeId`: both materialization paths must share one hidden-class lineage inside the decoder.
+    spec.populate(node, reader, nodeId, nodeType);
 
     if (cache.frozen) {
       // Non-enumerable so `nid()` never trusts an id that a spread copied.
@@ -187,8 +184,6 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
         enumerable: false,
       });
     }
-
-    spec.populate(node, reader, nodeId, nodeType);
 
     installNodeData(node, reader.getNodeData(nodeId), spec.label, nodeId);
 
