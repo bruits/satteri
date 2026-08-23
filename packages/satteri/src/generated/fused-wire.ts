@@ -33,23 +33,20 @@ export function readMdastWireNode(
     case 10:
     case 13:
     case 25:
-    case 26:
-    {
+    case 26: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
       n.value = dl >= 8 ? pool.substring(o0, o0 + (u32[db + 1] ?? 0)) : "";
       return true;
     }
-    case 2:
-    {
+    case 2: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       n.depth = dl > 0 ? (u8[(db << 2) + 0] ?? 1) : 1;
       return true;
     }
-    case 8:
-    {
+    case 8: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -62,8 +59,7 @@ export function readMdastWireNode(
       n.value = dl >= 24 ? pool.substring(o2, o2 + (u32[db + 5] ?? 0)) : "";
       return true;
     }
-    case 9:
-    {
+    case 9: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -77,8 +73,7 @@ export function readMdastWireNode(
       n.label = dl >= 32 ? pool.substring(o3, o3 + (u32[db + 7] ?? 0)) : "";
       return true;
     }
-    case 15:
-    {
+    case 15: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -88,8 +83,7 @@ export function readMdastWireNode(
       n.title = s1 === "" ? null : s1;
       return true;
     }
-    case 16:
-    {
+    case 16: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -101,8 +95,7 @@ export function readMdastWireNode(
       n.title = s2 === "" ? null : s2;
       return true;
     }
-    case 17:
-    {
+    case 17: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -113,8 +106,7 @@ export function readMdastWireNode(
       n.referenceType = FUSED_ENUM_0[b2] ?? FUSED_ENUM_0[0];
       return true;
     }
-    case 18:
-    {
+    case 18: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -127,8 +119,7 @@ export function readMdastWireNode(
       n.alt = dl >= 28 ? pool.substring(o3, o3 + (u32[db + 6] ?? 0)) : "";
       return true;
     }
-    case 19:
-    {
+    case 19: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -137,8 +128,7 @@ export function readMdastWireNode(
       n.label = dl >= 16 ? pool.substring(o1, o1 + (u32[db + 3] ?? 0)) : "";
       return true;
     }
-    case 20:
-    {
+    case 20: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -147,8 +137,7 @@ export function readMdastWireNode(
       n.label = dl >= 16 ? pool.substring(o1, o1 + (u32[db + 3] ?? 0)) : "";
       return true;
     }
-    case 27:
-    {
+    case 27: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -158,8 +147,7 @@ export function readMdastWireNode(
       n.value = dl >= 16 ? pool.substring(o1, o1 + (u32[db + 3] ?? 0)) : "";
       return true;
     }
-    case 28:
-    {
+    case 28: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db + 2] ?? 0;
@@ -168,8 +156,7 @@ export function readMdastWireNode(
     }
     case 102:
     case 103:
-    case 104:
-    {
+    case 104: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -219,8 +206,7 @@ export function readHastWireNode(
     case 2:
     case 3:
     case 5:
-    case 13:
-    {
+    case 13: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
@@ -228,16 +214,14 @@ export function readHastWireNode(
       return true;
     }
     case 12:
-    case 14:
-    {
+    case 14: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       const o0 = u32[db] ?? 0;
       n.value = restorePhantomSpaces(dl >= 8 ? pool.substring(o0, o0 + (u32[db + 1] ?? 0)) : "");
       return true;
     }
-    case 1:
-    {
+    case 1: {
       const dl = u32[w + W_DATA_LEN] ?? 0;
       const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
       let tagName = "";
