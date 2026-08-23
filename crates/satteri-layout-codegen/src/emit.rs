@@ -1658,3 +1658,30 @@ pub fn parse_options_ts() -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::{HAST_NODES, MDAST_NODES};
+
+    /// The user-defined node must stay on the reader path (the `name` -> `node.type` rename lives there), and hast Element's hand-codec `custom` flag must not evict its arm.
+    #[test]
+    fn fused_decode_classifies_the_custom_flagged_nodes() {
+        let out = fused_wire_ts(MDAST_NODES, HAST_NODES);
+        let hast_at = out
+            .find("export function readHastWireNode")
+            .expect("hast decode fn");
+        let (mdast_fn, hast_fn) = out.split_at(hast_at);
+        let custom = MDAST_NODES
+            .iter()
+            .find(|n| n.name == "custom")
+            .expect("custom node");
+        assert!(!mdast_fn.contains(&format!("case {}:", custom.tag)));
+        let element = HAST_NODES
+            .iter()
+            .find(|n| n.name == "element")
+            .expect("element node");
+        assert!(hast_fn.contains(&format!("case {}:", element.tag)));
+        assert!(hast_fn.contains("tagName"));
+    }
+}
