@@ -8,15 +8,18 @@ import type {
 import { restorePhantomSpaces } from "../phantom.js";
 import { decodeColumnAlign } from "./column-align.js";
 import { NodeTypeName } from "./generated/node-types.js";
-import { ARENA_MAGIC, KIND_MDAST, FIELD, HEADER } from "../generated/arena-layout.js";
 import {
+  ARENA_MAGIC,
+  KIND_MDAST,
+  FIELD,
+  HEADER,
   W_CHILDREN_COUNT,
   W_CHILDREN_START,
   W_DATA_LEN,
   W_DATA_OFFSET,
   W_PARENT,
   W_START_OFFSET,
-} from "../arena-words.js";
+} from "../generated/arena-layout.js";
 import type { Position } from "unist";
 
 export { NodeType, NodeTypeName } from "./generated/node-types.js";

@@ -28,6 +28,14 @@ export const FIELD = {
   data_len: 48,
 } as const;
 
+/** Word (u32) indices of the `FIELD` byte offsets, for readers indexing a `Uint32Array` view of the wire. */
+export const W_PARENT = 2;
+export const W_START_OFFSET = 3;
+export const W_CHILDREN_START = 9;
+export const W_CHILDREN_COUNT = 10;
+export const W_DATA_OFFSET = 11;
+export const W_DATA_LEN = 12;
+
 /** Raw-buffer header byte offsets (4-byte fields, u32 LE). */
 export const HEADER = {
   magic: 0,

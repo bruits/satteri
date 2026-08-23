@@ -993,7 +993,6 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
         }
     }
     out.push_str("};\n\n");
-    out.push_str(&plain_value_types_ts(layouts));
     out.push_str(DECODER_PRELUDE_TS);
     out.push_str(&walk_plain_string_fast_path_ts(layouts));
     out.push_str(DECODER_BODY_TS);
@@ -1001,8 +1000,8 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
     out
 }
 
-/// The registry-derived tag set behind the fused materializer's inline `value` read.
-fn plain_value_types_ts(layouts: &[Layout]) -> String {
+/// The registry-derived tags whose whole fixed layout is one plain string `value` at offset 0.
+fn plain_value_tags(layouts: &[Layout]) -> Vec<u8> {
     let mut tags: Vec<u8> = Vec::new();
     for layout in layouts {
         if is_plain_string_layout(layout)
@@ -1015,14 +1014,168 @@ fn plain_value_types_ts(layouts: &[Layout]) -> String {
         }
     }
     tags.sort_unstable();
-    let list = tags
+    tags
+}
+
+/// The wire-decode half of the fused tree materializers, emitted so the hand-written files stay at reader level.
+pub fn fused_wire_ts(
+    mdast_layouts: &[Layout],
+    hast_layouts: &[Layout],
+    hast_tails: &[TailLayout],
+) -> String {
+    use crate::schema::ARENA_NODE_FIELDS;
+    let word = |name: &str| -> usize {
+        ARENA_NODE_FIELDS
+            .iter()
+            .find(|(f, _)| *f == name)
+            .expect("known ArenaNode field")
+            .1
+            / 4
+    };
+    let p = word("start_offset");
+    let (end_off, start_line, start_col, end_line, end_col) = (
+        word("end_offset") - p,
+        word("start_line") - p,
+        word("start_column") - p,
+        word("end_line") - p,
+        word("end_column") - p,
+    );
+
+    let mut out = String::from(HEADER_TS);
+    out.push_str(
+        "import type { Position } from \"unist\";\n\
+         import type { ArenaWire } from \"../types.js\";\n\
+         import type { HastProperty } from \"../hast/hast-reader.js\";\n\
+         import { decodeElementProp } from \"../hast/element-props.js\";\n\
+         import { W_START_OFFSET, W_DATA_LEN, W_DATA_OFFSET } from \"./arena-layout.js\";\n\n",
+    );
+
+    let _ = writeln!(
+        out,
+        "/** Install `position` when the node has a source range (a zero start line marks a synthesized node). */\n\
+         export function readWirePosition(wire: ArenaWire, nodeId: number, node: object): void {{\n\
+         \x20 const u32 = wire.u32;\n\
+         \x20 const w = wire.nodesW + nodeId * wire.strideW + W_START_OFFSET;\n\
+         \x20 const startLine = u32[w + {start_line}] ?? 0;\n\
+         \x20 if (startLine === 0) return;\n\
+         \x20 (node as {{ position?: Position }}).position = {{\n\
+         \x20   start: {{ offset: u32[w] ?? 0, line: startLine, column: u32[w + {start_col}] ?? 0 }},\n\
+         \x20   end: {{ offset: u32[w + {end_off}] ?? 0, line: u32[w + {end_line}] ?? 0, column: u32[w + {end_col}] ?? 0 }},\n\
+         \x20 }};\n\
+         }}\n"
+    );
+
+    out.push_str(
+        "/** The pool substring of a node's single leading StringRef; `\"\"` when the blob is absent. */\n\
+         function plainValue(wire: ArenaWire, nodeId: number): string {\n\
+         \x20 const u32 = wire.u32;\n\
+         \x20 const w = wire.nodesW + nodeId * wire.strideW;\n\
+         \x20 if ((u32[w + W_DATA_LEN] ?? 0) < 8) return \"\";\n\
+         \x20 const at = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;\n\
+         \x20 const off = u32[at] ?? 0;\n\
+         \x20 return wire.pool.substring(off, off + (u32[at + 1] ?? 0));\n\
+         }\n\n",
+    );
+
+    for (fn_name, layouts) in [
+        ("readMdastWireValue", mdast_layouts),
+        ("readHastWireValue", hast_layouts),
+    ] {
+        let cond = plain_value_tags(layouts)
+            .iter()
+            .map(|t| format!("nodeType === {t}"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        let _ = writeln!(
+            out,
+            "/** Store the plain-string `value` tags straight off the wire; `false` hands the tag to the caller's reader path. */\n\
+             export function {fn_name}(\n\
+             \x20 wire: ArenaWire,\n\
+             \x20 nodeId: number,\n\
+             \x20 nodeType: number,\n\
+             \x20 node: object,\n\
+             ): boolean {{\n\
+             \x20 if ({cond}) {{\n\
+             \x20   (node as {{ value: string }}).value = plainValue(wire, nodeId);\n\
+             \x20   return true;\n\
+             \x20 }}\n\
+             \x20 return false;\n\
+             }}\n"
+        );
+    }
+
+    out.push_str(&element_decode_ts(hast_tails));
+    out.truncate(out.trim_end().len());
+    out.push('\n');
+    out
+}
+
+fn element_decode_ts(hast_tails: &[TailLayout]) -> String {
+    let tail = &hast_tails
         .iter()
-        .map(|t| t.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
+        .find(|t| matches!(t.tail.js, Some(TailJs::ElementProps { .. })))
+        .expect("hast element tail")
+        .tail;
+    let tag_word = tail.head[0].offset / 4;
+    let count_word = tail.count_offset / 4;
+    let items_word = tail.items_offset / 4;
+    let stride_words = tail.stride / 4;
+    let min_bytes = tail.items_offset;
+    let refs: Vec<&Field> = tail
+        .item
+        .iter()
+        .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
+        .collect();
+    let (name_word, value_word) = (refs[0].offset / 4, refs[1].offset / 4);
+    let kind_byte = tail
+        .item
+        .iter()
+        .find(|f| matches!(f.wire, Wire::U8))
+        .expect("element kind byte")
+        .offset;
+    let at = |base: &str, w: usize| {
+        if w == 0 {
+            base.to_string()
+        } else {
+            format!("{base} + {w}")
+        }
+    };
     format!(
-        "/** Tags whose whole fixed layout is one plain string `value` at offset 0. */\n\
-         export const PLAIN_VALUE_TYPES: readonly number[] = [{list}];\n\n"
+        "/** Decode an element's `tagName` and `properties` ({stride}-byte `PropertyEntry` items after a {min_bytes}-byte head). */\n\
+         export function readHastWireElement(\n\
+         \x20 wire: ArenaWire,\n\
+         \x20 nodeId: number,\n\
+         \x20 node: {{ tagName: string; properties: Record<string, HastProperty[\"value\"]> }},\n\
+         ): void {{\n\
+         \x20 const {{ u8, u32, pool }} = wire;\n\
+         \x20 const w = wire.nodesW + nodeId * wire.strideW;\n\
+         \x20 let tagName = \"\";\n\
+         \x20 const properties: Record<string, HastProperty[\"value\"]> = {{}};\n\
+         \x20 if ((u32[w + W_DATA_LEN] ?? 0) >= {min_bytes}) {{\n\
+         \x20   const tw = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;\n\
+         \x20   const toff = u32[{tag0}] ?? 0;\n\
+         \x20   tagName = pool.substring(toff, toff + (u32[{tag1}] ?? 0));\n\
+         \x20   const count = u32[tw + {count_word}] ?? 0;\n\
+         \x20   for (let i = 0; i < count; i++) {{\n\
+         \x20     const base = tw + {items_word} + i * {stride_words};\n\
+         \x20     const noff = u32[{name0}] ?? 0;\n\
+         \x20     const voff = u32[{value0}] ?? 0;\n\
+         \x20     properties[pool.substring(noff, noff + (u32[{name1}] ?? 0))] = decodeElementProp(\n\
+         \x20       u8[(base << 2) + {kind_byte}] ?? 0,\n\
+         \x20       pool.substring(voff, voff + (u32[{value1}] ?? 0)),\n\
+         \x20     );\n\
+         \x20   }}\n\
+         \x20 }}\n\
+         \x20 node.tagName = tagName;\n\
+         \x20 node.properties = properties;\n\
+         }}\n",
+        stride = tail.stride,
+        tag0 = at("tw", tag_word),
+        tag1 = at("tw", tag_word + 1),
+        name0 = at("base", name_word),
+        name1 = at("base", name_word + 1),
+        value0 = at("base", value_word),
+        value1 = at("base", value_word + 1),
     )
 }
 
@@ -1458,6 +1611,28 @@ pub fn arena_layout_ts() -> String {
         let _ = writeln!(out, "  {field}: {offset},");
     }
     out.push_str("} as const;\n\n");
+    out.push_str(
+        "/** Word (u32) indices of the `FIELD` byte offsets, for readers indexing a `Uint32Array` view of the wire. */\n",
+    );
+    for (field, offset) in ARENA_NODE_FIELDS {
+        if matches!(
+            *field,
+            "parent"
+                | "start_offset"
+                | "children_start"
+                | "children_count"
+                | "data_offset"
+                | "data_len"
+        ) {
+            let _ = writeln!(
+                out,
+                "export const W_{} = {};",
+                field.to_uppercase(),
+                offset / 4
+            );
+        }
+    }
+    out.push('\n');
     out.push_str("/** Raw-buffer header byte offsets (4-byte fields, u32 LE). */\n");
     out.push_str("export const HEADER = {\n");
     for (i, name) in ARENA_HEADER_FIELDS.iter().enumerate() {
