@@ -225,18 +225,6 @@ export class HastReader {
     return ids;
   }
 
-  /** Push child node IDs directly onto a stack array (reverse order for depth-first). */
-  pushChildIds(nodeId: number, stack: number[]): void {
-    const u32 = this.#u32;
-    const w = this.#nodesW + nodeId * this.#strideW;
-    const childrenStart = u32[w + W_CHILDREN_START] ?? 0;
-    const childrenCount = u32[w + W_CHILDREN_COUNT] ?? 0;
-    const base = this.#childrenW + childrenStart;
-    for (let i = childrenCount - 1; i >= 0; i--) {
-      stack.push(u32[base + i] ?? 0);
-    }
-  }
-
   /** Get the raw type_data bytes for a node. */
   getTypeData(nodeId: number): Uint8Array {
     const u32 = this.#u32;
@@ -255,62 +243,6 @@ export class HastReader {
     const w = this.#nodesW + nodeId * this.#strideW;
     if ((u32[w + W_DATA_LEN] ?? 0) < min) return -1;
     return this.#typeDataB + (u32[w + W_DATA_OFFSET] ?? 0);
-  }
-
-  #stringAt(at: number): string {
-    const w = at >> 2;
-    return this.getString(this.#u32[w] ?? 0, this.#u32[w + 1] ?? 0);
-  }
-
-  /** Element `tagName`, `properties` count, and the i-th property, read without
-   *  building the intermediate views and records `getElementData` allocates.
-   *
-   * Element type_data layout:
-   *   [tag_name: StringRef(8B)][prop_count: u32(4B)][_pad: u32(4B)] = 16-byte header
-   *   then prop_count * 20 bytes:
-   *     [name: StringRef(8B)][value_type: u8(1B)][_pad: [u8;3](3B)][value: StringRef(8B)]
-   */
-  getElementTagName(nodeId: number): string {
-    const at = this.#typeDataAt(nodeId, 16);
-    return at === -1 ? "" : this.#stringAt(at);
-  }
-
-  getElementPropCount(nodeId: number): number {
-    const at = this.#typeDataAt(nodeId, 16);
-    return at === -1 ? 0 : (this.#u32[(at >> 2) + 2] ?? 0);
-  }
-
-  getElementPropName(nodeId: number, index: number): string {
-    const at = this.#typeDataAt(nodeId, 16);
-    return at === -1 ? "" : this.#stringAt(at + 16 + index * 20);
-  }
-
-  getElementPropValue(nodeId: number, index: number): HastProperty["value"] {
-    const at = this.#typeDataAt(nodeId, 16);
-    if (at === -1) return "";
-    const base = at + 16 + index * 20;
-    return decodeElementProp(this.#u8[base + 8] ?? 0, this.#stringAt(base + 12));
-  }
-
-  getElementData(nodeId: number): { tagName: string; properties: HastProperty[] } {
-    const at = this.#typeDataAt(nodeId, 16);
-    if (at === -1) {
-      return { tagName: "", properties: [] };
-    }
-    const u32 = this.#u32;
-    const w = at >> 2;
-    const tagName = this.getString(u32[w] ?? 0, u32[w + 1] ?? 0);
-    const propCount = u32[w + 2] ?? 0;
-
-    const properties: HastProperty[] = [];
-    for (let i = 0; i < propCount; i++) {
-      const base = w + 4 + i * 5;
-      const name = this.getString(u32[base] ?? 0, u32[base + 1] ?? 0);
-      const valueStr = this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0);
-      properties.push({ name, value: decodeElementProp(this.#u8[(base + 2) << 2] ?? 0, valueStr) });
-    }
-
-    return { tagName, properties };
   }
 
   /**
@@ -377,17 +309,5 @@ export class HastReader {
     }
 
     return { name, attributes };
-  }
-
-  /**
-   * Get the string value for HAST_TEXT, HAST_COMMENT, or HAST_RAW nodes.
-   * These store a single StringRef (8 bytes) as their type_data.
-   */
-  getTextValue(nodeId: number): string {
-    const u32 = this.#u32;
-    const w = this.#nodesW + nodeId * this.#strideW;
-    if ((u32[w + W_DATA_LEN] ?? 0) < 8) return "";
-    const at = (this.#typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
-    return this.getString(u32[at] ?? 0, u32[at + 1] ?? 0);
   }
 }

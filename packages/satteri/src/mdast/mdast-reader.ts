@@ -288,45 +288,6 @@ export class MdastReader {
   }
 
   /**
-   * StringRef value. Valid for Text, InlineCode, Html, Yaml, Toml nodes.
-   * These store a single StringRef as their type data.
-   */
-  getTextValue(nodeId: number): string {
-    return this.fieldString(nodeId, 0);
-  }
-
-  /**
-   * ListData #[repr(C)]: start(0..4), ordered(4), spread(5), _pad(6..8).
-   * Valid for List nodes.
-   */
-  getListData(nodeId: number): { ordered: boolean; start: number; spread: boolean } {
-    return {
-      start: this.fieldU32(nodeId, 0, 0),
-      ordered: this.fieldU8(nodeId, 4, 0) !== 0,
-      spread: this.fieldU8(nodeId, 5, 0) !== 0,
-    };
-  }
-
-  /**
-   * ListItemData #[repr(C)]: checked(0), spread(1).
-   * checked: 0=unchecked, 1=checked, 2=not-a-task-item.
-   */
-  getListItemData(nodeId: number): { checked: boolean | null; spread: boolean } {
-    const checked = this.fieldU8(nodeId, 0, 2);
-    return {
-      checked: checked === 2 ? null : checked === 1,
-      spread: this.fieldU8(nodeId, 1, 0) !== 0,
-    };
-  }
-
-  /**
-   * DescriptionDetailsData #[repr(C)]: spread(0). Valid for descriptionDetails.
-   */
-  getDescriptionDetailsData(nodeId: number): { spread: boolean } {
-    return { spread: this.fieldU8(nodeId, 0, 0) !== 0 };
-  }
-
-  /**
    * TableData #[repr(C)]: align_count(0..4), then align_count bytes.
    * Alignment bytes: 0=none, 1=left, 2=right, 3=center.
    */

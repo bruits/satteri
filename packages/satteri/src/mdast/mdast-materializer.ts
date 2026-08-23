@@ -1,7 +1,7 @@
 import type { Root } from "mdast";
 import type { ArenaWire, MdastNode } from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
-import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
+import { LEAF_TYPES, NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { FIELD, W_CHILDREN_COUNT, W_CHILDREN_START } from "../generated/arena-layout.js";
 import { readMdastWireNode } from "../generated/fused-wire.js";
@@ -10,12 +10,7 @@ import { readMdastWireNode } from "../generated/fused-wire.js";
  *  author's public `type` string. */
 const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
 
-// Leaf node types that do NOT have children.
-// Type 9 = `definition`; type 18 = `imageReference` — leaves per mdast spec
-// (imageReference carries `alt` as a string, not children).
-export const LEAF_TYPES: ReadonlySet<number> = new Set([
-  9, 10, 13, 7, 8, 14, 3, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104,
-]);
+export { LEAF_TYPES };
 
 const IS_LEAF = new Uint8Array(256);
 for (const t of LEAF_TYPES) IS_LEAF[t] = 1;

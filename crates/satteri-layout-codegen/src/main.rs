@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use schema::{HAST_NODES, HAST_STRUCTS, MDAST_NODES, MDAST_STRUCTS};
 
 fn main() {
+    schema::validate_leafness();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -126,7 +127,13 @@ fn main() {
     // MDAST (TS)
     write(
         &mdast_ts.join("node-types.ts"),
-        &emit::node_types_ts(MDAST_NODES, "MDAST", schema::MDAST_OPSTREAM_EXCLUDED, true),
+        &emit::node_types_ts(
+            MDAST_NODES,
+            "MDAST",
+            schema::MDAST_OPSTREAM_EXCLUDED,
+            true,
+            emit::Leafness::Leaves(schema::MDAST_LEAF_TAGS),
+        ),
     );
     write(
         &mdast_ts.join("layout.ts"),
@@ -136,7 +143,13 @@ fn main() {
     // HAST (TS)
     write(
         &hast_ts.join("node-types.ts"),
-        &emit::node_types_ts(HAST_NODES, "HAST", schema::HAST_OPSTREAM_EXCLUDED, false),
+        &emit::node_types_ts(
+            HAST_NODES,
+            "HAST",
+            schema::HAST_OPSTREAM_EXCLUDED,
+            false,
+            emit::Leafness::Containers(schema::HAST_CONTAINER_TAGS),
+        ),
     );
 
     // Tree-agnostic TS (wire constants + arena layout)

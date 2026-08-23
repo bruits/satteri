@@ -59,8 +59,8 @@ test("MdastReader reads heading node", () => {
 test("MdastReader reads text values", () => {
   const buf = buildHelloWorldBuffer();
   const reader = new MdastReader(buf);
-  expect(reader.getTextValue(3)).toBe("Hello");
-  expect(reader.getTextValue(4)).toBe("World");
+  expect(reader.fieldString(3, 0)).toBe("Hello");
+  expect(reader.fieldString(4, 0)).toBe("World");
 });
 
 test("MdastReader getNodeType fast path", () => {
@@ -118,7 +118,7 @@ test("MdastReader accepts Uint8Array", () => {
   const u8 = new Uint8Array(buf);
   const reader = new MdastReader(u8);
   expect(reader.nodeCount).toBe(5);
-  expect(reader.getTextValue(3)).toBe("Hello");
+  expect(reader.fieldString(3, 0)).toBe("Hello");
 });
 
 test("MdastReader getTypeData returns empty for nodes without data", () => {
@@ -133,7 +133,7 @@ test("MdastReader out of range node throws", () => {
   expect(() => reader.getNode(99)).toThrow(/out of range/);
 });
 
-test("getListData reads correct layout: start(u32)@0, ordered(bool)@4, spread(bool)@5", () => {
+test("fieldU32/fieldU8 read the ListData layout: start(u32)@0, ordered@4, spread@5", () => {
   // Build a minimal list buffer to verify layout offsets
   // ListData #[repr(C)]: start(0..4), ordered(4), spread(5), _pad(6..8)
   const typeData = new Uint8Array(8);
@@ -152,13 +152,12 @@ test("getListData reads correct layout: start(u32)@0, ordered(bool)@4, spread(bo
     typeData,
   });
   const reader = new MdastReader(buf);
-  const d = reader.getListData(1);
-  expect(d.start).toBe(42);
-  expect(d.ordered).toBe(true);
-  expect(d.spread).toBe(true);
+  expect(reader.fieldU32(1, 0, 0)).toBe(42);
+  expect(reader.fieldU8(1, 4, 0)).toBe(1);
+  expect(reader.fieldU8(1, 5, 0)).toBe(1);
 });
 
-test("list accessors fall back safely when a node carries no type data", () => {
+test("field reads fall back safely when a node carries no type data", () => {
   const buf = buildTestBuffer({
     source: "",
     nodes: [
@@ -170,9 +169,11 @@ test("list accessors fall back safely when a node carries no type data", () => {
   });
   const reader = new MdastReader(buf);
 
-  expect(reader.getListData(1)).toEqual({ start: 0, ordered: false, spread: false });
-  expect(reader.getListItemData(1)).toEqual({ checked: null, spread: false });
-  expect(reader.getDescriptionDetailsData(1)).toEqual({ spread: false });
+  // Absent data must yield the declared fallback, never a neighbor's bytes.
+  expect(reader.fieldU32(1, 0, 0)).toBe(0);
+  expect(reader.fieldU8(1, 0, 2)).toBe(2);
+  expect(reader.fieldU8(1, 1, 0)).toBe(0);
+  expect(reader.fieldString(1, 0)).toBe("");
 });
 
 test("a misaligned buffer view reads identically to an aligned one", () => {

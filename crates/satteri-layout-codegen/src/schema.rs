@@ -690,6 +690,53 @@ pub const HAST_NODES: &[Node] = &[
     ),
 ];
 
+/// JS-side leafness, one entry per registry tag. mdast `custom` (38) is
+/// deliberately in neither list: its leafness is per node (`isCustomLeaf`).
+/// `definition` (9) and `imageReference` (18) are leaves per the mdast spec
+/// (imageReference carries `alt` as a string, not children).
+pub const MDAST_LEAF_TAGS: &[u8] = &[
+    3, 7, 8, 9, 10, 13, 14, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104,
+];
+pub const MDAST_CONTAINER_TAGS: &[u8] = &[
+    0, 1, 2, 4, 5, 6, 11, 12, 15, 17, 19, 21, 22, 23, 24, 30, 31, 32, 33, 34, 35, 36, 37, 100, 101,
+];
+pub const HAST_LEAF_TAGS: &[u8] = &[2, 3, 4, 5, 12, 13, 14];
+pub const HAST_CONTAINER_TAGS: &[u8] = &[0, 1, 10, 11];
+
+/// A new node type must land in exactly one list, so leafness is a declared
+/// decision rather than a silently wrong runtime default.
+pub fn validate_leafness() {
+    let kinds: [(&[Node], &[u8], &[u8], &str); 2] = [
+        (MDAST_NODES, MDAST_LEAF_TAGS, MDAST_CONTAINER_TAGS, "mdast"),
+        (HAST_NODES, HAST_LEAF_TAGS, HAST_CONTAINER_TAGS, "hast"),
+    ];
+    for (nodes, leaves, containers, kind) in kinds {
+        for node in nodes {
+            let leaf = leaves.contains(&node.tag);
+            let container = containers.contains(&node.tag);
+            if node.name == "custom" {
+                assert!(
+                    !leaf && !container,
+                    "{kind} custom decides leafness per node; keep it out of both lists"
+                );
+                continue;
+            }
+            assert!(
+                leaf ^ container,
+                "{kind} `{}` (tag {}) must be in exactly one of the leaf/container lists",
+                node.name,
+                node.tag
+            );
+        }
+        for tag in leaves.iter().chain(containers) {
+            assert!(
+                nodes.iter().any(|n| n.tag == *tag),
+                "{kind} leafness lists name a tag ({tag}) missing from the registry"
+            );
+        }
+    }
+}
+
 /// AST names that can't be handed in as op-stream replacement content (the
 /// op-stream is the only structural encoding, so the visitor throws on these
 /// rather than falling back). `root` is a document container, never a

@@ -67,3 +67,6 @@ export const HAST_CUSTOM_TYPES: readonly string[] = [
   "mdxJsxFlowElement",
   "mdxJsxTextElement",
 ];
+
+/** Tags whose nodes carry `children`. */
+export const CONTAINER_TYPES: ReadonlySet<number> = new Set([0, 1, 10, 11]);

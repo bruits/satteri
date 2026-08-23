@@ -806,11 +806,18 @@ fn ts_field(f: &crate::schema::Field) -> String {
 /// node except `root`), and the `{prefix}_OPSTREAM_TYPES` replay set. With
 /// `variant_maps`, also the PascalCase `NodeType` / `NodeTypeName` maps that
 /// `mdast-reader.ts` re-exports.
+/// Which side of the schema's leaf/container partition a kind's read paths consume.
+pub enum Leafness {
+    Leaves(&'static [u8]),
+    Containers(&'static [u8]),
+}
+
 pub fn node_types_ts(
     nodes: &[Node],
     prefix: &str,
     opstream_excluded: &[&str],
     variant_maps: bool,
+    leafness: Leafness,
 ) -> String {
     for ex in opstream_excluded {
         assert!(
@@ -877,7 +884,36 @@ pub fn node_types_ts(
     for node in nodes.iter().filter(|n| n.custom) {
         let _ = writeln!(out, "  {:?},", node.name);
     }
-    out.push_str("];\n");
+    out.push_str("];\n\n");
+
+    let list = |tags: &[u8]| {
+        tags.iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // One orientation per kind, matching what the read paths consume; the full
+    // partition is still schema-validated by `validate_leafness`.
+    match leafness {
+        Leafness::Leaves(tags) => {
+            out.push_str(
+                "/** Tags whose nodes never carry `children` (`custom` decides per node). */\n",
+            );
+            let _ = writeln!(
+                out,
+                "export const LEAF_TYPES: ReadonlySet<number> = new Set([{}]);",
+                list(tags)
+            );
+        }
+        Leafness::Containers(tags) => {
+            out.push_str("/** Tags whose nodes carry `children`. */\n");
+            let _ = writeln!(
+                out,
+                "export const CONTAINER_TYPES: ReadonlySet<number> = new Set([{}]);",
+                list(tags)
+            );
+        }
+    }
     out
 }
 

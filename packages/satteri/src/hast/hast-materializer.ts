@@ -1,29 +1,17 @@
-import {
-  HastReader,
-  HAST_ROOT,
-  HAST_ELEMENT,
-  HAST_MDX_JSX_ELEMENT,
-  HAST_MDX_JSX_TEXT_ELEMENT,
-} from "./hast-reader.js";
+import { HastReader, HAST_MDX_JSX_ELEMENT, HAST_MDX_JSX_TEXT_ELEMENT } from "./hast-reader.js";
 import type { Root } from "hast";
 import type { ArenaWire, HastNode } from "../types.js";
-import { TYPE_NAMES } from "./generated/node-types.js";
+import { CONTAINER_TYPES, TYPE_NAMES } from "./generated/node-types.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { FIELD, W_CHILDREN_COUNT, W_CHILDREN_START } from "../generated/arena-layout.js";
 import { readHastWireNode } from "../generated/fused-wire.js";
 
 export type { HastNode };
 
-/** Container node types (the ones that carry `children`); everything else is a leaf. */
-export const HAST_CONTAINER_TYPES: ReadonlySet<number> = new Set([
-  HAST_ROOT,
-  HAST_ELEMENT,
-  HAST_MDX_JSX_ELEMENT,
-  HAST_MDX_JSX_TEXT_ELEMENT,
-]);
+export { CONTAINER_TYPES as HAST_CONTAINER_TYPES };
 
 const IS_CONTAINER = new Uint8Array(256);
-for (const t of HAST_CONTAINER_TYPES) IS_CONTAINER[t] = 1;
+for (const t of CONTAINER_TYPES) IS_CONTAINER[t] = 1;
 
 const hastMaterializer = createMaterializer<HastReader, HastNode>({
   label: "materializeHastNode",
