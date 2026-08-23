@@ -157,6 +157,10 @@ fn main() {
         &shared_ts.join("wire-constants.ts"),
         &emit::wire_constants_ts(schema::TS_WIRE_TABLES),
     );
+    write(
+        &hast_ts.join("walk-decode.ts"),
+        &emit::hast_walk_decode_ts(&hast_layouts, &hast_tails),
+    );
     write(&shared_ts.join("arena-layout.ts"), &emit::arena_layout_ts());
     write(
         &shared_ts.join("fused-wire.ts"),

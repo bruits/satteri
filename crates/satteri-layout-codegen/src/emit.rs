@@ -1301,6 +1301,169 @@ fn fused_element_arm(tail: &Tail) -> String {
     )
 }
 
+/// The TS decode twin of the generated Rust walk serializer (`hast/generated/walk_type_data.rs`): the hand-written visitor keeps node shaping and laziness, this owns the byte-walking.
+pub fn hast_walk_decode_ts(hast_layouts: &[Layout], hast_tails: &[TailLayout]) -> String {
+    let phantom_tags: Vec<u8> = hast_layouts
+        .iter()
+        .filter(|l| l.fields.iter().any(|f| f.phantom))
+        .flat_map(|l| l.tags.iter().copied())
+        .collect();
+    let phantom_cond = phantom_tags
+        .iter()
+        .map(|t| format!("nodeType === {t}"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+
+    let mut out = String::from(HEADER_TS);
+    out.push_str(
+        "import { rstr } from \"../../wire-read.js\";\n\
+         import { restorePhantomSpaces } from \"../../phantom.js\";\n\
+         import { decodeElementProp } from \"../element-props.js\";\n\
+         import { decodeMdxJsxAttr } from \"../../mdx-attr.js\";\n\
+         import type { MdxJsxAttributeUnion } from \"../../types.js\";\n\n",
+    );
+
+    out.push_str(
+        "/** Walk-wire element head: `[tagLen: u16][tag bytes]`. */\n\
+         export function readWalkElementTag(view: DataView, buf: Uint8Array, pos: number): string {\n\
+         \x20 return rstr(buf, pos + 2, view.getUint16(pos, true));\n\
+         }\n\n\
+         /** Position of the element's props section (`[count: u16][entries]`), past the tag. */\n\
+         export function walkElementPropsAt(view: DataView, pos: number): number {\n\
+         \x20 return pos + 2 + view.getUint16(pos, true);\n\
+         }\n\n\
+         export function walkElementPropCount(view: DataView, propsAt: number): number {\n\
+         \x20 return view.getUint16(propsAt, true);\n\
+         }\n\n",
+    );
+
+    let element = hast_tails
+        .iter()
+        .find(|t| matches!(t.tail.js, Some(TailJs::ElementProps { .. })))
+        .expect("hast element tail");
+    let _ = writeln!(
+        out,
+        "/** Decode the props section into a `properties` record; entries are {}. */\n\
+         export function decodeWalkElementProps(\n\
+         \x20 view: DataView,\n\
+         \x20 buf: Uint8Array,\n\
+         \x20 pos: number,\n\
+         ): Record<string, string | number | boolean | (string | number)[]> {{\n\
+         \x20 const count = view.getUint16(pos, true);\n\
+         \x20 pos += 2;\n\
+         \x20 const properties: Record<string, string | number | boolean | (string | number)[]> = {{}};\n\
+         \x20 for (let i = 0; i < count; i++) {{",
+        walk_entry_shape(&element.tail)
+    );
+    out.push_str(&walk_entry_reads(&element.tail));
+    out.push_str(
+        "    properties[name] = decodeElementProp(kind, value);\n\
+         \x20 }\n\
+         \x20 return properties;\n\
+         }\n\n",
+    );
+
+    let _ = writeln!(
+        out,
+        "/** `[valLen: u32][value]`; expression tags restore MDX phantom spaces. */\n\
+         export function readWalkHastValue(\n\
+         \x20 view: DataView,\n\
+         \x20 buf: Uint8Array,\n\
+         \x20 offset: number,\n\
+         \x20 nodeType: number,\n\
+         ): string {{\n\
+         \x20 const value = rstr(buf, offset + 4, view.getUint32(offset, true));\n\
+         \x20 return {phantom_cond} ? restorePhantomSpaces(value) : value;\n\
+         }}\n"
+    );
+
+    let jsx = hast_tails
+        .iter()
+        .find(|t| matches!(t.tail.js, Some(TailJs::JsxAttrs { .. })))
+        .expect("hast mdx jsx tail");
+    let _ = writeln!(
+        out,
+        "/** MDX JSX head and attributes: `[nameLen: u16][name][count: u16]`, then {} per\n\
+         \x20*  attribute; a zero-length head name is a fragment (`null`). */\n\
+         export function readWalkMdxJsx(\n\
+         \x20 view: DataView,\n\
+         \x20 buf: Uint8Array,\n\
+         \x20 pos: number,\n\
+         ): {{ name: string | null; attributes: MdxJsxAttributeUnion[] }} {{\n\
+         \x20 const headLen = view.getUint16(pos, true);\n\
+         \x20 pos += 2;\n\
+         \x20 const headName = headLen > 0 ? rstr(buf, pos, headLen) : null;\n\
+         \x20 pos += headLen;\n\
+         \x20 const count = view.getUint16(pos, true);\n\
+         \x20 pos += 2;\n\
+         \x20 const attributes: MdxJsxAttributeUnion[] = [];\n\
+         \x20 for (let i = 0; i < count; i++) {{",
+        walk_entry_shape(&jsx.tail)
+    );
+    out.push_str(&walk_entry_reads(&jsx.tail));
+    out.push_str(
+        "    attributes.push(decodeMdxJsxAttr(kind, name, value));\n\
+         \x20 }\n\
+         \x20 return { name: headName, attributes };\n\
+         }\n",
+    );
+    out
+}
+
+/// Sequential walk-wire reads for one tail entry, in schema field order; each
+/// wire kind fixes the framing (str16: u16 len, str32: u32 len, u8: one byte).
+fn walk_entry_reads(tail: &Tail) -> String {
+    let mut out = String::new();
+    let mut fields: Vec<&Field> = tail.item.iter().collect();
+    fields.sort_by_key(|f| f.offset);
+    for field in fields {
+        let js = field.js;
+        match field.wire {
+            Wire::U8 => {
+                let _ = writeln!(out, "    const {js} = buf[pos] ?? 0;\n    pos += 1;");
+            }
+            Wire::Str16 => {
+                let _ = writeln!(
+                    out,
+                    "    const {js}Len = view.getUint16(pos, true);\n\
+                     \x20   pos += 2;\n\
+                     \x20   const {js} = rstr(buf, pos, {js}Len);\n\
+                     \x20   pos += {js}Len;"
+                );
+            }
+            Wire::Str32 => {
+                let _ = writeln!(
+                    out,
+                    "    const {js}Len = view.getUint32(pos, true);\n\
+                     \x20   pos += 4;\n\
+                     \x20   const {js} = rstr(buf, pos, {js}Len);\n\
+                     \x20   pos += {js}Len;"
+                );
+            }
+        }
+    }
+    out
+}
+
+/// One-line shape doc for a tail's wire entries, e.g. "`[name: str16][kind: u8][value: str16]`".
+fn walk_entry_shape(tail: &Tail) -> String {
+    let mut fields: Vec<&Field> = tail.item.iter().collect();
+    fields.sort_by_key(|f| f.offset);
+    let parts = fields
+        .iter()
+        .map(|f| {
+            let kind = match f.wire {
+                Wire::U8 => "u8",
+                Wire::Str16 => "str16",
+                Wire::Str32 => "str32",
+            };
+            format!("[{}: {kind}]", f.js)
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("`{parts}`")
+}
+
 /// Single-`str32` layouts dominate walks; one named store skips the descriptor loop the unoptimized tiers pay for.
 fn walk_plain_string_fast_path_ts(layouts: &[Layout]) -> String {
     let mut out = String::new();
