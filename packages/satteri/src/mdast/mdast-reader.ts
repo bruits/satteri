@@ -9,16 +9,17 @@ import { restorePhantomSpaces } from "../phantom.js";
 import { decodeColumnAlign } from "./column-align.js";
 import { NodeTypeName } from "./generated/node-types.js";
 import { ARENA_MAGIC, KIND_MDAST, FIELD, HEADER } from "../generated/arena-layout.js";
+import {
+  W_CHILDREN_COUNT,
+  W_CHILDREN_START,
+  W_DATA_LEN,
+  W_DATA_OFFSET,
+  W_PARENT,
+  W_START_OFFSET,
+} from "../arena-words.js";
 import type { Position } from "unist";
 
 export { NodeType, NodeTypeName } from "./generated/node-types.js";
-
-const W_PARENT = FIELD.parent >> 2;
-const W_START_OFFSET = FIELD.start_offset >> 2;
-const W_CHILDREN_START = FIELD.children_start >> 2;
-const W_CHILDREN_COUNT = FIELD.children_count >> 2;
-const W_DATA_OFFSET = FIELD.data_offset >> 2;
-const W_DATA_LEN = FIELD.data_len >> 2;
 
 export class MdastReader {
   readonly #view: DataView;
@@ -87,11 +88,6 @@ export class MdastReader {
 
   #nodeDataTable: Map<number, string> | null = null;
 
-  /** Lets tree fills skip the per-node `getNodeData` call on data-free wires. */
-  hasNodeData(): boolean {
-    return this.#nodeDataCount !== 0;
-  }
-
   /** @internal */
   getWire(): ArenaWire {
     return {
@@ -108,9 +104,17 @@ export class MdastReader {
   }
 
   /** Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
-   * side). Lazy-builds a `Map<id, string>` on first call so materialization
-   * of a data-heavy tree stays O(nodes) rather than O(nodes × entries). */
+   * side). Returns `null` when the node has no entry. Lazy-builds a
+   * `Map<id, string>` on first call so materialization of a data-heavy tree
+   * stays O(nodes) rather than O(nodes × entries). */
   getNodeData(nodeId: number): string | null {
+    const table = this.getNodeDataTable();
+    if (table === null) return null;
+    return table.get(nodeId) ?? null;
+  }
+
+  /** @internal `null` when no node carries a `data` blob. */
+  getNodeDataTable(): ReadonlyMap<number, string> | null {
     if (this.#nodeDataCount === 0) return null;
     if (this.#nodeDataTable === null) {
       this.#nodeDataTable = new Map();
@@ -126,7 +130,7 @@ export class MdastReader {
         pos += len;
       }
     }
-    return this.#nodeDataTable.get(nodeId) ?? null;
+    return this.#nodeDataTable;
   }
 
   get nodeCount(): number {
@@ -202,17 +206,8 @@ export class MdastReader {
     return this.#u32[this.#nodesW + nodeId * this.#strideW + W_PARENT] ?? 0;
   }
 
-  getChildrenStart(nodeId: number): number {
-    return this.#u32[this.#nodesW + nodeId * this.#strideW + W_CHILDREN_START] ?? 0;
-  }
-
   getChildrenCount(nodeId: number): number {
     return this.#u32[this.#nodesW + nodeId * this.#strideW + W_CHILDREN_COUNT] ?? 0;
-  }
-
-  /** Indexed off a `getChildrenStart` result so a walk reads the node struct once. */
-  childIdAt(childrenStart: number, index: number): number {
-    return this.#u32[this.#childrenW + childrenStart + index] ?? 0;
   }
 
   getChildIds(nodeId: number): number[] {

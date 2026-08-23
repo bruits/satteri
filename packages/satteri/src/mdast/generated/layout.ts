@@ -156,6 +156,9 @@ const MDAST_TAILS: Readonly<Record<number, TailDescriptor>> = {
   },
 };
 
+/** Tags whose whole fixed layout is one plain string `value` at offset 0. */
+export const PLAIN_VALUE_TYPES: readonly number[] = [7, 10, 13, 25, 26];
+
 interface TailField {
   readonly js: string;
   readonly kind: FieldKind;

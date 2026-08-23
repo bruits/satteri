@@ -20,6 +20,13 @@ import { restorePhantomSpaces } from "../phantom.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { decodeElementProp } from "./element-props.js";
 import { FIELD } from "../generated/arena-layout.js";
+import {
+  W_CHILDREN_COUNT,
+  W_CHILDREN_START,
+  W_DATA_LEN,
+  W_DATA_OFFSET,
+  W_START_OFFSET,
+} from "../arena-words.js";
 
 export type { HastNode };
 
@@ -84,12 +91,6 @@ const hastMaterializer = createMaterializer<HastReader, HastNode>({
  */
 export const materializeHastNode = hastMaterializer.node;
 
-const W_START_OFFSET = FIELD.start_offset >> 2;
-const W_CHILDREN_START = FIELD.children_start >> 2;
-const W_CHILDREN_COUNT = FIELD.children_count >> 2;
-const W_DATA_OFFSET = FIELD.data_offset >> 2;
-const W_DATA_LEN = FIELD.data_len >> 2;
-
 // Not a per-call closure: fresh closures restart type feedback per tree, pinning small-tree calls to the slow tiers.
 function buildHastFused(
   reader: HastReader,
@@ -102,78 +103,76 @@ function buildHastFused(
   nodeId: number,
   nodeType: number,
 ): HastNode {
-  {
-    const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
-    // Plain object, not a class: unified's `assertNode` rejects any other prototype.
-    const node = { type: typeName } as unknown as HastNode;
-    const w = nodesW + nodeId * strideW + W_START_OFFSET;
-    const startLine = u32[w + 2] ?? 0;
-    if (startLine !== 0) {
-      (node as { position?: Position }).position = {
-        start: { offset: u32[w] ?? 0, line: startLine, column: u32[w + 3] ?? 0 },
-        end: { offset: u32[w + 1] ?? 0, line: u32[w + 4] ?? 0, column: u32[w + 5] ?? 0 },
-      };
-    }
-    const wd = nodesW + nodeId * strideW;
-    switch (nodeType) {
-      case HAST_TEXT:
-      case HAST_COMMENT:
-      case HAST_RAW: {
-        let value = "";
-        if ((u32[wd + W_DATA_LEN] ?? 0) >= 8) {
-          const at = (typeDataB + (u32[wd + W_DATA_OFFSET] ?? 0)) >> 2;
-          const off = u32[at] ?? 0;
-          value = pool.substring(off, off + (u32[at + 1] ?? 0));
-        }
-        (node as { value: string }).value = value;
-        break;
-      }
-
-      case HAST_ELEMENT: {
-        let tagName = "";
-        const properties: Record<string, HastProperty["value"]> = {};
-        if ((u32[wd + W_DATA_LEN] ?? 0) >= 16) {
-          const tw = (typeDataB + (u32[wd + W_DATA_OFFSET] ?? 0)) >> 2;
-          const toff = u32[tw] ?? 0;
-          tagName = pool.substring(toff, toff + (u32[tw + 1] ?? 0));
-          const count = u32[tw + 2] ?? 0;
-          for (let i = 0; i < count; i++) {
-            const base = tw + 4 + i * 5;
-            const noff = u32[base] ?? 0;
-            const voff = u32[base + 3] ?? 0;
-            properties[pool.substring(noff, noff + (u32[base + 1] ?? 0))] = decodeElementProp(
-              u8[(base + 2) << 2] ?? 0,
-              pool.substring(voff, voff + (u32[base + 4] ?? 0)),
-            );
-          }
-        }
-        (node as { tagName: string }).tagName = tagName;
-        (node as { properties: Record<string, HastProperty["value"]> }).properties = properties;
-        break;
-      }
-
-      case HAST_MDX_JSX_ELEMENT:
-      case HAST_MDX_JSX_TEXT_ELEMENT: {
-        const { name, attributes } = reader.getMdxJsxElementData(nodeId);
-        (node as { name: string | null }).name = name;
-        (node as { attributes: unknown }).attributes = attributes;
-        break;
-      }
-
-      case HAST_MDX_FLOW_EXPRESSION:
-      case HAST_MDX_TEXT_EXPRESSION:
-        (node as { value: string }).value = restorePhantomSpaces(reader.getTextValue(nodeId));
-        break;
-
-      case HAST_MDX_ESM:
-        (node as { value: string }).value = reader.getTextValue(nodeId);
-        break;
-
-      default:
-        break;
-    }
-    return node;
+  const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
+  // Plain object, not a class: unified's `assertNode` rejects any other prototype.
+  const node = { type: typeName } as unknown as HastNode;
+  const w = nodesW + nodeId * strideW;
+  const wp = w + W_START_OFFSET;
+  const startLine = u32[wp + 2] ?? 0;
+  if (startLine !== 0) {
+    (node as { position?: Position }).position = {
+      start: { offset: u32[wp] ?? 0, line: startLine, column: u32[wp + 3] ?? 0 },
+      end: { offset: u32[wp + 1] ?? 0, line: u32[wp + 4] ?? 0, column: u32[wp + 5] ?? 0 },
+    };
   }
+  switch (nodeType) {
+    case HAST_TEXT:
+    case HAST_COMMENT:
+    case HAST_RAW: {
+      let value = "";
+      if ((u32[w + W_DATA_LEN] ?? 0) >= 8) {
+        const at = (typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
+        const off = u32[at] ?? 0;
+        value = pool.substring(off, off + (u32[at + 1] ?? 0));
+      }
+      (node as { value: string }).value = value;
+      break;
+    }
+
+    case HAST_ELEMENT: {
+      let tagName = "";
+      const properties: Record<string, HastProperty["value"]> = {};
+      if ((u32[w + W_DATA_LEN] ?? 0) >= 16) {
+        const tw = (typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;
+        const toff = u32[tw] ?? 0;
+        tagName = pool.substring(toff, toff + (u32[tw + 1] ?? 0));
+        const count = u32[tw + 2] ?? 0;
+        for (let i = 0; i < count; i++) {
+          const base = tw + 4 + i * 5;
+          const noff = u32[base] ?? 0;
+          const voff = u32[base + 3] ?? 0;
+          properties[pool.substring(noff, noff + (u32[base + 1] ?? 0))] = decodeElementProp(
+            u8[(base + 2) << 2] ?? 0,
+            pool.substring(voff, voff + (u32[base + 4] ?? 0)),
+          );
+        }
+      }
+      (node as { tagName: string }).tagName = tagName;
+      (node as { properties: Record<string, HastProperty["value"]> }).properties = properties;
+      break;
+    }
+
+    case HAST_MDX_JSX_ELEMENT:
+    case HAST_MDX_JSX_TEXT_ELEMENT: {
+      const { name, attributes } = reader.getMdxJsxElementData(nodeId);
+      (node as { name: string | null }).name = name;
+      (node as { attributes: unknown }).attributes = attributes;
+      break;
+    }
+
+    case HAST_MDX_FLOW_EXPRESSION:
+    case HAST_MDX_TEXT_EXPRESSION:
+      (node as { value: string }).value = restorePhantomSpaces(reader.getTextValue(nodeId));
+      break;
+
+    case HAST_MDX_ESM:
+      (node as { value: string }).value = reader.getTextValue(nodeId);
+      break;
+
+    default:
+      break;
+  }
+  return node;
 }
 
 /** Materialize the full HAST tree from root (nodeId=0), fused: one-shot walk, so wire loads replace per-node reader calls. */
@@ -206,7 +205,15 @@ export function materializeHastTree(reader: HastReader): Root {
       const childId = u32[cbase + i] ?? 0;
       const childType = u8[nodesB + childId * strideB + FIELD.node_type] ?? 0;
       const child = buildHastFused(
-        reader, u8, u32, nodesW, strideW, typeDataB, pool, childId, childType,
+        reader,
+        u8,
+        u32,
+        nodesW,
+        strideW,
+        typeDataB,
+        pool,
+        childId,
+        childType,
       );
       kids[i] = child;
       if (dataTable !== null) {

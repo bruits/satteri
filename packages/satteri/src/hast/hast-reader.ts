@@ -11,6 +11,14 @@ import {
 import { decodeElementProp } from "./element-props.js";
 import { NAME_TO_TYPE } from "./generated/node-types.js";
 import { ARENA_MAGIC, KIND_HAST, FIELD, HEADER } from "../generated/arena-layout.js";
+import {
+  W_CHILDREN_COUNT,
+  W_CHILDREN_START,
+  W_DATA_LEN,
+  W_DATA_OFFSET,
+  W_PARENT,
+  W_START_OFFSET,
+} from "../arena-words.js";
 
 export type { MdxJsxAttribute, MdxJsxExpressionAttribute };
 
@@ -29,13 +37,6 @@ export interface HastProperty {
   name: string;
   value: string | number | boolean | (string | number)[];
 }
-
-const W_PARENT = FIELD.parent >> 2;
-const W_START_OFFSET = FIELD.start_offset >> 2;
-const W_CHILDREN_START = FIELD.children_start >> 2;
-const W_CHILDREN_COUNT = FIELD.children_count >> 2;
-const W_DATA_OFFSET = FIELD.data_offset >> 2;
-const W_DATA_LEN = FIELD.data_len >> 2;
 
 export class HastReader {
   readonly #view: DataView;
@@ -101,11 +102,6 @@ export class HastReader {
   }
 
   #nodeDataTable: Map<number, string> | null = null;
-
-  /** Lets tree fills skip the per-node `getNodeData` call on data-free wires. */
-  hasNodeData(): boolean {
-    return this.#nodeDataCount !== 0;
-  }
 
   /** @internal */
   getWire(): ArenaWire {
@@ -206,17 +202,8 @@ export class HastReader {
     return this.#u32[this.#nodesW + nodeId * this.#strideW + W_PARENT] ?? 0;
   }
 
-  getChildrenStart(nodeId: number): number {
-    return this.#u32[this.#nodesW + nodeId * this.#strideW + W_CHILDREN_START] ?? 0;
-  }
-
   getChildrenCount(nodeId: number): number {
     return this.#u32[this.#nodesW + nodeId * this.#strideW + W_CHILDREN_COUNT] ?? 0;
-  }
-
-  /** Indexed off a `getChildrenStart` result so a walk reads the node struct once. */
-  childIdAt(childrenStart: number, index: number): number {
-    return this.#u32[this.#childrenW + childrenStart + index] ?? 0;
   }
 
   getChildIds(nodeId: number): number[] {

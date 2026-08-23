@@ -12,12 +12,9 @@ import type { NodeRefs } from "./visitor-shared.js";
 export interface MaterializerReader {
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
-  getChildrenStart(nodeId: number): number;
   getChildrenCount(nodeId: number): number;
-  childIdAt(childrenStart: number, index: number): number;
   getPosition(nodeId: number): Position | undefined;
   getNodeData(nodeId: number): string | null;
-  hasNodeData(): boolean;
 }
 
 /** Node memo + shared lazy `children` descriptor; the memo keeps one object per `(reader, id)` so identity-based plugin dedup works across access paths. */

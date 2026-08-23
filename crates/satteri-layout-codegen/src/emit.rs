@@ -993,11 +993,37 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
         }
     }
     out.push_str("};\n\n");
+    out.push_str(&plain_value_types_ts(layouts));
     out.push_str(DECODER_PRELUDE_TS);
     out.push_str(&walk_plain_string_fast_path_ts(layouts));
     out.push_str(DECODER_BODY_TS);
     out.push_str(&stored_decoder_ts(layouts));
     out
+}
+
+/// The registry-derived tag set behind the fused materializer's inline `value` read.
+fn plain_value_types_ts(layouts: &[Layout]) -> String {
+    let mut tags: Vec<u8> = Vec::new();
+    for layout in layouts {
+        if is_plain_string_layout(layout)
+            && layout
+                .fields
+                .iter()
+                .any(|f| f.js == "value" && !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+        {
+            tags.extend(&layout.tags);
+        }
+    }
+    tags.sort_unstable();
+    let list = tags
+        .iter()
+        .map(|t| t.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "/** Tags whose whole fixed layout is one plain string `value` at offset 0. */\n\
+         export const PLAIN_VALUE_TYPES: readonly number[] = [{list}];\n\n"
+    )
 }
 
 /// Single-`str32` layouts dominate walks; one named store skips the descriptor loop the unoptimized tiers pay for.
