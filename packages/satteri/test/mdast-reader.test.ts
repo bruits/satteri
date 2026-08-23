@@ -174,3 +174,17 @@ test("list accessors fall back safely when a node carries no type data", () => {
   expect(reader.getListItemData(1)).toEqual({ checked: null, spread: false });
   expect(reader.getDescriptionDetailsData(1)).toEqual({ spread: false });
 });
+
+test("a misaligned buffer view reads identically to an aligned one", () => {
+  const aligned = buildHelloWorldBuffer();
+  const bytes = new Uint8Array(aligned);
+  const shifted = new Uint8Array(bytes.length + 1);
+  shifted.set(bytes, 1);
+
+  const reader = new MdastReader(shifted.subarray(1));
+  const reference = new MdastReader(aligned);
+  expect(reader.getString(2, 5)).toBe(reference.getString(2, 5));
+  for (let id = 0; id < reference.nodeCount; id++) {
+    expect(reader.getNode(id)).toEqual(reference.getNode(id));
+  }
+});
