@@ -5,7 +5,7 @@ import { NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
 import { materializeMdastFields } from "./generated/layout.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { FIELD, W_CHILDREN_COUNT, W_CHILDREN_START } from "../generated/arena-layout.js";
-import { readMdastWireValue, readWirePosition } from "../generated/fused-wire.js";
+import { readMdastWireNode } from "../generated/fused-wire.js";
 
 /** Internal tag for user-defined nodes; its stored `name` field carries the
  *  author's public `type` string. */
@@ -149,8 +149,7 @@ function buildMdastFused(
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
   // Plain object, not a class: unified's `assertNode` rejects any other prototype.
   const node = { type: typeName } as unknown as MdastNode;
-  readWirePosition(wire, nodeId, node);
-  if (!readMdastWireValue(wire, nodeId, nodeType, node)) {
+  if (!readMdastWireNode(wire, nodeId, nodeType, node)) {
     addTypeProperties(node, reader, nodeId, nodeType);
   }
   return node;

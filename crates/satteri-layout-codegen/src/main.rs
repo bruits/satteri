@@ -147,7 +147,7 @@ fn main() {
     write(&shared_ts.join("arena-layout.ts"), &emit::arena_layout_ts());
     write(
         &shared_ts.join("fused-wire.ts"),
-        &emit::fused_wire_ts(&mdast_layouts, &hast_layouts, &hast_tails),
+        &emit::fused_wire_ts(MDAST_NODES, HAST_NODES),
     );
     write(
         &shared_ts.join("parse-options.ts"),

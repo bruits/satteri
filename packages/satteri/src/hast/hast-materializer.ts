@@ -18,11 +18,7 @@ import { TYPE_NAMES } from "./generated/node-types.js";
 import { restorePhantomSpaces } from "../phantom.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { FIELD, W_CHILDREN_COUNT, W_CHILDREN_START } from "../generated/arena-layout.js";
-import {
-  readHastWireElement,
-  readHastWireValue,
-  readWirePosition,
-} from "../generated/fused-wire.js";
+import { readHastWireNode } from "../generated/fused-wire.js";
 
 export type { HastNode };
 
@@ -97,33 +93,14 @@ function buildHastFused(
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
   // Plain object, not a class: unified's `assertNode` rejects any other prototype.
   const node = { type: typeName } as unknown as HastNode;
-  readWirePosition(wire, nodeId, node);
-  switch (nodeType) {
-    case HAST_ELEMENT:
-      readHastWireElement(
-        wire,
-        nodeId,
-        node as { tagName: string; properties: Record<string, HastProperty["value"]> },
-      );
-      break;
-
-    case HAST_MDX_JSX_ELEMENT:
-    case HAST_MDX_JSX_TEXT_ELEMENT: {
+  if (!readHastWireNode(wire, nodeId, nodeType, node)) {
+    // MDX JSX elements are the one tag pair the wire decode hands back: their
+    // attribute assembly (kind-tagged unions) stays on the reader.
+    if (nodeType === HAST_MDX_JSX_ELEMENT || nodeType === HAST_MDX_JSX_TEXT_ELEMENT) {
       const { name, attributes } = reader.getMdxJsxElementData(nodeId);
       (node as { name: string | null }).name = name;
       (node as { attributes: unknown }).attributes = attributes;
-      break;
     }
-
-    case HAST_MDX_FLOW_EXPRESSION:
-    case HAST_MDX_TEXT_EXPRESSION:
-      (node as { value: string }).value = restorePhantomSpaces(reader.getTextValue(nodeId));
-      break;
-
-    // text, comment, raw, and ESM store a plain `value`; root and doctype store nothing.
-    default:
-      readHastWireValue(wire, nodeId, nodeType, node);
-      break;
   }
   return node;
 }

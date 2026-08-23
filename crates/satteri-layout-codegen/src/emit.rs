@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::schema::{
-    ArenaStruct, Field, Js, Layout, Node, SetSlot, Slot, TailJs, TailLayout, Wire, WireTable,
+    ArenaStruct, Field, Js, Layout, Node, SetSlot, Slot, Tail, TailJs, TailLayout, Wire, WireTable,
 };
 
 const HEADER_RS: &str =
@@ -1000,29 +1000,8 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
     out
 }
 
-/// The registry-derived tags whose whole fixed layout is one plain string `value` at offset 0.
-fn plain_value_tags(layouts: &[Layout]) -> Vec<u8> {
-    let mut tags: Vec<u8> = Vec::new();
-    for layout in layouts {
-        if is_plain_string_layout(layout)
-            && layout
-                .fields
-                .iter()
-                .any(|f| f.js == "value" && !matches!(f.js_kind, Js::Const(_) | Js::Skip))
-        {
-            tags.extend(&layout.tags);
-        }
-    }
-    tags.sort_unstable();
-    tags
-}
-
-/// The wire-decode half of the fused tree materializers, emitted so the hand-written files stay at reader level.
-pub fn fused_wire_ts(
-    mdast_layouts: &[Layout],
-    hast_layouts: &[Layout],
-    hast_tails: &[TailLayout],
-) -> String {
+/// One wire-decode call per node for the fused tree materializers, emitted so the hand-written files stay at reader level.
+pub fn fused_wire_ts(mdast_nodes: &[Node], hast_nodes: &[Node]) -> String {
     use crate::schema::ARENA_NODE_FIELDS;
     let word = |name: &str| -> usize {
         ARENA_NODE_FIELDS
@@ -1033,13 +1012,24 @@ pub fn fused_wire_ts(
             / 4
     };
     let p = word("start_offset");
-    let (end_off, start_line, start_col, end_line, end_col) = (
+    let pos = [
         word("end_offset") - p,
         word("start_line") - p,
         word("start_column") - p,
         word("end_line") - p,
         word("end_column") - p,
-    );
+    ];
+
+    let mut enums: Vec<&'static [&'static str]> = Vec::new();
+    for node in mdast_nodes.iter().chain(hast_nodes) {
+        for field in node.fields {
+            if let Js::Enum(values) = field.js_kind
+                && !enums.contains(&values)
+            {
+                enums.push(values);
+            }
+        }
+    }
 
     let mut out = String::from(HEADER_TS);
     out.push_str(
@@ -1047,76 +1037,188 @@ pub fn fused_wire_ts(
          import type { ArenaWire } from \"../types.js\";\n\
          import type { HastProperty } from \"../hast/hast-reader.js\";\n\
          import { decodeElementProp } from \"../hast/element-props.js\";\n\
+         import { restorePhantomSpaces } from \"../phantom.js\";\n\
          import { W_START_OFFSET, W_DATA_LEN, W_DATA_OFFSET } from \"./arena-layout.js\";\n\n",
     );
-
-    let _ = writeln!(
-        out,
-        "/** Install `position` when the node has a source range (a zero start line marks a synthesized node). */\n\
-         export function readWirePosition(wire: ArenaWire, nodeId: number, node: object): void {{\n\
-         \x20 const u32 = wire.u32;\n\
-         \x20 const w = wire.nodesW + nodeId * wire.strideW + W_START_OFFSET;\n\
-         \x20 const startLine = u32[w + {start_line}] ?? 0;\n\
-         \x20 if (startLine === 0) return;\n\
-         \x20 (node as {{ position?: Position }}).position = {{\n\
-         \x20   start: {{ offset: u32[w] ?? 0, line: startLine, column: u32[w + {start_col}] ?? 0 }},\n\
-         \x20   end: {{ offset: u32[w + {end_off}] ?? 0, line: u32[w + {end_line}] ?? 0, column: u32[w + {end_col}] ?? 0 }},\n\
-         \x20 }};\n\
-         }}\n"
-    );
-
-    out.push_str(
-        "/** The pool substring of a node's single leading StringRef; `\"\"` when the blob is absent. */\n\
-         function plainValue(wire: ArenaWire, nodeId: number): string {\n\
-         \x20 const u32 = wire.u32;\n\
-         \x20 const w = wire.nodesW + nodeId * wire.strideW;\n\
-         \x20 if ((u32[w + W_DATA_LEN] ?? 0) < 8) return \"\";\n\
-         \x20 const at = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;\n\
-         \x20 const off = u32[at] ?? 0;\n\
-         \x20 return wire.pool.substring(off, off + (u32[at + 1] ?? 0));\n\
-         }\n\n",
-    );
-
-    for (fn_name, layouts) in [
-        ("readMdastWireValue", mdast_layouts),
-        ("readHastWireValue", hast_layouts),
-    ] {
-        let cond = plain_value_tags(layouts)
+    for (i, values) in enums.iter().enumerate() {
+        let list = values
             .iter()
-            .map(|t| format!("nodeType === {t}"))
+            .map(|v| format!("{v:?}"))
             .collect::<Vec<_>>()
-            .join(" || ");
-        let _ = writeln!(
-            out,
-            "/** Store the plain-string `value` tags straight off the wire; `false` hands the tag to the caller's reader path. */\n\
-             export function {fn_name}(\n\
-             \x20 wire: ArenaWire,\n\
-             \x20 nodeId: number,\n\
-             \x20 nodeType: number,\n\
-             \x20 node: object,\n\
-             ): boolean {{\n\
-             \x20 if ({cond}) {{\n\
-             \x20   (node as {{ value: string }}).value = plainValue(wire, nodeId);\n\
-             \x20   return true;\n\
-             \x20 }}\n\
-             \x20 return false;\n\
-             }}\n"
-        );
+            .join(", ");
+        let _ = writeln!(out, "const FUSED_ENUM_{i} = [{list}] as const;");
+    }
+    if !enums.is_empty() {
+        out.push('\n');
     }
 
-    out.push_str(&element_decode_ts(hast_tails));
+    for (fn_name, nodes) in [
+        ("readMdastWireNode", mdast_nodes),
+        ("readHastWireNode", hast_nodes),
+    ] {
+        out.push_str(&fused_node_fn(fn_name, nodes, &enums, &pos));
+    }
     out.truncate(out.trim_end().len());
     out.push('\n');
     out
 }
 
-fn element_decode_ts(hast_tails: &[TailLayout]) -> String {
-    let tail = &hast_tails
+fn is_plain_fields(fields: &[Field]) -> bool {
+    let significant: Vec<&Field> = fields
         .iter()
-        .find(|t| matches!(t.tail.js, Some(TailJs::ElementProps { .. })))
-        .expect("hast element tail")
-        .tail;
-    let tag_word = tail.head[0].offset / 4;
+        .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+        .collect();
+    let [field] = significant.as_slice() else {
+        return false;
+    };
+    field.offset == 0 && !field.phantom && matches!(field.js_kind, Js::Str)
+}
+
+/// Position install plus a per-tag straight-line field decode; `false` hands the tag
+/// to the caller's reader path (the user-defined node, struct scalars, non-element tails).
+fn fused_node_fn(
+    fn_name: &str,
+    nodes: &[Node],
+    enums: &[&'static [&'static str]],
+    pos: &[usize; 5],
+) -> String {
+    let mut field_groups: Vec<(Vec<u8>, &'static [Field])> = Vec::new();
+    let mut element_tags: Vec<u8> = Vec::new();
+    let mut element_tail: Option<Tail> = None;
+    let mut bare_tags: Vec<u8> = Vec::new();
+    for node in nodes {
+        // The user-defined node keeps its reader path: the hand-written
+        // decode renames its stored `name` to the open `node.type`.
+        if node.name == "custom" {
+            continue;
+        }
+        if let Some(tail) = node.tail {
+            if matches!(tail.js, Some(TailJs::ElementProps { .. })) {
+                element_tags.push(node.tag);
+                element_tail = Some(tail);
+            }
+            continue;
+        }
+        let significant = node
+            .fields
+            .iter()
+            .any(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip));
+        if significant {
+            match field_groups.iter_mut().find(|(_, f)| *f == node.fields) {
+                Some((tags, _)) => tags.push(node.tag),
+                None => field_groups.push((vec![node.tag], node.fields)),
+            }
+        } else if node.set_slots.is_empty() && !node.custom {
+            bare_tags.push(node.tag);
+        }
+    }
+    field_groups.sort_by_key(|(_, fields)| !is_plain_fields(fields));
+
+    let [end_off, start_line, start_col, end_line, end_col] = *pos;
+    let mut out = format!(
+        "/** Install `position` (a zero start line marks a synthesized node) and the tag's fixed\n\
+         \x20*  fields straight off the wire; `false` hands the tag to the caller's reader path. */\n\
+         export function {fn_name}(\n\
+         \x20 wire: ArenaWire,\n\
+         \x20 nodeId: number,\n\
+         \x20 nodeType: number,\n\
+         \x20 node: object,\n\
+         ): boolean {{\n\
+         \x20 const {{ u8, u32, pool }} = wire;\n\
+         \x20 const w = wire.nodesW + nodeId * wire.strideW;\n\
+         \x20 const wp = w + W_START_OFFSET;\n\
+         \x20 const startLine = u32[wp + {start_line}] ?? 0;\n\
+         \x20 if (startLine !== 0) {{\n\
+         \x20   (node as {{ position?: Position }}).position = {{\n\
+         \x20     start: {{ offset: u32[wp] ?? 0, line: startLine, column: u32[wp + {start_col}] ?? 0 }},\n\
+         \x20     end: {{ offset: u32[wp + {end_off}] ?? 0, line: u32[wp + {end_line}] ?? 0, column: u32[wp + {end_col}] ?? 0 }},\n\
+         \x20   }};\n\
+         \x20 }}\n\
+         \x20 const n = node as Record<string, unknown>;\n\
+         \x20 switch (nodeType) {{\n"
+    );
+
+    for (tags, fields) in &field_groups {
+        for tag in tags {
+            let _ = writeln!(out, "    case {tag}:");
+        }
+        out.push_str("    {\n");
+        out.push_str("      const dl = u32[w + W_DATA_LEN] ?? 0;\n");
+        out.push_str("      const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;\n");
+        for (i, field) in fields
+            .iter()
+            .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+            .enumerate()
+        {
+            out.push_str(&fused_field_stmt(field, i, enums));
+        }
+        out.push_str("      return true;\n    }\n");
+    }
+
+    if let Some(tail) = element_tail {
+        for tag in &element_tags {
+            let _ = writeln!(out, "    case {tag}:");
+        }
+        out.push_str(&fused_element_arm(&tail));
+    }
+
+    if !bare_tags.is_empty() {
+        for tag in &bare_tags {
+            let _ = writeln!(out, "    case {tag}:");
+        }
+        out.push_str("      return true;\n");
+    }
+
+    out.push_str("    default:\n      return false;\n  }\n}\n\n");
+    out
+}
+
+fn word_expr(base: &str, w: usize) -> String {
+    if w == 0 {
+        base.to_string()
+    } else {
+        format!("{base} + {w}")
+    }
+}
+
+fn fused_field_stmt(field: &Field, index: usize, enums: &[&'static [&'static str]]) -> String {
+    let js = field.js;
+    let off = field.offset;
+    if matches!(field.wire, Wire::U8) {
+        let d = field.u8_default;
+        let read = format!("dl > {off} ? (u8[(db << 2) + {off}] ?? {d}) : {d}");
+        return match field.js_kind {
+            Js::Enum(values) => {
+                let slot = enums.iter().position(|e| *e == values).unwrap_or(0);
+                format!(
+                    "      const b{index} = {read};\n      n.{js} = FUSED_ENUM_{slot}[b{index}] ?? FUSED_ENUM_{slot}[0];\n"
+                )
+            }
+            _ => format!("      n.{js} = {read};\n"),
+        };
+    }
+    let end = off + 8;
+    let idx0 = word_expr("db", off / 4);
+    let idx1 = word_expr("db", off / 4 + 1);
+    let head = format!("      const o{index} = u32[{idx0}] ?? 0;\n");
+    let sub = format!("pool.substring(o{index}, o{index} + (u32[{idx1}] ?? 0))");
+    let read = format!("dl >= {end} ? {sub} : \"\"");
+    let read = if field.phantom {
+        format!("restorePhantomSpaces({read})")
+    } else {
+        read
+    };
+    match field.js_kind {
+        Js::StrNull => format!(
+            "{head}      const s{index} = {read};\n      n.{js} = s{index} === \"\" ? null : s{index};\n"
+        ),
+        _ => format!("{head}      n.{js} = {read};\n"),
+    }
+}
+
+fn fused_element_arm(tail: &Tail) -> String {
+    let tag0 = word_expr("db", tail.head[0].offset / 4);
+    let tag1 = word_expr("db", tail.head[0].offset / 4 + 1);
     let count_word = tail.count_offset / 4;
     let items_word = tail.items_offset / 4;
     let stride_words = tail.stride / 4;
@@ -1126,56 +1228,41 @@ fn element_decode_ts(hast_tails: &[TailLayout]) -> String {
         .iter()
         .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
         .collect();
-    let (name_word, value_word) = (refs[0].offset / 4, refs[1].offset / 4);
+    let name0 = word_expr("base", refs[0].offset / 4);
+    let name1 = word_expr("base", refs[0].offset / 4 + 1);
+    let value0 = word_expr("base", refs[1].offset / 4);
+    let value1 = word_expr("base", refs[1].offset / 4 + 1);
     let kind_byte = tail
         .item
         .iter()
         .find(|f| matches!(f.wire, Wire::U8))
         .expect("element kind byte")
         .offset;
-    let at = |base: &str, w: usize| {
-        if w == 0 {
-            base.to_string()
-        } else {
-            format!("{base} + {w}")
-        }
-    };
     format!(
-        "/** Decode an element's `tagName` and `properties` ({stride}-byte `PropertyEntry` items after a {min_bytes}-byte head). */\n\
-         export function readHastWireElement(\n\
-         \x20 wire: ArenaWire,\n\
-         \x20 nodeId: number,\n\
-         \x20 node: {{ tagName: string; properties: Record<string, HastProperty[\"value\"]> }},\n\
-         ): void {{\n\
-         \x20 const {{ u8, u32, pool }} = wire;\n\
-         \x20 const w = wire.nodesW + nodeId * wire.strideW;\n\
-         \x20 let tagName = \"\";\n\
-         \x20 const properties: Record<string, HastProperty[\"value\"]> = {{}};\n\
-         \x20 if ((u32[w + W_DATA_LEN] ?? 0) >= {min_bytes}) {{\n\
-         \x20   const tw = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;\n\
-         \x20   const toff = u32[{tag0}] ?? 0;\n\
-         \x20   tagName = pool.substring(toff, toff + (u32[{tag1}] ?? 0));\n\
-         \x20   const count = u32[tw + {count_word}] ?? 0;\n\
-         \x20   for (let i = 0; i < count; i++) {{\n\
-         \x20     const base = tw + {items_word} + i * {stride_words};\n\
-         \x20     const noff = u32[{name0}] ?? 0;\n\
-         \x20     const voff = u32[{value0}] ?? 0;\n\
-         \x20     properties[pool.substring(noff, noff + (u32[{name1}] ?? 0))] = decodeElementProp(\n\
-         \x20       u8[(base << 2) + {kind_byte}] ?? 0,\n\
-         \x20       pool.substring(voff, voff + (u32[{value1}] ?? 0)),\n\
-         \x20     );\n\
-         \x20   }}\n\
-         \x20 }}\n\
-         \x20 node.tagName = tagName;\n\
-         \x20 node.properties = properties;\n\
-         }}\n",
-        stride = tail.stride,
-        tag0 = at("tw", tag_word),
-        tag1 = at("tw", tag_word + 1),
-        name0 = at("base", name_word),
-        name1 = at("base", name_word + 1),
-        value0 = at("base", value_word),
-        value1 = at("base", value_word + 1),
+        "    {{\n\
+         \x20     const dl = u32[w + W_DATA_LEN] ?? 0;\n\
+         \x20     const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;\n\
+         \x20     let tagName = \"\";\n\
+         \x20     const properties: Record<string, HastProperty[\"value\"]> = {{}};\n\
+         \x20     if (dl >= {min_bytes}) {{\n\
+         \x20       const toff = u32[{tag0}] ?? 0;\n\
+         \x20       tagName = pool.substring(toff, toff + (u32[{tag1}] ?? 0));\n\
+         \x20       const count = u32[{count_expr}] ?? 0;\n\
+         \x20       for (let i = 0; i < count; i++) {{\n\
+         \x20         const base = db + {items_word} + i * {stride_words};\n\
+         \x20         const noff = u32[{name0}] ?? 0;\n\
+         \x20         const voff = u32[{value0}] ?? 0;\n\
+         \x20         properties[pool.substring(noff, noff + (u32[{name1}] ?? 0))] = decodeElementProp(\n\
+         \x20           u8[(base << 2) + {kind_byte}] ?? 0,\n\
+         \x20           pool.substring(voff, voff + (u32[{value1}] ?? 0)),\n\
+         \x20         );\n\
+         \x20       }}\n\
+         \x20     }}\n\
+         \x20     n.tagName = tagName;\n\
+         \x20     n.properties = properties;\n\
+         \x20     return true;\n\
+         \x20   }}\n",
+        count_expr = word_expr("db", count_word),
     )
 }
 
