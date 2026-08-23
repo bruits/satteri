@@ -148,4 +148,4 @@ const tree = markdownToHast(`<div class="note">\n\n**hi**\n\n</div>`, {
 // <div> is now a real element wrapping the parsed <p><strong>hi</strong></p>
 ```
 
-The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Positions are not preserved through the reparse.
+The whole tree is reparsed through the HTML parser, so a tag opened in one raw block and closed in another is resolved against the surrounding Markdown. Positions are not preserved through the reparse, except on the root, which keeps the document's own span.

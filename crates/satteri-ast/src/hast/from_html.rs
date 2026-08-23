@@ -807,11 +807,21 @@ pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
 /// no synthesised `<html>`/`<head>`/`<body>` wrapper.
 ///
 /// MDX nodes have no HTML form; they are carried through as placeholder
-/// comments and spliced back afterwards. Positions are not preserved: the
-/// tree is rebuilt from serialised HTML.
+/// comments and spliced back afterwards. Child positions do not survive the
+/// rebuild from serialised HTML; the source string and the root's own span
+/// describe the document rather than the reparse, so both carry over.
 pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
-    let mut builder = ArenaBuilder::<Hast>::new(String::new());
+    let mut builder = ArenaBuilder::<Hast>::new(arena.source().to_string());
     builder.open_node_raw(HastNodeType::Root as u8);
+    let root = arena.get_node(0);
+    builder.set_position_current(
+        root.start_offset,
+        root.end_offset,
+        root.start_line,
+        root.start_column,
+        root.end_line,
+        root.end_column,
+    );
     reparse_children_into(arena, 0, &mut builder);
     builder.close_node();
     builder.finish()
