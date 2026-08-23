@@ -706,7 +706,7 @@ pub const HAST_CONTAINER_TAGS: &[u8] = &[0, 1, 10, 11];
 /// A new node type must land in exactly one list, so leafness is a declared
 /// decision rather than a silently wrong runtime default.
 pub fn validate_leafness() {
-    let kinds: [(&[Node], &[u8], &[u8], &str); 2] = [
+    let kinds = [
         (MDAST_NODES, MDAST_LEAF_TAGS, MDAST_CONTAINER_TAGS, "mdast"),
         (HAST_NODES, HAST_LEAF_TAGS, HAST_CONTAINER_TAGS, "hast"),
     ];
