@@ -54,10 +54,6 @@ export {
   PROP_SPACE_SEP,
   PROP_INT,
   PROP_NULL,
-  MDX_ATTR_BOOLEAN_PROP,
-  MDX_ATTR_LITERAL_PROP,
-  MDX_ATTR_EXPRESSION_PROP,
-  MDX_ATTR_SPREAD,
 } from "./generated/wire-constants.js";
 
 export class OpWriter extends ByteWriter {
