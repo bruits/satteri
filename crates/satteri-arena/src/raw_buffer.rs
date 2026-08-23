@@ -55,7 +55,9 @@ impl<K: ArenaKind> Arena<K> {
                 // Pools are overwhelmingly ASCII; striding beats decoding each char.
                 while i + 8 <= bytes.len() {
                     let chunk = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
-                    if chunk & 0x8080_8080_8080_8080 != 0 {
+                    let flagged = chunk & 0x8080_8080_8080_8080;
+                    if flagged != 0 {
+                        i += (flagged.trailing_zeros() >> 3) as usize;
                         break;
                     }
                     i += 8;
@@ -202,6 +204,8 @@ impl<K: ArenaKind> Arena<K> {
             let mut remap = to_utf16;
             // A patch rebuild can leave several nodes sharing one blob; blob starts are 4-aligned, so a bit per slot dedups without hashing.
             let mut seen_blobs = vec![0u64; self.type_data.len() / 4 / 64 + 1];
+            #[cfg(debug_assertions)]
+            let mut blob_claims = std::collections::HashMap::new();
             for node in &self.nodes {
                 if node.data_len == 0 {
                     continue;
@@ -210,9 +214,17 @@ impl<K: ArenaKind> Arena<K> {
                 let slot = (node.data_offset / 4) as usize;
                 let (word, bit) = (slot / 64, 1u64 << (slot % 64));
                 if seen_blobs[word] & bit != 0 {
+                    #[cfg(debug_assertions)]
+                    assert_eq!(
+                        blob_claims.get(&node.data_offset),
+                        Some(&(node.node_type, node.data_len)),
+                        "nodes sharing a type_data blob must share its layout"
+                    );
                     continue;
                 }
                 seen_blobs[word] |= bit;
+                #[cfg(debug_assertions)]
+                blob_claims.insert(node.data_offset, (node.node_type, node.data_len));
                 let start = node.data_offset as usize;
                 let end = start + node.data_len as usize;
                 K::remap_string_refs(node.node_type, &mut type_data[start..end], &mut remap);
@@ -230,5 +242,100 @@ impl<K: ArenaKind> Arena<K> {
         }
 
         buf
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kind::Mdast;
+
+    /// Text tag: a single StringRef at offset 0 in the generated remap table.
+    const TEXT: u8 = 7;
+    const START: usize = offset_of!(ArenaNode, start_offset);
+    const END: usize = offset_of!(ArenaNode, end_offset);
+    const DATA_OFF: usize = offset_of!(ArenaNode, data_offset);
+
+    fn u32_at(buf: &[u8], off: usize) -> u32 {
+        u32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
+    }
+
+    fn wire_ref(buf: &[u8], type_data_at: u32, blob_offset: u32) -> (u32, u32) {
+        let at = (type_data_at + blob_offset) as usize;
+        (u32_at(buf, at), u32_at(buf, at + 4))
+    }
+
+    #[test]
+    fn wire_remaps_refs_and_node_offsets_to_utf16_units() {
+        // "aé😀b" is 8 bytes / 5 UTF-16 units; 300 'x's push the tail refs past the first 256-byte block onto the equal-shifts fast path.
+        let mut pool = String::from("aé😀b");
+        pool.push_str(&"x".repeat(300));
+        let mut arena: Arena<Mdast> = Arena::new(pool);
+        let root = arena.alloc_node(0);
+        arena.set_position(root, 0, 308, 1, 1, 2, 1);
+        let text = arena.alloc_node(TEXT);
+        arena.set_position(text, 1, 8, 1, 2, 1, 6);
+        arena.set_type_data(text, &[1, 0, 0, 0, 7, 0, 0, 0]);
+        let tail = arena.alloc_node(TEXT);
+        arena.set_position(tail, 260, 300, 1, 258, 1, 298);
+        arena.set_type_data(tail, &[4, 1, 0, 0, 40, 0, 0, 0]);
+        let synthesized = arena.alloc_node(TEXT);
+        arena.set_position(synthesized, 999, 999, 0, 0, 0, 0);
+        arena.set_children(root, &[text, tail, synthesized]);
+
+        let buf = arena.to_raw_buffer();
+
+        let nodes_at = u32_at(&buf, header::NODES_OFFSET) as usize;
+        let type_data_at = u32_at(&buf, header::TYPE_DATA_OFFSET);
+        let node = |id: usize| nodes_at + id * NODE_STRUCT_SIZE;
+
+        assert_eq!(u32_at(&buf, node(0) + START), 0);
+        assert_eq!(u32_at(&buf, node(0) + END), 305);
+        assert_eq!(u32_at(&buf, node(1) + START), 1);
+        assert_eq!(u32_at(&buf, node(1) + END), 5);
+        assert_eq!(u32_at(&buf, node(2) + START), 257);
+        assert_eq!(u32_at(&buf, node(2) + END), 297);
+        // Synthesized nodes (start_line 0) keep their spliced byte offsets.
+        assert_eq!(u32_at(&buf, node(3) + START), 999);
+
+        let text_blob = u32_at(&buf, node(1) + DATA_OFF);
+        assert_eq!(wire_ref(&buf, type_data_at, text_blob), (1, 4));
+        let tail_blob = u32_at(&buf, node(2) + DATA_OFF);
+        assert_eq!(wire_ref(&buf, type_data_at, tail_blob), (257, 40));
+    }
+
+    #[test]
+    fn shared_blobs_remap_once() {
+        let mut arena: Arena<Mdast> = Arena::new(String::from("aébb"));
+        let root = arena.alloc_node(0);
+        let a = arena.alloc_node(TEXT);
+        arena.set_type_data(a, &[3, 0, 0, 0, 2, 0, 0, 0]);
+        let b = arena.alloc_node(TEXT);
+        let blob = arena.get_node(a).data_offset;
+        arena.nodes[b as usize].data_offset = blob;
+        arena.nodes[b as usize].data_len = 8;
+        arena.set_children(root, &[a, b]);
+
+        let buf = arena.to_raw_buffer();
+
+        // A second remap of the shared blob would shift the start again (2 → 1).
+        let type_data_at = u32_at(&buf, header::TYPE_DATA_OFFSET);
+        assert_eq!(wire_ref(&buf, type_data_at, blob), (2, 2));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "must share its layout")]
+    fn shared_blob_with_a_different_layout_asserts() {
+        let mut arena: Arena<Mdast> = Arena::new(String::from("aébb"));
+        let root = arena.alloc_node(0);
+        let a = arena.alloc_node(TEXT);
+        arena.set_type_data(a, &[3, 0, 0, 0, 2, 0, 0, 0]);
+        let b = arena.alloc_node(8);
+        let blob = arena.get_node(a).data_offset;
+        arena.nodes[b as usize].data_offset = blob;
+        arena.nodes[b as usize].data_len = 8;
+        arena.set_children(root, &[a, b]);
+        arena.to_raw_buffer();
     }
 }
