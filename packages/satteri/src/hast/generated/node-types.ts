@@ -17,17 +17,17 @@ export const TYPE_NAMES: Readonly<Record<number, string>> = {
 
 /** Canonical AST name -> node-type tag. */
 export const NAME_TO_TYPE: Readonly<Record<string, number>> = {
-  "root": 0,
-  "element": 1,
-  "text": 2,
-  "comment": 3,
-  "doctype": 4,
-  "raw": 5,
-  "mdxJsxFlowElement": 10,
-  "mdxJsxTextElement": 11,
-  "mdxFlowExpression": 12,
-  "mdxjsEsm": 13,
-  "mdxTextExpression": 14,
+  root: 0,
+  element: 1,
+  text: 2,
+  comment: 3,
+  doctype: 4,
+  raw: 5,
+  mdxJsxFlowElement: 10,
+  mdxJsxTextElement: 11,
+  mdxFlowExpression: 12,
+  mdxjsEsm: 13,
+  mdxTextExpression: 14,
 };
 
 /** Names a plugin can subscribe to (every node except `root`). */

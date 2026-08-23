@@ -27,17 +27,55 @@ const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {
   13: [{ js: "value", offset: 0, kind: "str32" }],
   25: [{ js: "value", offset: 0, kind: "str32" }],
   26: [{ js: "value", offset: 0, kind: "str32" }],
-  8: [{ js: "lang", offset: 0, kind: "str16", nullable: true }, { js: "meta", offset: 8, kind: "str16", nullable: true }, { js: "value", offset: 16, kind: "str32" }],
-  9: [{ js: "url", offset: 0, kind: "str16" }, { js: "title", offset: 8, kind: "str16", nullable: true }, { js: "identifier", offset: 16, kind: "str16" }, { js: "label", offset: 24, kind: "str16" }],
-  15: [{ js: "url", offset: 0, kind: "str16" }, { js: "title", offset: 8, kind: "str16", nullable: true }],
-  16: [{ js: "url", offset: 0, kind: "str16" }, { js: "alt", offset: 8, kind: "str16" }, { js: "title", offset: 16, kind: "str16", nullable: true }],
-  17: [{ js: "identifier", offset: 0, kind: "str16" }, { js: "label", offset: 8, kind: "str16" }, { js: "referenceType", offset: 16, kind: "u8", values: ["shortcut", "collapsed", "full"] }],
-  18: [{ js: "identifier", offset: 0, kind: "str16" }, { js: "label", offset: 8, kind: "str16" }, { js: "referenceType", offset: 16, kind: "u8", values: ["shortcut", "collapsed", "full"] }, { js: "alt", offset: 20, kind: "str16" }],
-  19: [{ js: "identifier", offset: 0, kind: "str16" }, { js: "label", offset: 8, kind: "str16" }],
-  20: [{ js: "identifier", offset: 0, kind: "str16" }, { js: "label", offset: 8, kind: "str16" }, { js: "", offset: 16, kind: "u8", skip: true }],
-  27: [{ js: "meta", offset: 0, kind: "str16", nullable: true }, { js: "value", offset: 8, kind: "str32" }],
+  8: [
+    { js: "lang", offset: 0, kind: "str16", nullable: true },
+    { js: "meta", offset: 8, kind: "str16", nullable: true },
+    { js: "value", offset: 16, kind: "str32" },
+  ],
+  9: [
+    { js: "url", offset: 0, kind: "str16" },
+    { js: "title", offset: 8, kind: "str16", nullable: true },
+    { js: "identifier", offset: 16, kind: "str16" },
+    { js: "label", offset: 24, kind: "str16" },
+  ],
+  15: [
+    { js: "url", offset: 0, kind: "str16" },
+    { js: "title", offset: 8, kind: "str16", nullable: true },
+  ],
+  16: [
+    { js: "url", offset: 0, kind: "str16" },
+    { js: "alt", offset: 8, kind: "str16" },
+    { js: "title", offset: 16, kind: "str16", nullable: true },
+  ],
+  17: [
+    { js: "identifier", offset: 0, kind: "str16" },
+    { js: "label", offset: 8, kind: "str16" },
+    { js: "referenceType", offset: 16, kind: "u8", values: ["shortcut", "collapsed", "full"] },
+  ],
+  18: [
+    { js: "identifier", offset: 0, kind: "str16" },
+    { js: "label", offset: 8, kind: "str16" },
+    { js: "referenceType", offset: 16, kind: "u8", values: ["shortcut", "collapsed", "full"] },
+    { js: "alt", offset: 20, kind: "str16" },
+  ],
+  19: [
+    { js: "identifier", offset: 0, kind: "str16" },
+    { js: "label", offset: 8, kind: "str16" },
+  ],
+  20: [
+    { js: "identifier", offset: 0, kind: "str16" },
+    { js: "label", offset: 8, kind: "str16" },
+    { js: "", offset: 16, kind: "u8", skip: true },
+  ],
+  27: [
+    { js: "meta", offset: 0, kind: "str16", nullable: true },
+    { js: "value", offset: 8, kind: "str32" },
+  ],
   28: [{ js: "value", offset: 8, kind: "str32" }],
-  38: [{ js: "name", offset: 0, kind: "str16" }, { js: "value", offset: 8, kind: "str32" }],
+  38: [
+    { js: "name", offset: 0, kind: "str16" },
+    { js: "value", offset: 8, kind: "str32" },
+  ],
   102: [{ js: "value", offset: 0, kind: "str32", phantom: true }],
   103: [{ js: "value", offset: 0, kind: "str32", phantom: true }],
   104: [{ js: "value", offset: 0, kind: "str32", phantom: true }],
@@ -74,11 +112,48 @@ export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
  *  (directives), `jsx` a typed MDX-JSX attribute array. */
 const MDAST_TAILS: Readonly<Record<number, TailDescriptor>> = {
   21: { head: [], item: [{ js: "align", kind: "u8" }], bytes: { attrsKey: "align" } },
-  30: { head: [{ js: "name", kind: "str16" }], item: [{ js: "key", kind: "str16" }, { js: "value", kind: "str16" }], map: { attrsKey: "attributes", key: "key", value: "value" } },
-  31: { head: [{ js: "name", kind: "str16" }], item: [{ js: "key", kind: "str16" }, { js: "value", kind: "str16" }], map: { attrsKey: "attributes", key: "key", value: "value" } },
-  32: { head: [{ js: "name", kind: "str16" }], item: [{ js: "key", kind: "str16" }, { js: "value", kind: "str16" }], map: { attrsKey: "attributes", key: "key", value: "value" } },
-  100: { head: [{ js: "name", kind: "str16" }], item: [{ js: "kind", kind: "u8" }, { js: "name", kind: "str16" }, { js: "value", kind: "str32" }], jsx: { attrsKey: "attributes" } },
-  101: { head: [{ js: "name", kind: "str16" }], item: [{ js: "kind", kind: "u8" }, { js: "name", kind: "str16" }, { js: "value", kind: "str32" }], jsx: { attrsKey: "attributes" } },
+  30: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "key", kind: "str16" },
+      { js: "value", kind: "str16" },
+    ],
+    map: { attrsKey: "attributes", key: "key", value: "value" },
+  },
+  31: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "key", kind: "str16" },
+      { js: "value", kind: "str16" },
+    ],
+    map: { attrsKey: "attributes", key: "key", value: "value" },
+  },
+  32: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "key", kind: "str16" },
+      { js: "value", kind: "str16" },
+    ],
+    map: { attrsKey: "attributes", key: "key", value: "value" },
+  },
+  100: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "kind", kind: "u8" },
+      { js: "name", kind: "str16" },
+      { js: "value", kind: "str32" },
+    ],
+    jsx: { attrsKey: "attributes" },
+  },
+  101: {
+    head: [{ js: "name", kind: "str16" }],
+    item: [
+      { js: "kind", kind: "u8" },
+      { js: "name", kind: "str16" },
+      { js: "value", kind: "str32" },
+    ],
+    jsx: { attrsKey: "attributes" },
+  },
 };
 
 interface TailField {
