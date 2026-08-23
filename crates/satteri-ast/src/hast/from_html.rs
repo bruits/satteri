@@ -67,7 +67,11 @@ struct Node {
     data: NodeData,
     /// Source-arena node this was fed from; `None` when it came from raw HTML.
     origin: Option<u32>,
+    /// Raw chunk this was tokenized out of; `NO_CHUNK` when fed as tokens.
+    chunk: u32,
 }
+
+const NO_CHUNK: u32 = u32::MAX;
 
 enum NodeData {
     Document,
@@ -104,6 +108,7 @@ impl HtmlSink {
                 children: Vec::new(),
                 data: NodeData::Document,
                 origin: None,
+                chunk: NO_CHUNK,
             }]),
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             stitch,
@@ -178,6 +183,7 @@ fn new_node(nodes: &mut Vec<Node>, data: NodeData) -> usize {
         children: Vec::new(),
         data,
         origin: None,
+        chunk: NO_CHUNK,
     });
     id
 }
@@ -506,6 +512,7 @@ fn emit(
                         let element = builder.open_node_raw(HastNodeType::Element as u8);
                         let data = encode_element_data(tag_ref, &props);
                         builder.arena_mut().set_type_data(element, &data);
+                        copy_position(builder, element, origin);
                     }
                 }
 
@@ -689,17 +696,126 @@ fn reparse_children_into(src: &Arena<Hast>, parent: u32, builder: &mut ArenaBuil
         Vec::new(),
         false,
     );
-    let mut stitches: Vec<u32> = Vec::new();
-    feed_children(&mut parser, src, parent, &mut stitches, 0);
+    let mut feed = Feed::default();
+    feed_children(&mut parser, src, parent, &mut feed, 0);
 
     let sink = parser.finish();
     let leaked = sink
         .stitch
         .map(StitchRecognizer::leaked_markers)
         .unwrap_or_default();
-    let nodes = sink.nodes.into_inner();
+    let mut nodes = sink.nodes.into_inner();
+    adopt_self_contained_chunks(&mut nodes, &feed.chunks, src);
     let roots = fragment_roots(&nodes);
-    emit(&nodes, &roots, builder, Some(src), &stitches, &leaked);
+    emit(&nodes, &roots, builder, Some(src), &feed.stitches, &leaked);
+}
+
+/// MDX nodes held back as placeholders, and the raw node behind each chunk.
+#[derive(Default)]
+struct Feed {
+    stitches: Vec<u32>,
+    chunks: Vec<u32>,
+}
+
+/// Give the one element a raw chunk produced the span of the raw node it came
+/// from. Sound only when that element is the whole chunk: one yielding two
+/// elements says nothing about where either ends, and spans *within* a chunk
+/// need offsets html5ever does not expose.
+fn adopt_self_contained_chunks(nodes: &mut [Node], chunks: &[u32], src: &Arena<Hast>) {
+    let mut sole_product: Vec<Option<usize>> = vec![None; chunks.len()];
+    let mut disqualified = vec![false; chunks.len()];
+
+    for id in 0..nodes.len() {
+        let chunk = nodes[id].chunk;
+        if chunk == NO_CHUNK {
+            continue;
+        }
+        let nested = nodes[id]
+            .parent
+            .is_some_and(|parent| nodes[parent].chunk == chunk);
+        if nested {
+            continue;
+        }
+        let chunk = chunk as usize;
+        if sole_product[chunk].is_some() || !matches!(nodes[id].data, NodeData::Element { .. }) {
+            disqualified[chunk] = true;
+        }
+        sole_product[chunk] = Some(id);
+    }
+
+    for chunk in 0..chunks.len() {
+        let Some(id) = sole_product[chunk] else {
+            continue;
+        };
+        if disqualified[chunk] || !subtree_is_all_chunk(nodes, id, chunk as u32) {
+            continue;
+        }
+        let NodeData::Element { name, .. } = &nodes[id].data else {
+            continue;
+        };
+        let raw = src.get_type_data(chunks[chunk]);
+        if raw.len() >= 8 && is_lone_element_source(src.get_str(decode_text_data(raw)), &name.local)
+        {
+            nodes[id].origin = Some(chunks[chunk]);
+        }
+    }
+}
+
+/// Whether `html` is exactly one `tag` element and nothing else, so that the raw
+/// node's span is that element's span. Deliberately literal: markup the tokenizer
+/// drops (`<body>`, a stray `</div>`, a second `<form>`) leaves the element
+/// covering less than the text, and every uncertain case declines.
+fn is_lone_element_source(html: &str, tag: &str) -> bool {
+    let opens = count_tag(html, tag, false);
+    let body = html.trim();
+    if !starts_with_tag(body, tag) {
+        return false;
+    }
+    if is_void_element(tag) {
+        return opens == 1 && count_tag(html, tag, true) == 0 && body.ends_with('>');
+    }
+    let mut close = String::with_capacity(tag.len() + 3);
+    close.push_str("</");
+    close.push_str(tag);
+    close.push('>');
+    opens == 1 && count_tag(html, tag, true) == 1 && body.ends_with(&close)
+}
+
+/// Occurrences of `<tag` (or `</tag`). Counts them anywhere, comments and
+/// attribute values included, so a lookalike only ever forces a decline.
+fn count_tag(html: &str, tag: &str, closing: bool) -> usize {
+    let mut needle = String::with_capacity(tag.len() + 2);
+    needle.push('<');
+    if closing {
+        needle.push('/');
+    }
+    needle.push_str(tag);
+    html.match_indices(&needle)
+        .filter(|(at, _)| {
+            let rest = &html[at + needle.len()..];
+            !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+        })
+        .count()
+}
+
+fn starts_with_tag(html: &str, tag: &str) -> bool {
+    html.strip_prefix('<')
+        .and_then(|rest| rest.strip_prefix(tag))
+        .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-'))
+}
+
+/// Whether every node under `id` came from `chunk`. Anything else in there means
+/// the element outlived its chunk — an unclosed tag that swallowed what follows,
+/// or a tag closed by a later raw node — so the chunk's span is not its span.
+fn subtree_is_all_chunk(nodes: &[Node], id: usize, chunk: u32) -> bool {
+    let mut stack = vec![id];
+    while let Some(node) = stack.pop() {
+        if nodes[node].chunk != chunk {
+            return false;
+        }
+        stack.extend_from_slice(&nodes[node].children);
+    }
+    true
 }
 
 /// Feed `parent`'s children into an in-flight fragment parse.
@@ -707,11 +823,11 @@ fn feed_children(
     parser: &mut Parser<HtmlSink>,
     src: &Arena<Hast>,
     parent: u32,
-    stitches: &mut Vec<u32>,
+    feed: &mut Feed,
     depth: u32,
 ) {
     for &child in src.get_children(parent) {
-        crate::stack::with_headroom(depth, || feed_node(parser, src, child, stitches, depth));
+        crate::stack::with_headroom(depth, || feed_node(parser, src, child, feed, depth));
     }
 }
 
@@ -719,20 +835,27 @@ fn feed_node(
     parser: &mut Parser<HtmlSink>,
     src: &Arena<Hast>,
     node_id: u32,
-    stitches: &mut Vec<u32>,
+    feed: &mut Feed,
     depth: u32,
 ) {
     let data = src.get_type_data(node_id);
     let Some(node_type) = HastNodeType::from_u8(src.get_node(node_id).node_type) else {
-        feed_children(parser, src, node_id, stitches, depth + 1);
+        feed_children(parser, src, node_id, feed, depth + 1);
         return;
     };
 
     match node_type {
-        HastNodeType::Root => feed_children(parser, src, node_id, stitches, depth + 1),
+        HastNodeType::Root => feed_children(parser, src, node_id, feed, depth + 1),
         HastNodeType::Raw if data.len() >= 8 => {
             let html = src.get_str(decode_text_data(data));
+            let chunk = feed.chunks.len() as u32;
+            feed.chunks.push(node_id);
+            let before = node_count(parser);
             parser.process(StrTendril::from_slice(html));
+            let mut nodes = parser.tokenizer.sink.sink.nodes.borrow_mut();
+            for node in nodes.iter_mut().skip(before) {
+                node.chunk = chunk;
+            }
         }
         HastNodeType::Element if data.len() >= 16 => {
             let tag = src.get_str(decode_element_tag(data));
@@ -760,7 +883,7 @@ fn feed_node(
             );
             if !is_void_element(tag) {
                 let first_child = node_count(parser);
-                feed_children(parser, src, node_id, stitches, depth + 1);
+                feed_children(parser, src, node_id, feed, depth + 1);
                 feed_token(parser, tag_token(TagKind::EndTag, tag, Vec::new()), None);
                 if let Some(element) = element
                     && escaped_element(parser, element, first_child)
@@ -806,7 +929,7 @@ fn feed_node(
                 return;
             };
             let marker = format!("<!--{}{}-->", stitch.prefix, stitch.register());
-            stitches.push(node_id);
+            feed.stitches.push(node_id);
             parser.process(StrTendril::from_slice(&marker));
         }
         _ => {}

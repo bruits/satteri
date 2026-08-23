@@ -192,13 +192,21 @@ describe("rawHtml position conformance vs rehype-raw", () => {
     for (const [path, span] of kept) expect([path, span]).toEqual([path, reference.get(path)]);
   });
 
-  // Recovering these needs per-token source offsets, which html5ever does not expose.
-  test("nodes parsed out of raw HTML carry no position", () => {
+  test("a raw block that is one element gets that element's span", () => {
+    const md = "text\n\n<div><em>x</em></div>\n";
+    const reference = new Map(spans(referenceTree(md)));
+    const ours = new Map(spans(markdownToHast(md, { features: { rawHtml: true } })));
+    expect(ours.get("/2")).toBe(reference.get("/2"));
+    expect(ours.get("/2")).toBe("6..27");
+  });
+
+  // Spans within a raw block need per-token offsets, which html5ever does not expose.
+  test("nodes nested inside raw HTML carry no position", () => {
     const tree = markdownToHast("text\n\n<div><em>x</em></div>\n", {
       features: { rawHtml: true },
     });
-    const children = "children" in tree ? (tree.children as HastNode[]) : [];
-    const div = children.find((child) => child.type === "element" && child.tagName === "div");
-    expect(div?.position).toBeUndefined();
+    const inner = spans(tree).filter(([path]) => path.startsWith("/2/"));
+    expect(inner.length).toBeGreaterThan(0);
+    for (const [, span] of inner) expect(span).toBeNull();
   });
 });
