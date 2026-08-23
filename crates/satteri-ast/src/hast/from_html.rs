@@ -9,8 +9,9 @@ use std::cell::{Cell, Ref, RefCell};
 
 use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
+use html5ever::tokenizer::{Doctype, Tag, TagKind, Token, TokenSink};
 use html5ever::{
-    Attribute, LocalName, Namespace, ParseOpts, QualName, parse_document, parse_fragment,
+    Attribute, LocalName, Namespace, ParseOpts, Parser, QualName, parse_document, parse_fragment,
     tree_builder::TreeBuilderOpts,
 };
 use satteri_arena::{Arena, ArenaBuilder, Hast, StringRef};
@@ -21,7 +22,8 @@ use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
     encode_element_data,
 };
-use crate::hast::render::{is_void_element, render_node_inner};
+use crate::hast::properties::property_to_attribute;
+use crate::hast::render::is_void_element;
 #[cfg(feature = "mdx")]
 use crate::mdast::codec::{
     decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
@@ -63,6 +65,8 @@ struct Node {
     parent: Option<usize>,
     children: Vec<usize>,
     data: NodeData,
+    /// Source-arena node this was fed from; `None` when it came from raw HTML.
+    origin: Option<u32>,
 }
 
 enum NodeData {
@@ -99,6 +103,7 @@ impl HtmlSink {
                 parent: None,
                 children: Vec::new(),
                 data: NodeData::Document,
+                origin: None,
             }]),
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             stitch,
@@ -117,11 +122,18 @@ struct StitchRecognizer {
 }
 
 impl StitchRecognizer {
-    fn new(prefix: String, count: usize) -> Self {
+    fn new(prefix: String) -> Self {
         StitchRecognizer {
             prefix,
-            claimed: RefCell::new(vec![false; count]),
+            claimed: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Reserve the next marker index; the reparse discovers MDX nodes as it feeds them.
+    fn register(&self) -> usize {
+        let mut claimed = self.claimed.borrow_mut();
+        claimed.push(false);
+        claimed.len() - 1
     }
 
     fn claim(&self, contents: &str) -> Option<usize> {
@@ -165,6 +177,7 @@ fn new_node(nodes: &mut Vec<Node>, data: NodeData) -> usize {
         parent: None,
         children: Vec::new(),
         data,
+        origin: None,
     });
     id
 }
@@ -421,6 +434,8 @@ fn emit(
             EmitTask::Emit(id) => id,
         };
 
+        let origin = nodes[id].origin.zip(src);
+
         match &nodes[id].data {
             NodeData::Document => {
                 for &child in nodes[id].children.iter().rev() {
@@ -428,7 +443,8 @@ fn emit(
                 }
             }
             NodeData::Doctype => {
-                builder.add_leaf_raw(HastNodeType::Doctype as u8);
+                let leaf = builder.add_leaf_raw(HastNodeType::Doctype as u8);
+                copy_position(builder, leaf, origin);
             }
             NodeData::Text { contents } => {
                 let text = scrub_markers(contents, leaked);
@@ -437,6 +453,7 @@ fn emit(
                 builder
                     .arena_mut()
                     .set_type_data(leaf, &text_ref.as_bytes());
+                copy_position(builder, leaf, origin);
             }
             NodeData::Comment { contents } => {
                 let text = scrub_markers(contents, leaked);
@@ -445,6 +462,7 @@ fn emit(
                 builder
                     .arena_mut()
                     .set_type_data(leaf, &text_ref.as_bytes());
+                copy_position(builder, leaf, origin);
             }
             NodeData::Stitch(index) => {
                 stack.push(EmitTask::EmitArena(stitches[*index]));
@@ -457,31 +475,39 @@ fn emit(
                 attrs,
                 template_contents,
             } => {
-                let tag_ref = builder.alloc_string(&scrub_markers(&name.local, leaked));
-                // The SVG property schema keeps attribute casing (`viewBox`);
-                // the HTML schema normalises it.
-                let in_svg = &*name.ns == SVG_NAMESPACE;
-                let props: Vec<(StringRef, u8, StringRef)> = attrs
-                    .iter()
-                    // An attribute name containing a leaked marker is junk the
-                    // tokenizer minted from marker text; drop it.
-                    .filter(|attr| {
-                        leaked.is_empty()
-                            || !leaked.iter().any(|m| attr.name.local.contains(m.as_str()))
-                    })
-                    .map(|attr| {
-                        let attr_name = qualified_attr_name(&attr.name);
-                        let (property, prop_kind) = find_property(&attr_name, in_svg);
-                        let name_ref = builder.alloc_string(&property);
-                        let value = scrub_markers(&attr.value, leaked);
-                        let (kind, value_ref) =
-                            coerce_value(builder, prop_kind, &attr_name, &value);
-                        (name_ref, kind, value_ref)
-                    })
-                    .collect();
-                let element = builder.open_node_raw(HastNodeType::Element as u8);
-                let data = encode_element_data(tag_ref, &props);
-                builder.arena_mut().set_type_data(element, &data);
+                // Fed properties are already normalised; copying beats round-tripping.
+                match origin.filter(|&(aid, src)| src.get_type_data(aid).len() >= 16) {
+                    Some((aid, src)) => {
+                        open_arena_element(src, aid, builder);
+                    }
+                    None => {
+                        let tag_ref = builder.alloc_string(&scrub_markers(&name.local, leaked));
+                        // The SVG property schema keeps attribute casing (`viewBox`);
+                        // the HTML schema normalises it.
+                        let in_svg = &*name.ns == SVG_NAMESPACE;
+                        let props: Vec<(StringRef, u8, StringRef)> = attrs
+                            .iter()
+                            // An attribute name containing a leaked marker is junk the
+                            // tokenizer minted from marker text; drop it.
+                            .filter(|attr| {
+                                leaked.is_empty()
+                                    || !leaked.iter().any(|m| attr.name.local.contains(m.as_str()))
+                            })
+                            .map(|attr| {
+                                let attr_name = qualified_attr_name(&attr.name);
+                                let (property, prop_kind) = find_property(&attr_name, in_svg);
+                                let name_ref = builder.alloc_string(&property);
+                                let value = scrub_markers(&attr.value, leaked);
+                                let (kind, value_ref) =
+                                    coerce_value(builder, prop_kind, &attr_name, &value);
+                                (name_ref, kind, value_ref)
+                            })
+                            .collect();
+                        let element = builder.open_node_raw(HastNodeType::Element as u8);
+                        let data = encode_element_data(tag_ref, &props);
+                        builder.arena_mut().set_type_data(element, &data);
+                    }
+                }
 
                 stack.push(EmitTask::Close);
                 // `<template>` content lives in a detached document, not the
@@ -498,6 +524,46 @@ fn emit(
             }
         }
     }
+}
+
+/// Give `node_id` the span of the source node it was fed from, if any.
+fn copy_position(
+    builder: &mut ArenaBuilder<Hast>,
+    node_id: u32,
+    origin: Option<(u32, &Arena<Hast>)>,
+) {
+    let Some((aid, src)) = origin else { return };
+    let node = src.get_node(aid);
+    builder.arena_mut().set_position(
+        node_id,
+        node.start_offset,
+        node.end_offset,
+        node.start_line,
+        node.start_column,
+        node.end_line,
+        node.end_column,
+    );
+}
+
+/// Open an element copied from the source arena. Children are the caller's business.
+fn open_arena_element(src: &Arena<Hast>, aid: u32, builder: &mut ArenaBuilder<Hast>) -> u32 {
+    let data = src.get_type_data(aid);
+    let tag_ref = builder.alloc_string(src.get_str(decode_element_tag(data)));
+    let props: Vec<(StringRef, u8, StringRef)> = (0..decode_element_prop_count(data))
+        .map(|i| {
+            let (name, kind, value) = decode_element_prop(data, i);
+            (
+                builder.alloc_string(src.get_str(name)),
+                kind,
+                builder.alloc_string(src.get_str(value)),
+            )
+        })
+        .collect();
+    let element = builder.open_node_raw(HastNodeType::Element as u8);
+    let encoded = encode_element_data(tag_ref, &props);
+    builder.arena_mut().set_type_data(element, &encoded);
+    copy_position(builder, element, Some((aid, src)));
+    element
 }
 
 /// html5ever splits foreign attrs into prefix + local; the tables key `prefix:local`.
@@ -543,7 +609,8 @@ fn emit_arena_node(
             }
         }
         Some(HastNodeType::Doctype) => {
-            builder.add_leaf_raw(HastNodeType::Doctype as u8);
+            let leaf = builder.add_leaf_raw(HastNodeType::Doctype as u8);
+            copy_position(builder, leaf, Some((aid, src)));
         }
         Some(HastNodeType::Text | HastNodeType::Comment | HastNodeType::Raw) if data.len() >= 8 => {
             let value_ref = builder.alloc_string(src.get_str(decode_text_data(data)));
@@ -551,22 +618,10 @@ fn emit_arena_node(
             builder
                 .arena_mut()
                 .set_type_data(leaf, &value_ref.as_bytes());
+            copy_position(builder, leaf, Some((aid, src)));
         }
         Some(HastNodeType::Element) if data.len() >= 16 => {
-            let tag_ref = builder.alloc_string(src.get_str(decode_element_tag(data)));
-            let props: Vec<(StringRef, u8, StringRef)> = (0..decode_element_prop_count(data))
-                .map(|i| {
-                    let (name, kind, value) = decode_element_prop(data, i);
-                    (
-                        builder.alloc_string(src.get_str(name)),
-                        kind,
-                        builder.alloc_string(src.get_str(value)),
-                    )
-                })
-                .collect();
-            let element = builder.open_node_raw(HastNodeType::Element as u8);
-            let encoded = encode_element_data(tag_ref, &props);
-            builder.arena_mut().set_type_data(element, &encoded);
+            open_arena_element(src, aid, builder);
             stack.push(EmitTask::Close);
             for &child in src.get_children(aid).iter().rev() {
                 stack.push(EmitTask::EmitArena(child));
@@ -589,6 +644,7 @@ fn emit_arena_node(
             let element = builder.open_node_raw(node_type);
             let encoded = encode_mdx_jsx_element_data(name_ref, &attrs, explicit);
             builder.arena_mut().set_type_data(element, &encoded);
+            copy_position(builder, element, Some((aid, src)));
             // Reparse rather than copy, so raw HTML nested inside the MDX
             // element is resolved too.
             reparse_children_into(src, aid, builder);
@@ -605,6 +661,7 @@ fn emit_arena_node(
             builder
                 .arena_mut()
                 .set_type_data(leaf, &value_ref.as_bytes());
+            copy_position(builder, leaf, Some((aid, src)));
         }
         // Unknown or malformed node: emit its children so a bad wrapper never
         // silently swallows a whole subtree.
@@ -616,31 +673,196 @@ fn emit_arena_node(
     }
 }
 
-/// Serialise `parent`'s children to HTML (MDX nodes become placeholder
-/// comments), reparse that as a fragment, and emit the result into the
-/// currently open node. Recurses once per nested MDX level via
+/// Reparse `parent`'s children as one fragment and emit the result into the
+/// currently open node. Raw nodes are tokenized, so a tag opened in one and
+/// closed in another resolves; every other node is fed to the tree builder as
+/// tokens tagged with the node they came from, which is what lets the emitted
+/// tree keep their source positions. Recurses once per nested MDX level via
 /// [`emit_arena_node`]. An MDX node whose placeholder the parser swallowed as
 /// text (e.g. inside an unclosed raw `<script>`) is dropped and its marker
 /// scrubbed from the output.
 fn reparse_children_into(src: &Arena<Hast>, parent: u32, builder: &mut ArenaBuilder<Hast>) {
-    let prefix = stitch_prefix();
-    let mut html = String::new();
+    let mut parser = parse_fragment(
+        HtmlSink::new(Some(StitchRecognizer::new(stitch_prefix()))),
+        parse_opts(),
+        HtmlSpace::Html.context_element(),
+        Vec::new(),
+        false,
+    );
     let mut stitches: Vec<u32> = Vec::new();
-    {
-        let mut on_mdx = |out: &mut String, node_id: u32| {
-            out.push_str("<!--");
-            out.push_str(&prefix);
-            out.push_str(&stitches.len().to_string());
-            out.push_str("-->");
+    feed_children(&mut parser, src, parent, &mut stitches, 0);
+
+    let sink = parser.finish();
+    let leaked = sink
+        .stitch
+        .map(StitchRecognizer::leaked_markers)
+        .unwrap_or_default();
+    let nodes = sink.nodes.into_inner();
+    let roots = fragment_roots(&nodes);
+    emit(&nodes, &roots, builder, Some(src), &stitches, &leaked);
+}
+
+/// Feed `parent`'s children into an in-flight fragment parse.
+fn feed_children(
+    parser: &mut Parser<HtmlSink>,
+    src: &Arena<Hast>,
+    parent: u32,
+    stitches: &mut Vec<u32>,
+    depth: u32,
+) {
+    for &child in src.get_children(parent) {
+        crate::stack::with_headroom(depth, || feed_node(parser, src, child, stitches, depth));
+    }
+}
+
+fn feed_node(
+    parser: &mut Parser<HtmlSink>,
+    src: &Arena<Hast>,
+    node_id: u32,
+    stitches: &mut Vec<u32>,
+    depth: u32,
+) {
+    let data = src.get_type_data(node_id);
+    let Some(node_type) = HastNodeType::from_u8(src.get_node(node_id).node_type) else {
+        feed_children(parser, src, node_id, stitches, depth + 1);
+        return;
+    };
+
+    match node_type {
+        HastNodeType::Root => feed_children(parser, src, node_id, stitches, depth + 1),
+        HastNodeType::Raw if data.len() >= 8 => {
+            let html = src.get_str(decode_text_data(data));
+            parser.process(StrTendril::from_slice(html));
+        }
+        HastNodeType::Element if data.len() >= 16 => {
+            let tag = src.get_str(decode_element_tag(data));
+            let in_svg = tag == "svg";
+            let attrs = (0..decode_element_prop_count(data))
+                .filter_map(|i| {
+                    let (name_ref, kind, value_ref) = decode_element_prop(data, i);
+                    let name = property_to_attribute(src.get_str(name_ref), in_svg);
+                    let value = match kind {
+                        PROP_BOOL_TRUE => "",
+                        PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP
+                        | PROP_COMMA_SEP_NUM => src.get_str(value_ref),
+                        _ => return None,
+                    };
+                    Some(Attribute {
+                        name: QualName::new(None, Namespace::from(""), LocalName::from(&*name)),
+                        value: StrTendril::from_slice(value),
+                    })
+                })
+                .collect();
+            let element = feed_token(
+                parser,
+                tag_token(TagKind::StartTag, tag, attrs),
+                Some(node_id),
+            );
+            if !is_void_element(tag) {
+                let first_child = node_count(parser);
+                feed_children(parser, src, node_id, stitches, depth + 1);
+                feed_token(parser, tag_token(TagKind::EndTag, tag, Vec::new()), None);
+                if let Some(element) = element
+                    && escaped_element(parser, element, first_child)
+                {
+                    parser.tokenizer.sink.sink.nodes.borrow_mut()[element].origin = None;
+                }
+            }
+        }
+        HastNodeType::Text if data.len() >= 8 => {
+            let text = src.get_str(decode_text_data(data));
+            feed_token(
+                parser,
+                Token::CharacterTokens(StrTendril::from_slice(text)),
+                Some(node_id),
+            );
+        }
+        HastNodeType::Comment if data.len() >= 8 => {
+            let text = src.get_str(decode_text_data(data));
+            feed_token(
+                parser,
+                Token::CommentToken(StrTendril::from_slice(text)),
+                Some(node_id),
+            );
+        }
+        HastNodeType::Doctype => {
+            feed_token(
+                parser,
+                Token::DoctypeToken(Doctype {
+                    name: Some(StrTendril::from_slice("html")),
+                    ..Doctype::default()
+                }),
+                Some(node_id),
+            );
+        }
+        // MDX has no HTML form. The marker goes through the tokenizer so a raw
+        // text context still swallows it, as an element's tokens never can.
+        HastNodeType::MdxJsxElement
+        | HastNodeType::MdxJsxTextElement
+        | HastNodeType::MdxFlowExpression
+        | HastNodeType::MdxTextExpression
+        | HastNodeType::MdxEsm => {
+            let Some(stitch) = parser.tokenizer.sink.sink.stitch.as_ref() else {
+                return;
+            };
+            let marker = format!("<!--{}{}-->", stitch.prefix, stitch.register());
             stitches.push(node_id);
-        };
-        for &child in src.get_children(parent) {
-            render_node_inner(child, src, &mut html, false, false, Some(&mut on_mdx), 0);
+            parser.process(StrTendril::from_slice(&marker));
+        }
+        _ => {}
+    }
+}
+
+fn tag_token(kind: TagKind, name: &str, attrs: Vec<Attribute>) -> Token {
+    Token::TagToken(Tag {
+        kind,
+        name: LocalName::from(name),
+        self_closing: false,
+        attrs,
+        had_duplicate_attributes: false,
+    })
+}
+
+/// Process one synthesised token and mark what it created as coming from
+/// `origin`, returning that node. The tree builder creates the token's own node
+/// last, after any element it had to reconstruct first, and creates nothing at
+/// all when text merges into a preceding text node.
+fn feed_token(parser: &mut Parser<HtmlSink>, token: Token, origin: Option<u32>) -> Option<usize> {
+    let tree_builder = &parser.tokenizer.sink;
+    let before = tree_builder.sink.nodes.borrow().len();
+    let _ = tree_builder.process_token(token, 1);
+    let mut nodes = tree_builder.sink.nodes.borrow_mut();
+    if nodes.len() == before {
+        return None;
+    }
+    let id = nodes.len() - 1;
+    nodes[id].origin = origin;
+    Some(id)
+}
+
+fn node_count(parser: &Parser<HtmlSink>) -> usize {
+    parser.tokenizer.sink.sink.nodes.borrow().len()
+}
+
+/// Whether the parser closed `element` before its end tag and carried on
+/// outside it, which is what happens when block-level raw HTML interrupts a
+/// Markdown element. What it holds is then a fragment of the source node, so
+/// the source span would overstate it.
+fn escaped_element(parser: &Parser<HtmlSink>, element: usize, first_child: usize) -> bool {
+    let nodes = parser.tokenizer.sink.sink.nodes.borrow();
+    if nodes.len() <= first_child {
+        return false;
+    }
+    let mut cursor = nodes.len() - 1;
+    loop {
+        if cursor == element {
+            return false;
+        }
+        match nodes[cursor].parent {
+            Some(parent) => cursor = parent,
+            None => return true,
         }
     }
-    let recognizer = StitchRecognizer::new(prefix, stitches.len());
-    let (nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer), HtmlSpace::Html);
-    emit(&nodes, &roots, builder, Some(src), &stitches, &leaked);
 }
 
 /// Coerce an attribute string into its typed wire `(kind, value)` pair.
@@ -829,9 +1051,7 @@ pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
 
 /// Parse an HTML fragment in `space`'s context element, the insertion mode the
 /// fragment's top-level content is read in. Returns the node list, the
-/// top-level node indices, and the markers of any swallowed stitches. The
-/// fragment algorithm wraps content in a synthesised `<html>` root; the
-/// returned roots are that wrapper's children.
+/// top-level node indices, and the markers of any swallowed stitches.
 fn parse_fragment_nodes(
     html: &str,
     stitch: Option<StitchRecognizer>,
@@ -850,11 +1070,17 @@ fn parse_fragment_nodes(
         .map(StitchRecognizer::leaked_markers)
         .unwrap_or_default();
     let nodes = sink.nodes.into_inner();
-    let roots = match nodes[0].children.first() {
+    let roots = fragment_roots(&nodes);
+    (nodes, roots, leaked)
+}
+
+/// The fragment algorithm wraps content in a synthesised `<html>` root; the
+/// fragment's own top-level nodes are that wrapper's children.
+fn fragment_roots(nodes: &[Node]) -> Vec<usize> {
+    match nodes[0].children.first() {
         Some(&html_root) => nodes[html_root].children.clone(),
         None => Vec::new(),
-    };
-    (nodes, roots, leaked)
+    }
 }
 
 #[cfg(test)]

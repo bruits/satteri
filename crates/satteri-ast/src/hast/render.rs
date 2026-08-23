@@ -39,50 +39,35 @@ pub fn render_node(
     in_raw_text: bool,
     in_svg: bool,
 ) {
-    render_node_inner(node_id, view, out, in_raw_text, in_svg, None, 0);
+    render_node_inner(node_id, view, out, in_raw_text, in_svg, 0);
 }
 
-/// Raw-HTML reparse hook: receives the output buffer and the MDX node's id.
-pub(crate) type OnMdx<'a> = dyn FnMut(&mut String, u32) + 'a;
-
-/// MDX nodes have no HTML representation: `on_mdx` decides what to emit for
-/// them; `None` skips them.
-pub(crate) fn render_node_inner<'cb>(
+fn render_node_inner(
     node_id: u32,
     view: &Arena<Hast>,
     out: &mut String,
     in_raw_text: bool,
     in_svg: bool,
-    on_mdx: Option<&mut OnMdx<'cb>>,
     depth: u32,
 ) {
     crate::stack::with_headroom(depth, || {
-        render_node_at(node_id, view, out, in_raw_text, in_svg, on_mdx, depth);
+        render_node_at(node_id, view, out, in_raw_text, in_svg, depth);
     });
 }
 
-fn render_node_at<'cb>(
+fn render_node_at(
     node_id: u32,
     view: &Arena<Hast>,
     out: &mut String,
     in_raw_text: bool,
     in_svg: bool,
-    mut on_mdx: Option<&mut OnMdx<'cb>>,
     depth: u32,
 ) {
     let node = view.get_node(node_id);
 
     let Some(node_type) = HastNodeType::from_u8(node.node_type) else {
         for &child_id in view.get_children(node_id) {
-            render_node_inner(
-                child_id,
-                view,
-                out,
-                in_raw_text,
-                in_svg,
-                on_mdx.as_deref_mut(),
-                depth + 1,
-            );
+            render_node_inner(child_id, view, out, in_raw_text, in_svg, depth + 1);
         }
         return;
     };
@@ -90,15 +75,7 @@ fn render_node_at<'cb>(
     match node_type {
         HastNodeType::Root => {
             for &child_id in view.get_children(node_id) {
-                render_node_inner(
-                    child_id,
-                    view,
-                    out,
-                    in_raw_text,
-                    in_svg,
-                    on_mdx.as_deref_mut(),
-                    depth + 1,
-                );
+                render_node_inner(child_id, view, out, in_raw_text, in_svg, depth + 1);
             }
         }
 
@@ -153,7 +130,6 @@ fn render_node_at<'cb>(
                         out,
                         child_in_raw_text,
                         element_in_svg,
-                        on_mdx.as_deref_mut(),
                         depth + 1,
                     );
                 }
@@ -200,15 +176,12 @@ fn render_node_at<'cb>(
             }
         }
 
+        // MDX nodes have no HTML form.
         HastNodeType::MdxJsxElement
         | HastNodeType::MdxJsxTextElement
         | HastNodeType::MdxFlowExpression
         | HastNodeType::MdxTextExpression
-        | HastNodeType::MdxEsm => {
-            if let Some(cb) = on_mdx.as_mut() {
-                cb(out, node_id);
-            }
-        }
+        | HastNodeType::MdxEsm => {}
     }
 }
 

@@ -159,3 +159,46 @@ describe("rawHtml conformance vs rehype-raw", () => {
     });
   }
 });
+
+/** Flatten to `path → span`, so two trees compare node position by node position. */
+function spans(node: HastNode, path = "", out: Array<[string, string | null]> = []) {
+  const p = node.position;
+  out.push([path, p ? `${p.start.offset}..${p.end ? p.end.offset : "?"}` : null]);
+  if ("children" in node && node.children) {
+    (node.children as HastNode[]).forEach((child, i) => spans(child, `${path}/${i}`, out));
+  }
+  return out;
+}
+
+// The root is excluded: rehype-raw collapses it to a zero-width span at 1:1.
+describe("rawHtml position conformance vs rehype-raw", () => {
+  for (const { name, md } of cases) {
+    test(`every position kept matches the reference: ${name}`, () => {
+      const reference = new Map(spans(referenceTree(md)));
+      for (const [path, span] of spans(markdownToHast(md, { features: { rawHtml: true } }))) {
+        if (path === "" || span === null) continue;
+        expect([path, span]).toEqual([path, reference.get(path)]);
+      }
+    });
+  }
+
+  test("nodes that came from Markdown keep their positions", () => {
+    const md = "# Hi\n\n<div>raw</div>\n\nA [link](x) here.\n";
+    const reference = new Map(spans(referenceTree(md)));
+    const kept = spans(markdownToHast(md, { features: { rawHtml: true } })).filter(
+      ([path, span]) => path !== "" && span !== null,
+    );
+    expect(kept.length).toBeGreaterThan(4);
+    for (const [path, span] of kept) expect([path, span]).toEqual([path, reference.get(path)]);
+  });
+
+  // Recovering these needs per-token source offsets, which html5ever does not expose.
+  test("nodes parsed out of raw HTML carry no position", () => {
+    const tree = markdownToHast("text\n\n<div><em>x</em></div>\n", {
+      features: { rawHtml: true },
+    });
+    const children = "children" in tree ? (tree.children as HastNode[]) : [];
+    const div = children.find((child) => child.type === "element" && child.tagName === "div");
+    expect(div?.position).toBeUndefined();
+  });
+});
