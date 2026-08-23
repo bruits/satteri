@@ -5,7 +5,7 @@ import type {
   StringRefRaw,
   MdxJsxAttributeUnion,
 } from "../types.js";
-import { restorePhantomSpaces } from "../phantom.js";
+import { decodeMdxJsxAttr } from "../mdx-attr.js";
 import { decodeColumnAlign } from "./column-align.js";
 import { NodeTypeName } from "./generated/node-types.js";
 import {
@@ -338,42 +338,13 @@ export class MdastReader {
     const attributes: MdxJsxAttributeUnion[] = [];
     for (let i = 0; i < attrCount; i++) {
       const base = w + 4 + i * 5;
-      const kind = this.#u8[base << 2] ?? 0;
-      const attrName = () => this.getString(u32[base + 1] ?? 0, u32[base + 2] ?? 0);
-      const attrValue = () => this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0);
-
-      switch (kind) {
-        case 0: // BooleanProp
-          attributes.push({
-            type: "mdxJsxAttribute",
-            name: attrName(),
-            value: null,
-          });
-          break;
-        case 1: // LiteralProp
-          attributes.push({
-            type: "mdxJsxAttribute",
-            name: attrName(),
-            value: attrValue(),
-          });
-          break;
-        case 2: // ExpressionProp
-          attributes.push({
-            type: "mdxJsxAttribute",
-            name: attrName(),
-            value: {
-              type: "mdxJsxAttributeValueExpression",
-              value: restorePhantomSpaces(attrValue()),
-            },
-          });
-          break;
-        case 3: // Spread
-          attributes.push({
-            type: "mdxJsxExpressionAttribute",
-            value: restorePhantomSpaces(attrValue()),
-          });
-          break;
-      }
+      attributes.push(
+        decodeMdxJsxAttr(
+          this.#u8[base << 2] ?? 0,
+          this.getString(u32[base + 1] ?? 0, u32[base + 2] ?? 0),
+          this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0),
+        ),
+      );
     }
 
     return { name, attributes };

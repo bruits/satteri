@@ -1,13 +1,7 @@
 import type { ArenaWire, BufferHeader } from "../types.js";
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "../mdx-types.js";
-import { restorePhantomSpaces } from "../phantom.js";
 import type { Position } from "unist";
-import {
-  MDX_ATTR_BOOLEAN_PROP,
-  MDX_ATTR_LITERAL_PROP,
-  MDX_ATTR_EXPRESSION_PROP,
-  MDX_ATTR_SPREAD,
-} from "../op-stream.js";
+import { decodeMdxJsxAttr } from "../mdx-attr.js";
 import { decodeElementProp } from "./element-props.js";
 import { NAME_TO_TYPE } from "./generated/node-types.js";
 import {
@@ -270,42 +264,13 @@ export class HastReader {
     const attributes: (MdxJsxAttribute | MdxJsxExpressionAttribute)[] = [];
     for (let i = 0; i < attrCount; i++) {
       const base = w + 4 + i * 5;
-      const kind = this.#u8[base << 2] ?? 0;
-      const attrName = () => this.getString(u32[base + 1] ?? 0, u32[base + 2] ?? 0);
-      const attrValue = () => this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0);
-
-      switch (kind) {
-        case MDX_ATTR_BOOLEAN_PROP:
-          attributes.push({
-            type: "mdxJsxAttribute",
-            name: attrName(),
-            value: null,
-          });
-          break;
-        case MDX_ATTR_LITERAL_PROP:
-          attributes.push({
-            type: "mdxJsxAttribute",
-            name: attrName(),
-            value: attrValue(),
-          });
-          break;
-        case MDX_ATTR_EXPRESSION_PROP:
-          attributes.push({
-            type: "mdxJsxAttribute",
-            name: attrName(),
-            value: {
-              type: "mdxJsxAttributeValueExpression",
-              value: restorePhantomSpaces(attrValue()),
-            },
-          });
-          break;
-        case MDX_ATTR_SPREAD:
-          attributes.push({
-            type: "mdxJsxExpressionAttribute",
-            value: restorePhantomSpaces(attrValue()),
-          });
-          break;
-      }
+      attributes.push(
+        decodeMdxJsxAttr(
+          this.#u8[base << 2] ?? 0,
+          this.getString(u32[base + 1] ?? 0, u32[base + 2] ?? 0),
+          this.getString(u32[base + 3] ?? 0, u32[base + 4] ?? 0),
+        ),
+      );
     }
 
     return { name, attributes };
