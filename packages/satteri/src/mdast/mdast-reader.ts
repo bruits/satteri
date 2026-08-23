@@ -241,9 +241,8 @@ export class MdastReader {
     }
   }
 
-  /** Fixed-layout field reads straight off the u32/u8 views. The generated
-   *  decoder runs once per node, so an intermediate view or ref object here
-   *  costs an allocation per field. */
+  /** Fixed-layout field reads straight off the u32/u8 views; an intermediate
+   *  view or ref object here would cost an allocation per field. */
   fieldU8(nodeId: number, offset: number, fallback: number): number {
     const u32 = this.#u32;
     const w = this.#nodesW + nodeId * this.#strideW;

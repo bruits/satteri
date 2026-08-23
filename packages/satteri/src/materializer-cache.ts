@@ -43,15 +43,6 @@ export interface MaterializerSpec<TReader extends MaterializerReader, TNode exte
   populate(node: TNode, reader: TReader, nodeId: number, nodeType: number): void;
 }
 
-/**
- * Build a memoizing materializer, memoized per `(reader, id)`.
- *
- * `node` materializes one node with lazy `children`; `frozen` (the plugin walk
- * path) deep-freezes every node at construction so plugins cannot corrupt the
- * shared cache. `tree` materializes a whole tree eagerly, which is what the
- * step-by-step API wants: it asked for the tree, so laziness would only add
- * per-node accessor overhead.
- */
 /** Plugins can set `data` on any node type, so rehydration is generic (see divergences.md for the code-block case). */
 export function installNodeData(
   node: object,
@@ -72,6 +63,13 @@ export function installNodeData(
   }
 }
 
+/**
+ * Build a memoizing materializer, memoized per `(reader, id)`.
+ *
+ * `node` materializes one node with lazy `children`; `frozen` (the plugin walk
+ * path) deep-freezes every node at construction so plugins cannot corrupt the
+ * shared cache.
+ */
 export function createMaterializer<TReader extends MaterializerReader, TNode extends object>(
   spec: MaterializerSpec<TReader, TNode>,
 ): {

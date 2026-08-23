@@ -223,7 +223,7 @@ export interface BufferHeader {
   nodeDataOffset: number;
 }
 
-/** @internal Derived reader state for the fused eager tree fill; `B`/`W` suffixes are byte vs u32-word units. */
+/** @internal Derived reader state for the fused wire decode; `B`/`W` suffixes are byte vs u32-word units. */
 export interface ArenaWire {
   u8: Uint8Array;
   u32: Uint32Array;
