@@ -630,7 +630,9 @@ pub fn walk_mdast_handle(
             tag_filter: s.tag_filter,
         })
         .collect();
-    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(&arena, &subs)))
+    Ok(Uint8Array::new(satteri_ast::walk::walk_mdast(
+        &arena, &subs,
+    )))
 }
 
 /// Apply a command buffer to an MDAST handle in-place. Returns how many patches
@@ -995,10 +997,7 @@ pub fn create_mdx_hast_handle_with_frontmatter(
 
 /// Walk a HAST handle's arena and return matched nodes as a flat binary buffer.
 #[napi]
-pub fn walk_handle(
-    handle: &HastHandle,
-    subscriptions: Vec<JsSubscription>,
-) -> Result<Uint8Array> {
+pub fn walk_handle(handle: &HastHandle, subscriptions: Vec<JsSubscription>) -> Result<Uint8Array> {
     let arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
