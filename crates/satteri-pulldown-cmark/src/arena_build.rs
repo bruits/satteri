@@ -111,6 +111,8 @@ fn parse_inner(
         options
     };
 
+    let options = strip_absent_constructs(source, options);
+
     let line_index = if track_positions {
         LineIndex::from_source(source)
     } else {
@@ -217,17 +219,15 @@ fn parse_inner(
                 // MDAST spec requires listItem > paragraph > text even for
                 // tight lists.
 
+                let item = inner.tree[ix].item;
+
                 // Inside an image: skip closing non-Image containers
                 // (they were never opened in the MDAST builder).
-                if image_alt_buf.is_some()
-                    && !matches!(inner.tree[ix].item.body, ItemBody::Image(_))
-                {
+                if image_alt_buf.is_some() && !matches!(item.body, ItemBody::Image(_)) {
                     image_depth = image_depth.saturating_sub(1);
                     inner.tree.next_sibling(ix);
                     continue;
                 }
-
-                let item = inner.tree[ix].item;
                 // Every branch of `mdast_position_end` hands back `item.end` untouched unless a line terminator precedes it.
                 let end = if item.end > 0
                     && matches!(source.as_bytes().get(item.end - 1), Some(b'\n' | b'\r'))
@@ -243,7 +243,7 @@ fn parse_inner(
                 };
                 let (end_line, end_col) = cursor.offset_to_line_col(end);
 
-                match &inner.tree[ix].item.body {
+                match &item.body {
                     // Math block close: write accumulated content.
                     ItemBody::MathBlock(_) => {
                         if let Some(mut content) = code_block_buf.take() {
@@ -255,7 +255,7 @@ fn parse_inner(
                             } else if content.ends_with('\n') || content.ends_with('\r') {
                                 content.pop();
                             }
-                            let meta_str = match &inner.tree[ix].item.body {
+                            let meta_str = match &item.body {
                                 ItemBody::MathBlock(cow_ix) => {
                                     let cow = inner.allocs.take_cow(*cow_ix);
                                     cow.to_string()
@@ -316,7 +316,7 @@ fn parse_inner(
                             let parent_body =
                                 inner.tree.peek_up().map(|p| &inner.tree[p].item.body);
                             if let Some(ext) = crate::firstpass::extend_indented_code_block(
-                                &inner.tree[ix].item,
+                                &item,
                                 source.as_bytes(),
                                 parent_body,
                                 code_start_column,
@@ -826,21 +826,14 @@ fn parse_inner(
                 // MDAST spec requires listItem > paragraph > text even for
                 // tight lists.
 
+                let mut item = inner.tree[cur_ix].item;
                 // Resolve inline markup if needed.
-                if inner.tree[cur_ix].item.body.is_maybe_inline() {
+                if item.body.is_maybe_inline() {
                     inner.handle_inline(&mut callbacks);
+                    item = inner.tree[cur_ix].item;
                 }
-
-                let item = inner.tree[cur_ix].item;
                 let start = item.start as u32;
                 let end = item.end as u32;
-                let (start_line, start_col) = cursor.offset_to_line_col(start);
-                let (end_line, end_col) =
-                    if defer_container_end && opens_repositioned_node(&item.body) {
-                        (0, 0)
-                    } else {
-                        cursor.offset_to_line_col(end)
-                    };
 
                 // If we're accumulating content for an HTML/code block, handle it.
                 if let Some(buf) = html_block_buf.as_mut() {
@@ -954,6 +947,64 @@ fn parse_inner(
                     inner.tree.next_sibling(cur_ix);
                     continue;
                 }
+
+                // A text/soft-break sibling chain is one contiguous source range, so one zero-copy leaf replaces the item-by-item merge.
+                if let Some((run_last_ix, run_end)) =
+                    collect_text_run(&inner.tree, cur_ix, &item, source.as_bytes())
+                {
+                    let prev_id = builder.last_sibling_id();
+                    let mut merged = false;
+                    if let Some(pid) = prev_id {
+                        let prev = builder.arena_ref().get_node(pid);
+                        if prev.node_type == MdastNodeType::Text as u8 {
+                            let prev_data = builder.arena_ref().get_type_data(pid);
+                            if prev_data.len() >= 8 {
+                                let (el, ec) = cursor.offset_to_line_col(run_end);
+                                let prev_sr = StringRef::from_bytes(prev_data);
+                                let new_sr = builder
+                                    .arena_mut()
+                                    .append_string(prev_sr, &source[item.start..run_end as usize]);
+                                let pn = builder.arena_ref().get_node(pid);
+                                builder.update_leaf_full(
+                                    pid,
+                                    pn.start_offset,
+                                    run_end,
+                                    pn.start_line,
+                                    pn.start_column,
+                                    el,
+                                    ec,
+                                    &new_sr.as_bytes(),
+                                );
+                                merged = true;
+                            }
+                        }
+                    }
+                    if !merged {
+                        let (sl, sc) = cursor.offset_to_line_col(start);
+                        let (el, ec) = cursor.offset_to_line_col(run_end);
+                        let sr = StringRef::new(start, run_end - start);
+                        builder.add_leaf_full(
+                            MdastNodeType::Text as u8,
+                            start,
+                            run_end,
+                            sl,
+                            sc,
+                            el,
+                            ec,
+                            &sr.as_bytes(),
+                        );
+                    }
+                    inner.tree.next_sibling(run_last_ix);
+                    continue;
+                }
+
+                let (start_line, start_col) = cursor.offset_to_line_col(start);
+                let (end_line, end_col) =
+                    if defer_container_end && opens_repositioned_node(&item.body) {
+                        (0, 0)
+                    } else {
+                        cursor.offset_to_line_col(end)
+                    };
 
                 // Map ItemBody to arena node.
                 match item.body {
@@ -2040,6 +2091,74 @@ fn parse_inner(
     }
 
     (arena, mdx_errors)
+}
+
+/// Tables can't join this: a `:-` delimiter row makes a single-column table with no pipe anywhere.
+fn strip_absent_constructs(source: &str, options: Options) -> Options {
+    let bytes = source.as_bytes();
+    let mut opts = options;
+    if opts.intersects(
+        Options::ENABLE_MATH
+            | Options::ENABLE_MATH_SINGLE_DOLLAR
+            | Options::ENABLE_MATH_MULTI_DOLLAR,
+    ) && memchr::memchr(b'$', bytes).is_none()
+    {
+        opts.remove(
+            Options::ENABLE_MATH
+                | Options::ENABLE_MATH_SINGLE_DOLLAR
+                | Options::ENABLE_MATH_MULTI_DOLLAR,
+        );
+    }
+    if opts.contains(Options::ENABLE_FOOTNOTES) && memchr::memchr(b'^', bytes).is_none() {
+        opts.remove(Options::ENABLE_FOOTNOTES);
+    }
+    if opts.contains(Options::ENABLE_STRIKETHROUGH) && memchr::memchr(b'~', bytes).is_none() {
+        opts.remove(Options::ENABLE_STRIKETHROUGH);
+    }
+    opts
+}
+
+/// Joins only items whose emitted value equals their own source bytes exactly, so the run's slice is the run's value.
+fn collect_text_run(
+    tree: &crate::tree::Tree<crate::parse::Item>,
+    first_ix: crate::tree::TreeIndex,
+    first: &crate::parse::Item,
+    source: &[u8],
+) -> Option<(crate::tree::TreeIndex, u32)> {
+    if !matches!(
+        first.body,
+        ItemBody::Text {
+            backslash_escaped: false
+        }
+    ) || first.start >= first.end
+    {
+        return None;
+    }
+    let mut last_ix = first_ix;
+    let mut run_end = first.end;
+    let mut next = tree[first_ix].next;
+    while let Some(ix) = next {
+        let node = &tree[ix];
+        let it = &node.item;
+        if it.start != run_end {
+            break;
+        }
+        match it.body {
+            ItemBody::Text {
+                backslash_escaped: false,
+            } if it.start < it.end => {}
+            ItemBody::SoftBreak if matches!(&source[it.start..it.end], b"\n" | b"\r" | b"\r\n") => {
+            }
+            _ => break,
+        }
+        run_end = it.end;
+        last_ix = ix;
+        next = node.next;
+    }
+    if last_ix == first_ix {
+        return None;
+    }
+    Some((last_ix, run_end as u32))
 }
 
 /// Nodes the walk opens and descends into: the tree pop rewrites their end, so an open-time end line/column is dead.

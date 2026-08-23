@@ -1,4 +1,4 @@
-import type { BufferHeader } from "../types.js";
+import type { ArenaWire, BufferHeader } from "../types.js";
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "../mdx-types.js";
 import { restorePhantomSpaces } from "../phantom.js";
 import type { Position } from "unist";
@@ -107,6 +107,21 @@ export class HastReader {
     return this.#nodeDataCount !== 0;
   }
 
+  /** @internal */
+  getWire(): ArenaWire {
+    return {
+      u8: this.#u8,
+      u32: this.#u32,
+      nodesB: this.#nodesB,
+      nodesW: this.#nodesW,
+      strideB: this.#strideB,
+      strideW: this.#strideW,
+      childrenW: this.#childrenW,
+      typeDataB: this.#typeDataB,
+      pool: this.getStringPool(),
+    };
+  }
+
   /**
    * Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
    * side). Returns `null` when the node has no entry. Lazy-builds a
@@ -114,6 +129,13 @@ export class HastReader {
    * data-heavy tree stays O(nodes) rather than O(nodes × entries).
    */
   getNodeData(nodeId: number): string | null {
+    const table = this.getNodeDataTable();
+    if (table === null) return null;
+    return table.get(nodeId) ?? null;
+  }
+
+  /** @internal `null` when no node carries a `data` blob. */
+  getNodeDataTable(): ReadonlyMap<number, string> | null {
     if (this.#nodeDataCount === 0) return null;
     if (this.#nodeDataTable === null) {
       this.#nodeDataTable = new Map();
@@ -129,7 +151,7 @@ export class HastReader {
         pos += len;
       }
     }
-    return this.#nodeDataTable.get(nodeId) ?? null;
+    return this.#nodeDataTable;
   }
 
   get nodeCount(): number {

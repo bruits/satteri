@@ -2416,6 +2416,11 @@ impl<'input> ParserInner<'input> {
                 start_ix = ix;
             } else {
                 ix += 1;
+                while ix < spanned_bytes.len()
+                    && !matches!(spanned_bytes[ix], b'\r' | b'\n' | b'\\')
+                {
+                    ix += 1;
+                }
             }
         }
 
@@ -2488,6 +2493,11 @@ impl<'input> ParserInner<'input> {
                 start_ix = ix;
             } else {
                 ix += 1;
+                while ix < spanned_bytes.len()
+                    && !matches!(spanned_bytes[ix], b'\r' | b'\n' | b'\\')
+                {
+                    ix += 1;
+                }
             }
         }
 
