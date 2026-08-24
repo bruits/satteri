@@ -5,7 +5,7 @@ const emojis = defineMdastPlugin({
   name: "emojis",
   text(node, ctx) {
     if (node.value.includes(":wave:")) {
-      ctx.setProperty(node, "value", node.value.replaceAll(":wave:", "\u{1F44B}"));
+      ctx.setField(node, "value", node.value.replaceAll(":wave:", "\u{1F44B}"));
     }
   },
 });

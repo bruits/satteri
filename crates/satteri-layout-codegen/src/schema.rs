@@ -305,6 +305,7 @@ const LIST_ITEM_SLOTS: &[SetSlot] = &[
 const DESCRIPTION_DETAILS_SLOTS: &[SetSlot] = &[sl("spread", 0, Slot::Bool)];
 /// `MdxJsxElementData`: name `StringRef` @0.
 const MDX_JSX_SLOTS: &[SetSlot] = &[sl("name", 0, Slot::Str)];
+const DIRECTIVE_SLOTS: &[SetSlot] = &[sl("name", 0, Slot::Str)];
 /// `ReferenceData.reference_kind` stays settable on footnoteReference even
 /// though the walk wire skips it there (the mdast spec hides it).
 const FOOTNOTE_REF_SLOTS: &[SetSlot] = &[sl("referenceType", 16, Slot::Enum8(REF_KINDS))];
@@ -590,15 +591,30 @@ pub const MDAST_NODES: &[Node] = &[
     // InlineMath shares Math's stored `MathData` (meta@0, value@8) but the mdast
     // spec gives it no `meta`, so only `value` is surfaced.
     n(Mdast, 28, "InlineMath", "inlineMath", &[s32("value", 8)]),
-    xt(
+    xts(
         Mdast,
         30,
         "ContainerDirective",
         "containerDirective",
         DIRECTIVE_TAIL,
+        DIRECTIVE_SLOTS,
     ),
-    xt(Mdast, 31, "LeafDirective", "leafDirective", DIRECTIVE_TAIL),
-    xt(Mdast, 32, "TextDirective", "textDirective", DIRECTIVE_TAIL),
+    xts(
+        Mdast,
+        31,
+        "LeafDirective",
+        "leafDirective",
+        DIRECTIVE_TAIL,
+        DIRECTIVE_SLOTS,
+    ),
+    xts(
+        Mdast,
+        32,
+        "TextDirective",
+        "textDirective",
+        DIRECTIVE_TAIL,
+        DIRECTIVE_SLOTS,
+    ),
     c(Mdast, 33, "Superscript", "superscript"),
     c(Mdast, 34, "Subscript", "subscript"),
     c(Mdast, 35, "DescriptionList", "descriptionList"),
@@ -1269,6 +1285,16 @@ pub const COMMANDS: WireTable = WireTable {
             "CMD_SET_CHILDREN",
             0x0d,
             "payload is a Root-wrapped child list",
+        ),
+        wc(
+            "CMD_SET_FIELD",
+            0x0e,
+            "[valueType: u8][name str][value str], PROP_* value kinds; name is a node field",
+        ),
+        wc(
+            "CMD_SET_ATTRIBUTE",
+            0x0f,
+            "[valueType: u8][name str][value str], PROP_* value kinds; name is an `attributes` entry",
         ),
     ],
 };

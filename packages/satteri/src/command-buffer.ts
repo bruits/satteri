@@ -30,6 +30,8 @@ import {
   CMD_WRAP,
   CMD_REPLACE,
   CMD_SET_PROPERTY,
+  CMD_SET_FIELD,
+  CMD_SET_ATTRIBUTE,
   CMD_SET_CHILDREN,
   PAYLOAD_RAW,
   RAW_LITERAL_BRACES,
@@ -166,12 +168,22 @@ export class CommandBuffer extends OpWriter {
     this.writeU32(nodeId);
   }
 
-  /** Unified set-property for both MDAST and HAST nodes.
-   *
-   *  Hot path: uses `encodeInto` to write UTF-8 straight into the buffer (no
+  setProperty(nodeId: number, key: string, value: unknown): void {
+    this.#writeNamedValue(CMD_SET_PROPERTY, nodeId, key, value);
+  }
+
+  setField(nodeId: number, key: string, value: unknown): void {
+    this.#writeNamedValue(CMD_SET_FIELD, nodeId, key, value);
+  }
+
+  setAttribute(nodeId: number, name: string, value: unknown): void {
+    this.#writeNamedValue(CMD_SET_ATTRIBUTE, nodeId, name, value);
+  }
+
+  /** Hot path: uses `encodeInto` to write UTF-8 straight into the buffer (no
    *  per-call `Uint8Array`), reserving the worst-case length up front and
    *  backfilling the length prefix once the byte count is known. */
-  setProperty(nodeId: number, key: string, value: unknown): void {
+  #writeNamedValue(cmd: number, nodeId: number, key: string, value: unknown): void {
     this.#assertNotEncoding();
     let valueType: number;
     let str: string;
@@ -198,7 +210,7 @@ export class CommandBuffer extends OpWriter {
 
     // 1(cmd) + 4(nodeId) + 1(valueType); name and value are length-prefixed strings
     this.ensure(6);
-    this.buf[this.n++] = CMD_SET_PROPERTY;
+    this.buf[this.n++] = cmd;
     this.writeU32(nodeId);
     this.buf[this.n++] = valueType;
     this.utf8WithU32Len(key);

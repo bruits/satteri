@@ -48,6 +48,8 @@ export const CMD_WRAP = 0x09;
 export const CMD_REPLACE = 0x0b;
 export const CMD_SET_PROPERTY = 0x0c; // [valueType: u8][name str][value str], PROP_* value kinds
 export const CMD_SET_CHILDREN = 0x0d; // payload is a Root-wrapped child list
+export const CMD_SET_FIELD = 0x0e; // [valueType: u8][name str][value str], PROP_* value kinds; name is a node field
+export const CMD_SET_ATTRIBUTE = 0x0f; // [valueType: u8][name str][value str], PROP_* value kinds; name is an `attributes` entry
 
 // Structural-command payload types (0x10+, a range distinct from commands).
 export const PAYLOAD_RAW = 0x10; // [flags: u8][len: u32 LE][utf8] — re-parsed as markdown; see RAW_* flags
