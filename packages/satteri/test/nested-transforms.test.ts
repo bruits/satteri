@@ -66,6 +66,7 @@ test("dropping a stranded transform warns, naming the plugin", () => {
   try {
     const plugin = defineMdastPlugin({
       name: "remove-outer",
+      options: { warnings: false },
       containerDirective(node, ctx) {
         if (node.name === "note") {
           ctx.removeNode(node);
@@ -77,6 +78,11 @@ test("dropping a stranded transform warns, naming the plugin", () => {
       },
     });
     markdownToHtml(nestedDirectives, { features, mdastPlugins: [plugin] });
+    expect(warn).toHaveBeenCalledTimes(0);
+    markdownToHtml(nestedDirectives, {
+      features,
+      mdastPlugins: [{ ...plugin, options: { warnings: true } }],
+    });
     expect(warn).toHaveBeenCalledTimes(1);
     const message = warn.mock.calls[0]?.[0] as string;
     expect(message).toContain('plugin "remove-outer"');
@@ -95,6 +101,7 @@ test("a stranded HAST transform is dropped with a warning, like MDAST", () => {
     // queued in the same pass.
     const plugin = defineHastPlugin({
       name: "remove-heading",
+      options: { warnings: false },
       element: {
         filter: ["h1", "em"],
         visit(node, ctx) {
@@ -113,7 +120,11 @@ test("a stranded HAST transform is dropped with a warning, like MDAST", () => {
         },
       },
     });
-    const { html } = markdownToHtml("# *Hi*", { hastPlugins: [plugin] });
+    markdownToHtml(nestedDirectives, { features, mdastPlugins: [plugin] });
+    expect(warn).toHaveBeenCalledTimes(0);
+    const { html } = markdownToHtml("# *Hi*", {
+      hastPlugins: [{ ...plugin, options: { warnings: true } }],
+    });
     expect(html.trim()).toBe(""); // heading + its em gone, no throw
     expect(warn).toHaveBeenCalledTimes(1);
     const message = warn.mock.calls[0]?.[0] as string;
