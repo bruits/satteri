@@ -2158,6 +2158,11 @@ describe("fuzz known-fails: email autolink after a backslash escape", () => {
   test.fails("escaped `+` still starts an email in satteri", () => {
     assertMdastConformance("\\+_@.a\n");
   });
+
+  // Same miss after a soft break: remark splits the merged text at `+` into an email link; satteri keeps one flat text.
+  test.fails("escaped backslash after a soft break before an email", () => {
+    assertMdastConformance("text\n\\\\+@.9a);\n");
+  });
 });
 
 // Each `test.fails` below is a structural divergence Sätteri still has

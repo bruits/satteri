@@ -1178,7 +1178,13 @@ pub(crate) fn scan_link_dest(
                 b'\\' if i + 1 < bytes.len() && is_ascii_punctuation(bytes[i + 1]) => {
                     i += 1;
                 }
-                _ => {}
+                _ => {
+                    while i + 1 < bytes.len()
+                        && !matches!(bytes[i + 1], b'\n' | b'\r' | b'<' | b'>' | b'\\')
+                    {
+                        i += 1;
+                    }
+                }
             }
             i += 1;
         }
@@ -1206,7 +1212,14 @@ pub(crate) fn scan_link_dest(
                 b'\\' if i + 1 < bytes.len() && is_ascii_punctuation(bytes[i + 1]) => {
                     i += 1;
                 }
-                _ => {}
+                _ => {
+                    while i + 1 < bytes.len()
+                        && bytes[i + 1] > 0x20
+                        && !matches!(bytes[i + 1], b'(' | b')' | b'\\')
+                    {
+                        i += 1;
+                    }
+                }
             }
             i += 1;
         }

@@ -4,7 +4,6 @@
  * path) freeze rules.
  */
 
-import type { Position } from "unist";
 import { deepFreeze } from "./freeze.js";
 import type { NodeRefs } from "./visitor-shared.js";
 
@@ -12,7 +11,7 @@ import type { NodeRefs } from "./visitor-shared.js";
 export interface MaterializerReader {
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
-  getPosition(nodeId: number): Position | undefined;
+  getChildrenCount(nodeId: number): number;
   getNodeData(nodeId: number): string | null;
 }
 
@@ -37,11 +36,31 @@ export interface MaterializerSpec<TReader extends MaterializerReader, TNode exte
    *  `custom` decides leafness per node rather than per type. */
   hasChildren(nodeType: number, node: TNode, reader: TReader, nodeId: number): boolean;
   /**
-   * Install the type-specific eager fields on `node`. Must not install
-   * `children`, `position`, `data`, or `_nodeId`, and must not freeze:
-   * the shared machinery owns all of those.
+   * Install `position` and the type-specific eager fields on `node`. Must not
+   * install `children`, `data`, or `_nodeId`, and must not freeze: the shared
+   * machinery owns those.
    */
   populate(node: TNode, reader: TReader, nodeId: number, nodeType: number): void;
+}
+
+/** Plugins can set `data` on any node type, so rehydration is generic (see divergences.md for the code-block case). */
+export function installNodeData(
+  node: object,
+  rawData: string | null,
+  label: string,
+  nodeId: number,
+): void {
+  if (rawData === null) return;
+  try {
+    const parsed = JSON.parse(rawData) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
+      (node as { data?: Record<string, unknown> }).data = parsed;
+    }
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`${label}: malformed node_data for nodeId=${nodeId}`, err);
+    }
+  }
 }
 
 /**
@@ -49,15 +68,12 @@ export interface MaterializerSpec<TReader extends MaterializerReader, TNode exte
  *
  * `node` materializes one node with lazy `children`; `frozen` (the plugin walk
  * path) deep-freezes every node at construction so plugins cannot corrupt the
- * shared cache. `tree` materializes a whole tree eagerly, which is what the
- * step-by-step API wants: it asked for the tree, so laziness would only add
- * per-node accessor overhead.
+ * shared cache.
  */
 export function createMaterializer<TReader extends MaterializerReader, TNode extends object>(
   spec: MaterializerSpec<TReader, TNode>,
 ): {
   node: (reader: TReader, nodeId: number, frozen?: boolean, refs?: NodeRefs) => TNode;
-  tree: (reader: TReader, rootId: number) => TNode;
 } {
   const readerCaches = new WeakMap<TReader, ReaderCache<TNode>>();
 
@@ -119,7 +135,11 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     };
   }
 
-  function readerCache(reader: TReader, frozen: boolean, refs: NodeRefs | undefined): ReaderCache<TNode> {
+  function readerCache(
+    reader: TReader,
+    frozen: boolean,
+    refs: NodeRefs | undefined,
+  ): ReaderCache<TNode> {
     let cache = readerCaches.get(reader);
     if (cache === undefined) {
       cache = {
@@ -143,16 +163,14 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     cache: ReaderCache<TNode>,
     nodeId: number,
     nodeType: number,
-    eager = false,
   ): TNode {
     const typeName = spec.typeNames[nodeType] ?? `unknown(${nodeType})`;
 
     // Plain object, not a class: unified's `assertNode` rejects any other prototype.
     const node = { type: typeName } as unknown as TNode;
-    const position = reader.getPosition(nodeId);
-    if (position !== undefined) {
-      (node as { position?: Position }).position = position;
-    }
+
+    // Populate before `_nodeId`: both materialization paths must share one hidden-class lineage inside the decoder.
+    spec.populate(node, reader, nodeId, nodeType);
 
     if (cache.frozen) {
       // Non-enumerable so `nid()` never trusts an id that a spread copied.
@@ -165,30 +183,9 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
       });
     }
 
-    spec.populate(node, reader, nodeId, nodeType);
+    installNodeData(node, reader.getNodeData(nodeId), spec.label, nodeId);
 
-    // Plugins can set `data` on any node type, so rehydrate generically
-    // (see website/content/docs/divergences.md for the code-block case).
-    const rawData = reader.getNodeData(nodeId);
-    if (rawData !== null) {
-      try {
-        const parsed = JSON.parse(rawData) as Record<string, unknown>;
-        if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
-          Object.defineProperty(node, "data", {
-            value: parsed,
-            writable: true,
-            configurable: true,
-            enumerable: true,
-          });
-        }
-      } catch (err) {
-        if (process.env.NODE_ENV !== "production") {
-          console.warn(`${spec.label}: malformed node_data for nodeId=${nodeId}`, err);
-        }
-      }
-    }
-
-    if (!eager && spec.hasChildren(nodeType, node, reader, nodeId)) {
+    if (spec.hasChildren(nodeType, node, reader, nodeId)) {
       Object.defineProperty(
         node,
         "children",
@@ -212,49 +209,5 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     return node;
   }
 
-  /**
-   * Iterative on purpose: recursing to full document depth overflows on deeply
-   * nested input, and nothing else here descends more than one level.
-   *
-   * Breadth-first over the parents still to fill, so every node is built and
-   * every child list decoded exactly once, and a child is wired into its
-   * parent's array as it is built rather than in a second pass.
-   */
-  function fillTree(reader: TReader, cache: ReaderCache<TNode>, rootId: number): TNode {
-    const rootType = reader.getNodeType(rootId);
-    const root = buildNode(reader, cache, rootId, rootType, true);
-    if (!spec.hasChildren(rootType, root, reader, rootId)) return root;
-
-    const parents: TNode[] = [root];
-    const parentIds: number[] = [rootId];
-    for (let p = 0; p < parentIds.length; p++) {
-      const parent = parents[p];
-      const parentId = parentIds[p];
-      if (parent === undefined || parentId === undefined) continue;
-      const ids = reader.getChildIds(parentId);
-      const kids = new Array<TNode>(ids.length);
-      for (let i = 0; i < ids.length; i++) {
-        const childId = ids[i];
-        if (childId === undefined) continue;
-        const childType = reader.getNodeType(childId);
-        const child = buildNode(reader, cache, childId, childType, true);
-        kids[i] = child;
-        if (spec.hasChildren(childType, child, reader, childId)) {
-          parents.push(child);
-          parentIds.push(childId);
-        }
-      }
-      // Assignment beats defineProperty here; `eager` left `children` uninstalled.
-      (parent as { children?: TNode[] }).children = kids;
-    }
-
-    return root;
-  }
-
-  /** Whole tree at once: the caller will walk it, so lazy accessors cost more than they defer. */
-  function materializeTree(reader: TReader, rootId: number): TNode {
-    return fillTree(reader, readerCache(reader, false, undefined), rootId);
-  }
-
-  return { node: materialize, tree: materializeTree };
+  return { node: materialize };
 }

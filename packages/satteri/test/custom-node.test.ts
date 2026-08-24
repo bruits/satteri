@@ -2,6 +2,10 @@ import { test, expect } from "vitest";
 import { markdownToHtml } from "../src/index.js";
 import { defineMdastPlugin } from "../src/plugin.js";
 import type { MdastContent } from "../src/mdast/mdast-visitor.js";
+import { MdastReader } from "../src/mdast/mdast-reader.js";
+import { materializeMdastTree } from "../src/mdast/mdast-materializer.js";
+import { NAME_TO_TYPE } from "../src/mdast/generated/node-types.js";
+import { buildTestBuffer } from "./fixtures.js";
 
 // Issue #125: user-defined mdast node types. A plugin creates a node with an
 // arbitrary `type` string; it round-trips, renders via `data.hName` (default
@@ -433,4 +437,57 @@ test("a custom child's type is readable from a parent's children", () => {
   });
   markdownToHtml("> hello\n", { mdastPlugins: [create, inspect] });
   expect(childTypes).toEqual(["sec"]);
+});
+
+// The eager tree fill meets a custom node only through a serialized mutated
+// arena; the wire fixture stands in for that without the plugin machinery.
+test("the eager tree fill surfaces a custom node's stored name as its type", () => {
+  const CUSTOM = NAME_TO_TYPE.custom!;
+  const typeData = new Uint8Array(32);
+  const dv = new DataView(typeData.buffer);
+  dv.setUint32(0, 0, true); // name "aside"
+  dv.setUint32(4, 5, true);
+  dv.setUint32(16, 5, true); // name "kbd"
+  dv.setUint32(20, 3, true);
+  dv.setUint32(24, 8, true); // value "x"
+  dv.setUint32(28, 1, true);
+
+  const buf = buildTestBuffer({
+    source: "asidekbdx",
+    nodes: [
+      {
+        id: 0,
+        type: 0,
+        startLine: 0,
+        childrenStart: 0,
+        childrenCount: 2,
+        dataOffset: 0,
+        dataLen: 0,
+      },
+      {
+        id: 1,
+        type: CUSTOM,
+        startLine: 0,
+        childrenStart: 0,
+        childrenCount: 0,
+        dataOffset: 0,
+        dataLen: 16,
+      },
+      {
+        id: 2,
+        type: CUSTOM,
+        startLine: 0,
+        childrenStart: 0,
+        childrenCount: 0,
+        dataOffset: 16,
+        dataLen: 16,
+      },
+    ],
+    children: [1, 2],
+    typeData,
+  });
+
+  const root = materializeMdastTree(new MdastReader(buf));
+  expect(root.children[0]).toEqual({ type: "aside", children: [] });
+  expect(root.children[1]).toEqual({ type: "kbd", value: "x" });
 });

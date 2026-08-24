@@ -119,8 +119,11 @@ fn walk_and_collect_inner<K: ArenaKind>(
     // parse-time cache when intact, else a one-shot `LineIndex` (rebuilds
     // and position mutations drop the cache).
     let cached = arena.utf16_offsets.len() == arena.nodes.len();
-    let line_index = (!cached && !arena.string_pool().is_ascii())
-        .then(|| LineIndex::from_source(arena.string_pool()));
+    // The line check spares skip-positions mode an index nothing below consults.
+    let line_index = (!cached
+        && !arena.string_pool().is_ascii()
+        && arena.nodes.iter().any(|n| n.start_line != 0))
+    .then(|| LineIndex::from_source(arena.string_pool()));
     let mut offset_cursor = line_index.as_ref().map(|index| index.cursor());
 
     // Build fast lookup: node_type → list of (subscription_index, tag_filter)

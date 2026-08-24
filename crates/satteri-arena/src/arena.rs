@@ -165,9 +165,20 @@ impl<K: ArenaKind> Arena<K> {
         }
     }
 
+    /// Blob starts must stay 4-byte aligned: the JS readers take `Uint32Array` views over `type_data`.
+    #[inline]
+    pub fn pad_type_data_tail(&mut self, blob_len: usize) {
+        let pad = blob_len.wrapping_neg() & 3;
+        if pad != 0 {
+            self.type_data.resize(self.type_data.len() + pad, 0);
+        }
+    }
+
     pub fn set_type_data(&mut self, node_id: u32, data: &[u8]) {
         let offset = self.type_data.len() as u32;
+        debug_assert_eq!(offset & 3, 0);
         self.type_data.extend_from_slice(data);
+        self.pad_type_data_tail(data.len());
         let node = &mut self.nodes[node_id as usize];
         node.data_offset = offset;
         node.data_len = data.len() as u32;
@@ -177,6 +188,7 @@ impl<K: ArenaKind> Arena<K> {
     /// Returns the start offset; call `finish_type_data` when done.
     pub fn begin_type_data(&mut self, node_id: u32) -> TypeDataWriter {
         let offset = self.type_data.len() as u32;
+        debug_assert_eq!(offset & 3, 0);
         self.nodes[node_id as usize].data_offset = offset;
         TypeDataWriter {
             node_id,
@@ -188,6 +200,7 @@ impl<K: ArenaKind> Arena<K> {
     pub fn finish_type_data(&mut self, writer: TypeDataWriter) {
         let len = self.type_data.len() as u32 - writer.start;
         self.nodes[writer.node_id as usize].data_len = len;
+        self.pad_type_data_tail(len as usize);
     }
 
     pub fn get_node(&self, node_id: u32) -> &ArenaNode {
