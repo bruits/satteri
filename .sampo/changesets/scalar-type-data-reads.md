@@ -2,4 +2,4 @@
 npm/satteri: patch
 ---
 
-Fixed list and list-item nodes reading wrong values when their stored data was absent.
+Fixed list and list-item nodes sometimes having corrupted values
