@@ -49,7 +49,8 @@ export function reuseAncestorError(op: string): Error {
 export function reuseCycleError(op: string): Error {
   return new Error(
     `satteri: ${op} and an earlier insert each reuse the other's node, so neither can be ` +
-      "resolved. Pass structuredClone(node) to insert a copy instead.",
+      'resolved. To reorder siblings, use setProperty(parent, "children", [...]) with the ' +
+      "children in the order you want.",
   );
 }
 

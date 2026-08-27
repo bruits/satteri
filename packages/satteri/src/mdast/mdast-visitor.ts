@@ -223,18 +223,22 @@ export class MdastVisitorContext {
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "insertBefore", this.#refs);
-    for (const n of asArray(newNode)) {
-      this.#trackReuse(id, n, "insertBefore");
-      emitMdastTree(this.#commandBuffer, "insertBefore", id, n, false, this.#refs, true);
-    }
+    this.#splice(requireNid(node as MdastNode, "insertBefore", this.#refs), newNode, "insertBefore", "insertBefore");
   }
 
   insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "insertAfter", this.#refs);
-    for (const n of asArray(newNode)) {
-      this.#trackReuse(id, n, "insertAfter");
-      emitMdastTree(this.#commandBuffer, "insertAfter", id, n, false, this.#refs, true);
+    this.#splice(requireNid(node as MdastNode, "insertAfter", this.#refs), newNode, "insertAfter", "insertAfter");
+  }
+
+  #splice(
+    anchorId: number,
+    content: MdastContent | MdastContent[],
+    op: StructuralOp,
+    label: string,
+  ): void {
+    for (const n of asArray(content)) {
+      this.#trackReuse(anchorId, n, label);
+      emitMdastTree(this.#commandBuffer, op, anchorId, n, false, this.#refs, true);
     }
   }
 
@@ -280,19 +284,11 @@ export class MdastVisitorContext {
   }
 
   prependChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "prependChild", this.#refs);
-    for (const n of asArray(childNode)) {
-      this.#trackReuse(id, n, "prependChild");
-      emitMdastTree(this.#commandBuffer, "prependChild", id, n, false, this.#refs, true);
-    }
+    this.#splice(requireNid(node as MdastNode, "prependChild", this.#refs), childNode, "prependChild", "prependChild");
   }
 
   appendChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "appendChild", this.#refs);
-    for (const n of asArray(childNode)) {
-      this.#trackReuse(id, n, "appendChild");
-      emitMdastTree(this.#commandBuffer, "appendChild", id, n, false, this.#refs, true);
-    }
+    this.#splice(requireNid(node as MdastNode, "appendChild", this.#refs), childNode, "appendChild", "appendChild");
   }
 
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -302,13 +298,18 @@ export class MdastVisitorContext {
     childNode: MdastContent | MdastContent[],
   ): void {
     const children = ("children" in node ? node.children : undefined) ?? [];
-    if (index <= 0 || children.length === 0) {
-      this.prependChild(node, childNode);
-    } else if (index >= children.length) {
-      this.appendChild(node, childNode);
-    } else {
-      this.insertBefore(children[index]!, childNode);
-    }
+    const [anchor, op] =
+      index <= 0 || children.length === 0
+        ? ([node, "prependChild"] as const)
+        : index >= children.length
+          ? ([node, "appendChild"] as const)
+          : ([children[index]!, "insertBefore"] as const);
+    this.#splice(
+      requireNid(anchor as MdastNode, "insertChildAt", this.#refs),
+      childNode,
+      op,
+      "insertChildAt",
+    );
   }
 
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
