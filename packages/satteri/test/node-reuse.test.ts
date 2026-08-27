@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 
-// Structural ops encode a reused tree node as a ref when nested, a copy at the top level.
+// Structural ops splice a reused tree node by id, so it resolves to whatever that node ends up as.
 
 const twoQuotes = "> a\n\n> b\n";
 
@@ -53,7 +53,7 @@ test("insertAfter with the node itself duplicates it exactly once", () => {
   expect((html.match(/<blockquote>/g) ?? []).length).toBe(2);
 });
 
-test("a node's own parent is accepted as an insert payload", () => {
+test("inserting a node inside itself is rejected at the call site", () => {
   const plugin = defineMdastPlugin({
     name: "insert-parent-after-child",
     paragraph(node, ctx) {
@@ -62,11 +62,12 @@ test("a node's own parent is accepted as an insert payload", () => {
       ctx.insertAfter(node, parent);
     },
   });
-  const { html } = markdownToHtml("> a\n", { mdastPlugins: [plugin] });
-  expect((html.match(/<p>a<\/p>/g) ?? []).length).toBe(2);
+  expect(() => markdownToHtml("> a\n", { mdastPlugins: [plugin] })).toThrow(
+    /contains its own insertion point/,
+  );
 });
 
-test("two nodes inserted next to each other both survive", () => {
+test("two inserts that each reuse the other's node are rejected at the call site", () => {
   let paired = false;
   const plugin = defineMdastPlugin({
     name: "mutual-insert",
@@ -79,13 +80,12 @@ test("two nodes inserted next to each other both survive", () => {
       ctx.insertAfter(node, other);
     },
   });
-  const { html } = markdownToHtml(twoQuotes, { mdastPlugins: [plugin] });
-  expect(html).toContain("<p>a</p>");
-  expect(html).toContain("<p>b</p>");
+  expect(() => markdownToHtml(twoQuotes, { mdastPlugins: [plugin] })).toThrow(
+    /each reuse the other's node/,
+  );
 });
 
-// Fails today: the payload is copied while its children splice by reference.
-test.fails("an inserted tree node carries transforms made to it in the same pass", () => {
+test("an inserted tree node carries transforms made to it in the same pass", () => {
   const plugin = defineMdastPlugin({
     name: "mixed-vintage",
     emphasis(node, ctx) {
