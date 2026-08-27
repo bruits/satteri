@@ -186,6 +186,11 @@ export function decodeMdastTypeData(
   nodeType: number,
   node: Record<string, unknown>,
 ): boolean {
+  if (nodeType === 7 || nodeType === 10 || nodeType === 13 || nodeType === 25 || nodeType === 26) {
+    const len = ru32(view, start);
+    node.value = rstr(buf, start + 4, len);
+    return true;
+  }
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields !== undefined) {
     let pos = start;
@@ -274,37 +279,4 @@ export function decodeMdastTypeData(
   }
 
   return false;
-}
-
-/**
- * Attach a node's fixed `type_data` fields, materialized from the arena
- * snapshot, driven by `MDAST_LAYOUTS`. Returns `false` for tags with no entry,
- * so the materializer falls through to its hand-written cases (list, table,
- * directives, MDX JSX). Fields are eager plain stores.
- */
-export function materializeMdastFields(
-  reader: MdastReader,
-  node: object,
-  nodeId: number,
-  nodeType: number,
-): boolean {
-  const fields = MDAST_LAYOUTS[nodeType];
-  if (fields === undefined) return false;
-  const out = node as Record<string, unknown>;
-  for (const f of fields) {
-    if (f.skip) continue;
-    if (f.kind === "u8") {
-      // Short type_data falls back to the layout's declared default,
-      // matching the Rust walk serializer.
-      const b = reader.fieldU8(nodeId, f.offset, f.default ?? 0);
-      out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
-    } else {
-      // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
-      // reads as empty, mirroring the Rust decoders' bounds checks.
-      const raw = reader.fieldString(nodeId, f.offset);
-      const s = f.nullable && raw === "" ? null : raw;
-      out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;
-    }
-  }
-  return true;
 }

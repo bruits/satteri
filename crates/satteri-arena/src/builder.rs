@@ -141,6 +141,7 @@ impl<K: ArenaKind> ArenaBuilder<K> {
         } else {
             let offset = self.arena.type_data.len() as u32;
             self.arena.type_data.extend_from_slice(data);
+            self.arena.pad_type_data_tail(data.len());
             (offset, data.len() as u32)
         };
         let parent = self.stack.last().map_or(u32::MAX, |&(id, _)| id);
@@ -291,6 +292,7 @@ impl<K: ArenaKind> ArenaBuilder<K> {
         node.data_offset = self.arena.type_data.len() as u32;
         node.data_len = data.len() as u32;
         self.arena.type_data.extend_from_slice(data);
+        self.arena.pad_type_data_tail(data.len());
     }
 
     pub fn arena_ref(&self) -> &Arena<K> {

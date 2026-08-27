@@ -296,3 +296,8 @@ export const MDAST_CUSTOM_TYPES: readonly string[] = [
   "mdxJsxFlowElement",
   "mdxJsxTextElement",
 ];
+
+/** Tags whose nodes never carry `children` (`custom` decides per node). */
+export const LEAF_TYPES: ReadonlySet<number> = new Set([
+  3, 7, 8, 9, 10, 13, 14, 16, 18, 20, 25, 26, 27, 28, 102, 103, 104,
+]);

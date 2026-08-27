@@ -52,9 +52,14 @@ import {
   PROP_INT,
   emitMdxAttr,
 } from "../op-stream.js";
-import { restorePhantomSpaces } from "../phantom.js";
-import { decodeMdxJsxAttr } from "../mdx-attr.js";
-import { decodeElementProp } from "./element-props.js";
+import {
+  decodeWalkElementProps,
+  readWalkElementTag,
+  readWalkHastValue,
+  readWalkMdxJsx,
+  walkElementPropCount,
+  walkElementPropsAt,
+} from "./generated/walk-decode.js";
 import { readPosition, rstr } from "../wire-read.js";
 import {
   walkHandle,
@@ -269,7 +274,12 @@ function hastReusedId(node: unknown, refs: NodeRefs): number | undefined {
 
 /** Emit a set-children command in place: a root-wrapped child list, the shape
  *  `Patch::SetChildren` splices in. Reused children become refs. */
-function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown, refs: NodeRefs): boolean {
+function emitHastChildrenCommand(
+  buffer: CommandBuffer,
+  id: number,
+  children: unknown,
+  refs: NodeRefs,
+): boolean {
   if (!Array.isArray(children)) return false;
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(HAST_ROOT);
@@ -285,7 +295,13 @@ function emitHastChildrenCommand(buffer: CommandBuffer, id: number, children: un
  *  payload directly into the command buffer (no intermediate copy). HAST
  *  content is always a declarative node (no raw escape hatch), so it
  *  compiles or it's a hard error. */
-function emitHastTree(buffer: CommandBuffer, op: StructuralOp, id: number, node: HastNode, refs: NodeRefs): void {
+function emitHastTree(
+  buffer: CommandBuffer,
+  op: StructuralOp,
+  id: number,
+  node: HastNode,
+  refs: NodeRefs,
+): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
     emitHastOp(buffer, node, true, refs),
   );
@@ -418,7 +434,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
       // The last node carries the `replace` so refs back to the target still splice.
       let previous: HastContent | undefined;
       for (const n of newNode) {
-        if (previous !== undefined) emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
+        if (previous !== undefined)
+          emitHastTree(this.#commandBuffer, "insertBefore", id, previous, this.#refs);
         previous = n;
       }
       if (previous === undefined) {
@@ -444,12 +461,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertBefore", this.#refs);
-    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
+    for (const n of asArray(newNode))
+      emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertAfter", this.#refs);
-    for (const n of asArray(newNode)) emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
+    for (const n of asArray(newNode))
+      emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
   }
 
   wrapNode(
@@ -470,12 +489,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "prependChild", this.#refs);
-    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
+    for (const n of asArray(childNode))
+      emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "appendChild", this.#refs);
-    for (const n of asArray(childNode)) emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
+    for (const n of asArray(childNode))
+      emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
@@ -562,9 +583,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   parent<N extends Exclude<HastNode, HastRoot>>(node: Readonly<N>): Readonly<HastParents>;
   parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined;
   parent(node: Readonly<HastNode>): Readonly<HastParents> | undefined {
-    const parentId = this.#resolver.parentIdOf(
-      requireNid(node as HastNode, "parent", this.#refs),
-    );
+    const parentId = this.#resolver.parentIdOf(requireNid(node as HastNode, "parent", this.#refs));
     if (parentId === undefined) return undefined;
     const byId = (this.#parentsById ??= new Map());
     let parent = byId.get(parentId);
@@ -739,30 +758,6 @@ const METHOD_TO_TYPE: Record<string, number> = Object.fromEntries(
   [...VISITOR_KEYS].map((name) => [name, NAME_TO_TYPE[name]!] as const),
 );
 
-function decodeProperties(
-  view: DataView,
-  buf: Uint8Array,
-  pos: number,
-): Record<string, string | number | boolean | (string | number)[]> {
-  const propCount = view.getUint16(pos, true);
-  pos += 2;
-  const properties: Record<string, string | number | boolean | (string | number)[]> = {};
-  for (let i = 0; i < propCount; i++) {
-    const nameLen = view.getUint16(pos, true);
-    pos += 2;
-    const name = rstr(buf, pos, nameLen);
-    pos += nameLen;
-    const kind = buf[pos]!;
-    pos += 1;
-    const valLen = view.getUint16(pos, true);
-    pos += 2;
-    const valStr = rstr(buf, pos, valLen);
-    pos += valLen;
-    properties[name] = decodeElementProp(kind, valStr);
-  }
-  return properties;
-}
-
 /** Build the child-stub list for a matched node from the wire's `[child_ids]
  *  [child_types]` blocks, no arena snapshot. Stale ids are caught at
  *  materialization: the resolver's epoch check refuses a snapshot once the
@@ -877,7 +872,7 @@ class WalkElement {
       configurable: true,
       get(this: WalkElement): HastProperties {
         const w = this.#wire;
-        const val = decodeProperties(w.view, w.buf, this.#propsPos);
+        const val = decodeWalkElementProps(w.view, w.buf, this.#propsPos);
         Object.defineProperty(this, "properties", {
           value: val,
           writable: true,
@@ -924,15 +919,10 @@ function readElementFromBinary(
   childCount: number,
   data: Record<string, unknown> | null,
 ): HastNode {
-  let pos = offset;
-
   // Eager: tagName (almost always accessed by visitors)
-  const tagLen = wire.view.getUint16(pos, true);
-  pos += 2;
-  const tagName = rstr(wire.buf, pos, tagLen);
-  pos += tagLen;
-
-  const propCount = wire.view.getUint16(pos, true);
+  const tagName = readWalkElementTag(wire.view, wire.buf, offset);
+  const pos = walkElementPropsAt(wire.view, offset);
+  const propCount = walkElementPropCount(wire.view, pos);
   const node = new WalkElement(
     tagName,
     nodeId,
@@ -948,13 +938,6 @@ function readElementFromBinary(
   return node as unknown as HastNode;
 }
 
-/** Value-carrying types read by `readTextFromBinary` (tag → AST name). */
-const TEXT_NODE_TYPES: Record<number, string> = Object.fromEntries(
-  ["text", "comment", "raw", "mdxFlowExpression", "mdxTextExpression", "mdxjsEsm"].map(
-    (name) => [NAME_TO_TYPE[name]!, name] as const,
-  ),
-);
-
 function readTextFromBinary(
   view: DataView,
   buf: Uint8Array,
@@ -965,15 +948,11 @@ function readTextFromBinary(
   data: Record<string, unknown> | null,
   refs: NodeRefs,
 ): HastNode {
-  const valLen = view.getUint32(offset, true);
-  const rawValue = rstr(buf, offset + 4, valLen);
-  // MDX flow/text expressions store phantom-space sentinels; restore them so
-  // the value matches the reader path. ESM and plain text keep their value.
-  const value =
-    nodeType === HAST_MDX_FLOW_EXPRESSION || nodeType === HAST_MDX_TEXT_EXPRESSION
-      ? restorePhantomSpaces(rawValue)
-      : rawValue;
-  const base: Record<string, unknown> = { type: TEXT_NODE_TYPES[nodeType]!, value };
+  const value = readWalkHastValue(view, buf, offset, nodeType);
+  const base: Record<string, unknown> = {
+    type: TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`,
+    value,
+  };
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   const node = base as unknown as HastNode;
@@ -999,30 +978,7 @@ function readMdxJsxFromBinary(
   childCount: number,
   data: Record<string, unknown> | null,
 ): HastNode {
-  let pos = offset;
-
-  const nameLen = view.getUint16(pos, true);
-  pos += 2;
-  const name = nameLen > 0 ? rstr(buf, pos, nameLen) : null;
-  pos += nameLen;
-
-  // Attributes: [kind: u8][nameLen: u16][name][valLen: u32][val]
-  const attrCount = view.getUint16(pos, true);
-  pos += 2;
-  const attributes: MdxJsxAttributeUnion[] = [];
-  for (let i = 0; i < attrCount; i++) {
-    const kind = buf[pos]!;
-    pos += 1;
-    const attrNameLen = view.getUint16(pos, true);
-    pos += 2;
-    const attrName = rstr(buf, pos, attrNameLen);
-    pos += attrNameLen;
-    const attrValLen = view.getUint32(pos, true);
-    pos += 4;
-    const attrVal = rstr(buf, pos, attrValLen);
-    pos += attrValLen;
-    attributes.push(decodeMdxJsxAttr(kind, attrName, attrVal));
-  }
+  const { name, attributes } = readWalkMdxJsx(view, buf, offset);
 
   const typeName = nodeType === HAST_MDX_JSX_ELEMENT ? "mdxJsxFlowElement" : "mdxJsxTextElement";
   const base: Record<string, unknown> = { type: typeName, name, attributes };
@@ -1134,11 +1090,7 @@ class HastLazyChildResolver extends LazyChildResolver<HastReader, HastNode> {
     return new HastReader(wire);
   }
 
-  protected override materializeNode(
-    reader: HastReader,
-    nodeId: number,
-    refs: NodeRefs,
-  ): HastNode {
+  protected override materializeNode(reader: HastReader, nodeId: number, refs: NodeRefs): HastNode {
     return materializeHastNode(reader, nodeId, true, refs);
   }
 

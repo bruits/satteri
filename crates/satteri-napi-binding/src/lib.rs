@@ -459,6 +459,46 @@ pub fn create_mdx_mdast_handle(
     Ok(External::new(Mutex::new(arena)))
 }
 
+/// One boundary crossing instead of create + serialize + drop; only the plugin path needs a live handle.
+#[napi]
+pub fn parse_mdast_wire<'env>(
+    env: &'env Env,
+    source: String,
+    parse_options: u32,
+    mdx: bool,
+    track_positions: Option<bool>,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    let opts = parser_options(parse_options, mdx);
+    let arena = parse_mdast_pooled(&source, opts, mdx, track_positions.unwrap_or(true))?;
+    let buf = arena.to_raw_buffer();
+    release_mdast_arena(arena);
+    wire_out(env, buf)
+}
+
+/// One-crossing parse + convert + serialize for the no-plugin hast tree functions.
+#[napi]
+pub fn parse_hast_wire<'env>(
+    env: &'env Env,
+    source: String,
+    parse_options: u32,
+    convert_options: Option<JsConvertOptions>,
+    mdx: bool,
+    track_positions: Option<bool>,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    let opts = parser_options(parse_options, mdx);
+    let convert_opts = js_convert_options_to_rust(*env, convert_options);
+    let mdast = parse_mdast_pooled(&source, opts, mdx, track_positions.unwrap_or(true))?;
+    let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
+        &mdast,
+        &convert_opts,
+        acquire_hast_arena(),
+    );
+    release_mdast_arena(mdast);
+    let buf = hast.to_raw_buffer();
+    release_hast_arena(hast);
+    wire_out(env, buf)
+}
+
 /// Frontmatter extracted from an MDAST arena.
 #[napi(object)]
 pub struct JsFrontmatter {
@@ -506,11 +546,24 @@ pub fn get_mdast_frontmatter(handle: &MdastHandle) -> Result<Option<JsFrontmatte
     Ok(None)
 }
 
+/// Below this, a V8-owned copy beats the ~700 ns external-buffer registration `Uint8Array::new` pays.
+const SMALL_WIRE_LIMIT: usize = 8192;
+
+fn wire_out<'env>(env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    if buf.len() <= SMALL_WIRE_LIMIT {
+        return Ok(Either::A(BufferSlice::copy_from(env, &buf)?));
+    }
+    Ok(Either::B(Uint8Array::new(buf)))
+}
+
 /// Serialize a handle's arena to the wire-format buffer JS instantiates a
 /// reader from. The kind tag in the header tells the JS side whether to
 /// pick `MdastReader` or `HastReader`.
 #[napi]
-pub fn serialize_handle(handle: AnyHandle) -> Result<Uint8Array> {
+pub fn serialize_handle<'env>(
+    env: &'env Env,
+    handle: AnyHandle,
+) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
     let buf = match handle {
         Either::A(h) => h
             .lock()
@@ -521,7 +574,7 @@ pub fn serialize_handle(handle: AnyHandle) -> Result<Uint8Array> {
             .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?
             .to_raw_buffer(),
     };
-    Ok(Uint8Array::new(buf))
+    wire_out(env, buf)
 }
 
 /// Get the source string from a handle. Kind-agnostic: source is the

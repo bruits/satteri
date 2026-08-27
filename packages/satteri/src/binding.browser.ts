@@ -29,6 +29,8 @@ export {
   parseExpression,
   parseToHtml,
   renderHandle,
+  parseHastWire,
+  parseMdastWire,
   serializeHandle,
   setNodeData,
   textContentHandle,

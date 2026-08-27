@@ -1657,6 +1657,39 @@ test("a node built by an earlier plugin is a real parent()-able node in the next
   expect(seen).toEqual([["root", 1]]);
 });
 
+// The mutation drops the parse-time UTF-16 cache, so this pass serializes through the fallback remap tables.
+test("a later pass reads exact strings and UTF-16 positions from a mutated multibyte arena", () => {
+  const insert = defineMdastPlugin({
+    name: "insert-multibyte",
+    heading(node, ctx) {
+      ctx.insertAfter(node, {
+        type: "paragraph",
+        children: [{ type: "text", value: "añadido 😀" }],
+      });
+    },
+  });
+  const seen: [string, number | undefined, number | undefined][] = [];
+  const observe = defineMdastPlugin({
+    name: "observe-multibyte",
+    options: { position: true },
+    before(root) {
+      for (const block of root.children) {
+        if (!("children" in block)) continue;
+        for (const child of block.children) {
+          if (child.type !== "text") continue;
+          seen.push([child.value, child.position?.start.offset, child.position?.end.offset]);
+        }
+      }
+    },
+  });
+  markdownToHtml("# T😀tle\n\ncorps é un\n", { mdastPlugins: [insert, observe] });
+  expect(seen).toEqual([
+    ["T😀tle", 2, 8],
+    ["añadido 😀", undefined, undefined],
+    ["corps é un", 10, 20],
+  ]);
+});
+
 test("the plugin-built object itself stays id-less across passes", () => {
   const orphan = {
     type: "paragraph",
