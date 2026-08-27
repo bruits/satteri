@@ -1,12 +1,7 @@
 // Child stubs let unchanged children pass through as arena references without serializing the tree.
 
-interface StubResolver {
-  materializeOne(id: number): object;
-}
-
 interface StubHost {
-  _resolver: StubResolver;
-  _id: number;
+  _materialize(): object;
 }
 
 const REAL_NODES = new WeakMap<object, Record<string, unknown>>();
@@ -20,7 +15,7 @@ function fieldGetter(key: string): (this: StubHost) => unknown {
     getter = function (this: StubHost) {
       let real = REAL_NODES.get(this);
       if (real === undefined) {
-        real = this._resolver.materializeOne(this._id) as Record<string, unknown>;
+        real = this._materialize() as Record<string, unknown>;
         REAL_NODES.set(this, real);
       }
       const value = real[key];
