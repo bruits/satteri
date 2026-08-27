@@ -409,7 +409,10 @@ fn resolve_target<K: ArenaKind>(
         }
         return vec![copy_subtree(arena, anchor, 0)];
     }
-    if let Some(slot) = slots.get(&target) {
+    // An emptied slot is a removal, whose content the ref still names.
+    if let Some(slot) = slots.get(&target)
+        && !slot.is_empty()
+    {
         if truly_dead.contains(&target) && adopted_by_id.insert(target) {
             return slot.clone();
         }

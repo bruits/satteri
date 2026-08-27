@@ -2545,3 +2545,41 @@ fn stranded_splice_is_dropped_on_the_immediate_path() {
         MdastNodeType::Paragraph as u8
     );
 }
+
+/// A ref to a node that is itself removed resolves through the empty slot the
+/// removal leaves behind, so without adoption the moved content disappears.
+#[test]
+fn ref_to_a_removed_node_moves_it() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(ref_payload_mdast(heading)),
+            },
+            Patch::Remove { node_id: heading },
+        ],
+    )
+    .expect("apply failed");
+
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 2, "the paragraph, then the moved heading");
+    assert_eq!(
+        arena.get_node(kids[0]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+    assert_eq!(
+        arena.get_node(kids[1]).node_type,
+        MdastNodeType::Heading as u8
+    );
+    assert_eq!(
+        arena.get_children(kids[1]).len(),
+        1,
+        "the moved heading keeps its text"
+    );
+}
