@@ -59,6 +59,8 @@ import {
   requireRootReplacement,
   ROOT_NODE_ID,
   rootReplacementError,
+  reuseAncestorError,
+  reuseCycleError,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -227,9 +229,10 @@ function emitHastTree(
   id: number,
   node: HastNode,
   refs: NodeRefs,
+  allowRootRef = false,
 ): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitHastOp(buffer, node, true, refs),
+    emitHastOp(buffer, node, true, refs, false, allowRootRef),
   );
   if (!ok) throw unencodableContentError(node);
 }
@@ -290,9 +293,10 @@ function emitHastOp(
   isRoot: boolean,
   refs: NodeRefs,
   document = false,
+  allowRootRef = false,
 ): boolean {
   if (node === null || typeof node !== "object") return false;
-  if (!isRoot) {
+  if (!isRoot || allowRootRef) {
     const id = hastReusedId(node, refs);
     if (id !== undefined) {
       w.ref(id);
@@ -353,6 +357,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
   readonly #refs: NodeRefs;
+  /** Anchor id → existing nodes spliced there; null until a visitor reuses one. */
+  #reuseEdges: Map<number, Set<number>> | null = null;
   readonly fileURL: URL | undefined;
   readonly data: Data;
   readonly sourceFormat: SourceFormat;
@@ -418,14 +424,42 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertBefore", this.#refs);
-    for (const n of asArray(newNode))
-      emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
+    for (const n of asArray(newNode)) {
+      this.#trackReuse(id, n, "insertBefore");
+      emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs, true);
+    }
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "insertAfter", this.#refs);
-    for (const n of asArray(newNode))
-      emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
+    for (const n of asArray(newNode)) {
+      this.#trackReuse(id, n, "insertAfter");
+      emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs, true);
+    }
+  }
+
+  /** Rejects the two reuse shapes that can't be spliced by id, at the call site rather than at the end of the compile. */
+  #trackReuse(anchorId: number, content: HastContent, op: string): void {
+    const targetId = hastReusedId(content, this.#refs);
+    if (targetId === undefined || targetId === anchorId) return;
+    for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
+      if (cur === targetId) throw reuseAncestorError(op);
+      cur = this.#resolver.parentIdOf(cur);
+    }
+    const edges = (this.#reuseEdges ??= new Map());
+    const seen = new Set<number>([targetId]);
+    const queue = [targetId];
+    while (queue.length > 0) {
+      const next = edges.get(queue.pop()!);
+      if (next === undefined) continue;
+      for (const id of next) {
+        if (id === anchorId) throw reuseCycleError(op);
+        if (seen.add(id)) queue.push(id);
+      }
+    }
+    let targets = edges.get(anchorId);
+    if (targets === undefined) edges.set(anchorId, (targets = new Set()));
+    targets.add(targetId);
   }
 
   wrapNode(
@@ -446,14 +480,18 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "prependChild", this.#refs);
-    for (const n of asArray(childNode))
-      emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
+    for (const n of asArray(childNode)) {
+      this.#trackReuse(id, n, "prependChild");
+      emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs, true);
+    }
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "appendChild", this.#refs);
-    for (const n of asArray(childNode))
-      emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
+    for (const n of asArray(childNode)) {
+      this.#trackReuse(id, n, "appendChild");
+      emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs, true);
+    }
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
