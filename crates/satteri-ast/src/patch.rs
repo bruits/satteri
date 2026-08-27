@@ -1031,12 +1031,19 @@ fn apply_patches_impl<K: ArenaKind>(
         out
     };
 
-    // Each anchor splices immediately so later copies observe post-patch
-    // state, except that with no refs in play there is nothing that copies
-    // spliced subtrees, so sibling splices are grouped per parent and each
-    // parent's child list is rebuilt once at the end (a per-anchor rebuild is
-    // O(anchors × siblings) and grows the flat children vec unboundedly).
-    let defer_splices = ref_uses.is_empty();
+    // Grouping is safe only when nothing copies a spliced subtree; splicing per anchor is O(anchors × siblings).
+    let defer_splices = ref_uses.is_empty()
+        || (target_inner_patched.is_empty()
+            && !ref_targets.iter().any(|t| {
+                patch_map.get(t).is_some_and(|group| {
+                    group.iter().any(|&pi| {
+                        !matches!(
+                            &patches[pi],
+                            Patch::InsertBefore { .. } | Patch::InsertAfter { .. }
+                        )
+                    })
+                })
+            }));
     let mut pending_splices: FxHashMap<u32, FxHashMap<u32, Vec<u32>>> = FxHashMap::default();
     let mut slots: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut grafted: FxHashMap<usize, Vec<u32>> = FxHashMap::default();
