@@ -38,6 +38,21 @@ export function requireRootReplacement<T>(content: T): T {
   throw rootReplacementError(content);
 }
 
+/** A splice by id has no answer when the content would have to contain itself. */
+export function reuseAncestorError(op: string): Error {
+  return new Error(
+    `satteri: ${op} was passed a node that contains its own insertion point, so it cannot be ` +
+      "spliced there. Pass structuredClone(node) to insert a copy instead.",
+  );
+}
+
+export function reuseCycleError(op: string): Error {
+  return new Error(
+    `satteri: ${op} and an earlier insert each reuse the other's node, so neither can be ` +
+      "resolved. Pass structuredClone(node) to insert a copy instead.",
+  );
+}
+
 export function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
 }
