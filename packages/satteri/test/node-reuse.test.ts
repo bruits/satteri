@@ -142,7 +142,7 @@ test("hast: insertAfter with the element itself duplicates it exactly once", () 
   expect((html.match(/<h1>one<\/h1>/g) ?? []).length).toBe(2);
 });
 
-test("hast: an element's own parent is accepted as an insert payload", () => {
+test("hast: inserting an element inside itself is rejected at the call site", () => {
   const plugin = defineHastPlugin({
     name: "insert-parent-after-child",
     element: {
@@ -154,6 +154,24 @@ test("hast: an element's own parent is accepted as an insert payload", () => {
       },
     },
   });
+  expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
+    /contains its own insertion point/,
+  );
+});
+
+test("hast: an inserted element carries transforms made to it in the same pass", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-mixed-vintage",
+    element: {
+      filter: ["em"],
+      visit(node, ctx) {
+        ctx.setProperty(node, "className", ["marked"]);
+        const siblings = ctx.parent(node).children;
+        const last = siblings[siblings.length - 1]!;
+        if (last !== node) ctx.insertAfter(last, node);
+      },
+    },
+  });
   const { html } = markdownToHtml("a *b* c\n", { hastPlugins: [plugin] });
-  expect((html.match(/<em>b<\/em>/g) ?? []).length).toBe(2);
+  expect((html.match(/class="marked"/g) ?? []).length).toBe(2);
 });
