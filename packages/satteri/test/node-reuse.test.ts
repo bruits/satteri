@@ -175,3 +175,46 @@ test("hast: an inserted element carries transforms made to it in the same pass",
   const { html } = markdownToHtml("a *b* c\n", { hastPlugins: [plugin] });
   expect((html.match(/class="marked"/g) ?? []).length).toBe(2);
 });
+
+test("structuredClone works on nodes read from the tree, in hooks and visitors", () => {
+  const cloned: string[] = [];
+  const plugin = defineMdastPlugin({
+    name: "clone-nodes",
+    before(root) {
+      cloned.push(structuredClone(root).type, structuredClone(root.children[0]!).type);
+    },
+    paragraph(node, ctx) {
+      cloned.push(structuredClone(node).type, structuredClone(ctx.parent(node)).type);
+    },
+  });
+  markdownToHtml("one\n\ntwo\n", { mdastPlugins: [plugin] });
+  expect(cloned).toEqual(["root", "paragraph", "paragraph", "root", "paragraph", "root"]);
+});
+
+test("a cloned node carries no internal fields", () => {
+  const keys: string[][] = [];
+  const plugin = defineMdastPlugin({
+    name: "clone-keys",
+    before(root) {
+      keys.push(Object.keys(structuredClone(root.children[0]!)));
+      keys.push(Object.keys({ ...root.children[0]! }));
+    },
+  });
+  markdownToHtml("one\n", { mdastPlugins: [plugin] });
+  for (const k of keys) expect(k.filter((n) => n.startsWith("_"))).toEqual([]);
+});
+
+test("hast: structuredClone works on elements read from the tree", () => {
+  const cloned: string[] = [];
+  const plugin = defineHastPlugin({
+    name: "clone-elements",
+    element: {
+      filter: ["em"],
+      visit(node, ctx) {
+        cloned.push(structuredClone(node).tagName, structuredClone(ctx.parent(node)).type);
+      },
+    },
+  });
+  markdownToHtml("a *b* c\n", { hastPlugins: [plugin] });
+  expect(cloned).toEqual(["em", "element"]);
+});

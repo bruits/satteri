@@ -6,16 +6,10 @@
  * refs without ever serializing the arena.
  */
 
-/** The slice of `LazyChildResolver` a stub getter needs. */
-interface StubResolver {
-  materializeOne(id: number): object;
-}
-
-/** Stub host shape: `_id`/`_resolver` are enumerable plain fields for
- *  construction speed; spread/identity rules are enforced by the visitors' `nid()`. */
+/** Stub host shape: the arena id and resolver stay private so a
+ *  `structuredClone` of a stub carries node data only. */
 interface StubHost {
-  _resolver: StubResolver;
-  _id: number;
+  _materialize(): object;
 }
 
 /** Stub → materialized arena node, filled on the first real-field read. */
@@ -31,7 +25,7 @@ function fieldGetter(key: string): (this: StubHost) => unknown {
     getter = function (this: StubHost) {
       let real = REAL_NODES.get(this);
       if (real === undefined) {
-        real = this._resolver.materializeOne(this._id) as Record<string, unknown>;
+        real = this._materialize() as Record<string, unknown>;
         REAL_NODES.set(this, real);
       }
       const value = real[key];

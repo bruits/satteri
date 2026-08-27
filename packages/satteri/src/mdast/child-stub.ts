@@ -63,13 +63,13 @@ const FALLBACK_DESCRIPTORS = stubDescriptors([]);
  * list snapshot the arena up front.
  */
 export class MdastChildStub {
-  _resolver: MdastResolver;
-  _id: number;
+  readonly #resolver: MdastResolver;
+  readonly #id: number;
   type!: string;
 
   constructor(resolver: MdastResolver, id: number, nodeType: number) {
-    this._resolver = resolver;
-    this._id = id;
+    this.#resolver = resolver;
+    this.#id = id;
     if (nodeType === MDAST_CUSTOM) {
       installLazyCustomType(this);
       installLazyCustomChildren(this);
@@ -81,7 +81,17 @@ export class MdastChildStub {
 
   /** @internal */
   get _refs(): NodeRefs {
-    return this._resolver.refs;
+    return this.#resolver.refs;
+  }
+
+  /** @internal */
+  get _id(): number {
+    return this.#id;
+  }
+
+  /** @internal */
+  _materialize(): object {
+    return this.#resolver.materializeOne(this.#id);
   }
 }
 
@@ -91,7 +101,7 @@ export class MdastChildStub {
 function installLazyCustomChildren(stub: MdastChildStub): void {
   Object.defineProperty(stub, "children", {
     get(this: MdastChildStub): MdastNode[] | undefined {
-      const real = this._resolver.materializeOne(this._id) as { children?: MdastNode[] };
+      const real = this._materialize() as { children?: MdastNode[] };
       const value = real.children;
       if (value === undefined) {
         delete (this as { children?: MdastNode[] }).children;
@@ -115,7 +125,7 @@ function installLazyCustomChildren(stub: MdastChildStub): void {
 function installLazyCustomType(stub: MdastChildStub): void {
   Object.defineProperty(stub, "type", {
     get(this: MdastChildStub): string {
-      const value = (this._resolver.materializeOne(this._id) as { type: string }).type;
+      const value = (this._materialize() as { type: string }).type;
       Object.defineProperty(this, "type", {
         value,
         writable: true,
