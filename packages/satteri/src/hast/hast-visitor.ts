@@ -422,19 +422,15 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.#pendingNodes.set(id, newNode);
   }
 
-  insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "insertBefore", this.#refs);
-    for (const n of asArray(newNode)) {
-      this.#trackReuse(id, n, "insertBefore");
-      emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs, true);
-    }
-  }
-
-  insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "insertAfter", this.#refs);
-    for (const n of asArray(newNode)) {
-      this.#trackReuse(id, n, "insertAfter");
-      emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs, true);
+  #splice(
+    anchorId: number,
+    content: HastContent | HastContent[],
+    op: StructuralOp,
+    label: string,
+  ): void {
+    for (const n of asArray(content)) {
+      this.#trackReuse(anchorId, n, label);
+      emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
     }
   }
 
@@ -462,6 +458,14 @@ class HastVisitorContextImpl implements HastVisitorContext {
     targets.add(targetId);
   }
 
+  insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
+    this.#splice(requireNid(node, "insertBefore", this.#refs), newNode, "insertBefore", "insertBefore");
+  }
+
+  insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
+    this.#splice(requireNid(node, "insertAfter", this.#refs), newNode, "insertAfter", "insertAfter");
+  }
+
   wrapNode(
     node: HastNode,
     parentNode: HastParentContent | RawHastContent | RawHtmlHastContent,
@@ -479,30 +483,22 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "prependChild", this.#refs);
-    for (const n of asArray(childNode)) {
-      this.#trackReuse(id, n, "prependChild");
-      emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs, true);
-    }
+    this.#splice(requireNid(node, "prependChild", this.#refs), childNode, "prependChild", "prependChild");
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "appendChild", this.#refs);
-    for (const n of asArray(childNode)) {
-      this.#trackReuse(id, n, "appendChild");
-      emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs, true);
-    }
+    this.#splice(requireNid(node, "appendChild", this.#refs), childNode, "appendChild", "appendChild");
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
     const children = "children" in node ? node.children : [];
-    if (index <= 0 || children.length === 0) {
-      this.prependChild(node, childNode);
-    } else if (index >= children.length) {
-      this.appendChild(node, childNode);
-    } else {
-      this.insertBefore(children[index]!, childNode);
-    }
+    const [anchor, op] =
+      index <= 0 || children.length === 0
+        ? ([node, "prependChild"] as const)
+        : index >= children.length
+          ? ([node, "appendChild"] as const)
+          : ([children[index]!, "insertBefore"] as const);
+    this.#splice(requireNid(anchor, "insertChildAt", this.#refs), childNode, op, "insertChildAt");
   }
 
   removeChildAt(node: HastNode, index: number): void {
