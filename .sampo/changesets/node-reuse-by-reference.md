@@ -1,5 +1,5 @@
 ---
-npm/satteri: patch
+npm/satteri: minor
 cargo/satteri-ast: patch
 ---
 
