@@ -2583,3 +2583,86 @@ fn ref_to_a_removed_node_moves_it() {
         "the moved heading keeps its text"
     );
 }
+
+/// A ref names the node, not the siblings spliced around it: the slot for an
+/// anchor with sibling inserts holds those inserts too.
+#[test]
+fn ref_to_a_node_with_sibling_inserts_resolves_to_the_node_alone() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+    let text_in_paragraph = orig.get_children(paragraph)[0];
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(ref_payload_mdast(paragraph)),
+            },
+            // Pins the ungrouped path, where the slot is observable.
+            Patch::Replace {
+                node_id: text_in_paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::InlineCode)),
+                keep_children: false,
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let kids = arena.get_children(0).to_vec();
+    let types: Vec<u8> = kids.iter().map(|&k| arena.get_node(k).node_type).collect();
+    assert_eq!(
+        types,
+        vec![
+            MdastNodeType::Heading as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::ThematicBreak as u8,
+        ],
+        "the reused paragraph must not drag the break inserted after it"
+    );
+}
+
+/// A removed node's slot holds whatever replaced its position, so a ref to it
+/// must resolve to the node itself rather than to that content.
+#[test]
+fn ref_to_a_removed_node_ignores_what_took_its_place() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(ref_payload_mdast(heading)),
+            },
+            Patch::Remove { node_id: heading },
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let kids = arena.get_children(0).to_vec();
+    let types: Vec<u8> = kids.iter().map(|&k| arena.get_node(k).node_type).collect();
+    assert_eq!(
+        types,
+        vec![
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::Heading as u8,
+        ],
+        "the moved heading must land, not a second copy of the break"
+    );
+}

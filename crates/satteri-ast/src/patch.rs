@@ -1500,7 +1500,8 @@ fn apply_patches_impl<K: ArenaKind>(
             arena.set_children(parent, &new_list);
         }
         if !ref_uses.is_empty() {
-            slots.insert(anchor, slot);
+            // `core` and not `slot`: a ref names the node, not the siblings spliced around it.
+            slots.insert(anchor, core);
         }
     }
 
