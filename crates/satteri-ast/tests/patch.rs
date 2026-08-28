@@ -2716,3 +2716,48 @@ fn set_children_keeps_a_sibling_insert_on_a_retained_child() {
         "the insert queued on the retained paragraph must survive the new child list"
     );
 }
+
+/// A splice into a parent that rebuilds its own child list later must wait for
+/// that rebuild rather than be overwritten by it.
+#[test]
+fn a_sibling_insert_survives_a_later_set_children_on_its_parent() {
+    use satteri_ast::patch::REF_NODE_TYPE;
+
+    let orig = build_hello_world();
+    let paragraph = orig.get_children(0)[1];
+    let text_in_paragraph = orig.get_children(paragraph)[0];
+
+    let mut sub = ArenaBuilder::<Mdast>::new(String::new());
+    sub.open_node(MdastNodeType::Root as u8);
+    sub.open_node_raw(REF_NODE_TYPE);
+    sub.set_data_current(&text_in_paragraph.to_le_bytes());
+    sub.close_node();
+    sub.close_node();
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: text_in_paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::InlineCode)),
+            },
+            Patch::SetChildren {
+                node_id: paragraph,
+                new_children: PatchContent::Tree(sub.finish()),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let types: Vec<u8> = arena
+        .get_children(paragraph)
+        .iter()
+        .map(|&k| arena.get_node(k).node_type)
+        .collect();
+    assert_eq!(
+        types,
+        vec![MdastNodeType::Text as u8, MdastNodeType::InlineCode as u8],
+        "the insert queued on the retained text must survive the parent's rebuild"
+    );
+}
