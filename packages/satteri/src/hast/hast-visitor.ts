@@ -237,6 +237,23 @@ function emitHastTree(
   if (!ok) throw unencodableContentError(node);
 }
 
+/** Replace `id` with several nodes in one command, root-wrapped so the engine
+ *  splices the children in place of the node. */
+function emitHastMultiReplace(
+  buffer: CommandBuffer,
+  id: number,
+  nodes: readonly HastContent[],
+  refs: NodeRefs,
+): void {
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
+    buffer.open(HAST_ROOT);
+    for (const n of nodes) if (!emitHastOp(buffer, n, false, refs)) return false;
+    buffer.close();
+    return true;
+  });
+  if (!ok) throw unencodableContentError(nodes);
+}
+
 // Root replacement needs a separate encoder because per-node encoding rejects root payloads.
 function emitHastRootReplace(buffer: CommandBuffer, root: HastContent, refs: NodeRefs): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
@@ -396,7 +413,13 @@ class HastVisitorContextImpl implements HastVisitorContext {
     const id = requireNid(node, "replaceNode", this.#refs);
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // Replace last so earlier insertions can still reference the target node.
+      // One command, so the node's replacement is its whole slot and a ref back
+      // to it resolves to all of it rather than to the last element.
+      if (id !== ROOT_NODE_ID && newNode.length > 1) {
+        emitHastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
+        this.#pendingNodes.delete(id);
+        return;
+      }
       let previous: HastContent | undefined;
       for (const n of newNode) {
         if (previous !== undefined)

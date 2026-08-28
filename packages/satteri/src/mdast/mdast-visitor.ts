@@ -303,7 +303,12 @@ export class MdastVisitorContext {
     const id = requireNid(node as MdastNode, "replaceNode", this.#refs);
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // Replace last so earlier insertions can still reference the target node.
+      // One command, so the node's replacement is its whole slot and a ref back
+      // to it resolves to all of it rather than to the last element.
+      if (id !== ROOT_NODE_ID && newNode.length > 1 && newNode.every(isPlainReplacement)) {
+        emitMdastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
+        return;
+      }
       let previous: MdastContent | undefined;
       for (const n of newNode) {
         if (previous !== undefined) {
@@ -567,6 +572,30 @@ function emitMdastChildrenCommand(
     buffer.close();
     return true;
   });
+}
+
+/** True for content the op-stream can carry inside one root-wrapped payload. */
+function isPlainReplacement(content: MdastContent): boolean {
+  return (
+    !isRawMdastContent(content) && (content as { _keepChildren?: unknown })._keepChildren !== true
+  );
+}
+
+/** Replace `id` with several nodes in one command, root-wrapped so the engine
+ *  splices the children in place of the node. */
+function emitMdastMultiReplace(
+  buffer: CommandBuffer,
+  id: number,
+  nodes: readonly MdastContent[],
+  refs: NodeRefs,
+): void {
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
+    buffer.open(MDAST_ROOT);
+    for (const n of nodes) if (!emitMdastOp(buffer, n, false, true, refs)) return false;
+    buffer.close();
+    return true;
+  });
+  if (!ok) throw unencodableContentError(nodes);
 }
 
 // Root replacement needs a separate encoder because per-node encoding rejects root payloads.
