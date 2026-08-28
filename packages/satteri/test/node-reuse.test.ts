@@ -267,3 +267,60 @@ test("hast: an element replaced by several elements is reused as all of them", (
   const { html } = markdownToHtml("# one\n\nbody\n", { hastPlugins: [plugin] });
   expect(html).toContain("<section><b></b><i></i></section>");
 });
+
+test("a node cannot be made its own child", () => {
+  const asChild = (op: "appendChild" | "prependChild") =>
+    defineMdastPlugin({
+      name: `self-${op}`,
+      blockquote(node, ctx) {
+        ctx[op](node, node);
+      },
+    });
+  for (const op of ["appendChild", "prependChild"] as const) {
+    expect(() => markdownToHtml("> x\n", { mdastPlugins: [asChild(op)] })).toThrow(
+      /content that contains the target node/,
+    );
+  }
+});
+
+test("the root cannot be made its own child", () => {
+  const plugin = defineMdastPlugin({
+    name: "self-root",
+    paragraph(node, ctx) {
+      const root = ctx.parent(node);
+      ctx.appendChild(root, root);
+    },
+  });
+  expect(() => markdownToHtml("x\n", { mdastPlugins: [plugin] })).toThrow(
+    /content that contains the target node/,
+  );
+});
+
+test("hast: an element cannot be made its own child", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-self-child",
+    element: {
+      filter: ["em"],
+      visit(node, ctx) {
+        ctx.appendChild(node, node);
+      },
+    },
+  });
+  expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
+    /content that contains the target node/,
+  );
+});
+
+test("a long chain of reuses is not mistaken for a cycle", () => {
+  let previous: Readonly<{ type: string }> | undefined;
+  const plugin = defineMdastPlugin({
+    name: "chain",
+    paragraph(node, ctx) {
+      if (previous !== undefined) ctx.insertAfter(node, previous as never);
+      previous = node;
+    },
+  });
+  const source = Array.from({ length: 400 }, (_, i) => `p${i}`).join("\n\n") + "\n";
+  const { html } = markdownToHtml(source, { mdastPlugins: [plugin] });
+  expect((html.match(/<p>/g) ?? []).length).toBe(799);
+});
