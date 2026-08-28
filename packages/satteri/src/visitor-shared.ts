@@ -41,16 +41,16 @@ export function requireRootReplacement<T>(content: T): T {
 /** A splice by id has no answer when the content would have to contain itself. */
 export function reuseAncestorError(op: string): Error {
   return new Error(
-    `satteri: ${op} cannot insert a node inside itself. The content you passed contains the ` +
-      "node you passed as the target. Pass structuredClone(node) to insert a copy instead.",
+    `satteri: ${op} was passed content that contains the target node, so the content would end ` +
+      "up inside itself. Wrap the content in structuredClone() to insert a detached copy instead.",
   );
 }
 
 export function reuseCycleError(op: string): Error {
   return new Error(
-    `satteri: ${op} and an earlier insert each reuse the other's node, so neither can be ` +
-      'resolved. To reorder siblings, use setProperty(parent, "children", [...]) with the ' +
-      "children in the order you want.",
+    `satteri: ${op} closes a cycle of inserts: this call and earlier ones each name a node ` +
+      "another insert is placing, so none of them can resolve. To reorder siblings, hand the " +
+      'parent the order you want with setProperty(parent, "children", [...]).',
   );
 }
 
