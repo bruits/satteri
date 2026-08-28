@@ -410,13 +410,6 @@ fn resolve_target<K: ArenaKind>(
         return vec![copy_subtree(arena, anchor, 0)];
     }
     // An emptied slot is a removal, whose content the ref still names.
-    if std::env::var("SATTERI_TRACE").is_ok() {
-        eprintln!(
-            "TRACE resolve target={target} anchor={anchor} slot={:?} truly_dead={}",
-            slots.get(&target),
-            truly_dead.contains(&target)
-        );
-    }
     if let Some(slot) = slots.get(&target)
         && !slot.is_empty()
     {
@@ -1051,22 +1044,6 @@ fn apply_patches_impl<K: ArenaKind>(
                     })
                 })
             }));
-    if std::env::var("SATTERI_TRACE").is_ok() {
-        eprintln!(
-            "TRACE defer_splices={defer_splices} ref_uses={ref_uses:?} ref_targets={ref_targets:?} inner={target_inner_patched:?} truly_dead={truly_dead:?} anchors={:?} kinds={:?}",
-            plans.keys().collect::<Vec<_>>(),
-            patches.iter().map(|p| match p {
-                Patch::Remove { node_id } => format!("Remove({node_id})"),
-                Patch::Replace { node_id, keep_children, .. } => format!("Replace({node_id},keep={keep_children})"),
-                Patch::InsertBefore { node_id, .. } => format!("InsBefore({node_id})"),
-                Patch::InsertAfter { node_id, .. } => format!("InsAfter({node_id})"),
-                Patch::PrependChild { node_id, .. } => format!("Prepend({node_id})"),
-                Patch::AppendChild { node_id, .. } => format!("Append({node_id})"),
-                Patch::Wrap { node_id, .. } => format!("Wrap({node_id})"),
-                Patch::SetChildren { node_id, .. } => format!("SetChildren({node_id})"),
-            }).collect::<Vec<_>>()
-        );
-    }
     let mut pending_splices: FxHashMap<u32, FxHashMap<u32, Vec<u32>>> = FxHashMap::default();
     let mut slots: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
     let mut grafted: FxHashMap<usize, Vec<u32>> = FxHashMap::default();
