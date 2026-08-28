@@ -1052,7 +1052,31 @@ fn apply_patches_impl<K: ArenaKind>(
     let mut redirect: FxHashMap<u32, u32> = FxHashMap::default();
     let mut stranded: Vec<u32> = Vec::new();
 
-    for anchor in order {
+    // A splice into a parent that rebuilds its own child list later would be
+    // overwritten by that rebuild, so it waits for it instead.
+    let rebuild_at: FxHashMap<u32, usize> = order
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            patch_map.get(a).is_some_and(|group| {
+                group.iter().any(|&pi| {
+                    matches!(
+                        &patches[pi],
+                        Patch::PrependChild { .. }
+                            | Patch::AppendChild { .. }
+                            | Patch::SetChildren { .. }
+                            | Patch::Replace {
+                                keep_children: true,
+                                ..
+                            }
+                    )
+                })
+            })
+        })
+        .map(|(i, &a)| (a, i))
+        .collect();
+
+    for (anchor_index, anchor) in order.into_iter().enumerate() {
         let plan = &plans[&anchor];
         if plan.dropped {
             continue;
@@ -1482,7 +1506,9 @@ fn apply_patches_impl<K: ArenaKind>(
                 .get(&splice_parent)
                 .copied()
                 .unwrap_or(splice_parent);
-            if defer_splices {
+            if defer_splices
+                || rebuild_at.get(&parent).is_some_and(|&i| i > anchor_index)
+            {
                 pending_splices
                     .entry(parent)
                     .or_default()
