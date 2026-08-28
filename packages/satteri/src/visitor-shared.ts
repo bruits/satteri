@@ -21,6 +21,10 @@ const EMPTY_BYTES = new Uint8Array(0);
 
 export const ROOT_NODE_ID = 0;
 
+/** Past this many nodes the reuse graph is big enough that the engine's own
+ *  cycle check is the cheaper place to catch it. */
+export const REUSE_SCAN_BUDGET = 256;
+
 export function rootReplacementError(content: unknown): Error {
   const type = (content as { type?: unknown } | null)?.type;
   return new Error(
@@ -36,6 +40,22 @@ export function rootReplacementError(content: unknown): Error {
 export function requireRootReplacement<T>(content: T): T {
   if ((content as { type?: unknown } | null)?.type === "root") return content;
   throw rootReplacementError(content);
+}
+
+/** A splice by id has no answer when the content would have to contain itself. */
+export function reuseAncestorError(op: string): Error {
+  return new Error(
+    `satteri: ${op} was passed content that contains the target node, so the content would end ` +
+      "up inside itself. Wrap the content in structuredClone() to insert a detached copy instead.",
+  );
+}
+
+export function reuseCycleError(op: string): Error {
+  return new Error(
+    `satteri: ${op} closes a cycle of inserts: this call and earlier ones each name a node ` +
+      "another insert is placing, so none of them can resolve. To reorder siblings, hand the " +
+      'parent the order you want with setProperty(parent, "children", [...]).',
+  );
 }
 
 export function asArray<T>(value: T | T[]): T[] {
