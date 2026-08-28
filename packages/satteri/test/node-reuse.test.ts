@@ -324,3 +324,18 @@ test("a long chain of reuses is not mistaken for a cycle", () => {
   const { html } = markdownToHtml(source, { mdastPlugins: [plugin] });
   expect((html.match(/<p>/g) ?? []).length).toBe(799);
 });
+
+test("keeping a node's children keeps a sibling inserted among them", () => {
+  let done = false;
+  const plugin = defineMdastPlugin({
+    name: "keep-children-with-insert",
+    blockquote(node, ctx) {
+      if (done) return;
+      done = true;
+      ctx.insertAfter(node.children[1]!, { type: "thematicBreak" });
+      return { ...node, _keepChildren: true } as never;
+    },
+  });
+  const { html } = markdownToHtml("> a\n>\n> b\n>\n> c\n", { mdastPlugins: [plugin] });
+  expect(html).toContain("<p>b</p>\n<hr>\n<p>c</p>");
+});
