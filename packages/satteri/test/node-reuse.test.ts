@@ -63,7 +63,7 @@ test("inserting a node inside itself is rejected at the call site", () => {
     },
   });
   expect(() => markdownToHtml("> a\n", { mdastPlugins: [plugin] })).toThrow(
-    /cannot insert a node inside itself/,
+    /content that contains the target node/,
   );
 });
 
@@ -81,7 +81,7 @@ test("two inserts that each reuse the other's node are rejected at the call site
     },
   });
   expect(() => markdownToHtml(twoQuotes, { mdastPlugins: [plugin] })).toThrow(
-    /each reuse the other's node/,
+    /closes a cycle of inserts/,
   );
 });
 
@@ -155,7 +155,7 @@ test("hast: inserting an element inside itself is rejected at the call site", ()
     },
   });
   expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
-    /cannot insert a node inside itself/,
+    /content that contains the target node/,
   );
 });
 
