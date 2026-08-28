@@ -1816,9 +1816,12 @@ mod tests {
         let children = arena.get_children(heading).to_vec();
         assert_eq!(children.len(), 1);
         assert_eq!(arena.get_node(children[0]).node_type, REF_NODE_TYPE);
+        let td = arena.get_type_data(children[0]);
+        assert_eq!(u32::from_le_bytes(td[..4].try_into().unwrap()), orig_text);
         assert_eq!(
-            u32::from_le_bytes(arena.get_type_data(children[0]).try_into().unwrap()),
-            orig_text
+            td.get(4),
+            Some(&satteri_ast::patch::REF_KIND_SLOT),
+            "keep_children names each child's position, not the child alone"
         );
     }
 
