@@ -166,6 +166,22 @@ test("mdast round-trip: imageReference (alt + identifier + referenceType)", () =
   } satisfies MdastNode);
 });
 
+test("mdast round-trip: inlineMath and math share the 16-byte MathData layout", () => {
+  expectMdastRoundTrip(
+    {
+      type: "paragraph",
+      children: [
+        { type: "text", value: "before " },
+        { type: "inlineMath", value: "x^2" },
+      ],
+    } satisfies MdastNode,
+    { features: { math: true } },
+  );
+  expectMdastRoundTrip({ type: "math", value: "y = 1", meta: null } satisfies MdastNode, {
+    features: { math: true },
+  });
+});
+
 test("mdast round-trip: containerDirective with attributes", () => {
   expectMdastRoundTrip(
     {

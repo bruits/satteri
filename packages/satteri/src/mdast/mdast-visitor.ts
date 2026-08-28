@@ -145,8 +145,8 @@ export interface MdastDiagnostic {
 }
 
 function nid(node: MdastNode, refs: NodeRefs): number | undefined {
-  // Genuine stubs carry their id as a plain field; a spread copy is not
-  // `instanceof` and has no `_nodeId`, so it correctly reads as new content.
+  // A stub's id is private, so a spread copy is not `instanceof` and carries no
+  // id of its own, which correctly reads as new content.
   if (node instanceof MdastChildStub) return node._refs === refs ? node._id : FOREIGN_REF;
   const id = refs.get(node as object);
   if (id !== undefined) return id;
