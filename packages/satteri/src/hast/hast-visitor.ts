@@ -479,7 +479,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
       } else if (id === ROOT_NODE_ID) {
         emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
       } else {
-        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs);
+        this.#trackReuse(id, previous, "replaceNode", false);
+        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs, true);
       }
       // A stale queued replacement would win: setProperty folds into it, landing last.
       this.#pendingNodes.delete(id);
@@ -489,7 +490,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
       emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
       return;
     }
-    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs);
+    this.#trackReuse(id, newNode, "replaceNode", false);
+    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true);
     // Track the replacement so a later mdxJsx setProperty can fold into it.
     this.#pendingNodes.set(id, newNode);
   }
@@ -1224,7 +1226,7 @@ function applyHastVisitResult(
     returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
-  emitHastTree(returnBuffer, "replace", nodeId, result, refs);
+  emitHastTree(returnBuffer, "replace", nodeId, result, refs, true);
 }
 
 function handleVisitResult(
