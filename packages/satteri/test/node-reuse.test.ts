@@ -218,3 +218,52 @@ test("hast: structuredClone works on elements read from the tree", () => {
   markdownToHtml("a *b* c\n", { hastPlugins: [plugin] });
   expect(cloned).toEqual(["em", "element"]);
 });
+
+test("a node replaced by several nodes is reused as all of them", () => {
+  let done = false;
+  const plugin = defineMdastPlugin({
+    name: "multi-replace-then-reuse",
+    blockquote(node, ctx) {
+      if (done) return;
+      done = true;
+      const siblings = ctx.parent(node).children;
+      ctx.replaceNode(node, [
+        { type: "paragraph", children: [{ type: "text", value: "X" }] },
+        { type: "paragraph", children: [{ type: "text", value: "Y" }] },
+      ]);
+      ctx.insertAfter(siblings[siblings.length - 1]!, {
+        type: "blockquote",
+        children: [node],
+      });
+    },
+  });
+  const { html } = markdownToHtml(twoQuotes, { mdastPlugins: [plugin] });
+  expect(html).toContain("<blockquote>\n<p>X</p>\n<p>Y</p>\n</blockquote>");
+});
+
+test("hast: an element replaced by several elements is reused as all of them", () => {
+  let done = false;
+  const plugin = defineHastPlugin({
+    name: "hast-multi-replace-then-reuse",
+    element: {
+      filter: ["h1"],
+      visit(node, ctx) {
+        if (done) return;
+        done = true;
+        const siblings = ctx.parent(node).children;
+        ctx.replaceNode(node, [
+          { type: "element", tagName: "b", properties: {}, children: [] },
+          { type: "element", tagName: "i", properties: {}, children: [] },
+        ]);
+        ctx.insertAfter(siblings[siblings.length - 1]!, {
+          type: "element",
+          tagName: "section",
+          properties: {},
+          children: [node],
+        });
+      },
+    },
+  });
+  const { html } = markdownToHtml("# one\n\nbody\n", { hastPlugins: [plugin] });
+  expect(html).toContain("<section><b></b><i></i></section>");
+});
