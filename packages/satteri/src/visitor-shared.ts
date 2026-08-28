@@ -21,6 +21,10 @@ const EMPTY_BYTES = new Uint8Array(0);
 
 export const ROOT_NODE_ID = 0;
 
+/** Past this many nodes the reuse graph is big enough that the engine's own
+ *  cycle check is the cheaper place to catch it. */
+export const REUSE_SCAN_BUDGET = 256;
+
 export function rootReplacementError(content: unknown): Error {
   const type = (content as { type?: unknown } | null)?.type;
   return new Error(

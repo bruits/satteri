@@ -64,6 +64,7 @@ import {
   ROOT_NODE_ID,
   requireRootReplacement,
   rootReplacementError,
+  REUSE_SCAN_BUDGET,
   reuseAncestorError,
   reuseCycleError,
   unencodableContentError,
@@ -236,16 +237,22 @@ export class MdastVisitorContext {
     op: StructuralOp,
     label: string,
   ): void {
+    const intoSelf = op === "prependChild" || op === "appendChild";
     for (const n of asArray(content)) {
-      this.#trackReuse(anchorId, n, label);
+      this.#trackReuse(anchorId, n, label, intoSelf);
       emitMdastTree(this.#commandBuffer, op, anchorId, n, false, this.#refs, true);
     }
   }
 
   /** Rejects the two reuse shapes that can't be spliced by id, at the call site rather than at the end of the compile. */
-  #trackReuse(anchorId: number, content: MdastContent, op: string): void {
+  #trackReuse(anchorId: number, content: MdastContent, op: string, intoSelf: boolean): void {
     const targetId = reusedId(content, this.#refs);
-    if (targetId === undefined || targetId === anchorId) return;
+    if (targetId === undefined) return;
+    // A node is an ancestor of itself, so it cannot become its own child.
+    if (targetId === anchorId) {
+      if (intoSelf) throw reuseAncestorError(op);
+      return;
+    }
     for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
       if (cur === targetId) throw reuseAncestorError(op);
       cur = this.#resolver.parentIdOf(cur);
@@ -253,12 +260,16 @@ export class MdastVisitorContext {
     const edges = (this.#reuseEdges ??= new Map());
     const seen = new Set<number>([targetId]);
     const queue = [targetId];
-    while (queue.length > 0) {
+    let budget = REUSE_SCAN_BUDGET;
+    while (queue.length > 0 && budget > 0) {
       const next = edges.get(queue.pop()!);
       if (next === undefined) continue;
       for (const id of next) {
         if (id === anchorId) throw reuseCycleError(op);
-        if (seen.add(id)) queue.push(id);
+        if (seen.add(id)) {
+          queue.push(id);
+          budget--;
+        }
       }
     }
     let targets = edges.get(anchorId);
