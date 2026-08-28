@@ -342,6 +342,17 @@ fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u3
     id
 }
 
+/// A `keep_children` expansion names each child's *position*, so it must carry
+/// whatever else was spliced there rather than the child alone.
+fn emit_slot_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
+    let id = builder.open_node_raw(REF_NODE_TYPE);
+    let mut data = ref_id.to_le_bytes().to_vec();
+    data.push(satteri_ast::patch::REF_KIND_SLOT);
+    builder.set_data_current(&data);
+    builder.close_node();
+    id
+}
+
 // Generated per-type arena encoder, driven by the node registry. See
 // `crates/satteri-layout-codegen`.
 use crate::generated::encode::{
@@ -672,7 +683,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                 }
                 let children = builder.arena_ref().get_children(anchor).to_vec();
                 for child in children {
-                    let ref_id = emit_ref_node(child, builder);
+                    let ref_id = emit_slot_ref_node(child, builder);
                     if stack.is_empty() {
                         roots.push(ref_id);
                     }
