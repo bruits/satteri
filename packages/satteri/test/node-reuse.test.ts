@@ -339,3 +339,32 @@ test("keeping a node's children keeps a sibling inserted among them", () => {
   const { html } = markdownToHtml("> a\n>\n> b\n>\n> c\n", { mdastPlugins: [plugin] });
   expect(html).toContain("<p>b</p>\n<hr>\n<p>c</p>");
 });
+
+test("replaceNode reuses a node the same way whatever form it is passed in", () => {
+  const forms = {
+    scalar: (ctx: never, a: never, c: never) => (ctx as never as { replaceNode: Function }).replaceNode(c, a),
+    array1: (ctx: never, a: never, c: never) => (ctx as never as { replaceNode: Function }).replaceNode(c, [a]),
+    array2: (ctx: never, a: never, c: never) =>
+      (ctx as never as { replaceNode: Function }).replaceNode(c, [
+        { type: "paragraph", children: [{ type: "text", value: "X" }] },
+        a,
+      ]),
+  };
+  for (const form of Object.values(forms)) {
+    let done = false;
+    const plugin = defineMdastPlugin({
+      name: "replace-forms",
+      text(node) {
+        if (node.value === "a") return { type: "text", value: "SEEN" };
+      },
+      blockquote(node, ctx) {
+        if (done) return;
+        done = true;
+        const siblings = ctx.parent(node).children;
+        form(ctx as never, siblings[0] as never, siblings[siblings.length - 1] as never);
+      },
+    });
+    const { html } = markdownToHtml(twoQuotes, { mdastPlugins: [plugin] });
+    expect((html.match(/SEEN/g) ?? []).length).toBe(2);
+  }
+});
