@@ -1261,9 +1261,12 @@ fn apply_patches_impl<K: ArenaKind>(
                 )
             });
             if has_own_edit {
-                // A child anchor's pending splice must land before this
-                // anchor's own child list is read and rebuilt.
-                flush_pending_splices(arena, &mut pending_splices, anchor, &mut stranded);
+                // A child anchor's pending splice must land before this anchor's
+                // own child list is read; a set-children discards that list, so
+                // there its splices are re-applied to the new one instead.
+                if winning_set_children.is_none() {
+                    flush_pending_splices(arena, &mut pending_splices, anchor, &mut stranded);
+                }
                 let mut new_list: Vec<u32> = Vec::new();
                 for &pi in group {
                     if let Patch::PrependChild { .. } = &patches[pi] {
@@ -1282,6 +1285,9 @@ fn apply_patches_impl<K: ArenaKind>(
                 }
                 let target = redirect.get(&anchor).copied().unwrap_or(anchor);
                 arena.set_children(target, &new_list);
+                if winning_set_children.is_some() {
+                    flush_pending_splices(arena, &mut pending_splices, target, &mut stranded);
+                }
             }
         }
 
