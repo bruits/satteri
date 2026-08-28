@@ -337,7 +337,8 @@ export class MdastVisitorContext {
       } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
         emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
       } else {
-        emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs);
+        this.#trackReuse(id, previous, "replaceNode", false);
+        emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs, true);
       }
       if (previous !== undefined && !isRawMdastContent(previous)) {
         this.#pendingNodes.set(id, previous);
@@ -353,6 +354,8 @@ export class MdastVisitorContext {
     }
     if (isRawMdastContent(newNode)) this.#pendingNodes.delete(id);
     else this.#pendingNodes.set(id, newNode);
+    this.#trackReuse(id, newNode, "replaceNode", false);
+    emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
   }
 
   setField<N extends MdastTarget, K extends SettableScalarFieldKey<N>>(
@@ -936,7 +939,7 @@ function applyMdastVisitResult(
         returnBuffer.setProperty(nodeId, "value", node.value);
         break;
       }
-      emitMdastTree(returnBuffer, "replace", nodeId, node as MdastContent, true, refs);
+      emitMdastTree(returnBuffer, "replace", nodeId, node as MdastContent, true, refs, true);
       break;
     }
   }
