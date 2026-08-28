@@ -63,7 +63,7 @@ test("inserting a node inside itself is rejected at the call site", () => {
     },
   });
   expect(() => markdownToHtml("> a\n", { mdastPlugins: [plugin] })).toThrow(
-    /contains its own insertion point/,
+    /cannot insert a node inside itself/,
   );
 });
 
@@ -155,7 +155,7 @@ test("hast: inserting an element inside itself is rejected at the call site", ()
     },
   });
   expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
-    /contains its own insertion point/,
+    /cannot insert a node inside itself/,
   );
 });
 
