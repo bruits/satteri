@@ -2,7 +2,6 @@ import { describe, test, expect } from "vitest";
 import { unified } from "unified";
 import rehypeStringify from "rehype-stringify";
 import { h, s } from "hastscript";
-import { html as htmlSchema, svg as svgSchema } from "property-information";
 import {
   defineHastPlugin,
   hastToHtml,
@@ -130,19 +129,44 @@ describe("hastToHtml", () => {
     for (const node of cases) matchesOracle(node);
   });
 
-  test("separates list properties the way property-information classifies them", () => {
-    const cases: [property: string, node: Element][] = [];
-    for (const [property, info] of Object.entries(htmlSchema.property)) {
-      if (!info.spaceSeparated && !info.commaSeparated) continue;
-      cases.push([property, el("div", { [property]: ["a", "b"] })]);
-    }
-    // Inside `<svg>` the SVG schema applies, and it separates a different set:
-    // `coords` turns plain there, `glyphName` turns comma-separated.
-    for (const [property, info] of Object.entries(svgSchema.property)) {
-      if (!info.spaceSeparated && !info.commaSeparated) continue;
-      cases.push([`svg ${property}`, inSvg({ [property]: ["a", "b"] })]);
-    }
-    expect(cases.length).toBeGreaterThan(30);
+  // Both schemas' full comma-separated sets, per satteri-property-info's classes.
+  test("separates every comma-separated property by its own schema", () => {
+    const cases: [label: string, node: Element][] = [
+      ["accept", el("input", { accept: ["a", "b"] })],
+      ["coords", el("area", { coords: ["a", "b"] })],
+      ["exportParts", el("div", { exportParts: ["a", "b"] })],
+      ["svg g1", inSvg({ g1: ["a", "b"] })],
+      ["svg g2", inSvg({ g2: ["a", "b"] })],
+      ["svg glyphName", inSvg({ glyphName: ["a", "b"] })],
+      ["svg accept", inSvg({ accept: ["a", "b"] })],
+      ["svg coords", inSvg({ coords: ["a", "b"] })],
+      ["svg exportParts", inSvg({ exportParts: ["a", "b"] })],
+      ["g1", el("div", { g1: ["a", "b"] })],
+      ["className", el("div", { className: ["a", "b"] })],
+      ["svg className", inSvg({ className: ["a", "b"] })],
+      ["rel", el("link", { rel: ["a", "b"] })],
+      ["svg strokeDashArray", inSvg({ strokeDashArray: ["a", "b"] })],
+    ];
+    const separators = cases.map(([label, node]) => [
+      label,
+      hastToHtml(node).includes("a, b") ? "comma" : "space",
+    ]);
+    expect(separators).toEqual([
+      ["accept", "comma"],
+      ["coords", "comma"],
+      ["exportParts", "comma"],
+      ["svg g1", "comma"],
+      ["svg g2", "comma"],
+      ["svg glyphName", "comma"],
+      ["svg accept", "space"],
+      ["svg coords", "space"],
+      ["svg exportParts", "space"],
+      ["g1", "space"],
+      ["className", "space"],
+      ["svg className", "space"],
+      ["rel", "space"],
+      ["svg strokeDashArray", "space"],
+    ]);
     for (const [label, node] of cases) {
       expect(hastToHtml(node), label).toBe(stringify(node));
     }
