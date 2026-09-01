@@ -20,6 +20,7 @@ import {
   PROP_SPACE_SEP,
   PROP_INT,
   PROP_NULL,
+  PROP_TOKEN_LIST,
 } from "./op-stream.js";
 import {
   CMD_REMOVE,
@@ -190,7 +191,7 @@ export class CommandBuffer extends OpWriter {
       str = String(value);
     } else if (Array.isArray(value)) {
       valueType = PROP_SPACE_SEP;
-      str = (value as string[]).join(" ");
+      str = (value as unknown[]).join(" ");
     } else {
       valueType = PROP_STRING;
       str = String(value);
@@ -203,6 +204,18 @@ export class CommandBuffer extends OpWriter {
     this.buf[this.n++] = valueType;
     this.utf8WithU32Len(key);
     this.utf8WithU32Len(str);
+  }
+
+  /** Set a HAST element's list property from `encodeTokenList` bytes, whose
+   *  separator the renderer picks from the element's schema. */
+  setTokenListProperty(nodeId: number, key: string, tokens: string): void {
+    this.#assertNotEncoding();
+    this.ensure(6);
+    this.buf[this.n++] = CMD_SET_PROPERTY;
+    this.writeU32(nodeId);
+    this.buf[this.n++] = PROP_TOKEN_LIST;
+    this.utf8WithU32Len(key);
+    this.utf8WithU32Len(tokens);
   }
 
   insertBefore(nodeId: number, newNode: StructuralContent): void {

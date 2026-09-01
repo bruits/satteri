@@ -106,6 +106,7 @@ mdxToMdast(source: string, options?: TreeOptions): MdastNode;
 markdownToHast(source: string, options?: TreeOptions): HastNode;
 mdxToHast(source: string, options?: TreeOptions): HastNode;
 htmlToHast(html: string): HastNode;
+hastToHtml(tree: HastNode | HastNode[]): string;
 ```
 
 ```js
@@ -134,6 +135,20 @@ tree.type; // "root"
 ```
 
 Attributes are normalised into typed hast properties (`class` → `className: ["…"]`, `disabled` → `true`, `tabindex` → a number, `data-foo-bar` → `dataFooBar`). One deliberate divergence from standard hast: `<template>` content is emitted as the element's `children` rather than a separate `content` root, so external serializers that only read `content` will not re-serialize it.
+
+`hastToHtml` goes the other way, serializing a HAST tree back to an HTML string. It takes a `root` (whose children are rendered), any other single node, or a list of nodes.
+
+```js
+import { hastToHtml, htmlToHast } from "satteri";
+
+hastToHtml({ type: "element", tagName: "p", properties: {}, children: [{ type: "text", value: "hi" }] });
+// '<p>hi</p>'
+
+hastToHtml(htmlToHast("<!doctype html><p>hi</p>"));
+// '<!doctype html><html><head></head><body><p>hi</p></body></html>'
+```
+
+It is the renderer `markdownToHtml` uses, so `raw` nodes are emitted verbatim and MDX nodes, which have no HTML representation, are skipped. The result is the tree's exact serialization, with no trailing newline (the one `markdownToHtml` ends a document with).
 
 ## Reparsing raw HTML (`rawHtml`)
 

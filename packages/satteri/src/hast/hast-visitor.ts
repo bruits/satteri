@@ -48,10 +48,11 @@ import {
   PROP_STRING,
   PROP_BOOL_TRUE,
   PROP_BOOL_FALSE,
-  PROP_SPACE_SEP,
   PROP_INT,
+  PROP_TOKEN_LIST,
   emitMdxAttr,
 } from "../op-stream.js";
+import { encodeTokenList } from "./element-props.js";
 import {
   decodeWalkElementProps,
   readWalkElementTag,
@@ -316,6 +317,37 @@ function emitHastRootReplace(buffer: CommandBuffer, root: HastContent, refs: Nod
   if (!ok) throw unencodableContentError(root);
 }
 
+/** A document is encoded standalone, so no node can be a ref into a tree. */
+const NO_REFS: NodeRefs = new WeakMap();
+
+const HAST_DOCTYPE = NAME_TO_TYPE.doctype;
+
+/**
+ * Encode a standalone HAST tree as an op-stream document: one `root` wrapping
+ * `nodes`, which Rust replays into an arena of its own and serializes. The
+ * bytes are handed to `use` because they are a view into a pooled buffer,
+ * valid only until it is released.
+ */
+export function encodeHastDocument<T>(nodes: readonly HastNode[], use: (ops: Uint8Array) => T): T {
+  const w = acquireCommandBuffer();
+  try {
+    w.open(HAST_ROOT);
+    for (const node of nodes) {
+      // Carries no fields, and patch content has nothing to attach it to.
+      if (node.type === "doctype" && HAST_DOCTYPE !== undefined) {
+        w.open(HAST_DOCTYPE);
+        w.close();
+        continue;
+      }
+      if (!emitHastOp(w, node, false, NO_REFS)) throw unencodableContentError(node);
+    }
+    w.close();
+    return use(w.getBuffer());
+  } finally {
+    releaseCommandBuffer(w);
+  }
+}
+
 function emitHastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs): boolean {
   w.open(HAST_ROOT);
   if (n.data != null) w.data(n.data);
@@ -377,9 +409,10 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
   if (value === true) w.prop(name, PROP_BOOL_TRUE, "");
   else if (value === false) w.prop(name, PROP_BOOL_FALSE, "");
   else if (typeof value === "string") w.prop(name, PROP_STRING, value);
-  else if (typeof value === "number") w.prop(name, PROP_INT, String(value));
-  else if (Array.isArray(value))
-    w.prop(name, PROP_SPACE_SEP, value.filter((v) => typeof v === "string").join(" "));
+  // A NaN property is dropped, not rendered as `"NaN"`, matching hast.
+  else if (typeof value === "number") {
+    if (!Number.isNaN(value)) w.prop(name, PROP_INT, String(value));
+  } else if (Array.isArray(value)) w.prop(name, PROP_TOKEN_LIST, encodeTokenList(value));
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
@@ -530,7 +563,13 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
     if (node.type === "element") {
-      this.#commandBuffer.setProperty(id, key, value);
+      if (Array.isArray(value)) {
+        this.#commandBuffer.setTokenListProperty(id, key, encodeTokenList(value));
+      } else {
+        // NaN drops the attribute, as it does on a built element.
+        const dropped = typeof value === "number" && Number.isNaN(value);
+        this.#commandBuffer.setProperty(id, key, dropped ? null : value);
+      }
       return;
     }
 

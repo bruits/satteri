@@ -54,6 +54,7 @@ export {
   PROP_SPACE_SEP,
   PROP_INT,
   PROP_NULL,
+  PROP_TOKEN_LIST,
 } from "./generated/wire-constants.js";
 
 export class OpWriter extends ByteWriter {

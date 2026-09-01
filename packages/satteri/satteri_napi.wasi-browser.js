@@ -88,6 +88,7 @@ export const parseHastWire = __napiModule.exports.parseHastWire
 export const parseMdastWire = __napiModule.exports.parseMdastWire
 export const parseToHtml = __napiModule.exports.parseToHtml
 export const renderHandle = __napiModule.exports.renderHandle
+export const renderHastOpstream = __napiModule.exports.renderHastOpstream
 export const serializeHandle = __napiModule.exports.serializeHandle
 export const setNodeData = __napiModule.exports.setNodeData
 export const textContentHandle = __napiModule.exports.textContentHandle

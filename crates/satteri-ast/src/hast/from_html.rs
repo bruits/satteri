@@ -665,11 +665,11 @@ fn coerce_value(
             (PROP_SPACE_SEP, builder.alloc_string(&joined))
         }
         PropKind::CommaSeparated => {
-            let joined = split_comma(value).join(",");
+            let joined = join_comma(split_comma(value));
             (PROP_COMMA_SEP, builder.alloc_string(&joined))
         }
         PropKind::NumberCommaSeparated => {
-            let joined = split_comma(value).join(",");
+            let joined = join_comma(split_comma(value));
             (PROP_COMMA_SEP_NUM, builder.alloc_string(&joined))
         }
         PropKind::CommaOrSpaceSeparated => {
@@ -683,6 +683,17 @@ fn coerce_value(
         // `String`, plus the non-empty overloaded-boolean/number fallbacks.
         _ => (PROP_STRING, builder.alloc_string(value)),
     }
+}
+
+/// Join comma-separated items the way the value serializes: `", "` between
+/// items, and a list ending in an empty item gets another so `split_comma`
+/// reads back the same list instead of dropping it as the trailing empty.
+fn join_comma(items: Vec<&str>) -> String {
+    let mut items = items;
+    if items.last() == Some(&"") {
+        items.push("");
+    }
+    items.join(", ").trim().to_string()
 }
 
 /// Split a comma-separated value: items are trimmed, interior empty items are

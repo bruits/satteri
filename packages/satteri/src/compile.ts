@@ -1,4 +1,5 @@
 import {
+  encodeHastDocument,
   visitHastHandle,
   visitHastHandleCollect,
   visitHastHook,
@@ -46,6 +47,7 @@ import {
   markdownToJsFast,
   mdxToJsFast,
   renderHandle,
+  renderHastOpstream,
   parseHastWire,
   parseMdastWire,
   serializeHandle,
@@ -1267,7 +1269,12 @@ export interface TreeOptions {
 export function markdownToMdast(source: string, options: TreeOptions = {}): MdastNode {
   return materializeMdastTree(
     new MdastReader(
-      parseMdastWire(source, featuresToNative(options.features).parseOptions, false, options.position),
+      parseMdastWire(
+        source,
+        featuresToNative(options.features).parseOptions,
+        false,
+        options.position,
+      ),
     ),
   );
 }
@@ -1276,7 +1283,12 @@ export function markdownToMdast(source: string, options: TreeOptions = {}): Mdas
 export function mdxToMdast(source: string, options: TreeOptions = {}): MdastNode {
   return materializeMdastTree(
     new MdastReader(
-      parseMdastWire(source, featuresToNative(options.features).parseOptions, true, options.position),
+      parseMdastWire(
+        source,
+        featuresToNative(options.features).parseOptions,
+        true,
+        options.position,
+      ),
     ),
   );
 }
@@ -1330,4 +1342,29 @@ export function htmlToHast(html: string, options: HtmlToHastOptions = {}): HastN
   } finally {
     releaseHandle(handle, true);
   }
+}
+
+/**
+ * Serialize a HAST tree to an HTML string: a `root` renders its children, any
+ * other node renders itself, and a list renders in order. MDX nodes have no
+ * HTML representation and are skipped; `raw` nodes are emitted verbatim.
+ *
+ * The result is the tree's exact serialization, with no trailing newline (the
+ * one `markdownToHtml` ends its document with).
+ */
+export function hastToHtml(tree: HastNode | readonly HastNode[]): string {
+  return encodeHastDocument(documentNodes(tree), renderHastOpstream);
+}
+
+/** A `root` contributes its children, wherever it sits, so a list of trees
+ *  serializes as the concatenation of what each renders alone. */
+function documentNodes(tree: HastNode | readonly HastNode[]): readonly HastNode[] {
+  if (!Array.isArray(tree)) {
+    const node = tree as HastNode;
+    return node.type === "root" ? (node.children ?? []) : [node];
+  }
+  const nodes = tree as readonly HastNode[];
+  return nodes.some((node) => node.type === "root")
+    ? nodes.flatMap((node) => (node.type === "root" ? (node.children ?? []) : [node]))
+    : nodes;
 }
