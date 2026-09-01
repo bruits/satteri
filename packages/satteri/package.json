@@ -71,6 +71,7 @@
     "hastscript": "^9.0.1",
     "mdast-util-mdx": "^3.0.0",
     "mdast-util-to-hast": "^13.2.1",
+    "property-information": "^7.2.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "rehype-raw": "^7.0.0",

@@ -1,3 +1,4 @@
+import { encodeHastDocument } from "./hast/hast-visitor.js";
 import { featuresToNative, mdxOptionsToNative } from "./compile-options.js";
 import type {
   CompileOptions,
@@ -65,6 +66,7 @@ import {
   parseHastWire,
   parseMdastWire,
   renderHandle,
+  renderHastOpstream,
   serializeHandle,
 } from "#binding";
 import { materializeHastTree } from "./hast/hast-materializer.js";
@@ -651,4 +653,22 @@ export function htmlToHast(html: string, options: HtmlToHastOptions = {}): HastN
   } finally {
     releaseHandle(handle, true);
   }
+}
+
+/**
+ * Serialize a HAST tree to an HTML string: a `root` renders its children, any
+ * other node renders itself, and a list renders in order. MDX nodes have no
+ * HTML representation and are skipped; `raw` nodes are emitted verbatim.
+ *
+ * The result is the tree's exact serialization, with no trailing newline (the
+ * one `markdownToHtml` ends its document with).
+ */
+export function hastToHtml(tree: HastNode | readonly HastNode[]): string {
+  return encodeHastDocument(documentNodes(tree), renderHastOpstream);
+}
+
+function documentNodes(tree: HastNode | readonly HastNode[]): readonly HastNode[] {
+  if (Array.isArray(tree)) return tree;
+  const node = tree as HastNode;
+  return node.type === "root" ? node.children : [node];
 }

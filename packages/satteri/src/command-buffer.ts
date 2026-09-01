@@ -141,7 +141,7 @@ export class CommandBuffer extends OpWriter {
     this.writeU32(nodeId);
   }
 
-  setProperty(nodeId: number, key: string, value: unknown): void {
+  setProperty(nodeId: number, key: string, value: unknown, listKind = PROP_SPACE_SEP): void {
     this.#assertNotEncoding();
     let valueType: number;
     let str: string;
@@ -159,8 +159,8 @@ export class CommandBuffer extends OpWriter {
       valueType = PROP_INT;
       str = String(value);
     } else if (Array.isArray(value)) {
-      valueType = PROP_SPACE_SEP;
-      str = (value as string[]).join(" ");
+      valueType = listKind;
+      str = (value as unknown[]).join(listKind === PROP_SPACE_SEP ? " " : ", ");
     } else {
       valueType = PROP_STRING;
       str = String(value);

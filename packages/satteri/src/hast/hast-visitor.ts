@@ -38,6 +38,7 @@ import {
 import type { Data, HastRaw, MdxJsxAttributeUnion, SourceFormat } from "../types.js";
 import { HAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
 import { type HastNode } from "./hast-materializer.js";
+import { joinListProp, listPropKind } from "./element-props.js";
 import {
   HAST_ELEMENT,
   HAST_MDX_JSX_ELEMENT,
@@ -240,6 +241,37 @@ function emitHastRootReplace(buffer: CommandBuffer, root: HastContent, refs: Nod
   if (!ok) throw unencodableContentError(root);
 }
 
+/** A document is encoded standalone, so no node can be a ref into a tree. */
+const NO_REFS: NodeRefs = new WeakMap();
+
+const HAST_DOCTYPE = NAME_TO_TYPE.doctype;
+
+/**
+ * Encode a standalone HAST tree as an op-stream document: one `root` wrapping
+ * `nodes`, which Rust replays into an arena of its own and serializes. The
+ * bytes are handed to `use` because they are a view into a pooled buffer,
+ * valid only until it is released.
+ */
+export function encodeHastDocument<T>(nodes: readonly HastNode[], use: (ops: Uint8Array) => T): T {
+  const w = acquireCommandBuffer();
+  try {
+    w.open(HAST_ROOT);
+    for (const node of nodes) {
+      // Carries no fields, and patch content has nothing to attach it to.
+      if (node.type === "doctype" && HAST_DOCTYPE !== undefined) {
+        w.open(HAST_DOCTYPE);
+        w.close();
+        continue;
+      }
+      if (!emitHastOp(w, node, false, NO_REFS)) throw unencodableContentError(node);
+    }
+    w.close();
+    return use(w.getBuffer());
+  } finally {
+    releaseCommandBuffer(w);
+  }
+}
+
 function emitHastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs): boolean {
   w.open(HAST_ROOT);
   if (n.data != null) w.data(n.data);
@@ -299,8 +331,10 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
   else if (value === false) w.prop(name, PROP_BOOL_FALSE, "");
   else if (typeof value === "string") w.prop(name, PROP_STRING, value);
   else if (typeof value === "number") w.prop(name, PROP_INT, String(value));
-  else if (Array.isArray(value))
-    w.prop(name, PROP_SPACE_SEP, value.filter((v) => typeof v === "string").join(" "));
+  else if (Array.isArray(value)) {
+    const kind = listPropKind(name);
+    w.prop(name, kind, joinListProp(kind, value));
+  }
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
@@ -442,6 +476,16 @@ class HastVisitorContextImpl implements HastVisitorContext {
       this.#commandBuffer.setProperty(id, key, value != null ? JSON.stringify(value) : null);
       return;
     }
+    if (node.type === "element") {
+      this.#commandBuffer.setProperty(
+        id,
+        key,
+        value,
+        Array.isArray(value) ? listPropKind(key) : undefined,
+      );
+      return;
+    }
+
     if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
       // Fold attributes into queued replacements so the rebuild cannot overwrite later setProperty calls.
       const pending = this.#pendingNodes.get(id) as

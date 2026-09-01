@@ -590,7 +590,7 @@ trait OpCollector<'a>: Sized {
     const NUMERIC_OPS: bool;
 
     fn open(node_type: u8) -> Self;
-    fn check_tag(tag: u8) -> Result<(), CommandError>;
+    fn check_tag(tag: u8, scope: OpstreamScope) -> Result<(), CommandError>;
     fn finalize(&mut self, builder: &mut ArenaBuilder<Self::Kind>);
     fn str_field(&mut self, field: u8, value: &'a str);
     fn bool_field(&mut self, field: u8, value: bool);
@@ -601,10 +601,26 @@ trait OpCollector<'a>: Sized {
     fn align(&mut self, _bytes: &'a [u8]) {}
 }
 
-/// Deepest `OP_OPEN` nesting the replay accepts: the apply splices a
-/// replayed sub-arena recursively, so its depth must stay well inside the
-/// host stack. 128 = serde_json's default recursion limit, ample for content.
-const MAX_OPSTREAM_DEPTH: usize = 128;
+/// Content grafted into an existing tree, or a whole document built from
+/// scratch, which has no arena for `REF`/`KEEP_CHILDREN` to resolve against.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpstreamScope {
+    Patch,
+    Document,
+}
+
+impl OpstreamScope {
+    /// Deepest `OP_OPEN` nesting the replay accepts: patch content is spliced
+    /// into the arena recursively so it must stay well inside the host stack,
+    /// while a document is replayed iteratively and rendered behind the stack
+    /// guard.
+    fn max_depth(self) -> usize {
+        match self {
+            Self::Patch => 128,
+            Self::Document => 10_000,
+        }
+    }
+}
 
 /// Replay an op-stream into a fresh sub-arena. `orig`/`anchor` resolve
 /// `KEEP_CHILDREN` (splice the replaced node's original children, as refs).
@@ -613,6 +629,7 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
     builder: &mut ArenaBuilder<C::Kind>,
     original_len: u32,
     anchor: u32,
+    scope: OpstreamScope,
 ) -> Result<Vec<u32>, CommandError> {
     let mut reader = BufReader::new(ops);
     let mut stack: Vec<C> = Vec::new();
@@ -625,15 +642,15 @@ fn replay_opstream<'a, C: OpCollector<'a>>(
                     c.finalize(builder);
                 }
                 let node_type = reader.read_u8()?;
-                C::check_tag(node_type)?;
+                C::check_tag(node_type, scope)?;
                 // A root is only valid as the stream's top-level wrapper
                 // (the apply splices its children); nested it would smuggle
                 // a node the JS visitors refuse to encode.
                 if !stack.is_empty() && node_type == <C::Kind as ArenaKind>::ROOT_TAG {
                     return Err(CommandError::UnencodableNodeType("root"));
                 }
-                if stack.len() >= MAX_OPSTREAM_DEPTH {
-                    return Err(CommandError::OpstreamTooDeep(MAX_OPSTREAM_DEPTH));
+                if stack.len() >= scope.max_depth() {
+                    return Err(CommandError::OpstreamTooDeep(scope.max_depth()));
                 }
                 let id = builder.open_node(node_type);
                 if stack.is_empty() {
@@ -836,9 +853,9 @@ impl<'a> OpCollector<'a> for FieldCollector<'a> {
         }
     }
 
-    /// Reject op-stream tags this build can't construct — unknown bytes
+    /// Reject op-stream tags this build can't construct: unknown bytes
     /// always, MDX tags without the `mdx` feature.
-    fn check_tag(tag: u8) -> Result<(), CommandError> {
+    fn check_tag(tag: u8, _scope: OpstreamScope) -> Result<(), CommandError> {
         let known = MdastNodeType::from_u8(tag).is_some();
         #[cfg(not(feature = "mdx"))]
         let known = known
@@ -914,7 +931,7 @@ fn replay_mdast_opstream(
     original_len: u32,
     anchor: u32,
 ) -> Result<Vec<u32>, CommandError> {
-    replay_opstream::<FieldCollector>(ops, builder, original_len, anchor)
+    replay_opstream::<FieldCollector>(ops, builder, original_len, anchor, OpstreamScope::Patch)
 }
 
 /// Returns (arena, keep_children) for an MDAST sub-tree payload. `orig`/`anchor`
@@ -1019,11 +1036,11 @@ impl<'a> OpCollector<'a> for HastFieldCollector<'a> {
     }
 
     /// HAST twin of the MDAST `check_tag`.
-    fn check_tag(tag: u8) -> Result<(), CommandError> {
-        // The JS visitor refuses to encode a doctype (it's not in
-        // `HAST_OPSTREAM_TYPES`); enforce the same here so a crafted buffer
-        // can't smuggle one in.
-        if HastNodeType::from_u8(tag) == Some(HastNodeType::Doctype) {
+    fn check_tag(tag: u8, scope: OpstreamScope) -> Result<(), CommandError> {
+        // A doctype is document furniture; plugin content has nothing to attach it to.
+        if scope == OpstreamScope::Patch
+            && HastNodeType::from_u8(tag) == Some(HastNodeType::Doctype)
+        {
             return Err(CommandError::UnencodableNodeType("doctype"));
         }
         let known = HastNodeType::from_u8(tag).is_some();
@@ -1081,7 +1098,23 @@ fn replay_hast_opstream(
     original_len: u32,
     anchor: u32,
 ) -> Result<Vec<u32>, CommandError> {
-    replay_opstream::<HastFieldCollector>(ops, builder, original_len, anchor)
+    replay_opstream::<HastFieldCollector>(ops, builder, original_len, anchor, OpstreamScope::Patch)
+}
+
+/// Build a standalone HAST arena from an op-stream document: one top-level
+/// `root` wrapping the tree, as `hastToHtml` encodes it.
+pub fn hast_arena_from_opstream(ops: &[u8]) -> Result<Arena<Hast>, CommandError> {
+    let mut builder = ArenaBuilder::<Hast>::new(String::new());
+    let roots =
+        replay_opstream::<HastFieldCollector>(ops, &mut builder, 0, 0, OpstreamScope::Document)?;
+    // Rendering starts at node 0, so nothing but the root wrapper may open there.
+    let wrapped = roots.len() == 1
+        && roots[0] == 0
+        && builder.arena_ref().get_node(0).node_type == <Hast as ArenaKind>::ROOT_TAG;
+    if !wrapped {
+        return Err(CommandError::MissingDocumentRoot);
+    }
+    Ok(builder.finish())
 }
 
 /// Returns (arena, keep_children) for a HAST sub-tree payload: an op-stream,
@@ -1854,12 +1887,53 @@ mod tests {
     }
 
     #[test]
+    fn document_opstream_accepts_doctype() {
+        let ops = vec![
+            OP_OPEN,
+            HastNodeType::Root as u8,
+            OP_OPEN,
+            HastNodeType::Doctype as u8,
+            OP_CLOSE,
+            OP_CLOSE,
+        ];
+        let arena = hast_arena_from_opstream(&ops).unwrap();
+        assert_eq!(
+            satteri_ast::hast::hast_arena_to_html(&arena),
+            "<!doctype html>\n"
+        );
+    }
+
+    #[test]
+    fn document_opstream_requires_a_root() {
+        let ops = vec![OP_OPEN, HastNodeType::Comment as u8, OP_CLOSE];
+        assert!(matches!(
+            hast_arena_from_opstream(&ops).unwrap_err(),
+            CommandError::MissingDocumentRoot
+        ));
+        assert!(matches!(
+            hast_arena_from_opstream(&[]).unwrap_err(),
+            CommandError::MissingDocumentRoot
+        ));
+    }
+
+    #[test]
+    fn document_opstream_rejects_refs() {
+        let mut ops = vec![OP_OPEN, HastNodeType::Root as u8, OP_REF];
+        ops.extend_from_slice(&0u32.to_le_bytes());
+        ops.push(OP_CLOSE);
+        assert!(matches!(
+            hast_arena_from_opstream(&ops).unwrap_err(),
+            CommandError::InvalidNodeId(0)
+        ));
+    }
+
+    #[test]
     fn opstream_rejects_over_deep_nesting() {
         // The apply splices replayed content recursively, so unbounded
         // nesting would overflow the host stack (an abort napi can't catch).
         let empty = ArenaBuilder::<Mdast>::new(String::new()).finish();
         let mut ops = Vec::new();
-        for _ in 0..(MAX_OPSTREAM_DEPTH + 1) {
+        for _ in 0..(OpstreamScope::Patch.max_depth() + 1) {
             op_open(&mut ops, MdastNodeType::Blockquote);
         }
         let err = replay_mdast_for_test(&ops, &empty, 0).unwrap_err();
