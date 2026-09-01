@@ -17,9 +17,7 @@ export type HastPropertyValue = string | number | boolean | (string | number)[];
  *  comma- or space-separated depends on the element's schema, which is only
  *  known at render (a subtree may still be detached here). Every token is
  *  NUL-terminated, so an empty list stays distinct from a list holding one
- *  empty token. A token containing NUL is split at it, the one input this
- *  cannot represent; parsed documents never carry one, since the HTML parser
- *  replaces NUL with U+FFFD.
+ *  empty token.
  *
  *  A list *ending* in an empty string gets another appended, mirroring
  *  `comma-separated-tokens`, which pads so the value parses back to the same
@@ -29,12 +27,29 @@ export type HastPropertyValue = string | number | boolean | (string | number)[];
 export function encodeTokenList(items: readonly unknown[]): string {
   if (items.length === 0) return "";
   const padded = items[items.length - 1] === "" ? [...items, ""] : items;
-  return `${padded.join("\0")}\0`;
+  return `${padded.map(tokenToWire).join("\0")}\0`;
+}
+
+/** U+0001 introduces an escape so a token carrying a NUL of its own does not
+ *  read as two tokens: `\u00010` is a NUL, `\u00011` the escape itself. */
+const ESCAPE = "\u0001";
+
+/** `join` renders null and undefined as an empty token; keep that. */
+function tokenToWire(item: unknown): string {
+  const token = item === null || item === undefined ? "" : String(item);
+  return token.includes("\0") || token.includes(ESCAPE)
+    ? token.replaceAll(ESCAPE, `${ESCAPE}1`).replaceAll("\0", `${ESCAPE}0`)
+    : token;
 }
 
 function decodeTokenList(value: string): string[] {
   if (value === "") return [];
-  return (value.endsWith("\0") ? value.slice(0, -1) : value).split("\0");
+  const tokens = (value.endsWith("\0") ? value.slice(0, -1) : value).split("\0");
+  return tokens.map((token) =>
+    token.includes(ESCAPE)
+      ? token.replace(/\u0001([01])/g, (_, digit: string) => (digit === "0" ? "\0" : ESCAPE))
+      : token,
+  );
 }
 
 export function decodeElementProp(kind: number, value: string): HastPropertyValue {

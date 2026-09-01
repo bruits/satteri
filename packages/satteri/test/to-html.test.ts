@@ -262,6 +262,13 @@ describe("hastToHtml", () => {
     expect(hastToHtml({ type: "root" } as unknown as HastNode)).toBe("");
   });
 
+  test("keeps a token holding a NUL in one piece", () => {
+    const node = el("div", { className: ["a\u0000b", "c"] });
+    expect(hastToHtml(node)).toBe(`<div class="a\u0000b c"></div>`);
+    // The reference spells the NUL `&#x0;`; both re-parse to U+FFFD.
+    expect(stringify(node)).toBe(`<div class="a&#x0;b c"></div>`);
+  });
+
   test("treats an inherited property name as an ordinary list", () => {
     const node = el("div", { constructor: ["a", "b"] });
     expect(hastToHtml(node)).toBe(`<div constructor="a b"></div>`);

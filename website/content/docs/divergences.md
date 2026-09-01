@@ -147,12 +147,6 @@ The HTML serialization algorithm leaves text unescaped when its parent is a `sty
 
 Sätteri follows the spec here because the parser reads those elements back as raw text: an escaped `&#x26;` inside `<xmp>` parses as the literal characters `&#x26;`, so escaping breaks the round trip rather than protecting it. Text inside `<script>` and `<style>` is identical on both sides, and text under a nested element is escaped on both.
 
-### Lists holding a NUL character
-
-`hastToHtml` sends a list-valued property (`className`, `accept`, …) to the renderer as NUL-separated tokens, because whether the value joins with commas or spaces depends on the schema of the element it lands in. A token containing a literal NUL is therefore split in two, where `hast-util-to-html` escapes it as `&#x0;`.
-
-The HTML parser replaces NUL with U+FFFD, so no parsed document reaches this: it needs a hand-built tree whose class name holds a NUL of its own.
-
 ## MDX
 
 ### oxc vs acorn differences

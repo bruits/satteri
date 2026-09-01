@@ -223,15 +223,41 @@ fn render_node_at<'cb>(
 
 /// Split a `PROP_TOKEN_LIST` value: every token is NUL-terminated, so an empty
 /// value is an empty list and a lone NUL is a list holding one empty token.
-fn token_list_items(tokens: &str) -> Vec<&str> {
-    if tokens.is_empty() {
-        return Vec::new();
+fn token_list_items(tokens: &str) -> impl Iterator<Item = Cow<'_, str>> {
+    let body = if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.strip_suffix('\0').unwrap_or(tokens))
+    };
+    body.into_iter()
+        .flat_map(|b| b.split('\0'))
+        .map(unescape_token)
+}
+
+/// Undo `encodeTokenList`'s escaping: U+0001 hides a token's own NUL from the
+/// separator, as `\u{1}0`, and itself as `\u{1}1`.
+fn unescape_token(token: &str) -> Cow<'_, str> {
+    if !token.contains('\u{1}') {
+        return Cow::Borrowed(token);
     }
-    tokens
-        .strip_suffix('\0')
-        .unwrap_or(tokens)
-        .split('\0')
-        .collect()
+    let mut out = String::with_capacity(token.len());
+    let mut chars = token.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('0') => out.push('\0'),
+            Some('1') => out.push('\u{1}'),
+            Some(other) => {
+                out.push(c);
+                out.push(other);
+            }
+            None => out.push(c),
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// Join a JS-built list property, whose tokens ride the wire unjoined because
@@ -240,7 +266,7 @@ fn token_list_items(tokens: &str) -> Vec<&str> {
 /// `comma-separated-tokens` and `space-separated-tokens`; the trailing empty
 /// item each pads with is already in the tokens (see `encodeTokenList`).
 pub fn join_token_list(name: &str, in_svg: bool, tokens: &str) -> String {
-    let items = token_list_items(tokens);
+    let items: Vec<Cow<'_, str>> = token_list_items(tokens).collect();
     let comma_separated = matches!(
         find_property(name, in_svg).1,
         PropKind::CommaSeparated | PropKind::NumberCommaSeparated
