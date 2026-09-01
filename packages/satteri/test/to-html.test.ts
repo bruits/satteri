@@ -12,6 +12,7 @@ import {
   mdxToHast,
 } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
+import type { Element, ElementContent, Properties } from "hast";
 
 const stringify = (tree: HastNode | HastNode[]): string =>
   unified()
@@ -29,6 +30,17 @@ const foldEscapes = (html: string): string =>
 const matchesOracle = (tree: HastNode | HastNode[]): void => {
   expect(foldEscapes(hastToHtml(tree))).toBe(foldEscapes(stringify(tree)));
 };
+
+const el = (tagName: string, properties: Properties, children: ElementContent[] = []): Element => ({
+  type: "element",
+  tagName,
+  properties,
+  children,
+});
+
+/** The SVG schema applies to an element's own attributes too, so the property
+ *  under test goes on a child of `<svg>`, not on the `<svg>`. */
+const inSvg = (properties: Properties): Element => el("svg", {}, [el("circle", properties)]);
 
 describe("hastToHtml", () => {
   test("serializes an element and escapes its text", () => {
@@ -79,11 +91,11 @@ describe("hastToHtml", () => {
   });
 
   test("joins list properties by name, comma-separated ones included", () => {
-    const el = (tagName: string, properties: Record<string, unknown>): HastNode =>
-      ({ type: "element", tagName, properties, children: [] }) as unknown as HastNode;
-    const cases: HastNode[] = [
+    const cases: Element[] = [
       el("p", { className: ["x", "y"] }),
-      el("img", { srcSet: ["a 1x", "b 2x"] }),
+      // hast types `srcSet` as a string; an array is still valid input, and
+      // it separates with spaces because the schema does not mark it comma-separated.
+      el("img", { srcSet: ["a 1x", "b 2x"] } as unknown as Properties),
       el("input", { accept: ["a/b", "c/d"] }),
       el("area", { coords: [1, 2, 3] }),
       el("div", { exportParts: ["a", "b"] }),
@@ -99,15 +111,13 @@ describe("hastToHtml", () => {
   });
 
   test("joins list edge cases like the token stringifiers", () => {
-    const div = (properties: Record<string, unknown>): HastNode =>
-      ({ type: "element", tagName: "div", properties, children: [] }) as unknown as HastNode;
     const cases = [
-      div({ exportParts: [""] }),
-      div({ exportParts: ["a", ""] }),
-      div({ exportParts: [" a "] }),
-      div({ className: ["", "a"] }),
-      div({ className: [" a "] }),
-      div({ className: [] }),
+      el("div", { exportParts: [""] }),
+      el("div", { exportParts: ["a", ""] }),
+      el("div", { exportParts: [" a "] }),
+      el("div", { className: ["", "a"] }),
+      el("div", { className: [" a "] }),
+      el("div", { className: [] }),
     ];
     expect(cases.map((node) => hastToHtml(node))).toEqual([
       `<div exportparts=","></div>`,
@@ -121,39 +131,16 @@ describe("hastToHtml", () => {
   });
 
   test("separates list properties the way property-information classifies them", () => {
-    const cases: [property: string, node: HastNode][] = [];
+    const cases: [property: string, node: Element][] = [];
     for (const [property, info] of Object.entries(htmlSchema.property)) {
       if (!info.spaceSeparated && !info.commaSeparated) continue;
-      cases.push([
-        property,
-        {
-          type: "element",
-          tagName: "div",
-          properties: { [property]: ["a", "b"] },
-          children: [],
-        } as unknown as HastNode,
-      ]);
+      cases.push([property, el("div", { [property]: ["a", "b"] })]);
     }
     // Inside `<svg>` the SVG schema applies, and it separates a different set:
     // `coords` turns plain there, `glyphName` turns comma-separated.
     for (const [property, info] of Object.entries(svgSchema.property)) {
       if (!info.spaceSeparated && !info.commaSeparated) continue;
-      cases.push([
-        `svg ${property}`,
-        {
-          type: "element",
-          tagName: "svg",
-          properties: {},
-          children: [
-            {
-              type: "element",
-              tagName: "circle",
-              properties: { [property]: ["a", "b"] },
-              children: [],
-            },
-          ],
-        } as unknown as HastNode,
-      ]);
+      cases.push([`svg ${property}`, inSvg({ [property]: ["a", "b"] })]);
     }
     expect(cases.length).toBeGreaterThan(30);
     for (const [label, node] of cases) {
@@ -162,35 +149,20 @@ describe("hastToHtml", () => {
   });
 
   test("separates a list by the schema of the element it sits in", () => {
-    const inSvg = (properties: Record<string, unknown>): HastNode =>
-      ({
-        type: "element",
-        tagName: "svg",
-        properties: {},
-        children: [{ type: "element", tagName: "circle", properties, children: [] }],
-      }) as unknown as HastNode;
-    const inHtml = (tagName: string, properties: Record<string, unknown>): HastNode =>
-      ({ type: "element", tagName, properties, children: [] }) as unknown as HastNode;
-
     expect(hastToHtml(inSvg({ coords: [1, 2] }))).toBe(`<svg><circle coords="1 2"></circle></svg>`);
-    expect(hastToHtml(inHtml("area", { coords: [1, 2] }))).toBe(`<area coords="1, 2">`);
+    expect(hastToHtml(el("area", { coords: [1, 2] }))).toBe(`<area coords="1, 2">`);
     expect(hastToHtml(inSvg({ glyphName: ["a", "b"] }))).toBe(
       `<svg><circle glyph-name="a, b"></circle></svg>`,
     );
-    expect(hastToHtml(inHtml("div", { glyphName: ["a", "b"] }))).toBe(
-      `<div glyphName="a b"></div>`,
-    );
+    expect(hastToHtml(el("div", { glyphName: ["a", "b"] }))).toBe(`<div glyphName="a b"></div>`);
   });
 
   test("keeps a token holding the other schema's separator intact", () => {
-    const node = (properties: Record<string, unknown>): HastNode =>
-      ({
-        type: "element",
-        tagName: "svg",
-        properties: {},
-        children: [{ type: "element", tagName: "circle", properties, children: [] }],
-      }) as unknown as HastNode;
-    const cases = [node({ accept: [","] }), node({ glyphName: [""] }), node({ accept: ["a b"] })];
+    const cases = [
+      inSvg({ accept: [","] }),
+      inSvg({ glyphName: [""] }),
+      inSvg({ accept: ["a b"] }),
+    ];
     expect(cases.map((tree) => hastToHtml(tree))).toEqual([
       `<svg><circle accept=","></circle></svg>`,
       `<svg><circle glyph-name=","></circle></svg>`,
@@ -200,28 +172,18 @@ describe("hastToHtml", () => {
   });
 
   test("escapes text below a raw-text element, not just inside it", () => {
-    const tree = {
-      type: "element",
-      tagName: "script",
-      properties: {},
-      children: [
-        { type: "text", value: "a & b" },
-        {
-          type: "element",
-          tagName: "div",
-          properties: {},
-          children: [{ type: "text", value: "c & d" }],
-        },
-      ],
-    } as unknown as HastNode;
+    const tree = el("script", {}, [
+      { type: "text", value: "a & b" },
+      el("div", {}, [{ type: "text", value: "c & d" }]),
+    ]);
     expect(hastToHtml(tree)).toBe("<script>a & b<div>c &amp; d</div></script>");
     matchesOracle(tree);
   });
 
   test("round-trips a comma-separated attribute through htmlToHast", () => {
     const tree = htmlToHast(`<input accept="a,b"><input accept=", ,">`, { fragment: true });
-    expect(tree.type).toBe("root");
-    const accepts = (tree.children as HastNode[]).map((child) =>
+    if (tree.type !== "root") throw new Error("htmlToHast returned a non-root");
+    const accepts = tree.children.map((child) =>
       child.type === "element" ? child.properties.accept : undefined,
     );
     expect(accepts).toEqual([
@@ -232,13 +194,52 @@ describe("hastToHtml", () => {
     matchesOracle(tree);
   });
 
+  test("drops a NaN property instead of rendering it", () => {
+    const built = h("div", { tabIndex: Number.NaN }) as HastNode;
+    expect(hastToHtml(built)).toBe("<div></div>");
+    matchesOracle(built);
+
+    const plugin = defineHastPlugin({
+      name: "set-nan",
+      element: {
+        filter: ["a"],
+        visit(node, ctx) {
+          ctx.setProperty(node, "tabIndex", Number.NaN);
+        },
+      },
+    });
+    expect(markdownToHtml("[a](/x)", { hastPlugins: [plugin] }).html.trim()).toBe(
+      `<p><a href="/x">a</a></p>`,
+    );
+  });
+
+  test("pads a trailing empty item but not a trailing null", () => {
+    // `null` is not a hast list item, but a plugin can hand one over.
+    const cases = [
+      el("div", { exportParts: ["a", ""] }),
+      el("div", { exportParts: ["a", null] } as unknown as Properties),
+    ];
+    expect(cases.map((node) => hastToHtml(node))).toEqual([
+      `<div exportparts="a, ,"></div>`,
+      `<div exportparts="a,"></div>`,
+    ]);
+    for (const node of cases) matchesOracle(node);
+  });
+
+  test("renders a root nested in a list of nodes", () => {
+    const nodes = [
+      h("p", "a") as HastNode,
+      { type: "root", children: [h("p", "b") as HastNode] } as HastNode,
+    ];
+    expect(hastToHtml(nodes)).toBe("<p>a</p><p>b</p>");
+  });
+
+  test("renders a childless root as an empty string", () => {
+    expect(hastToHtml({ type: "root" } as unknown as HastNode)).toBe("");
+  });
+
   test("treats an inherited property name as an ordinary list", () => {
-    const node = {
-      type: "element",
-      tagName: "div",
-      properties: { constructor: ["a", "b"] },
-      children: [],
-    } as unknown as HastNode;
+    const node = el("div", { constructor: ["a", "b"] });
     expect(hastToHtml(node)).toBe(`<div constructor="a b"></div>`);
   });
 

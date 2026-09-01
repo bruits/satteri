@@ -102,7 +102,7 @@ impl std::fmt::Display for CommandError {
                 write!(f, "node type '{t}' cannot appear in plugin-built content")
             }
             Self::OpstreamTooDeep(max) => {
-                write!(f, "plugin content nests deeper than {max} levels")
+                write!(f, "content nests deeper than {max} levels")
             }
             Self::WrapOnRemovedNode(id) => {
                 write!(f, "wrapNode targets node {id} which is also removed")
