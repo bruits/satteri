@@ -12,6 +12,32 @@ import {
 
 export type HastPropertyValue = string | number | boolean | (string | number)[];
 
+/** Mirrors `PropKind::CommaSeparated`/`NumberCommaSeparated` in
+ *  satteri-property-info; every other list property is space-separated. */
+const COMMA_SEPARATED_PROPS = new Map<string, number>([
+  ["accept", PROP_COMMA_SEP],
+  ["coords", PROP_COMMA_SEP_NUM],
+  ["exportParts", PROP_COMMA_SEP],
+  ["g1", PROP_COMMA_SEP],
+  ["g2", PROP_COMMA_SEP],
+  ["glyphName", PROP_COMMA_SEP],
+]);
+
+/** Wire kind for an array-valued property, keyed by name as hast does. */
+export function listPropKind(name: string): number {
+  return COMMA_SEPARATED_PROPS.get(name) ?? PROP_SPACE_SEP;
+}
+
+/** Join an array property's items for the wire exactly as
+ *  `space-separated-tokens` / `comma-separated-tokens` join them for output:
+ *  numbers stringify, the joined value is trimmed, and a comma-separated list
+ *  ending in an empty item gets another so it parses back to the same list. */
+export function joinListProp(kind: number, items: readonly unknown[]): string {
+  if (kind === PROP_SPACE_SEP) return items.join(" ").trim();
+  const padded = items[items.length - 1] === "" ? [...items, ""] : items;
+  return padded.join(", ").trim();
+}
+
 export function decodeElementProp(kind: number, value: string): HastPropertyValue {
   switch (kind) {
     case PROP_BOOL_TRUE:

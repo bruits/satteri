@@ -313,6 +313,13 @@ export declare function parseToHtml(source: string, parseOptions: number, conver
 export declare function renderHandle(handle: HastHandle): string
 
 /**
+ * Render a JS-built HAST tree, encoded as an op-stream document, to HTML.
+ * Backs `hastToHtml`: no handle is involved, and the output is the exact
+ * serialization, without the trailing newline a rendered document carries.
+ */
+export declare function renderHastOpstream(ops: Uint8Array): string
+
+/**
  * Result of the fused apply + render tail. `dropped_transforms` mirrors the
  * count `apply_commands_to_handle` returns: patches dropped because their
  * target lived inside a removed/replaced subtree; the JS pipeline warns when

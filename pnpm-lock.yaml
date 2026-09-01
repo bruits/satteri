@@ -84,6 +84,9 @@ importers:
       mdast-util-to-hast:
         specifier: ^13.2.1
         version: 13.2.1
+      property-information:
+        specifier: ^7.2.0
+        version: 7.2.0
       react:
         specifier: ^19.2.5
         version: 19.2.5

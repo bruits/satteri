@@ -166,12 +166,14 @@ export class CommandBuffer extends OpWriter {
     this.writeU32(nodeId);
   }
 
-  /** Unified set-property for both MDAST and HAST nodes.
+  /** Unified set-property for both MDAST and HAST nodes. `listKind` is the
+   *  wire kind an array value takes, which on HAST elements depends on the
+   *  property name (`listPropKind`); everything else lists space-separated.
    *
    *  Hot path: uses `encodeInto` to write UTF-8 straight into the buffer (no
    *  per-call `Uint8Array`), reserving the worst-case length up front and
    *  backfilling the length prefix once the byte count is known. */
-  setProperty(nodeId: number, key: string, value: unknown): void {
+  setProperty(nodeId: number, key: string, value: unknown, listKind = PROP_SPACE_SEP): void {
     this.#assertNotEncoding();
     let valueType: number;
     let str: string;
@@ -189,8 +191,8 @@ export class CommandBuffer extends OpWriter {
       valueType = PROP_INT;
       str = String(value);
     } else if (Array.isArray(value)) {
-      valueType = PROP_SPACE_SEP;
-      str = (value as string[]).join(" ");
+      valueType = listKind;
+      str = (value as unknown[]).join(listKind === PROP_SPACE_SEP ? " " : ", ");
     } else {
       valueType = PROP_STRING;
       str = String(value);

@@ -48,6 +48,9 @@ pub enum CommandError {
     PatchOnRemovedSubtree(u32),
     /// An op-stream's `OP_OPEN`s and `OP_CLOSE`s did not pair up.
     UnbalancedOpstream,
+    /// A document op-stream is not the one `root` wrapping the tree that
+    /// rendering starts from.
+    MissingDocumentRoot,
     /// A wire-supplied node id does not exist in the target arena.
     InvalidNodeId(u32),
     /// A stored node's `type_data` is shorter than its declared layout, so a
@@ -106,6 +109,9 @@ impl std::fmt::Display for CommandError {
             }
             Self::UnbalancedOpstream => {
                 write!(f, "unbalanced op-stream: OPEN and CLOSE ops do not pair up")
+            }
+            Self::MissingDocumentRoot => {
+                write!(f, "op-stream document must be one root wrapping the tree")
             }
             Self::InvalidNodeId(id) => {
                 write!(

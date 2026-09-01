@@ -28,6 +28,7 @@ export {
   parseExpression,
   parseToHtml,
   renderHandle,
+  renderHastOpstream,
   parseHastWire,
   parseMdastWire,
   serializeHandle,

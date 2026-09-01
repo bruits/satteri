@@ -1035,6 +1035,18 @@ pub fn apply_commands_to_handle(handle: &HastHandle, command_buf: Uint8Array) ->
     Ok(dropped.len() as u32)
 }
 
+/// Render a JS-built HAST tree, encoded as an op-stream document, to HTML.
+/// Backs `hastToHtml`: no handle is involved, and the output is the exact
+/// serialization, without the trailing newline a rendered document carries.
+#[napi]
+pub fn render_hast_opstream(ops: Uint8Array) -> Result<String> {
+    let arena = satteri_plugin_api::hast_arena_from_opstream(&ops)
+        .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let mut html = String::with_capacity(arena.string_pool().len());
+    satteri_ast::hast::render_node(0, &arena, &mut html, false, false);
+    Ok(html)
+}
+
 /// Render a HAST handle's arena to HTML. Does not consume the handle.
 #[napi]
 pub fn render_handle(handle: &HastHandle) -> Result<String> {
