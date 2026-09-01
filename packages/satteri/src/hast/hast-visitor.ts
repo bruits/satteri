@@ -48,11 +48,11 @@ import {
   PROP_STRING,
   PROP_BOOL_TRUE,
   PROP_BOOL_FALSE,
-  PROP_SPACE_SEP,
   PROP_INT,
+  PROP_TOKEN_LIST,
   emitMdxAttr,
 } from "../op-stream.js";
-import { joinListProp, listPropKind } from "./element-props.js";
+import { encodeTokenList } from "./element-props.js";
 import {
   decodeWalkElementProps,
   readWalkElementTag,
@@ -410,10 +410,7 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
   else if (value === false) w.prop(name, PROP_BOOL_FALSE, "");
   else if (typeof value === "string") w.prop(name, PROP_STRING, value);
   else if (typeof value === "number") w.prop(name, PROP_INT, String(value));
-  else if (Array.isArray(value)) {
-    const kind = listPropKind(name);
-    w.prop(name, kind, joinListProp(kind, value));
-  }
+  else if (Array.isArray(value)) w.prop(name, PROP_TOKEN_LIST, encodeTokenList(value));
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
@@ -564,12 +561,11 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
     if (node.type === "element") {
-      this.#commandBuffer.setProperty(
-        id,
-        key,
-        value,
-        Array.isArray(value) ? listPropKind(key) : undefined,
-      );
+      if (Array.isArray(value)) {
+        this.#commandBuffer.setTokenListProperty(id, key, encodeTokenList(value));
+      } else {
+        this.#commandBuffer.setProperty(id, key, value);
+      }
       return;
     }
 

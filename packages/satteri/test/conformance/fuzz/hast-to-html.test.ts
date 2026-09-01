@@ -30,15 +30,12 @@ const VOID_TAGS = ["br", "img", "hr", "input", "meta"];
 const RAW_TEXT_TAGS = ["script", "style"];
 const SVG_TAGS = ["circle", "path", "text"];
 
-// An empty or whitespace-only token survives one serialization but not the
-// re-parse, so list values stay to tokens a document could carry.
 const TOKEN = fc.string({
-  unit: fc.constantFrom(..."abc012-".split("")),
-  minLength: 1,
+  unit: fc.constantFrom(..."abc012-, ".split("")),
   maxLength: 6,
 });
 
-const ANY_SCHEMA_PROPERTY = fc.oneof(
+const PROPERTY = fc.oneof(
   fc.tuple(fc.constant("id"), TEXT),
   fc.tuple(fc.constant("title"), TEXT),
   fc.tuple(fc.constant("className"), fc.array(TOKEN, { maxLength: 3 })),
@@ -48,25 +45,15 @@ const ANY_SCHEMA_PROPERTY = fc.oneof(
   fc.tuple(fc.constant("strokeWidth"), fc.integer({ min: 0, max: 9 })),
   fc.tuple(fc.constant("data-x-y"), TEXT),
   fc.tuple(fc.constant("hidden"), fc.constant(false)),
-);
-
-// Comma-separated in the HTML schema only. The encoder keys the separator on
-// the property name alone, so it would join these with commas inside `<svg>`
-// too, where rehype switches schemas and joins with spaces.
-const HTML_ONLY_PROPERTY = fc.oneof(
   fc.tuple(fc.constant("accept"), fc.array(TOKEN, { maxLength: 3 })),
   fc.tuple(fc.constant("coords"), fc.array(fc.integer({ min: 0, max: 99 }), { maxLength: 3 })),
   fc.tuple(fc.constant("exportParts"), fc.array(TOKEN, { maxLength: 2 })),
+  fc.tuple(fc.constant("glyphName"), fc.array(TOKEN, { maxLength: 2 })),
 );
 
-const toProperties = (entries: [string, unknown][]): Record<string, unknown> =>
-  Object.fromEntries(entries) as Record<string, unknown>;
-
 const properties = fc
-  .array(fc.oneof(ANY_SCHEMA_PROPERTY, HTML_ONLY_PROPERTY), { maxLength: 4 })
-  .map(toProperties);
-
-const svgProperties = fc.array(ANY_SCHEMA_PROPERTY, { maxLength: 4 }).map(toProperties);
+  .array(PROPERTY, { maxLength: 4 })
+  .map((entries) => Object.fromEntries(entries) as Record<string, unknown>);
 
 const leaf: fc.Arbitrary<HastNode> = fc.oneof(
   TEXT.map((value) => ({ type: "text", value }) as unknown as HastNode),
@@ -82,36 +69,24 @@ const leaf: fc.Arbitrary<HastNode> = fc.oneof(
     ),
 );
 
-// Only text children under <script>/<style>: an element there cannot come from
-// parsing, and the renderer keeps raw-text escaping off for the whole subtree
-// where `hast-util-to-html` looks at the text node's direct parent only.
-const rawTextElement = fc
-  .tuple(fc.constantFrom(...RAW_TEXT_TAGS), properties, fc.array(TEXT, { maxLength: 2 }))
-  .map(
-    ([tagName, props, values]) =>
-      ({
-        type: "element",
-        tagName,
-        properties: props,
-        children: values.map((value) => ({ type: "text", value })),
-      }) as unknown as HastNode,
-  );
-
 const element: fc.Arbitrary<HastNode> = fc.letrec<{ node: HastNode }>((tie) => ({
   node: fc.oneof(
     { depthSize: "small", withCrossShrink: true },
     leaf,
-    rawTextElement,
     fc
-      .tuple(fc.constantFrom(...HTML_TAGS), properties, fc.array(tie("node"), { maxLength: 3 }))
+      .tuple(
+        fc.constantFrom(...HTML_TAGS, ...RAW_TEXT_TAGS),
+        properties,
+        fc.array(tie("node"), { maxLength: 3 }),
+      )
       .map(
         ([tagName, props, children]) =>
           ({ type: "element", tagName, properties: props, children }) as unknown as HastNode,
       ),
     fc
       .tuple(
-        svgProperties,
-        fc.array(fc.tuple(fc.constantFrom(...SVG_TAGS), svgProperties), { maxLength: 2 }),
+        properties,
+        fc.array(fc.tuple(fc.constantFrom(...SVG_TAGS), properties), { maxLength: 2 }),
       )
       .map(
         ([props, kids]) =>
@@ -150,7 +125,19 @@ const parseableElement: fc.Arbitrary<HastNode> = fc.letrec<{ node: HastNode }>((
         ([tagName, props]) =>
           ({ type: "element", tagName, properties: props, children: [] }) as unknown as HastNode,
       ),
-    rawTextElement,
+    fc
+      .tuple(
+        fc.constantFrom(...RAW_TEXT_TAGS),
+        properties,
+        fc.array(
+          TEXT.map((value) => ({ type: "text", value })),
+          { maxLength: 2 },
+        ),
+      )
+      .map(
+        ([tagName, props, children]) =>
+          ({ type: "element", tagName, properties: props, children }) as unknown as HastNode,
+      ),
     fc
       .tuple(fc.constantFrom(...NESTABLE_TAGS), properties, fc.array(tie("node"), { maxLength: 3 }))
       .map(

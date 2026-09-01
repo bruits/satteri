@@ -1,6 +1,9 @@
 //! Render a HAST arena to an HTML string.
 
+use std::borrow::Cow;
+
 use satteri_arena::{Arena, Hast};
+use satteri_property_info::{PropKind, find_property};
 
 use crate::hast::HastNodeType;
 use crate::hast::codec::{
@@ -10,7 +13,7 @@ use crate::hast::escape::{escape_html_attr_value, escape_html_body_text};
 use crate::hast::properties::property_to_attribute;
 use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
-    PROP_STRING,
+    PROP_STRING, PROP_TOKEN_LIST,
 };
 
 /// Render HTML from an arena.
@@ -25,9 +28,10 @@ pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
 
 /// Render a HAST node subtree to HTML.
 ///
-/// `in_raw_text` indicates the node is being rendered inside a raw-text element
-/// (`<script>` / `<style>`). Per the HTML spec, descendant text of these elements
-/// is not entity-escaped.
+/// `in_raw_text` indicates the node's *parent* is a raw-text element
+/// (`<script>` / `<style>` / …). Per the HTML serialization algorithm only a
+/// text node whose direct parent is one of those escapes nothing, so the flag
+/// does not carry past the next element.
 ///
 /// `in_svg` selects the SVG attribute schema. Set on entry to `<svg>` and
 /// sticky for all descendants — `<foreignObject>` does NOT switch back, matching
@@ -129,12 +133,17 @@ fn render_node_at<'cb>(
                     }
                     PROP_BOOL_FALSE => {}
                     PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP
-                    | PROP_COMMA_SEP_NUM => {
-                        let value = view.get_str(value_ref);
+                    | PROP_COMMA_SEP_NUM | PROP_TOKEN_LIST => {
+                        let stored = view.get_str(value_ref);
+                        let value = if value_kind == PROP_TOKEN_LIST {
+                            Cow::Owned(join_token_list(name, element_in_svg, stored))
+                        } else {
+                            Cow::Borrowed(stored)
+                        };
                         out.push(' ');
                         out.push_str(&attr_name);
                         out.push_str("=\"");
-                        escape_html_attr_value(out, value);
+                        escape_html_attr_value(out, &value);
                         out.push('"');
                     }
                     _ => {}
@@ -145,7 +154,7 @@ fn render_node_at<'cb>(
                 out.push('>');
             } else {
                 out.push('>');
-                let child_in_raw_text = in_raw_text || is_raw_text_element(tag);
+                let child_in_raw_text = is_raw_text_element(tag);
                 for &child_id in view.get_children(node_id) {
                     render_node_inner(
                         child_id,
@@ -210,6 +219,40 @@ fn render_node_at<'cb>(
             }
         }
     }
+}
+
+/// Split a `PROP_TOKEN_LIST` value: every token is NUL-terminated, so an empty
+/// value is an empty list and a lone NUL is a list holding one empty token.
+fn token_list_items(tokens: &str) -> Vec<&str> {
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+    tokens
+        .strip_suffix('\0')
+        .unwrap_or(tokens)
+        .split('\0')
+        .collect()
+}
+
+/// Join a JS-built list property, whose tokens ride the wire unjoined because
+/// only the render knows the element's schema: `coords` is comma-separated in
+/// HTML and plain in SVG, `glyphName` the reverse. Mirrors
+/// `comma-separated-tokens` and `space-separated-tokens`, down to the extra
+/// empty item that keeps a trailing empty parsing back.
+pub fn join_token_list(name: &str, in_svg: bool, tokens: &str) -> String {
+    let items = token_list_items(tokens);
+    let comma_separated = matches!(
+        find_property(name, in_svg).1,
+        PropKind::CommaSeparated | PropKind::NumberCommaSeparated
+    );
+    if !comma_separated {
+        return items.join(" ").trim().to_string();
+    }
+    let mut joined = items.join(", ");
+    if items.last() == Some(&"") {
+        joined.push_str(", ");
+    }
+    joined.trim().to_string()
 }
 
 /// Void elements render as a single tag; any children never reach the output.

@@ -8,34 +8,22 @@ import {
   PROP_COMMA_SEP,
   PROP_COMMA_SEP_NUM,
   PROP_INT,
+  PROP_TOKEN_LIST,
 } from "../generated/wire-constants.js";
 
 export type HastPropertyValue = string | number | boolean | (string | number)[];
 
-/** Mirrors `PropKind::CommaSeparated`/`NumberCommaSeparated` in
- *  satteri-property-info; every other list property is space-separated. */
-const COMMA_SEPARATED_PROPS = new Map<string, number>([
-  ["accept", PROP_COMMA_SEP],
-  ["coords", PROP_COMMA_SEP_NUM],
-  ["exportParts", PROP_COMMA_SEP],
-  ["g1", PROP_COMMA_SEP],
-  ["g2", PROP_COMMA_SEP],
-  ["glyphName", PROP_COMMA_SEP],
-]);
-
-/** Wire kind for an array-valued property, keyed by name as hast does. */
-export function listPropKind(name: string): number {
-  return COMMA_SEPARATED_PROPS.get(name) ?? PROP_SPACE_SEP;
+/** Encode an array property value as `PROP_TOKEN_LIST`: whether it serializes
+ *  comma- or space-separated depends on the element's schema, which is only
+ *  known at render (a subtree may still be detached here). Every token is
+ *  NUL-terminated, so an empty list stays distinct from a list holding one
+ *  empty token. */
+export function encodeTokenList(items: readonly unknown[]): string {
+  return items.length === 0 ? "" : `${items.join("\0")}\0`;
 }
 
-/** Join an array property's items for the wire exactly as
- *  `space-separated-tokens` / `comma-separated-tokens` join them for output:
- *  numbers stringify, the joined value is trimmed, and a comma-separated list
- *  ending in an empty item gets another so it parses back to the same list. */
-export function joinListProp(kind: number, items: readonly unknown[]): string {
-  if (kind === PROP_SPACE_SEP) return items.join(" ").trim();
-  const padded = items[items.length - 1] === "" ? [...items, ""] : items;
-  return padded.join(", ").trim();
+function decodeTokenList(value: string): string[] {
+  return value === "" ? [] : value.slice(0, -1).split("\0");
 }
 
 export function decodeElementProp(kind: number, value: string): HastPropertyValue {
@@ -57,6 +45,8 @@ export function decodeElementProp(kind: number, value: string): HastPropertyValu
       if (items[items.length - 1] === "") items.pop();
       return items.map((s) => (s !== "" && !Number.isNaN(Number(s)) ? Number(s) : s));
     }
+    case PROP_TOKEN_LIST:
+      return decodeTokenList(value);
     case PROP_INT:
       return Number(value);
     default:

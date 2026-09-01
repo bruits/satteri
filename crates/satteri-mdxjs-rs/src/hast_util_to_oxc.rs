@@ -38,6 +38,7 @@ use satteri_ast::mdast::codec::{
 use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
     PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP, PROP_STRING,
+    PROP_TOKEN_LIST,
 };
 
 /// Get a Span from a HAST binary node's position data.
@@ -613,11 +614,22 @@ fn transform_element<'a>(
     for i in 0..prop_count {
         let (name_ref, value_kind, value_ref) = decode_element_prop(data, i);
         let name = context.view.get_str(name_ref);
+        // JSX takes the string the HTML attribute would have held.
+        let joined_tokens = (value_kind == PROP_TOKEN_LIST).then(|| {
+            satteri_ast::hast::join_token_list(name, in_svg, context.view.get_str(value_ref))
+        });
 
         // `style="…"` parses into a JSX expression object regardless of
         // attribute-name casing; key casing is controlled separately.
-        if name == "style" && matches!(value_kind, PROP_STRING | PROP_SPACE_SEP | PROP_COMMA_SEP) {
-            let raw = context.view.get_str(value_ref);
+        if name == "style"
+            && matches!(
+                value_kind,
+                PROP_STRING | PROP_SPACE_SEP | PROP_COMMA_SEP | PROP_TOKEN_LIST
+            )
+        {
+            let raw = joined_tokens
+                .as_deref()
+                .unwrap_or_else(|| context.view.get_str(value_ref));
             let object = build_style_object(alloc, raw, style_case);
             attrs.push(JSXAttributeItem::Attribute(OxcBox::new_in(
                 JSXAttribute {
@@ -640,8 +652,11 @@ fn transform_element<'a>(
 
         let value = match value_kind {
             PROP_BOOL_TRUE => None,
-            PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP | PROP_COMMA_SEP_NUM => {
-                let v = context.view.get_str(value_ref);
+            PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP | PROP_COMMA_SEP_NUM
+            | PROP_TOKEN_LIST => {
+                let v = joined_tokens
+                    .as_deref()
+                    .unwrap_or_else(|| context.view.get_str(value_ref));
                 Some(JSXAttributeValue::StringLiteral(OxcBox::new_in(
                     StringLiteral {
                         node_id: Cell::new(NodeId::DUMMY),
