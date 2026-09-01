@@ -27,9 +27,13 @@ const TEXT = fc.string({
 
 const HTML_TAGS = ["div", "p", "span", "a", "li", "pre", "code", "button", "table"];
 const VOID_TAGS = ["br", "img", "hr", "input", "meta"];
+// `xmp`, `iframe` and friends are raw-text here and escaped by the reference;
+// that deliberate divergence is in docs/divergences.md, so keep them out.
 const RAW_TEXT_TAGS = ["script", "style"];
 const SVG_TAGS = ["circle", "path", "text"];
 
+// No NUL: it separates the tokens of a list property on the wire, so a token
+// holding one is split (docs/divergences.md).
 const TOKEN = fc.string({
   unit: fc.constantFrom(..."abc012-, ".split("")),
   maxLength: 6,

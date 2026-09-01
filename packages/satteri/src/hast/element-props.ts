@@ -17,13 +17,24 @@ export type HastPropertyValue = string | number | boolean | (string | number)[];
  *  comma- or space-separated depends on the element's schema, which is only
  *  known at render (a subtree may still be detached here). Every token is
  *  NUL-terminated, so an empty list stays distinct from a list holding one
- *  empty token. */
+ *  empty token. A token containing NUL is split at it, the one input this
+ *  cannot represent; parsed documents never carry one, since the HTML parser
+ *  replaces NUL with U+FFFD.
+ *
+ *  A list *ending* in an empty string gets another appended, mirroring
+ *  `comma-separated-tokens`, which pads so the value parses back to the same
+ *  list. It happens here because only `""` pads: `null` joins to the same
+ *  empty token but does not. Space-separated joining trims the padding away
+ *  again, so it is harmless there. */
 export function encodeTokenList(items: readonly unknown[]): string {
-  return items.length === 0 ? "" : `${items.join("\0")}\0`;
+  if (items.length === 0) return "";
+  const padded = items[items.length - 1] === "" ? [...items, ""] : items;
+  return `${padded.join("\0")}\0`;
 }
 
 function decodeTokenList(value: string): string[] {
-  return value === "" ? [] : value.slice(0, -1).split("\0");
+  if (value === "") return [];
+  return (value.endsWith("\0") ? value.slice(0, -1) : value).split("\0");
 }
 
 export function decodeElementProp(kind: number, value: string): HastPropertyValue {

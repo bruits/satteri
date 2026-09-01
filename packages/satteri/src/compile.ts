@@ -1356,8 +1356,15 @@ export function hastToHtml(tree: HastNode | readonly HastNode[]): string {
   return encodeHastDocument(documentNodes(tree), renderHastOpstream);
 }
 
+/** A `root` contributes its children, wherever it sits, so a list of trees
+ *  serializes as the concatenation of what each renders alone. */
 function documentNodes(tree: HastNode | readonly HastNode[]): readonly HastNode[] {
-  if (Array.isArray(tree)) return tree;
-  const node = tree as HastNode;
-  return node.type === "root" ? node.children : [node];
+  if (!Array.isArray(tree)) {
+    const node = tree as HastNode;
+    return node.type === "root" ? (node.children ?? []) : [node];
+  }
+  const nodes = tree as readonly HastNode[];
+  return nodes.some((node) => node.type === "root")
+    ? nodes.flatMap((node) => (node.type === "root" ? (node.children ?? []) : [node]))
+    : nodes;
 }

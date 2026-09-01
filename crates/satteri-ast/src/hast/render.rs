@@ -237,22 +237,19 @@ fn token_list_items(tokens: &str) -> Vec<&str> {
 /// Join a JS-built list property, whose tokens ride the wire unjoined because
 /// only the render knows the element's schema: `coords` is comma-separated in
 /// HTML and plain in SVG, `glyphName` the reverse. Mirrors
-/// `comma-separated-tokens` and `space-separated-tokens`, down to the extra
-/// empty item that keeps a trailing empty parsing back.
+/// `comma-separated-tokens` and `space-separated-tokens`; the trailing empty
+/// item each pads with is already in the tokens (see `encodeTokenList`).
 pub fn join_token_list(name: &str, in_svg: bool, tokens: &str) -> String {
     let items = token_list_items(tokens);
     let comma_separated = matches!(
         find_property(name, in_svg).1,
         PropKind::CommaSeparated | PropKind::NumberCommaSeparated
     );
-    if !comma_separated {
-        return items.join(" ").trim().to_string();
-    }
-    let mut joined = items.join(", ");
-    if items.last() == Some(&"") {
-        joined.push_str(", ");
-    }
-    joined.trim().to_string()
+    let joined = items.join(if comma_separated { ", " } else { " " });
+    // `String.prototype.trim` counts the BOM as whitespace and `str::trim` does not.
+    joined
+        .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+        .to_string()
 }
 
 /// Void elements render as a single tag; any children never reach the output.

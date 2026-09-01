@@ -409,8 +409,10 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
   if (value === true) w.prop(name, PROP_BOOL_TRUE, "");
   else if (value === false) w.prop(name, PROP_BOOL_FALSE, "");
   else if (typeof value === "string") w.prop(name, PROP_STRING, value);
-  else if (typeof value === "number") w.prop(name, PROP_INT, String(value));
-  else if (Array.isArray(value)) w.prop(name, PROP_TOKEN_LIST, encodeTokenList(value));
+  // A NaN property is dropped, not rendered as `"NaN"`, matching hast.
+  else if (typeof value === "number") {
+    if (!Number.isNaN(value)) w.prop(name, PROP_INT, String(value));
+  } else if (Array.isArray(value)) w.prop(name, PROP_TOKEN_LIST, encodeTokenList(value));
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
@@ -564,7 +566,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
       if (Array.isArray(value)) {
         this.#commandBuffer.setTokenListProperty(id, key, encodeTokenList(value));
       } else {
-        this.#commandBuffer.setProperty(id, key, value);
+        // NaN drops the attribute, as it does on a built element.
+        const dropped = typeof value === "number" && Number.isNaN(value);
+        this.#commandBuffer.setProperty(id, key, dropped ? null : value);
       }
       return;
     }
