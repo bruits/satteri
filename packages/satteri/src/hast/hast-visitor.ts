@@ -32,13 +32,13 @@ import {
   PROP_BOOL_FALSE,
   PROP_BOOL_TRUE,
   PROP_INT,
-  PROP_SPACE_SEP,
+  PROP_TOKEN_LIST,
   PROP_STRING,
 } from "../op-stream.js";
 import type { Data, HastRaw, MdxJsxAttributeUnion, SourceFormat } from "../types.js";
 import { HAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
 import { type HastNode } from "./hast-materializer.js";
-import { joinListProp, listPropKind } from "./element-props.js";
+import { encodeTokenList } from "./element-props.js";
 import {
   HAST_ELEMENT,
   HAST_MDX_JSX_ELEMENT,
@@ -331,10 +331,7 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
   else if (value === false) w.prop(name, PROP_BOOL_FALSE, "");
   else if (typeof value === "string") w.prop(name, PROP_STRING, value);
   else if (typeof value === "number") w.prop(name, PROP_INT, String(value));
-  else if (Array.isArray(value)) {
-    const kind = listPropKind(name);
-    w.prop(name, kind, joinListProp(kind, value));
-  }
+  else if (Array.isArray(value)) w.prop(name, PROP_TOKEN_LIST, encodeTokenList(value));
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
@@ -477,12 +474,11 @@ class HastVisitorContextImpl implements HastVisitorContext {
       return;
     }
     if (node.type === "element") {
-      this.#commandBuffer.setProperty(
-        id,
-        key,
-        value,
-        Array.isArray(value) ? listPropKind(key) : undefined,
-      );
+      if (Array.isArray(value)) {
+        this.#commandBuffer.setTokenListProperty(id, key, encodeTokenList(value));
+      } else {
+        this.#commandBuffer.setProperty(id, key, value);
+      }
       return;
     }
 

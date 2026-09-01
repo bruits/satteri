@@ -1,6 +1,9 @@
 //! Render a HAST arena to an HTML string.
 
+use std::borrow::Cow;
+
 use satteri_arena::{Arena, Hast};
+use satteri_property_info::{PropKind, find_property};
 
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
@@ -10,7 +13,7 @@ use crate::hast::properties::property_to_attribute;
 use crate::hast::{HastNodeType, is_svg_html_integration_point};
 use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
-    PROP_STRING,
+    PROP_STRING, PROP_TOKEN_LIST,
 };
 
 /// Render HTML from an arena.
@@ -169,12 +172,17 @@ fn render_node_at<'cb>(
                     }
                     PROP_BOOL_FALSE => {}
                     PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP
-                    | PROP_COMMA_SEP_NUM => {
-                        let value = view.get_str(value_ref);
+                    | PROP_COMMA_SEP_NUM | PROP_TOKEN_LIST => {
+                        let stored = view.get_str(value_ref);
+                        let value = if value_kind == PROP_TOKEN_LIST {
+                            Cow::Owned(join_token_list(name, element_in_svg, stored))
+                        } else {
+                            Cow::Borrowed(stored)
+                        };
                         out.push(' ');
                         out.push_str(&attr_name);
                         out.push_str("=\"");
-                        escape_html_attr_value(out, value);
+                        escape_html_attr_value(out, &value);
                         out.push('"');
                     }
                     _ => {}
@@ -249,6 +257,40 @@ fn render_node_at<'cb>(
             }
         }
     }
+}
+
+/// Split a `PROP_TOKEN_LIST` value: every token is NUL-terminated, so an empty
+/// value is an empty list and a lone NUL is a list holding one empty token.
+fn token_list_items(tokens: &str) -> Vec<&str> {
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+    tokens
+        .strip_suffix('\0')
+        .unwrap_or(tokens)
+        .split('\0')
+        .collect()
+}
+
+/// Join a JS-built list property, whose tokens ride the wire unjoined because
+/// only the render knows the element's schema: `coords` is comma-separated in
+/// HTML and plain in SVG, `glyphName` the reverse. Mirrors
+/// `comma-separated-tokens` and `space-separated-tokens`, down to the extra
+/// empty item that keeps a trailing empty parsing back.
+pub fn join_token_list(name: &str, in_svg: bool, tokens: &str) -> String {
+    let items = token_list_items(tokens);
+    let comma_separated = matches!(
+        find_property(name, in_svg).1,
+        PropKind::CommaSeparated | PropKind::NumberCommaSeparated
+    );
+    if !comma_separated {
+        return items.join(" ").trim().to_string();
+    }
+    let mut joined = items.join(", ");
+    if items.last() == Some(&"") {
+        joined.push_str(", ");
+    }
+    joined.trim().to_string()
 }
 
 /// Void elements render as a single tag; any children never reach the output.

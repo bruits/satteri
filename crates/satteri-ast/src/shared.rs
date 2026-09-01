@@ -10,5 +10,5 @@ pub use crate::generated::wire_constants::{
 };
 pub use crate::generated::wire_constants::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_NULL,
-    PROP_SPACE_SEP, PROP_STRING,
+    PROP_SPACE_SEP, PROP_STRING, PROP_TOKEN_LIST,
 };
