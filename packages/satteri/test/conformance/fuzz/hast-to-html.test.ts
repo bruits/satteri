@@ -16,7 +16,11 @@ const referenceHtml = (tree: HastNode): string => reference.stringify(tree as ne
 /** `hast-util-to-html` leaves `>`, `'` and `` ` `` bare where the renderer,
  *  following cmark, escapes them; both are valid HTML for the same text. */
 const foldEscapes = (html: string): string =>
-  html.replaceAll("&gt;", ">").replaceAll("&#x27;", "'").replaceAll("&#x60;", "`");
+  html
+    .replaceAll("&gt;", ">")
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&#x60;", "`")
+    .replaceAll("&#x0;", "\u0000");
 
 // Spread, not `split("")`: a lone surrogate has no UTF-8 form, so the native
 // boundary replaces it and the comparison would fail on the generator's input.
@@ -32,10 +36,10 @@ const VOID_TAGS = ["br", "img", "hr", "input", "meta"];
 const RAW_TEXT_TAGS = ["script", "style"];
 const SVG_TAGS = ["circle", "path", "text"];
 
-// No NUL: it separates the tokens of a list property on the wire, so a token
-// holding one is split (docs/divergences.md).
+// NUL separates a list property's tokens on the wire, so it is exactly the
+// character the escaping has to survive.
 const TOKEN = fc.string({
-  unit: fc.constantFrom(..."abc012-, ".split("")),
+  unit: fc.constantFrom(..."abc012-, ".split(""), "\u0000", "\u0001"),
   maxLength: 6,
 });
 
