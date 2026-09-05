@@ -42,7 +42,8 @@ fn is_html_integration_point(local: &str) -> bool {
     matches!(local, "foreignObject" | "desc" | "title")
 }
 
-/// The namespace a fragment's own top-level content is parsed in.
+/// The namespace HTML content is parsed in; for a fragment, that of its own
+/// top-level content.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum HtmlSpace {
     #[default]
@@ -51,6 +52,31 @@ pub enum HtmlSpace {
 }
 
 impl HtmlSpace {
+    fn is_svg(self) -> bool {
+        self == HtmlSpace::Svg
+    }
+
+    /// The space of an arena element named `tag` whose parent sits in `self`.
+    /// The arena records no namespace, so, as in the serializer, the name
+    /// `svg` is what opens SVG content.
+    fn of_arena_element(self, tag: &str) -> HtmlSpace {
+        if self.is_svg() || tag == "svg" {
+            HtmlSpace::Svg
+        } else {
+            HtmlSpace::Html
+        }
+    }
+
+    /// The space for the content of an element named `tag` that itself sits
+    /// in `self`: an HTML integration point parses its content as HTML.
+    fn inside(self, tag: &str) -> HtmlSpace {
+        if self.is_svg() && !is_html_integration_point(tag) {
+            HtmlSpace::Svg
+        } else {
+            HtmlSpace::Html
+        }
+    }
+
     /// `<template>` is the most permissive insertion mode, so table parts survive outside a table.
     fn context_element(self) -> QualName {
         match self {
@@ -386,15 +412,24 @@ impl TreeSink for HtmlSink {
 /// A unit of work for the iterative emitter: emit a sink node, copy a
 /// preserved node from the source arena, or close the open element.
 ///
-/// The `bool` is whether the node sits in SVG content. A parsed element
-/// carries its own namespace, so among sink nodes only a [`NodeData::Stitch`]
-/// reads it: the preserved MDX node has no namespace of its own and inherits
-/// its parent's. A copied arena node reads it to pick the schema for any raw
-/// HTML reparsed beneath it.
+/// The [`HtmlSpace`] is the context the node sits in. A parsed element has a
+/// namespace of its own and ignores it; a stitched MDX node has none and
+/// inherits it, and a copied arena node uses it for any raw HTML reparsed
+/// below.
 enum EmitTask {
-    Emit(usize, bool),
-    EmitArena(u32, bool),
+    Emit(usize, HtmlSpace),
+    EmitArena(u32, HtmlSpace),
     Close,
+}
+
+/// What a raw-HTML reparse stitches back into the parsed fragment: the arena
+/// the preserved MDX subtrees live in, their ids in placeholder order, and the
+/// markers that leaked into text instead of becoming stitch nodes.
+#[derive(Clone, Copy)]
+struct Stitching<'a> {
+    src: &'a Arena<Hast>,
+    stitches: &'a [u32],
+    leaked: &'a [String],
 }
 
 /// Emit `roots` into the HAST builder in document order.
@@ -402,49 +437,43 @@ enum EmitTask {
 /// Walks with an explicit stack: HTML nesting is unbounded, so recursion
 /// would overflow the native stack on adversarially deep input.
 ///
-/// A [`NodeData::Stitch`] node is replaced by the preserved subtree
-/// `stitches[N]` from `src` (`None` for [`html_to_hast_arena`], which never
-/// stitches). `leaked` markers are scrubbed from emitted text, comments, and
-/// attributes. `in_svg` is the namespace context of `roots` themselves.
+/// With `stitching`, a [`NodeData::Stitch`] node is replaced by the preserved
+/// subtree `stitches[N]` and leaked markers are scrubbed from emitted text,
+/// comments, and attributes; the plain HTML entry points pass `None`. `space`
+/// is the namespace context of `roots` themselves.
 fn emit(
     nodes: &[Node],
     roots: &[usize],
     builder: &mut ArenaBuilder<Hast>,
-    src: Option<&Arena<Hast>>,
-    stitches: &[u32],
-    leaked: &[String],
-    in_svg: bool,
+    stitching: Option<Stitching<'_>>,
+    space: HtmlSpace,
 ) {
+    let leaked = stitching.map_or(&[][..], |s| s.leaked);
     // Seed with the roots reversed, so they pop in document order.
     let mut stack: Vec<EmitTask> = roots
         .iter()
         .rev()
-        .map(|&id| EmitTask::Emit(id, in_svg))
+        .map(|&id| EmitTask::Emit(id, space))
         .collect();
 
     while let Some(task) = stack.pop() {
-        let (id, in_svg) = match task {
+        let (id, space) = match task {
             EmitTask::Close => {
                 builder.close_node();
                 continue;
             }
-            EmitTask::EmitArena(aid, in_svg) => {
-                emit_arena_node(
-                    src.expect("EmitArena without a source arena"),
-                    aid,
-                    builder,
-                    &mut stack,
-                    in_svg,
-                );
+            EmitTask::EmitArena(aid, space) => {
+                let src = stitching.expect("EmitArena without stitching").src;
+                emit_arena_node(src, aid, builder, &mut stack, space);
                 continue;
             }
-            EmitTask::Emit(id, in_svg) => (id, in_svg),
+            EmitTask::Emit(id, space) => (id, space),
         };
 
         match &nodes[id].data {
             NodeData::Document => {
                 for &child in nodes[id].children.iter().rev() {
-                    stack.push(EmitTask::Emit(child, in_svg));
+                    stack.push(EmitTask::Emit(child, space));
                 }
             }
             NodeData::Doctype => {
@@ -467,7 +496,8 @@ fn emit(
                     .set_type_data(leaf, &text_ref.as_bytes());
             }
             NodeData::Stitch(index) => {
-                stack.push(EmitTask::EmitArena(stitches[*index], in_svg));
+                let stitches = stitching.expect("Stitch node without stitching").stitches;
+                stack.push(EmitTask::EmitArena(stitches[*index], space));
             }
             // HAST has no processing-instruction node; HTML parsing turns `<?...>`
             // into a comment anyway, so this is effectively unreachable.
@@ -478,30 +508,14 @@ fn emit(
                 template_contents,
             } => {
                 let tag_ref = builder.alloc_string(&scrub_markers(&name.local, leaked));
-                // The SVG property schema keeps attribute casing (`viewBox`);
-                // the HTML schema normalises it.
-                let in_svg = &*name.ns == SVG_NAMESPACE;
-                // Children scheduled below inherit this element's namespace as
-                // their context, except under an HTML integration point.
-                let child_in_svg = in_svg && !is_html_integration_point(&name.local);
-                let props: Vec<(StringRef, u8, StringRef)> = attrs
-                    .iter()
-                    // An attribute name containing a leaked marker is junk the
-                    // tokenizer minted from marker text; drop it.
-                    .filter(|attr| {
-                        leaked.is_empty()
-                            || !leaked.iter().any(|m| attr.name.local.contains(m.as_str()))
-                    })
-                    .map(|attr| {
-                        let attr_name = qualified_attr_name(&attr.name);
-                        let (property, prop_kind) = find_property(&attr_name, in_svg);
-                        let name_ref = builder.alloc_string(&property);
-                        let value = scrub_markers(&attr.value, leaked);
-                        let (kind, value_ref) =
-                            coerce_value(builder, prop_kind, &attr_name, &value);
-                        (name_ref, kind, value_ref)
-                    })
-                    .collect();
+                // A parsed element has its own namespace, so the inherited
+                // context does not apply to it; its children take theirs from it.
+                let element_space = match &*name.ns {
+                    SVG_NAMESPACE => HtmlSpace::Svg,
+                    _ => HtmlSpace::Html,
+                };
+                let child_space = element_space.inside(&name.local);
+                let props = parsed_props(builder, attrs, leaked, element_space);
                 let element = builder.open_node_raw(HastNodeType::Element as u8);
                 let data = encode_element_data(tag_ref, &props);
                 builder.arena_mut().set_type_data(element, &data);
@@ -512,15 +526,41 @@ fn emit(
                 // so emit it as the template's children rather than dropping it.
                 if let Some(contents) = template_contents {
                     for &child in nodes[*contents].children.iter().rev() {
-                        stack.push(EmitTask::Emit(child, child_in_svg));
+                        stack.push(EmitTask::Emit(child, child_space));
                     }
                 }
                 for &child in nodes[id].children.iter().rev() {
-                    stack.push(EmitTask::Emit(child, child_in_svg));
+                    stack.push(EmitTask::Emit(child, child_space));
                 }
             }
         }
     }
+}
+
+/// Convert a parsed element's attributes into hast props under the schema of
+/// `space`: SVG keeps attribute casing (`viewBox`), HTML normalises it. An
+/// attribute whose name contains a leaked marker is junk the tokenizer minted
+/// from marker text, and is dropped.
+fn parsed_props(
+    builder: &mut ArenaBuilder<Hast>,
+    attrs: &[Attribute],
+    leaked: &[String],
+    space: HtmlSpace,
+) -> Vec<(StringRef, u8, StringRef)> {
+    attrs
+        .iter()
+        .filter(|attr| {
+            leaked.is_empty() || !leaked.iter().any(|m| attr.name.local.contains(m.as_str()))
+        })
+        .map(|attr| {
+            let attr_name = qualified_attr_name(&attr.name);
+            let (property, prop_kind) = find_property(&attr_name, space.is_svg());
+            let name_ref = builder.alloc_string(&property);
+            let value = scrub_markers(&attr.value, leaked);
+            let (kind, value_ref) = coerce_value(builder, prop_kind, &attr_name, &value);
+            (name_ref, kind, value_ref)
+        })
+        .collect()
 }
 
 /// html5ever splits foreign attrs into prefix + local; the tables key `prefix:local`.
@@ -549,14 +589,14 @@ fn scrub_markers<'a>(text: &'a str, leaked: &[String]) -> std::borrow::Cow<'a, s
 
 /// Copy the source-arena subtree rooted at `aid` into `builder`, scheduling
 /// its children on `stack`. Strings are re-allocated because `src` and the
-/// builder have separate pools. `in_svg` is the namespace context the node
-/// was stitched into; it decides the schema for any raw HTML reparsed below.
+/// builder have separate pools. `space` is the namespace context the node was
+/// stitched into; it decides the schema for any raw HTML reparsed below.
 fn emit_arena_node(
     src: &Arena<Hast>,
     aid: u32,
     builder: &mut ArenaBuilder<Hast>,
     stack: &mut Vec<EmitTask>,
-    in_svg: bool,
+    space: HtmlSpace,
 ) {
     let node_type = src.get_node(aid).node_type;
     let data = src.get_type_data(aid);
@@ -564,7 +604,7 @@ fn emit_arena_node(
     match HastNodeType::from_u8(node_type) {
         Some(HastNodeType::Root) => {
             for &child in src.get_children(aid).iter().rev() {
-                stack.push(EmitTask::EmitArena(child, in_svg));
+                stack.push(EmitTask::EmitArena(child, space));
             }
         }
         Some(HastNodeType::Doctype) => {
@@ -579,7 +619,7 @@ fn emit_arena_node(
         }
         Some(HastNodeType::Element) if data.len() >= 16 => {
             let tag = src.get_str(decode_element_tag(data));
-            let child_in_svg = (in_svg || tag == "svg") && !is_html_integration_point(tag);
+            let child_space = space.of_arena_element(tag).inside(tag);
             let tag_ref = builder.alloc_string(tag);
             let props: Vec<(StringRef, u8, StringRef)> = (0..decode_element_prop_count(data))
                 .map(|i| {
@@ -596,16 +636,13 @@ fn emit_arena_node(
             builder.arena_mut().set_type_data(element, &encoded);
             stack.push(EmitTask::Close);
             for &child in src.get_children(aid).iter().rev() {
-                stack.push(EmitTask::EmitArena(child, child_in_svg));
+                stack.push(EmitTask::EmitArena(child, child_space));
             }
         }
         #[cfg(feature = "mdx")]
         Some(HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement) if data.len() >= 16 => {
             let name = src.get_str(decode_mdx_jsx_element_name(data));
-            // Like the serializer's schema switch, an MDX element named `svg`
-            // puts its children in SVG content; unlike it, an HTML integration
-            // point takes them back out, as the parser would.
-            let child_in_svg = (in_svg || name == "svg") && !is_html_integration_point(name);
+            let child_space = space.of_arena_element(name).inside(name);
             let name_ref = builder.alloc_string(name);
             let explicit = decode_mdx_jsx_explicit(data);
             let attrs: Vec<(u8, StringRef, StringRef)> = (0..decode_mdx_jsx_attr_count(data))
@@ -623,7 +660,7 @@ fn emit_arena_node(
             builder.arena_mut().set_type_data(element, &encoded);
             // Reparse rather than copy, so raw HTML nested inside the MDX
             // element is resolved too.
-            reparse_children_into(src, aid, builder, child_in_svg);
+            reparse_children_into(src, aid, builder, child_space);
             builder.close_node();
         }
         #[cfg(feature = "mdx")]
@@ -642,7 +679,7 @@ fn emit_arena_node(
         // silently swallows a whole subtree.
         _ => {
             for &child in src.get_children(aid).iter().rev() {
-                stack.push(EmitTask::EmitArena(child, in_svg));
+                stack.push(EmitTask::EmitArena(child, space));
             }
         }
     }
@@ -655,18 +692,18 @@ fn emit_arena_node(
 /// text (e.g. inside an unclosed raw `<script>`, in HTML content) is dropped
 /// and its marker scrubbed from the output.
 ///
-/// `in_svg` selects the SVG schema for both directions: the children are
-/// serialized with it and the fragment is parsed in an `<svg>` context, so
-/// SVG-only attributes resolve to their canonical property names.
+/// Serialising and parsing must share `space`, or an SVG-cased attribute
+/// would not survive the round trip.
 fn reparse_children_into(
     src: &Arena<Hast>,
     parent: u32,
     builder: &mut ArenaBuilder<Hast>,
-    in_svg: bool,
+    space: HtmlSpace,
 ) {
     let prefix = stitch_prefix();
     let mut html = String::new();
     let mut stitches: Vec<u32> = Vec::new();
+    let in_svg = space.is_svg();
     {
         let mut on_mdx = |out: &mut String, node_id: u32| {
             out.push_str("<!--");
@@ -680,21 +717,13 @@ fn reparse_children_into(
         }
     }
     let recognizer = StitchRecognizer::new(prefix, stitches.len());
-    let space = if in_svg {
-        HtmlSpace::Svg
-    } else {
-        HtmlSpace::Html
-    };
     let (nodes, roots, leaked) = parse_fragment_nodes(&html, Some(recognizer), space);
-    emit(
-        &nodes,
-        &roots,
-        builder,
-        Some(src),
-        &stitches,
-        &leaked,
-        in_svg,
-    );
+    let stitching = Stitching {
+        src,
+        stitches: &stitches,
+        leaked: &leaked,
+    };
+    emit(&nodes, &roots, builder, Some(stitching), space);
 }
 
 /// Coerce an attribute string into its typed wire `(kind, value)` pair.
@@ -810,9 +839,7 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
         &nodes[0].children,
         &mut builder,
         None,
-        &[],
-        &[],
-        false,
+        HtmlSpace::Html,
     );
     builder.close_node();
     builder.finish()
@@ -826,8 +853,7 @@ pub fn html_fragment_to_hast_arena(html: &str, space: HtmlSpace) -> Arena<Hast> 
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node_raw(HastNodeType::Root as u8);
-    let in_svg = space == HtmlSpace::Svg;
-    emit(&nodes, &roots, &mut builder, None, &[], &[], in_svg);
+    emit(&nodes, &roots, &mut builder, None, space);
     builder.close_node();
     builder.finish()
 }
@@ -858,7 +884,7 @@ pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
         return Err("must parse to exactly one element".to_string());
     };
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    emit(&nodes, &[wrapper], &mut builder, None, &[], &[], false);
+    emit(&nodes, &[wrapper], &mut builder, None, HtmlSpace::Html);
     Ok(builder.finish())
 }
 
@@ -875,7 +901,7 @@ pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
 pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
     builder.open_node_raw(HastNodeType::Root as u8);
-    reparse_children_into(arena, 0, &mut builder, false);
+    reparse_children_into(arena, 0, &mut builder, HtmlSpace::Html);
     builder.close_node();
     builder.finish()
 }
