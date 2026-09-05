@@ -1276,10 +1276,7 @@ mod tests {
         b.open_node_raw(HastNodeType::Root as u8);
 
         add_raw_node(&mut b, r#"<div class="n">"#);
-        let tag = b.alloc_string("p");
-        let el = b.open_node_raw(HastNodeType::Element as u8);
-        let data = encode_element_data(tag, &[]);
-        b.arena_mut().set_type_data(el, &data);
+        open_element(&mut b, "p", &[]);
         let t = b.alloc_string("hi");
         let text = b.add_leaf_raw(HastNodeType::Text as u8);
         b.arena_mut().set_type_data(text, &t.as_bytes());
@@ -1394,16 +1391,8 @@ mod tests {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
         b.open_node_raw(HastNodeType::Root as u8);
 
-        // <Note> containing a single raw node `<em>hi</em>`.
-        let name = b.alloc_string("Note");
-        let mdx = b.open_node_raw(HastNodeType::MdxJsxElement as u8);
-        let data = encode_mdx_jsx_element_data(name, &[], true);
-        b.arena_mut().set_type_data(mdx, &data);
-
-        let raw = b.alloc_string("<em>hi</em>");
-        let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
-        b.arena_mut().set_type_data(leaf, &raw.as_bytes());
-
+        open_mdx_element(&mut b, "Note");
+        add_raw_node(&mut b, "<em>hi</em>");
         b.close_node(); // </Note>
         b.close_node(); // </root>
         let arena = b.finish();
@@ -1440,6 +1429,18 @@ mod tests {
         let r = b.alloc_string(html);
         let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
         b.arena_mut().set_type_data(leaf, &r.as_bytes());
+    }
+
+    /// Open a hast element with `(name, kind, value)` props; the caller closes it.
+    fn open_element(b: &mut ArenaBuilder<Hast>, tag: &str, props: &[(&str, u8, &str)]) {
+        let tag = b.alloc_string(tag);
+        let props: Vec<(StringRef, u8, StringRef)> = props
+            .iter()
+            .map(|&(name, kind, value)| (b.alloc_string(name), kind, b.alloc_string(value)))
+            .collect();
+        let el = b.open_node_raw(HastNodeType::Element as u8);
+        let data = encode_element_data(tag, &props);
+        b.arena_mut().set_type_data(el, &data);
     }
 
     #[cfg(feature = "mdx")]
@@ -1527,12 +1528,7 @@ mod tests {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
         b.open_node_raw(HastNodeType::Root as u8);
         open_mdx_element(&mut b, "svg");
-        let tag = b.alloc_string("path");
-        let name = b.alloc_string("fillRule");
-        let value = b.alloc_string("evenodd");
-        let el = b.open_node_raw(HastNodeType::Element as u8);
-        let data = encode_element_data(tag, &[(name, PROP_STRING, value)]);
-        b.arena_mut().set_type_data(el, &data);
+        open_element(&mut b, "path", &[("fillRule", PROP_STRING, "evenodd")]);
         b.close_node(); // </path>
         b.close_node(); // </svg>
         b.close_node(); // </root>
