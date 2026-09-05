@@ -1,5 +1,15 @@
 # satteri
 
+## 0.10.6 — 2026-09-05
+
+### Patch changes
+
+- [371b584](https://github.com/bruits/satteri/commit/371b584fdc0271ad8c193532172f24812d4c4c18) Added Android ARM64 native binding support. — Thanks @dcavalcante for your first contribution 🎉!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made parsing, HTML rendering, and tree building faster, by 3% to 35% depending on the document and output, with the largest gains on small documents. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `position: false` faster and fixes cases were it could lower performance by accident compared to enabling positions. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Fixed list and list-item nodes sometimes having corrupted values — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `markdownToMdast`, `markdownToHast`, and the MDX tree functions faster and less memory-hungry, with the largest gains on text-heavy and non-ASCII documents. — Thanks @Princesseuh!
+
 ## 0.10.5 — 2026-08-19
 
 ### Patch changes
