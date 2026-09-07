@@ -126,6 +126,12 @@ pub fn property_to_attribute(name: &str, in_svg: bool) -> Cow<'_, str> {
     Cow::Borrowed(name)
 }
 
+/// Whether `name` is a property of the HTML or SVG schema (case-insensitive).
+/// Custom `data-*` and unknown properties are not.
+pub fn is_known_property(name: &str, in_svg: bool) -> bool {
+    lookup(table(in_svg), normalize(name).as_ref()).is_some()
+}
+
 /// Reverse lookup: the attribute for a known hast property, or `None` for
 /// unknown / custom properties (which pass through unchanged).
 fn attribute_of(name: &str, in_svg: bool) -> Option<&'static str> {
@@ -204,7 +210,7 @@ fn format_data_attribute(suffix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PropKind, find_property, property_to_attribute};
+    use super::{PropKind, find_property, is_known_property, property_to_attribute};
 
     fn html(name: &str) -> std::borrow::Cow<'_, str> {
         property_to_attribute(name, false)
@@ -306,6 +312,16 @@ mod tests {
     fn xmlns_special_cases() {
         assert_eq!(html("xmlnsXLink"), "xmlns:xlink");
         assert_eq!(svg("xmlnsXLink"), "xmlns:xlink");
+    }
+
+    #[test]
+    fn is_known_property_is_schema_and_case_aware() {
+        // `dataType` is an SVG-only property; on HTML it is a custom `data-type`.
+        assert!(is_known_property("dataType", true));
+        assert!(!is_known_property("dataType", false));
+        assert!(!is_known_property("dataFoo", true));
+        assert!(is_known_property("classname", false));
+        assert!(!is_known_property("customProp", false));
     }
 
     #[test]
