@@ -171,18 +171,12 @@ fn render_node_at<'cb>(
                     }
                     PROP_BOOL_FALSE => {}
                     PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP
-                    | PROP_COMMA_SEP_NUM | PROP_TOKEN_LIST => {
-                        let stored = view.get_str(value_ref);
-                        let value = if value_kind == PROP_TOKEN_LIST {
-                            Cow::Owned(join_token_list(name, svg_schema, stored))
-                        } else {
-                            Cow::Borrowed(stored)
-                        };
-                        out.push(' ');
-                        out.push_str(&attr_name);
-                        out.push_str("=\"");
-                        escape_html_attr_value(out, &value);
-                        out.push('"');
+                    | PROP_COMMA_SEP_NUM => {
+                        render_attribute(out, &attr_name, view.get_str(value_ref));
+                    }
+                    PROP_TOKEN_LIST => {
+                        let value = join_token_list(name, svg_schema, view.get_str(value_ref));
+                        render_attribute(out, &attr_name, &value);
                     }
                     _ => {}
                 }
@@ -256,6 +250,14 @@ fn render_node_at<'cb>(
             }
         }
     }
+}
+
+fn render_attribute(out: &mut String, name: &str, value: &str) {
+    out.push(' ');
+    out.push_str(name);
+    out.push_str("=\"");
+    escape_html_attr_value(out, value);
+    out.push('"');
 }
 
 /// Split `encodeTokenList`'s typed, NUL-terminated tokens after the padding flag.
