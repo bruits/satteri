@@ -1696,7 +1696,8 @@ describe("visitHastHandle - child stubs", () => {
         filter: ["ul"],
         visit(node, ctx) {
           const items = node.children.filter((c) => c.type === "element");
-          ctx.setProperty(node, "children", items.reverse());
+          items.reverse();
+          ctx.setProperty(node, "children", items);
         },
       },
     });

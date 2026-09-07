@@ -1,3 +1,6 @@
+function buildPrompt(): string {
+  return `Help me understand this Sätteri docs page: ${window.location.href}`;
+}
 const button = document.querySelector<HTMLButtonElement>("#page-actions-button");
 const menu = document.querySelector<HTMLDivElement>("#page-actions-menu");
 const sourceTemplate = document.querySelector<HTMLTemplateElement>("#page-source");
@@ -31,10 +34,6 @@ if (button && menu && sourceTemplate) {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") close();
   });
-
-  function buildPrompt(): string {
-    return `Help me understand this Sätteri docs page: ${window.location.href}`;
-  }
 
   document
     .querySelector<HTMLButtonElement>("#action-copy-md")

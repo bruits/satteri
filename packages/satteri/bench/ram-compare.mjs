@@ -76,9 +76,9 @@ async function buildScenario(name, markdown) {
       if (node.depth === 1) ctx.setProperty(node, "depth", 2);
     },
   });
-  const setProperty = (name, filter, key, value) =>
+  const setProperty = (pluginName, filter, key, value) =>
     defineHastPlugin({
-      name,
+      name: pluginName,
       element: {
         filter,
         visit(node, ctx) {
@@ -165,10 +165,10 @@ const SCALES = process.env.RAM_BENCH_SCALES
   : [1, 10];
 
 for (const scale of SCALES) {
-  const label = `${scale}x (~${Math.round(scale * 11)}KB)`;
+  const documentSize = `${scale}x (~${Math.round(scale * 11)}KB)`;
   console.log(`\n${"=".repeat(90)}`);
   const iters = process.env.RAM_BENCH_ITERATIONS || "200";
-  console.log(`Document: ${label}   |  ${iters} iterations, no forced GC`);
+  console.log(`Document: ${documentSize}   |  ${iters} iterations, no forced GC`);
   console.log(`${"=".repeat(90)}\n`);
 
   const hdr = [

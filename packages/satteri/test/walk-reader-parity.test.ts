@@ -24,6 +24,16 @@ import type { Element, ElementContent, Text as HastText } from "hast";
 import type { Position } from "unist";
 import { collect, type TreeNode } from "./fixtures.js";
 
+const isEl = (n: TreeNode): n is Element => n.type === "element";
+
+const isLink = (c: MdastNode): c is Link => c.type === "link";
+
+const isStrong = (c: MdastNode): c is Strong => c.type === "strong";
+
+const isMdastText = (c: MdastNode): c is MdastText => c.type === "text";
+
+const isHastText = (c: ElementContent): c is HastText => c.type === "text";
+
 // Phantom-space sentinel; mirrors the unexported PHANTOM_SPACE in src/phantom.ts.
 const PHANTOM = "\uF002";
 
@@ -246,7 +256,6 @@ test("setProperty after replaceNode (fold path) space-joins arrays the same way"
 test("an array replaceNode clears the queued replacement so a later setProperty can't resurrect it", () => {
   const handle = createMdxHastHandle("<Box />");
   const source = getHandleSource(handle);
-  const isEl = (n: TreeNode): n is Element => n.type === "element";
   const plugin = defineHastPlugin({
     name: "single-then-array-then-set",
     mdxJsxFlowElement: {
@@ -287,12 +296,9 @@ test("mdast stub children read the same as reader-materialized children", () => 
   for (let i = 0; i < stubs.length; i++) {
     expect(stubs[i]!.position).toEqual(real[i]!.position);
   }
-  const isLink = (c: MdastNode): c is Link => c.type === "link";
-  const isStrong = (c: MdastNode): c is Strong => c.type === "strong";
-  const isText = (c: MdastNode): c is MdastText => c.type === "text";
   expect(stubs.find(isLink)!.url).toBe(real.find(isLink)!.url);
   expect(stubs.find(isLink)!.title).toBe(real.find(isLink)!.title);
-  expect(stubs.find(isText)!.value).toBe(real.find(isText)!.value);
+  expect(stubs.find(isMdastText)!.value).toBe(real.find(isMdastText)!.value);
   expect(stubs.find(isStrong)!.children).toEqual(real.find(isStrong)!.children);
 });
 
@@ -324,8 +330,7 @@ test("hast stub children read the same as reader-materialized children", () => {
   }
   const isAnchor = (c: ElementContent): c is Element =>
     c.type === "element" && (c as Element).tagName === "a";
-  const isText = (c: ElementContent): c is HastText => c.type === "text";
-  expect(stubs.find(isText)!.value).toBe(real.find(isText)!.value);
+  expect(stubs.find(isHastText)!.value).toBe(real.find(isHastText)!.value);
   expect(stubs.find(isAnchor)!.tagName).toBe(real.find(isAnchor)!.tagName);
   expect(stubs.find(isAnchor)!.properties).toEqual(real.find(isAnchor)!.properties);
   expect(stubs.find(isAnchor)!.children).toEqual(real.find(isAnchor)!.children);

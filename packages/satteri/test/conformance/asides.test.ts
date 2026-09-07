@@ -12,7 +12,7 @@ import type { MdastNode } from "../../src/types.js";
 type Variant = "note" | "tip" | "caution" | "danger";
 const variants: Variant[] = ["note", "tip", "caution", "danger"];
 const variantSet = new Set<string>(variants);
-const isAsideVariant = (s: string): s is Variant => variantSet.has(s);
+const isAsideVariant = (value: string): value is Variant => variantSet.has(value);
 
 const defaultTitles: Record<Variant, string> = {
   note: "Note",

@@ -21,6 +21,10 @@ import type { Position } from "unist";
 import { defineMdastPlugin } from "../src/plugin.js";
 import { markdownToHtml, applyCommandsToMdastHandle } from "../src/index.js";
 
+const intoMdast = (h: MdastHandle): MdastHandle => h;
+
+const intoHast = (h: HastHandle): HastHandle => h;
+
 function visitAndRender(
   md: string,
   plugin: Parameters<typeof resolveMdastSubscriptions>[0],
@@ -1246,8 +1250,6 @@ test("ctx.source stays verbatim after a mutating plugin rebuilds the tree", () =
 
 test("handles are kind-branded: cross-kind use is a compile error", () => {
   const { handle, source } = setup();
-  const intoMdast = (h: MdastHandle): MdastHandle => h;
-  const intoHast = (h: HastHandle): HastHandle => h;
   expect(intoMdast(handle)).toBe(handle);
   // @ts-expect-error a mdast handle must not flow into a hast-typed slot
   intoHast(handle);
@@ -1270,7 +1272,8 @@ test("reordering and filtering stub children works", () => {
     name: "reverse-paragraph",
     paragraph(node, ctx) {
       const kept = node.children.filter((c) => c.type !== "emphasis");
-      ctx.setProperty(node, "children", kept.reverse());
+      kept.reverse();
+      ctx.setProperty(node, "children", kept);
     },
   });
   const html = visitAndRender("*a* x **b**", plugin);
@@ -1540,7 +1543,7 @@ test("child edits land inside a parent-level restructure from the same pass", ()
     heading(node, ctx) {
       const parent = ctx.parent(node);
       if (parent === undefined || !("children" in parent)) return;
-      ctx.setProperty(parent, "children", [...parent.children].reverse());
+      ctx.setProperty(parent, "children", parent.children.toReversed());
     },
     text(node, ctx) {
       ctx.setProperty(node, "value", node.value.toUpperCase());
@@ -1576,7 +1579,7 @@ test("parent sees the rebuilt tree in a later plugin's pass", () => {
     heading(node, ctx) {
       const parent = ctx.parent(node);
       if (parent === undefined || !("children" in parent)) return;
-      ctx.setProperty(parent, "children", [...parent.children].reverse());
+      ctx.setProperty(parent, "children", parent.children.toReversed());
     },
   });
   const seen: (number | undefined)[] = [];

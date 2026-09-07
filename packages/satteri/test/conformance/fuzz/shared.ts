@@ -1465,7 +1465,8 @@ function diffFingerprint(expected: unknown, actual: unknown, path = ""): string[
 function classifyDiff(expected: unknown, actual: unknown): string {
   const diffs = diffFingerprint(expected, actual);
   const patterns = diffs.map((d) => d.replace(/\[\d+\]/g, "[N]").replace(/\.\d+\./g, ".N."));
-  return patterns.sort().join(" | ");
+  patterns.sort();
+  return patterns.join(" | ");
 }
 
 export function deduplicateIssues(issues: FuzzIssue[]): FuzzIssue[] {

@@ -35,7 +35,7 @@ test.each(["mdast", "hast"] as const)(
     );
     expect(result).toBeInstanceOf(Promise);
     expect(complete).toHaveLength(3);
-    for (const resolve of complete.reverse()) resolve();
+    for (let i = complete.length - 1; i >= 0; i--) complete[i]!();
     expect((await result).html).toBe("<p>ONE</p>\n<p>TWO</p>\n<p>THREE</p>\n");
   },
 );

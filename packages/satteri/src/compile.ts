@@ -204,9 +204,9 @@ export function markdownToHtml(
     try {
       let html: string;
       if (collected.commands.length > 0) {
-        const result = applyCommandsAndRenderHandle(h, collected.commands);
-        warnIfDroppedTransforms(result.droppedTransforms, collected.lastPlugin, "hast");
-        html = result.html;
+        const transformed = applyCommandsAndRenderHandle(h, collected.commands);
+        warnIfDroppedTransforms(transformed.droppedTransforms, collected.lastPlugin, "hast");
+        html = transformed.html;
       } else {
         html = renderHandle(h);
       }
@@ -390,9 +390,9 @@ function toJsImpl(
     try {
       let code: string;
       if (collected.commands.length > 0) {
-        const result = applyCommandsAndCompileHandle(h, collected.commands, mdxOptions);
-        warnIfDroppedTransforms(result.droppedTransforms, collected.lastPlugin, "hast");
-        code = result.code;
+        const transformed = applyCommandsAndCompileHandle(h, collected.commands, mdxOptions);
+        warnIfDroppedTransforms(transformed.droppedTransforms, collected.lastPlugin, "hast");
+        code = transformed.code;
       } else {
         code = compileHandle(h, mdxOptions);
       }

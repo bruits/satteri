@@ -16,6 +16,24 @@ import type { MdastNode } from "../src/types.js";
 import type { Element } from "hast";
 import type { MdxJsxFlowElement, MdxJsxFlowElementData } from "../src/mdx-types.js";
 
+interface TreeLike {
+  type: string;
+  value?: unknown;
+  tagName?: unknown;
+  position?: unknown;
+  children?: readonly TreeLike[];
+}
+
+const hasAnyPosition = (node: TreeLike): boolean =>
+  node.position !== undefined || (node.children ?? []).some(hasAnyPosition);
+
+const shape = (node: TreeLike): unknown => ({
+  type: node.type,
+  value: node.value,
+  tagName: node.tagName,
+  children: (node.children ?? []).map(shape),
+});
+
 describe("frontmatter extraction", () => {
   test("returns null when there is no frontmatter", () => {
     const result = markdownToHtml("# Hello");
@@ -2148,24 +2166,6 @@ describe("position: false", () => {
   const MD = "# Hi\n\nSome *text* with [a link](/u).\n";
   const MDX = '# Hi\n\n<Comp x="1" />\n';
 
-  interface TreeLike {
-    type: string;
-    value?: unknown;
-    tagName?: unknown;
-    position?: unknown;
-    children?: readonly TreeLike[];
-  }
-
-  const hasAnyPosition = (node: TreeLike): boolean =>
-    node.position !== undefined || (node.children ?? []).some(hasAnyPosition);
-
-  const shape = (node: TreeLike): unknown => ({
-    type: node.type,
-    value: node.value,
-    tagName: node.tagName,
-    children: (node.children ?? []).map(shape),
-  });
-
   const cases: ReadonlyArray<readonly [string, () => TreeLike, () => TreeLike]> = [
     ["markdownToMdast", () => markdownToMdast(MD), () => markdownToMdast(MD, { position: false })],
     ["mdxToMdast", () => mdxToMdast(MDX), () => mdxToMdast(MDX, { position: false })],
@@ -2484,9 +2484,8 @@ describe("per-plugin position opt-in", () => {
           link(node, ctx) {
             visits++;
             const { start, end } = node.position!;
-            const expected = ctx.source
-              .split("\n")
-              [start.line - 1]!.slice(start.column - 1, end.column - 1);
+            const line = ctx.source.split("\n")[start.line - 1]!;
+            const expected = line.slice(start.column - 1, end.column - 1);
             expect(ctx.source.slice(start.offset, end.offset)).toBe(expected);
             expect(expected.startsWith("[")).toBe(true);
             expect(expected.endsWith(")")).toBe(true);

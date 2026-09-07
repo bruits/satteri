@@ -1,4 +1,11 @@
-// Dynamic imports defer WASM and Shiki downloads until the demo is near interaction.
+const fmt = (ms: number) => (ms < 1 ? `${(ms * 1000).toFixed(0)}μs` : `${ms.toFixed(2)}ms`);
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+const themeFor = () =>
+  document.documentElement.dataset.theme === "dark" ? "vitesse-dark" : "vitesse-light";
 
 const installButton = document.querySelector<HTMLButtonElement>("#install-copy");
 const installLabel = document.querySelector<HTMLSpanElement>("#install-copy-text");
@@ -61,8 +68,6 @@ if (input && output && stat && status && highlight && highlightCode) {
   highlightCode.textContent = SAMPLE;
   output.innerHTML = `<p class="text-tertiary italic">Loading…</p>`;
 
-  const fmt = (ms: number) => (ms < 1 ? `${(ms * 1000).toFixed(0)}μs` : `${ms.toFixed(2)}ms`);
-
   type Compile = (source: string) => string;
   type Highlighter = (source: string) => string;
   let compile: Compile | null = null;
@@ -70,10 +75,6 @@ if (input && output && stat && status && highlight && highlightCode) {
   let pending: number | null = null;
   let started = false;
   let loadingPromise: Promise<void> | null = null;
-
-  function escapeHtml(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
 
   function applyHighlight() {
     if (!highlightHtml || !input || !highlightCode) return;
@@ -137,6 +138,7 @@ if (input && output && stat && status && highlight && highlightCode) {
     stat.textContent = "loading wasm…";
 
     loadingPromise = (async () => {
+      // Dynamic imports defer WASM and Shiki downloads until the demo is near interaction.
       const [satteri, shikiCore, jsEngine, langMarkdown, themeLight, themeDark] = await Promise.all(
         [
           import("satteri"),
@@ -153,9 +155,6 @@ if (input && output && stat && status && highlight && highlightCode) {
         langs: [langMarkdown.default],
         engine: jsEngine.createJavaScriptRegexEngine(),
       });
-
-      const themeFor = () =>
-        document.documentElement.dataset.theme === "dark" ? "vitesse-dark" : "vitesse-light";
 
       highlightHtml = (source: string) => {
         const tokens = highlighter.codeToTokensBase(source, {

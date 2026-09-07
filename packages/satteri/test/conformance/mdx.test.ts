@@ -11,6 +11,9 @@ import { mdxToJs, mdxToMdast, defineMdastPlugin, defineHastPlugin } from "../../
 import type { Element } from "hast";
 import type { MdxJsxFlowElement, MdxJsxFlowElementData } from "../../src/mdx-types.js";
 
+const Pass = (props: any) => props.children;
+
+const EmptyComponent = () => null;
 const Foo = (props: any) => createElement("div", null, `bar=${props.bar}`);
 const Bar = (props: any) => createElement("em", null, `baz=${props.baz}`);
 const Box = (props: any) => createElement("section", null, props.children);
@@ -133,14 +136,12 @@ describe("MDX conformance: JSX", () => {
   });
 
   test("JSX attribute name starting with `$`", async () => {
-    const z = () => null;
-    await assertMdxConformance(" <z $/>x", { z });
-    await assertMdxConformance(" <z\n$/>x", { z });
+    await assertMdxConformance(" <z $/>x", { z: EmptyComponent });
+    await assertMdxConformance(" <z\n$/>x", { z: EmptyComponent });
   });
 
   test("JSX attribute name with Unicode identifier", async () => {
-    const z = () => null;
-    await assertMdxConformance("<z café/>", { z });
+    await assertMdxConformance("<z café/>", { z: EmptyComponent });
   });
 
   test("spread with object literal", async () => {
@@ -252,7 +253,6 @@ describe("MDX conformance: unicode", () => {
   });
 
   test("JSX with unicode content in blockquote", async () => {
-    const Box = (props: any) => createElement("section", null, props.children);
     await assertMdxConformance("> <Box>café</Box>", { Box });
   });
 });
@@ -479,7 +479,6 @@ describe("MDX conformance: attribute values", () => {
   // Keep the space between text nodes so HTML normalization cannot erase it.
   test("significant whitespace between JSX elements in attribute expression", async () => {
     const Slot = (props: any) => createElement("div", null, props.d);
-    const Pass = (props: any) => props.children;
     await assertMdxConformance("<Slot d={<><x>a</x> <y>b</y></>} />", { Slot, x: Pass, y: Pass });
     await assertMdxConformance("<Slot d={<>a<em> </em>b</>} />", { Slot, em: Pass });
   });
@@ -980,8 +979,7 @@ describe("MDX conformance: syntax edge cases", () => {
   });
 
   test("self-closing JSX `<x/\\n>` followed by trailing content", async () => {
-    const _ = () => null;
-    await assertMdxConformance("<_/\n>>", { _ });
+    await assertMdxConformance("<_/\n>>", { _: EmptyComponent });
   });
 
   test("text-position expression dedents trailing tab before close", async () => {

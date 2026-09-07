@@ -31,7 +31,7 @@ async function runTransform(
     fn = t.handler as unknown as (src: string, id: string) => unknown;
   }
   if (!fn) return null;
-  const result = await fn.call(undefined, source, id);
+  const result = await fn(source, id);
   return result as { code: string; map: null } | null;
 }
 

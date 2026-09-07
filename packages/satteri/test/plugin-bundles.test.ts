@@ -8,6 +8,11 @@ import {
 } from "../src/index.js";
 import type { MarkdownToHtmlResult, MdastPluginEntry } from "../src/index.js";
 
+const cyclic = (): unknown[] => [cyclic];
+
+const nest = (depth: number, plugin: MdastPluginEntry): MdastPluginEntry =>
+  depth === 0 ? plugin : () => nest(depth - 1, plugin);
+
 function recordMdast(order: string[], name: string) {
   return defineMdastPlugin({
     name,
@@ -213,8 +218,6 @@ describe("nested plugin lists", () => {
   });
 
   test("a factory that returns itself is rejected, naming the option", () => {
-    const cyclic = (): unknown[] => [cyclic];
-
     expect(() => markdownToHtml("# T", { mdastPlugins: [cyclic as never] })).toThrowError(
       /^mdastPlugins: plugin factory nesting is too deep/,
     );
@@ -225,8 +228,6 @@ describe("nested plugin lists", () => {
 
   test("factories nest ten deep, and the eleventh is rejected", () => {
     const order: string[] = [];
-    const nest = (depth: number, plugin: MdastPluginEntry): MdastPluginEntry =>
-      depth === 0 ? plugin : () => nest(depth - 1, plugin);
 
     markdownToHtml("# T", { mdastPlugins: [nest(10, recordMdast(order, "deep"))] });
     expect(order).toEqual(["deep"]);

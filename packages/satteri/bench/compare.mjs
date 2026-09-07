@@ -12,7 +12,6 @@ const ITERATIONS = 2000;
 const WARMUP = 200;
 
 async function bench(name, fn) {
-  // warmup
   for (let i = 0; i < WARMUP; i++) await fn();
 
   const start = performance.now();

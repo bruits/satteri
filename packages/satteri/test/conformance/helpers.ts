@@ -29,6 +29,17 @@ import rehypeStringify from "rehype-stringify";
 import type { Nodes } from "hast";
 import { expect } from "vitest";
 
+const positions = (code: string): string[] =>
+  [...code.matchAll(/lineNumber: (\d+),\s*columnNumber: (\d+)/g)].map(
+    (match) => `${match[1]}:${match[2]}`,
+  );
+
+// The two pipelines emit reference guards in different orders.
+const missingRefPlaces = (code: string): string[] =>
+  [...code.matchAll(/_missingMdxReference\("[^"]*", \w+, "([^"]*)"\)/g)]
+    .map((match) => match[1]!)
+    .sort();
+
 const mdxRuntime = runtime as unknown as Pick<MdxEvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 const satteriRuntime = runtime as unknown as Pick<EvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 
@@ -799,12 +810,14 @@ function moduleEnvelope(code: string): ModuleEnvelope {
           .map((name) => name.trim().replace(/\s+/g, " "))
           .filter(Boolean),
       );
-    imports.push(`${match[3]}: ${names.sort().join(", ")}`);
+    names.sort();
+    imports.push(`${match[3]}: ${names.join(", ")}`);
   }
+  imports.sort();
   const defaultExport = /export default (?:function\s+)?([\w$]+)/.exec(code);
   return {
     pragmas: [...code.matchAll(/\/\*(@jsx[A-Za-z]*\s[^*]*)\*\//g)].map((match) => match[1]!.trim()),
-    imports: imports.sort(),
+    imports,
     defaultExport: defaultExport ? defaultExport[1]! : null,
     markers: ENVELOPE_MARKERS.filter((marker) =>
       new RegExp(`${marker.replaceAll(".", "\\.")}\\b`).test(code),
@@ -837,11 +850,6 @@ export async function assertMarkdownJsModuleConformance(
 }
 
 export async function assertMarkdownJsDevPositionConformance(input: string): Promise<void> {
-  const positions = (code: string): string[] =>
-    [...code.matchAll(/lineNumber: (\d+),\s*columnNumber: (\d+)/g)].map(
-      (match) => `${match[1]}:${match[2]}`,
-    );
-
   const expected = positions(
     String(
       await mdxCompile(input, {
@@ -860,16 +868,6 @@ export async function assertMarkdownJsDevPositionConformance(input: string): Pro
 }
 
 export async function assertMdxDevPositionConformance(input: string): Promise<void> {
-  const positions = (code: string): string[] =>
-    [...code.matchAll(/lineNumber: (\d+),\s*columnNumber: (\d+)/g)].map(
-      (match) => `${match[1]}:${match[2]}`,
-    );
-  // Sorted: the two pipelines emit the reference guards in different orders.
-  const missingRefPlaces = (code: string): string[] =>
-    [...code.matchAll(/_missingMdxReference\("[^"]*", \w+, "([^"]*)"\)/g)]
-      .map((match) => match[1]!)
-      .sort();
-
   const expected = String(await mdxCompile(input, { development: true }));
   const { code } = mdxToJs(input, { development: true });
 

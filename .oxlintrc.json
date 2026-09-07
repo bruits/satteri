@@ -1,5 +1,12 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "perf": "error",
+    "suspicious": "error"
+  },
+  "rules": {
+    "no-await-in-loop": "off"
+  },
   "ignorePatterns": [
     "target",
     "crates/**/*",
