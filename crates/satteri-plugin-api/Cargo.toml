@@ -1,6 +1,6 @@
 [package]
 name = "satteri-plugin-api"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 description = "Rust plugin trait, typed visitors, and runner for Sätteri"
 license = "MIT"

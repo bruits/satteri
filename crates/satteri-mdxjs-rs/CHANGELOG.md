@@ -1,5 +1,13 @@
 # satteri-mdxjs
 
+## 0.3.14 — 2026-09-07
+
+### Patch changes
+
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed SVG script and style text being corrupted and elements with HTML void-element names losing children or absorbing siblings during HTML serialization and rawHtml reparsing. HTML content inside SVG integration points keeps its normal serialization rules, including with optimizeStatic. — Thanks @gtritchie!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Fixed list-valued properties on HAST elements: numeric items (like `coords`) no longer disappear, lists are separated by comma or space according to the schema of the element they sit in, and a comma-separated attribute parsed from HTML round-trips unchanged. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.2, satteri-ast (Cargo)@0.5.4, satteri-pulldown-cmark (Cargo)@0.6.4
+
 ## 0.3.13 — 2026-08-19
 
 ### Patch changes

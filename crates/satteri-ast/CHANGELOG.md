@@ -1,5 +1,18 @@
 # satteri-ast
 
+## 0.5.4 — 2026-09-07
+
+### Patch changes
+
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed SVG script and style text being corrupted and elements with HTML void-element names losing children or absorbing siblings during HTML serialization and rawHtml reparsing. HTML content inside SVG integration points keeps its normal serialization rules, including with optimizeStatic. — Thanks @gtritchie!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made parsing, HTML rendering, and tree building faster, by 3% to 35% depending on the document and output, with the largest gains on small documents. — Thanks @Princesseuh!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Fixed list-valued properties on HAST elements: numeric items (like `coords`) no longer disappear, lists are separated by comma or space according to the schema of the element they sit in, and a comma-separated attribute parsed from HTML round-trips unchanged. — Thanks @Princesseuh!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Added `hastToHtml`, which serializes a HAST tree, a single node, or a list of nodes back to an HTML string, the reverse of `htmlToHast`. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `markdownToMdast`, `markdownToHast`, and the MDX tree functions faster and less memory-hungry, with the largest gains on text-heavy and non-ASCII documents. — Thanks @Princesseuh!
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed `rawHtml` losing the SVG attribute schema for raw HTML inside a JSX `<svg>` element, so `fill-rule` now maps to `fillRule` instead of passing through as an unknown property. — Thanks @gtritchie!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Fixed text inside an element nested in `<script>` or `<style>` rendering unescaped; only text directly inside those elements is left as-is. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.2
+
 ## 0.5.3 — 2026-08-19
 
 ### Patch changes
