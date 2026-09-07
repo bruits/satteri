@@ -1,5 +1,12 @@
 # vite-plugin-satteri
 
+## 0.3.6 — 2026-09-07
+
+### Patch changes
+
+- [b2e7533](https://github.com/bruits/satteri/commit/b2e7533b3e29ed98d5004f844ca9c2e155ee7c40) Fixed forwarding of the MDX elementAttributeNameCase and stylePropertyNameCase options in the Vite plugin. — Thanks @Princesseuh!
+- Updated dependencies: satteri (npm)@0.10.6
+
 ## 0.3.5 — 2026-08-19
 
 ### Patch changes

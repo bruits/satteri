@@ -1,5 +1,13 @@
 # satteri-napi
 
+## 0.5.5 — 2026-09-07
+
+### Patch changes
+
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed SVG script and style text being corrupted and elements with HTML void-element names losing children or absorbing siblings during HTML serialization and rawHtml reparsing. HTML content inside SVG integration points keeps its normal serialization rules, including with optimizeStatic. — Thanks @gtritchie!
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed `rawHtml` losing the SVG attribute schema for raw HTML inside a JSX `<svg>` element, so `fill-rule` now maps to `fillRule` instead of passing through as an unknown property. — Thanks @gtritchie!
+- Updated dependencies: satteri-arena (Cargo)@0.3.2, satteri-ast (Cargo)@0.5.4, satteri-mdxjs (Cargo)@0.3.14, satteri-plugin-api (Cargo)@0.5.4, satteri-pulldown-cmark (Cargo)@0.6.4
+
 ## 0.5.4 — 2026-08-19
 
 ### Patch changes

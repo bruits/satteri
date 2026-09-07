@@ -1,5 +1,12 @@
 # satteri-plugin-api
 
+## 0.5.4 — 2026-09-07
+
+### Patch changes
+
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Added `hastToHtml`, which serializes a HAST tree, a single node, or a list of nodes back to an HTML string, the reverse of `htmlToHast`. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.3.2, satteri-ast (Cargo)@0.5.4
+
 ## 0.5.3 — 2026-08-19
 
 ### Patch changes
