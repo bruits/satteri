@@ -139,6 +139,7 @@ module.exports.parseHastWire = __napiModule.exports.parseHastWire
 module.exports.parseMdastWire = __napiModule.exports.parseMdastWire
 module.exports.parseToHtml = __napiModule.exports.parseToHtml
 module.exports.renderHandle = __napiModule.exports.renderHandle
+module.exports.renderHastOpstream = __napiModule.exports.renderHastOpstream
 module.exports.serializeHandle = __napiModule.exports.serializeHandle
 module.exports.setNodeData = __napiModule.exports.setNodeData
 module.exports.textContentHandle = __napiModule.exports.textContentHandle

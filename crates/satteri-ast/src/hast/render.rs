@@ -1,16 +1,19 @@
 //! Render a HAST arena to an HTML string.
 
+use std::borrow::Cow;
+
 use satteri_arena::{Arena, Hast};
+use satteri_property_info::{PropKind, find_property};
 
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
 };
 use crate::hast::escape::{escape_html_attr_value, escape_html_body_text};
-use crate::hast::properties::property_to_attribute;
+use crate::hast::properties::{property_to_attribute, trim_js_whitespace};
 use crate::hast::{HastNodeType, is_svg_html_integration_point};
 use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
-    PROP_STRING,
+    PROP_STRING, PROP_TOKEN_LIST,
 };
 
 /// Render HTML from an arena.
@@ -25,9 +28,8 @@ pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
 
 /// Render a HAST node subtree to HTML.
 ///
-/// `in_raw_text` indicates the node is being rendered inside a raw-text element
-/// (HTML `<script>` / `<style>`). Descendant text of these elements is not
-/// entity-escaped; SVG script/style text is escaped.
+/// `in_raw_text` indicates the node's direct parent is an HTML raw-text element.
+/// Its text is not entity-escaped; SVG script/style text is escaped.
 ///
 /// `in_svg` selects the SVG attribute schema. Set on entry to `<svg>` and
 /// sticky for all descendants — `<foreignObject>` does NOT switch back, matching
@@ -68,7 +70,7 @@ impl RenderOptions {
     pub fn for_children(self, tag: &str) -> Self {
         let element_in_svg = self.svg_content || tag == "svg";
         Self {
-            in_raw_text: self.in_raw_text || (!element_in_svg && is_raw_text_element(tag)),
+            in_raw_text: !element_in_svg && is_raw_text_element(tag),
             svg_schema: self.svg_schema || tag == "svg",
             svg_content: element_in_svg && !is_svg_html_integration_point(tag),
         }
@@ -170,12 +172,11 @@ fn render_node_at<'cb>(
                     PROP_BOOL_FALSE => {}
                     PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP
                     | PROP_COMMA_SEP_NUM => {
-                        let value = view.get_str(value_ref);
-                        out.push(' ');
-                        out.push_str(&attr_name);
-                        out.push_str("=\"");
-                        escape_html_attr_value(out, value);
-                        out.push('"');
+                        render_attribute(out, &attr_name, view.get_str(value_ref));
+                    }
+                    PROP_TOKEN_LIST => {
+                        let value = join_token_list(name, svg_schema, view.get_str(value_ref));
+                        render_attribute(out, &attr_name, &value);
                     }
                     _ => {}
                 }
@@ -249,6 +250,69 @@ fn render_node_at<'cb>(
             }
         }
     }
+}
+
+fn render_attribute(out: &mut String, name: &str, value: &str) {
+    out.push(' ');
+    out.push_str(name);
+    out.push_str("=\"");
+    escape_html_attr_value(out, value);
+    out.push('"');
+}
+
+/// Split `encodeTokenList`'s typed, NUL-terminated tokens after the padding flag.
+fn token_list_items(tokens: &str) -> impl Iterator<Item = Cow<'_, str>> {
+    let body = tokens
+        .get(1..)
+        .map(|body| body.strip_suffix('\0').unwrap_or(body));
+    body.into_iter()
+        .flat_map(|b| b.split('\0'))
+        .filter_map(|token| token.strip_prefix('s').or_else(|| token.strip_prefix('n')))
+        .map(unescape_token)
+}
+
+/// Undo `encodeTokenList`'s escaping: U+0001 hides a token's own NUL from the
+/// separator, as `\u{1}0`, and itself as `\u{1}1`.
+fn unescape_token(token: &str) -> Cow<'_, str> {
+    if !token.contains('\u{1}') {
+        return Cow::Borrowed(token);
+    }
+    let mut out = String::with_capacity(token.len());
+    let mut chars = token.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('0') => out.push('\0'),
+            Some('1') => out.push('\u{1}'),
+            Some(other) => {
+                out.push(c);
+                out.push(other);
+            }
+            None => out.push(c),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Join a JS-built list property, whose tokens ride the wire unjoined because
+/// only the render knows the element's schema: `coords` is comma-separated in
+/// HTML and plain in SVG, `glyphName` the reverse. Mirrors
+/// `comma-separated-tokens` and `space-separated-tokens`; comma padding is
+/// recorded separately so it never leaks into properties read by plugins.
+pub fn join_token_list(name: &str, in_svg: bool, tokens: &str) -> String {
+    let mut items: Vec<Cow<'_, str>> = token_list_items(tokens).collect();
+    let comma_separated = matches!(
+        find_property(name, in_svg).1,
+        PropKind::CommaSeparated | PropKind::NumberCommaSeparated
+    );
+    if comma_separated && tokens.starts_with('1') {
+        items.push(Cow::Borrowed(""));
+    }
+    let joined = items.join(if comma_separated { ", " } else { " " });
+    trim_js_whitespace(&joined).to_string()
 }
 
 /// Void elements render as a single tag; any children never reach the output.

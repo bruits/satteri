@@ -20,7 +20,8 @@ pub use from_html::{
 };
 pub use node::HastNodeType;
 pub use render::{
-    RenderOptions, hast_arena_to_html, is_void_element, render_node, render_node_with_options,
+    RenderOptions, hast_arena_to_html, is_void_element, join_token_list, render_node,
+    render_node_with_options,
 };
 
 /// SVG elements whose children are parsed as HTML.

@@ -20,6 +20,7 @@ use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
     encode_element_data,
 };
+use crate::hast::properties::trim_js_whitespace;
 use crate::hast::render::{RenderOptions, is_void_element, render_node_inner};
 use crate::hast::{HastNodeType, is_svg_html_integration_point};
 #[cfg(feature = "mdx")]
@@ -740,11 +741,11 @@ fn coerce_value(
             (PROP_SPACE_SEP, builder.alloc_string(&joined))
         }
         PropKind::CommaSeparated => {
-            let joined = split_comma(value).join(",");
+            let joined = join_comma(split_comma(value));
             (PROP_COMMA_SEP, builder.alloc_string(&joined))
         }
         PropKind::NumberCommaSeparated => {
-            let joined = split_comma(value).join(",");
+            let joined = join_comma(split_comma(value));
             (PROP_COMMA_SEP_NUM, builder.alloc_string(&joined))
         }
         PropKind::CommaOrSpaceSeparated => {
@@ -760,11 +761,22 @@ fn coerce_value(
     }
 }
 
+/// Join comma-separated items the way the value serializes: `", "` between
+/// items, and a list ending in an empty item gets another so `split_comma`
+/// reads back the same list instead of dropping it as the trailing empty.
+fn join_comma(items: Vec<&str>) -> String {
+    let mut items = items;
+    if items.last() == Some(&"") {
+        items.push("");
+    }
+    trim_js_whitespace(&items.join(", ")).to_string()
+}
+
 /// Split a comma-separated value: items are trimmed, interior empty items are
 /// kept, and only a trailing empty item is dropped (`"a,,b"` → `["a","","b"]`,
 /// `"a,"` → `["a"]`).
 fn split_comma(value: &str) -> Vec<&str> {
-    let mut items: Vec<&str> = value.split(',').map(str::trim).collect();
+    let mut items: Vec<&str> = value.split(',').map(trim_js_whitespace).collect();
     if items.last() == Some(&"") {
         items.pop();
     }

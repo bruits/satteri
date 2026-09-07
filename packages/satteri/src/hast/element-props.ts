@@ -6,9 +6,58 @@ import {
   PROP_COMMA_SEP,
   PROP_COMMA_SEP_NUM,
   PROP_INT,
+  PROP_TOKEN_LIST,
 } from "../generated/wire-constants.js";
 
 export type HastPropertyValue = string | number | boolean | (string | number)[];
+
+/** Encode an array property value as `PROP_TOKEN_LIST`: whether it serializes
+ *  comma- or space-separated depends on the element's schema, which is only
+ *  known at render (a subtree may still be detached here). A leading `1`/`0`
+ *  records whether comma joining needs trailing padding. Each NUL-terminated
+ *  token starts with `n` (number) or `s` (string), preserving numeric items
+ *  when a later plugin reads the property.
+ *
+ *  A list *ending* in an empty string gets another appended, mirroring
+ *  `comma-separated-tokens`, which pads so the value parses back to the same
+ *  list. Only `""` pads: `null` joins to the same empty token but does not.
+ *  Keep padding separate from the items so materializing and re-encoding
+ *  a property never adds phantom tokens. */
+export function encodeTokenList(items: readonly unknown[]): string {
+  if (items.length === 0) return "";
+  let tokens = items[items.length - 1] === "" ? "1" : "0";
+  for (const item of items) tokens += `${tokenToWire(item)}\0`;
+  return tokens;
+}
+
+/** U+0001 introduces an escape so a token carrying a NUL of its own does not
+ *  read as two tokens: `\u00010` is a NUL, `\u00011` the escape itself. */
+const ESCAPE = "\u0001";
+// eslint-disable-next-line no-control-regex -- U+0001 introduces the wire protocol's escape sequences.
+const TOKEN_ESCAPE = /\u0001([01])/g;
+
+/** `join` renders null and undefined as an empty token; keep that. */
+function tokenToWire(item: unknown): string {
+  const token = item === null || item === undefined ? "" : String(item);
+  const escaped =
+    token.includes("\0") || token.includes(ESCAPE)
+      ? token.replaceAll(ESCAPE, `${ESCAPE}1`).replaceAll("\0", `${ESCAPE}0`)
+      : token;
+  return `${typeof item === "number" ? "n" : "s"}${escaped}`;
+}
+
+function decodeTokenList(value: string): (string | number)[] {
+  if (value === "") return [];
+  const body = value.slice(1);
+  const tokens = (body.endsWith("\0") ? body.slice(0, -1) : body).split("\0");
+  return tokens.map((entry) => {
+    const token = entry.slice(1);
+    if (entry[0] === "n") return Number(token);
+    return token.includes(ESCAPE)
+      ? token.replace(TOKEN_ESCAPE, (_, digit: string) => (digit === "0" ? "\0" : ESCAPE))
+      : token;
+  });
+}
 
 export function decodeElementProp(kind: number, value: string): HastPropertyValue {
   switch (kind) {
@@ -28,6 +77,8 @@ export function decodeElementProp(kind: number, value: string): HastPropertyValu
       if (items[items.length - 1] === "") items.pop();
       return items.map((s) => (s !== "" && !Number.isNaN(Number(s)) ? Number(s) : s));
     }
+    case PROP_TOKEN_LIST:
+      return decodeTokenList(value);
     case PROP_INT:
       return Number(value);
     default:

@@ -1323,6 +1323,11 @@ pub const PROP_KINDS: WireTable = WireTable {
             7,
             "comma-separated list, numeric items parsed to numbers",
         ),
+        wc(
+            "PROP_TOKEN_LIST",
+            8,
+            "typed, escaped NUL-terminated tokens with a comma-padding flag; joined by schema",
+        ),
     ],
 };
 

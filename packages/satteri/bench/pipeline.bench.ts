@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 import {
   markdownToHtml,
   mdxToJs,
@@ -7,6 +7,7 @@ import {
   mdxToMdast,
   markdownToHast,
   mdxToHast,
+  hastToHtml,
   defineHastPlugin,
   defineMdastPlugin,
 } from "../src/index.js";
@@ -251,5 +252,29 @@ describe("markdownToHast", () => {
 describe("mdxToHast", () => {
   bench("mdx", () => {
     walk(mdxToHast(MDX));
+  });
+});
+
+describe("hastToHtml", () => {
+  let HAST: HastNode;
+  let HAST_LISTS: HastNode;
+  beforeAll(() => {
+    HAST = markdownToHast(MARKDOWN);
+    HAST_LISTS = {
+      type: "root",
+      children: Array.from({ length: 100 }, (_, index) => ({
+        type: "element",
+        tagName: "area",
+        properties: { coords: [index, index + 1, index + 2], className: ["region", "active"] },
+        children: [],
+      })),
+    };
+  });
+  bench("materialized markdown tree", () => {
+    hastToHtml(HAST);
+  });
+
+  bench("list properties", () => {
+    hastToHtml(HAST_LISTS);
   });
 });

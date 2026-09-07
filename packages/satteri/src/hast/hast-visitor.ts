@@ -11,6 +11,7 @@ import type {
 import {
   acquireCommandBuffer,
   CommandBuffer,
+  releaseCommandBuffer,
   STRUCTURAL_CMD,
   type StructuralOp,
 } from "../command-buffer.js";
@@ -32,12 +33,13 @@ import {
   PROP_BOOL_FALSE,
   PROP_BOOL_TRUE,
   PROP_INT,
-  PROP_SPACE_SEP,
+  PROP_TOKEN_LIST,
   PROP_STRING,
 } from "../op-stream.js";
 import type { Data, HastRaw, MdxJsxAttributeUnion, SourceFormat } from "../types.js";
 import { HAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
 import { type HastNode } from "./hast-materializer.js";
+import { encodeTokenList } from "./element-props.js";
 import {
   HAST_ELEMENT,
   HAST_MDX_JSX_ELEMENT,
@@ -240,6 +242,37 @@ function emitHastRootReplace(buffer: CommandBuffer, root: HastContent, refs: Nod
   if (!ok) throw unencodableContentError(root);
 }
 
+/** A document is encoded standalone, so no node can be a ref into a tree. */
+const NO_REFS: NodeRefs = new WeakMap();
+
+const HAST_DOCTYPE = NAME_TO_TYPE.doctype;
+
+/**
+ * Encode a standalone HAST tree as an op-stream document: one `root` wrapping
+ * `nodes`, which Rust replays into an arena of its own and serializes. The
+ * bytes are handed to `use` because they are a view into a pooled buffer,
+ * valid only until it is released.
+ */
+export function encodeHastDocument<T>(nodes: readonly HastNode[], use: (ops: Uint8Array) => T): T {
+  const w = acquireCommandBuffer();
+  try {
+    w.open(HAST_ROOT);
+    for (const node of nodes) {
+      // Carries no fields, and patch content has nothing to attach it to.
+      if (node.type === "doctype" && HAST_DOCTYPE !== undefined) {
+        w.open(HAST_DOCTYPE);
+        w.close();
+        continue;
+      }
+      if (!emitHastOp(w, node, false, NO_REFS, true)) throw unencodableContentError(node);
+    }
+    w.close();
+    return use(w.getBuffer());
+  } finally {
+    releaseCommandBuffer(w);
+  }
+}
+
 function emitHastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs): boolean {
   w.open(HAST_ROOT);
   if (n.data != null) w.data(n.data);
@@ -251,7 +284,13 @@ function emitHastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs)
   return true;
 }
 
-function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, refs: NodeRefs): boolean {
+function emitHastOp(
+  w: OpWriter,
+  node: unknown,
+  isRoot: boolean,
+  refs: NodeRefs,
+  document = false,
+): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
     const id = hastReusedId(node, refs);
@@ -263,6 +302,8 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, refs: NodeRefs)
   const n = node as Record<string, unknown>;
   const type = HAST_OPSTREAM_TYPES[n.type as string];
   if (type === undefined) return false;
+  // Standalone HTML serialization does not need MDX support or JSON-serializable metadata.
+  if (document && (n.type as string).startsWith("mdx")) return true;
   w.open(type);
   if (type === HAST_ELEMENT) {
     w.str(OF_TAGNAME, typeof n.tagName === "string" ? n.tagName : "div");
@@ -285,10 +326,10 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, refs: NodeRefs)
   } else {
     w.str(OF_VALUE, typeof n.value === "string" ? n.value : "");
   }
-  if (n.data != null) w.data(n.data);
+  if (!document && n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false, refs)) return false;
+    for (const c of children) if (!emitHastOp(w, c, false, refs, document)) return false;
   }
   w.close();
   return true;
@@ -298,9 +339,10 @@ function emitHastProp(w: OpWriter, name: string, value: unknown): void {
   if (value === true) w.prop(name, PROP_BOOL_TRUE, "");
   else if (value === false) w.prop(name, PROP_BOOL_FALSE, "");
   else if (typeof value === "string") w.prop(name, PROP_STRING, value);
-  else if (typeof value === "number") w.prop(name, PROP_INT, String(value));
-  else if (Array.isArray(value))
-    w.prop(name, PROP_SPACE_SEP, value.filter((v) => typeof v === "string").join(" "));
+  // A NaN property is dropped, not rendered as `"NaN"`, matching hast.
+  else if (typeof value === "number") {
+    if (!Number.isNaN(value)) w.prop(name, PROP_INT, String(value));
+  } else if (Array.isArray(value)) w.prop(name, PROP_TOKEN_LIST, encodeTokenList(value));
 }
 
 class HastVisitorContextImpl implements HastVisitorContext {
@@ -442,6 +484,17 @@ class HastVisitorContextImpl implements HastVisitorContext {
       this.#commandBuffer.setProperty(id, key, value != null ? JSON.stringify(value) : null);
       return;
     }
+    if (node.type === "element") {
+      if (Array.isArray(value)) {
+        this.#commandBuffer.setTokenListProperty(id, key, encodeTokenList(value));
+      } else {
+        // NaN drops the attribute, as it does on a built element.
+        const dropped = typeof value === "number" && Number.isNaN(value);
+        this.#commandBuffer.setProperty(id, key, dropped ? null : value);
+      }
+      return;
+    }
+
     if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
       // Fold attributes into queued replacements so the rebuild cannot overwrite later setProperty calls.
       const pending = this.#pendingNodes.get(id) as
