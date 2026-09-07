@@ -12,7 +12,7 @@ import {
 } from "../src/index.js";
 import type { MarkdownToJsOptions } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
-import type { MdastNode } from "../src/types.js";
+import type { Custom, MdastNode } from "../src/types.js";
 import type { Element } from "hast";
 import type { MdxJsxFlowElement, MdxJsxFlowElementData } from "../src/mdx-types.js";
 
@@ -1367,6 +1367,151 @@ describe("mdxToJs", () => {
     expect(js).toContain('"data-foo": "bar"');
     expect(js).toContain('strokeWidth: "1"');
   });
+
+  test("rawHtml keeps the SVG schema for raw HTML inside a JSX <svg> (#249)", () => {
+    // An `html` node is the only way raw HTML reaches the MDX path: `{ raw }`
+    // is parsed as MDX, where `<path .../>` would already be JSX.
+    const inject = defineMdastPlugin({
+      name: "inject-html-path",
+      paragraph() {
+        return {
+          type: "html" as const,
+          value: '<path fill-rule="evenodd" stroke-width="2"/>',
+        } as MdastNode;
+      },
+    });
+    const { code: js } = mdxToJs('<svg viewBox="0 0 10 10">\n\ntext\n\n</svg>\n', {
+      mdastPlugins: [inject],
+      features: { rawHtml: true },
+    });
+    // The raw <path> reparses in the SVG namespace, so its attributes map to
+    // the canonical SVG property names instead of passing through unknown.
+    expect(js).toContain('fillRule: "evenodd"');
+    expect(js).toContain('strokeWidth: "2"');
+    expect(js).not.toContain("fill-rule");
+  });
+
+  test.each([
+    ["script", 'if (a<b && c) { const label = "&copy;"; }'],
+    ["style", 'a::before { content: "<b>&copy;"; }'],
+  ])("rawHtml preserves plugin-created %s text inside JSX svg", (tag, value) => {
+    const inject = defineMdastPlugin({
+      name: "inject-svg-text",
+      paragraph(): MdastNode {
+        return {
+          type: "paragraph",
+          data: { hName: tag },
+          children: [{ type: "text", value }],
+        };
+      },
+    });
+    const tree = mdxToHast("<svg>\n\ntext\n\n</svg>", {
+      mdastPlugins: [inject],
+      features: { rawHtml: true },
+      position: false,
+    });
+    expect(tree.type).toBe("root");
+    if (tree.type !== "root") throw new Error("expected a root");
+    expect(tree.children).toEqual([
+      expect.objectContaining({
+        type: "mdxJsxFlowElement",
+        name: "svg",
+        children: [
+          {
+            type: "element",
+            tagName: tag,
+            properties: {},
+            children: [{ type: "text", value }],
+          },
+        ],
+      }),
+    ]);
+  });
+
+  test("rawHtml preserves children and siblings of a plugin-created SVG input", () => {
+    const path: Custom = {
+      type: "custom",
+      data: { hName: "path", hProperties: { fillRule: "evenodd" } },
+      children: [],
+    };
+    const inject = defineMdastPlugin({
+      name: "inject-svg-input",
+      paragraph(node, ctx) {
+        ctx.replaceNode(node, {
+          type: "custom",
+          data: { hName: "g" },
+          children: [{ type: "custom", data: { hName: "input" }, children: [path] }, path],
+        });
+      },
+    });
+    const tree = mdxToHast("<svg>\n\ntext\n\n</svg>", {
+      mdastPlugins: [inject],
+      features: { rawHtml: true },
+      position: false,
+    });
+    const expectedPath = {
+      type: "element",
+      tagName: "path",
+      properties: { fillRule: "evenodd" },
+      children: [],
+    };
+    expect(tree.type).toBe("root");
+    if (tree.type !== "root") throw new Error("expected a root");
+    expect(tree.children).toEqual([
+      expect.objectContaining({
+        type: "mdxJsxFlowElement",
+        name: "svg",
+        children: [
+          {
+            type: "element",
+            tagName: "g",
+            properties: {},
+            children: [
+              { type: "element", tagName: "input", properties: {}, children: [expectedPath] },
+              expectedPath,
+            ],
+          },
+        ],
+      }),
+    ]);
+  });
+
+  test.each(["svg", "foreignObject", "desc", "title"])(
+    "optimizeStatic preserves the content namespace below a dynamic %s",
+    (tag) => {
+      const inject = defineMdastPlugin({
+        name: "inject-html-in-svg",
+        paragraph(node, ctx) {
+          ctx.replaceNode(node, {
+            type: "custom",
+            data: { hName: "g" },
+            children: [
+              { type: "custom", data: { hName: "input" }, children: [] },
+              {
+                type: "custom",
+                data: { hName: "script" },
+                children: [{ type: "text", value: "a<b & &copy;" }],
+              },
+            ],
+          });
+        },
+      });
+      const source =
+        tag === "svg"
+          ? "<svg>{value}\n\ntext\n\n</svg>"
+          : `<svg><${tag}>{value}\n\ntext\n\n</${tag}></svg>`;
+      const { code } = mdxToJs(source, {
+        mdastPlugins: [inject],
+        features: { rawHtml: true },
+        optimizeStatic: { component: "Fragment", prop: "set:html" },
+      });
+      expect(code).toContain(
+        tag === "svg"
+          ? '"set:html": "<g><input></input><script>a&lt;b &amp; &amp;copy;'
+          : '"set:html": "<g><input><script>a<b & &copy;',
+      );
+    },
+  );
 
   test("style attribute parses into an object by default (DOM casing)", () => {
     const { code: js } = mdxToJs("| a | b |\n|:--|--:|\n| c | d |\n", {

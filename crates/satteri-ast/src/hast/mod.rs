@@ -19,7 +19,14 @@ pub use from_html::{
     raw_to_hast_arena,
 };
 pub use node::HastNodeType;
-pub use render::{hast_arena_to_html, is_void_element, render_node};
+pub use render::{
+    RenderOptions, hast_arena_to_html, is_void_element, render_node, render_node_with_options,
+};
+
+/// SVG elements whose children are parsed as HTML.
+pub(crate) fn is_svg_html_integration_point(tag: &str) -> bool {
+    matches!(tag, "foreignObject" | "desc" | "title")
+}
 
 /// Collect concatenated text content from a HAST arena.
 ///
