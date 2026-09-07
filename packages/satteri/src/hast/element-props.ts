@@ -33,6 +33,8 @@ export function encodeTokenList(items: readonly unknown[]): string {
 /** U+0001 introduces an escape so a token carrying a NUL of its own does not
  *  read as two tokens: `\u00010` is a NUL, `\u00011` the escape itself. */
 const ESCAPE = "\u0001";
+// eslint-disable-next-line no-control-regex -- U+0001 introduces the wire protocol's escape sequences.
+const TOKEN_ESCAPE = /\u0001([01])/g;
 
 /** `join` renders null and undefined as an empty token; keep that. */
 function tokenToWire(item: unknown): string {
@@ -52,7 +54,7 @@ function decodeTokenList(value: string): (string | number)[] {
     const token = entry.slice(1);
     if (entry[0] === "n") return Number(token);
     return token.includes(ESCAPE)
-      ? token.replace(/\u0001([01])/g, (_, digit: string) => (digit === "0" ? "\0" : ESCAPE))
+      ? token.replace(TOKEN_ESCAPE, (_, digit: string) => (digit === "0" ? "\0" : ESCAPE))
       : token;
   });
 }

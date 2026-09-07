@@ -25,7 +25,7 @@ const foldEscapes = (html: string): string =>
 // Spread, not `split("")`: a lone surrogate has no UTF-8 form, so the native
 // boundary replaces it and the comparison would fail on the generator's input.
 const TEXT = fc.string({
-  unit: fc.constantFrom(...[...`ab 0<>&"'\`\n\t\\{}émoji🎉`]),
+  unit: fc.constantFrom(...`ab 0<>&"'\`\n\t\\{}émoji🎉`),
   maxLength: 12,
 });
 
