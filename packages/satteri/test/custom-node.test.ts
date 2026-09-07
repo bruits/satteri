@@ -84,7 +84,7 @@ test("custom type round-trips as node.type and content stays visible to other pl
   expect(seenStrong).toBe(true);
 });
 
-test("GFM content survives inside a custom node (the #125 repro, fixed)", () => {
+test("GFM content survives inside a custom node", () => {
   const wrap = defineMdastPlugin({
     name: "wrap-block",
     blockquote(node, ctx) {

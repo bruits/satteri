@@ -43,7 +43,7 @@ describe("MDAST conformance: GFM autolink-literal trim-back split", () => {
   });
 });
 
-describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (#187)", () => {
+describe("MDAST conformance: autolinks in a `](…)` that never becomes a link", () => {
   test("inner shortcut reference deactivates the opener", () => {
     assertExtMdastConformance("[[x]](https://x.y)\n\n[x]: /", []);
   });
@@ -102,7 +102,7 @@ describe("MDAST conformance: autolinks in a `](…)` that never becomes a link (
   });
 });
 
-describe("HTML conformance: literal-autolink trigger inside a pointed autolink (#93)", () => {
+describe("HTML conformance: literal-autolink trigger inside a pointed autolink", () => {
   test("`www.` mid-URL + backslash hard break: clean autolink, `)`, and `<br>`", () => {
     assertHtmlConformance("(<https://www.example.com/page>)\\\nnext line\n");
   });
@@ -128,13 +128,13 @@ describe("HTML conformance: literal-autolink trigger inside a pointed autolink (
   });
 });
 
-describe("MDAST conformance: literal-autolink trigger inside a pointed autolink (#93)", () => {
+describe("MDAST conformance: literal-autolink trigger inside a pointed autolink", () => {
   test("`www.` mid-URL + backslash hard break: single link node, no overlap", () => {
     assertMdastConformance("(<https://www.example.com/page>)\\\nnext line\n");
   });
 });
 
-describe("HTML conformance: literal-autolink trigger inside an inline HTML construct (#93)", () => {
+describe("HTML conformance: literal-autolink trigger inside an inline HTML construct", () => {
   test("`www.` in a tag attribute value + backslash hard break", () => {
     assertHtmlConformance("text <img alt=www.foo.com>\\\nnext line\n");
   });
@@ -190,7 +190,7 @@ describe("HTML conformance: malformed inline links fall back to paragraphs", () 
   });
 });
 
-describe("MDAST conformance: unescaped `(` inside a parenthesized title (#211)", () => {
+describe("MDAST conformance: unescaped `(` inside a parenthesized title", () => {
   test("the reported input is a link with url `*` and title `(`", () => {
     const md = "[a](* (())";
     assertExtMdastConformance(md, []);
@@ -278,7 +278,7 @@ describe("MDAST conformance: edge-case reference parsing", () => {
 });
 
 describe("HTML conformance: GFM autolink literals vs remark-gfm", () => {
-  test("`www.` needs no second dot (micromark GH#279)", () => {
+  test("`www.` needs no second dot", () => {
     assertHtmlConformance("www.localhost\n");
     assertHtmlConformance("http://localhost\n");
     assertHtmlConformance("www.localhost, then more\n");
@@ -326,7 +326,7 @@ describe("HTML conformance: GFM autolink literals vs remark-gfm", () => {
   });
 });
 
-describe("HTML conformance: GFM autolink fuzz regressions", () => {
+describe("HTML conformance: GFM autolink edge cases", () => {
   test("email domain `.` before `-`/`_` is kept by the FNR pipeline", () => {
     assertHtmlConformance("@0@1_-._9a}.\n");
     assertHtmlConformance("a@b._c\n");

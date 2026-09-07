@@ -353,23 +353,23 @@ describe("MDX conformance: ESM", () => {
     await assertMdxConformance("export function greet() { return 'hi' }\n\n{greet()}");
   });
 
-  test("blank line inside template literal in export (#111)", async () => {
+  test("blank line inside template literal in export", async () => {
     await assertMdxConformance("export const code = `first line\n\nsecond line`;\n\n{code}");
   });
 
-  test("blank line between template literals in export (#111)", async () => {
+  test("blank line between template literals in export", async () => {
     await assertMdxConformance("export const x = `a` +\n\n`b`;\n\n{x}");
   });
 
-  test("blank line inside block comment in export (#111)", async () => {
+  test("blank line inside block comment in export", async () => {
     await assertMdxConformance("export const y = 1; /* note\n\nstill note */\n\n{y}");
   });
 
-  test("regex with backtick in export (#111)", async () => {
+  test("regex with backtick in export", async () => {
     await assertMdxConformance("export const re = /a`b/;\n\n{re.source}");
   });
 
-  test("regex with quotes in export (#111)", async () => {
+  test("regex with quotes in export", async () => {
     await assertMdxConformance("export const re = /[\"']/g;\n\n{re.source}");
   });
 
@@ -406,7 +406,7 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance('<Demo code="</Demo>">child</Demo>', { Demo });
   });
 
-  test("self-referential close tag inside template-literal attribute (#74)", async () => {
+  test("self-referential close tag inside template-literal attribute", async () => {
     const CodePreview = (props: any) =>
       createElement("figure", null, createElement("pre", null, props.code), props.children);
     const src = [
@@ -428,7 +428,7 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance(src, { CodePreview });
   });
 
-  test("regex with quotes in attribute expression (#112)", async () => {
+  test("regex with quotes in attribute expression", async () => {
     const LinkedCode = (props: any) => createElement("code", null, String(props.ins[0]));
     const src = [
       "<LinkedCode",
@@ -439,12 +439,12 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance(src, { LinkedCode });
   });
 
-  test("inline regex with quotes in attribute expression (#112)", async () => {
+  test("inline regex with quotes in attribute expression", async () => {
     const Tag = (props: any) => createElement("span", null, String(props.re));
     await assertMdxConformance(`<Tag re={/a="b"/g} />`, { Tag });
   });
 
-  test("different self-closing component inside template-literal attribute (#74)", async () => {
+  test("different self-closing component inside template-literal attribute", async () => {
     const CodePreview = (props: any) =>
       createElement("figure", null, createElement("pre", null, props.code), props.children);
     const CodeBlock = (props: any) => createElement("span", null, String(props.lineStart));
@@ -462,14 +462,14 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance(src, { CodePreview, CodeBlock });
   });
 
-  test("JSX element/fragment/conditional in attribute expression (#119)", async () => {
+  test("JSX element/fragment/conditional in attribute expression", async () => {
     const Slot = (props: any) => createElement("div", null, props.d);
     await assertMdxConformance("<Slot d={<p>hi there</p>} />", { Slot });
     await assertMdxConformance("<Slot d={<>hi</>} />", { Slot });
     await assertMdxConformance("<Slot d={true ? <a>x</a> : <b>y</b>} />", { Slot });
   });
 
-  test("quotes in JSX text inside attribute expression (#119)", async () => {
+  test("quotes in JSX text inside attribute expression", async () => {
     const Slot = (props: any) => createElement("div", null, props.d);
     await assertMdxConformance("<Slot d={<p>a<b>x</b>'s</p>} />", { Slot });
     await assertMdxConformance("<Slot d={<p>Acme Corp.'s view</p>} />", { Slot });
@@ -477,7 +477,7 @@ describe("MDX conformance: attribute values", () => {
   });
 
   // Keep the space between text nodes so HTML normalization cannot erase it.
-  test("significant whitespace between JSX elements in attribute expression (#129)", async () => {
+  test("significant whitespace between JSX elements in attribute expression", async () => {
     const Slot = (props: any) => createElement("div", null, props.d);
     const Pass = (props: any) => props.children;
     await assertMdxConformance("<Slot d={<><x>a</x> <y>b</y></>} />", { Slot, x: Pass, y: Pass });
@@ -808,7 +808,7 @@ describe("MDX conformance: mark-and-unravel", () => {
   });
 });
 
-describe("MDX conformance: fuzz regressions", () => {
+describe("MDX conformance: syntax edge cases", () => {
   test("dollar-prefixed component name does not produce phantom attribute", async () => {
     const $Foo = (props: any) => createElement("span", null, `bar=${props.bar}`);
     await assertMdxConformance("text <$Foo bar={1}/> end", { $Foo });
@@ -990,7 +990,7 @@ describe("MDX conformance: fuzz regressions", () => {
 });
 
 describe("MDX conformance: math interaction", () => {
-  test("braces inside inline math are not an expression (#110)", async () => {
+  test("braces inside inline math are not an expression", async () => {
     await assertMdxMathConformance("$\\frac{-b}{2a}$ and {1 + 1}");
   });
 

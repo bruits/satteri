@@ -100,7 +100,7 @@ const PRECEDING: Array<{ prefix: string; name: string; urls: string[] }> = [
   { prefix: "𠀀", name: "astral Lo letter", urls: [NO, H, E, U, O] },
 ];
 
-describe("family A: the preceding-character classifier", () => {
+describe("the preceding-character classifier", () => {
   test.each(PRECEDING)("$name", ({ prefix, urls }) => {
     for (const [ix, trigger] of A_TRIGGERS.entries()) {
       const md = `${prefix}${trigger}\n`;
@@ -132,7 +132,7 @@ describe("family A: the preceding-character classifier", () => {
   ])("%j", conforms);
 });
 
-describe("family B: trailing punctuation and entities", () => {
+describe("trailing punctuation and entities", () => {
   test.each([
     ["www.example.com\n", ["http://www.example.com"]],
     ["www.example.com.\n", ["http://www.example.com"]],
@@ -205,7 +205,7 @@ describe("family B: trailing punctuation and entities", () => {
   ])("%j", conforms);
 });
 
-describe("family C: the balanced-paren rule", () => {
+describe("the balanced-paren rule", () => {
   test.each([
     ["www.example.com/a(b\n", ["http://www.example.com/a(b"]],
     ["www.example.com/a)b\n", ["http://www.example.com/a)b"]],
@@ -240,7 +240,7 @@ describe("family C: the balanced-paren rule", () => {
   ])("%j", conforms);
 });
 
-describe("family G: unicode in and around the URL", () => {
+describe("unicode in and around the URL", () => {
   test.each([
     ["www.exämple.com\n", ["http://www.exämple.com"]],
     ["www.example.com/ä\n", ["http://www.example.com/ä"]],
@@ -261,7 +261,7 @@ describe("family G: unicode in and around the URL", () => {
   ])("%j", conforms);
 });
 
-describe("family G: underscores in the last two domain labels", () => {
+describe("underscores in the last two domain labels", () => {
   test.each([
     ["www.exa_mple.com\n", []],
     ["www.example_.com\n", []],
@@ -287,7 +287,7 @@ describe("family G: underscores in the last two domain labels", () => {
 });
 
 // GFM §6.9: autolinks (extension).
-describe("family H: GFM §6.9 spec clauses", () => {
+describe("GFM §6.9 spec clauses", () => {
   test.each([
     ["www.commonmark.org\n", ["http://www.commonmark.org"]],
     ["Visit www.commonmark.org/help for more information.\n", ["http://www.commonmark.org/help"]],
@@ -379,7 +379,7 @@ describe("family H: GFM §6.9 spec clauses", () => {
   ])("%j", conforms);
 });
 
-describe("family J: unicode whitespace as terminator and boundary", () => {
+describe("unicode whitespace as terminator and boundary", () => {
   test.each([
     ["user@example.com\u{85}x\n", ["mailto:user@example.com"]],
     ["user@exa\u{85}mple.com\n", []],
@@ -418,7 +418,7 @@ describe("family J: unicode whitespace as terminator and boundary", () => {
   ])("%j", conforms);
 });
 
-describe("family M: email and `www` triggering at the same offset", () => {
+describe("email and `www` triggering at the same offset", () => {
   test.each([
     ["www.x.ya@b.cd\n", ["mailto:www.x.ya@b.cd"]],
     ["www.x.ya@b.cd/p\n", ["mailto:www.x.ya@b.cd"]],
@@ -450,7 +450,7 @@ describe("family M: email and `www` triggering at the same offset", () => {
   ])("%j", conforms);
 });
 
-describe("family N: a www link overlapping an email on the fallback path", () => {
+describe("a www link overlapping an email on the fallback path", () => {
   test.each([
     ["[a user@www.example.org\n", ["http://www.example.org"]],
     ["[a user@www.example.org y\n", ["http://www.example.org"]],

@@ -126,11 +126,11 @@ describe("MDAST conformance: lists", () => {
     assertMdastConformance("*  \n ");
   });
 
-  test("spec 259: nested blockquote ordered list with blank continuation", () => {
+  test("nested blockquote ordered list with blank continuation", () => {
     assertMdastConformance("   > > 1.  one\n>>\n>>     two\n");
   });
 
-  test("spec 325: list item with sublist and trailing content becomes loose", () => {
+  test("list item with sublist and trailing content becomes loose", () => {
     assertMdastConformance("* foo\n  * bar\n\n  baz\n");
   });
 });
@@ -766,7 +766,7 @@ describe("MDAST conformance: multibyte string pool", () => {
   });
 });
 
-describe("MDAST conformance: fuzz regressions", () => {
+describe("MDAST conformance: parsing edge cases", () => {
   test("strikethrough flanking: alnum before, punct after rejects", () => {
     assertMdastConformance("=l0u~~!~~");
   });

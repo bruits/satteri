@@ -1252,7 +1252,7 @@ describe("mdxToJs", () => {
     expect(js).toContain('className: "x"');
   });
 
-  test("elementAttributeNameCase: 'html' converts a nested appended <svg>'s own attributes (#208)", () => {
+  test("elementAttributeNameCase: 'html' converts a nested appended <svg>'s own attributes", () => {
     const plugin = defineHastPlugin({
       name: "svg-append",
       element: {
@@ -1291,7 +1291,7 @@ describe("mdxToJs", () => {
     expect(js).toContain('"fill-rule": "evenodd"');
   });
 
-  test("elementAttributeNameCase: 'html' converts an appended root <svg> and setProperty names alike (#192)", () => {
+  test("elementAttributeNameCase: 'html' converts an appended root <svg> and setProperty names alike", () => {
     const plugin = defineHastPlugin({
       name: "svg-root-and-setprop",
       element: {

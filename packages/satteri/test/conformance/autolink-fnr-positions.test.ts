@@ -60,7 +60,7 @@ function expectReferenceTakesFnr(md: string): void {
 }
 
 describe("find-and-replace autolink positions", () => {
-  test("1. a value identical to its source", () => {
+  test("a value identical to its source", () => {
     const md = "[www.a.com/x";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -70,7 +70,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("2. a match spanning a character reference covers it whole", () => {
+  test("a match spanning a character reference covers it whole", () => {
     const md = "[www.a.com/&amp;b";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -80,7 +80,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("3. a match starting at a character reference starts at the `&`", () => {
+  test("a match starting at a character reference starts at the `&`", () => {
     const md = "[&#104;ttp://x.y";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -90,7 +90,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("3b. a `www` trigger supplied by a character reference", () => {
+  test("a `www` trigger supplied by a character reference", () => {
     const md = "[&#119;ww.x.y";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -100,7 +100,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("3c. an `@` trigger supplied by a character reference", () => {
+  test("an `@` trigger supplied by a character reference", () => {
     const md = "[a&#64;b.com";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -110,7 +110,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("4. a backslash escape inside the match", () => {
+  test("a backslash escape inside the match", () => {
     const md = "[www.x.y/a\\_b";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -120,7 +120,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("5. a table cell maps through pipe unescaping", () => {
+  test("a table cell maps through pipe unescaping", () => {
     const md = "| a |\n| - |\n| [www.x.y\\|z |";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -131,7 +131,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("6. a match on a continuation line reports that line", () => {
+  test("a match on a continuation line reports that line", () => {
     const md = "[a\nwww.x.y";
     expectReferenceTakesFnr(md);
     const link = firstLink(satteriMdast(md));
@@ -141,7 +141,7 @@ describe("find-and-replace autolink positions", () => {
     });
   });
 
-  test("7. a continuation prefix belongs to neither neighbour", () => {
+  test("a continuation prefix belongs to neither neighbour", () => {
     const md = "> [a\n> www.x.y";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -153,7 +153,7 @@ describe("find-and-replace autolink positions", () => {
     expect(link.position!.start).toEqual({ line: 2, column: 3, offset: 7 });
   });
 
-  test("7b. a lone carriage return ends the line the prefix follows", () => {
+  test("a lone carriage return ends the line the prefix follows", () => {
     const md = "> [a\r> www.x.y";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -163,7 +163,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("8. a multi-character reference is included whole or not at all", () => {
+  test("a multi-character reference is included whole or not at all", () => {
     const md = "[www.a.com/&fjlig;b";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -173,7 +173,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("9. the splitUrl trail is its own node, with its own exact span", () => {
+  test("the splitUrl trail is its own node, with its own exact span", () => {
     const md = "[www.x.y&amp;";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -184,7 +184,7 @@ describe("find-and-replace autolink positions", () => {
     ]);
   });
 
-  test("10. offsets are UTF-16 indices at the JS boundary", () => {
+  test("offsets are UTF-16 indices at the JS boundary", () => {
     const md = "你好[www.x.y";
     expectReferenceTakesFnr(md);
     const link = firstLink(satteriMdast(md));
@@ -192,7 +192,7 @@ describe("find-and-replace autolink positions", () => {
     expect(md.slice(link.position!.start.offset, link.position!.end.offset)).toBe("www.x.y");
   });
 
-  test("11. skip-positions mode builds no map and reports nothing", () => {
+  test("skip-positions mode builds no map and reports nothing", () => {
     const md = "[www.a.com&amp;b";
     const handle = createMdastHandle(md, { frontmatter: false, math: false }, false);
     try {

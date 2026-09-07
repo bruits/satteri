@@ -207,7 +207,7 @@ describe("HAST plugins affecting HTML output", () => {
     expect(texts).toContain("world");
   });
 
-  test("appended SVG child converts React-cased properties to kebab-case (#193)", () => {
+  test("appended SVG child converts React-cased properties to kebab-case", () => {
     const plugin = defineHastPlugin({
       name: "svg-append",
       element: {

@@ -9,25 +9,25 @@ import {
 import type { Code } from "mdast";
 
 describe("CommonMark spec deltas: HTML blocks with following content", () => {
-  test("spec 148: HTML block in table cell with following paragraph", () => {
+  test("HTML block in table cell with following paragraph", () => {
     assertHastConformance(
       "<table><tr><td>\n<pre>\n**Hello**,\n\n_world_.\n</pre>\n</td></tr></table>\n",
     );
   });
 
-  test("spec 155: HTML block div with following paragraph", () => {
+  test("HTML block div with following paragraph", () => {
     assertHastConformance("<div>\n*foo*\n\n*bar*\n");
   });
 
-  test("spec 174: HTML block in blockquote with following paragraph", () => {
+  test("HTML block in blockquote with following paragraph", () => {
     assertHastConformance("> <div>\n> foo\n\nbar\n");
   });
 
-  test("spec 177: HTML comment with following content", () => {
+  test("HTML comment with following content", () => {
     assertHastConformance("<!-- foo -->*bar*\n*baz*\n");
   });
 
-  test("spec 191: table with indented content", () => {
+  test("table with indented content", () => {
     assertHastConformance(
       "<table>\n\n  <tr>\n\n    <td>\n      Hi\n    </td>\n\n  </tr>\n\n</table>\n",
     );
@@ -35,73 +35,73 @@ describe("CommonMark spec deltas: HTML blocks with following content", () => {
 });
 
 describe("CommonMark spec deltas: list paragraph wrapping", () => {
-  test("spec 300: heading and setext heading in list", () => {
+  test("heading and setext heading in list", () => {
     assertHastConformance("- # Foo\n- Bar\n  ---\n  baz\n");
   });
 
-  test("spec 321: list item with blockquote and code", () => {
+  test("list item with blockquote and code", () => {
     assertHastConformance("- a\n  > b\n  ```\n  c\n  ```\n- d\n");
   });
 });
 
 describe("CommonMark spec deltas: URL encoding", () => {
-  test("spec 526: autolink with ] in URL", () => {
+  test("autolink with ] in URL", () => {
     assertHastConformance("[foo<https://example.com/?search=](uri)>\n");
   });
 
-  test("spec 538: autolink with ][ in URL", () => {
+  test("autolink with ][ in URL", () => {
     assertHastConformance("[foo<https://example.com/?search=][ref]>\n\n[ref]: /uri\n");
   });
 
-  test("spec 603: autolink with escaped brackets", () => {
+  test("autolink with escaped brackets", () => {
     assertHastConformance("<https://example.com/\\[\\>\n");
   });
 });
 
 describe("CommonMark spec deltas: list spread detection", () => {
-  test("spec 259: nested blockquote ordered list with blank continuation", () => {
+  test("nested blockquote ordered list with blank continuation", () => {
     assertHastConformance("   > > 1.  one\n>>\n>>     two\n");
   });
 
-  test("spec 325: list item with sublist and trailing content becomes loose", () => {
+  test("list item with sublist and trailing content becomes loose", () => {
     assertHastConformance("* foo\n  * bar\n\n  baz\n");
   });
 });
 
 describe("CommonMark spec deltas: HTML block in list item", () => {
-  test("regression 175: code block followed by HTML block in list item", () => {
+  test("code block followed by HTML block in list item", () => {
     assertHastConformance("*\n      <div>\n     <div>\n");
   });
 });
 
 describe("CommonMark spec deltas: image alt text", () => {
-  test("spec 574: nested image in image alt", () => {
+  test("nested image in image alt", () => {
     assertHastConformance("![foo ![bar](/url)](/url2)\n");
   });
 });
 
-describe("CommonMark spec deltas: fuzz-discovered regressions", () => {
-  test("fuzz: GFM table with single-char header row", () => {
+describe("CommonMark spec deltas: parsing edge cases", () => {
+  test("GFM table with single-char header row", () => {
     assertMdastConformance("r\n|-");
   });
 
-  test("fuzz: invalid HTML comment syntax stays as text", () => {
+  test("invalid HTML comment syntax stays as text", () => {
     assertMdastConformance("<!~@7reg>)");
   });
 
-  test("fuzz: GFM table with punctuation-only header", () => {
+  test("GFM table with punctuation-only header", () => {
     assertHastConformance("06*!@)(\n-|");
   });
 
-  test("fuzz: invalid HTML tag syntax stays as paragraph text", () => {
+  test("invalid HTML tag syntax stays as paragraph text", () => {
     assertHastConformance("<c-!@9>#>}");
   });
 
-  test("fuzz: single-tilde strikethrough around content with inner tildes", () => {
+  test("single-tilde strikethrough around content with inner tildes", () => {
     assertHastConformance("~o5o~~#(~");
   });
 
-  test("fuzz: GFM table with escaped backslash before delimiter", () => {
+  test("GFM table with escaped backslash before delimiter", () => {
     assertHtmlConformance("]g\\\n|-");
   });
 
@@ -113,11 +113,11 @@ describe("CommonMark spec deltas: fuzz-discovered regressions", () => {
     assertHtmlConformance("a | b\\\n- | -\n1 | 2\n");
   });
 
-  test("fuzz: heading with brace suffix stays as text", () => {
+  test("heading with brace suffix stays as text", () => {
     assertHastConformance("# { ()g}");
   });
 
-  test("fuzz: backtick in code-fence language is entity-encoded", () => {
+  test("backtick in code-fence language is entity-encoded", () => {
     assertHtmlConformance("~~~r`|");
   });
 });
@@ -166,11 +166,11 @@ describe("GFM list-item edge cases", () => {
 });
 
 describe("Emphasis: remark vs cmark divergences", () => {
-  test("regression 729: triple asterisk run keeps outer `*` literal", () => {
+  test("triple asterisk run keeps outer `*` literal", () => {
     assertHtmlConformance("j***5*=*\n");
   });
 
-  test("regression 741: `**a.*.**a*.**.` resolves as single strong + nested em", () => {
+  test("`**a.*.**a*.**.` resolves as single strong + nested em", () => {
     assertHtmlConformance("**a.*.**a*.**.\n");
   });
 });

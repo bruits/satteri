@@ -13,7 +13,7 @@ import {
 
 const MATH: ["math"] = ["math"];
 
-describe("fuzz regressions: HTML block in list item", () => {
+describe("HTML block in list item", () => {
   test("`<textarea>` in list item keeps trailing newline on close", () => {
     assertMdastConformance("+\t<textarea>\n\nfoo");
   });
@@ -25,7 +25,7 @@ describe("fuzz regressions: HTML block in list item", () => {
   });
 });
 
-describe("fuzz regressions: indented code merging after list sibling", () => {
+describe("indented code merging after list sibling", () => {
   test("indented code merges across blanks after list sibling", () => {
     assertMdastConformance("- a\n- Foo\n\n      bar\n\n      baz");
   });
@@ -39,13 +39,13 @@ describe("fuzz regressions: indented code merging after list sibling", () => {
   });
 });
 
-describe("fuzz regressions: email autolinks preceded by `[`", () => {
+describe("email autolinks preceded by `[`", () => {
   test("`[skeLTO:FOO@BAR.BAZ>` keeps `>\\n$` as one trailing text", () => {
     assertMdastConformance("[skeLTO:FOO@BAR.BAZ>\n$");
   });
 });
 
-describe("fuzz regressions: type-7 HTML on lazy line in list item", () => {
+describe("type-7 HTML on lazy line in list item", () => {
   test("eof without trailing newline: html at root", () => {
     assertMdastConformance('- a\n<a href="x">');
   });
@@ -66,12 +66,12 @@ describe("fuzz regressions: type-7 HTML on lazy line in list item", () => {
     assertMdastConformance("- a\n<a>\nx");
   });
 
-  test("original fuzz repro: bracketed item content + html + more", () => {
+  test("bracketed list item content followed by HTML and paragraphs", () => {
     assertMdastConformance("+  $o[Foo bar]:\n<my url>\n'title'\n\n[Foo bar]\n");
   });
 });
 
-describe("fuzz regressions: autolink suppressed by unbalanced `[`", () => {
+describe("autolink suppressed by unbalanced `[`", () => {
   test("`[https://foo` rejected (no `.` in domain)", () => {
     assertMdastConformance("[https://foo");
   });
@@ -85,7 +85,7 @@ describe("fuzz regressions: autolink suppressed by unbalanced `[`", () => {
   });
 });
 
-describe("fuzz regressions: bracket+URL trail split", () => {
+describe("bracket+URL trail split", () => {
   test("`]` after URL preceded by `[` becomes its own text node", () => {
     assertMdastConformance("[https://foo.bar] x");
   });
@@ -103,7 +103,7 @@ describe("fuzz regressions: bracket+URL trail split", () => {
   });
 });
 
-describe("fuzz regressions: footnote definition label escapes", () => {
+describe("footnote definition label escapes", () => {
   test("`[^foot\\\\]: ...` label has unescaped backslash", () => {
     assertMdastConformance("[^foot\\\\]: footnote");
   });
@@ -121,7 +121,7 @@ describe("fuzz regressions: footnote definition label escapes", () => {
   });
 });
 
-describe("fuzz regressions: HTML block trailing newline", () => {
+describe("HTML block trailing newline", () => {
   test("`><style\\n\\nfoo`: single-line blockquote html trims trailing \\n (blank)", () => {
     assertMdastConformance("><style\n\nfoo");
   });
@@ -147,7 +147,7 @@ describe("fuzz regressions: HTML block trailing newline", () => {
   });
 });
 
-describe("fuzz regressions: trim-lines on text→hast", () => {
+describe("trim-lines on text→hast", () => {
   test("`&#9;` decoded to tab on continuation line is stripped in hast", () => {
     assertHastConformance("n\n&#9;foo\n");
   });
@@ -157,7 +157,7 @@ describe("fuzz regressions: trim-lines on text→hast", () => {
   });
 });
 
-describe("fuzz regressions: GFM tables", () => {
+describe("GFM tables", () => {
   test("minimal `header\\n:-` table is recognized", () => {
     assertHastConformance("r5\n:-");
   });
@@ -196,7 +196,7 @@ describe("fuzz regressions: GFM tables", () => {
   });
 });
 
-describe("fuzz regressions: link definitions", () => {
+describe("link definitions", () => {
   test("definition label preserves trailing whitespace", () => {
     assertMdastConformance("[m(  ]:8");
   });
@@ -206,7 +206,7 @@ describe("fuzz regressions: link definitions", () => {
   });
 });
 
-describe("fuzz regressions: math at EOF", () => {
+describe("math at EOF", () => {
   test("math fence at EOF with empty body keeps trailing newline in position", () => {
     assertExtMdastConformance("$$\n", MATH);
   });
@@ -216,25 +216,25 @@ describe("fuzz regressions: math at EOF", () => {
   });
 });
 
-describe("fuzz regressions: backslash escapes", () => {
+describe("backslash escapes", () => {
   test("inline math after `\\\\` is still parsed", () => {
     assertExtHastConformance("\\+$+$j", MATH);
   });
 });
 
-describe("fuzz regressions: paragraph continuation", () => {
+describe("paragraph continuation", () => {
   test("`::` on continuation line stays in the paragraph", () => {
     assertMdastConformance("s\n::cw !u");
   });
 });
 
-describe("fuzz regressions: code blocks", () => {
+describe("code blocks", () => {
   test("trailing indented blank line is part of the code block", () => {
     assertHtmlConformance("\t* :u4i\n\t\t");
   });
 });
 
-describe("fuzz regressions: math meta", () => {
+describe("math meta", () => {
   test("math meta preserves trailing space", () => {
     assertExtMdastConformance("$$|/0= ", MATH);
   });
@@ -244,7 +244,7 @@ describe("fuzz regressions: math meta", () => {
   });
 });
 
-describe("fuzz regressions: post-break whitespace", () => {
+describe("post-break whitespace", () => {
   test("inline math after hard break has leading whitespace trimmed", () => {
     assertExtHastConformance("a\\\n$\t$", MATH);
   });
@@ -254,7 +254,7 @@ describe("fuzz regressions: post-break whitespace", () => {
   });
 });
 
-describe("fuzz regressions: blockquote continuation", () => {
+describe("blockquote continuation", () => {
   test("tab followed by `>` is lazy continuation, not a marker", () => {
     assertMdastConformance(">:\n\t>");
   });
@@ -264,7 +264,7 @@ describe("fuzz regressions: blockquote continuation", () => {
   });
 });
 
-describe("fuzz regressions: indented code blocks", () => {
+describe("indented code blocks", () => {
   test("trailing indented blank line preserves a separating newline", () => {
     assertMdastConformance("\tfoo\n\n\t");
   });
@@ -274,7 +274,7 @@ describe("fuzz regressions: indented code blocks", () => {
   });
 });
 
-describe("fuzz regressions: GFM table delimiter precedence", () => {
+describe("GFM table delimiter precedence", () => {
   test("delimiter line that's also a list marker (`{!\\n -\\t|`) is a list", () => {
     assertMdastConformance("{!\n -\t|");
   });
@@ -284,7 +284,7 @@ describe("fuzz regressions: GFM table delimiter precedence", () => {
   });
 });
 
-describe("fuzz regressions: inline HTML wrapping", () => {
+describe("inline HTML wrapping", () => {
   test("continuation line drops leading whitespace from inline HTML", () => {
     assertMdastConformance("<a\n jr_r>");
   });
@@ -294,7 +294,7 @@ describe("fuzz regressions: inline HTML wrapping", () => {
   });
 });
 
-describe("fuzz regressions: footnote vs definition", () => {
+describe("footnote vs definition", () => {
   test("`[^a b]:` falls back to a regular definition (label has whitespace)", () => {
     assertMdastConformance("[^a b]:!");
   });
@@ -308,7 +308,7 @@ describe("fuzz regressions: footnote vs definition", () => {
   });
 });
 
-describe("fuzz regressions: refdef nesting", () => {
+describe("refdef nesting", () => {
   test("definition inside a list item stays inside the item", () => {
     assertMdastConformance("- [a]:b");
   });
@@ -322,7 +322,7 @@ describe("fuzz regressions: refdef nesting", () => {
   });
 });
 
-describe("fuzz regressions: light table interrupts paragraphs", () => {
+describe("light table interrupts paragraphs", () => {
   test("light delim row interrupts a multi-line paragraph", () => {
     assertMdastConformance("foo\nbar\n:--");
   });
@@ -344,7 +344,7 @@ describe("fuzz regressions: light table interrupts paragraphs", () => {
   });
 });
 
-describe("fuzz regressions: tilde delimiter flanking", () => {
+describe("tilde delimiter flanking", () => {
   test("single-tilde opener can't pair across an escaped `~`", () => {
     assertMdastConformance("~#zs(\\~~qc");
   });
@@ -358,7 +358,7 @@ describe("fuzz regressions: tilde delimiter flanking", () => {
   });
 });
 
-describe("fuzz regressions: link definition position", () => {
+describe("link definition position", () => {
   test("trailing space after URL is part of the definition span", () => {
     assertMdastConformance("[yu]:k ");
   });
@@ -372,7 +372,7 @@ describe("fuzz regressions: link definition position", () => {
   });
 });
 
-describe("fuzz regressions: fenced code block position at EOF", () => {
+describe("fenced code block position at EOF", () => {
   test("trailing newline at EOF is preserved in the position span", () => {
     assertMdastConformance("~~~|>(*]\n");
   });
@@ -386,7 +386,7 @@ describe("fuzz regressions: fenced code block position at EOF", () => {
   });
 });
 
-describe("fuzz regressions: definition/reference label backslash unescape", () => {
+describe("definition/reference label backslash unescape", () => {
   test("definition label resolves `\\\\` escape to `\\`", () => {
     assertMdastConformance("[a\\\\b]:url");
   });
@@ -412,7 +412,7 @@ describe("fuzz regressions: definition/reference label backslash unescape", () =
   });
 });
 
-describe("fuzz regressions: HTML block on blockquote lazy-continuation", () => {
+describe("HTML block on blockquote lazy-continuation", () => {
   test("type-7 open tag with attributes on lazy line opens HTML inside blockquote", () => {
     assertMdastConformance('>oo\n<a href="bar">\nbaz');
   });
@@ -434,7 +434,7 @@ describe("fuzz regressions: HTML block on blockquote lazy-continuation", () => {
   });
 });
 
-describe("fuzz regressions: GFM literal autolink with escapes", () => {
+describe("GFM literal autolink with escapes", () => {
   test("URL spanning backslash escapes keeps raw source bytes", () => {
     assertMdastConformance("https://example.com/\\[\\>");
   });
@@ -472,7 +472,7 @@ describe("fuzz regressions: GFM literal autolink with escapes", () => {
   });
 });
 
-describe("fuzz regressions: MDX inline expression after backslash-escaped `<`", () => {
+describe("MDX inline expression after backslash-escaped `<`", () => {
   test("escaped `<` doesn't suppress later inline expression", () => {
     // This assertion covers plain Markdown; the MDX fuzz suite checks expression parsing separately.
     assertMdastConformance('[r\\<Foo bar={1} baz="two"/>h');
@@ -483,7 +483,7 @@ describe("fuzz regressions: MDX inline expression after backslash-escaped `<`", 
   });
 });
 
-describe("fuzz regressions: indented code split after blockquote close", () => {
+describe("indented code split after blockquote close", () => {
   test("empty blockquote then per-line indented code splits", () => {
     assertMdastConformance(">\n    bar\n    baz");
   });
@@ -513,13 +513,13 @@ describe("fuzz regressions: indented code split after blockquote close", () => {
   });
 });
 
-describe("fuzz regressions: CDATA inline HTML close requires `]]>`", () => {
+describe("CDATA inline HTML close requires `]]>`", () => {
   test("CDATA with one `]` is not a complete close", () => {
     assertMdastConformance("foo <![CDATA[>&<]>");
   });
 });
 
-describe("fuzz regressions: protocol autolink first-char rejection", () => {
+describe("protocol autolink first-char rejection", () => {
   test("`http://-` rejected (first body char is punctuation)", () => {
     assertMdastConformance("Foo\n-<http://--\nbar");
   });
@@ -561,19 +561,19 @@ describe("fuzz regressions: protocol autolink first-char rejection", () => {
   });
 });
 
-describe("fuzz regressions: email walkback past `_`", () => {
+describe("email walkback past `_`", () => {
   test("email starts after `_` via find-and-replace path", () => {
     assertMdastConformance("$/_ipecial@Bar.baz-bar0.com>");
   });
 });
 
-describe("fuzz regressions: code span across lines suppresses autolink", () => {
+describe("code span across lines suppresses autolink", () => {
   test("paragraph-scoped earlier-backtick beats autolink-inside suppression", () => {
     assertMdastConformance("pz  _xlo`\n<https://foo.bar.`baz>`");
   });
 });
 
-describe("fuzz regressions: MDX JSX whitespace around `=`", () => {
+describe("MDX JSX whitespace around `=`", () => {
   test("space before `=` parses as attribute", () => {
     assertMdastConformance("<Foo bar = 'baz'/>");
   });
@@ -583,7 +583,7 @@ describe("fuzz regressions: MDX JSX whitespace around `=`", () => {
   });
 });
 
-describe("fuzz regressions: indented code after empty list item", () => {
+describe("indented code after empty list item", () => {
   test("`*\\n\\n      bar\\n      baz` → two code blocks at root", () => {
     assertMdastConformance("*\n\n      bar\n      baz");
   });
@@ -597,7 +597,7 @@ describe("fuzz regressions: indented code after empty list item", () => {
   });
 });
 
-describe("fuzz regressions: fenced code block trim on container outdent", () => {
+describe("fenced code block trim on container outdent", () => {
   test("`- ```\\n  b\\n\\noo` → code value `b`", () => {
     assertMdastConformance("- ```\n  b\n\noo");
   });
@@ -611,7 +611,7 @@ describe("fuzz regressions: fenced code block trim on container outdent", () => 
   });
 });
 
-describe("fuzz regressions: list extension first-content-line only absorbs `>`", () => {
+describe("list extension first-content-line only absorbs `>`", () => {
   test("`>+ # Foo\\n> bar\\n> baz\\n` keeps list end at line 1", () => {
     assertMdastConformance(">+ # Foo\n> bar\n> baz\n");
   });
@@ -621,19 +621,19 @@ describe("fuzz regressions: list extension first-content-line only absorbs `>`",
   });
 });
 
-describe("fuzz regressions: list/bq extension stops at indented-code threshold", () => {
+describe("list/bq extension stops at indented-code threshold", () => {
   test("`>* > # Foo` then 4-space indented `> bar` keeps positions tight", () => {
     assertMdastConformance("~-{tg\t\n>* > # Foo\n    > bar\n    > baz\n");
   });
 });
 
-describe("fuzz regressions: HAST footnote elements carry position", () => {
+describe("HAST footnote elements carry position", () => {
   test("footnote ref/def positions appear in HAST", () => {
     assertHastConformance("j4nu0[^y]\n\nrvt[^bxmw]\n\n[^y]: 4quj08jtc\n");
   });
 });
 
-describe("fuzz regressions: GFM email rejects when domain ends in `-`, digit, or `_`", () => {
+describe("GFM email rejects when domain ends in `-`, digit, or `_`", () => {
   test("trailing `-` after domain: no email", () => {
     assertHtmlConformance("foo@bar.com-");
   });
@@ -654,20 +654,20 @@ describe("fuzz regressions: GFM email rejects when domain ends in `-`, digit, or
     assertHtmlConformance("-----foo@bar.example.c----");
   });
 
-  test("compound: full fuzz case with setext heading + paragraph", () => {
+  test("setext heading followed by a paragraph containing an email", () => {
     assertHtmlConformance(
       "\\$l->yhwn#\n\tFoo *bar*\n=========\n\nFoo *bar*\n-----foo@bar.example.c----\n",
     );
   });
 });
 
-describe("fuzz regressions: inline HTML clears backslash-escape on trail", () => {
+describe("inline HTML clears backslash-escape on trail", () => {
   test("inline HTML with escaped char in attribute: trail position correct", () => {
     assertMdastConformance('foo <a href="\\*">>\t\tfoo\n');
   });
 });
 
-describe("fuzz regressions: CommonMark autolink clears backslash-escape on trail", () => {
+describe("CommonMark autolink clears backslash-escape on trail", () => {
   test("autolink with escaped close delimiter: trail starts after `>`", () => {
     assertMdastConformance("<https://example.com/\\>foo");
   });
@@ -681,7 +681,7 @@ describe("fuzz regressions: CommonMark autolink clears backslash-escape on trail
   });
 });
 
-describe("fuzz regressions: URL encoding for invalid percent-encoding", () => {
+describe("URL encoding for invalid percent-encoding", () => {
   test("invalid `%2^` becomes `%252%5E`", () => {
     assertHtmlConformance("ba/[link](foo%2^b&auml;)\n");
   });
@@ -695,7 +695,7 @@ describe("fuzz regressions: URL encoding for invalid percent-encoding", () => {
   });
 });
 
-describe("fuzz regressions: list-item end extends through next marker when last child ends after \\n", () => {
+describe("list-item end extends through next marker when last child ends after \\n", () => {
   test("`- ```\\n- d\\n` → listItem 1 end at content col of listItem 2", () => {
     assertMdastConformance("- ```\n- d\n");
   });
@@ -705,19 +705,19 @@ describe("fuzz regressions: list-item end extends through next marker when last 
   });
 });
 
-describe("fuzz regressions: autolink continuation line drops leading space", () => {
+describe("autolink continuation line drops leading space", () => {
   test("email autolink on continuation line skips leading indent space", () => {
     assertMdastConformance("r<@\n special@Bar.baz-bar0.com>\n");
   });
 });
 
-describe("fuzz regressions: list extension absorbs trailing tab on blank marker line", () => {
+describe("list extension absorbs trailing tab on blank marker line", () => {
   test("blank `>\\t` marker line: list end past tab", () => {
     assertMdastConformance(">-\n>\t\n:7^");
   });
 });
 
-describe("fuzz regressions: link refdef resolves in source order, not node-id order", () => {
+describe("link refdef resolves in source order, not node-id order", () => {
   test("top-level def with title wins over bq-nested def without title (HTML)", () => {
     assertHtmlConformance('[foo]: /url "title"\n\n[foo]\n\n> [foo]: /url');
   });
@@ -727,13 +727,13 @@ describe("fuzz regressions: link refdef resolves in source order, not node-id or
   });
 });
 
-describe("fuzz regressions: nested list inside list-item-blockquote does not extend through blank `>>`", () => {
+describe("nested list inside list-item-blockquote does not extend through blank `>>`", () => {
   test("nested bq>bq>list inside list-item leaves positions at line 1", () => {
     assertMdastConformance("-   > > 1.  one\n>>\n>>     two\n");
   });
 });
 
-describe("fuzz regressions: footnote definition trims trailing whitespace", () => {
+describe("footnote definition trims trailing whitespace", () => {
   test("trailing space after content", () => {
     assertMdastConformance("[^a]: foo\n ");
   });
@@ -751,7 +751,7 @@ describe("fuzz regressions: footnote definition trims trailing whitespace", () =
   });
 });
 
-describe("fuzz regressions: empty unclosed fenced code in list-item before new container", () => {
+describe("empty unclosed fenced code in list-item before new container", () => {
   test("empty fenced followed by new list (different marker)", () => {
     assertMdastConformance("*\t  ```\n  c\n  ```\n- d\n");
   });
@@ -773,7 +773,7 @@ describe("fuzz regressions: empty unclosed fenced code in list-item before new c
   });
 });
 
-describe("fuzz regressions: `~~` flanking when followed by punctuation", () => {
+describe("`~~` flanking when followed by punctuation", () => {
   test("`a~~/foo~~` stays text (alnum before, punct after)", () => {
     assertMdastConformance(":f~~/42e~~\n[]\n~~~\n");
   });
@@ -783,7 +783,7 @@ describe("fuzz regressions: `~~` flanking when followed by punctuation", () => {
   });
 });
 
-describe("fuzz regressions: autolink + backtick code-span ordering", () => {
+describe("autolink + backtick code-span ordering", () => {
   test("`[\\nhttps://foo.bar.\\`baz>\\`` splits URL and code span", () => {
     assertMdastConformance("[\nhttps://foo.bar.`baz>`");
     assertHastConformance("[\nhttps://foo.bar.`baz>`");
@@ -801,7 +801,7 @@ describe("fuzz regressions: autolink + backtick code-span ordering", () => {
   });
 });
 
-describe("fuzz regressions: HTML attribute leniency for type-7 blocks", () => {
+describe("HTML attribute leniency for type-7 blocks", () => {
   test('`<img src=title="*"/>` parses as HTML block', () => {
     assertMdastConformance('<img src=title="*"/>\n');
     assertHastConformance('<img src=title="*"/>\n');
@@ -818,7 +818,7 @@ describe("fuzz regressions: HTML attribute leniency for type-7 blocks", () => {
   });
 });
 
-describe("fuzz regressions: strikethrough/emphasis two-pass resolve", () => {
+describe("strikethrough/emphasis two-pass resolve", () => {
   test("`*~bar~*` → emphasis wraps delete", () => {
     assertMdastConformance("*~bar~*");
     assertHtmlConformance("*~bar~*");
@@ -922,7 +922,7 @@ describe("fuzz regressions: strikethrough/emphasis two-pass resolve", () => {
   });
 });
 
-describe("fuzz regressions: URL percent-encoding", () => {
+describe("URL percent-encoding", () => {
   test("`%` + two alphanumerics is kept, not re-encoded to `%25`", () => {
     assertHtmlConformance("www.x.com/a%ax\n");
     assertHtmlConformance("www.example.com/100%off\n");
@@ -934,7 +934,7 @@ describe("fuzz regressions: URL percent-encoding", () => {
   });
 });
 
-describe("fuzz regressions: email autolink underscore in domain", () => {
+describe("email autolink underscore in domain", () => {
   test("`xg@_xample.com` → email (leading `_` in penult is fine)", () => {
     assertMdastConformance("7!xg@_xample.com\n");
   });
@@ -960,7 +960,7 @@ describe("fuzz regressions: email autolink underscore in domain", () => {
   });
 });
 
-describe("fuzz regressions: GFM autolink trail split on newline", () => {
+describe("GFM autolink trail split on newline", () => {
   test("`https://../>\\nfoo` → link + text `>` + text `\\nfoo`", () => {
     assertMdastConformance("6r1# #https://../>\nfoo******bar*********baz");
   });
@@ -974,7 +974,7 @@ describe("fuzz regressions: GFM autolink trail split on newline", () => {
   });
 });
 
-describe("fuzz regressions: GFM email domain can't start with `.`", () => {
+describe("GFM email domain can't start with `.`", () => {
   test("`2@\\.baz>` (text `2@.baz`) is NOT an email", () => {
     assertMdastConformance("t\t2@\\.baz>\n");
   });
@@ -984,7 +984,7 @@ describe("fuzz regressions: GFM email domain can't start with `.`", () => {
   });
 });
 
-describe("fuzz regressions: code span container scan beyond span", () => {
+describe("code span container scan beyond span", () => {
   test("tab-marker list item: code span keeps trailing indent", () => {
     assertMdastConformance("+\t w4-w```\naaa\n    ```\n");
   });
@@ -994,7 +994,7 @@ describe("fuzz regressions: code span container scan beyond span", () => {
   });
 });
 
-describe("fuzz regressions: shortcut link suppressed by following `[`", () => {
+describe("shortcut link suppressed by following `[`", () => {
   test("`[foo][ref[]` stays text (inner `[` invalidates label)", () => {
     assertMdastConformance("[foo][ref[]\n\n[foo]: /url");
   });
@@ -1004,7 +1004,7 @@ describe("fuzz regressions: shortcut link suppressed by following `[`", () => {
   });
 });
 
-describe("fuzz regressions: table delimiter row last-cell hyphen check", () => {
+describe("table delimiter row last-cell hyphen check", () => {
   test("`-|:` (no `-` in last cell) is NOT a delimiter row", () => {
     assertMdastConformance("[is:|{\n-|:");
   });
@@ -1014,7 +1014,7 @@ describe("fuzz regressions: table delimiter row last-cell hyphen check", () => {
   });
 });
 
-describe("fuzz regressions: footnote def with leading whitespace in label", () => {
+describe("footnote def with leading whitespace in label", () => {
   test("`[^ *o]: url` becomes a refdef, not a footnote", () => {
     assertMdastConformance('[^ *o]: /url\n"title" ok\n');
   });
@@ -1024,7 +1024,7 @@ describe("fuzz regressions: footnote def with leading whitespace in label", () =
   });
 });
 
-describe("fuzz regressions: fenced code block trailing whitespace at EOF", () => {
+describe("fenced code block trailing whitespace at EOF", () => {
   test("single space line at EOF kept as code content", () => {
     assertMdastConformance("~~~s\n ");
   });
@@ -1034,7 +1034,7 @@ describe("fuzz regressions: fenced code block trailing whitespace at EOF", () =>
   });
 });
 
-describe("fuzz regressions: ordered list start≠1 after indented code", () => {
+describe("ordered list start≠1 after indented code", () => {
   test("`    code\\n\\n2. b` → [code, paragraph]", () => {
     assertMdastConformance("    code\n\n2. b");
   });
@@ -1056,14 +1056,14 @@ describe("fuzz regressions: ordered list start≠1 after indented code", () => {
   });
 });
 
-describe("fuzz regressions: MDX list-item content column", () => {
+describe("MDX list-item content column", () => {
   // This assertion covers plain Markdown; the MDX fuzz suite checks its different indentation rules.
   test("plain mdast: 5+ space marker keeps clamped content col", () => {
     assertMdastConformance("1.     abc\n\n   def");
   });
 });
 
-describe("fuzz regressions: autolink text chunk covers backslash-escape source", () => {
+describe("autolink text chunk covers backslash-escape source", () => {
   test("leading `\\[` before email autolink keeps escape in text span", () => {
     assertMdastConformance("\\[foo@bar.example.com");
   });
@@ -1073,13 +1073,13 @@ describe("fuzz regressions: autolink text chunk covers backslash-escape source",
   });
 });
 
-describe("fuzz regressions: bracket depth propagates across inline parents", () => {
+describe("bracket depth propagates across inline parents", () => {
   test("`![` inside emphasis suppresses position on following autolink", () => {
     assertMdastConformance("*![fw*https://example.com");
   });
 });
 
-describe("fuzz regressions: link with escape in URL leaves trail position unshifted", () => {
+describe("link with escape in URL leaves trail position unshifted", () => {
   test("`[link](foo\\()trail` puts trail at offset 13 not 12", () => {
     assertMdastConformance("[link](foo\\()trail");
   });
@@ -1089,7 +1089,7 @@ describe("fuzz regressions: link with escape in URL leaves trail position unshif
   });
 });
 
-describe("fuzz regressions: text_to_source skips trimmed line-ending whitespace", () => {
+describe("text_to_source skips trimmed line-ending whitespace", () => {
   test("trailing space before soft-break keeps source-byte alignment", () => {
     assertMdastConformance(":rap#| \n6!< https://foo.bar >");
   });
@@ -1099,7 +1099,7 @@ describe("fuzz regressions: text_to_source skips trimmed line-ending whitespace"
   });
 });
 
-describe("fuzz regressions: list inside blockquote extends position to absorb trailing markers", () => {
+describe("list inside blockquote extends position to absorb trailing markers", () => {
   test("`>>- one\\n>>\\n  >  > two` list extends through blank `>>`", () => {
     assertMdastConformance(">>- one\n>>\n  >  > two");
   });
@@ -1113,7 +1113,7 @@ describe("fuzz regressions: list inside blockquote extends position to absorb tr
   });
 });
 
-describe("fuzz regressions: blockquote-parented fenced code at EOF trims trailing newline", () => {
+describe("blockquote-parented fenced code at EOF trims trailing newline", () => {
   test("`>\\`\\`\\`\\n` blockquote/code both end at offset 4 (before `\\n`)", () => {
     assertMdastConformance(">```\n");
   });
@@ -1123,7 +1123,7 @@ describe("fuzz regressions: blockquote-parented fenced code at EOF trims trailin
   });
 });
 
-describe("fuzz regressions: setext heading extends position to preceding adjacent definition", () => {
+describe("setext heading extends position to preceding adjacent definition", () => {
   test("`[foo]: /url\\nbar\\n===` heading start extends to def start (offset 0)", () => {
     assertMdastConformance("[foo]: /url\nbar\n===");
   });
@@ -1164,14 +1164,14 @@ describe("fuzz regressions: setext heading extends position to preceding adjacen
     assertMdastConformance("[foo]: /url\n   -\nbaz\n===");
   });
 
-  test("full fuzz case with `-` first content line", () => {
+  test("definition followed by a `-` line and list items with code blocks", () => {
     assertMdastConformance(
       "/_-/zr]\n\n[foo]: /url1\n-\n  foo\n-\n  ```\n  bar\n  ```\n-\n      baz",
     );
   });
 });
 
-describe("fuzz regressions: indented code position extension respects lazy-one-line flag", () => {
+describe("indented code position extension respects lazy-one-line flag", () => {
   test("`*\\n\\n    foo\\n    \\n\\n` (lazy split) code ends after `foo`", () => {
     assertMdastConformance("*\n\n    foo\n    \n\n");
   });
@@ -1181,7 +1181,7 @@ describe("fuzz regressions: indented code position extension respects lazy-one-l
   });
 });
 
-describe("fuzz regressions: empty list-item split only when blank-separated from indented code", () => {
+describe("empty list-item split only when blank-separated from indented code", () => {
   test("empty marker directly followed by indented code stays in listItem", () => {
     assertMdastConformance("-\n             bbb\n                                       ccc");
   });
@@ -1191,7 +1191,7 @@ describe("fuzz regressions: empty list-item split only when blank-separated from
   });
 });
 
-describe("fuzz regressions: accept literal `.` as first domain char but reject source-escaped `\\.`", () => {
+describe("accept literal `.` as first domain char but reject source-escaped `\\.`", () => {
   test("`8z y@.bar.baz` emits email link with literal first-dot domain", () => {
     assertMdastConformance("8z y@.bar.baz");
   });
@@ -1201,13 +1201,13 @@ describe("fuzz regressions: accept literal `.` as first domain char but reject s
   });
 });
 
-describe("fuzz regressions: distinguish literal `\\` from escape before email", () => {
+describe("distinguish literal `\\` from escape before email", () => {
   test("`3\\e-gdafoo@bar.example.com` keeps position on email link", () => {
     assertMdastConformance("3\\e-gdafoo@bar.example.com");
   });
 });
 
-describe("fuzz regressions: email autolink suppresses position when escape directly precedes local-part", () => {
+describe("email autolink suppresses position when escape directly precedes local-part", () => {
   test("`\\+@bar.example.com>` produces position-less email + trailing text", () => {
     assertMdastConformance("\\+@bar.example.com>");
   });
@@ -1217,7 +1217,7 @@ describe("fuzz regressions: email autolink suppresses position when escape direc
   });
 });
 
-describe("fuzz regressions: thematic break clears list_interrupted_paragraph", () => {
+describe("thematic break clears list_interrupted_paragraph", () => {
   test("`    foo\\n----\\n+ ` empty marker after thematic break opens list", () => {
     assertMdastConformance("    foo\n----\n+ ");
   });
@@ -1227,7 +1227,7 @@ describe("fuzz regressions: thematic break clears list_interrupted_paragraph", (
   });
 });
 
-describe("fuzz regressions: indented code position respects container indent threshold", () => {
+describe("indented code position respects container indent threshold", () => {
   test("`- Foo\\n\\n      bar\\n\\n\\n      baz\\n\\t` trailing tab stays out of list-item code", () => {
     assertMdastConformance("- Foo\n\n      bar\n\n\n      baz\n\t");
   });
@@ -1241,24 +1241,24 @@ describe("fuzz regressions: indented code position respects container indent thr
   });
 });
 
-describe("fuzz regressions: autolink construct domain extraction stops at non-domain chars", () => {
+describe("autolink construct domain extraction stops at non-domain chars", () => {
   test("`#h6:0< https://foo.barf]_q#4` autolink keeps position", () => {
     assertMdastConformance("#h6:0< https://foo.barf]_q#4");
   });
 });
 
-describe("fuzz regressions: indented code extension skipped when inside a blockquote", () => {
+describe("indented code extension skipped when inside a blockquote", () => {
   test("`>     chunk1\\n      \\n      chunk2\\n` blockquote ends at line 1", () => {
     assertMdastConformance(">     chunk1\n      \n      chunk2\n");
   });
 });
 
-describe("fuzz regressions: scan_reference honors backslash-escaped opening bracket", () => {
+describe("scan_reference honors backslash-escaped opening bracket", () => {
   test("`[]\\[foo]\\n\\n[foo]: /url` produces literal `[][foo]`, not empty link", () => {
     assertHtmlConformance("[]\\[foo]\n\n[foo]: /url\n");
   });
 
-  test('full fuzz case `_>~$ []\\[foo]\\n\\n[foo]: /url "title"`', () => {
+  test("escaped reference opener with preceding punctuation and a titled definition", () => {
     assertHtmlConformance('_>~$ []\\[foo]\n\n[foo]: /url "title"\n');
   });
 
@@ -1267,7 +1267,7 @@ describe("fuzz regressions: scan_reference honors backslash-escaped opening brac
   });
 });
 
-describe("fuzz regressions: setext heading chain-back tolerates 1-3 leading spaces on first content line", () => {
+describe("setext heading chain-back tolerates 1-3 leading spaces on first content line", () => {
   test("`[bar]: /url\\n   Foo\\n---` (3-space indent before Foo) chains heading start to def", () => {
     assertMdastConformance("[bar]: /url\n   Foo\n---");
   });
@@ -1276,14 +1276,14 @@ describe("fuzz regressions: setext heading chain-back tolerates 1-3 leading spac
     assertMdastConformance("[bar]: /url\n    Foo\n---");
   });
 
-  test("full fuzz case with multiple setext headings", () => {
+  test("reference definition followed by multiple indented setext headings", () => {
     assertMdastConformance(
       '2\tb n[foo][bar]\n\n[bar]: /url "title"\n   Foo\n---\n\n  Foo\n-----\n\n  Foo\n  ===',
     );
   });
 });
 
-describe("fuzz regressions: autolink trim uses find-and-replace set when preceded by unbalanced `[`", () => {
+describe("autolink trim uses find-and-replace set when preceded by unbalanced `[`", () => {
   test("`[ **<URL_**` keeps trailing `_` in the URL", () => {
     assertHtmlConformance("[ **<https://foo.bar.baz/tes_**\n");
   });
@@ -1297,13 +1297,13 @@ describe("fuzz regressions: autolink trim uses find-and-replace set when precede
   });
 });
 
-describe("fuzz regressions: text_to_source map skips blockquote `>` prefixes", () => {
+describe("text_to_source map skips blockquote `>` prefixes", () => {
   test("`># Foo\\n>bar\\n> baz\\nfoo@bar.example.com` email link gets correct position", () => {
     assertMdastConformance("># Foo\n>bar\n> baz\nfoo@bar.example.com");
   });
 });
 
-describe("fuzz regressions: emphasis lowerbound keyed by current_count not run_length", () => {
+describe("emphasis lowerbound keyed by current_count not run_length", () => {
   test("`cz*x\\`*foo***bar***baz` outer em opens between `cz` and `baz`", () => {
     assertHtmlConformance("cz*x`*foo***bar***baz\n");
   });
@@ -1317,16 +1317,16 @@ describe("fuzz regressions: emphasis lowerbound keyed by current_count not run_l
   });
 });
 
-describe("fuzz regressions: inner blockquote extends through outer-marker-only continuation lines", () => {
+describe("inner blockquote extends through outer-marker-only continuation lines", () => {
   test("`>>g\\n>` inner bq extends to after outer marker on line 2", () => {
     assertMdastConformance(">>g\n>");
   });
 
-  test("`>>g^[( \\n>` full fuzz case", () => {
+  test("inner blockquote with punctuation extends through the outer marker", () => {
     assertMdastConformance(">>g^[( \n>");
   });
 
-  test("`>>g\\n>>` (both markers) extends as before", () => {
+  test("`>>g\\n>>` extends through both continuation markers", () => {
     assertMdastConformance(">>g\n>>");
   });
 
@@ -1343,7 +1343,7 @@ describe("fuzz regressions: inner blockquote extends through outer-marker-only c
   });
 });
 
-describe("fuzz regressions: list-marker after link reference definition", () => {
+describe("list-marker after link reference definition", () => {
   test("`[ref]: /uri\\n1. 2. foo` — `2.` becomes text inside the `1.` item", () => {
     assertMdastConformance("[ref]: /uri\n1. 2. foo\n");
   });
@@ -1353,12 +1353,12 @@ describe("fuzz regressions: list-marker after link reference definition", () => 
   test("`[ref]: /uri\\n1. - 2. foo` — `2.` stays as text under the nested `-`", () => {
     assertMdastConformance("[ref]: /uri\n1. - 2. foo\n");
   });
-  test("full fuzz case with leading autolink+refdef+nested-list", () => {
+  test("autolink followed by a reference definition and nested list markers", () => {
     assertMdastConformance("oo<https://example.com/?search=][ref]>\n\n[ref]: /uri\n1. - 2. foo\n");
   });
 });
 
-describe("fuzz regressions: autolink URL stops at matched-backtick code span (find-and-replace path)", () => {
+describe("autolink URL stops at matched-backtick code span (find-and-replace path)", () => {
   test("`[\\nURL.\\`baz>\\`` URL ends at first backtick", () => {
     // Check URL positions independently of the known trailing code-span parsing divergence.
     const ref = referenceMdast("[\nhttps://foo.bar.`baz>`\n") as any;
@@ -1369,7 +1369,7 @@ describe("fuzz regressions: autolink URL stops at matched-backtick code span (fi
   });
 });
 
-describe("fuzz regressions: table header pipe count with consecutive backslashes", () => {
+describe("table header pipe count with consecutive backslashes", () => {
   test("`lf\\\\| a | b |` produces 3 header cells, not 2 (not a table vs 2-col delim)", () => {
     assertMdastConformance("lf\\\\| col | val |\n| --- | --- |\n| a   | $x$ |");
   });
@@ -1387,7 +1387,7 @@ describe("fuzz regressions: table header pipe count with consecutive backslashes
   });
 });
 
-describe("fuzz regressions: ordered list interrupt requires textual `1.`", () => {
+describe("ordered list interrupt requires textual `1.`", () => {
   test("`foo\\n01. bar` → single paragraph (leading zero forbids interrupt)", () => {
     assertMdastConformance("foo\n01. bar");
   });
@@ -1420,16 +1420,16 @@ describe("fuzz regressions: ordered list interrupt requires textual `1.`", () =>
     assertMdastConformance("10. bar");
   });
 
-  test("the math/mdx fuzz finding: `vdpj\\n01. ordered $a$\\n2. items $b$`", () => {
+  test("zero-prefixed list marker does not interrupt a paragraph containing math", () => {
     assertMdastConformance("vdpj\n01. ordered $a$\n2. items $b$");
   });
 
-  test("the mdx fuzz finding: `tx\\n01.      indented code\\n…`", () => {
+  test("zero-prefixed list marker with indented content does not interrupt a paragraph", () => {
     assertMdastConformance("tx\n01.      indented code\n\n   paragraph\n\n       more code\n");
   });
 });
 
-describe("fuzz regressions: lazy indented code after empty blockquote doesn't suppress next list", () => {
+describe("lazy indented code after empty blockquote doesn't suppress next list", () => {
   test("`>\\n\\t9\\n+` → blockquote(), code:'9', list(emptyItem)", () => {
     assertMdastConformance(">\n\t9\n+");
   });
@@ -1451,7 +1451,7 @@ describe("fuzz regressions: lazy indented code after empty blockquote doesn't su
   });
 });
 
-describe("fuzz regressions: empty list marker can't interrupt refdef-paragraph", () => {
+describe("empty list marker can't interrupt refdef-paragraph", () => {
   // CommonMark example 305 forbids empty list markers from interrupting a paragraph.
   test("`[a]: u\\n>*` keeps `*` as paragraph text inside the blockquote", () => {
     assertMdastConformance("[a]: u\n>*");
@@ -1478,7 +1478,7 @@ describe("fuzz regressions: empty list marker can't interrupt refdef-paragraph",
   });
 });
 
-describe("fuzz regressions: HTML block preserves tab-expansion leftover in blockquote", () => {
+describe("HTML block preserves tab-expansion leftover in blockquote", () => {
   test("`>\\t<div>` keeps 2 leading spaces in the html value", () => {
     assertMdastConformance(">\t<div>\nbar\n</div>\n*foo*\n");
   });
@@ -1492,7 +1492,7 @@ describe("fuzz regressions: HTML block preserves tab-expansion leftover in block
   });
 });
 
-describe("fuzz regressions: code/html block trailing newline depends on terminator", () => {
+describe("code/html block trailing newline depends on terminator", () => {
   test("code fence + 2 blanks + new list item keeps both newlines", () => {
     assertMdastConformanceNoPosition("- ```\n  b\n\n\n2. x");
   });
@@ -1518,7 +1518,7 @@ describe("fuzz regressions: code/html block trailing newline depends on terminat
   });
 });
 
-describe("fuzz regressions: refdef label decodes HTML entities and backslash escapes", () => {
+describe("refdef label decodes HTML entities and backslash escapes", () => {
   test("`[A]\\n\\n[&AElig;]: /url` decodes entity in label", () => {
     assertMdastConformance("[A]\n\n[&AElig;]: /url\n");
   });
@@ -1528,7 +1528,7 @@ describe("fuzz regressions: refdef label decodes HTML entities and backslash esc
   });
 });
 
-describe("fuzz regressions: image alt preserves inline HTML verbatim", () => {
+describe("image alt preserves inline HTML verbatim", () => {
   test('`![foo<div>\\n bar](/u "title")` keeps `<div>` in alt', () => {
     assertMdastConformance('m(q\n~k}y ![foo<div>\n bar](/path/to/train.jpg  "title"   )\n');
   });
@@ -1538,7 +1538,7 @@ describe("fuzz regressions: image alt preserves inline HTML verbatim", () => {
   });
 });
 
-describe("fuzz regressions: numeric character references map control chars to U+FFFD", () => {
+describe("numeric character references map control chars to U+FFFD", () => {
   test("`&#17;` (C0 control U+0011) → U+FFFD", () => {
     assertMdastConformance("8|o&#17;&#10;bar\n");
   });
@@ -1560,7 +1560,7 @@ describe("fuzz regressions: numeric character references map control chars to U+
   });
 });
 
-describe("fuzz regressions: GFM autolink trail split based on trim-set kind", () => {
+describe("GFM autolink trail split based on trim-set kind", () => {
   test("trail `>` + newline + html → split into trail + `\\n` + html", () => {
     assertMdastConformance("https://../>\n</script>");
   });
@@ -1573,14 +1573,14 @@ describe("fuzz regressions: GFM autolink trail split based on trim-set kind", ()
     assertMdastConformance('a<https://x/?a!";\nfoo');
   });
 
-  test("the full script-block fuzz input", () => {
+  test("autolink trail followed by a script closing tag and paragraph", () => {
     assertMdastConformance(
       '3[:[a@^o~r(<script type="text/javascript">\n// JavaScript example\n\ndocument.getElementById("demo").innerHTML = "Hello Jav__a<https://foo.bar/?aScript!";\n</script>\nokay\n',
     );
   });
 });
 
-describe("fuzz regressions: MDX JSX namespace allows whitespace around `:`", () => {
+describe("MDX JSX namespace allows whitespace around `:`", () => {
   test("`<a :b/>` opens flow JSX with name `a:b`", async () => {
     const { satteriMdxMdast, referenceMdxMdast } = await import("./fuzz/shared.js");
     expect(satteriMdxMdast("<a :b/>")).toEqual(referenceMdxMdast("<a :b/>"));
@@ -1592,7 +1592,7 @@ describe("fuzz regressions: MDX JSX namespace allows whitespace around `:`", () 
   });
 });
 
-describe("fuzz regressions: GFM autolink fires during inline tokenization, not as post-pass", () => {
+describe("GFM autolink fires during inline tokenization, not as post-pass", () => {
   test("[a](https://x[![alt](url) → trailing literal autolink", () => {
     assertMdastConformance("[a](https://x[![alt](url)");
   });
@@ -1616,7 +1616,7 @@ describe("fuzz regressions: GFM autolink fires during inline tokenization, not a
   });
 });
 
-describe("fuzz known-fails: email autolink after a backslash escape", () => {
+describe("email autolink after a backslash escape", () => {
   test.fails("escaped backslash before a non-alphanumeric local part", () => {
     assertMdastConformance("\\\\+@.a\n");
   });
@@ -1630,7 +1630,7 @@ describe("fuzz known-fails: email autolink after a backslash escape", () => {
   });
 });
 
-describe("fuzz known-fails: complex structural divergences (md)", () => {
+describe("Markdown structural divergences", () => {
   test("list/bq/code-fence/autolink cascade", () => {
     assertMdastConformance(
       "*>ss)1.  foo\n\n    ```\n <https://ex   bar\n    ```\n\n    baz\n\n    > bam\n",
@@ -1658,7 +1658,7 @@ describe("fuzz known-fails: complex structural divergences (md)", () => {
   });
 });
 
-describe("fuzz known-fails: complex structural divergences (mdx)", () => {
+describe("MDX structural divergences", () => {
   test.fails("code span body that contains autolink-like `<…>` errors in mdx", async () => {
     const { satteriMdxMdast, referenceMdxMdast } = await import("./fuzz/shared.js");
     expect(satteriMdxMdast("l`{yk[[=\t\n<https://foo.bar.`baz>`\n")).toEqual(
@@ -1674,8 +1674,8 @@ describe("fuzz known-fails: complex structural divergences (mdx)", () => {
   });
 });
 
-describe("fuzz regressions: inline code after a link destination with CJK trail", () => {
-  test("link + CJK + inline code (originally found in zh-cn/ja docs)", () => {
+describe("inline code after a link destination with CJK trail", () => {
+  test("link + CJK + inline code", () => {
     assertMdastConformance("使用 [link](http://x)，即运行`cmd`。");
     assertHastConformance("使用 [link](http://x)，即运行`cmd`。");
   });
@@ -1701,7 +1701,7 @@ describe("fuzz regressions: inline code after a link destination with CJK trail"
   });
 });
 
-describe("fuzz regressions: the slice invariant across every line ending", () => {
+describe("the slice invariant across every line ending", () => {
   const cases = [
     "{\r a",
     "a\r\t$",

@@ -230,7 +230,7 @@ test("a plugin's own freshly-built node is not re-walked", () => {
   expect((html.match(/data-wrapped/g) ?? []).length).toBe(1);
 });
 
-test("a table moved out of a directive keeps its cells and alignment (#80)", () => {
+test("a table moved out of a directive keeps its cells and alignment", () => {
   const move = defineMdastPlugin({
     name: "move-table",
     containerDirective(node, ctx) {
