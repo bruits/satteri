@@ -129,7 +129,7 @@ pub fn property_to_attribute(name: &str, in_svg: bool) -> Cow<'_, str> {
 /// Whether `name` is a property of the HTML or SVG schema (case-insensitive).
 /// Custom `data-*` and unknown properties are not.
 pub fn is_known_property(name: &str, in_svg: bool) -> bool {
-    lookup(table(in_svg), normalize(name).as_ref()).is_some()
+    attribute_of(name, in_svg).is_some()
 }
 
 /// Reverse lookup: the attribute for a known hast property, or `None` for
