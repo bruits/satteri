@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 import {
   markdownToHtml,
   mdxToJs,
@@ -19,16 +19,6 @@ const MARKDOWN = readFileSync(new URL("./fixtures/markdown.md", import.meta.url)
 const MDX = readFileSync(new URL("./fixtures/document.mdx", import.meta.url), "utf8");
 // Add autolink triggers because markdown.md has none.
 const AUTOLINKS = readFileSync(new URL("./fixtures/autolinks.md", import.meta.url), "utf8");
-const HAST = markdownToHast(MARKDOWN);
-const HAST_LISTS: HastNode = {
-  type: "root",
-  children: Array.from({ length: 100 }, (_, index) => ({
-    type: "element",
-    tagName: "area",
-    properties: { coords: [index, index + 1, index + 2], className: ["region", "active"] },
-    children: [],
-  })),
-};
 
 const noopHastPlugin = defineHastPlugin({
   name: "noop",
@@ -266,6 +256,20 @@ describe("mdxToHast", () => {
 });
 
 describe("hastToHtml", () => {
+  let HAST: HastNode;
+  let HAST_LISTS: HastNode;
+  beforeAll(() => {
+    HAST = markdownToHast(MARKDOWN);
+    HAST_LISTS = {
+      type: "root",
+      children: Array.from({ length: 100 }, (_, index) => ({
+        type: "element",
+        tagName: "area",
+        properties: { coords: [index, index + 1, index + 2], className: ["region", "active"] },
+        children: [],
+      })),
+    };
+  });
   bench("materialized markdown tree", () => {
     hastToHtml(HAST);
   });
