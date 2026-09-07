@@ -16,12 +16,12 @@ use html5ever::{
 use satteri_arena::{Arena, ArenaBuilder, Hast, StringRef};
 use satteri_property_info::{PropKind, find_property};
 
-use crate::hast::HastNodeType;
 use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
     encode_element_data,
 };
-use crate::hast::render::{is_void_element, render_node_inner};
+use crate::hast::render::{RenderOptions, is_void_element, render_node_inner};
+use crate::hast::{HastNodeType, is_svg_html_integration_point};
 #[cfg(feature = "mdx")]
 use crate::mdast::codec::{
     decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
@@ -33,14 +33,6 @@ use crate::shared::{
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
-
-/// SVG elements whose content is parsed as HTML (the spec's HTML integration
-/// points), so SVG content stops at them. MathML's integration points do not
-/// matter here: the context only tracks SVG content, which html5ever's
-/// MathML-namespace elements never enter.
-fn is_html_integration_point(local: &str) -> bool {
-    matches!(local, "foreignObject" | "desc" | "title")
-}
 
 /// The namespace HTML content is parsed in; for a fragment, that of its own
 /// top-level content.
@@ -70,7 +62,7 @@ impl HtmlSpace {
     /// The space for the content of an element named `tag` that itself sits
     /// in `self`: an HTML integration point parses its content as HTML.
     fn inside(self, tag: &str) -> HtmlSpace {
-        if self.is_svg() && !is_html_integration_point(tag) {
+        if self.is_svg() && !is_svg_html_integration_point(tag) {
             HtmlSpace::Svg
         } else {
             HtmlSpace::Html
@@ -703,7 +695,7 @@ fn reparse_children_into(
     let prefix = stitch_prefix();
     let mut html = String::new();
     let mut stitches: Vec<u32> = Vec::new();
-    let in_svg = space.is_svg();
+    let context = RenderOptions::new(false, space.is_svg());
     {
         let mut on_mdx = |out: &mut String, node_id: u32| {
             out.push_str("<!--");
@@ -713,7 +705,7 @@ fn reparse_children_into(
             stitches.push(node_id);
         };
         for &child in src.get_children(parent) {
-            render_node_inner(child, src, &mut html, false, in_svg, Some(&mut on_mdx), 0);
+            render_node_inner(child, src, &mut html, context, Some(&mut on_mdx), 0);
         }
     }
     let recognizer = StitchRecognizer::new(prefix, stitches.len());
@@ -977,6 +969,49 @@ mod tests {
         let arena = html_fragment_to_hast_arena("<p>hi</p>", HtmlSpace::Html);
         assert_eq!(arena.get_node(0).node_type, HastNodeType::Root as u8);
         assert_eq!(tags(&arena), ["p"]);
+    }
+
+    #[test]
+    fn svg_serialization_preserves_script_and_style_text() {
+        for tag in ["script", "style"] {
+            let html = format!("<svg><{tag}>a&lt;b &amp; &amp;copy;</{tag}></svg>");
+            let arena = html_fragment_to_hast_arena(&html, HtmlSpace::Html);
+            assert_eq!(hast_arena_to_html(&arena), format!("{html}\n"));
+            let reparsed = raw_to_hast_arena(&arena);
+            assert_eq!(tags(&reparsed), ["svg", tag]);
+            assert_eq!(crate::hast::text_content(&reparsed, 0), "a<b & &copy;");
+        }
+    }
+
+    #[test]
+    fn svg_serialization_preserves_void_named_elements_children_and_siblings() {
+        let html = "<svg><input><path></path></input><path></path></svg>";
+        let arena = html_fragment_to_hast_arena(html, HtmlSpace::Html);
+        assert_eq!(hast_arena_to_html(&arena), format!("{html}\n"));
+        let reparsed = raw_to_hast_arena(&arena);
+        let svg = reparsed.get_children(0)[0];
+        let children = reparsed.get_children(svg);
+        assert_eq!(children.len(), 2);
+        assert_eq!(reparsed.get_children(children[0]).len(), 1);
+        assert!(reparsed.get_children(children[1]).is_empty());
+        assert_eq!(tags(&reparsed), ["svg", "input", "path", "path"]);
+    }
+
+    #[test]
+    fn svg_serialization_uses_html_rules_inside_integration_points() {
+        for tag in ["foreignObject", "desc", "title"] {
+            let html = format!(
+                "<svg><{tag}><input><script>a<b & &copy;</script>\
+                 <svg><input></input><style>a&lt;b &amp; &amp;copy;</style></svg>\
+                 </{tag}></svg>"
+            );
+            let arena = html_fragment_to_hast_arena(&html, HtmlSpace::Html);
+            assert_eq!(hast_arena_to_html(&arena), format!("{html}\n"));
+            assert_eq!(
+                hast_arena_to_html(&raw_to_hast_arena(&arena)),
+                format!("{html}\n")
+            );
+        }
     }
 
     #[test]
