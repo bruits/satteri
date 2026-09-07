@@ -1,6 +1,5 @@
 import { markdownToHtml, defineHastPlugin } from "satteri";
 
-// Add target="_blank" and rel="noopener" to external links
 const externalLinks = defineHastPlugin({
   name: "external-links",
   element: {
@@ -15,7 +14,6 @@ const externalLinks = defineHastPlugin({
   },
 });
 
-// Add IDs to headings
 const headingIds = defineHastPlugin({
   name: "heading-ids",
   element: {

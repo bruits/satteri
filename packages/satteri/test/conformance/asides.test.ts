@@ -12,7 +12,7 @@ import type { MdastNode } from "../../src/types.js";
 type Variant = "note" | "tip" | "caution" | "danger";
 const variants: Variant[] = ["note", "tip", "caution", "danger"];
 const variantSet = new Set<string>(variants);
-const isAsideVariant = (s: string): s is Variant => variantSet.has(s);
+const isAsideVariant = (value: string): value is Variant => variantSet.has(value);
 
 const defaultTitles: Record<Variant, string> = {
   note: "Note",
@@ -78,8 +78,6 @@ function buildAside(
   );
 }
 
-// Matches `mdast-util-to-string` (and satteri's `ctx.textContent`) so the two
-// pipelines agree on `inlineCode` etc. when computing the aside's aria-label.
 function nodeText(node: { type: string; value?: string; children?: { type: string }[] }): string {
   if (typeof node.value === "string") return node.value;
   if (Array.isArray(node.children)) {
@@ -115,8 +113,7 @@ function transformAsides(tree: MdastRoot): void {
           title = nodeText(firstChild as Parameters<typeof nodeText>[0]);
           children.shift();
         }
-        // Recurse into the body first so a nested directive becomes an aside too
-        // (innermost-first), matching how the real remarkAsides plugin composes.
+        // Transform the body first so nested directives become asides before their parent does.
         walk({ children });
         kids[i] = buildAside(
           variant,
@@ -206,7 +203,6 @@ describe("Starlight asides plugin (fresh-node data hints, full integration)", ()
     expect(satteriHtml(md)).toBe(referenceHtml(md));
   });
 
-  // Issue 3: emphasis/strong inside a directive label (not just inline code).
   test("aside label parses emphasis and strong", () => {
     const md = `:::note[Custom **strong with _emphasis_** Label]\nSome text\n:::`;
     expect(satteriHtml(md)).toBe(referenceHtml(md));
@@ -217,14 +213,11 @@ describe("Starlight asides plugin (fresh-node data hints, full integration)", ()
     expect(satteriHtml(md)).toBe(referenceHtml(md));
   });
 
-  // Issue 4: a container directive whose body ends with an HTML block must still
-  // close on the `:::` fence rather than swallowing it into the HTML block.
   test("aside body ending in an HTML block closes cleanly", () => {
     const md = `:::note\nParagraph.\n\n<details>\n<summary>See more</summary>\n\nMore.\n\n</details>\n:::`;
     expect(satteriHtml(md)).toBe(referenceHtml(md));
   });
 
-  // Issue 1: a nested directive inside a transformed directive must transform too.
   test("nested asides", () => {
     const md = `::::note\nNote contents.\n\n:::tip\nNested tip.\n:::\n\n::::`;
     expect(satteriHtml(md)).toBe(referenceHtml(md));

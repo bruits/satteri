@@ -6,12 +6,10 @@ import { decodeElementProp } from "../element-props.js";
 import { decodeMdxJsxAttr } from "../../mdx-attr.js";
 import type { MdxJsxAttributeUnion } from "../../types.js";
 
-/** Walk-wire element head: `[tagLen: u16][tag bytes]`. */
 export function readWalkElementTag(view: DataView, buf: Uint8Array, pos: number): string {
   return rstr(buf, pos + 2, view.getUint16(pos, true));
 }
 
-/** Position of the element's props section (`[count: u16][entries]`), past the tag. */
 export function walkElementPropsAt(view: DataView, pos: number): number {
   return pos + 2 + view.getUint16(pos, true);
 }
@@ -20,7 +18,6 @@ export function walkElementPropCount(view: DataView, propsAt: number): number {
   return view.getUint16(propsAt, true);
 }
 
-/** Decode the props section into a `properties` record; entries are `[name: str16][kind: u8][value: str16]`. */
 export function decodeWalkElementProps(
   view: DataView,
   buf: Uint8Array,
@@ -45,7 +42,6 @@ export function decodeWalkElementProps(
   return properties;
 }
 
-/** `[valLen: u32][value]`; expression tags restore MDX phantom spaces. */
 export function readWalkHastValue(
   view: DataView,
   buf: Uint8Array,
@@ -56,8 +52,7 @@ export function readWalkHastValue(
   return nodeType === 12 || nodeType === 14 ? restorePhantomSpaces(value) : value;
 }
 
-/** MDX JSX head and attributes: `[nameLen: u16][name][count: u16]`, then `[kind: u8][name: str16][value: str32]` per
- *  attribute; a zero-length head name is a fragment (`null`). */
+// A zero-length name represents an MDX fragment.
 export function readWalkMdxJsx(
   view: DataView,
   buf: Uint8Array,

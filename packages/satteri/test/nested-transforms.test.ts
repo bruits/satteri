@@ -3,16 +3,8 @@ import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/inde
 import type { MdastNode } from "../src/types.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 
-// Nested transforms compose in a SINGLE pass: when a plugin replaces a node and
-// passes its children through, those children keep their identity, so a patch
-// the same pass queued on a nested one still applies. A plugin's own freshly
-// *built* nodes are not re-walked — transform them up front, or hand off to a
-// later plugin, which sees the materialized tree.
-
 const variants = new Set(["note", "tip", "caution"]);
 
-/** Replace a directive with an `<aside>`-rendering paragraph, passing its
- *  children through so a nested directive among them is still visited. */
 function asideTransform(node: { name: string; children: MdastNode[] }): MdastNode {
   return {
     type: "paragraph",
@@ -23,6 +15,30 @@ function asideTransform(node: { name: string; children: MdastNode[] }): MdastNod
 
 const nestedDirectives = "::::note\nouter\n\n:::tip\ninner\n:::\n::::";
 const features = { directive: true, gfm: false } as const;
+
+test.each(["mdast", "hast"] as const)(
+  "%s async replacements keep their targets when they settle in reverse order",
+  async (phase) => {
+    const complete: (() => void)[] = [];
+    const plugin = {
+      name: "reverse-completion",
+      text(node: { value: string }) {
+        if (node.value.trim() === "") return;
+        return new Promise<{ type: "text"; value: string }>((resolve) => {
+          complete.push(() => resolve({ type: "text", value: node.value.toUpperCase() }));
+        });
+      },
+    };
+    const result = markdownToHtml(
+      "one\n\ntwo\n\nthree",
+      phase === "mdast" ? { mdastPlugins: [plugin] } : { hastPlugins: [plugin] },
+    );
+    expect(result).toBeInstanceOf(Promise);
+    expect(complete).toHaveLength(3);
+    for (let i = complete.length - 1; i >= 0; i--) complete[i]!();
+    expect((await result).html).toBe("<p>ONE</p>\n<p>TWO</p>\n<p>THREE</p>\n");
+  },
+);
 
 test("nested transforms compose in one pass, including across an async visitor", async () => {
   const plugin = defineMdastPlugin({
@@ -40,9 +56,6 @@ test("nested transforms compose in one pass, including across an async visitor",
 });
 
 test("a transform stranded under a removed node is dropped, not fatal", () => {
-  // Removing the outer note discards the tip transform queued in the same pass:
-  // the plugin chose to drop that subtree, so the tip transform is moot. Quiet
-  // drop, not an error.
   const plugin = defineMdastPlugin({
     name: "remove-outer",
     containerDirective(node, ctx) {
@@ -56,8 +69,8 @@ test("a transform stranded under a removed node is dropped, not fatal", () => {
     },
   });
   const { html } = markdownToHtml(nestedDirectives, { features, mdastPlugins: [plugin] });
-  expect(html).not.toContain("TIP"); // the stranded tip transform was dropped
-  expect(html).not.toContain("outer"); // the whole note subtree is gone
+  expect(html).not.toContain("TIP");
+  expect(html).not.toContain("outer");
   expect(html.trim()).toBe("");
 });
 
@@ -86,13 +99,9 @@ test("dropping a stranded transform warns, naming the plugin", () => {
   }
 });
 
-// HAST behaves like MDAST: a transform stranded under a node removed earlier in
-// the same pass is dropped with a warning, not a fatal error.
 test("a stranded HAST transform is dropped with a warning, like MDAST", () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   try {
-    // `# *Hi*` -> <h1><em>Hi</em></h1>. Removing the h1 strands the em transform
-    // queued in the same pass.
     const plugin = defineHastPlugin({
       name: "remove-heading",
       element: {
@@ -114,7 +123,7 @@ test("a stranded HAST transform is dropped with a warning, like MDAST", () => {
       },
     });
     const { html } = markdownToHtml("# *Hi*", { hastPlugins: [plugin] });
-    expect(html.trim()).toBe(""); // heading + its em gone, no throw
+    expect(html.trim()).toBe("");
     expect(warn).toHaveBeenCalledTimes(1);
     const message = warn.mock.calls[0]?.[0] as string;
     expect(message).toContain('plugin "remove-heading"');
@@ -198,17 +207,12 @@ test("a passed-through child is fully transformed before the next plugin runs", 
     },
   });
   const { html } = markdownToHtml(nestedDirectives, { features, mdastPlugins: [aside, upper] });
-  // Both asides formed (nesting composed in one pass), and `upper` saw the
-  // finished tree.
   expect((html.match(/<aside/g) ?? []).length).toBe(2);
   expect(html).toContain("OUTER");
   expect(html).toContain("INNER");
 });
 
 test("a plugin's own freshly-built node is not re-walked", () => {
-  // Each blockquote is replaced with a blockquote nesting a *fresh* one. The
-  // fresh inner blockquote is brand-new (not passed through), so it is not
-  // re-entered: one pass, terminates, exactly one wrap.
   let calls = 0;
   const wrap = defineMdastPlugin({
     name: "wrap-once",
@@ -222,11 +226,11 @@ test("a plugin's own freshly-built node is not re-walked", () => {
     },
   });
   const { html } = markdownToHtml("> a", { features: { gfm: false }, mdastPlugins: [wrap] });
-  expect(calls).toBe(1); // the single original blockquote, visited once
-  expect((html.match(/data-wrapped/g) ?? []).length).toBe(1); // output not re-wrapped
+  expect(calls).toBe(1);
+  expect((html.match(/data-wrapped/g) ?? []).length).toBe(1);
 });
 
-test("a table moved out of a directive keeps its cells and alignment (#80)", () => {
+test("a table moved out of a directive keeps its cells and alignment", () => {
   const move = defineMdastPlugin({
     name: "move-table",
     containerDirective(node, ctx) {
@@ -244,8 +248,6 @@ test("a table moved out of a directive keeps its cells and alignment (#80)", () 
 });
 
 test("an inlineMath node survives a round-trip", () => {
-  // inlineMath shares Math's 16-byte `MathData` layout. The rebuild once encoded
-  // it as an 8-byte string ref, so reading it back overran the buffer and crashed.
   const dup = defineMdastPlugin({
     name: "dup-inline-math",
     inlineMath(node, ctx) {
@@ -257,9 +259,6 @@ test("an inlineMath node survives a round-trip", () => {
 });
 
 test("an imageReference keeps its alt through a round-trip", () => {
-  // imageReference stores `alt` after the reference header. The rebuild used the
-  // plain reference layout (no alt), and the matched-node reader never surfaced
-  // it, so a duplicated reference lost its alt text.
   const dup = defineMdastPlugin({
     name: "dup-image-ref",
     imageReference(node, ctx) {
@@ -272,9 +271,6 @@ test("an imageReference keeps its alt through a round-trip", () => {
 });
 
 test("a fresh table built without `align` still renders its cells", () => {
-  // mdast→hast uses the table's `align` length as the column count. A plugin
-  // building a table from scratch need not supply `align`; the conversion then
-  // falls back to the row's own cell count instead of dropping every cell.
   const build = defineMdastPlugin({
     name: "build-table",
     paragraph() {
@@ -299,8 +295,6 @@ test("a fresh table built without `align` still renders its cells", () => {
 });
 
 test("a freshly-generated node is transformed by a later plugin (the multi-plugin path)", () => {
-  // `emit` produces a NEW :::tip directive; it is not re-walked within `emit`.
-  // `toAside`, running afterward over the materialized tree, transforms it.
   const emit = defineMdastPlugin({
     name: "emit-tip",
     containerDirective(node) {
@@ -320,7 +314,7 @@ test("a freshly-generated node is transformed by a later plugin (the multi-plugi
   });
   const md = ":::note\nx\n:::";
   const emitOnly = markdownToHtml(md, { features, mdastPlugins: [emit] }).html;
-  expect(emitOnly).not.toContain("<aside"); // generated tip not re-walked by emit
+  expect(emitOnly).not.toContain("<aside");
 
   const both = markdownToHtml(md, { features, mdastPlugins: [emit, toAside] }).html;
   expect((both.match(/<aside/g) ?? []).length).toBe(1);

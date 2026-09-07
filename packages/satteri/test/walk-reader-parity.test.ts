@@ -1,10 +1,3 @@
-// Regression guard: a node must read the same whether a plugin reaches it as a
-// direct walk match (the Rust `walk.rs` inline path) or as a materialized child
-// (the `*Reader` path). Divergences between these two paths were the root of a
-// batch of "behaves differently depending on how you got the node" bugs — see
-// C2 (phantom spaces), C3 (position), C4 (imageReference `alt`). These tests
-// pin the two paths together. C1, P1, and P2 cover the mutation-side fixes.
-
 import { test, expect } from "vitest";
 import {
   createMdastHandle,
@@ -14,6 +7,7 @@ import {
   getHandleSource,
   serializeHandle,
   applyCommandsToMdastHandle,
+  dropHandle,
 } from "../src/index.js";
 import { visitMdastHandle, resolveMdastSubscriptions } from "../src/mdast/mdast-visitor.js";
 import { visitHastHandle, resolveSubscriptions } from "../src/hast/hast-visitor.js";
@@ -30,13 +24,51 @@ import type { Element, ElementContent, Text as HastText } from "hast";
 import type { Position } from "unist";
 import { collect, type TreeNode } from "./fixtures.js";
 
+const isEl = (n: TreeNode): n is Element => n.type === "element";
+
+const isLink = (c: MdastNode): c is Link => c.type === "link";
+
+const isStrong = (c: MdastNode): c is Strong => c.type === "strong";
+
+const isMdastText = (c: MdastNode): c is MdastText => c.type === "text";
+
+const isHastText = (c: ElementContent): c is HastText => c.type === "text";
+
 // Phantom-space sentinel; mirrors the unexported PHANTOM_SPACE in src/phantom.ts.
 const PHANTOM = "\uF002";
 
+test.each(["mdast", "hast"] as const)(
+  "%s reader preserves Unicode and node fields in a misaligned buffer slice",
+  (kind) => {
+    const source = "# Héllo 🌍\n\nA [link](https://example.com).";
+    const handle = kind === "mdast" ? createMdastHandle(source) : createHastHandle(source);
+    const Reader = kind === "mdast" ? MdastReader : HastReader;
+    try {
+      const bytes = serializeHandle(handle);
+      const shifted = new Uint8Array(bytes.length + 1);
+      shifted.set(bytes, 1);
+      const reference = new Reader(bytes);
+      const reader = new Reader(shifted.subarray(1));
+
+      expect(reader.getStringPool()).toBe(reference.getStringPool());
+      expect(reader.getStringPool()).toContain("Héllo 🌍");
+      expect(reader.header).toEqual(reference.header);
+      reader.header.nodeCount = 0;
+      expect(reader.nodeCount).toBe(reference.nodeCount);
+      for (let id = 0; id < reader.nodeCount; id++) {
+        expect(reader.getNodeType(id)).toBe(reference.getNodeType(id));
+        expect(reader.getPosition(id)).toEqual(reference.getPosition(id));
+        expect(reader.getChildIds(id)).toEqual(reference.getChildIds(id));
+        expect(reader.getNodeData(id)).toBe(reference.getNodeData(id));
+      }
+    } finally {
+      dropHandle(handle);
+    }
+  },
+);
+
 type MdastNodeOf<T extends MdastNode["type"]> = Extract<MdastNode, { type: T }>;
 
-/** Capture the nodes a walk visitor receives for `type`, plus the same-type
- *  nodes from the reader-materialized tree, in document order. */
 function walkAndReader<T extends MdastNode["type"]>(md: string, type: T, mdx = false) {
   const handle = mdx ? createMdxMdastHandle(md) : createMdastHandle(md);
   const source = getHandleSource(handle);
@@ -55,9 +87,7 @@ function walkAndReader<T extends MdastNode["type"]>(md: string, type: T, mdx = f
   return { walked, materialized };
 }
 
-// C4 — imageReference `alt`
-
-test("C4: imageReference exposes `alt`/`referenceType` on the walk path, matching the reader", () => {
+test("imageReference exposes `alt`/`referenceType` on the walk path, matching the reader", () => {
   const { walked, materialized } = walkAndReader(
     "![my alt][ref]\n\n[ref]: /img.png",
     "imageReference",
@@ -71,11 +101,7 @@ test("C4: imageReference exposes `alt`/`referenceType` on the walk path, matchin
   expect(walked[0]!.label).toBe(materialized[0]!.label);
 });
 
-// C2 — phantom-space sentinels
-
-test("C2: MDX expression value strips phantom spaces on the walk path, matching the reader", () => {
-  // The tab on the continuation line is partially consumed by the dedent and
-  // re-emitted as phantom-space sentinels; both paths must restore real spaces.
+test("MDX expression value strips phantom spaces on the walk path, matching the reader", () => {
   const { walked, materialized } = walkAndReader(
     "<div>\n\t{`a\n\tb`}\n</div>",
     "mdxFlowExpression",
@@ -87,18 +113,8 @@ test("C2: MDX expression value strips phantom spaces on the walk path, matching 
   expect(walked[0]!.value).toBe(materialized[0]!.value);
 });
 
-// C3 — position parity (the synthesized → undefined branch is defensive; this
-// pins the decode offsets and guards the walk path from fabricating positions)
-
-test("C3: walk-path position matches the reader for every matched node", () => {
-  // The second doc leads with multibyte characters (❤️/CJK/astral 😀): the
-  // walk path used to serialize raw byte offsets while the reader converted
-  // to UTF-16 code units, so positions diverged after any multibyte char.
-  // The third doc adds lone-CR endings as parity input only. It cannot guard
-  // the line-ending split itself: both `utf16_offset_at` and
-  // `byte_to_utf16_offset` sum to the same UTF-16 length whatever the split,
-  // so the two paths agree even when the split is wrong. `line_index.rs`
-  // covers that.
+test("walk-path position matches the reader for every matched node", () => {
+  // Lone-CR inputs check reader parity; line_index.rs separately verifies line-ending boundaries.
   const docs = [
     "# Heading\n\nA paragraph with **bold** and a [link](/x).",
     "# ❤️你好\n\n😀 A paragraph with **bold** and a [link](/x).",
@@ -116,9 +132,7 @@ test("C3: walk-path position matches the reader for every matched node", () => {
   }
 });
 
-test("C3: GFM autolink positions match the reader, present or absent (#187)", () => {
-  // The first doc's autolink carries a position; the unclosed `[` in the second
-  // sends it down the position-less path.
+test("GFM autolink positions match the reader, present or absent", () => {
   const docs = ["[[x]](https://x.y)\n\n[x]: /", "a [b(https://x.y), c"];
   for (const md of docs) {
     for (const type of ["link", "text"] as const) {
@@ -132,18 +146,12 @@ test("C3: GFM autolink positions match the reader, present or absent (#187)", ()
   }
 });
 
-// C1 — mdast context structural methods preserve passed-through node identity
-
-test("C1: ctx.replaceNode preserves a passed-through child's identity (nested transforms, one pass)", () => {
+test("ctx.replaceNode preserves a passed-through child's identity (nested transforms, one pass)", () => {
   const variants = new Set(["note", "tip"]);
   const plugin = defineMdastPlugin({
     name: "aside-ctx",
     containerDirective(node, ctx) {
       if (!variants.has(node.name)) return;
-      // Replace via the context method (not the return value), passing children
-      // through. The inner `:::tip` rides along and its own replacement, queued
-      // the same pass, must still land — which requires the child to keep its
-      // arena id (a `_ref` placeholder), exactly like the return-value path.
       ctx.replaceNode(node, {
         type: "paragraph",
         data: { hName: "aside", hProperties: { "data-v": node.name } },
@@ -161,8 +169,6 @@ test("C1: ctx.replaceNode preserves a passed-through child's identity (nested tr
   expect(html).toContain('data-v="note"');
   expect(html).toContain('data-v="tip"');
 });
-
-// P1 — HAST setProperty on MDX JSX elements (binary attribute upsert)
 
 const isJsxFlow = (n: TreeNode): n is MdxJsxFlowElementHast => n.type === "mdxJsxFlowElement";
 
@@ -183,40 +189,39 @@ function setJsxAttr(md: string, component: string, key: string, value: unknown) 
   return collect(tree, isJsxFlow)[0]!;
 }
 
-test("P1: setProperty adds a string JSX attribute and preserves existing ones + children", () => {
+test("setProperty adds a string JSX attribute and preserves existing ones + children", () => {
   const jsx = setJsxAttr("<Box foo='bar'>\n  hi\n</Box>", "Box", "id", "x");
   expect(jsx.attributes).toContainEqual({ type: "mdxJsxAttribute", name: "id", value: "x" });
   expect(jsx.attributes).toContainEqual({ type: "mdxJsxAttribute", name: "foo", value: "bar" });
-  // Children survive the attribute write (the whole point of the binary path).
   const texts = collect(jsx, (n): n is HastText => n.type === "text");
   expect(texts.some((t) => t.value.includes("hi"))).toBe(true);
 });
 
-test("P1: setProperty updates an existing JSX attribute without duplicating it", () => {
+test("setProperty updates an existing JSX attribute without duplicating it", () => {
   const jsx = setJsxAttr("<Box foo='bar' />", "Box", "foo", "baz");
   const foos = jsx.attributes.filter((a) => a.type === "mdxJsxAttribute" && a.name === "foo");
   expect(foos).toEqual([{ type: "mdxJsxAttribute", name: "foo", value: "baz" }]);
 });
 
-test("P1: setProperty(true) yields a boolean JSX attribute (value null)", () => {
+test("setProperty(true) yields a boolean JSX attribute (value null)", () => {
   const jsx = setJsxAttr("<Box />", "Box", "disabled", true);
   expect(jsx.attributes).toContainEqual({ type: "mdxJsxAttribute", name: "disabled", value: null });
 });
 
-test("P1: setProperty replaces an expression-valued JSX attribute instead of duplicating it", () => {
+test("setProperty replaces an expression-valued JSX attribute instead of duplicating it", () => {
   const jsx = setJsxAttr("<Box foo={1+1} />", "Box", "foo", "x");
   const foos = jsx.attributes.filter((a) => a.type === "mdxJsxAttribute" && a.name === "foo");
   expect(foos).toEqual([{ type: "mdxJsxAttribute", name: "foo", value: "x" }]);
 });
 
-test("P1: setProperty over a spread re-appends the attribute after it, so the write wins", () => {
+test("setProperty over a spread re-appends the attribute after it, so the write wins", () => {
   const jsx = setJsxAttr('<Box foo="a" {...rest} />', "Box", "foo", "b");
   const kinds = jsx.attributes.map((a) => (a.type === "mdxJsxAttribute" ? a.name : "{...}"));
   expect(kinds).toEqual(["{...}", "foo"]);
   expect(jsx.attributes[1]).toMatchObject({ name: "foo", value: "b" });
 });
 
-test("P1: setProperty space-joins array values (binary path)", () => {
+test("setProperty space-joins array values (binary path)", () => {
   const jsx = setJsxAttr("<Box />", "Box", "className", ["a", "b"]);
   expect(jsx.attributes).toContainEqual({
     type: "mdxJsxAttribute",
@@ -225,7 +230,7 @@ test("P1: setProperty space-joins array values (binary path)", () => {
   });
 });
 
-test("P1: setProperty after replaceNode (fold path) space-joins arrays the same way", () => {
+test("setProperty after replaceNode (fold path) space-joins arrays the same way", () => {
   const handle = createMdxHastHandle("<Box />");
   const source = getHandleSource(handle);
   const plugin = defineHastPlugin({
@@ -248,21 +253,15 @@ test("P1: setProperty after replaceNode (fold path) space-joins arrays the same 
   });
 });
 
-test("P1: an array replaceNode clears the queued replacement so a later setProperty can't resurrect it", () => {
+test("an array replaceNode clears the queued replacement so a later setProperty can't resurrect it", () => {
   const handle = createMdxHastHandle("<Box />");
   const source = getHandleSource(handle);
-  const isEl = (n: TreeNode): n is Element => n.type === "element";
   const plugin = defineHastPlugin({
     name: "single-then-array-then-set",
     mdxJsxFlowElement: {
       filter: ["Box"],
       visit(node, ctx) {
-        // A scalar replacement queues `node` in pendingNodes, the fold target for
-        // a later mdxJsx setProperty.
         ctx.replaceNode(node, { ...node, name: "Stale" });
-        // The array replacement must drop that queue. Otherwise the setProperty
-        // below folds into "Stale" and re-emits its `replace`, which lands last
-        // and clobbers [a, b].
         ctx.replaceNode(node, [
           { type: "element", tagName: "a-el", properties: {}, children: [] },
           { type: "element", tagName: "b-el", properties: {}, children: [] },
@@ -273,20 +272,13 @@ test("P1: an array replaceNode clears the queued replacement so a later setPrope
   });
   visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
   const tree = materializeHastTree(new HastReader(serializeHandle(handle)));
-  // The array replacement stands: both elements survive and no "Stale" JSX node
-  // was resurrected by the fold path.
   expect(collect(tree, isJsxFlow)).toHaveLength(0);
   const tags = collect(tree, isEl).map((e) => e.tagName);
   expect(tags).toContain("a-el");
   expect(tags).toContain("b-el");
 });
 
-// P2 — walk-vs-reader parity for element properties
-
-// S1 — ref-stub children: a matched node's `.children` are id+type stubs whose
-// lazily-forwarded fields must read exactly like the reader-materialized node.
-
-test("S1: mdast stub children read the same as reader-materialized children", () => {
+test("mdast stub children read the same as reader-materialized children", () => {
   const handle = createMdastHandle('A paragraph with **bold** and a [link](/x "T").');
   const source = getHandleSource(handle);
   let stubs: Paragraph["children"] = [];
@@ -300,22 +292,17 @@ test("S1: mdast stub children read the same as reader-materialized children", ()
   const tree = materializeMdastTree(new MdastReader(serializeHandle(handle)));
   const real = collect(tree, (n): n is Paragraph => n.type === "paragraph")[0]!.children;
   expect(stubs.length).toBe(real.length);
-  // `type` is eager on stubs; the rest forwards through the snapshot.
   expect(stubs.map((c) => c.type)).toEqual(real.map((c) => c.type));
   for (let i = 0; i < stubs.length; i++) {
     expect(stubs[i]!.position).toEqual(real[i]!.position);
   }
-  const isLink = (c: MdastNode): c is Link => c.type === "link";
-  const isStrong = (c: MdastNode): c is Strong => c.type === "strong";
-  const isText = (c: MdastNode): c is MdastText => c.type === "text";
   expect(stubs.find(isLink)!.url).toBe(real.find(isLink)!.url);
   expect(stubs.find(isLink)!.title).toBe(real.find(isLink)!.title);
-  expect(stubs.find(isText)!.value).toBe(real.find(isText)!.value);
-  // A stub's `children` forwards to the reader path (real materialized nodes).
+  expect(stubs.find(isMdastText)!.value).toBe(real.find(isMdastText)!.value);
   expect(stubs.find(isStrong)!.children).toEqual(real.find(isStrong)!.children);
 });
 
-test("S1: hast stub children read the same as reader-materialized children", () => {
+test("hast stub children read the same as reader-materialized children", () => {
   const handle = createHastHandle("# Hi [link](/x)");
   const source = getHandleSource(handle);
   let stubs: ElementContent[] = [];
@@ -343,14 +330,13 @@ test("S1: hast stub children read the same as reader-materialized children", () 
   }
   const isAnchor = (c: ElementContent): c is Element =>
     c.type === "element" && (c as Element).tagName === "a";
-  const isText = (c: ElementContent): c is HastText => c.type === "text";
-  expect(stubs.find(isText)!.value).toBe(real.find(isText)!.value);
+  expect(stubs.find(isHastText)!.value).toBe(real.find(isHastText)!.value);
   expect(stubs.find(isAnchor)!.tagName).toBe(real.find(isAnchor)!.tagName);
   expect(stubs.find(isAnchor)!.properties).toEqual(real.find(isAnchor)!.properties);
   expect(stubs.find(isAnchor)!.children).toEqual(real.find(isAnchor)!.children);
 });
 
-test("P2: a false-valued element property reads the same from walk and reader paths", () => {
+test("a false-valued element property reads the same from walk and reader paths", () => {
   const handle = createHastHandle("- [ ] todo");
   const source = getHandleSource(handle);
   let walkChecked: unknown = "unset";
@@ -389,7 +375,6 @@ test("leaf node omits children on the walk path, matching the reader", () => {
   expect("children" in materialized[0]!).toBe(false);
 });
 
-/** Create `replacement` for the doc's paragraph, then read it back both ways. */
 function customWalkAndReader(replacement: Custom) {
   const handle = createMdastHandle("> placeholder\n");
   const source = getHandleSource(handle);
@@ -432,7 +417,6 @@ test("a custom leaf omits children on the walk, stub and reader paths alike", ()
   expect(walked?.value).toBe("Ctrl");
   expect("children" in walked!).toBe(false);
   expect("children" in materialized[0]!).toBe(false);
-  // A stub resolves `children` against the arena on read, then drops the key.
   expect(stub!.children).toBeUndefined();
   expect("children" in stub!).toBe(false);
 });

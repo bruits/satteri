@@ -16,7 +16,7 @@ export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle,
  * Fused tail step for `markdownToHtml` with a HAST plugin: apply the plugin's
  * command buffer, render the resulting HAST to HTML, and leave the handle
  * drained, all in one NAPI roundtrip. Saves the `apply` + `render` + `drop`
- * crossings the old path made separately.
+ * crossings of the handle-based pipeline.
  *
  * The handle keeps existing (callers can still `dropHandle` it on the JS
  * side if they want explicit cleanup), but the arena inside is left empty so
@@ -47,12 +47,8 @@ export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandB
 export declare function applyMdastCommandsAndConvertAndCompile(handle: MdastHandle, commandBuf: Uint8Array, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
 
 /**
- * Fused tail for `markdownToHtml` when there's an MDAST plugin but no HAST
- * plugin: apply the MDAST commands, extract frontmatter from the (now
- * possibly-mutated) MDAST, convert MDAST → HAST, render to HTML. All in one
- * NAPI roundtrip. Saves the convert + render + drop + frontmatter crossings
- * the old path made separately, and reads frontmatter *after* mutations so a
- * plugin that rewrites yaml/toml is observed correctly.
+ * Apply MDAST commands, extract frontmatter, convert to HAST, and render HTML
+ * in one NAPI call. Frontmatter reflects plugin edits to YAML/TOML nodes.
  */
 export declare function applyMdastCommandsAndConvertAndRender(handle: MdastHandle, commandBuf: Uint8Array, convertOptions?: JsConvertOptions | undefined | null): MarkdownHtmlOneShot
 

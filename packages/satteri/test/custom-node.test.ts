@@ -7,10 +7,6 @@ import { materializeMdastTree } from "../src/mdast/mdast-materializer.js";
 import { NAME_TO_TYPE } from "../src/mdast/generated/node-types.js";
 import { buildTestBuffer } from "./fixtures.js";
 
-// Issue #125: user-defined mdast node types. A plugin creates a node with an
-// arbitrary `type` string; it round-trips, renders via `data.hName` (default
-// `<div>`), recurses its children, and is visible to other plugins.
-
 test("custom node renders via data.hName with children recursed", () => {
   const wrap = defineMdastPlugin({
     name: "wrap",
@@ -79,7 +75,6 @@ test("custom type round-trips as node.type and content stays visible to other pl
       seenType = node.type;
     },
     strong() {
-      // Wrapping only adds a level: a later pass still reaches the descendants.
       seenStrong = true;
     },
   });
@@ -89,9 +84,7 @@ test("custom type round-trips as node.type and content stays visible to other pl
   expect(seenStrong).toBe(true);
 });
 
-test("GFM content survives inside a custom node (the #125 repro, fixed)", () => {
-  // Replace a blockquote with a section wrapping its children, a GFM table
-  // among them. A directive wrapper drops all of it without an `hName`.
+test("GFM content survives inside a custom node", () => {
   const wrap = defineMdastPlugin({
     name: "wrap-block",
     blockquote(node, ctx) {
@@ -113,12 +106,10 @@ test("custom leaf node (value, no children) renders as an escaped text node", ()
   const wrap = defineMdastPlugin({
     name: "leaf",
     paragraph(node, ctx) {
-      // Replace the paragraph with a value-bearing leaf: no children, no hName.
       ctx.replaceNode(node, { type: "token", value: "a < b & c" });
     },
   });
   const { html } = markdownToHtml("placeholder", { mdastPlugins: [wrap] });
-  // Rendered as text (not wrapped in an element) and HTML-escaped.
   expect(html).toContain("a &lt; b &amp; c");
   expect(html).not.toContain("<token>");
   expect(html).not.toContain("<div>");
@@ -211,8 +202,6 @@ test("custom parent node with `data.h*` carries an empty children array", () => 
 });
 
 test("a node whose type is literally 'custom' round-trips its type", () => {
-  // `"custom"` is the internal tag's own public name; a plugin may still pick
-  // it as a user-defined type, and it must survive rather than emptying out.
   const create = defineMdastPlugin({
     name: "create",
     paragraph(node, ctx) {
@@ -358,7 +347,6 @@ test("a custom leaf keeps no children key however it is reached", () => {
     },
     blockquote(node) {
       const child = node.children[0]!;
-      // A stub resolves `children` against the arena on read, then drops the key.
       expect((child as { children?: unknown }).children).toBeUndefined();
       fromStub = "children" in child;
     },
@@ -439,17 +427,16 @@ test("a custom child's type is readable from a parent's children", () => {
   expect(childTypes).toEqual(["sec"]);
 });
 
-// The eager tree fill meets a custom node only through a serialized mutated
-// arena; the wire fixture stands in for that without the plugin machinery.
+// A mutated-arena fixture reaches custom nodes in the eager materializer without running plugins.
 test("the eager tree fill surfaces a custom node's stored name as its type", () => {
   const CUSTOM = NAME_TO_TYPE.custom!;
   const typeData = new Uint8Array(32);
   const dv = new DataView(typeData.buffer);
-  dv.setUint32(0, 0, true); // name "aside"
+  dv.setUint32(0, 0, true);
   dv.setUint32(4, 5, true);
-  dv.setUint32(16, 5, true); // name "kbd"
+  dv.setUint32(16, 5, true);
   dv.setUint32(20, 3, true);
-  dv.setUint32(24, 8, true); // value "x"
+  dv.setUint32(24, 8, true);
   dv.setUint32(28, 1, true);
 
   const buf = buildTestBuffer({

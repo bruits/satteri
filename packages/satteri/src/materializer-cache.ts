@@ -1,13 +1,7 @@
-/**
- * Shared materializer machinery for the HAST and MDAST flavors: per-reader
- * node memo, lazy `children` descriptors, and the frozen-mode (plugin walk
- * path) freeze rules.
- */
-
 import { deepFreeze } from "./freeze.js";
+import type { Node } from "unist";
 import type { NodeRefs } from "./visitor-shared.js";
 
-/** The reader surface the shared machinery needs; both `HastReader` and `MdastReader` satisfy it. */
 export interface MaterializerReader {
   getNodeType(nodeId: number): number;
   getChildIds(nodeId: number): number[];
@@ -15,46 +9,35 @@ export interface MaterializerReader {
   getNodeData(nodeId: number): string | null;
 }
 
-/** Node memo + shared lazy `children` descriptor; the memo keeps one object per `(reader, id)` so identity-based plugin dedup works across access paths. */
-interface ReaderCache<TNode extends object> {
+// Identity-based plugin deduplication requires one object per reader and node ID.
+interface ReaderCache<TNode extends Node> {
   nodes: Map<number, TNode>;
-  /** Frozen-mode memo of children arrays, keyed by node id. */
   childLists: Map<number, readonly TNode[]>;
-  /** Frozen mode only; mutable mode builds a per-node descriptor instead. */
   children: PropertyDescriptor | undefined;
   frozen: boolean;
-  /** Frozen mode only: the edited tree's refs, which these nodes join as proof of ownership. */
   refs: NodeRefs | undefined;
 }
 
-export interface MaterializerSpec<TReader extends MaterializerReader, TNode extends object> {
-  /** Function name used in error/warning messages (e.g. "materializeHastNode"). */
+export interface MaterializerSpec<TReader extends MaterializerReader, TNode extends Node> {
   label: string;
-  /** Node-type tag -> canonical AST name (the generated `TYPE_NAMES`). */
   typeNames: Readonly<Record<number, string>>;
-  /** Whether `node` carries `children`. Takes the built node because mdast
-   *  `custom` decides leafness per node rather than per type. */
+  // Custom MDAST nodes determine leafness from their fields, not just their type.
   hasChildren(nodeType: number, node: TNode, reader: TReader, nodeId: number): boolean;
-  /**
-   * Install `position` and the type-specific eager fields on `node`. Must not
-   * install `children`, `data`, or `_nodeId`, and must not freeze: the shared
-   * machinery owns those.
-   */
+  // The materializer owns children, data, identity, and freezing; populate only eager type fields.
   populate(node: TNode, reader: TReader, nodeId: number, nodeType: number): void;
 }
 
-/** Plugins can set `data` on any node type, so rehydration is generic (see divergences.md for the code-block case). */
 export function installNodeData(
-  node: object,
+  node: Node,
   rawData: string | null,
   label: string,
   nodeId: number,
 ): void {
   if (rawData === null) return;
   try {
-    const parsed = JSON.parse(rawData) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(rawData);
     if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
-      (node as { data?: Record<string, unknown> }).data = parsed;
+      node.data = parsed;
     }
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
@@ -63,18 +46,9 @@ export function installNodeData(
   }
 }
 
-/**
- * Build a memoizing materializer, memoized per `(reader, id)`.
- *
- * `node` materializes one node with lazy `children`; `frozen` (the plugin walk
- * path) deep-freezes every node at construction so plugins cannot corrupt the
- * shared cache.
- */
-export function createMaterializer<TReader extends MaterializerReader, TNode extends object>(
+export function createMaterializer<TReader extends MaterializerReader, TNode extends Node>(
   spec: MaterializerSpec<TReader, TNode>,
-): {
-  node: (reader: TReader, nodeId: number, frozen?: boolean, refs?: NodeRefs) => TNode;
-} {
+) {
   const readerCaches = new WeakMap<TReader, ReaderCache<TNode>>();
 
   function materialize(reader: TReader, nodeId: number, frozen = false, refs?: NodeRefs): TNode {
@@ -87,15 +61,14 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     return node;
   }
 
-  /** Frozen-mode `children`: memoized in `cache.childLists` because the node
-   *  is frozen, so the accessor cannot self-replace with a data property. */
+  // A frozen node cannot replace its children getter, so cache the array separately.
   function frozenChildrenDescriptor(
     reader: TReader,
     cache: ReaderCache<TNode>,
   ): PropertyDescriptor {
     return {
-      get(this: TNode): readonly TNode[] {
-        const nodeId = (this as unknown as { _nodeId: number })._nodeId;
+      get(this: TNode & { _nodeId: number }): readonly TNode[] {
+        const nodeId = this._nodeId;
         let value = cache.childLists.get(nodeId);
         if (value === undefined) {
           const ids = reader.getChildIds(nodeId);
@@ -112,9 +85,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     };
   }
 
-  /** Mutable-mode `children`: self-replacing with a plain writable array on
-   *  first read. The id is captured rather than stored on the node, so a
-   *  materialized tree carries no marker for `toEqual` or a spread to find. */
+  // Capture the ID so mutable trees expose no arena identity marker.
   function mutableChildrenDescriptor(reader: TReader, nodeId: number): PropertyDescriptor {
     return {
       get(this: TNode): TNode[] {
@@ -166,14 +137,14 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
   ): TNode {
     const typeName = spec.typeNames[nodeType] ?? `unknown(${nodeType})`;
 
-    // Plain object, not a class: unified's `assertNode` rejects any other prototype.
-    const node = { type: typeName } as unknown as TNode;
+    // Unified's assertNode requires a plain-object prototype.
+    const node = { type: typeName } as TNode;
 
-    // Populate before `_nodeId`: both materialization paths must share one hidden-class lineage inside the decoder.
+    // Populate before _nodeId so both materialization paths share V8 hidden classes.
     spec.populate(node, reader, nodeId, nodeType);
 
     if (cache.frozen) {
-      // Non-enumerable so `nid()` never trusts an id that a spread copied.
+      // Non-enumerable IDs prevent spread copies from impersonating arena nodes.
       cache.refs?.set(node, nodeId);
       Object.defineProperty(node, "_nodeId", {
         value: nodeId,
@@ -194,8 +165,7 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     }
 
     if (cache.frozen) {
-      // Deep-freeze the eager own values but not the lazy `children` accessor;
-      // freeze eagerly even for containers so nothing is writable while cached.
+      // Inspect descriptors to avoid triggering lazy children getters while freezing.
       const descriptors = Object.getOwnPropertyDescriptors(node);
       for (const key of Object.keys(descriptors)) {
         const desc = descriptors[key];

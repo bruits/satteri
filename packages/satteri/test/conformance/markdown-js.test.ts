@@ -122,7 +122,6 @@ describe("markdownToJs conformance: ESM syntax stays literal", () => {
   });
 });
 
-// The reference drops it too, with no rehype-raw installed.
 describe("markdownToJs conformance: raw HTML is dropped by default", () => {
   test("inline element", async () => {
     await assertMarkdownJsConformance("a <b>bold</b> word");
@@ -357,8 +356,6 @@ describe("markdownToJs conformance: frontmatter", () => {
   });
 });
 
-// The comparisons above only see the rendered tree; these see the module the
-// JS-output options actually shape.
 describe("markdownToJs conformance: compiled module envelope", () => {
   const src = "# Head\n\ntext with a [link](https://e.com)\n";
 
@@ -444,7 +441,6 @@ describe("markdownToJs conformance: development positions", () => {
   });
 });
 
-// No KaTeX on either side: math renders as `<code>`/`<pre>` with a language class.
 describe("markdownToJs conformance: math", () => {
   test("inline math", async () => {
     await assertMarkdownJsConformance("mass $E = mc^2$ here", { math: true });
@@ -463,9 +459,6 @@ describe("markdownToJs conformance: math", () => {
   });
 });
 
-// Raw HTML is dropped after the plugins run, not at parse time, so a plugin can
-// still turn a `raw` node into something renderable. @mdx-js/mdx orders it the
-// same way.
 describe("markdownToJs conformance: plugins see raw HTML before it is dropped", () => {
   test("inline element", async () => {
     await assertMarkdownJsConformance("a <b>bold</b> word", { rewriteRaw: true });

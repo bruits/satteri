@@ -1,18 +1,9 @@
-import type {
-  ArenaWire,
-  MdastNodeRaw,
-  BufferHeader,
-  StringRefRaw,
-  MdxJsxAttributeUnion,
-} from "../types.js";
-import { decodeMdxJsxAttr } from "../mdx-attr.js";
-import { decodeColumnAlign } from "./column-align.js";
-import { NodeTypeName } from "./generated/node-types.js";
+import type { Position } from "unist";
+import type { AlignType } from "mdast";
+import { ArenaReader } from "../arena-reader.js";
 import {
-  ARENA_MAGIC,
-  KIND_MDAST,
   FIELD,
-  HEADER,
+  KIND_MDAST,
   W_CHILDREN_COUNT,
   W_CHILDREN_START,
   W_DATA_LEN,
@@ -20,15 +11,22 @@ import {
   W_PARENT,
   W_START_OFFSET,
 } from "../generated/arena-layout.js";
-import type { Position } from "unist";
+import { decodeMdxJsxAttr } from "../mdx-attr.js";
+import type {
+  ArenaWire,
+  BufferHeader,
+  MdastNodeRaw,
+  MdxJsxAttributeUnion,
+  StringRefRaw,
+} from "../types.js";
+import { decodeColumnAlign } from "./column-align.js";
+import { NodeTypeName } from "./generated/node-types.js";
 
 export { NodeType, NodeTypeName } from "./generated/node-types.js";
 
 export class MdastReader {
-  readonly #view: DataView;
-  readonly #header: BufferHeader;
-  readonly #textDecoder: TextDecoder;
-  // Typed-array views over the aligned LE wire: DataView getters cost far more in unoptimized V8 tiers.
+  readonly #arena: ArenaReader;
+  // Typed arrays avoid DataView getter overhead in unoptimized V8 tiers.
   readonly #u8: Uint8Array;
   readonly #u32: Uint32Array;
   readonly #nodesB: number;
@@ -37,138 +35,56 @@ export class MdastReader {
   readonly #strideW: number;
   readonly #childrenW: number;
   readonly #typeDataB: number;
-  readonly #nodeDataCount: number;
-  #stringPoolCache: string | null = null;
 
   constructor(buffer: ArrayBuffer | Uint8Array) {
-    let u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-    // A u32 view needs a 4-byte-aligned base, which a foreign slice may not have.
-    if ((u8.byteOffset & 3) !== 0) u8 = u8.slice();
-    this.#u8 = u8;
-    this.#view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-    this.#u32 = new Uint32Array(u8.buffer, u8.byteOffset, u8.byteLength >> 2);
-    this.#textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
-    const header = this.#readHeader();
-    this.#header = header;
+    const arena = new ArenaReader(buffer, KIND_MDAST);
+    this.#arena = arena;
+    this.#u8 = arena.u8;
+    this.#u32 = arena.u32;
+    const header = arena.header;
     this.#nodesB = header.nodesOffset;
     this.#nodesW = header.nodesOffset >> 2;
     this.#strideB = header.nodeStructSize;
     this.#strideW = header.nodeStructSize >> 2;
     this.#childrenW = header.childrenOffset >> 2;
     this.#typeDataB = header.typeDataOffset;
-    this.#nodeDataCount = header.nodeDataCount;
   }
 
-  #readHeader(): BufferHeader {
-    const v = this.#view;
-    const magic = v.getUint32(HEADER.magic, true);
-    if (magic !== ARENA_MAGIC) {
-      throw new Error(
-        `Invalid buffer: bad magic 0x${magic.toString(16)}, expected 0x${ARENA_MAGIC.toString(16)}`,
-      );
-    }
-    const kind = v.getUint32(HEADER.kind, true);
-    if (kind !== KIND_MDAST) {
-      throw new Error(
-        `MdastReader was handed a buffer of kind ${kind} (expected ${KIND_MDAST}). ` +
-          `MDAST and HAST node types overlap; reading the wrong kind decodes garbage.`,
-      );
-    }
-    return {
-      nodeStructSize: v.getUint32(HEADER.node_struct_size, true),
-      nodeCount: v.getUint32(HEADER.node_count, true),
-      nodesOffset: v.getUint32(HEADER.nodes_offset, true),
-      childrenCount: v.getUint32(HEADER.children_count, true),
-      childrenOffset: v.getUint32(HEADER.children_offset, true),
-      typeDataLen: v.getUint32(HEADER.type_data_len, true),
-      typeDataOffset: v.getUint32(HEADER.type_data_offset, true),
-      stringPoolLen: v.getUint32(HEADER.string_pool_len, true),
-      stringPoolOffset: v.getUint32(HEADER.string_pool_offset, true),
-      nodeDataCount: v.getUint32(HEADER.node_data_count, true),
-      nodeDataOffset: v.getUint32(HEADER.node_data_offset, true),
-    };
-  }
-
-  #nodeDataTable: Map<number, string> | null = null;
-
-  #wire: ArenaWire | null = null;
-
-  /** @internal Memoized: the lazy materializer asks once per node. */
+  /** @internal Memoized wire view for the fused decoder. */
   getWire(): ArenaWire {
-    return (this.#wire ??= {
-      u8: this.#u8,
-      u32: this.#u32,
-      nodesB: this.#nodesB,
-      nodesW: this.#nodesW,
-      strideB: this.#strideB,
-      strideW: this.#strideW,
-      childrenW: this.#childrenW,
-      typeDataB: this.#typeDataB,
-      pool: this.getStringPool(),
-    });
+    return this.#arena.getWire();
   }
 
-  /** Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
-   * side). Returns `null` when the node has no entry. Lazy-builds a
-   * `Map<id, string>` on first call so materialization of a data-heavy tree
-   * stays O(nodes) rather than O(nodes × entries). */
+  /** Per-node JSON data, or null when absent. */
   getNodeData(nodeId: number): string | null {
-    const table = this.getNodeDataTable();
-    if (table === null) return null;
-    return table.get(nodeId) ?? null;
+    return this.#arena.getNodeData(nodeId);
   }
 
-  /** @internal `null` when no node carries a `data` blob. */
+  /** @internal null when no node carries data. */
   getNodeDataTable(): ReadonlyMap<number, string> | null {
-    if (this.#nodeDataCount === 0) return null;
-    if (this.#nodeDataTable === null) {
-      this.#nodeDataTable = new Map();
-      const v = this.#view;
-      let pos = this.#header.nodeDataOffset;
-      for (let i = 0; i < this.#nodeDataCount; i++) {
-        const id = v.getUint32(pos, true);
-        pos += 4;
-        const len = v.getUint32(pos, true);
-        pos += 4;
-        const slice = this.#u8.subarray(pos, pos + len);
-        this.#nodeDataTable.set(id, this.#textDecoder.decode(slice));
-        pos += len;
-      }
-    }
-    return this.#nodeDataTable;
+    return this.#arena.getNodeDataTable();
   }
 
   get nodeCount(): number {
-    return this.#header.nodeCount;
+    return this.#arena.header.nodeCount;
   }
+
   get header(): BufferHeader {
-    return { ...this.#header };
+    return { ...this.#arena.header };
   }
 
-  /** The full string pool (original input + interning heap). Not the document
-   * source as written; for that, read `ctx.source` from a plugin. */
+  /** Full string pool, including interned strings; use ctx.source for the original document. */
   getStringPool(): string {
-    return this.#stringPoolCache ?? this.#initPool();
+    return this.#arena.getStringPool();
   }
 
-  #initPool(): string {
-    const { stringPoolOffset, stringPoolLen } = this.#header;
-    const pool = this.#textDecoder.decode(
-      this.#u8.subarray(stringPoolOffset, stringPoolOffset + stringPoolLen),
-    );
-    this.#stringPoolCache = pool;
-    return pool;
-  }
-
-  /** String refs arrive in UTF-16 units (the serializer remaps multibyte pools), so a plain substring is exact. */
+  /** Wire string refs use UTF-16 units, so substring preserves their offsets. */
   getString(offset: number, len: number): string {
-    if (len === 0) return "";
-    const pool = this.#stringPoolCache ?? this.#initPool();
-    return pool.substring(offset, offset + len);
+    return this.#arena.getString(offset, len);
   }
 
   getNode(nodeId: number): MdastNodeRaw {
-    const { nodeCount } = this.#header;
+    const nodeCount = this.nodeCount;
     if (nodeId >= nodeCount) {
       throw new RangeError(`Node ID ${nodeId} out of range (count: ${nodeCount})`);
     }
@@ -241,8 +157,7 @@ export class MdastReader {
     }
   }
 
-  /** Fixed-layout field reads straight off the u32/u8 views; an intermediate
-   *  view or ref object here would cost an allocation per field. */
+  // Read fields directly to avoid allocating an intermediate view or reference per field.
   fieldU8(nodeId: number, offset: number, fallback: number): number {
     const u32 = this.#u32;
     const w = this.#nodesW + nodeId * this.#strideW;
@@ -286,40 +201,26 @@ export class MdastReader {
     };
   }
 
-  /**
-   * TableData #[repr(C)]: align_count(0..4), then align_count bytes.
-   * Alignment bytes: 0=none, 1=left, 2=right, 3=center.
-   */
-  getTableAlign(nodeId: number): (string | null)[] {
+  /** Alignment bytes follow a u32 count: 0=none, 1=left, 2=right, 3=center. */
+  getTableAlign(nodeId: number): AlignType[] {
     const data = this.getTypeData(nodeId);
     if (data.length < 4) return [];
     const count = this.#u32[(data.byteOffset - this.#u8.byteOffset) >> 2] ?? 0;
-    const result: (string | null)[] = [];
+    const result: AlignType[] = [];
     for (let i = 0; i < count; i++) {
       result.push(decodeColumnAlign(data[4 + i] ?? 0));
     }
     return result;
   }
 
-  /**
-   * MdxJsxElementData: name StringRef (0..8). len===0 means fragment.
-   */
+  /** A zero-length element name represents an MDX fragment. */
   getMdxJsxElementName(nodeId: number): string | null {
     const data = this.getTypeData(nodeId);
     const nameRef = this.readStringRef(data, 0);
     return nameRef.len > 0 ? this.getString(nameRef.offset, nameRef.len) : null;
   }
 
-  /**
-   * MDX JSX element data: name + attributes.
-   *
-   * Layout:
-   *   [name: StringRef(8B)][attr_count: u32(4B)][_pad: u32(4B)] = 16-byte header
-   *   then attr_count * 20 bytes:
-   *     [kind: u8(1B)][_pad: [u8;3](3B)][name: StringRef(8B)][value: StringRef(8B)]
-   *
-   * Attribute kinds: 0=boolean, 1=literal, 2=expression, 3=spread
-   */
+  /** Attribute kinds: 0=boolean, 1=literal, 2=expression, 3=spread. */
   getMdxJsxElementData(nodeId: number): {
     name: string | null;
     attributes: MdxJsxAttributeUnion[];
@@ -350,12 +251,6 @@ export class MdastReader {
     return { name, attributes };
   }
 
-  /**
-   * DirectiveData layout:
-   *   [name: StringRef(8B)][attr_count: u32(4B)][_pad: u32(4B)] = 16-byte header
-   *   then attr_count × 16 bytes:
-   *     [key: StringRef(8B)][value: StringRef(8B)]
-   */
   getDirectiveData(nodeId: number): { name: string; attributes: Record<string, string> } {
     const u32 = this.#u32;
     const nw = this.#nodesW + nodeId * this.#strideW;

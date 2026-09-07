@@ -40,7 +40,6 @@ function passesOf<H>(
   return passes;
 }
 
-/** Mirrors the step-by-step pipeline the playground drives by hand. */
 function manualPipeline(
   source: string,
   options: {

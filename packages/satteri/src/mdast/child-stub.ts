@@ -16,8 +16,6 @@ type MdastResolver = LazyChildResolver<MdastReader, MdastNode>;
 
 const N = NAME_TO_TYPE;
 
-/** Per-type stub fields for the types `addTypeProperties` hand-writes; the
- *  fixed-layout types come from the generated `MDAST_LAYOUT_KEYS`. */
 const HAND_WRITTEN_FIELDS: Readonly<Record<number, readonly string[]>> = {
   [N.list!]: ["ordered", "start", "spread"],
   [N.listItem!]: ["spread", "checked"],
@@ -32,9 +30,7 @@ const HAND_WRITTEN_FIELDS: Readonly<Record<number, readonly string[]>> = {
 
 const TYPE_NAME_BY_TAG = flatByTag(TYPE_NAMES);
 
-/** Internal tag for user-defined nodes; its stored `name` field is folded into
- *  the open `node.type`, so the stub exposes `value` (leaf content) but no
- *  separate `name`. */
+// Custom nodes expose their stored name as type, without a separate name field.
 const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
 
 const MDAST_STUB_DESCRIPTORS: (readonly StubDescriptorEntry[] | undefined)[] = [];
@@ -49,19 +45,9 @@ for (const tag of Object.keys(TYPE_NAMES)) {
   MDAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(fields);
 }
 
-/** Unknown node types still expose the prelude-backed lazy fields. */
 const FALLBACK_DESCRIPTORS = stubDescriptors([]);
 
-/**
- * Walk-path child stub: arena id + `type` eagerly, every other field a lazy
- * forward to the materialized node (first read snapshots the arena via
- * `materializeOne`, which enforces the handle epoch). Spread/identity rules
- * are enforced by `nid()` (authoritative doc in hast-visitor.ts).
- *
- * A user-defined node's `type` is the one exception: it lives in the arena,
- * not the tag, so it joins the lazy fields rather than making every sibling
- * list snapshot the arena up front.
- */
+// Custom type names live in the arena, so reading type must remain lazy too.
 export class MdastChildStub {
   _resolver: MdastResolver;
   _id: number;
@@ -85,9 +71,7 @@ export class MdastChildStub {
   }
 }
 
-/** `children` as a self-replacing accessor, and self-*removing* for a leaf: the
- *  stub only knows the tag, so it cannot tell a leaf from a parent until the
- *  arena snapshot says which shape this node has. */
+// A custom node’s leafness is unknown until materialization; leaf stubs must lose their children field.
 function installLazyCustomChildren(stub: MdastChildStub): void {
   Object.defineProperty(stub, "children", {
     get(this: MdastChildStub): MdastNode[] | undefined {
@@ -110,12 +94,10 @@ function installLazyCustomChildren(stub: MdastChildStub): void {
   });
 }
 
-/** `type` as a self-replacing accessor: the materialized node folds the stored
- *  name into `type`. Enumerable so a spread copy still carries it. */
 function installLazyCustomType(stub: MdastChildStub): void {
   Object.defineProperty(stub, "type", {
     get(this: MdastChildStub): string {
-      const value = (this._resolver.materializeOne(this._id) as { type: string }).type;
+      const value = this._resolver.materializeOne(this._id).type;
       Object.defineProperty(this, "type", {
         value,
         writable: true,

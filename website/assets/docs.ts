@@ -1,6 +1,6 @@
-// "Use this page" dropdown: copy markdown to clipboard or open it in
-// Claude/ChatGPT with a pre-filled prompt. The raw markdown lives in a
-// <template> the route renders alongside the dropdown.
+function buildPrompt(): string {
+  return `Help me understand this Sätteri docs page: ${window.location.href}`;
+}
 const button = document.querySelector<HTMLButtonElement>("#page-actions-button");
 const menu = document.querySelector<HTMLDivElement>("#page-actions-menu");
 const sourceTemplate = document.querySelector<HTMLTemplateElement>("#page-source");
@@ -34,10 +34,6 @@ if (button && menu && sourceTemplate) {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") close();
   });
-
-  function buildPrompt(): string {
-    return `Help me understand this Sätteri docs page: ${window.location.href}`;
-  }
 
   document
     .querySelector<HTMLButtonElement>("#action-copy-md")
@@ -75,9 +71,6 @@ if (button && menu && sourceTemplate) {
   });
 }
 
-// Package-manager tabs (emitted by the `install` shortcode). Clicking a tab
-// switches every install snippet on the page at once and persists the choice
-// so the reader's preferred manager sticks across pages.
 const PM_KEY = "pkgManager";
 const DEFAULT_PM = "pnpm";
 

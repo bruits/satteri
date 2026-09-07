@@ -19,7 +19,7 @@ function setOpen(next: boolean) {
 
 button?.addEventListener("click", () => setOpen(!open));
 
-// Auto-close so an open panel doesn't linger when the viewport widens past md.
+// Close the mobile panel when the viewport reaches desktop width.
 matchMedia("(min-width: 768px)").addEventListener("change", (e) => {
   if (e.matches && open) setOpen(false);
 });
