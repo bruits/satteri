@@ -1,16 +1,3 @@
-// Distilled from a hand-crafted GFM autolink differential matrix (3,234 cases,
-// families A–L) run against `remark-parse` + `remark-gfm`. Every case kept here is
-// one the committed suite did not already exercise, and one whose behaviour no
-// other kept case repeats: where the matrix enumerated a rule over a vocabulary,
-// only the members that sit on a boundary of that rule survive.
-//
-// Each row carries the URLs satteri must produce, so a row that stops linking
-// (or starts linking something new) fails on its own terms and not only through
-// the tree comparison.
-//
-// This half covers autolinks in context: the constructs that contain them, the
-// constructs they collide with, line endings, and bracket state.
-
 import { describe, test, expect } from "vitest";
 import {
   assertExtMdastConformance,
@@ -24,11 +11,6 @@ import {
 } from "./helpers.js";
 import type { UrlNode } from "./helpers.js";
 
-// Family D: containing constructs. One case per construct, with a second inner
-// only where the inner changes the answer.
-//
-// The two `_`-delimited rows wrap an email whose local part starts with `_`, so the
-// opening delimiter and the local part compete for the same character.
 describe("family D: containing constructs — emphasis", () => {
   test.each([
     ["*www.example.com*\n", ["http://www.example.com"]],
@@ -186,7 +168,6 @@ describe("family D: containing constructs — math", () => {
   });
 });
 
-// Family E: shapes where an autolink meets another construct.
 describe("family E: adjacent autolinks", () => {
   test.each([
     ["www.a.com www.b.com", ["http://www.a.com", "http://www.b.com"]],
@@ -298,8 +279,6 @@ describe("family E: link destinations", () => {
   ])("%j", conforms);
 });
 
-// The rest of the deferred-splice family is in link-edge-cases.test.ts; these
-// are the shapes it does not carry.
 describe("family E: the deferred splice", () => {
   test.each([
     ["[a] www.x.y\\`code`", ["http://www.x.y\\`code`"]],
@@ -309,7 +288,6 @@ describe("family E: the deferred splice", () => {
   ])("%j", conforms);
 });
 
-// Family F: line endings.
 describe("family F: line endings", () => {
   test.each([
     ["www.example.com\r\n", ["http://www.example.com"]],
@@ -322,8 +300,6 @@ describe("family F: line endings", () => {
   ])("%j", conforms);
 });
 
-// Family I: constructs that shift offsets before the link, including the ones
-// that push it onto the find-and-replace path.
 describe("family I: position stress", () => {
   test.each([
     ["你好 www.example.com", ["http://www.example.com"]],
@@ -349,11 +325,6 @@ describe("family I: position stress", () => {
   ])("%j", conforms);
 });
 
-// Family K covers bracket state and the deferred-autolink decision: a closed `[…]`
-// stops blocking a later trigger even when it resolved to nothing, so the URL
-// before it must not run on. The separator decides whether the second trigger is
-// reachable at all, so the rows below are the label/separator/trigger
-// combinations that answer differently, not the full cross-product.
 describe("family K: bracket balance — a label that never blocked", () => {
   test.each([
     ["[a]www.b.com\n", ["http://www.b.com"]],
@@ -450,7 +421,6 @@ describe("family K: a closed label and a second trigger", () => {
   ])("%j", conforms);
 });
 
-// Family L: reference definitions and footnote definitions.
 describe("family L: definitions", () => {
   test.each([
     ["[a]: /x 'www.example.com'\n\n[a]\n", []],
@@ -464,10 +434,7 @@ describe("family L: definitions", () => {
   ])("%j", conforms);
 });
 
-// Deliberate divergence (see website/content/docs/divergences.md):
-// mdast-util-gfm-task-list-item pulls a task item's paragraph start back over
-// the checkbox only when the paragraph's first child is a text node. An
-// autolink first child is the case the doc's examples do not name.
+// remark includes a task checkbox in paragraph positions only when the first child is text.
 describe("family D: paragraph start in a task list item (documented divergence)", () => {
   test("an autolink first child keeps satteri's uniform start", () => {
     const md = "- [ ] www.example.com\n";
@@ -485,9 +452,6 @@ describe("family D: paragraph start in a task list item (documented divergence)"
   });
 });
 
-// The deferred path reaches the same construct-ordering decision through
-// `candidate_floor` rather than through the committed path's skip, and the
-// block containers each re-enter the scanner at a content start.
 describe("email and `www` triggering at the same offset, per container", () => {
   test.each([
     "[a] www.x.ya@b.cd",

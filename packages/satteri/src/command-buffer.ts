@@ -1,15 +1,4 @@
-/**
- * Binary command buffer for efficient JS→Rust mutation serialization.
- *
- * Simple mutations (remove, setProperty) are encoded as compact binary commands.
- * Structural mutations (insert, replace, …) carry one of two payload kinds:
- * compiled op-streams (`PAYLOAD_OPSTREAM`, replayed straight into the arena —
- * see op-stream.ts) for declarative content, or raw markdown/HTML strings
- * (re-parsed by Rust) for the `{raw}`/`{rawHtml}` escape hatches.
- *
- * All multi-byte integers are little-endian to match native x86/ARM layout and
- * avoid byte-swapping on the Rust side.
- */
+// Little-endian fields match the Rust wire protocol without byte swapping on x86/ARM.
 
 import { OpWriter } from "./op-stream.js";
 import type { MdastNode } from "./types.js";
@@ -30,7 +19,6 @@ import {
   CMD_WRAP,
   CMD_REPLACE,
   CMD_SET_PROPERTY,
-  CMD_SET_CHILDREN,
   PAYLOAD_RAW,
   RAW_LITERAL_BRACES,
   PAYLOAD_OPSTREAM,
@@ -38,7 +26,6 @@ import {
 
 type ReturnClass = "no_change" | "raw_markdown" | "raw_html" | "structured_node";
 
-/** Input to the structural mutators (`replace`, `insertBefore`, …). */
 type StructuralContent =
   | MdastNode
   | { raw: string; mdxExpressions?: boolean }
@@ -55,10 +42,7 @@ export function classifyReturn(value: unknown): ReturnClass {
 
 const INITIAL_SIZE = 4096;
 
-/** Free list recycling `CommandBuffer` instances (and their grown backings)
- *  across plugin passes. Safe to retain the backing because `mergeAndReset`
- *  copies the bytes out before a buffer is released, so no view outlives a
- *  pass. Cap bounds the pool for processes that briefly burst high. */
+// collectCommands copies bytes before release, so pooled buffers cannot invalidate returned commands.
 const COMMAND_BUFFER_POOL_MAX = 8;
 /** Backings above this are dropped on release so one huge compile does not retain megabytes forever. */
 export const COMMAND_BUFFER_RETAIN_MAX = 1 << 20;
@@ -75,7 +59,6 @@ export function releaseCommandBuffer(buf: CommandBuffer): void {
   commandBufferPool.push(buf);
 }
 
-/** Structural commands that carry a subtree payload emitted in place via `emitOpstreamCommand`. */
 export type StructuralOp =
   | "replace"
   | "insertBefore"
@@ -94,8 +77,7 @@ export const STRUCTURAL_CMD: Record<StructuralOp, number> = {
 };
 
 export class CommandBuffer extends OpWriter {
-  /** Set while a structural payload is being emitted in place; command
-   *  methods must not interleave bytes into it. */
+  // Commands must not interleave bytes while a structural payload is being emitted.
   #inOpstream = false;
 
   constructor() {
@@ -115,10 +97,7 @@ export class CommandBuffer extends OpWriter {
     }
   }
 
-  /** Emit a structural command whose opstream payload is written by `emit`
-   *  via the inherited op methods. If `emit` returns false or throws, the
-   *  buffer is rolled back to the command start so the Rust decoder never
-   *  sees a half-written command. Returns `emit`'s verdict. */
+  // Roll back failed payloads so the Rust decoder never sees a partial command.
   emitOpstreamCommand(cmd: number, nodeId: number, emit: () => boolean): boolean {
     const commandStart = this.n;
     const lenPos = this.#beginOpstream(cmd, nodeId);
@@ -133,9 +112,6 @@ export class CommandBuffer extends OpWriter {
     return ok;
   }
 
-  /** Open a structural command whose opstream payload is emitted in place via
-   *  the inherited op methods; returns the backpatch position for
-   *  `#endOpstream`. Pair with `#abortOpstream` on failure. */
   #beginOpstream(cmd: number, nodeId: number): number {
     this.#assertNotEncoding();
     this.#inOpstream = true;
@@ -153,7 +129,6 @@ export class CommandBuffer extends OpWriter {
     this.patchU32(lenPos, this.n - (lenPos + 4));
   }
 
-  /** Roll back an in-progress opstream command (unencodable content). */
   #abortOpstream(commandStart: number): void {
     this.#inOpstream = false;
     this.n = commandStart;
@@ -166,11 +141,6 @@ export class CommandBuffer extends OpWriter {
     this.writeU32(nodeId);
   }
 
-  /** Unified set-property for both MDAST and HAST nodes.
-   *
-   *  Hot path: uses `encodeInto` to write UTF-8 straight into the buffer (no
-   *  per-call `Uint8Array`), reserving the worst-case length up front and
-   *  backfilling the length prefix once the byte count is known. */
   setProperty(nodeId: number, key: string, value: unknown): void {
     this.#assertNotEncoding();
     let valueType: number;
@@ -196,7 +166,6 @@ export class CommandBuffer extends OpWriter {
       str = String(value);
     }
 
-    // 1(cmd) + 4(nodeId) + 1(valueType); name and value are length-prefixed strings
     this.ensure(6);
     this.buf[this.n++] = CMD_SET_PROPERTY;
     this.writeU32(nodeId);
@@ -229,7 +198,6 @@ export class CommandBuffer extends OpWriter {
     this.writeStructuralCommand(CMD_REPLACE, nodeId, newNode);
   }
 
-  /** Header (cmd + nodeId + PAYLOAD_RAW + flags) followed by a length-prefixed string. */
   private writeRawCommand(cmd: number, nodeId: number, flags: number, s: string): void {
     this.#assertNotEncoding();
     this.ensure(7);
@@ -240,12 +208,11 @@ export class CommandBuffer extends OpWriter {
     this.utf8WithU32Len(s);
   }
 
-  /** Return a Uint8Array view of the written bytes (no copy). */
+  // This view aliases the buffer and must be copied before it is released to the pool.
   getBuffer(): Uint8Array {
     return this.take();
   }
 
-  /** Encode the raw-string escape hatch; declarative nodes use `*Opstream` instead. */
   private writeStructuralCommand(cmd: number, nodeId: number, node: unknown): void {
     const v = node as Record<string, unknown>;
     if (typeof v.raw === "string") {

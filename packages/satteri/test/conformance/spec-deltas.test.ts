@@ -105,8 +105,6 @@ describe("CommonMark spec deltas: fuzz-discovered regressions", () => {
     assertHtmlConformance("]g\\\n|-");
   });
 
-  // A line starting with `- ` (bullet-list marker) takes precedence over being
-  // a GFM table delimiter row, even when the column counts match.
   test("bullet-list marker beats table delimiter (no backslash)", () => {
     assertHtmlConformance("a | b\n- | -\n1 | 2\n");
   });
@@ -115,23 +113,16 @@ describe("CommonMark spec deltas: fuzz-discovered regressions", () => {
     assertHtmlConformance("a | b\\\n- | -\n1 | 2\n");
   });
 
-  // Remark keeps any `{...}` suffix in a heading as plain text rather than
-  // stripping it as an attribute block (heading attributes aren't part of
-  // CommonMark / GFM).
   test("fuzz: heading with brace suffix stays as text", () => {
     assertHastConformance("# { ()g}");
   });
 
-  // Backtick in HTML attribute values is serialized as `&#x60;` to match
-  // rehype-stringify (which escapes `` ` `` for legacy-browser safety).
   test("fuzz: backtick in code-fence language is entity-encoded", () => {
     assertHtmlConformance("~~~r`|");
   });
 });
 
 describe("GFM autolink-literal: over-parenthesised URL", () => {
-  // remark re-tokenises an over-balanced `[40](…)` URL via the GFM autolink-literal
-  // post-pass (above the 32-paren inline-link cap); cmark-gfm leaves it raw.
   test("over-balanced parens URL re-autolinked as literal", () => {
     assertHtmlConformance(
       "[30](https://rust.org/something%3A((((((((((((((((((((((((((((((())))))))))))))))))))))))))))))))\n" +
@@ -159,7 +150,6 @@ describe("Directive: nested same-fence closer", () => {
 });
 
 describe("GFM list-item edge cases", () => {
-  // remark emits a single newline between the indented code block and the trailing HTML block, not a blank line.
   test("indented code block then HTML block inside list item", () => {
     assertHtmlConformance("*\n      <div>\n     <div>\n");
   });
@@ -168,7 +158,6 @@ describe("GFM list-item edge cases", () => {
     assertHtmlConformance("- [x]\n\\\n-\n");
   });
 
-  // When the next line is a paragraph interrupt (nested list / blockquote), the `[x]` is NOT a task marker; the item becomes plain text + a nested block.
   test("task-list marker ends line, next line is a paragraph interrupt", () => {
     assertHtmlConformance(
       "- [x] * some text\n- [ ] > some text\n- [x]\n  * some text\n- [ ]\n  > some text\n",
@@ -176,8 +165,6 @@ describe("GFM list-item edge cases", () => {
   });
 });
 
-// pulldown-cmark and cmark-gfm produce different emphasis/strikethrough
-// trees than remark/micromark for the cases below. satteri tracks remark.
 describe("Emphasis: remark vs cmark divergences", () => {
   test("regression 729: triple asterisk run keeps outer `*` literal", () => {
     assertHtmlConformance("j***5*=*\n");
@@ -194,8 +181,6 @@ describe("GFM strikethrough: remark flanking rule", () => {
   });
 });
 
-// A fence info string splits at the first *raw* space or tab, so a character
-// reference that decodes to whitespace stays inside the language.
 describe("Fence info strings: character references", () => {
   const code = (md: string) => (satteriMdast(md) as { children: Code[] }).children[0]!;
 

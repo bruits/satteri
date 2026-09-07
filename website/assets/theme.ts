@@ -1,6 +1,4 @@
-// Pairs with the inline THEME_INIT in layout.rs that sets data-theme on
-// first paint. This module just handles the toggle click + persistence.
-// Multiple `.theme-toggle` buttons can exist (one per responsive nav).
+// Initial theme selection runs inline in layout.rs to avoid a flash before this module loads.
 const root = document.documentElement;
 const buttons = document.querySelectorAll<HTMLButtonElement>(".theme-toggle");
 
@@ -18,7 +16,6 @@ buttons.forEach((button) => {
   });
 });
 
-// Follow the OS preference until the user makes an explicit choice.
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
   if (localStorage.getItem("theme")) return;
   apply(e.matches ? "dark" : "light");

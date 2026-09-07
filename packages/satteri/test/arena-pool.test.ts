@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import { markdownToHtml, mdxToJs, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 
-// The native pool caps at 4 arenas per thread, so a few rounds cycle every compile through recycled arenas; missed reset state shows as drift vs round 0.
+// Repeated compiles cycle through the four-arena native pool to expose incomplete resets.
 
 const big =
   "# Big\n\n" +

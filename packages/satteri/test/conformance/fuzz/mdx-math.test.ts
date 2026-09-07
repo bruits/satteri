@@ -9,9 +9,6 @@ import {
   FUZZ_TIMEOUT_MS,
 } from "./shared.js";
 
-// MDX and math enabled together: differential-fuzz the interaction between
-// inline `$...$` spans and `{...}` expressions (the inline-`{` math guard)
-// against @mdx-js/mdx + remark-math, rendered to HTML.
 describe("fuzz: MDX + math eval conformance", () => {
   test(
     "collect and report MDX+math eval issues",

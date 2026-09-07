@@ -1,6 +1,4 @@
-// Deliberate divergence (see website/content/docs/divergences.md): find-and-replace
-// autolinks carry source positions here and none in remark. A wrong position is
-// worse than an absent one, so these assert the exact span.
+// Sätteri supplies positions absent from remark’s find-and-replace output, so verify their spans directly.
 
 import { describe, test, expect } from "vitest";
 import {
@@ -34,7 +32,6 @@ function flatten(tree: unknown): Positioned[] {
   return out;
 }
 
-/** Every emitted node, paired with the source text its span covers. */
 function spans(md: string): Array<[string, string, string]> {
   return spansOf(md, satteriMdast(md));
 }
@@ -55,7 +52,6 @@ function firstLink(tree: unknown): Positioned {
   return link!;
 }
 
-/** The reference must keep taking the find-and-replace path, or the case moved. */
 function expectReferenceTakesFnr(md: string): void {
   expect(
     firstLink(referenceMdast(md)).position,
@@ -77,7 +73,6 @@ describe("find-and-replace autolink positions", () => {
   test("2. a match spanning a character reference covers it whole", () => {
     const md = "[www.a.com/&amp;b";
     expectReferenceTakesFnr(md);
-    // The URL stays decoded, as in remark; only the span is raw.
     expect(spans(md)).toEqual([
       ["text", "[", "["],
       ["link", "http://www.a.com/&b", "www.a.com/&amp;b"],
@@ -86,7 +81,6 @@ describe("find-and-replace autolink positions", () => {
   });
 
   test("3. a match starting at a character reference starts at the `&`", () => {
-    // The trigger `h` is the reference's output, so the raw source begins at `&`.
     const md = "[&#104;ttp://x.y";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -170,8 +164,6 @@ describe("find-and-replace autolink positions", () => {
   });
 
   test("8. a multi-character reference is included whole or not at all", () => {
-    // `&fjlig;` decodes to two characters, so a boundary inside it has no raw
-    // offset to name; here it falls within the match.
     const md = "[www.a.com/&fjlig;b";
     expectReferenceTakesFnr(md);
     expect(spans(md)).toEqual([
@@ -196,7 +188,6 @@ describe("find-and-replace autolink positions", () => {
     const md = "你好[www.x.y";
     expectReferenceTakesFnr(md);
     const link = firstLink(satteriMdast(md));
-    // Three UTF-16 units precede the trigger, not the seven bytes it occupies.
     expect(link.position!.start.offset).toBe(3);
     expect(md.slice(link.position!.start.offset, link.position!.end.offset)).toBe("www.x.y");
   });
@@ -215,10 +206,6 @@ describe("find-and-replace autolink positions", () => {
   });
 });
 
-// Smart punctuation rewrites the text a find-and-replace autolink is found in,
-// so the decoded value no longer matches its source span byte for byte. The
-// alignment undoes the three rewrites, and these pin that it lands exactly:
-// an approximate span would be worse than the absent one it replaces.
 describe("smart punctuation does not cost the autolink its position", () => {
   const smart = (md: string) =>
     spansOf(
@@ -229,11 +216,9 @@ describe("smart punctuation does not cost the autolink its position", () => {
     );
 
   test.each([
-    // Inside the URL: the value curls, the span still covers the raw run.
     ["[www.a.com/a--b", "http://www.a.com/a\u{2013}b", "www.a.com/a--b"],
     ["[www.a.com/a...b", "http://www.a.com/a\u{2026}b", "www.a.com/a...b"],
     ['[www.a.com/a"b', "http://www.a.com/a\u{201c}b", 'www.a.com/a"b'],
-    // The `%6` em/en formula, which the alignment shares with the first pass.
     ["[www.a.com/a----b", "http://www.a.com/a\u{2013}\u{2013}b", "www.a.com/a----b"],
     ["[www.a.com/a-----b", "http://www.a.com/a\u{2014}\u{2013}b", "www.a.com/a-----b"],
   ])("%j", (md, url, slice) => {
@@ -256,8 +241,6 @@ describe("smart punctuation does not cost the autolink its position", () => {
   });
 
   test("it composes with the alignment's existing rules", () => {
-    // A continuation prefix, a character reference, and an escape that keeps
-    // its `-` out of the dash run.
     expect(smart('> "q"\n> [www.a.com/x').at(1)).toEqual([
       "link",
       "http://www.a.com/x",

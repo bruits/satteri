@@ -1,13 +1,18 @@
-import type { Root } from "mdast";
-import type { ArenaWire, MdastNode } from "../types.js";
+import type { List, ListItem, Root, Table } from "mdast";
+import type {
+  ArenaWire,
+  Custom,
+  DescriptionDetails,
+  ContainerDirective,
+  MdastNode,
+  MdxJsxFlowElement,
+} from "../types.js";
 import type { MdastReader } from "./mdast-reader.js";
 import { LEAF_TYPES, NAME_TO_TYPE, TYPE_NAMES } from "./generated/node-types.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { FIELD, W_CHILDREN_COUNT, W_CHILDREN_START } from "../generated/arena-layout.js";
 import { readMdastWireNode } from "../generated/fused-wire.js";
 
-/** Internal tag for user-defined nodes; its stored `name` field carries the
- *  author's public `type` string. */
 const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
 
 export { LEAF_TYPES };
@@ -15,10 +20,7 @@ export { LEAF_TYPES };
 const IS_LEAF = new Uint8Array(256);
 for (const t of LEAF_TYPES) IS_LEAF[t] = 1;
 
-/** A `custom` node is a leaf when it has a non-empty `value` and no children or
- *  `data.h*`. Leafness is per node there, not per type, so the read paths ask
- *  this instead of {@link LEAF_TYPES}.
- *  @see {@link Custom} */
+// Custom nodes determine leafness from value, children, and data.h* rather than their type tag.
 export function isCustomLeaf(
   node: { readonly value?: unknown; readonly data?: unknown },
   childCount: number,
@@ -33,10 +35,6 @@ export function isCustomLeaf(
   return props === null || typeof props !== "object" || Array.isArray(props);
 }
 
-/**
- * The reader-path decode for the tags `readMdastWireNode` hands back:
- * struct-backed scalars, tails with hand assembly, and the user-defined node.
- */
 function addTypeProperties(
   node: MdastNode,
   reader: MdastReader,
@@ -45,8 +43,8 @@ function addTypeProperties(
 ): void {
   switch (nodeType) {
     case MDAST_CUSTOM: {
-      // The stored `name` becomes the open `node.type`; an empty `value` is omitted so the node doesn't read as a leaf.
-      const n = node as { type: string; value?: string };
+      // Omit an empty custom value so parent nodes do not masquerade as text leaves.
+      const n = node as Custom;
       n.type = reader.fieldString(nodeId, 0);
       const value = reader.fieldString(nodeId, 8);
       if (value !== "") n.value = value;
@@ -54,8 +52,7 @@ function addTypeProperties(
     }
 
     case 5: {
-      // list
-      const n = node as { ordered: boolean; start: number | null; spread: boolean };
+      const n = node as List;
       const ordered = reader.fieldU8(nodeId, 4, 0) !== 0;
       n.ordered = ordered;
       n.start = ordered ? reader.fieldU32(nodeId, 0, 0) : null;
@@ -64,8 +61,7 @@ function addTypeProperties(
     }
 
     case 6: {
-      // listItem
-      const n = node as { spread: boolean; checked: boolean | null };
+      const n = node as ListItem;
       // checked: 0=unchecked, 1=checked, 2=not-a-task-item.
       const checked = reader.fieldU8(nodeId, 0, 2);
       n.spread = reader.fieldU8(nodeId, 1, 0) !== 0;
@@ -74,31 +70,28 @@ function addTypeProperties(
     }
 
     case 37: {
-      // descriptionDetails
-      (node as { spread: boolean }).spread = reader.fieldU8(nodeId, 0, 0) !== 0;
+      (node as DescriptionDetails).spread = reader.fieldU8(nodeId, 0, 0) !== 0;
       break;
     }
 
-    case 21: // table
-      (node as { align: unknown }).align = reader.getTableAlign(nodeId);
+    case 21:
+      (node as Table).align = reader.getTableAlign(nodeId);
       break;
 
-    case 30: // containerDirective
-    case 31: // leafDirective
+    case 30:
+    case 31:
     case 32: {
-      // textDirective
       const d = reader.getDirectiveData(nodeId);
-      const n = node as { name: string; attributes: unknown };
+      const n = node as ContainerDirective;
       n.name = d.name;
       n.attributes = d.attributes;
       break;
     }
 
-    case 100: // mdxJsxFlowElement
+    case 100:
     case 101: {
-      // mdxJsxTextElement
       const d = reader.getMdxJsxElementData(nodeId);
-      const n = node as { name: string | null; attributes: unknown };
+      const n = node as MdxJsxFlowElement;
       n.name = d.name;
       n.attributes = d.attributes;
       break;
@@ -123,11 +116,6 @@ const mdastMaterializer = createMaterializer<MdastReader, MdastNode>({
   },
 });
 
-/**
- * Materialize a single MDAST node; scalars eager, `children` lazy, memoized
- * per `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
- * cannot corrupt the shared cache.
- */
 export const materializeNode = mdastMaterializer.node;
 
 // Not a per-call closure: fresh closures restart type feedback per tree, pinning small-tree calls to the slow tiers.
@@ -138,8 +126,8 @@ function buildMdastFused(
   nodeType: number,
 ): MdastNode {
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
-  // Plain object, not a class: unified's `assertNode` rejects any other prototype.
-  const node = { type: typeName } as unknown as MdastNode;
+  // Unified's assertNode requires a plain-object prototype.
+  const node = { type: typeName } as MdastNode;
   if (!readMdastWireNode(wire, nodeId, nodeType, node)) {
     addTypeProperties(node, reader, nodeId, nodeType);
   }

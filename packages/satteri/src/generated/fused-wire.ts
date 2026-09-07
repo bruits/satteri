@@ -9,8 +9,6 @@ import { W_START_OFFSET, W_DATA_LEN, W_DATA_OFFSET } from "./arena-layout.js";
 
 const FUSED_ENUM_0 = ["shortcut", "collapsed", "full"] as const;
 
-/** Install `position` (a zero start line marks a synthesized node) and the tag's fixed
- *  fields straight off the wire; `false` hands the tag to the caller's reader path. */
 export function readMdastWireNode(
   wire: ArenaWire,
   nodeId: number,
@@ -183,8 +181,6 @@ export function readMdastWireNode(
   }
 }
 
-/** Install `position` (a zero start line marks a synthesized node) and the tag's fixed
- *  fields straight off the wire; `false` hands the tag to the caller's reader path. */
 export function readHastWireNode(
   wire: ArenaWire,
   nodeId: number,

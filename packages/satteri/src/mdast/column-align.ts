@@ -1,7 +1,5 @@
-/** Decode a table column-alignment byte — shared by the generated walk decoder
- *  and the snapshot reader so the mapping lives in one place. */
-const ALIGN_NAMES: readonly (string | null)[] = [null, "left", "right", "center"];
+const ALIGN_NAMES = [null, "left", "right", "center"] as const;
 
-export function decodeColumnAlign(byte: number): string | null {
+export function decodeColumnAlign(byte: number) {
   return ALIGN_NAMES[byte] ?? null;
 }

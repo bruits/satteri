@@ -1,12 +1,3 @@
-/**
- * End-to-end pipeline benchmarks using the public API.
- *
- * Requires the native Rust module to be built:
- *   pnpm build:native
- *
- * Run with: pnpm bench
- */
-
 import { readFileSync } from "node:fs";
 import { bench, describe } from "vitest";
 import {
@@ -25,7 +16,7 @@ import type { MdastNode } from "../src/types.js";
 
 const MARKDOWN = readFileSync(new URL("./fixtures/markdown.md", import.meta.url), "utf8");
 const MDX = readFileSync(new URL("./fixtures/document.mdx", import.meta.url), "utf8");
-// `markdown.md` has no autolink triggers.
+// Add autolink triggers because markdown.md has none.
 const AUTOLINKS = readFileSync(new URL("./fixtures/autolinks.md", import.meta.url), "utf8");
 
 const noopHastPlugin = defineHastPlugin({
@@ -100,12 +91,6 @@ const touchAllMdastTextNoop = defineMdastPlugin({
   text() {},
 });
 
-// Plugins that transform the tree — the path most plugins exercise. Two
-// representative shapes: keeping children (passthrough) and building a fresh
-// subtree.
-
-// Keep children: swap every <a> for a <span> carrying the href; children pass
-// through by reference.
 const replaceLinksHast = defineHastPlugin({
   name: "replace-links",
   element: {
@@ -121,8 +106,6 @@ const replaceLinksHast = defineHastPlugin({
   },
 });
 
-// MDAST mirror of the keep-children fast path: passing `node.children` through
-// compiles them to refs and skips the arena snapshot.
 const replaceLinksMdast = defineMdastPlugin({
   name: "replace-links-mdast",
   link(node, ctx) {
@@ -130,7 +113,6 @@ const replaceLinksMdast = defineMdastPlugin({
   },
 });
 
-// Build a fresh subtree: replace every paragraph with a blockquote it constructs.
 const buildSubtreeMdast = defineMdastPlugin({
   name: "build-subtree-mdast",
   paragraph() {
@@ -234,7 +216,7 @@ describe("mdxToJs", () => {
   });
 });
 
-// Without a walk these time the call and not the tree, so deferred work reads as free.
+// Force traversal so deferred materialization is included in the measurement.
 function walk(node: MdastNode | HastNode): number {
   let count = 1;
   const children = (node as { children?: (MdastNode | HastNode)[] }).children;

@@ -32,10 +32,7 @@ import { expect } from "vitest";
 const mdxRuntime = runtime as unknown as Pick<MdxEvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 const satteriRuntime = runtime as unknown as Pick<EvaluateOptions, "Fragment" | "jsx" | "jsxs">;
 
-// Satteri's Rust mdast→hast converter can't see JS-level directive handlers,
-// so by default it emits nothing for directive nodes. Match that on the
-// reference side with empty `toHast` handlers; users who want to render
-// directives are expected to plug in their own handler on both pipelines.
+// Empty reference handlers match Sätteri’s omission of unhandled directives.
 const emptyHandler = () => undefined;
 export const REF_REHYPE_OPTIONS = {
   allowDangerousHtml: true,
@@ -46,15 +43,7 @@ export const REF_REHYPE_OPTIONS = {
   },
 } as const;
 
-// Default reference is plain remark + GFM. We intentionally do NOT enable
-// frontmatter or math here — remark-frontmatter has a quirk where enabling
-// it changes how `---` interacts with surrounding content even when no yaml
-// actually matches, which would make fuzz comparisons unstable.
-//
-// Satteri's `markdownToMdast(md)` default turns frontmatter/math on, so the
-// plain helpers below pass `features: BASE_FEATURES` to disable them when
-// comparing with this reference. Tests that specifically want frontmatter
-// or math use `assertExt*` which build feature-matched processors.
+// Disable frontmatter in the base reference because failed detection can change unrelated block parsing.
 const mdastProcessor = unified().use(remarkParse).use(remarkGfm);
 const hastProcessor = unified()
   .use(remarkParse)
@@ -135,10 +124,7 @@ function stripData(node: AnyNode): AnyNode {
   return out;
 }
 
-// Intentional divergence: Sätteri keeps `data.lang` on HAST code elements;
-// remark-rehype drops it (the language is already encoded in
-// `properties.className`). Strip it from satteri's output before conformance
-// comparisons. See website/content/docs/divergences.md.
+// Ignore data.lang because only Sätteri retains it on HAST code elements.
 function stripHastDataLang(node: AnyNode): AnyNode {
   if (typeof node !== "object" || node === null) return node;
   const out = { ...node };
@@ -186,7 +172,6 @@ const mathHtmlProcessor = unified()
   .use(remarkRehype, REF_REHYPE_OPTIONS)
   .use(rehypeStringify, { allowDangerousHtml: true });
 
-// Isolate math: the reference math processors don't enable frontmatter.
 const MATH_FEATURES: Features = { math: true, frontmatter: false };
 
 export function referenceMathMdast(md: string): unknown {
@@ -215,8 +200,6 @@ export function satteriMathHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
-// singleDollarTextMath: false on both sides, to pin satteri against
-// remark-math configured the same way.
 const mathNoSingleMdastProcessor = unified()
   .use(remarkParse)
   .use(remarkGfm)
@@ -249,24 +232,16 @@ export function assertNoSingleDollarMathHastConformance(md: string): void {
   expect(actual).toEqual(expected);
 }
 
-// remark-rehype takes callbacks for back-label/back-content; satteri uses
-// templates with auto-sup. This helper translates satteri's shape into
-// matching remark-rehype callbacks.
+// Convert templates to callbacks so remark-rehype uses the same backref text as Sätteri.
 const BASE_FOOTNOTE_FEATURES: Features = { math: false, frontmatter: false };
 
 type FootnoteCallback = (referenceNumber: number, rerunIndex: number) => string;
 
 export interface FootnoteOptionsConformance {
   label?: string;
-  /**
-   * Static text used for every back-content (auto-sup appended for k>1),
-   * or a callback returning the per-backref text.
-   */
+  // String content receives a repeat-reference superscript; callback results do not.
   backContent?: string | FootnoteCallback;
-  /**
-   * Template with `{reference}` placeholder (`n` for k=1, `n-K` for k>1),
-   * or a callback returning the per-backref aria-label.
-   */
+  // The reference placeholder uses n for the first backref and n-K for repeats.
   backLabel?: string | FootnoteCallback;
 }
 
@@ -297,7 +272,7 @@ export function assertFootnoteHastConformance(
   if (options.backContent !== undefined) {
     if (typeof options.backContent === "function") {
       const cb = options.backContent;
-      // Callback mode in satteri skips auto-sup; mirror that here.
+      // Callback results must bypass the automatic repeat-reference superscript.
       refOpts.footnoteBackContent = (refIdx: number, rerefIdx: number) => [
         { type: "text", value: cb(refIdx + 1, rerefIdx) },
       ];
@@ -328,7 +303,6 @@ const fmHastProcessor = buildHastProcessor(["frontmatter"]);
 const fmHtmlProcessor = buildHastProcessor(["frontmatter"]).use(rehypeStringify, {
   allowDangerousHtml: true,
 });
-// Isolate frontmatter: the reference fm processors don't enable math.
 const FM_FEATURES: Features = { frontmatter: true, math: false };
 
 export function referenceFmMdast(md: string): unknown {
@@ -357,9 +331,7 @@ export function satteriFmHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
-// Find-and-replace autolinks carry source positions here and none in remark.
-// Dropping positions wholesale would hide every other position bug, so each
-// extra one is verified against the source before being removed.
+// Verify extra autolink positions before removing them so normalization cannot hide incorrect spans.
 
 interface PositionedNode {
   type: string;
@@ -371,7 +343,6 @@ interface PositionedNode {
 
 const entityCache = new Map<string, string>();
 
-/** Decode one `&…;` reference, or `undefined` if it isn't one. */
 function decodeEntity(raw: string): string | undefined {
   let decoded = entityCache.get(raw);
   if (decoded === undefined) {
@@ -385,10 +356,7 @@ function decodeEntity(raw: string): string | undefined {
 
 const ENTITY_RE = /^&(?:#[Xx][0-9A-Fa-f]{1,6}|#\d{1,7}|[A-Za-z][A-Za-z0-9]{0,31});/;
 
-/**
- * Undo the transforms between raw source and a text node's value. Written
- * independently of the parser's own alignment so a symmetric bug can't cancel out.
- */
+// Keep source alignment independent of the parser so a shared bug cannot cancel out.
 function decodeRawSlice(raw: string, value: string): string {
   let out = "";
   let i = 0;
@@ -436,15 +404,12 @@ function decodeRawSlice(raw: string, value: string): string {
   return out;
 }
 
-/** Slicing the source by a node's reported offsets reproduces its raw text. */
 function assertSliceInvariant(node: PositionedNode, input: string, label: string): void {
   const { start, end } = node.position!;
   expect(start.offset, `${label}: start offset out of range`).toBeGreaterThanOrEqual(0);
   expect(end.offset, `${label}: end before start`).toBeGreaterThanOrEqual(start.offset);
   expect(end.offset, `${label}: end offset out of range`).toBeLessThanOrEqual(input.length);
   if (typeof node.value === "string") {
-    // The span must be exact under one convention or the other: the construct
-    // path slices raw source into the value, find-and-replace decodes it.
     const slice = input.slice(start.offset, end.offset);
     if (slice !== node.value) {
       expect(
@@ -455,7 +420,6 @@ function assertSliceInvariant(node: PositionedNode, input: string, label: string
   }
 }
 
-/** Sibling spans are ascending, non-overlapping, and inside their parent's. */
 function assertSpanSet(parent: PositionedNode, label: string): void {
   let previousEnd = 0;
   for (const child of parent.children ?? []) {
@@ -489,8 +453,7 @@ function stripVerifiedSubtree(
   label: string,
 ): void {
   if (!actual || !expected) return;
-  // A `link` has no `value`, so the slice invariant only bounds-checks it;
-  // sibling ordering is the rest of the check before the position is deleted.
+  // Links have no value to check, so verify sibling ordering before removing their positions.
   assertSpanSet(actual, label);
   if (actual.position) {
     assertSliceInvariant(actual, input, label);
@@ -502,8 +465,6 @@ function stripVerifiedSubtree(
   }
 }
 
-/** The slice invariant on every `link` and `text`: a wrong position is worse
- * than the absent one it replaces. */
 export function assertSliceInvariantEverywhere(tree: unknown, input: string): void {
   const walk = (node: PositionedNode, label: string): void => {
     if (node.position && (node.type === "link" || node.type === "text")) {
@@ -557,14 +518,12 @@ const CMARK_FEATURES: Features = {
   headingAttributes: false,
 };
 
-/** Every extension off on both sides, against plain remark-parse. */
 export function assertCommonMarkMdastConformance(md: string): void {
   expect(serialize(markdownToMdast(md, { features: CMARK_FEATURES }))).toEqual(
     serialize(cmarkMdastProcessor.parse(md)),
   );
 }
 
-/** The part of an mdast node the autolink suites walk. */
 export interface UrlNode {
   type: string;
   url?: string;
@@ -572,7 +531,6 @@ export interface UrlNode {
   position?: { start: { offset: number }; end: { offset: number } };
 }
 
-/** Every `link` URL in document order. */
 export function collectUrls(tree: unknown): string[] {
   const out: string[] = [];
   const walk = (node: UrlNode): void => {
@@ -583,20 +541,15 @@ export function collectUrls(tree: unknown): string[] {
   return out;
 }
 
-/** Every `link` URL satteri produces for `md`, in document order. */
 export function linkUrls(md: string): string[] {
   return collectUrls(satteriMdast(md));
 }
 
-/** The tree matches remark, and the autolinks are the ones named. */
 export function conforms(md: string, urls: string[]): void {
   assertMdastConformance(md);
   expect(linkUrls(md), JSON.stringify(md)).toEqual(urls);
 }
 
-/** Like `assertMdastConformance` but strips `position` fields before
- * comparing. Useful when the structural mdast matches but offsets diverge
- * in non-load-bearing ways (e.g. EOF accounting around trailing blanks). */
 export function assertMdastConformanceNoPosition(md: string): void {
   expect(stripPositions(serialize(markdownToMdast(md, { features: BASE_FEATURES })))).toEqual(
     stripPositions(serialize(mdastProcessor.parse(md))),
@@ -651,20 +604,14 @@ function normalizeHtmlForComparison(html: string): string {
       .replace(/<br\/>/g, "<br />")
       .replace(/<hr>/g, "<hr />")
       .replace(/<hr\/>/g, "<hr />")
-      // remark+rehype favours hex entities (`&#x26;`); satteri (and the
-      // CommonMark spec) use named ones. Canonicalize to named, then
-      // collapse the few entities rehype-stringify never has to encode.
-      // The `&quot; → "` collapse is context-unaware and could mask an
-      // unescaped `"` inside an attribute value; tolerated until we have
-      // an HTML-aware compare.
+      // Entity normalization is context-blind and cannot verify quote escaping inside attribute values.
       .replace(/&#x3C;/g, "&lt;")
       .replace(/&#x3E;/g, "&gt;")
       .replace(/&#x26;/g, "&amp;")
       .replace(/&#x22;/g, "&quot;")
       .replace(/&gt;/g, ">")
       .replace(/&quot;/g, '"')
-      // remark+rehype emits the legacy `align="X"` attribute on table cells;
-      // satteri emits modern `style="text-align: X"`. Canonicalize for diff.
+      // Treat CSS text-align and the deprecated align attribute as equivalent table alignment.
       .replace(/ align="(left|right|center)"/g, ' style="text-align: $1"')
       .trim()
   );
@@ -679,9 +626,7 @@ export function satteriHtml(md: string): string {
   return normalizeHtmlForComparison(html);
 }
 
-// Collapsing whitespace around tags also hides whitespace-only text nodes next
-// to an element, such as a table's row newlines: JSX strips those, satteri keeps
-// them.
+// Whitespace normalization also hides whitespace-only text nodes between elements.
 function normalizeHtml(html: string): string {
   return html.replace(/>\s+</g, "><").replace(/\s+</g, "<").replace(/>\s+/g, ">").trim();
 }
@@ -739,19 +684,14 @@ export async function assertMdxPluginConformance(
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }
 
-// Reference is @mdx-js/mdx with `format: "md"`. Both sides evaluate to a
-// component and render through react-dom/server, so escaping is identical and
-// only structural differences survive.
 export interface MarkdownJsConformanceOptions {
   components?: Record<string, unknown>;
   rawHtml?: boolean;
   frontmatter?: boolean;
   math?: boolean;
-  /** Pins when raw HTML is dropped: only what the plugins leave behind goes. */
   rewriteRaw?: boolean;
 }
 
-/** Makes a `raw` node show up in the render instead of being dropped. */
 const rewriteRawToCode = {
   reference: () => (tree: Nodes) => {
     const walk = (node: Nodes): void => {
@@ -831,8 +771,7 @@ interface ModuleEnvelope {
   markers: string[];
 }
 
-// Presence-only, not a text comparison: satteri emits `Object.assign` where
-// @mdx-js/mdx spreads, and pretty-prints differently.
+// Check presence because valid generated modules can differ in formatting and spread syntax.
 const ENVELOPE_MARKERS = [
   "_createMdxContent",
   "MDXContent",
@@ -873,11 +812,6 @@ function moduleEnvelope(code: string): ModuleEnvelope {
   };
 }
 
-/**
- * Compare the compiled module's envelope against @mdx-js/mdx `format: "md"`.
- * Covers the options that shape the module rather than the rendered tree, which
- * the evaluate-and-render comparison cannot see.
- */
 export async function assertMarkdownJsModuleConformance(
   input: string,
   options: MarkdownToJsOptions & { frontmatter?: boolean } = {},
@@ -902,10 +836,6 @@ export async function assertMarkdownJsModuleConformance(
   expect(moduleEnvelope(code)).toEqual(expected);
 }
 
-/**
- * Compare the `__source` metadata against @mdx-js/mdx `format: "md"`: one
- * `line:column` per JSX call, in source order.
- */
 export async function assertMarkdownJsDevPositionConformance(input: string): Promise<void> {
   const positions = (code: string): string[] =>
     [...code.matchAll(/lineNumber: (\d+),\s*columnNumber: (\d+)/g)].map(
@@ -929,10 +859,6 @@ export async function assertMarkdownJsDevPositionConformance(input: string): Pro
   expect(positions(code)).toEqual(expected);
 }
 
-/**
- * Compare development-mode source locations against @mdx-js/mdx: the `__source`
- * `line:column` of every JSX call and every `_missingMdxReference` range.
- */
 export async function assertMdxDevPositionConformance(input: string): Promise<void> {
   const positions = (code: string): string[] =>
     [...code.matchAll(/lineNumber: (\d+),\s*columnNumber: (\d+)/g)].map(
@@ -952,10 +878,6 @@ export async function assertMdxDevPositionConformance(input: string): Promise<vo
   expect(missingRefPlaces(code)).toEqual(missingRefPlaces(expected));
 }
 
-// Like `assertMdxConformance`, but with math enabled on both pipelines
-// (satteri `features.math`, reference `remark-math`). Exercises how MDX
-// expressions and `$...$` math interact, e.g. that braces inside a math span
-// stay math text rather than being parsed as an expression.
 export async function assertMdxMathConformance(
   input: string,
   components: Record<string, unknown> = {},
@@ -979,12 +901,6 @@ export async function assertMdxMathConformance(
   expect(normalizeHtml(satHtml)).toBe(normalizeHtml(mdxHtml));
 }
 
-// Set an inline `style` string on every `<tag>` element via a hast/rehype
-// plugin on both pipelines, evaluate, and compare the rendered HTML. This is
-// the path expressive-code (and similar hast plugins) take: satteri's HAST→JSX
-// compiler parses `style="…"` into a JSX style object, which must agree with
-// @mdx-js/mdx (hast-util-to-estree). CSS custom properties are case-sensitive,
-// so casing like `--tmLabel` must survive intact on both sides.
 export async function assertMdxInlineStyleConformance(
   input: string,
   tag: string,

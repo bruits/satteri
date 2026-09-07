@@ -211,7 +211,6 @@ function getFeatures() {
   };
 }
 
-// Raw HTML is a convert option, not a parse feature: the reparse happens on the way to HAST.
 function getConvertOptions() {
   return featRawHtml.checked ? { rawHtml: true } : undefined;
 }
@@ -251,8 +250,6 @@ function getMdxOptions() {
 function getOptimizeStatic(): MdxCompileOptions["optimizeStatic"] | undefined {
   if (currentMode !== "mdx" || !optimizeToggle.checked) return undefined;
   const ignoreRaw = osIgnoreElements.value.trim();
-  // Spread the optional fields conditionally so they're omitted (not set to
-  // undefined) when off — required by `exactOptionalPropertyTypes`.
   return {
     component: osComponent.value || "Fragment",
     prop: osProp.value || "set:html",
@@ -261,9 +258,7 @@ function getOptimizeStatic(): MdxCompileOptions["optimizeStatic"] | undefined {
   };
 }
 
-// --- Shareable links -------------------------------------------------------
-// The full editor state is deflate-compressed and base64url-encoded into the
-// URL hash, so a link is self-contained and never touches the static server.
+// Store share state in the URL hash so links work without server-side storage.
 
 type FeatureKey =
   | "gfm"
@@ -472,10 +467,8 @@ function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
 }
 
 const SHARE_HASH_PREFIX = "#s=";
-// Keep share links far below browser URL length limits but still in a reasonable range.
-// https://source.chromium.org/chromium/chromium/src/+/main:url/mojom/url.mojom;l=14?q=url%2Fmojom%2Furl.mojom&ss=chromium%2Fchromium%2Fsrc
+// Bound share links below browser URL limits.
 const MAX_SHARE_URL_LENGTH = 64 * 1024;
-// Limit decompressed state size to a 4:1 ratio of the URL length limit.
 const MAX_SHARE_STATE_BYTES = 256 * 1024;
 
 class ShareUrlTooLongError extends Error {}
@@ -711,7 +704,7 @@ function fmt(ms: number): string {
   return ms < 1 ? `${(ms * 1000).toFixed(0)}us` : `${ms.toFixed(1)}ms`;
 }
 
-// Entries stay unresolved: a factory is handed the document being compiled.
+// Preserve factories until compilation so they receive the document being processed.
 async function evaluatePluginEntries<T>(code: string): Promise<T[]> {
   const trimmed = code.trim();
   if (!trimmed) return [];
@@ -751,7 +744,6 @@ function requireNames(plugins: { name?: string }[]): void {
   }
 }
 
-/** Mirrors the per-plugin pass order `markdownToHtml` runs. */
 function pluginPasses<H>(
   plugin: { before?: H; after?: H },
   subscriptionCount: number,
@@ -775,7 +767,6 @@ async function compile() {
   const timings: string[] = [];
   let overhead = 0;
 
-  // One bag per compile, so both sides share the `ctx.data` they would in `markdownToHtml`.
   const data: Data = {};
   const sourceFormat: SourceFormat = isMdx ? "mdx" : "markdown";
 
@@ -841,7 +832,6 @@ async function compile() {
       const pluginStart = performance.now();
       const handleSource = () => getHandleSource(mdastHandle);
       for (const { plugin, subs, passes } of mdastRuns) {
-        // Shared across the plugin's passes, so `after` sees what `before` reported.
         const diagnostics: MdastDiagnostic[] = [];
         for (const pass of passes) {
           const result = await (pass === "visitors"
@@ -1011,8 +1001,7 @@ function scheduleCompile() {
 
 function renderedFrameDocument(body: string): string {
   const dark = document.documentElement.dataset.theme === "dark";
-  // Inline both palettes so the iframe document is self-contained — it can't
-  // reach out to the parent's CSS variables.
+  // The iframe cannot inherit the parent’s CSS variables, so include both palettes.
   const p = dark
     ? {
         bg: "#14120E",
@@ -1082,9 +1071,6 @@ function renderedFrameDocument(body: string): string {
 </html>`;
 }
 
-// Re-render when the user toggles the site theme: re-highlight the editor
-// textareas with the new shiki theme, and re-run the pipeline so the output
-// panes and rendered iframe pick up the swap too.
 new MutationObserver(() => {
   highlightAllInputs();
   scheduleCompile();
@@ -1194,7 +1180,6 @@ for (const [textarea, pre, lang] of inputPairs) {
 
 updateModeUI();
 
-// Mobile-only options toggle; on desktop `hidden md:flex` keeps the fieldsets open.
 const pgSidebarToggle = document.getElementById("pg-sidebar-toggle");
 const pgSidebarContent = document.getElementById("pg-sidebar-content");
 const pgSidebarChevron = document.getElementById("pg-sidebar-chevron");
@@ -1205,8 +1190,6 @@ pgSidebarToggle?.addEventListener("click", () => {
   pgSidebarChevron?.classList.toggle("rotate-180", open);
 });
 
-// The WASM module loads asynchronously (top-level await in wasi-browser.js).
-// Reaching this line means the import chain resolved; hide the overlay.
 loadingOverlay.classList.add("hidden");
 
 window.addEventListener("hashchange", () => {

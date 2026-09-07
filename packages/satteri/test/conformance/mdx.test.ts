@@ -40,7 +40,6 @@ describe("MDX conformance: expressions", () => {
     await assertMdxConformance("{ true ? 'a' : 'b' }");
   });
 
-  // The expression references an undefined binding, so it never renders.
   test("expression spanning blank line is not parsed as expression", async () => {
     const { satteriMdxMdast, referenceMdxMdast } = await import("./fuzz/shared.js");
     expect(satteriMdxMdast("{a +\n\nb}")).toEqual(referenceMdxMdast("{a +\n\nb}"));
@@ -119,10 +118,6 @@ describe("MDX conformance: JSX", () => {
     await assertMdxConformance("<Foo\n  bar={1}/>", { Foo });
   });
 
-  // HTML entities in JSX text content (e.g. `<li>foo &gt; bar</li>`) must be
-  // decoded before reaching the runtime — otherwise the literal `&` gets
-  // re-escaped to `&amp;` on render, producing `&amp;gt;`. Discovered while
-  // running mdx-eval conformance against the cloudflare-docs corpus.
   test("HTML entity in JSX text content", async () => {
     await assertMdxConformance("<p>tab &gt; arrow</p>");
     await assertMdxConformance("<p>amp &amp; sand</p>");
@@ -133,17 +128,10 @@ describe("MDX conformance: JSX", () => {
     await assertMdxConformance("{ true && (<ol><li>foo &gt; bar</li></ol>) }");
   });
 
-  // Multi-line JSX attribute expressions go through a dedent pass: the
-  // expression value carries the original indentation for mdast/hast output,
-  // but the JS handed to the parser has container-imposed indent stripped.
-  // Regression for the U+F002 phantom-space sentinel pipeline.
   test("multi-line JSX attribute expression with indent", async () => {
     await assertMdxConformance("<Foo bar={\n  1 +\n    2\n}/>", { Foo });
   });
 
-  // The attribute-name parser used to be ASCII-only and dropped any name
-  // whose start char wasn't `[a-zA-Z_]` — including `$` and Unicode
-  // identifier starts that acorn accepts.
   test("JSX attribute name starting with `$`", async () => {
     const z = () => null;
     await assertMdxConformance(" <z $/>x", { z });
@@ -320,10 +308,6 @@ describe("MDX conformance: error cases", () => {
     await assertBothReject("<Foo");
   });
 
-  // acorn (mdx-js) rejects legacy octals (`01`) and non-octal decimal
-  // literals (`08`, `09`) in any expression context because module sources
-  // are strict mode. oxc accepts them silently — we surface them as parse
-  // errors in `try_parse_expression_body`.
   test("rejects legacy octal literal `01`", async () => {
     await assertBothReject("{01}");
   });
@@ -357,7 +341,7 @@ describe("MDX conformance: escaped and special chars", () => {
 
 describe("MDX conformance: ESM", () => {
   test("import with blank line inside destructuring", async () => {
-    // Just verify both compile without error — can't eval external imports
+    // External imports can be compiled here but cannot be evaluated without their modules.
     await assertMdxConformance("hello");
   });
 
@@ -369,7 +353,6 @@ describe("MDX conformance: ESM", () => {
     await assertMdxConformance("export function greet() { return 'hi' }\n\n{greet()}");
   });
 
-  // A blank line inside a template literal must not end the ESM block (#111).
   test("blank line inside template literal in export (#111)", async () => {
     await assertMdxConformance("export const code = `first line\n\nsecond line`;\n\n{code}");
   });
@@ -378,14 +361,10 @@ describe("MDX conformance: ESM", () => {
     await assertMdxConformance("export const x = `a` +\n\n`b`;\n\n{x}");
   });
 
-  // Block comments span blank lines too, the same way templates do (#111).
   test("blank line inside block comment in export (#111)", async () => {
     await assertMdxConformance("export const y = 1; /* note\n\nstill note */\n\n{y}");
   });
 
-  // A backtick or quote inside a regex literal must not be read as a
-  // template/string opener and swallow the following content into the ESM
-  // block (#111).
   test("regex with backtick in export (#111)", async () => {
     await assertMdxConformance("export const re = /a`b/;\n\n{re.source}");
   });
@@ -394,9 +373,6 @@ describe("MDX conformance: ESM", () => {
     await assertMdxConformance("export const re = /[\"']/g;\n\n{re.source}");
   });
 
-  // A JSX identifier already bound at module scope must resolve to that
-  // binding rather than being destructured out of `props.components` (which
-  // would shadow it to `undefined` and throw `_missingMdxReference`).
   test("export const used as JSX component resolves to module binding", async () => {
     await assertMdxConformance("export const Comp = () => <span>local</span>\n\n<Comp />");
   });
@@ -405,8 +381,6 @@ describe("MDX conformance: ESM", () => {
     await assertMdxConformance("export function FnComp() { return <span>fn</span> }\n\n<FnComp />");
   });
 
-  // Only the identifier without a module-scope binding should fall through
-  // to `props.components`.
   test("mixed module-bound and prop-provided JSX components", async () => {
     const Provided = (props: any) => createElement("em", null, `provided:${props.label ?? ""}`);
     await assertMdxConformance(
@@ -454,8 +428,6 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance(src, { CodePreview });
   });
 
-  // Quote characters inside a regex literal in an attribute expression must
-  // not be mistaken for string delimiters (#112).
   test("regex with quotes in attribute expression (#112)", async () => {
     const LinkedCode = (props: any) => createElement("code", null, String(props.ins[0]));
     const src = [
@@ -490,9 +462,6 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance(src, { CodePreview, CodeBlock });
   });
 
-  // JSX in an attribute expression (`d={<p/>}`) must be lowered to `_jsx(...)`
-  // like JSX in children; it used to leak through raw, producing invalid JS
-  // (#119). `Slot` renders `props.d` so the comparison exercises the lowered value.
   test("JSX element/fragment/conditional in attribute expression (#119)", async () => {
     const Slot = (props: any) => createElement("div", null, props.d);
     await assertMdxConformance("<Slot d={<p>hi there</p>} />", { Slot });
@@ -500,9 +469,6 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance("<Slot d={true ? <a>x</a> : <b>y</b>} />", { Slot });
   });
 
-  // Quotes and apostrophes in the JSX text of an element inside an attribute
-  // expression are literal, but the scanner used to lex them as JS string openers
-  // and swallow the closing `}`, failing to parse (#119).
   test("quotes in JSX text inside attribute expression (#119)", async () => {
     const Slot = (props: any) => createElement("div", null, props.d);
     await assertMdxConformance("<Slot d={<p>a<b>x</b>'s</p>} />", { Slot });
@@ -510,7 +476,7 @@ describe("MDX conformance: attribute values", () => {
     await assertMdxConformance('<Slot d={<p>a "!?" badge here</p>} />', { Slot });
   });
 
-  // `Pass` renders inner elements transparently so the `" "` lands between text; `normalizeHtml` collapses whitespace between tags and would mask the difference.
+  // Keep the space between text nodes so HTML normalization cannot erase it.
   test("significant whitespace between JSX elements in attribute expression (#129)", async () => {
     const Slot = (props: any) => createElement("div", null, props.d);
     const Pass = (props: any) => props.children;
@@ -564,25 +530,16 @@ describe("MDX conformance: markdown elements", () => {
     await assertMdxConformance("![alt](https://example.com/img.png)");
   });
 
-  // mdx-js extends CommonMark's "alt = stripped visible content" rule by
-  // also concatenating the literal body of `{...}` expressions. Without the
-  // fix in arena_build, the expression contributed nothing to alt.
   test("image alt with expression body", async () => {
     await assertMdxConformance("![{1+2}](https://x.test/i.png)");
     await assertMdxConformance("![pre {x} mid {y} end](https://x.test/i.png)");
   });
 
-  // mdx-js does not evaluate expressions inside link URLs — `{...}` in URL
-  // position is literal text. Our firstpass suppresses `{` expression scan
-  // only when the surrounding `(` will close on the same line (i.e. a real
-  // link). When the `(` is unmatched (e.g. `[>>](}{{`), the link doesn't
-  // form and the `{` falls through to expression scanning — matching mdx-js
-  // which errors on the dangling brace.
   test("`{` inside link URL is literal text", async () => {
     await assertMdxConformance("[a]({foo})");
     await assertMdxConformance("[a]({1+2})");
     await assertMdxConformance("[a](b{c}d)");
-    await assertMdxConformance("[a]({)"); // previously crashed
+    await assertMdxConformance("[a]({)");
   });
 
   test("unmatched `(` after `]` doesn't suppress `{` expression scan", async () => {
@@ -627,8 +584,6 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject("[a](/u){w");
   });
 
-  // Every whitespace run in a resource accepts line endings; only the
-  // destination is line-bounded.
   test("a resource spanning lines keeps its `{` literal", async () => {
     await assertMdxConformance("[a]({{{\n)");
     await assertMdxConformance('[a](/u{\n"t")');
@@ -660,8 +615,6 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject("[a](/u\n) {w");
   });
 
-  // The dangerous direction: swallowing one of these as title text loses the
-  // expression silently, with no parse error to notice.
   test("a block boundary keeps a valid `{}` an expression, not title text", async () => {
     await assertMdxConformance('[a](/u "ti{1+1}\n# tle")');
     await assertMdxConformance('[a](/u "ti{1+1}\n``` tle")');
@@ -678,9 +631,7 @@ describe("MDX conformance: markdown elements", () => {
     await assertMdxConformance('a\\](/u "ti{1+1}\ntle")');
   });
 
-  // mdx-js has no GFM, so its footnote-blind parse can't be the oracle here;
-  // satteri's own block pass makes the definition, and the inline scan has to
-  // agree with it.
+  // This reference has no GFM support, so it cannot validate footnote behavior.
   test("a footnote definition ends the resource, keeping the `{}` an expression", () => {
     const tree = mdxToMdast('[a](/u "ti{1+1}\n[^a]: tle")') as { children: unknown[] };
     const types: string[] = [];
@@ -715,7 +666,6 @@ describe("MDX conformance: markdown elements", () => {
   test("an inner link deactivates the label starts around it", async () => {
     await assertBothReject("[[a](/u)](\\){)");
     await assertBothReject("[x [a](/u) y](\\){)");
-    // An image does not, so a linked image still takes a tail.
     await assertMdxConformance("[![a](/i)](/u{z})");
     await assertMdxConformance("[![a](/i)](\\){)");
   });
@@ -794,10 +744,6 @@ describe("MDX conformance: markdown elements", () => {
     await assertMdxConformance('[a](<u> "t") and [b](<v>) end');
   });
 
-  // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a
-  // later `</div>` (or other type-1/6 HTML tag) on its own line, because MDX
-  // disables HTML blocks entirely. Without this, the paragraph splits at
-  // `</div>` and the close never pairs with the inline `<div>` open.
   test("inline `<div>...\\n.../</div>` with trailing text matches reference", async () => {
     await assertMdxConformance("pre<div>xxx</div>after");
     await assertMdxConformance("pre<div>\nxxx\n</div>after");
@@ -808,11 +754,6 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject("## {a\nb}");
   });
 
-  // §A.1: a flow-mode open tag (`<Foo>` alone on its line) requires a
-  // matching flow-mode close (`</Foo>` alone on its line). When the close
-  // is in a paragraph (followed by content on its line), mdx-js rejects
-  // structurally — satteri's jsx_stack now tracks `is_flow` and errors
-  // on mode mismatch.
   test("trailing text after `</Name>` on a flow line rejects", async () => {
     await assertBothReject("<Foo>\n</Foo>X");
     await assertBothReject("<Foo>\n</Foo>3c");
@@ -821,9 +762,6 @@ describe("MDX conformance: markdown elements", () => {
     await assertBothReject("<Foo>\nbar</Foo>baz");
   });
 
-  // §B: a JSX open inside a structural container (blockquote, listItem)
-  // must close within that container. arena_build snapshots jsx_stack on
-  // container open and drains entries on close, erroring on each one.
   test("JSX opened in blockquote without proper continuation rejects", async () => {
     await assertBothReject("><Box>\n  child\n</Box>");
     await assertBothReject("> <Box>\n  child\n</Box>");
@@ -852,11 +790,6 @@ describe("MDX conformance: markdown elements", () => {
 });
 
 describe("MDX conformance: mark-and-unravel", () => {
-  // Bug A regression: paragraphs inside flow JSX whose only children are
-  // text-level JSX must be unraveled so the child becomes a flow element.
-  // Without unraveling, the HTML pipeline renders an extra <p> wrapper around
-  // the JSX component, diverging from @mdx-js/mdx.
-
   test("details/summary with blank-line body", async () => {
     await assertMdxConformance(
       "<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>",
@@ -876,41 +809,23 @@ describe("MDX conformance: mark-and-unravel", () => {
 });
 
 describe("MDX conformance: fuzz regressions", () => {
-  // Tag names can include `$` (matches `is_jsx_name_*` and JS identifier
-  // rules). Without this, `parse_jsx_attrs` re-enters the attribute branch
-  // and synthesises a phantom boolean attribute (e.g. `<$Foo bar/>` was
-  // parsed with name=`$Foo` AND a spurious `Foo` attribute).
   test("dollar-prefixed component name does not produce phantom attribute", async () => {
     const $Foo = (props: any) => createElement("span", null, `bar=${props.bar}`);
     await assertMdxConformance("text <$Foo bar={1}/> end", { $Foo });
   });
 
-  // Division after a regex close (`/x/ /y`) was treated as a new regex
-  // because `slash_is_regex` falls back to `_ => true` when the previous
-  // byte is `/`. Now the scanner tracks `prev_was_value` and prefers
-  // division after regex literals, identifiers, `)`, `]`, `}`.
   test("division after regex close is not parsed as a new regex", async () => {
     await assertMdxConformance("{ /a/.source.length / 2 }");
   });
 
-  // Same root cause: `}` after an object literal makes the next `/` a
-  // division, not a regex. Prior to the fix, `{ ({a: 1}) /2 }` failed to
-  // find the matching `}` because `scan_regex` ran off the end.
   test("division after object literal close is not parsed as a regex", async () => {
     await assertMdxConformance("{ ({a: 1}.a) / 2 }");
   });
 
-  // Inline expression continuation lines were emitted verbatim, keeping
-  // tabs as `\t`. Remark normalises a leading tab on a continuation line
-  // to two spaces (per the indentSize rule). The fix routes inline
-  // expressions through `dedent_expression_continuation` like flow ones.
   test("inline expression continuation tab normalises to spaces", async () => {
     await assertMdxConformance("text {1 +\n\t2} end");
   });
 
-  // Self-closing JSX with whitespace or a newline between `/` and `>` was
-  // mis-detected as a non-self-closing opening tag because the check used
-  // literal `s.ends_with("/>")`. Remark accepts these.
   test("self-closing JSX with newline before `>` is recognised", async () => {
     await assertMdxConformance("<g/\n>");
   });
@@ -918,32 +833,18 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertMdxConformance("text <utj/ >/ rest");
   });
 
-  // Inline expression value extraction in containers used the raw source
-  // slice, so a blockquote `>` continuation marker on line 2 leaked into
-  // the mdxTextExpression value (`"\n>"` instead of `"\n"`). Now the
-  // extraction is routed through `strip_container_prefixes`.
   test("inline expression in blockquote strips `>` from value", async () => {
     await assertMdxConformance("> {1 +\n> 2}");
   });
 
-  // Inline expressions in container paragraphs may end on a lazy
-  // continuation line (no `>` marker), but body content on a lazy line is
-  // rejected — matching micromark-extension-mdx-expression's lazy rule.
   test("inline expression in blockquote can close on a lazy line", async () => {
     await assertMdxConformance("> ]{\n}n");
   });
 
-  // Trailing content after a self-closing JSX tag (even with embedded
-  // whitespace like a tab) keeps the JSX inline (text-level) rather than
-  // promoting it to flow. The line-end probe in `scan_mdx_jsx_block`
-  // already rejects flow when bare text follows the tag.
   test("self-closing JSX with tab inside, then trailing text, stays inline", async () => {
     await assertMdxConformance("<y/\t>/");
   });
 
-  // JSX member-chain rules: each `.` segment must start with a name-start
-  // char and is mutually exclusive with `:` namespace syntax. Previously
-  // accepted as `mdxJsxFlowElement` with garbage `name`.
   test("JSX member chain with empty segment is rejected", async () => {
     await assertBothReject("<a..b/>");
   });
@@ -954,9 +855,6 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertBothReject("<a:b.c/>");
   });
 
-  // Attribute names must start with a JS name-start char; values must be
-  // quoted strings or `{expr}`, not bare words. Previously these silently
-  // produced phantom attributes (e.g. `<a x=foo/>` → `x` + `foo` attrs).
   test("attribute name starting with digit is rejected", async () => {
     await assertBothReject("<a 1x/>");
   });
@@ -967,16 +865,10 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertBothReject("<a x=foo/>");
   });
 
-  // A closing tag carries no attributes — only optional whitespace before
-  // its `>`. Previously `</a foo/>` was silently truncated to `</a>`.
   test("closing tag with attributes is rejected", async () => {
     await assertBothReject("<a></a foo/>");
   });
 
-  // `<` followed immediately by a non-name-start, non-whitespace char is
-  // rejected by mdx-js. Sätteri previously fell through to text for many
-  // of these; now matches mdx-js. Space/tab after `<` keep the literal `<`
-  // semantics (`1 < 2`, `use < and >`).
   test("bare `<` at end of paragraph is rejected", async () => {
     await assertBothReject("the value is <");
   });
@@ -1005,57 +897,33 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertBothReject("<");
   });
   test("`<` then newline then `}` (non-setext, non-`>`) stays as text", async () => {
-    // The setext-only check on `<\n…` should not fire on arbitrary chars.
     await assertMdxConformance("<\n}");
   });
   test("fragment `<\\t>` followed by trailing punctuation parses", async () => {
     await assertMdxConformance("<\t>}x#");
   });
 
-  // Validate expression bodies as JS via oxc at mdast time (mdx-js uses
-  // acorn). Catches `{h<}`, `{return 1}`, etc. at parse time instead of
-  // late at JS emit. The expression-context wrapper makes `{}/m` (empty
-  // object divided by `m`) parse correctly.
   test("expression body `{h<}` is rejected at parse time", async () => {
     await assertBothReject("{h<}");
   });
   test("expression body `{}/m` (object divided by m) is accepted", async () => {
-    // Note: uses `2` instead of an undefined identifier so the rendered
-    // output is comparable; the key point is that both parsers accept the
-    // `{}/2` body as expression-context division.
     await assertMdxConformance("#{{}/2}*");
   });
   test("regex literal in expression body followed by newline+tab+close", async () => {
-    // After a regex literal `/^=/`, the scanner must continue past
-    // whitespace (incl. newline+tab) to find the matching `}`.
     await assertMdxConformance("{!/^=/\n\t}>");
   });
   test("regex then division in expression body parses without consuming close", async () => {
-    // `/]/` is a regex literal; the following `/5` is division. Without
-    // `prev_was_value` tracking, the second `/` would re-enter regex mode
-    // and swallow `5}`, leaving the expression unclosed.
     await assertMdxConformance("4{/]//5}");
   });
 
-  // Text-position `{` (preceded by paragraph content on the line) follows
-  // mdx-js's text tokenizer with `allowLazy: true`: the expression body
-  // can span lazy continuation lines without erroring. Use a literal value
-  // so the rendered output matches.
   test("text-position expression accepts lazy continuation in blockquote", async () => {
     await assertMdxConformance(">-{\n42}");
   });
 
-  // Flow-position `{` (first content of a paragraph line in a container)
-  // follows the strict `allowLazy: false` rule, which errors on *any*
-  // token while the line is lazy — including the closing brace.
   test("flow-position expression rejects lazy line even when only the close is on it", async () => {
     await assertBothReject(">{\n}");
   });
 
-  // `<` followed by newline + a setext heading delimiter should error,
-  // because the setext promotion makes the `<`-line a heading whose JSX
-  // validation fails. Without this rule we'd silently accept `<\n-` as a
-  // heading containing literal `<` text.
   test("bare `<` followed by setext underline rejects", async () => {
     await assertBothReject("<\n-");
   });
@@ -1066,17 +934,10 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertBothReject("<\n--");
   });
 
-  // Setext rejection only applies when the underline would actually
-  // promote the `<`-line to a heading. Inside a blockquote, the
-  // unprefixed underline line is lazy continuation (paragraph text),
-  // not a setext underline — so `>z<\n=` is text, not an error.
   test("bare `<` followed by `=` inside blockquote stays text", async () => {
     await assertMdxConformance(">z<\n=");
   });
 
-  // Tab- or 4+-space-indented `>` should still continue an open blockquote
-  // in MDX mode (indented code is disabled). Without this, the second
-  // blockquote line spawns a fresh blockquote.
   test("tab-indented `>` continues open blockquote", async () => {
     await assertMdxConformance(">a\n\t>b");
   });
@@ -1087,11 +948,6 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertMdxConformance("c>l}>\n>\n\t>");
   });
 
-  // A blank `>` line between the outer paragraph close and an empty `-`
-  // marker resets the paragraph-interrupt — the marker opens a fresh list
-  // inside the blockquote (matches mdx-js/micromark; `currentConstruct`
-  // lingers only across non-blank lines, and inside a blockquote a `>`-
-  // only line counts as blank for that purpose).
   test("empty list marker inside blockquote after preceding paragraph", async () => {
     await assertMdxConformance("_\n>\n>-");
   });
@@ -1099,10 +955,6 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertMdxConformance("_>>>\n>\n>-");
   });
 
-  // Validating the expression body in parens-wrapped (expression) context
-  // rejects multi-statement bodies that the previous program-mode pass
-  // would have silently accepted: `{a;b}`, `{y\n a}`, etc. mdx-js does the
-  // same via acorn's `parseExpressionAt`.
   test("multi-statement expression body rejects", async () => {
     await assertBothReject("{a;b}");
   });
@@ -1116,9 +968,6 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertBothReject("|{_:n}");
   });
 
-  // Comment-only and whitespace-only expression bodies remain accepted —
-  // they don't parse as parens-wrapped expressions, but mdx-js's
-  // `allowEmpty` keeps them legal.
   test("comment-only expression body is accepted", async () => {
     await assertMdxConformance("{/* foo */}");
   });
@@ -1126,71 +975,41 @@ describe("MDX conformance: fuzz regressions", () => {
     await assertMdxConformance("{ }");
   });
 
-  // The `<` resolver skips blockquote container prefixes when probing
-  // past `\n` for the next significant byte. Without this, a `>` on the
-  // continuation line (which is just the blockquote marker, not a JSX
-  // delimiter) incorrectly triggered the `<\n>` rejection rule.
   test("bare `<` followed by newline + blockquote prefix stays as text", async () => {
     await assertMdxConformance(">/<\n>}v\n");
   });
 
-  // Self-closing JSX with a newline between `/` and `>` followed by
-  // trailing content. The `>` is the JSX close, the second `>` is text.
-  // Without suppression the `>>` line would be read as a new blockquote.
   test("self-closing JSX `<x/\\n>` followed by trailing content", async () => {
     const _ = () => null;
     await assertMdxConformance("<_/\n>>", { _ });
   });
 
-  // Text-position expression in a blockquote whose body ends with `\n\t`
-  // before the close `}`: remark applies micromark-factory-mdx-expression's
-  // 2-column dedent to the continuation line — tab at column 0 yields
-  // expression value `1+2\n  ` (the leftover 2 columns become literal
-  // spaces). Lazy lines (no `>` prefix) start the dedent at column 0
-  // rather than `container_content_col - 1`.
   test("text-position expression dedents trailing tab before close", async () => {
     await assertMdxConformance(">o{1+2\n\t}}");
   });
 });
 
 describe("MDX conformance: math interaction", () => {
-  // Braces inside an inline `$...$` span are math text, not an MDX expression
-  // (#110). remark-math pairs the dollar runs and the braces never reach the
-  // expression tokenizer; satteri must agree.
   test("braces inside inline math are not an expression (#110)", async () => {
     await assertMdxMathConformance("$\\frac{-b}{2a}$ and {1 + 1}");
   });
 
-  // Two single-dollar runs with `{x}` between them (e.g. prose about prices):
-  // remark-math pairs them into one math span, so `{x}` is math text on both
-  // sides and the undefined `x` is never evaluated. The `{` guard must mirror
-  // this rather than evaluate `{x}` as an expression.
   test("expression between dollar amounts is math text", async () => {
     await assertMdxMathConformance("Price is $5 and {x} costs $10 today");
   });
 
-  // An expression genuinely outside any math span is still evaluated.
   test("expression after a real math span is evaluated", async () => {
     await assertMdxMathConformance("Euler $e^{i\\pi}$ then {3 * 7}");
   });
 
-  // A `<` inside a math span is math content, not an open inline JSX tag, so a
-  // following `>` line opens a blockquote rather than being absorbed as a lazy
-  // paragraph continuation.
   test("`<` inside math does not suppress a following blockquote", async () => {
     await assertMdxMathConformance("$<$\n>");
   });
 
-  // A `\$` only prevents opening a math span, not closing one, so the `{` here
-  // is inside the span (math text) and must not be parsed as an expression.
   test("brace before a span-closing escaped dollar is math text", async () => {
     await assertMdxMathConformance("e$}}_{\\$h");
   });
 
-  // A `$$` display-math fence is a block boundary: an inline `$$` earlier in the
-  // paragraph must not pair across it, so `\frac{1}{2}` here is an expression
-  // (rendered `\frac12`), not math text. Reachable by omitting the blank line
-  // before a display-math block.
   test("inline `$$` does not pair across a display-math fence", async () => {
     await assertMdxMathConformance("See:$$\n\\frac{1}{2}\n$$");
   });
@@ -1253,14 +1072,16 @@ function mapChildren(tree: TreeNode, fn: (node: TreeNode) => unknown): void {
   tree.children = next;
 }
 
-const widget = (name: string, explicit: boolean) =>
-  ({
+const widget = (name: string, explicit: boolean): MdxJsxFlowElement => {
+  const node: MdxJsxFlowElement = {
     type: "mdxJsxFlowElement",
     name,
     attributes: [{ type: "mdxJsxAttribute", name: "foo", value: "bar" }],
     children: [],
-    ...(explicit ? { data: explicitJsxData } : {}),
-  }) satisfies MdxJsxFlowElement;
+  };
+  if (explicit) node.data = explicitJsxData;
+  return node;
+};
 
 const insertedBuilding = {
   type: "mdxJsxFlowElement",

@@ -1,14 +1,4 @@
-/**
- * Low-level op-stream writer shared by the MDAST/HAST declarative compilers.
- *
- * Emits the compact OPEN/CLOSE/field/REF/KEEP_CHILDREN/PROP stream that Rust
- * replays straight into the arena (`replay_opstream` in js_commands.rs; byte
- * values in generated/wire-constants.ts) — the only structural encoding for
- * plugin-built content. Strings ride ByteWriter's zero-alloc path (inline
- * char codes when short ASCII, `encodeInto` otherwise). `CommandBuffer`
- * extends this class so payloads are emitted directly into the command
- * bytes, with no intermediate opstream buffer or copy.
- */
+// Writing directly into CommandBuffer avoids an intermediate op-stream allocation and copy.
 
 import { ByteWriter } from "./byte-writer.js";
 import {
@@ -29,7 +19,6 @@ import {
   MDX_ATTR_SPREAD,
 } from "./generated/wire-constants.js";
 
-// Re-exported so visitors/readers keep importing wire constants from here.
 export {
   OF_VALUE,
   OF_URL,
@@ -102,9 +91,7 @@ export class OpWriter extends ByteWriter {
 
   data(value: unknown): void {
     const json = JSON.stringify(value);
-    // `JSON.stringify` yields undefined for a function or a `toJSON`
-    // returning undefined; a clear error beats a TypeError deep in the
-    // string encoder.
+    // JSON.stringify can return undefined for functions and custom toJSON methods.
     if (typeof json !== "string") {
       throw new Error("node `data` is not JSON-serializable");
     }
@@ -128,7 +115,6 @@ export class OpWriter extends ByteWriter {
     this.writeU32(id);
   }
 
-  /** Table column-alignment codes (0=none, 1=left, 2=right, 3=center). */
   align(codes: readonly number[]): void {
     this.ensure(5 + codes.length);
     this.buf[this.n++] = OP_ALIGN;
@@ -142,8 +128,6 @@ export class OpWriter extends ByteWriter {
   }
 }
 
-/** Emit one MDX JSX attribute as an OP_PROP, mirroring `encode_js_jsx_attrs`:
- *  null→boolean, string→literal, `{ value }` object→expression, else→boolean. */
 export function emitMdxAttr(w: OpWriter, a: Record<string, unknown>): void {
   if (a.type === "mdxJsxExpressionAttribute") {
     w.prop("", MDX_ATTR_SPREAD, typeof a.value === "string" ? a.value : "");

@@ -42,7 +42,6 @@ describe("Usage inside satteri", () => {
     expect(html).toContain("ec-line");
     expect(html).toContain("highlight");
     expect(html).toContain("ins");
-    // Expect Shiki syntax highlighting colors
     expect(html).toMatch(/--0:#/);
   });
   test("Provides access to styleOverrides settings contributed by default plugins", () => {
@@ -103,7 +102,6 @@ describe("Usage inside satteri", () => {
   test("Adds script modules inside the Expressive Code wrapper", async () => {
     const html = await processMarkdown(sampleCodeMarkdown);
     expect(html).toContain("<script");
-    // Scripts should be inside the expressive-code wrapper
     const wrapperIndex = html.indexOf("expressive-code");
     const scriptIndex = html.indexOf("<script");
     expect(wrapperIndex).toBeLessThan(scriptIndex);
@@ -122,7 +120,6 @@ describe("Usage inside satteri", () => {
     const multiBlockHtml = await processMarkdown(multiBlockMarkdown);
     const multiBlockScripts = (multiBlockHtml.match(/<script /g) ?? []).length;
 
-    // Script count should be the same regardless of how many code blocks
     expect(multiBlockScripts).toBe(singleBlockScripts);
   });
   test("Re-emits base styles and scripts when the same plugin processes multiple documents", async () => {
@@ -147,7 +144,6 @@ function test() {
 
     test("Replaces tabs with 2 spaces by default", async () => {
       const html = await processMarkdown(codeWithTabs);
-      // 2 spaces for one tab level (default tabWidth=2)
       expect(html).toContain("  try");
       expect(html).toContain("    console.log");
       expect(html).not.toContain("\t");
@@ -165,7 +161,6 @@ function test() {
   test("Extracts language from code block", async () => {
     const markdown = "```typescript\nconst x: number = 1\n```";
     const html = await processMarkdown(markdown);
-    // The rendered output should contain syntax-highlighted TypeScript
     expect(html).toContain("expressive-code");
     expect(html).toMatch(/--0:#/);
   });

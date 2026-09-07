@@ -154,8 +154,7 @@ export async function createRenderer(
   };
 }
 
-/** file: URL → decoded path. Hand-rolled to avoid a `node:url` dep; strips the
- *  leading slash on Windows drive paths (`/C:/x`). */
+// Avoid a node:url dependency for file URL conversion.
 function fileURLToFilePath(fileURL: URL | undefined): string {
   if (!fileURL) return "";
   if (fileURL.protocol !== "file:") return fileURL.href;

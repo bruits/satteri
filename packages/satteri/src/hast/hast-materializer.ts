@@ -1,6 +1,6 @@
 import { HastReader, HAST_MDX_JSX_ELEMENT, HAST_MDX_JSX_TEXT_ELEMENT } from "./hast-reader.js";
 import type { Root } from "hast";
-import type { ArenaWire, HastNode } from "../types.js";
+import type { ArenaWire, HastNode, MdxJsxFlowElementHast } from "../types.js";
 import { CONTAINER_TYPES, TYPE_NAMES } from "./generated/node-types.js";
 import { createMaterializer, installNodeData } from "../materializer-cache.js";
 import { FIELD, W_CHILDREN_COUNT, W_CHILDREN_START } from "../generated/arena-layout.js";
@@ -24,15 +24,8 @@ const hastMaterializer = createMaterializer<HastReader, HastNode>({
   },
 });
 
-/**
- * Materialize a single HAST node; scalars eager, `children` lazy, memoized per
- * `(reader, id)`; `frozen` (the plugin walk path) deep-freezes so plugins
- * cannot corrupt the shared cache.
- */
 export const materializeHastNode = hastMaterializer.node;
 
-/** The reader-path decode for the tags `readHastWireNode` hands back: MDX JSX
- *  elements, whose kind-tagged attribute assembly stays on the reader. */
 function addHastTypeProperties(
   node: HastNode,
   reader: HastReader,
@@ -41,8 +34,9 @@ function addHastTypeProperties(
 ): void {
   if (nodeType === HAST_MDX_JSX_ELEMENT || nodeType === HAST_MDX_JSX_TEXT_ELEMENT) {
     const { name, attributes } = reader.getMdxJsxElementData(nodeId);
-    (node as { name: string | null }).name = name;
-    (node as { attributes: unknown }).attributes = attributes;
+    const element = node as MdxJsxFlowElementHast;
+    element.name = name;
+    element.attributes = attributes;
   }
 }
 
@@ -54,8 +48,8 @@ function buildHastFused(
   nodeType: number,
 ): HastNode {
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
-  // Plain object, not a class: unified's `assertNode` rejects any other prototype.
-  const node = { type: typeName } as unknown as HastNode;
+  // Unified's assertNode requires a plain-object prototype.
+  const node = { type: typeName } as HastNode;
   if (!readHastWireNode(wire, nodeId, nodeType, node)) {
     addHastTypeProperties(node, reader, nodeId, nodeType);
   }

@@ -15,7 +15,7 @@ type HastResolver = LazyChildResolver<HastReader, HastNode>;
 
 const N = NAME_TO_TYPE;
 
-/** Per-type stub fields; must mirror `materializeHastNode`'s populate switch. */
+// Stub fields must match the fields populated by materializeHastNode.
 const HAST_STUB_FIELDS: Readonly<Record<number, readonly string[]>> = {
   [N.root!]: [],
   [N.element!]: ["tagName", "properties"],
@@ -40,15 +40,8 @@ for (const tag of Object.keys(HAST_STUB_FIELDS)) {
   HAST_STUB_DESCRIPTORS[nodeType] = stubDescriptors(fields);
 }
 
-/** Unknown node types still expose the prelude-backed lazy fields. */
 const FALLBACK_DESCRIPTORS = stubDescriptors([]);
 
-/**
- * Walk-path child stub: arena id + `type` eagerly, every other field a lazy
- * forward to the materialized node (first read snapshots the arena via
- * `materializeOne`, which enforces the handle epoch). Spread/identity rules
- * are enforced by `nid()` in hast-visitor.ts.
- */
 export class HastChildStub {
   _resolver: HastResolver;
   _id: number;

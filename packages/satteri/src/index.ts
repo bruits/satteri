@@ -1,4 +1,3 @@
-// Public API: compile functions
 export {
   markdownToHtml,
   markdownToJs,
@@ -29,7 +28,6 @@ export type {
   MdxToJsResult,
 } from "./compile.js";
 
-// Plugin definitions
 export { defineMdastPlugin, defineHastPlugin } from "./plugin.js";
 export type {
   MdastPluginDefinition,
@@ -43,7 +41,6 @@ export type {
   PluginFactoryContext,
 } from "./plugin.js";
 
-// Visitor types (for plugin authors)
 export type {
   HastVisitorInstance,
   HastVisitorContext,
@@ -55,7 +52,6 @@ export type {
   EstreeProgram,
 } from "./hast/hast-visitor.js";
 
-// Node types
 export type {
   MdastNode,
   HastNode,
@@ -69,13 +65,11 @@ export type {
   MdxJsxExpressionAttributeNode,
   MdxJsxAttributeValueExpressionNode,
   MdxJsxAttributeUnion,
-  // MDX mdast node types (mdast plugin visitors hand these)
   MdxJsxFlowElement,
   MdxJsxTextElement,
   MdxFlowExpression,
   MdxTextExpression,
   MdxjsEsm,
-  // MDX hast node types (hast plugin visitors hand these)
   MdxJsxFlowElementHast,
   MdxJsxTextElementHast,
   MdxFlowExpressionHast,
@@ -83,7 +77,6 @@ export type {
   MdxjsEsmHast,
 } from "./types.js";
 
-// Visitor pipeline (for manual plugin execution)
 export { normalizePlugins } from "./plugin.js";
 export {
   visitMdastHandle,
@@ -108,7 +101,6 @@ export {
 } from "./hast/hast-visitor.js";
 export type { HastDiagnostic, HastHookFn } from "./hast/hast-visitor.js";
 
-// Step-by-step API: readers, materializers, and handle functions
 export { MdastReader } from "./mdast/mdast-reader.js";
 export { materializeMdastTree } from "./mdast/mdast-materializer.js";
 export { HastReader } from "./hast/hast-reader.js";
@@ -132,8 +124,6 @@ import type { AnyHandle } from "./handles.js";
 import { markHandleMutated } from "./lazy-child-resolver.js";
 
 type NativeConvertOptions = NonNullable<Parameters<typeof napiCreateHastHandle>[2]>;
-
-// The napi creators take pre-packed parser bits; these keep `Features` the public shape.
 
 export function createMdastHandle(
   source: string,
@@ -190,10 +180,7 @@ function mergeConvertOptions(
   return { ...fromFeatures, ...explicit };
 }
 
-// The raw NAPI mutators renumber or empty the arena; without the epoch bump a
-// child stub retained past a manual-pipeline pass would silently snapshot the
-// changed arena (or die with an opaque RangeError) instead of hitting the
-// retention error.
+// Arena mutations invalidate retained child stubs because node IDs can be reassigned or freed.
 
 export function applyCommandsToMdastHandle(handle: MdastHandle, commandBuf: Uint8Array): number {
   markHandleMutated(handle);

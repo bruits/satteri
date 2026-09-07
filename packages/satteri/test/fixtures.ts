@@ -1,8 +1,5 @@
-// Builds a minimal valid MDAST buffer in pure JS for testing MdastReader
-// without requiring the native module to be built, plus small structural
-// tree helpers shared across test files.
+// Pure-JS wire fixtures let reader tests run without a native binding.
 
-/** Structural tree shape both mdast and hast nodes satisfy. */
 export interface TreeNode {
   type: string;
   children?: TreeNode[];
@@ -27,7 +24,7 @@ export function collect<T extends TreeNode>(
   return out;
 }
 
-const MAGIC = 0x5241444d; // "MDAR" bytes [0x4d,0x44,0x41,0x52] read as little-endian u32
+const MAGIC = 0x5241444d;
 const NODE_STRUCT_SIZE = 52;
 const HEADER_SIZE = 44;
 const KIND_MDAST = 1;
@@ -86,7 +83,6 @@ export function buildTestBuffer({
   view.setUint32(36, stringPoolBytes.length, true);
   view.setUint32(40, stringPoolOffset, true);
 
-  // Nodes
   for (let i = 0; i < nodes.length; i++) {
     const base = nodesOffset + i * NODE_STRUCT_SIZE;
     const n = nodes[i]!;
@@ -105,57 +101,23 @@ export function buildTestBuffer({
     view.setUint32(base + 48, n.dataLen ?? 0, true);
   }
 
-  // Children
   for (let i = 0; i < children.length; i++) {
     view.setUint32(childrenOffset + i * 4, children[i]!, true);
   }
 
-  // Type data
   u8.set(typeData, typeDataOffset);
 
-  // String pool
   u8.set(stringPoolBytes, stringPoolOffset);
 
   return buf;
 }
 
-// A simple "# Hello\n\nWorld" arena
-// source = "# Hello\n\nWorld"
-//   Root (id=0, children=[1,2])
-//   Heading depth=1 (id=1, children=[3], parent=0)
-//   Paragraph (id=2, children=[4], parent=0)
-//   Text "Hello" (id=3, parent=1, StringRef offset=2 len=5)
-//   Text "World" (id=4, parent=2, StringRef offset=9 len=5)
-// typeData blob starts are 4-byte aligned, matching the writer invariant:
-// [1, pad×3] (HeadingData.depth) then [2,0,0,0, 5,0,0,0] (StringRef Hello)
-// then [9,0,0,0, 5,0,0,0] (StringRef World)
-// children array: [1, 2, 3, 4]
+// Type-data blobs must remain 4-byte aligned to match the arena writer.
 
 export function buildHelloWorldBuffer(): ArrayBuffer {
   const source = "# Hello\n\nWorld";
 
-  const typeData = new Uint8Array([
-    1, // HeadingData.depth = 1
-    0,
-    0,
-    0,
-    2,
-    0,
-    0,
-    0,
-    5,
-    0,
-    0,
-    0, // StringRef for "Hello": offset=2, len=5
-    9,
-    0,
-    0,
-    0,
-    5,
-    0,
-    0,
-    0, // StringRef for "World": offset=9, len=5
-  ]);
+  const typeData = new Uint8Array([1, 0, 0, 0, 2, 0, 0, 0, 5, 0, 0, 0, 9, 0, 0, 0, 5, 0, 0, 0]);
 
   return buildTestBuffer({
     source,

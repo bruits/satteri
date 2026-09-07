@@ -1,28 +1,14 @@
-/**
- * Growable little-endian byte buffer shared by the op-stream and command-buffer
- * encoders — the two hottest write paths in the package.
- *
- * Subclasses write single bytes directly through the protected `buf`/`n`
- * fields after an `ensure` for the whole record (one bounds check per record,
- * not per byte, and no per-byte call in unoptimized tiers — CodSpeed's
- * Simulation mode runs too few iterations for V8 to inline method calls).
- * Only the non-trivial logic lives here: growth, u32 writes, and UTF-8
- * string encoding.
- */
+// Write bytes inline after reserving each record to avoid per-byte calls and bounds checks.
 
 const encoder = new TextEncoder();
 
 const EMPTY = new Uint8Array(0);
 
-/** Below this length the inline char-code copy beats `encodeInto`'s call
- *  overhead; above it the native bulk path wins (and skips the ASCII scan).
- *  Measured crossover ~16 bytes (Node 24: 8B 15 vs 41 ns, 16B 37 vs 43,
- *  32B 73 vs 52). */
+// Below 16 bytes, inline ASCII writes beat encodeInto call overhead.
 const INLINE_STR_MAX = 16;
 
 export class ByteWriter {
-  // Backing allocates on first write: visitor passes construct buffers that
-  // often never receive a byte (read-only plugins).
+  // Read-only plugin passes should allocate no backing buffer.
   protected buf: Uint8Array = EMPTY;
   protected n = 0;
   readonly #initialSize: number;
@@ -31,7 +17,6 @@ export class ByteWriter {
     this.#initialSize = initialSize;
   }
 
-  /** Number of bytes written so far. */
   get length(): number {
     return this.n;
   }
@@ -40,7 +25,7 @@ export class ByteWriter {
     return this.buf.length;
   }
 
-  /** Reset for reuse; the grown buffer is retained so steady state is alloc-free. */
+  // Retain capacity so repeated plugin passes can reuse the buffer without allocating.
   reset(): void {
     this.n = 0;
   }
@@ -50,13 +35,12 @@ export class ByteWriter {
     return this.n === 0 ? EMPTY : this.buf.subarray(0, this.n);
   }
 
-  /** Release the backing (handed-out views stay intact); next write re-allocates. */
   protected release(): void {
     this.buf = EMPTY;
     this.n = 0;
   }
 
-  /** Grow (doubling) so `extra` more bytes fit; required before unchecked writes. */
+  // Reserve capacity before unchecked writes.
   ensure(extra: number): void {
     if (this.n + extra <= this.buf.length) return;
     let size = Math.max(this.#initialSize, this.buf.length * 2);
@@ -77,13 +61,10 @@ export class ByteWriter {
     this.n = n;
   }
 
-  /** u32 byte length + UTF-8 bytes (self-ensuring). */
   protected utf8WithU32Len(s: string): void {
     const len = s.length;
     this.ensure(4 + len * 3); // worst-case UTF-8 is 3 bytes per UTF-16 unit
 
-    // Short strings: inline char copy (cheaper than a native call), guarded by a
-    // quick ASCII scan. Anything longer — or non-ASCII — goes to encodeInto.
     if (len <= INLINE_STR_MAX) {
       let ascii = true;
       for (let i = 0; i < len; i++) {
@@ -93,8 +74,7 @@ export class ByteWriter {
         }
       }
       if (ascii) {
-        // Inline stores, not writeU32: a per-string method call in the
-        // unoptimized tier is exactly what this class's header rules out.
+        // Inline stores avoid per-string method calls before V8 has optimized this path.
         const buf = this.buf;
         let n = this.n;
         buf[n++] = len & 255;
@@ -107,8 +87,6 @@ export class ByteWriter {
       }
     }
 
-    // Bulk path: encodeInto writes UTF-8 straight into the buffer (no alloc, no
-    // per-char loop); backpatch the byte length once it's known.
     const lenPos = this.n;
     this.n += 4;
     const written = encoder.encodeInto(s, this.buf.subarray(this.n)).written;
@@ -116,8 +94,6 @@ export class ByteWriter {
     this.n += written;
   }
 
-  /** Backpatch a u32 (LE) at `pos` in the already-written region; the cursor
-   *  is left untouched. */
   protected patchU32(pos: number, v: number): void {
     const buf = this.buf;
     buf[pos] = v & 255;

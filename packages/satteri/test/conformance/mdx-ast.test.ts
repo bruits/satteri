@@ -19,9 +19,7 @@ const MDX_PASS_THROUGH_NODES: Array<MdastNodes["type"]> = [
   "mdxjsEsm",
 ];
 
-// Satteri drops directives during mdast→hast conversion (JS-level handlers
-// aren't visible to the Rust converter). Match that by passing empty handlers
-// on the reference side.
+// Empty reference handlers match Sätteri’s omission of unhandled directives.
 const emptyHandler = () => undefined;
 const REF_TO_HAST_OPTIONS = {
   allowDangerousHtml: true,
@@ -41,7 +39,7 @@ function stripPositionsAndEstree(node: unknown): unknown {
   const out: AnyNode = {};
   for (const [k, v] of Object.entries(node as AnyNode)) {
     if (k === "position") continue;
-    // remark-mdx includes parsed estree in `data`; satteri doesn't
+    // Ignore ESTree data because Sätteri exposes expression parsing separately.
     if (k === "data") continue;
     if (Array.isArray(v)) out[k] = v.map(stripPositionsAndEstree);
     else if (typeof v === "object" && v !== null) out[k] = stripPositionsAndEstree(v);
@@ -110,9 +108,6 @@ describe("MDX MDAST conformance", () => {
     assertMdastConformance("<Foo bar={1}/><Bar baz={2}/>\n");
   });
 
-  // mdast `value` for a multi-line attribute expression keeps the original
-  // indentation verbatim — the dedent only happens for the JS handed to the
-  // parser. Regression for the phantom-space pipeline.
   test("multi-line JSX attribute expression preserves indent in mdast value", () => {
     assertMdastConformance("<Foo bar={\n  1 +\n    2\n}/>\n");
   });
@@ -121,10 +116,6 @@ describe("MDX MDAST conformance", () => {
     assertMdastConformance("<Box>\n  {\n    1 +\n      2\n  }\n</Box>\n");
   });
 
-  // Tab-indented continuation lines hit the partial-tab dedent path: a tab
-  // covers up to TAB_WIDTH=4 cols, and only the first INDENT=2 are stripped.
-  // Reference and Sätteri have to agree on how the leftover columns appear
-  // in the mdast `value`.
   test("multi-line JSX attribute expression with tab indent", () => {
     assertMdastConformance("<Foo bar={\n\t1 +\n\t2\n}/>\n");
   });
@@ -259,12 +250,6 @@ describe("MDX HAST conformance", () => {
 });
 
 describe("MDX mark-and-unravel: paragraph inside flow JSX parent", () => {
-  // Regression for bug A: when a flow JSX element contains a paragraph whose
-  // only children are text-level JSX, remark unravels the paragraph and
-  // promotes the child to a flow element. Satteri previously skipped
-  // unraveling whenever the paragraph's parent was itself a flow/text JSX
-  // element, leaving `<summary>` nested inside an extra paragraph wrapper.
-
   test("details/summary with blank-line body", () => {
     assertMdastConformance("<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>");
     assertHastConformance("<details>\n<summary>X</summary>\n\nparagraph content\n\n</details>");
@@ -296,12 +281,6 @@ describe("MDX mark-and-unravel: paragraph inside flow JSX parent", () => {
 });
 
 describe("MDX listItem.spread: non-trailing blank lines mark item loose", () => {
-  // Regression for remark's `listItem._spread` rule: any blank line inside an
-  // item — including blanks consumed atomically inside a multi-line flow JSX
-  // element — makes the item loose. The gap-between-children heuristic isn't
-  // enough on its own (a single child whose span contains a blank line would
-  // otherwise escape detection).
-
   test("blank line between block children of an item", () => {
     assertMdastConformance("- para1\n- para2\n\n  para3\n");
   });
@@ -317,17 +296,11 @@ describe("MDX listItem.spread: non-trailing blank lines mark item loose", () => 
   });
 
   test("tight list with nested sublist stays tight", () => {
-    // The blank between inner items must mark the INNER item, not the outer.
     assertMdastConformance("- a\n- b\n  - nested1\n\n  - nested2\n");
   });
 });
 
 describe("MDX mdxFlowExpression: continuation-line dedent", () => {
-  // Regression for micromark-factory-mdx-expression's `indentSize + 1` prefix
-  // strip: up to 2 columns of whitespace are eaten from each continuation line
-  // (tabs expand to the next multiple of 4; any leftover tab columns spill out
-  // as literal spaces). Must also preserve UTF-8 continuation bytes verbatim.
-
   test("strips single leading space on continuation", () => {
     assertMdastConformance("{/* hello\n - line2\n*/}\n");
   });
@@ -349,17 +322,11 @@ describe("MDX mdxFlowExpression: continuation-line dedent", () => {
   });
 
   test("utf-8 content on continuation lines is byte-safe", () => {
-    // Previously the dedent walked by bytes and corrupted multi-byte chars.
     assertMdastConformance("{/* x\n  café\n   über\n*/}\n");
   });
 });
 
 describe("MDX flow expression interrupts paragraphs", () => {
-  // Regression: a line starting with `{…}` that scans as a flow expression
-  // must interrupt an open paragraph, matching remark's paragraph-interrupt
-  // set. Without this, `{/* TODO */}` nested between a paragraph/list and the
-  // next block gets swallowed as an inline MdxTextExpression.
-
   test("expression between paragraph and heading", () => {
     assertMdastConformance("Text.\n{/* TODO */}\n## Heading\n");
   });
@@ -374,12 +341,6 @@ describe("MDX flow expression interrupts paragraphs", () => {
 });
 
 describe("MDX nested deep-indent lists", () => {
-  // Regression for the continuation-indent calculation in MDX-mode's
-  // "scan past 4 spaces to find a deeper marker" branch. The extra
-  // whitespace consumed by `scan_all_space` must be added to the item's
-  // `indent`, or sibling markers at the same column get swallowed as
-  // nested sublists.
-
   test("bullet list at 6 spaces inside MDX flow", () => {
     assertMdastConformance("      - a\n      - b\n      - c\n");
   });
@@ -393,10 +354,6 @@ describe("MDX nested deep-indent lists", () => {
   });
 });
 
-// A reference label is scanned over raw source, so it can stop on a `]` that
-// sits inside an expression: the expression loses to the label, and the bytes
-// past the label's `]` are literal text. remark resolves them the same way;
-// they used to belong to no node at all here and vanished from the output.
 describe("MDX expression holding the `]` that ends a reference label", () => {
   test("full reference", () => {
     assertMdastConformance('[a][{"]"}]\n\n[{"]: /u\n');
@@ -423,14 +380,12 @@ describe("MDX expression holding the `]` that ends a reference label", () => {
     assertMdastConformance('# [a][{"]"}]\n\n[{"]: /u\n');
   });
 
-  // Controls: the expression survives whole when no label ends inside it.
   test("an expression the label does not cut keeps its node", () => {
     assertMdastConformance('[{"]"}][a]\n\n[a]: /u\n');
     assertMdastConformance('[a][{"x"}]\n\n[{"x"}]: /u\n');
     assertMdastConformance('x {"]"} y\n');
   });
 
-  // The tree comparison above drops positions, so the span is pinned here.
   test("the tail spans exactly the bytes past the label", () => {
     const md = '[a][{"]"}]\n\n[{"]: /u\n';
     const tree = mdxToMdast(md) as unknown as { children: Array<{ children: AnyNode[] }> };
@@ -444,9 +399,6 @@ describe("MDX expression holding the `]` that ends a reference label", () => {
     });
   });
 
-  // Pre-existing: the expression is handed to oxc before reference resolution
-  // takes its `]`, so a diagnostic outlives the node it was about. The tree the
-  // arena builds is correct; only the error is spurious.
   describe("divergence: an expression the label cuts still reports its error", () => {
     test.fails("an expression that does not parse on its own", () => {
       assertMdastConformance("[a][{x]}]\n\n[{x]: /u\n");
@@ -457,9 +409,6 @@ describe("MDX expression holding the `]` that ends a reference label", () => {
     });
   });
 
-  // The tail is emitted as literal text, so inline markup inside it is never
-  // tokenized. Pre-fix those bytes were dropped outright, so this is the
-  // remaining half of the class rather than a regression.
   describe("divergence: markup in the tail stays literal", () => {
     test.fails("emphasis", () => {
       assertMdastConformance('[a][{"]*x*"}]\n\n[{"]: /u\n');
@@ -475,9 +424,6 @@ describe("MDX expression holding the `]` that ends a reference label", () => {
   });
 });
 
-// Found by `fuzz/mdx.test.ts` at seed 3. A `//` line comment ends at any line
-// ending, so every case below has to behave the same for `\n`, `\r\n` and a
-// lone `\r`.
 describe.each([
   ["LF", "\n"],
   ["CRLF", "\r\n"],
@@ -516,8 +462,6 @@ describe.each([
     assertMdastConformance(`a{\`t\` //${eol}}`);
   });
 
-  // Block comments legitimately span line endings, so the same shapes must
-  // still run past one rather than stopping with the line.
   test("block comments still span the line ending", () => {
     assertMdastConformance(`a{/*${eol}*/}`);
     assertMdastConformance(`a{/* x${eol}y${eol} */ 1}`);
@@ -532,10 +476,6 @@ describe.each([
   });
 });
 
-// Pre-existing and unrelated to line endings: both reproduce identically for
-// `\n`, `\r\n` and `\r`. `export` followed by a line ending opens an ESM block
-// in Sätteri but not in micromark, and a block comment spanning the blank line
-// that should end the block is accepted rather than cut short.
 describe.each([
   ["LF", "\n"],
   ["CRLF", "\r\n"],
@@ -550,9 +490,6 @@ describe.each([
   });
 });
 
-// A `\` before a line ending is one JS line continuation, so the string runs on
-// to the next line. CRLF is one ending, and eating only half of it used to end
-// the string on the orphan `\n` and run the expression to end of input.
 describe.each([
   ["LF", "\n"],
   ["CRLF", "\r\n"],

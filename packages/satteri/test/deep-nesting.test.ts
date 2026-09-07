@@ -24,7 +24,6 @@ describe("deeply nested documents", () => {
     expect(result.stdout).toBe("5");
   });
 
-  // Unprotected, an optimized build overflows Node's 8 MB main stack at ~10250.
   test("compiles a 25000 deep blockquote nest without crashing", () => {
     const result = compileNestedBlockquotes(25000);
     expect(result.signal).toBeNull();

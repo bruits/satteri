@@ -9,10 +9,6 @@ import type { Root as HastRoot, ElementContent } from "hast";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../../src/index.js";
 import type { MdastNode, HastNode } from "../../src/types.js";
 
-// Compare satteri's HTML output to remark-rehype + hast-util-to-html for
-// SVG attribute serialization and numeric properties, on both the mdast
-// `data.hProperties` path and the direct `_hast: true` HAST emit path.
-
 function visitMdast(tree: MdastNodes, fn: (node: MdastNodes) => void): void {
   fn(tree);
   if ("children" in tree && Array.isArray(tree.children)) {
@@ -150,7 +146,6 @@ describe("SVG attribute conformance vs remark-rehype", () => {
   });
 
   test("numeric HTML property on hProperties path (start on <ol>)", () => {
-    // Same numeric-handling code path, exercised on a plain HTML element.
     const patch: DataPatch = {
       hName: "ol",
       hProperties: { start: 5 },
@@ -164,8 +159,7 @@ describe("SVG attribute conformance vs remark-rehype", () => {
   });
 
   test("HTML schema unchanged: className stays `class`, srcSet → srcset", () => {
-    // Wrapper is non-void on purpose — void-element handling between satteri
-    // and hast-util-to-html diverges and would mask the attribute-name check.
+    // A non-void wrapper isolates attribute naming from void-element serialization differences.
     const patch: DataPatch = {
       hName: "section",
       hProperties: { className: "hero", srcSet: "a.png 1x, a@2x.png 2x", tabIndex: 0 },
@@ -177,7 +171,6 @@ describe("SVG attribute conformance vs remark-rehype", () => {
   });
 
   test("foreignObject inside SVG keeps SVG schema (matches hast-util-to-html)", () => {
-    // hast-util-to-html does not re-enter HTML at <foreignObject>; we mirror.
     const patch: DataPatch = {
       hName: "svg",
       hProperties: { viewBox: "0 0 100 100" },

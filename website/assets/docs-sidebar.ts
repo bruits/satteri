@@ -20,12 +20,11 @@ function setOpen(next: boolean) {
 toggle?.addEventListener("click", () => setOpen(true));
 close?.addEventListener("click", () => setOpen(false));
 
-// Backdrop click — fires only on the overlay itself, not its children.
 overlay?.addEventListener("click", (event) => {
   if (event.target === overlay) setOpen(false);
 });
 
-// Close after a link tap so the next page doesn't load with the overlay still showing.
+// Close before navigation so the next page cannot inherit an open overlay.
 panel?.addEventListener("click", (event) => {
   const target = event.target as HTMLElement | null;
   if (target?.closest("a")) setOpen(false);

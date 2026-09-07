@@ -311,7 +311,6 @@ describe("HAST conformance: edge cases", () => {
   });
 });
 
-// One multibyte character shifts every string the reader slices after it.
 describe("HAST conformance: multibyte string pool", () => {
   test("curly quotes and emoji mid-text", () => {
     assertHastConformance("A “quoted” word, then 🎉 an emoji, then a plain tail.");

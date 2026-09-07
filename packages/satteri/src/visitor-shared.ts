@@ -1,11 +1,6 @@
-/**
- * Cold/shape-stable helpers shared by the mdast and hast visitors. The
- * per-node hot decoders stay duplicated in each visitor on purpose: sharing
- * them would feed differently-shaped arguments through one call site and turn
- * it polymorphic.
- */
+// Keep hot decoders separate so MDAST and HAST objects do not make their call sites polymorphic.
 
-import type { CommandBuffer } from "./command-buffer.js";
+import { releaseCommandBuffer, type CommandBuffer } from "./command-buffer.js";
 
 /** Plugin-level configuration, set via `options` on a plugin definition. */
 export interface PluginOptions {
@@ -31,8 +26,7 @@ export function rootReplacementError(content: unknown): Error {
   );
 }
 
-/** Hooks subscribe to node 0 by node type, so a document left headed by anything
- *  but a `root` silently stops firing them, in this phase and every later one. */
+// Hooks require a root node at ID 0; replacing it with another type would silently disable them.
 export function requireRootReplacement<T>(content: T): T {
   if ((content as { type?: unknown } | null)?.type === "root") return content;
   throw rootReplacementError(content);
@@ -42,10 +36,6 @@ export function asArray<T>(value: T | T[]): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
-/** Thrown when declarative replacement content can't be compiled to the
- *  structural op-stream — an unsupported node type (e.g. a bare `root`/`doctype`
- *  handed in as content) or an out-of-range numeric field. The op-stream is the
- *  only structural encoding, so this is a hard error rather than a fallback. */
 export function unencodableContentError(content: unknown): Error {
   const type = (content as { type?: unknown } | null)?.type;
   return new Error(
@@ -67,15 +57,7 @@ export function crossPipelineForeign(node: object): number | undefined {
   return Object.hasOwn(node, "_refs") ? undefined : FOREIGN_REF;
 }
 
-/**
- * Arena id for a node passed to a context method, via a per-kind `nid` lookup
- * (closure keeps each kind's call site monomorphic) resolved against the
- * edited tree's own refs. Plugin-built nodes have no id; without this check
- * the id would coerce to 0 in the command buffer and the mutation would
- * silently target the document root. A node read from another tree has an id
- * that is meaningless here, and one that happens to be in range would edit an
- * unrelated node.
- */
+// Reject missing or foreign IDs before a command can target node 0 or an unrelated tree’s node.
 export function makeRequireNid<TNode>(
   nid: (node: TNode, refs: NodeRefs) => number | undefined,
 ): (node: TNode, method: string, refs: NodeRefs) => number {
@@ -91,24 +73,19 @@ export function makeRequireNid<TNode>(
   };
 }
 
-/** Concatenate the return-value and context command buffers for one pass,
- *  resetting both for reuse. */
-export function mergeAndReset(
+export function collectCommands(
   returnBuffer: CommandBuffer,
-  ctx: { getCommandBuffer(): CommandBuffer },
-): { merged: Uint8Array; hasMutations: boolean } {
-  const ctxCmdBuf = ctx.getCommandBuffer();
-  // The common case — no mutations this pass — allocates nothing.
-  if (returnBuffer.length === 0 && ctxCmdBuf.length === 0) {
-    return { merged: EMPTY_BYTES, hasMutations: false };
+  contextBuffer: CommandBuffer,
+): Uint8Array {
+  let merged = EMPTY_BYTES;
+  const length = returnBuffer.length + contextBuffer.length;
+  if (length > 0) {
+    merged = new Uint8Array(length);
+    merged.set(returnBuffer.getBuffer());
+    merged.set(contextBuffer.getBuffer(), returnBuffer.length);
   }
-  const ctxBuf = ctxCmdBuf.getBuffer();
-  const retBuf = returnBuffer.getBuffer();
-  const merged = new Uint8Array(retBuf.length + ctxBuf.length);
-  merged.set(retBuf, 0);
-  merged.set(ctxBuf, retBuf.length);
-
-  returnBuffer.reset();
-  ctxCmdBuf.reset();
-  return { merged, hasMutations: true };
+  // Copy before releasing: later passes reuse the backing storage.
+  releaseCommandBuffer(returnBuffer);
+  releaseCommandBuffer(contextBuffer);
+  return merged;
 }

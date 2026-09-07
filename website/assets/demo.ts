@@ -1,7 +1,4 @@
-// Lazy: the satteri + shiki imports are wrapped in dynamic `import()` so
-// Rolldown splits them into their own chunks and we don't pay the WASM
-// download / init cost (or Shiki's grammar) until the user is about to
-// interact with the demo.
+// Dynamic imports defer WASM and Shiki downloads until the demo is near interaction.
 
 const installButton = document.querySelector<HTMLButtonElement>("#install-copy");
 const installLabel = document.querySelector<HTMLSpanElement>("#install-copy-text");
@@ -116,11 +113,7 @@ if (input && output && stat && status && highlight && highlightCode) {
 
   function measureThroughput(markdownToHtml: (s: string) => { html: string }) {
     if (!docsPerSec) return;
-    // Run as many compiles of the sample as we can in ~80ms. This is short
-    // enough to feel instant on slow machines, long enough to amortize
-    // performance.now() noise. The number we display is conservative: actual
-    // batch throughput in Node with the native binding is meaningfully
-    // higher (no V8 boundary crossings).
+    // An 80ms sample amortizes timer noise without delaying interaction noticeably.
     const budgetMs = 80;
     const start = performance.now();
     let count = 0;
@@ -130,8 +123,7 @@ if (input && output && stat && status && highlight && highlightCode) {
     }
     const elapsed = performance.now() - start;
     const perSec = (count / elapsed) * 1000;
-    // Floor to two significant figures so the displayed number reads as a
-    // round value (14,723 → 14,000) and stays an honest underclaim.
+    // Round down so the displayed throughput does not overstate the measurement.
     const mag = Math.pow(10, Math.max(0, Math.floor(Math.log10(perSec)) - 1));
     const rounded = Math.floor(perSec / mag) * mag;
     docsPerSec.textContent = rounded.toLocaleString();
@@ -184,24 +176,18 @@ if (input && output && stat && status && highlight && highlightCode) {
         return out;
       };
 
-      // Re-highlight when the user toggles the site theme so token colors
-      // track the active palette instead of staying frozen at first paint.
       new MutationObserver(() => applyHighlight()).observe(document.documentElement, {
         attributes: true,
         attributeFilter: ["data-theme"],
       });
 
-      // Warm up V8's WASM tier-up so the first user-visible compile shows
-      // steady-state timing (~µs) instead of the Liftoff-baseline number.
+      // Warm up WASM compilation tiers before displaying a steady-state timing.
       for (let i = 0; i < 3; i++) satteri.markdownToHtml(SAMPLE);
       compile = (source: string) => satteri.markdownToHtml(source).html;
 
       applyHighlight();
       run();
-      // Throughput micro-benchmark: tight loop on the sample for a fixed time
-      // budget. Runs once after warmup so visitors see a real per-machine
-      // number instead of a marketing claim. Don't await it — it shouldn't
-      // block the first compile from displaying.
+      // Do not await throughput measurement; the first compile should display immediately.
       requestAnimationFrame(() => measureThroughput(satteri.markdownToHtml));
     })();
 
@@ -218,9 +204,7 @@ if (input && output && stat && status && highlight && highlightCode) {
   });
   input.addEventListener("scroll", syncScroll);
 
-  // Kick off the WASM download + first compile during browser idle time so it
-  // doesn't compete with initial page paint. `requestIdleCallback` is ideal;
-  // fall back to a `setTimeout` for browsers that don't ship it (Safari).
+  // Defer WASM initialization until idle so it does not compete with the initial page paint.
   const kickoff = () => void start_demo();
   if ("requestIdleCallback" in window) {
     (window as Window & typeof globalThis).requestIdleCallback(kickoff, { timeout: 3000 });

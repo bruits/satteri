@@ -1,14 +1,8 @@
-import type { ArenaWire, BufferHeader } from "../types.js";
-import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "../mdx-types.js";
 import type { Position } from "unist";
-import { decodeMdxJsxAttr } from "../mdx-attr.js";
-import { decodeElementProp } from "./element-props.js";
-import { NAME_TO_TYPE } from "./generated/node-types.js";
+import { ArenaReader } from "../arena-reader.js";
 import {
-  ARENA_MAGIC,
-  KIND_HAST,
   FIELD,
-  HEADER,
+  KIND_HAST,
   W_CHILDREN_COUNT,
   W_CHILDREN_START,
   W_DATA_LEN,
@@ -16,6 +10,10 @@ import {
   W_PARENT,
   W_START_OFFSET,
 } from "../generated/arena-layout.js";
+import { decodeMdxJsxAttr } from "../mdx-attr.js";
+import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "../mdx-types.js";
+import type { ArenaWire, BufferHeader } from "../types.js";
+import { NAME_TO_TYPE } from "./generated/node-types.js";
 
 export type { MdxJsxAttribute, MdxJsxExpressionAttribute };
 
@@ -36,10 +34,8 @@ export interface HastProperty {
 }
 
 export class HastReader {
-  readonly #view: DataView;
-  readonly #header: BufferHeader;
-  readonly #textDecoder: TextDecoder;
-  // Typed-array views over the aligned LE wire: DataView getters cost far more in unoptimized V8 tiers.
+  readonly #arena: ArenaReader;
+  // Typed arrays avoid DataView getter overhead in unoptimized V8 tiers.
   readonly #u8: Uint8Array;
   readonly #u32: Uint32Array;
   readonly #nodesB: number;
@@ -48,134 +44,52 @@ export class HastReader {
   readonly #strideW: number;
   readonly #childrenW: number;
   readonly #typeDataB: number;
-  readonly #nodeDataCount: number;
-  #stringPoolCache: string | null = null;
 
   constructor(buffer: ArrayBuffer | Uint8Array) {
-    let u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-    // A u32 view needs a 4-byte-aligned base, which a foreign slice may not have.
-    if ((u8.byteOffset & 3) !== 0) u8 = u8.slice();
-    this.#u8 = u8;
-    this.#view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-    this.#u32 = new Uint32Array(u8.buffer, u8.byteOffset, u8.byteLength >> 2);
-    this.#textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
-    const header = this.#readHeader();
-    this.#header = header;
+    const arena = new ArenaReader(buffer, KIND_HAST);
+    this.#arena = arena;
+    this.#u8 = arena.u8;
+    this.#u32 = arena.u32;
+    const header = arena.header;
     this.#nodesB = header.nodesOffset;
     this.#nodesW = header.nodesOffset >> 2;
     this.#strideB = header.nodeStructSize;
     this.#strideW = header.nodeStructSize >> 2;
     this.#childrenW = header.childrenOffset >> 2;
     this.#typeDataB = header.typeDataOffset;
-    this.#nodeDataCount = header.nodeDataCount;
   }
 
-  #readHeader(): BufferHeader {
-    const v = this.#view;
-    const magic = v.getUint32(HEADER.magic, true);
-    if (magic !== ARENA_MAGIC) {
-      throw new Error(`Invalid HAST buffer: bad magic 0x${magic.toString(16)}`);
-    }
-    const kind = v.getUint32(HEADER.kind, true);
-    if (kind !== KIND_HAST) {
-      throw new Error(
-        `HastReader was handed a buffer of kind ${kind} (expected ${KIND_HAST}). ` +
-          `MDAST and HAST node types overlap; reading the wrong kind decodes garbage.`,
-      );
-    }
-    return {
-      nodeStructSize: v.getUint32(HEADER.node_struct_size, true),
-      nodeCount: v.getUint32(HEADER.node_count, true),
-      nodesOffset: v.getUint32(HEADER.nodes_offset, true),
-      childrenCount: v.getUint32(HEADER.children_count, true),
-      childrenOffset: v.getUint32(HEADER.children_offset, true),
-      typeDataLen: v.getUint32(HEADER.type_data_len, true),
-      typeDataOffset: v.getUint32(HEADER.type_data_offset, true),
-      stringPoolLen: v.getUint32(HEADER.string_pool_len, true),
-      stringPoolOffset: v.getUint32(HEADER.string_pool_offset, true),
-      nodeDataCount: v.getUint32(HEADER.node_data_count, true),
-      nodeDataOffset: v.getUint32(HEADER.node_data_offset, true),
-    };
-  }
-
-  #nodeDataTable: Map<number, string> | null = null;
-
-  #wire: ArenaWire | null = null;
-
-  /** @internal Memoized: the lazy materializer asks once per node. */
+  /** @internal Memoized wire view for the fused decoder. */
   getWire(): ArenaWire {
-    return (this.#wire ??= {
-      u8: this.#u8,
-      u32: this.#u32,
-      nodesB: this.#nodesB,
-      nodesW: this.#nodesW,
-      strideB: this.#strideB,
-      strideW: this.#strideW,
-      childrenW: this.#childrenW,
-      typeDataB: this.#typeDataB,
-      pool: this.getStringPool(),
-    });
+    return this.#arena.getWire();
   }
 
-  /**
-   * Per-node JSON `data` blob (set via `Arena::set_node_data` on the Rust
-   * side). Returns `null` when the node has no entry. Lazy-builds a
-   * `Map<id, string>` on first call so a materialization pass on a
-   * data-heavy tree stays O(nodes) rather than O(nodes × entries).
-   */
+  /** Per-node JSON data, or null when absent. */
   getNodeData(nodeId: number): string | null {
-    const table = this.getNodeDataTable();
-    if (table === null) return null;
-    return table.get(nodeId) ?? null;
+    return this.#arena.getNodeData(nodeId);
   }
 
-  /** @internal `null` when no node carries a `data` blob. */
+  /** @internal null when no node carries data. */
   getNodeDataTable(): ReadonlyMap<number, string> | null {
-    if (this.#nodeDataCount === 0) return null;
-    if (this.#nodeDataTable === null) {
-      this.#nodeDataTable = new Map();
-      const v = this.#view;
-      let pos = this.#header.nodeDataOffset;
-      for (let i = 0; i < this.#nodeDataCount; i++) {
-        const id = v.getUint32(pos, true);
-        pos += 4;
-        const len = v.getUint32(pos, true);
-        pos += 4;
-        const slice = this.#u8.subarray(pos, pos + len);
-        this.#nodeDataTable.set(id, this.#textDecoder.decode(slice));
-        pos += len;
-      }
-    }
-    return this.#nodeDataTable;
+    return this.#arena.getNodeDataTable();
   }
 
   get nodeCount(): number {
-    return this.#header.nodeCount;
+    return this.#arena.header.nodeCount;
   }
+
   get header(): BufferHeader {
-    return { ...this.#header };
+    return { ...this.#arena.header };
   }
 
-  /** The full string pool (original input + interning heap). Not the document
-   * source as written; for that, read `ctx.source` from a plugin. */
+  /** Full string pool, including interned strings; use ctx.source for the original document. */
   getStringPool(): string {
-    return this.#stringPoolCache ?? this.#initPool();
+    return this.#arena.getStringPool();
   }
 
-  #initPool(): string {
-    const { stringPoolOffset, stringPoolLen } = this.#header;
-    const pool = this.#textDecoder.decode(
-      this.#u8.subarray(stringPoolOffset, stringPoolOffset + stringPoolLen),
-    );
-    this.#stringPoolCache = pool;
-    return pool;
-  }
-
-  /** String refs arrive in UTF-16 units (the serializer remaps multibyte pools), so a plain substring is exact. */
+  /** Wire string refs use UTF-16 units, so substring preserves their offsets. */
   getString(offset: number, len: number): string {
-    if (len === 0) return "";
-    const pool = this.#stringPoolCache ?? this.#initPool();
-    return pool.substring(offset, offset + len);
+    return this.#arena.getString(offset, len);
   }
 
   /** A zero start line marks a synthesized node with no source range (unist
@@ -239,14 +153,7 @@ export class HastReader {
     return this.#typeDataB + (u32[w + W_DATA_OFFSET] ?? 0);
   }
 
-  /**
-   * Get MDX JSX element data: name and attributes.
-   *
-   * MDX JSX element type_data layout:
-   *   [name: StringRef(8B)][attr_count: u32(4B)][_pad: u32(4B)] = 16-byte header
-   *   then attr_count * 20 bytes:
-   *     [kind: u8(1B)][_pad: [u8;3](3B)][name: StringRef(8B)][value: StringRef(8B)]
-   */
+  /** A zero-length element name represents an MDX fragment. */
   getMdxJsxElementData(nodeId: number): {
     name: string | null;
     attributes: (MdxJsxAttribute | MdxJsxExpressionAttribute)[];

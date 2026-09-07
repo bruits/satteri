@@ -24,9 +24,7 @@ const specPath = fileURLToPath(
 );
 const examples = JSON.parse(readFileSync(specPath, "utf8")) as SpecExample[];
 
-// spec.json is plain CommonMark — disable every extension on both sides so
-// the comparison stays apples-to-apples. (The default helpers in `./helpers`
-// enable GFM, which would skew strikethrough/table/autolink-literal cases.)
+// Disable extensions because spec.json describes plain CommonMark.
 const CMARK_ONLY_FEATURES: Features = {
   gfm: false,
   frontmatter: false,
@@ -58,8 +56,7 @@ function stripPositions(value: unknown): unknown {
   return out;
 }
 
-// Intentional divergence: Sätteri keeps `data.lang` on HAST code elements;
-// remark-rehype drops it. See website/content/docs/divergences.md.
+// Ignore data.lang because only Sätteri retains it on HAST code elements.
 function stripHastDataLang(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value;
   if (Array.isArray(value)) return value.map(stripHastDataLang);
@@ -81,11 +78,7 @@ function normalizeHtml(html: string): string {
     .replace(/<br\/>/g, "<br />")
     .replace(/<hr>/g, "<hr />")
     .replace(/<hr\/>/g, "<hr />");
-  // Canonicalize entity encoding style — remark+rehype favours hex (`&#x26;`)
-  // while satteri (and the spec) use named entities. Then collapse `&gt;`
-  // and `&quot;` to their raw forms because rehype-stringify doesn't encode
-  // `>` or `"` outside of contexts that require it. All produce semantically
-  // identical HTML.
+  // Normalize equivalent entity spellings before comparing HTML serializers.
   out = out
     .replace(/&#x3C;/g, "&lt;")
     .replace(/&#x3E;/g, "&gt;")
@@ -93,8 +86,7 @@ function normalizeHtml(html: string): string {
     .replace(/&#x22;/g, "&quot;")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"');
-  // Drop the trailing ` /` on void elements so `<img ...>` and `<img ... />`
-  // compare equal — both are HTML5-valid renderings of the same node.
+  // HTML5 permits either spelling of a void-element close.
   out = out.replace(/<(img|input|br|hr)([^>]*?)\s*\/?>/g, "<$1$2>");
   return out.trim();
 }

@@ -12,14 +12,9 @@ import {
 } from "../src/index.js";
 import type { MarkdownToJsOptions } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
-import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { MdastNode } from "../src/types.js";
 import type { Element } from "hast";
-import type {
-  MdxJsxFlowElement,
-  MdxJsxFlowElementData,
-  MdxJsxTextElementHast,
-} from "../src/mdx-types.js";
+import type { MdxJsxFlowElement, MdxJsxFlowElementData } from "../src/mdx-types.js";
 
 describe("frontmatter extraction", () => {
   test("returns null when there is no frontmatter", () => {
@@ -57,7 +52,6 @@ describe("frontmatter extraction", () => {
     expect(result.code).toContain("MDXContent");
   });
 
-  // hastPlugins-only takes a separate fused native call (createHastHandleWithFrontmatter)
   test("yaml/toml/null frontmatter flow through the hast-plugins-only path", () => {
     const noop = defineHastPlugin({ name: "noop", element: { filter: [], visit() {} } });
 
@@ -242,7 +236,6 @@ describe("features.gfm.footnotes", () => {
     });
     if (result instanceof Promise) throw new Error("expected sync");
     expect(result.html).not.toContain(">Footnotes<");
-    // Without parsing as footnotes, the `[^a]` text should leak as-is.
     expect(result.html).toContain("[^a]");
   });
 
@@ -340,9 +333,7 @@ describe("features.gfm.footnotes", () => {
     expect(result.html).toContain('href="#prefix-fnref-a-2"');
   });
 
-  // The compile pipeline picks a different NAPI shape per plugin mix (no-plugin
-  // fast path, MDAST-only fused tail, HAST collect-last). Footnote options must
-  // reach the MDAST→HAST conversion on every one of them.
+  // Exercise every plugin mix because each selects a different native conversion path.
 
   test("footnote options apply on the MDAST-plugins-only path", () => {
     const noop = defineMdastPlugin({ name: "noop", heading() {} });
@@ -366,8 +357,6 @@ describe("features.gfm.footnotes", () => {
     expect(result.html).not.toContain(">Footnotes<");
   });
 });
-
-// markdownToHtml - no plugins
 
 describe("markdownToHtml", () => {
   test("basic markdown to HTML", () => {
@@ -399,8 +388,6 @@ describe("markdownToHtml", () => {
     expect(html).toContain('<code class="language-js">');
     expect(html).toContain("console.log(1)");
   });
-
-  // with MDAST plugins only
 
   test("rawHtml preserves Mermaid curly braces in rendered HTML", () => {
     const plugin = defineMdastPlugin({
@@ -501,9 +488,6 @@ describe("markdownToHtml", () => {
     expect(html).not.toContain("</h1>\n<root");
   });
 
-  // Option B unwraps only the document root. A raw return into an inline slot
-  // (text visitor) still carries the parser's wrapping paragraph — raw is
-  // block-level by design — but it must not produce a nested <root>/<p><p>.
   test("raw return from an inline (text) visitor keeps a single paragraph wrapper", () => {
     const decorate = defineMdastPlugin({
       name: "decorate-text",
@@ -513,13 +497,9 @@ describe("markdownToHtml", () => {
     });
 
     const { html } = markdownToHtml("placeholder", { mdastPlugins: [decorate] });
-    // The parser's paragraph survives inside the original paragraph; what must
-    // never appear is a literal nested document root.
     expect(html).not.toContain("<root>");
     expect(html).toContain("<strong>ipsum</strong>");
   });
-
-  // with HAST plugins only
 
   test("HAST plugin adds class to all elements", () => {
     const addClasses = defineHastPlugin({
@@ -610,9 +590,7 @@ describe("markdownToHtml", () => {
       name: "noop",
       element: {
         filter: [],
-        visit() {
-          // inspect but don't mutate
-        },
+        visit() {},
       },
     });
 
@@ -623,8 +601,6 @@ describe("markdownToHtml", () => {
     expect(html).toContain("Test");
     expect(html).toContain("<p>");
   });
-
-  // with both MDAST and HAST plugins
 
   test("MDAST plugin removes headings, HAST plugin adds class", () => {
     const removeHeadings = defineMdastPlugin({
@@ -785,9 +761,7 @@ describe("markdownToHtml", () => {
       factoryCalls++;
       return defineMdastPlugin({
         name: "noop-mdast-factory",
-        heading() {
-          // observe only
-        },
+        heading() {},
       });
     };
 
@@ -796,8 +770,6 @@ describe("markdownToHtml", () => {
     expect(factoryCalls).toBe(2);
   });
 });
-
-// mdxToJs
 
 // Declared locally because `_mdxExplicitJsx` is private to the Data interfaces.
 interface ExplicitJsxData extends MdxJsxFlowElementData {
@@ -844,9 +816,6 @@ describe("mdxToJs", () => {
       },
     });
 
-    // Unlike markdownToHtml, the MDX pipeline must escape braces so the reparse
-    // does not read `{JWT valid?}` as a (broken) expression. The escape compiles
-    // to literal `{` / `}` string children, preserving the Mermaid source.
     const { code: js } = mdxToJs("```mermaid\nflowchart TD\n    C{JWT valid?}\n```", {
       mdastPlugins: [plugin],
     });
@@ -877,14 +846,12 @@ describe("mdxToJs", () => {
       },
     });
 
-    // mdxExpressions:false replaces the deprecated `{ rawHtml }`, so both must match.
     const optCode = mdxToJs("x\n", { mdastPlugins: [withOption] }).code;
     const legacyCode = mdxToJs("x\n", { mdastPlugins: [legacy] }).code;
     expect(optCode).toBe(legacyCode);
     expect(optCode).toContain('"{"');
     expect(optCode).toContain('"}"');
 
-    // Omitting the option leaves expressions live, so `{foo}` must not be a literal.
     const liveCode = mdxToJs("x\n", { mdastPlugins: [expressionsLive] }).code;
     expect(liveCode).not.toContain('"{"');
     expect(liveCode).toContain("children: foo");
@@ -962,10 +929,8 @@ describe("mdxToJs", () => {
       },
     });
 
-    // A `raw` node has no JSX representation, so MDX errors rather than escaping it.
     expect(() => mdxToJs("```\nhi\n```", { mdastPlugins: [plugin] })).toThrow(/mdxExpressions/);
 
-    // The same html node still renders verbatim in the (non-MDX) HTML output.
     const { html } = markdownToHtml("```\nhi\n```", { mdastPlugins: [plugin] });
     expect(html).toContain('<pre class="hl">hi</pre>');
   });
@@ -1027,7 +992,6 @@ describe("mdxToJs", () => {
     const { code: js } = mdxToJs("<Component />\n", {
       mdastPlugins: [addAttr],
     });
-    // The compiled output should reference the "added" attribute
     expect(js).toContain("added");
     expect(js).toContain("yes");
   });
@@ -1055,8 +1019,6 @@ describe("mdxToJs", () => {
     expect(js).not.toContain("bar");
   });
 
-  // Mirrors `_mdxExplicitJsx` in @mdx-js/mdx: source-parsed JSX stays literal,
-  // plugin-inserted JSX routes through `_components` so users can override it.
   test("plugin-inserted mdxJsx with hyphenated name routes through _components", () => {
     const insertAstroImage = defineHastPlugin({
       name: "insert-astro-image",
@@ -1167,10 +1129,8 @@ describe("mdxToJs", () => {
       hastPlugins: [injectMeta],
     });
 
-    // Original attributes must be preserved
     expect(js).toContain('"client:load": true');
     expect(js).toContain('foo: "bar"');
-    // Injected attributes must appear
     expect(js).toContain('"client:component-path": "/absolute/path/B.jsx"');
     expect(js).toContain('"client:component-export": "default"');
     expect(js).toContain('"client:component-hydration": ""');
@@ -1181,9 +1141,7 @@ describe("mdxToJs", () => {
       name: "noop",
       mdxJsxFlowElement: {
         filter: [],
-        visit() {
-          // do nothing
-        },
+        visit() {},
       },
     });
 
@@ -1215,8 +1173,6 @@ describe("mdxToJs", () => {
     expect(js).not.toContain('"bar"');
   });
 
-  // optimizeStatic
-
   test("optimizeStatic collapses static subtrees (Astro-style)", () => {
     const { code: js } = mdxToJs("# Hello\n\nWorld", {
       optimizeStatic: {
@@ -1227,7 +1183,6 @@ describe("mdxToJs", () => {
     expect(js).toContain("set:html");
     expect(js).toContain("<h1>Hello</h1>");
     expect(js).toContain("<p>World</p>");
-    // Should NOT have individual element calls
     expect(js).not.toMatch(/"h1"/);
   });
 
@@ -1254,7 +1209,7 @@ describe("mdxToJs", () => {
     expect(js).toContain("Dynamic");
   });
 
-  // Issue withastro/compiler-rs#127: Astro's `renderJSX` drops a whitespace-only HTMLString.
+  // Astro’s renderJSX drops whitespace-only HTMLString values.
   test("optimizeStatic keeps whitespace between components as a plain string", () => {
     const { code: js } = mdxToJs("<Span>hello</Span> <Span>world</Span>", {
       optimizeStatic: {
@@ -1285,16 +1240,12 @@ describe("mdxToJs", () => {
     });
     expect(js).toContain('class: "language-js"');
     expect(js).not.toContain("className:");
-    // GFM footnotes inject className + data-*/aria-*; the latter are already
-    // kebab in both modes, but className must lowercase to class.
     expect(js).toContain('class: "footnotes"');
     expect(js).toContain('"data-footnote-ref"');
     expect(js).toContain('"aria-describedby"');
   });
 
   test("elementAttributeNameCase only affects HAST elements, not MDX-written JSX", () => {
-    // User-written `className` on MDX-JSX is preserved verbatim regardless
-    // of the casing option (mirrors @mdx-js/mdx).
     const { code: js } = mdxToJs('<div className="x">hi</div>\n', {
       elementAttributeNameCase: "html",
     });
@@ -1334,7 +1285,6 @@ describe("mdxToJs", () => {
       hastPlugins: [plugin],
       elementAttributeNameCase: "html",
     });
-    // The SVG schema covers the <svg> element's own attributes, not just descendants.
     expect(js).toContain('"stroke-width": "1.2"');
     expect(js).toContain('"stroke-linecap": "round"');
     expect(js).not.toContain("strokeWidth");
@@ -1348,7 +1298,6 @@ describe("mdxToJs", () => {
         filter: ["p", "svg"],
         visit(node, ctx) {
           if (node.tagName === "p") {
-            // The <svg> is the root of the appended subtree, not nested under a wrapper.
             ctx.appendChild(node, {
               type: "element",
               tagName: "svg",
@@ -1388,8 +1337,6 @@ describe("mdxToJs", () => {
         visit(node, ctx) {
           ctx.setProperty(node, "ariaHidden", "true");
           ctx.setProperty(node, "dataFoo", "bar");
-          // An SVG-only property on an HTML element is unknown to the HTML
-          // schema and passes through verbatim, as in property-information.
           ctx.setProperty(node, "strokeWidth", "1");
         },
       },
@@ -1417,15 +1364,13 @@ describe("mdxToJs", () => {
       features: { gfm: true },
       stylePropertyNameCase: "css",
     });
-    // `text-align` is not a valid JS identifier so it serializes as a string.
     expect(js).toContain('"text-align": "right"');
     expect(js).toContain('"text-align": "left"');
     expect(js).not.toContain("textAlign:");
   });
 
   test("stylePropertyNameCase via hast plugin: vendor prefixes and custom properties", () => {
-    // Attach a complex style string via a plugin so we exercise the parsing
-    // on something other than table-align.
+    // Plugin-supplied styles exercise parsing beyond the table-alignment path.
     const setStyle = defineHastPlugin({
       name: "set-style",
       element: {
@@ -1443,9 +1388,6 @@ describe("mdxToJs", () => {
     const dom = mdxToJs("hi\n", { hastPlugins: [setStyle] }).code;
     expect(dom).toContain('backgroundColor: "red"');
     expect(dom).toContain('WebkitLineClamp: "2"');
-    // Custom properties are kept verbatim under both casings — including their
-    // case, which is significant (`--tmLabel` ≠ `--tmlabel`). Regression test
-    // for https://github.com/withastro/astro/issues/16940.
     expect(dom).toContain('"--tmLabel": "blue"');
     expect(dom).toContain('"--x": "1"');
 
@@ -1460,9 +1402,6 @@ describe("mdxToJs", () => {
   });
 
   test("case-insensitive standard property names are lowercased", () => {
-    // CSS standard property names are case-insensitive, so satteri normalizes
-    // `COLOR` to `color`. Custom properties (`--*`) are case-sensitive and
-    // exempt (covered above).
     const setStyle = defineHastPlugin({
       name: "set-style",
       element: {
@@ -1479,7 +1418,6 @@ describe("mdxToJs", () => {
   });
 
   test("style on MDX-written JSX is preserved as a string", () => {
-    // Matches @mdx-js/mdx: only HAST elements get string-to-object conversion.
     const { code: js } = mdxToJs('<div style="color: red">hi</div>\n');
     expect(js).toContain('style: "color: red"');
     expect(js).not.toContain("style: {");
@@ -1499,8 +1437,6 @@ describe("mdxToJs", () => {
       mdastPlugins: [plugin],
     });
 
-    // Curly braces should appear as string content, not parsed as MDX expressions.
-    // The escaping splits them into separate children: "{", "foo: 1", "}"
     expect(js).toContain('"{"');
     expect(js).toContain('"}"');
     expect(js).toContain("foo: 1");
@@ -1561,8 +1497,6 @@ describe("mdxToJs", () => {
     expect(html).toContain('class="added"');
   });
 
-  // Filtered (selective) HAST visitors
-
   test("filtered element visitor - single tag", () => {
     const plugin = defineHastPlugin({
       name: "link-class",
@@ -1579,7 +1513,6 @@ describe("mdxToJs", () => {
     });
     expect(html).toContain('class="link"');
     expect(html).toContain("click");
-    // Heading should NOT have the class
     expect(html).toMatch(/<h1>Hello<\/h1>/);
   });
 
@@ -1628,9 +1561,7 @@ describe("mdxToJs", () => {
     expect(html).toContain('target="_blank"');
   });
 
-  test("filtered visitor mixed with unfiltered falls back to JS walk", () => {
-    // This plugin has a bare `text` function (unfiltered), so it should
-    // fall back to the JS walk path, but still produce correct results.
+  test("filtered element visitors work alongside unfiltered text visitors", () => {
     const plugin = defineHastPlugin({
       name: "mixed",
       element: {
@@ -1639,24 +1570,19 @@ describe("mdxToJs", () => {
           ctx.setProperty(node, "class", "heading");
         },
       },
-      text(node, _ctx) {
-        // noop, but being a bare function forces JS-walk fallback
-      },
+      text() {},
     });
 
     const { html } = markdownToHtml("# Hello", {
       hastPlugins: [plugin],
     });
-    // The filter still works via fallback JS walk
-    expect(html).toContain("Hello");
+    expect(html).toContain('<h1 class="heading">Hello</h1>');
   });
-
-  // Async visitors
 
   test("async MDAST visitor - replaces code block after await", async () => {
     const plugin = defineMdastPlugin({
       name: "async-code",
-      async code(node) {
+      async code() {
         await new Promise((r) => setTimeout(r, 1));
         return { rawHtml: "<pre>async-highlighted</pre>" };
       },
@@ -1686,7 +1612,6 @@ describe("mdxToJs", () => {
       element: {
         filter: ["pre"],
         async visit(node, ctx) {
-          // Simulate async work (e.g. shiki language loading)
           await new Promise((r) => setTimeout(r, 1));
           ctx.replaceNode(node, { type: "raw", value: "<pre>highlighted</pre>" } as HastNode);
         },
@@ -1717,7 +1642,6 @@ describe("mdxToJs", () => {
 
     const { html } = await markdownToHtml("# One\n\n## Two", { hastPlugins: [plugin] });
     expect(html).toContain('class="processed"');
-    // Both should start before either ends (parallel execution)
     expect(order[0]).toBe("start:h1");
     expect(order[1]).toBe("start:h2");
   });
@@ -1776,7 +1700,7 @@ describe("mdxToJs", () => {
         if (node.depth < 6) {
           ctx.setProperty(node, "depth", (node.depth + 1) as 1 | 2 | 3 | 4 | 5 | 6);
         }
-        return node; // returning same node should NOT clobber setProperty
+        return node;
       },
     });
 
@@ -2005,8 +1929,7 @@ describe("markdownToJs", () => {
     expect(js).toContain('"Hello {x}"');
   });
 
-  // Each path builds the HAST arena differently inside, and all of them have to
-  // extract frontmatter and mark the arena as plain Markdown.
+  // Each pipeline creates its arena separately, so every path must preserve the source format.
   describe("every pipeline path", () => {
     const src = "---\ntitle: T\n---\n\npara <b>x</b>\n";
     const noopMdast = defineMdastPlugin({ name: "noop-mdast", paragraph() {} });
@@ -2132,7 +2055,6 @@ describe("markdownToJs", () => {
     });
 
     test("optimizeStatic injects raw HTML verbatim instead of dropping it", () => {
-      // Collapsing serializes the subtree back to HTML, so raw HTML rides along.
       const { code: js } = markdownToJs("a <b>bold</b> word", {
         optimizeStatic: { component: "Fragment", prop: "set:html" },
       });
@@ -2140,7 +2062,6 @@ describe("markdownToJs", () => {
     });
   });
 
-  // Shared with `mdxToJs`, but reached through a separate NAPI entry point.
   describe("JS output options", () => {
     test("compiles to an ES module by default", () => {
       const { code: js } = markdownToJs("# Hello");
@@ -2223,13 +2144,10 @@ describe("markdownToJs", () => {
   });
 });
 
-// Step-by-step API
-
 describe("position: false", () => {
   const MD = "# Hi\n\nSome *text* with [a link](/u).\n";
   const MDX = '# Hi\n\n<Comp x="1" />\n';
 
-  /** The subset of mdast/hast every node shares, so one helper walks both. */
   interface TreeLike {
     type: string;
     value?: unknown;
@@ -2408,9 +2326,7 @@ describe("smartPunctuation options", () => {
   });
 
   test("curls quotes that surround an MDX expression", () => {
-    // Documented divergence: remark-smartypants curls each text node in
-    // isolation, so an expression between the quotes leaves them straight.
-    // satteri pairs across the expression.
+    // remark-smartypants curls text nodes independently; Sätteri also pairs quotes across expressions.
     const { code: js } = mdxToJs('exports: "{value}"\n', {
       features: { smartPunctuation: true },
     });
@@ -2480,8 +2396,6 @@ describe("per-plugin position opt-in", () => {
         }),
       ],
     });
-    // A hast plugin opting in flips mdast tracking on too, so the earlier
-    // mdast plugin observes positions even though it didn't ask.
     expect(mdastRan).toBe(true);
     expect(mdastSeen).toBeDefined();
     expect(hastSeen?.start.line).toBe(1);
@@ -2551,10 +2465,6 @@ describe("per-plugin position opt-in", () => {
     expect(headingSeen?.start.line).toBe(1);
   });
 
-  // Issue #172: the walk path leaked byte offsets, so
-  // `ctx.source.slice(start.offset, end.offset)` drifted right after any
-  // multibyte character. Offsets and columns are UTF-16 code units, so
-  // astral pairs (😀) must slice cleanly too.
   test("offsets after multibyte characters slice ctx.source and agree with line/column", () => {
     const doc = [
       "[baseline](https://example.com)",
@@ -2588,10 +2498,7 @@ describe("per-plugin position opt-in", () => {
   });
 });
 
-// A visitor returning a same-type `{ type, value }` node is routed through
-// setProperty("value") instead of a structural replace. `text` is covered by
-// nested-transforms; these exercise the other value-only types so a bad prop
-// slot on one of them can't slip through as a silent no-op.
+// These node types use value-only writes, so each needs coverage for its native property slot.
 describe("value-only node swap fast path", () => {
   test("mdast inlineCode swap updates the rendered code", () => {
     const result = markdownToHtml("`abc`", {
@@ -2651,7 +2558,6 @@ describe("value-only node swap fast path", () => {
       ],
     });
     if (result instanceof Promise) throw new Error("expected sync");
-    // Unresolved references render their children as-is (the convert fallback)
     expect(result.html).not.toContain("example.com/secret");
     expect(result.html).not.toContain("<a");
     expect(result.html).toContain("See the docs.");
@@ -2680,14 +2586,11 @@ describe("value-only node swap fast path", () => {
   });
 });
 
-// Guards the default no-plugin path: skip-positions mode must still flow byte
-// offsets to HAST so MDX codegen resolves positions lazily.
 describe("MDX source positions without a position opt-in", () => {
   test("dev __source keeps lineNumber/columnNumber on the fast path", () => {
     const src = "# Title\n\n<Foo>bar</Foo>\n";
     const result = mdxToJs(src, { development: true });
     if (result instanceof Promise) throw new Error("expected sync");
-    // The authored `<Foo>` is on line 3, column 1.
     expect(result.code).toContain("lineNumber: 3");
     expect(result.code).toContain("columnNumber: 1");
   });
@@ -2857,7 +2760,6 @@ describe("nodes kept from another compile", () => {
       paragraph(node) {
         kept ??= node;
         const first = node.children[0];
-        // Reading content in-pass pins the snapshot the retained node reads from.
         if (first?.type === "text") void first.value;
       },
     });

@@ -1,6 +1,4 @@
-/** Decode a HAST element property value from its wire `(kind, value)` — shared
- *  by the walk decoder and the snapshot reader so the kind dispatch lives once.
- *  The bool kinds carry no value string (callers pass `""`). */
+// Boolean property kinds carry no value string in the wire protocol.
 import {
   PROP_BOOL_TRUE,
   PROP_BOOL_FALSE,
@@ -21,7 +19,6 @@ export function decodeElementProp(kind: number, value: string): HastPropertyValu
     case PROP_SPACE_SEP:
       return value.split(" ").filter((s) => s.length > 0);
     case PROP_COMMA_SEP: {
-      // Interior empty items are kept; only a trailing empty is dropped.
       const items = value.split(",").map((s) => s.trim());
       if (items[items.length - 1] === "") items.pop();
       return items;
@@ -34,6 +31,6 @@ export function decodeElementProp(kind: number, value: string): HastPropertyValu
     case PROP_INT:
       return Number(value);
     default:
-      return value; // PROP_STRING
+      return value;
   }
 }

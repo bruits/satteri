@@ -776,12 +776,8 @@ fn extract_mdast_frontmatter(
     None
 }
 
-/// Fused tail for `markdownToHtml` when there's an MDAST plugin but no HAST
-/// plugin: apply the MDAST commands, extract frontmatter from the (now
-/// possibly-mutated) MDAST, convert MDAST → HAST, render to HTML. All in one
-/// NAPI roundtrip. Saves the convert + render + drop + frontmatter crossings
-/// the old path made separately, and reads frontmatter *after* mutations so a
-/// plugin that rewrites yaml/toml is observed correctly.
+/// Apply MDAST commands, extract frontmatter, convert to HAST, and render HTML
+/// in one NAPI call. Frontmatter reflects plugin edits to YAML/TOML nodes.
 #[napi]
 pub fn apply_mdast_commands_and_convert_and_render(
     env: Env,
@@ -1057,7 +1053,7 @@ pub struct RenderHtmlOneShot {
 /// Fused tail step for `markdownToHtml` with a HAST plugin: apply the plugin's
 /// command buffer, render the resulting HAST to HTML, and leave the handle
 /// drained, all in one NAPI roundtrip. Saves the `apply` + `render` + `drop`
-/// crossings the old path made separately.
+/// crossings of the handle-based pipeline.
 ///
 /// The handle keeps existing (callers can still `dropHandle` it on the JS
 /// side if they want explicit cleanup), but the arena inside is left empty so

@@ -13,13 +13,9 @@ import { HastReader } from "../src/hast/hast-reader.js";
 import { visitHastHandle, resolveSubscriptions } from "../src/hast/hast-visitor.js";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 import { DEFAULT_PARSE_OPTIONS } from "../src/compile.js";
-import type { MdastNode } from "../src/types.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
-import type { HastVisitorContext, HastVisitorInstance } from "../src/hast/hast-visitor.js";
+import type { HastVisitorInstance } from "../src/hast/hast-visitor.js";
 
-// Helpers
-
-/** Create a HAST reader from source (handle-based) */
 function makeHastReader(source: string): {
   reader: HastReader;
   handle: ReturnType<typeof createHastHandle>;
@@ -28,8 +24,6 @@ function makeHastReader(source: string): {
   const buf = serializeHandle(handle);
   return { reader: new HastReader(buf), handle };
 }
-
-// PART 1: MDAST plugins that affect the Markdown → HTML result
 
 describe("MDAST plugins affecting HTML output", () => {
   test("no plugins: simple markdown renders correct HTML", () => {
@@ -67,7 +61,6 @@ describe("MDAST plugins affecting HTML output", () => {
     });
     const { html } = markdownToHtml("# Hello\n\nWorld", { mdastPlugins: [replaceHeading] });
     expect(html).not.toContain("<h1>");
-    // "Hello" should be in a <p> now
     expect(html).toContain("<p>");
     expect(html).toContain("Hello");
   });
@@ -92,18 +85,15 @@ describe("MDAST plugins affecting HTML output", () => {
 
   test("MDAST plugin chain: data survives rebuild when another node is mutated", () => {
     let seenIdInPlugin2: string | null = null;
-    // Plugin 1: sets data on heading AND mutates a different node (text → bold)
     const setDataAndMutate = defineMdastPlugin({
       name: "set-and-mutate",
       heading(node, ctx) {
         ctx.setProperty(node, "data", { id: "survives-rebuild" });
       },
       text(node, ctx) {
-        // Mutating text forces a rebuild, node IDs change
         ctx.setProperty(node, "value", "mutated");
       },
     });
-    // Plugin 2: reads the data set by plugin 1 (after rebuild)
     const readData = defineMdastPlugin({
       name: "read-data",
       heading(node) {
@@ -129,8 +119,6 @@ describe("MDAST plugins affecting HTML output", () => {
     expect(html).not.toContain("example.com");
   });
 });
-
-// PART 2: HAST plugins that affect the HTML result
 
 describe("HAST plugins affecting HTML output", () => {
   test("no HAST plugin: basic rendering is correct", () => {
@@ -245,7 +233,6 @@ describe("HAST plugins affecting HTML output", () => {
     expect(html).toContain(
       '<svg stroke-width="1.2" stroke-linecap="round" stroke-linejoin="miter">',
     );
-    // Descendants inherit the SVG schema, not just the <svg> element itself.
     expect(html).toContain('<path stroke-linecap="round" fill-rule="evenodd">');
   });
 
@@ -332,15 +319,12 @@ describe("HAST plugins affecting HTML output", () => {
   });
 });
 
-// PART 3: Handle-based HAST pipeline
-
 describe("Handle-based HAST pipeline", () => {
   test("serializeHandle returns valid HAST binary", () => {
     const handle = createHastHandle("Hello");
     const buf = serializeHandle(handle);
     expect(buf).toBeInstanceOf(Uint8Array);
-    expect(buf.length).toBeGreaterThan(44); // at least header
-    // Verify magic bytes (MDAR as LE u32)
+    expect(buf.length).toBeGreaterThan(44);
     const view = new DataView(buf.buffer, buf.byteOffset);
     expect(view.getUint32(0, true)).toBe(0x5241444d);
     dropHandle(handle);
@@ -375,9 +359,7 @@ describe("Handle-based HAST pipeline", () => {
 
   test("full pipeline handles HTML entities and special characters", () => {
     const { html } = markdownToHtml('Use `<div>` and `"quotes"` & ampersands');
-    // Text content should be escaped
     expect(html).toContain("&amp;");
-    // Code content should be escaped
     expect(html).toContain("<code>");
   });
 
@@ -399,12 +381,9 @@ describe("Handle-based HAST pipeline", () => {
   test("HastReader reads correct node count", () => {
     const { reader, handle } = makeHastReader("# Hello\n\nWorld");
     dropHandle(handle);
-    // root + h1 + text("Hello") + p + text("World") + possible newlines
     expect(reader.nodeCount).toBeGreaterThanOrEqual(5);
   });
 });
-
-// PART 4: Combined MDAST + HAST plugin scenarios
 
 describe("combined MDAST + HAST plugin scenarios", () => {
   test("MDAST plugin removes heading, HAST tree reflects the removal", () => {
@@ -453,7 +432,6 @@ describe("combined MDAST + HAST plugin scenarios", () => {
         }),
       ],
     });
-    // HAST result should not have any <a> elements
     expect(html).not.toContain("<a");
     expect(html).toContain("here");
   });
