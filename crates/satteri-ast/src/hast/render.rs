@@ -9,7 +9,7 @@ use crate::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
 };
 use crate::hast::escape::{escape_html_attr_value, escape_html_body_text};
-use crate::hast::properties::property_to_attribute;
+use crate::hast::properties::{property_to_attribute, trim_js_whitespace};
 use crate::hast::{HastNodeType, is_svg_html_integration_point};
 use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
@@ -28,9 +28,8 @@ pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
 
 /// Render a HAST node subtree to HTML.
 ///
-/// `in_raw_text` indicates the node is being rendered inside a raw-text element
-/// (HTML `<script>` / `<style>`). Descendant text of these elements is not
-/// entity-escaped; SVG script/style text is escaped.
+/// `in_raw_text` indicates the node's direct parent is an HTML raw-text element.
+/// Its text is not entity-escaped; SVG script/style text is escaped.
 ///
 /// `in_svg` selects the SVG attribute schema. Set on entry to `<svg>` and
 /// sticky for all descendants — `<foreignObject>` does NOT switch back, matching
@@ -71,7 +70,7 @@ impl RenderOptions {
     pub fn for_children(self, tag: &str) -> Self {
         let element_in_svg = self.svg_content || tag == "svg";
         Self {
-            in_raw_text: self.in_raw_text || (!element_in_svg && is_raw_text_element(tag)),
+            in_raw_text: !element_in_svg && is_raw_text_element(tag),
             svg_schema: self.svg_schema || tag == "svg",
             svg_content: element_in_svg && !is_svg_html_integration_point(tag),
         }
@@ -175,7 +174,7 @@ fn render_node_at<'cb>(
                     | PROP_COMMA_SEP_NUM | PROP_TOKEN_LIST => {
                         let stored = view.get_str(value_ref);
                         let value = if value_kind == PROP_TOKEN_LIST {
-                            Cow::Owned(join_token_list(name, element_in_svg, stored))
+                            Cow::Owned(join_token_list(name, svg_schema, stored))
                         } else {
                             Cow::Borrowed(stored)
                         };
@@ -259,16 +258,14 @@ fn render_node_at<'cb>(
     }
 }
 
-/// Split a `PROP_TOKEN_LIST` value: every token is NUL-terminated, so an empty
-/// value is an empty list and a lone NUL is a list holding one empty token.
+/// Split `encodeTokenList`'s typed, NUL-terminated tokens after the padding flag.
 fn token_list_items(tokens: &str) -> impl Iterator<Item = Cow<'_, str>> {
-    let body = if tokens.is_empty() {
-        None
-    } else {
-        Some(tokens.strip_suffix('\0').unwrap_or(tokens))
-    };
+    let body = tokens
+        .get(1..)
+        .map(|body| body.strip_suffix('\0').unwrap_or(body));
     body.into_iter()
         .flat_map(|b| b.split('\0'))
+        .filter_map(|token| token.strip_prefix('s').or_else(|| token.strip_prefix('n')))
         .map(unescape_token)
 }
 
@@ -301,19 +298,19 @@ fn unescape_token(token: &str) -> Cow<'_, str> {
 /// Join a JS-built list property, whose tokens ride the wire unjoined because
 /// only the render knows the element's schema: `coords` is comma-separated in
 /// HTML and plain in SVG, `glyphName` the reverse. Mirrors
-/// `comma-separated-tokens` and `space-separated-tokens`; the trailing empty
-/// item each pads with is already in the tokens (see `encodeTokenList`).
+/// `comma-separated-tokens` and `space-separated-tokens`; comma padding is
+/// recorded separately so it never leaks into properties read by plugins.
 pub fn join_token_list(name: &str, in_svg: bool, tokens: &str) -> String {
-    let items: Vec<Cow<'_, str>> = token_list_items(tokens).collect();
+    let mut items: Vec<Cow<'_, str>> = token_list_items(tokens).collect();
     let comma_separated = matches!(
         find_property(name, in_svg).1,
         PropKind::CommaSeparated | PropKind::NumberCommaSeparated
     );
+    if comma_separated && tokens.starts_with('1') {
+        items.push(Cow::Borrowed(""));
+    }
     let joined = items.join(if comma_separated { ", " } else { " " });
-    // `String.prototype.trim` counts the BOM as whitespace and `str::trim` does not.
-    joined
-        .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-        .to_string()
+    trim_js_whitespace(&joined).to_string()
 }
 
 /// Void elements render as a single tag; any children never reach the output.

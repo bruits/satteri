@@ -1641,6 +1641,8 @@ pub fn apply_hast_commands_lenient(
 
 #[cfg(test)]
 mod tests {
+    use std::iter::repeat_n;
+
     use super::*;
 
     /// Old-signature shim for the replay tests: replays into a builder over a
@@ -1924,6 +1926,43 @@ mod tests {
         assert!(matches!(
             hast_arena_from_opstream(&ops).unwrap_err(),
             CommandError::InvalidNodeId(0)
+        ));
+
+        let ops = [
+            OP_OPEN,
+            HastNodeType::Root as u8,
+            OP_KEEP_CHILDREN,
+            OP_CLOSE,
+        ];
+        assert!(matches!(
+            hast_arena_from_opstream(&ops).unwrap_err(),
+            CommandError::InvalidNodeId(0)
+        ));
+    }
+
+    #[test]
+    fn document_opstream_rejects_multiple_roots() {
+        let ops = [OP_OPEN, HastNodeType::Root as u8, OP_CLOSE].repeat(2);
+        assert!(matches!(
+            hast_arena_from_opstream(&ops).unwrap_err(),
+            CommandError::MissingDocumentRoot
+        ));
+    }
+
+    #[test]
+    fn document_opstream_has_its_own_depth_limit() {
+        let mut ops = vec![OP_OPEN, HastNodeType::Root as u8];
+        for _ in 0..256 {
+            ops.extend_from_slice(&[OP_OPEN, HastNodeType::Element as u8]);
+        }
+        ops.extend(repeat_n(OP_CLOSE, 257));
+        assert!(hast_arena_from_opstream(&ops).is_ok());
+
+        let ops =
+            [OP_OPEN, HastNodeType::Element as u8].repeat(OpstreamScope::Document.max_depth() + 1);
+        assert!(matches!(
+            hast_arena_from_opstream(&ops).unwrap_err(),
+            CommandError::OpstreamTooDeep(10_000)
         ));
     }
 

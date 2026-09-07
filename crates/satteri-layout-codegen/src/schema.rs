@@ -1326,7 +1326,7 @@ pub const PROP_KINDS: WireTable = WireTable {
         wc(
             "PROP_TOKEN_LIST",
             8,
-            "NUL-separated tokens; the renderer joins them for the element's schema",
+            "typed, escaped NUL-terminated tokens with a comma-padding flag; joined by schema",
         ),
     ],
 };

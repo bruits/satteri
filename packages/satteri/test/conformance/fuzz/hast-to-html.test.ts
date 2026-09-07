@@ -39,7 +39,15 @@ const SVG_TAGS = ["circle", "path", "text"];
 // NUL separates a list property's tokens on the wire, so it is exactly the
 // character the escaping has to survive.
 const TOKEN = fc.string({
-  unit: fc.constantFrom(..."abc012-, ".split(""), "\u0000", "\u0001"),
+  unit: fc.constantFrom(
+    ..."abc012-, ".split(""),
+    "\u0000",
+    "\u0001",
+    "\u0085",
+    "\uFEFF",
+    "é",
+    "🎉",
+  ),
   maxLength: 6,
 });
 

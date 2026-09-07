@@ -8,6 +8,7 @@ import {
   htmlToHast,
   markdownToHast,
   markdownToHtml,
+  markdownToJs,
   mdxToHast,
 } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
@@ -218,6 +219,15 @@ describe("hastToHtml", () => {
     matchesOracle(tree);
   });
 
+  test("keeps comma-list Unicode whitespace stable across HTML parses", () => {
+    const tree = el("div", { accept: ["", "\uFEFF\u0085a"] });
+    const parsed = htmlToHast(hastToHtml(tree), { fragment: true });
+    const html = '<div accept=", \u0085a"></div>';
+    expect(hastToHtml(parsed)).toBe(html);
+    matchesOracle(parsed);
+    expect(hastToHtml(htmlToHast(html, { fragment: true }))).toBe(html);
+  });
+
   test("drops a NaN property instead of rendering it", () => {
     const built = h("div", { tabIndex: Number.NaN }) as HastNode;
     expect(hastToHtml(built)).toBe("<div></div>");
@@ -288,6 +298,71 @@ describe("hastToHtml", () => {
     const { html } = markdownToHtml("[a](/x)", { hastPlugins: [plugin] });
     expect(html.trim()).toBe(`<p><a href="/x" coords="1, 2" class="x y">a</a></p>`);
   });
+
+  test.each(["setProperty", "replaceNode"] as const)(
+    "%s preserves list tokens across plugin passes and materialization",
+    (operation) => {
+      const properties = { coords: [1, "2", ""], className: ["a\u0000b", "\u0001", ""] };
+      const write = defineHastPlugin({
+        name: "write-list-properties",
+        element: {
+          filter: ["p"],
+          visit(node, ctx) {
+            if (operation === "replaceNode") ctx.replaceNode(node, { ...node, properties });
+            else
+              for (const [key, value] of Object.entries(properties))
+                ctx.setProperty(node, key, value);
+          },
+        },
+      });
+      const copy = defineHastPlugin({
+        name: "copy-list-properties",
+        element: {
+          filter: ["p"],
+          visit(node, ctx) {
+            expect(node.properties).toEqual(properties);
+            ctx.replaceNode(node, { ...node });
+          },
+        },
+      });
+      const tree = markdownToHast("text", { hastPlugins: [write, copy, copy] });
+      const expected = hastToHtml(el("p", properties, [{ type: "text", value: "text" }]));
+      expect(hastToHtml(tree)).toBe(expected);
+      expect(markdownToHtml("text", { hastPlugins: [write, copy, copy] }).html).toBe(
+        `${expected}\n`,
+      );
+    },
+  );
+
+  test("keeps the SVG property schema below HTML integration points", () => {
+    const tree = el("svg", {}, [
+      el("foreignObject", {}, [el("div", { glyphName: ["a", "b"], coords: [1, 2] })]),
+    ]);
+    matchesOracle(tree);
+    const plugin = defineHastPlugin({
+      name: "svg-list-properties",
+      before(node, ctx) {
+        ctx.replaceNode(node, { type: "root", children: [tree] });
+      },
+    });
+    expect(markdownToHtml("text", { hastPlugins: [plugin] }).html).toBe(`${hastToHtml(tree)}\n`);
+    const { code } = markdownToJs("text", {
+      hastPlugins: [plugin],
+      jsx: true,
+      elementAttributeNameCase: "html",
+    });
+    expect(code).toContain('glyph-name="a, b"');
+    expect(code).toContain('coords="1 2"');
+  });
+
+  test.each(["\u0085", "\uFEFF", "\u2028", "\u00A0"])(
+    "trims list whitespace like JavaScript for %j",
+    (space) => {
+      matchesOracle(
+        el("div", { className: [`${space}a${space}`], exportParts: [`${space}a${space}`] }),
+      );
+    },
+  );
 
   test("escapes attribute values", () => {
     expect(hastToHtml(h("a", { title: `a "b" & c` }) as HastNode)).toBe(
@@ -384,6 +459,20 @@ describe("hastToHtml", () => {
   test("skips MDX nodes, which have no HTML representation", () => {
     const tree = mdxToHast("<Foo bar />\n\nplain\n\n{1 + 1}");
     expect(hastToHtml(tree)).toBe("\n<p>plain</p>\n");
+  });
+
+  test("ignores metadata and the contents of skipped MDX nodes", () => {
+    const data: { self?: unknown } = {};
+    data.self = data;
+    expect(hastToHtml({ type: "text", value: "text", data })).toBe("text");
+    expect(
+      hastToHtml({
+        type: "mdxJsxFlowElement",
+        name: "Component",
+        attributes: [],
+        children: [{ type: "text", value: "hidden", data }],
+      }),
+    ).toBe("");
   });
 
   test("serializes a deeply nested tree", () => {

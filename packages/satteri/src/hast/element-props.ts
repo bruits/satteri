@@ -13,19 +13,21 @@ export type HastPropertyValue = string | number | boolean | (string | number)[];
 
 /** Encode an array property value as `PROP_TOKEN_LIST`: whether it serializes
  *  comma- or space-separated depends on the element's schema, which is only
- *  known at render (a subtree may still be detached here). Every token is
- *  NUL-terminated, so an empty list stays distinct from a list holding one
- *  empty token.
+ *  known at render (a subtree may still be detached here). A leading `1`/`0`
+ *  records whether comma joining needs trailing padding. Each NUL-terminated
+ *  token starts with `n` (number) or `s` (string), preserving numeric items
+ *  when a later plugin reads the property.
  *
  *  A list *ending* in an empty string gets another appended, mirroring
  *  `comma-separated-tokens`, which pads so the value parses back to the same
- *  list. It happens here because only `""` pads: `null` joins to the same
- *  empty token but does not. Space-separated joining trims the padding away
- *  again, so it is harmless there. */
+ *  list. Only `""` pads: `null` joins to the same empty token but does not.
+ *  Keep padding separate from the items so materializing and re-encoding
+ *  a property never adds phantom tokens. */
 export function encodeTokenList(items: readonly unknown[]): string {
   if (items.length === 0) return "";
-  const padded = items[items.length - 1] === "" ? [...items, ""] : items;
-  return `${padded.map(tokenToWire).join("\0")}\0`;
+  let tokens = items[items.length - 1] === "" ? "1" : "0";
+  for (const item of items) tokens += `${tokenToWire(item)}\0`;
+  return tokens;
 }
 
 /** U+0001 introduces an escape so a token carrying a NUL of its own does not
@@ -35,19 +37,24 @@ const ESCAPE = "\u0001";
 /** `join` renders null and undefined as an empty token; keep that. */
 function tokenToWire(item: unknown): string {
   const token = item === null || item === undefined ? "" : String(item);
-  return token.includes("\0") || token.includes(ESCAPE)
-    ? token.replaceAll(ESCAPE, `${ESCAPE}1`).replaceAll("\0", `${ESCAPE}0`)
-    : token;
+  const escaped =
+    token.includes("\0") || token.includes(ESCAPE)
+      ? token.replaceAll(ESCAPE, `${ESCAPE}1`).replaceAll("\0", `${ESCAPE}0`)
+      : token;
+  return `${typeof item === "number" ? "n" : "s"}${escaped}`;
 }
 
-function decodeTokenList(value: string): string[] {
+function decodeTokenList(value: string): (string | number)[] {
   if (value === "") return [];
-  const tokens = (value.endsWith("\0") ? value.slice(0, -1) : value).split("\0");
-  return tokens.map((token) =>
-    token.includes(ESCAPE)
+  const body = value.slice(1);
+  const tokens = (body.endsWith("\0") ? body.slice(0, -1) : body).split("\0");
+  return tokens.map((entry) => {
+    const token = entry.slice(1);
+    if (entry[0] === "n") return Number(token);
+    return token.includes(ESCAPE)
       ? token.replace(/\u0001([01])/g, (_, digit: string) => (digit === "0" ? "\0" : ESCAPE))
-      : token,
-  );
+      : token;
+  });
 }
 
 export function decodeElementProp(kind: number, value: string): HastPropertyValue {

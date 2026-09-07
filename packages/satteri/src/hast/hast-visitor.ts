@@ -11,6 +11,7 @@ import type {
 import {
   acquireCommandBuffer,
   CommandBuffer,
+  releaseCommandBuffer,
   STRUCTURAL_CMD,
   type StructuralOp,
 } from "../command-buffer.js";
@@ -263,7 +264,7 @@ export function encodeHastDocument<T>(nodes: readonly HastNode[], use: (ops: Uin
         w.close();
         continue;
       }
-      if (!emitHastOp(w, node, false, NO_REFS)) throw unencodableContentError(node);
+      if (!emitHastOp(w, node, false, NO_REFS, true)) throw unencodableContentError(node);
     }
     w.close();
     return use(w.getBuffer());
@@ -283,7 +284,13 @@ function emitHastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs)
   return true;
 }
 
-function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, refs: NodeRefs): boolean {
+function emitHastOp(
+  w: OpWriter,
+  node: unknown,
+  isRoot: boolean,
+  refs: NodeRefs,
+  document = false,
+): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
     const id = hastReusedId(node, refs);
@@ -295,6 +302,8 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, refs: NodeRefs)
   const n = node as Record<string, unknown>;
   const type = HAST_OPSTREAM_TYPES[n.type as string];
   if (type === undefined) return false;
+  // Standalone HTML serialization does not need MDX support or JSON-serializable metadata.
+  if (document && (n.type as string).startsWith("mdx")) return true;
   w.open(type);
   if (type === HAST_ELEMENT) {
     w.str(OF_TAGNAME, typeof n.tagName === "string" ? n.tagName : "div");
@@ -317,10 +326,10 @@ function emitHastOp(w: OpWriter, node: unknown, isRoot: boolean, refs: NodeRefs)
   } else {
     w.str(OF_VALUE, typeof n.value === "string" ? n.value : "");
   }
-  if (n.data != null) w.data(n.data);
+  if (!document && n.data != null) w.data(n.data);
   const children = n.children;
   if (Array.isArray(children)) {
-    for (const c of children) if (!emitHastOp(w, c, false, refs)) return false;
+    for (const c of children) if (!emitHastOp(w, c, false, refs, document)) return false;
   }
   w.close();
   return true;
