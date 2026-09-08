@@ -69,6 +69,30 @@ describe("setField", () => {
     });
     expect(after?.name).toBe("warning");
   });
+
+  test("wins when called after a hast replacement", () => {
+    const rename = defineHastPlugin({
+      name: "rename-replacement",
+      element: {
+        filter: ["a"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, { ...node, tagName: "div" });
+          ctx.setField(node, "tagName", "span");
+        },
+      },
+    });
+
+    const { html } = markdownToHtml("[label](/target)", { hastPlugins: [rename] });
+    expect(html.trim()).toBe('<p><span href="/target">label</span></p>');
+  });
+
+  test("wins when called after an mdast replacement", () => {
+    const after = editDirective("::note\n", (node, ctx) => {
+      ctx.replaceNode(node, { ...node, name: "warning" });
+      ctx.setField(node, "name", "danger");
+    });
+    expect(after?.name).toBe("danger");
+  });
 });
 
 describe("setAttribute", () => {
@@ -118,6 +142,41 @@ describe("setAttribute", () => {
     expect(code).toContain("card");
     expect(code).toContain("className");
   });
+
+  test("wins when called after a hast MDX JSX replacement", () => {
+    const annotate = defineHastPlugin({
+      name: "annotate-replacement",
+      mdxJsxFlowElement: {
+        filter: ["Box"],
+        visit(node, ctx) {
+          ctx.replaceNode(node, { ...node, name: "Card" });
+          ctx.setAttribute(node, "id", "intro");
+        },
+      },
+    });
+
+    const { code } = mdxToJs("<Box>hi</Box>", { hastPlugins: [annotate] });
+    expect(code).toContain("Card");
+    expect(code).toContain("intro");
+  });
+
+  test("wins when called after an mdast directive replacement", () => {
+    const after = editDirective("::note{.tip}\n", (node, ctx) => {
+      ctx.replaceNode(node, { ...node, name: "warning" });
+      ctx.setAttribute(node, "id", "intro");
+    });
+    expect(after?.name).toBe("warning");
+    expect(after?.attributes).toEqual({ class: "tip", id: "intro" });
+  });
+
+  test("rejects array values for string-only directive attributes", () => {
+    expect(() =>
+      editDirective("::note\n", (node, ctx) => {
+        // @ts-expect-error directive attributes only accept strings
+        ctx.setAttribute(node, "class", ["a", "b"]);
+      }),
+    ).toThrow(/directive attributes must be strings/);
+  });
 });
 
 describe("setField on MDX JSX", () => {
@@ -152,6 +211,22 @@ describe("setField on MDX JSX", () => {
     expect(code).toContain("Card");
     expect(code).toContain("x");
   });
+
+  test("accepts null to turn an element into a fragment", () => {
+    const fragment = defineHastPlugin({
+      name: "jsx-fragment",
+      mdxJsxFlowElement: {
+        filter: ["Box"],
+        visit(node, ctx) {
+          ctx.setField(node, "name", null);
+        },
+      },
+    });
+
+    const { code } = mdxToJs("<Box>hi</Box>", { hastPlugins: [fragment] });
+    expect(code).toContain("Fragment");
+    expect(code).not.toContain("Box");
+  });
 });
 
 type DirectiveEdit = (node: Readonly<LeafDirective>, ctx: MdastVisitorContext) => void;
@@ -163,7 +238,7 @@ function editDirective(source: string, edit: DirectiveEdit): LeafDirective | und
   const observe = defineMdastPlugin({
     name: "observe-directive",
     leafDirective(node) {
-      seen.push({ ...node, attributes: { ...(node.attributes ?? {}) } });
+      seen.push({ ...node, attributes: { ...node.attributes } });
     },
   });
 

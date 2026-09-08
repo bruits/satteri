@@ -1,6 +1,39 @@
 // Keep hot decoders separate so MDAST and HAST objects do not make their call sites polymorphic.
 
 import { releaseCommandBuffer, type CommandBuffer } from "./command-buffer.js";
+import type { MdxJsxAttributeUnion } from "./types.js";
+
+/** Node fields representable by the named-value command. Container fields use dedicated commands. */
+type ScalarFieldValue = string | number | boolean | null;
+
+export type SettableScalarFieldKey<N> = {
+  [K in keyof N & string]-?: K extends "type"
+    ? never
+    : Exclude<N[K], undefined> extends ScalarFieldValue
+      ? K
+      : never;
+}[keyof N & string];
+
+/** Return a replacement copy with one named MDX JSX attribute upserted at the end. */
+export function withMdxJsxAttribute<
+  N extends { attributes: MdxJsxAttributeUnion[] | null | undefined },
+>(node: N, name: string, value: unknown): N {
+  const attributes: MdxJsxAttributeUnion[] = [...(node.attributes ?? [])];
+  const index = attributes.findIndex(
+    (attribute) => attribute.type === "mdxJsxAttribute" && attribute.name === name,
+  );
+  if (index !== -1) attributes.splice(index, 1);
+  const attrValue =
+    value === true || value === null || value === undefined
+      ? null
+      : typeof value === "string"
+        ? value
+        : Array.isArray(value)
+          ? value.join(" ")
+          : String(value);
+  attributes.push({ type: "mdxJsxAttribute", name, value: attrValue });
+  return { ...node, attributes };
+}
 
 /** Plugin-level configuration, set via `options` on a plugin definition. */
 export interface PluginOptions {

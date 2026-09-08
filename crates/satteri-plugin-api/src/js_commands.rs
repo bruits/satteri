@@ -474,8 +474,17 @@ fn apply_hast_set_field(
         });
     }
 
-    // An element named by an empty or non-string value would render as `<>`.
-    if field_name != "value" && (value_type != PROP_STRING || value_str.is_empty()) {
+    let valid_value = match node_type {
+        // An element named by an empty or non-string value would render as `<>`.
+        HastNodeType::Element => value_type == PROP_STRING && !value_str.is_empty(),
+        // An empty name is the arena representation of an MDX fragment.
+        #[cfg(feature = "mdx")]
+        HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => {
+            value_type == PROP_NULL || (value_type == PROP_STRING && !value_str.is_empty())
+        }
+        _ => value_type == PROP_STRING,
+    };
+    if !valid_value {
         return Err(CommandError::InvalidPropertyValue {
             node_type: node_type.name().to_string(),
             name: field_name.to_string(),
@@ -498,6 +507,8 @@ fn apply_hast_set_attribute(
     let raw_type = arena.get_node(node_id).node_type;
     let node_type = HastNodeType::from_u8(raw_type)
         .ok_or_else(|| CommandError::UnknownNodeType(format!("hast type 0x{raw_type:02x}")))?;
+    #[cfg(not(feature = "mdx"))]
+    let _ = (value_type, value_str);
 
     match node_type {
         #[cfg(feature = "mdx")]
@@ -548,7 +559,7 @@ fn apply_mdast_directive_attribute(
     value_type: u8,
     value_str: &str,
 ) -> Result<(), CommandError> {
-    if !matches!(value_type, PROP_STRING | PROP_SPACE_SEP) {
+    if value_type != PROP_STRING {
         return Err(CommandError::InvalidPropertyValue {
             node_type: mdast_type_name(arena.get_node(node_id).node_type),
             name: attr_name.to_string(),
@@ -2328,6 +2339,13 @@ mod tests {
         assert_eq!(arena.get_str(decode_mdx_jsx_element_name(&data)), "Card");
         assert_eq!(decode_mdx_jsx_attr_count(&data), 1);
         assert!(decode_mdx_jsx_explicit(&data));
+
+        // A null name turns the element into a fragment without disturbing its tail.
+        apply_hast_set_field(&mut arena, 1, "name", PROP_NULL, "").unwrap();
+        let data = arena.get_type_data(1).to_vec();
+        assert!(arena.get_str(decode_mdx_jsx_element_name(&data)).is_empty());
+        assert_eq!(decode_mdx_jsx_attr_count(&data), 1);
+        assert!(decode_mdx_jsx_explicit(&data));
     }
 
     fn mdast_leaf_directive() -> Arena<Mdast> {
@@ -2379,16 +2397,19 @@ mod tests {
     #[test]
     fn mdast_set_attribute_rejects_non_string_directive_values() {
         let mut arena = mdast_leaf_directive();
-        for value_type in [PROP_BOOL_TRUE, PROP_BOOL_FALSE, PROP_NULL, PROP_INT] {
+        for value_type in [
+            PROP_BOOL_TRUE,
+            PROP_BOOL_FALSE,
+            PROP_NULL,
+            PROP_INT,
+            PROP_SPACE_SEP,
+        ] {
             assert!(matches!(
                 apply_mdast_set_attribute(&mut arena, 1, "id", value_type, "1"),
                 Err(CommandError::InvalidPropertyValue { ref name, .. }) if name == "id"
             ));
         }
-        assert_eq!(
-            decode_directive_attr_count(&arena.get_type_data(1).to_vec()),
-            1
-        );
+        assert_eq!(decode_directive_attr_count(arena.get_type_data(1)), 1);
     }
 
     fn test_parse_markdown(source: &str) -> Arena<Mdast> {
