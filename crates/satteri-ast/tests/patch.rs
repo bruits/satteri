@@ -2545,3 +2545,219 @@ fn stranded_splice_is_dropped_on_the_immediate_path() {
         MdastNodeType::Paragraph as u8
     );
 }
+
+/// A ref to a node that is itself removed resolves through the empty slot the
+/// removal leaves behind, so without adoption the moved content disappears.
+#[test]
+fn ref_to_a_removed_node_moves_it() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(ref_payload_mdast(heading)),
+            },
+            Patch::Remove { node_id: heading },
+        ],
+    )
+    .expect("apply failed");
+
+    let kids = arena.get_children(0).to_vec();
+    assert_eq!(kids.len(), 2, "the paragraph, then the moved heading");
+    assert_eq!(
+        arena.get_node(kids[0]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+    assert_eq!(
+        arena.get_node(kids[1]).node_type,
+        MdastNodeType::Heading as u8
+    );
+    assert_eq!(
+        arena.get_children(kids[1]).len(),
+        1,
+        "the moved heading keeps its text"
+    );
+}
+
+/// A ref names the node, not the siblings spliced around it: the slot for an
+/// anchor with sibling inserts holds those inserts too.
+#[test]
+fn ref_to_a_node_with_sibling_inserts_resolves_to_the_node_alone() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+    let text_in_paragraph = orig.get_children(paragraph)[0];
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(ref_payload_mdast(paragraph)),
+            },
+            // Pins the ungrouped path, where the slot is observable.
+            Patch::Replace {
+                node_id: text_in_paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::InlineCode)),
+                keep_children: false,
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let kids = arena.get_children(0).to_vec();
+    let types: Vec<u8> = kids.iter().map(|&k| arena.get_node(k).node_type).collect();
+    assert_eq!(
+        types,
+        vec![
+            MdastNodeType::Heading as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::ThematicBreak as u8,
+        ],
+        "the reused paragraph must not drag the break inserted after it"
+    );
+}
+
+/// A removed node's slot holds whatever replaced its position, so a ref to it
+/// must resolve to the node itself rather than to that content.
+#[test]
+fn ref_to_a_removed_node_ignores_what_took_its_place() {
+    let orig = build_hello_world();
+    let heading = orig.get_children(0)[0];
+    let paragraph = orig.get_children(0)[1];
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(ref_payload_mdast(heading)),
+            },
+            Patch::Remove { node_id: heading },
+            Patch::InsertAfter {
+                node_id: heading,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::ThematicBreak)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let kids = arena.get_children(0).to_vec();
+    let types: Vec<u8> = kids.iter().map(|&k| arena.get_node(k).node_type).collect();
+    assert_eq!(
+        types,
+        vec![
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::Heading as u8,
+        ],
+        "the moved heading must land, not a second copy of the break"
+    );
+}
+
+/// A set-children discards the anchor's old child list, so a sibling splice
+/// queued on a child that survives into the new list must still land.
+#[test]
+fn set_children_keeps_a_sibling_insert_on_a_retained_child() {
+    use satteri_ast::patch::REF_NODE_TYPE;
+
+    let orig = build_hello_world();
+    let paragraph = orig.get_children(0)[1];
+
+    let mut sub = ArenaBuilder::<Mdast>::new(String::new());
+    sub.open_node(MdastNodeType::Root as u8);
+    sub.open_node(MdastNodeType::ThematicBreak as u8);
+    sub.close_node();
+    sub.open_node_raw(REF_NODE_TYPE);
+    sub.set_data_current(&paragraph.to_le_bytes());
+    sub.close_node();
+    sub.close_node();
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::SetChildren {
+                node_id: 0,
+                new_children: PatchContent::Tree(sub.finish()),
+            },
+            Patch::InsertAfter {
+                node_id: paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::InlineCode)),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let types: Vec<u8> = arena
+        .get_children(0)
+        .iter()
+        .map(|&k| arena.get_node(k).node_type)
+        .collect();
+    assert_eq!(
+        types,
+        vec![
+            MdastNodeType::ThematicBreak as u8,
+            MdastNodeType::Paragraph as u8,
+            MdastNodeType::InlineCode as u8,
+        ],
+        "the insert queued on the retained paragraph must survive the new child list"
+    );
+}
+
+/// A splice into a parent that rebuilds its own child list later must wait for
+/// that rebuild rather than be overwritten by it.
+#[test]
+fn a_sibling_insert_survives_a_later_set_children_on_its_parent() {
+    use satteri_ast::patch::REF_NODE_TYPE;
+
+    let orig = build_hello_world();
+    let paragraph = orig.get_children(0)[1];
+    let text_in_paragraph = orig.get_children(paragraph)[0];
+
+    let mut sub = ArenaBuilder::<Mdast>::new(String::new());
+    sub.open_node(MdastNodeType::Root as u8);
+    sub.open_node_raw(REF_NODE_TYPE);
+    sub.set_data_current(&text_in_paragraph.to_le_bytes());
+    sub.close_node();
+    sub.close_node();
+
+    let mut arena = orig.clone();
+    apply_patches_in_place(
+        &mut arena,
+        &[
+            Patch::InsertAfter {
+                node_id: text_in_paragraph,
+                new_tree: PatchContent::Tree(single_node_arena(MdastNodeType::InlineCode)),
+            },
+            Patch::SetChildren {
+                node_id: paragraph,
+                new_children: PatchContent::Tree(sub.finish()),
+            },
+        ],
+    )
+    .expect("apply failed");
+
+    let types: Vec<u8> = arena
+        .get_children(paragraph)
+        .iter()
+        .map(|&k| arena.get_node(k).node_type)
+        .collect();
+    assert_eq!(
+        types,
+        vec![MdastNodeType::Text as u8, MdastNodeType::InlineCode as u8],
+        "the insert queued on the retained text must survive the parent's rebuild"
+    );
+}
