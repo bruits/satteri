@@ -447,8 +447,14 @@ fn resolve_grafted<K: ArenaKind>(
     adopted_by_id: &mut FxHashSet<u32>,
     mode: GraftMode,
 ) -> Vec<u32> {
+    let mut resolved_placeholders: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+    let mut placeholder_parents: Vec<u32> = Vec::new();
+    let mut seen_parents: FxHashSet<u32> = FxHashSet::default();
     for &(ph, target, slot_ref) in placeholders {
-        if roots.contains(&ph) {
+        // Top-level placeholders have no parent and are resolved below. Checking
+        // that directly avoids scanning every root for every placeholder.
+        let parent = arena.get_node(ph).parent;
+        if parent == u32::MAX {
             continue;
         }
         let ids = resolve_target(
@@ -462,14 +468,22 @@ fn resolve_grafted<K: ArenaKind>(
             truly_dead,
             adopted_by_id,
         );
-        let parent = arena.get_node(ph).parent;
+        resolved_placeholders.insert(ph, ids);
+        if seen_parents.insert(parent) {
+            placeholder_parents.push(parent);
+        }
+    }
+    // Resolve every placeholder under a parent in one rewrite. Multi-node
+    // replacements commonly put all refs under one synthetic root, so doing a
+    // child-list rewrite per ref would itself be quadratic.
+    for parent in placeholder_parents {
         let current = arena.get_children(parent).to_vec();
-        let mut new_list: Vec<u32> = Vec::with_capacity(current.len() + ids.len());
-        for &c in &current {
-            if c == ph {
-                new_list.extend_from_slice(&ids);
+        let mut new_list: Vec<u32> = Vec::with_capacity(current.len());
+        for &child in &current {
+            if let Some(ids) = resolved_placeholders.get(&child) {
+                new_list.extend_from_slice(ids);
             } else {
-                new_list.push(c);
+                new_list.push(child);
             }
         }
         arena.set_children(parent, &new_list);
@@ -814,10 +828,11 @@ fn apply_patches_impl<K: ArenaKind>(
                             return Err(unsupported("detached ref target"));
                         }
                         ref_uses.push((anchor, target));
-                        ref_positions
-                            .entry(pi)
-                            .or_default()
-                            .push((sub_id, target, td.get(4) == Some(&REF_KIND_SLOT)));
+                        ref_positions.entry(pi).or_default().push((
+                            sub_id,
+                            target,
+                            td.get(4) == Some(&REF_KIND_SLOT),
+                        ));
                         ref_targets.insert(target);
                     }
                 }
@@ -1532,9 +1547,7 @@ fn apply_patches_impl<K: ArenaKind>(
                 .get(&splice_parent)
                 .copied()
                 .unwrap_or(splice_parent);
-            if defer_splices
-                || rebuild_at.get(&parent).is_some_and(|&i| i > anchor_index)
-            {
+            if defer_splices || rebuild_at.get(&parent).is_some_and(|&i| i > anchor_index) {
                 // Recorded before deferring: a ref resolving later still needs
                 // to know what this anchor became.
                 if !ref_uses.is_empty() {

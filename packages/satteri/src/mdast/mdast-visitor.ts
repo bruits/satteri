@@ -199,11 +199,21 @@ export class MdastVisitorContext {
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    this.#splice(requireNid(node as MdastNode, "insertBefore", this.#refs), newNode, "insertBefore", "insertBefore");
+    this.#splice(
+      requireNid(node as MdastNode, "insertBefore", this.#refs),
+      newNode,
+      "insertBefore",
+      "insertBefore",
+    );
   }
 
   insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    this.#splice(requireNid(node as MdastNode, "insertAfter", this.#refs), newNode, "insertAfter", "insertAfter");
+    this.#splice(
+      requireNid(node as MdastNode, "insertAfter", this.#refs),
+      newNode,
+      "insertAfter",
+      "insertAfter",
+    );
   }
 
   #splice(
@@ -221,35 +231,36 @@ export class MdastVisitorContext {
 
   /** Rejects the two reuse shapes that can't be spliced by id, at the call site rather than at the end of the compile. */
   #trackReuse(anchorId: number, content: MdastContent, op: string, intoSelf: boolean): void {
-    const targetId = reusedId(content, this.#refs);
-    if (targetId === undefined) return;
-    // A node is an ancestor of itself, so it cannot become its own child.
-    if (targetId === anchorId) {
-      if (intoSelf) throw reuseAncestorError(op);
-      return;
-    }
-    for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
-      if (cur === targetId) throw reuseAncestorError(op);
-      cur = this.#resolver.parentIdOf(cur);
-    }
-    const edges = (this.#reuseEdges ??= new Map());
-    const seen = new Set<number>([targetId]);
-    const queue = [targetId];
-    let budget = REUSE_SCAN_BUDGET;
-    while (queue.length > 0 && budget > 0) {
-      const next = edges.get(queue.pop()!);
-      if (next === undefined) continue;
-      for (const id of next) {
-        if (id === anchorId) throw reuseCycleError(op);
-        if (seen.add(id)) {
-          queue.push(id);
-          budget--;
+    forEachMdastReusedId(content, this.#refs, (targetId) => {
+      // A node is an ancestor of itself, so it cannot become its own child.
+      // Replacement content may deliberately wrap the node being replaced.
+      if (targetId === anchorId) {
+        if (intoSelf) throw reuseAncestorError(op);
+        return;
+      }
+      for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
+        if (cur === targetId) throw reuseAncestorError(op);
+        cur = this.#resolver.parentIdOf(cur);
+      }
+      const edges = (this.#reuseEdges ??= new Map());
+      const seen = new Set<number>([targetId]);
+      const queue = [targetId];
+      let budget = REUSE_SCAN_BUDGET;
+      while (queue.length > 0 && budget > 0) {
+        const next = edges.get(queue.pop()!);
+        if (next === undefined) continue;
+        for (const id of next) {
+          if (id === anchorId) throw reuseCycleError(op);
+          if (seen.add(id)) {
+            queue.push(id);
+            budget--;
+          }
         }
       }
-    }
-    let targets = edges.get(anchorId);
-    if (targets === undefined) edges.set(anchorId, (targets = new Set()));
-    targets.add(targetId);
+      let targets = edges.get(anchorId);
+      if (targets === undefined) edges.set(anchorId, (targets = new Set()));
+      targets.add(targetId);
+    });
   }
 
   /**
@@ -270,11 +281,21 @@ export class MdastVisitorContext {
   }
 
   prependChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
-    this.#splice(requireNid(node as MdastNode, "prependChild", this.#refs), childNode, "prependChild", "prependChild");
+    this.#splice(
+      requireNid(node as MdastNode, "prependChild", this.#refs),
+      childNode,
+      "prependChild",
+      "prependChild",
+    );
   }
 
   appendChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
-    this.#splice(requireNid(node as MdastNode, "appendChild", this.#refs), childNode, "appendChild", "appendChild");
+    this.#splice(
+      requireNid(node as MdastNode, "appendChild", this.#refs),
+      childNode,
+      "appendChild",
+      "appendChild",
+    );
   }
 
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -312,6 +333,18 @@ export class MdastVisitorContext {
    */
   replaceNode(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode", this.#refs);
+    const onlyReplacement = Array.isArray(newNode)
+      ? newNode.length === 1
+        ? newNode[0]
+        : undefined
+      : newNode;
+    if (
+      id === ROOT_NODE_ID &&
+      onlyReplacement !== undefined &&
+      reusedId(onlyReplacement, this.#refs) === id
+    ) {
+      return;
+    }
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // One command, so the node's replacement is its whole slot and a ref back
@@ -323,7 +356,8 @@ export class MdastVisitorContext {
       let previous: MdastContent | undefined;
       for (const n of newNode) {
         if (previous !== undefined) {
-          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous, false, this.#refs);
+          this.#trackReuse(id, previous, "replaceNode", false);
+          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous, false, this.#refs, true);
         }
         previous = n;
       }
@@ -568,6 +602,41 @@ function reusedId(node: unknown, refs: NodeRefs): number | undefined {
   if (node === null || typeof node !== "object") return undefined;
   const id = getNodeId(node as MdastNode, refs);
   return id !== undefined && id !== FOREIGN_REF ? id : undefined;
+}
+
+/** Visit refs encoded by this content, including refs nested in newly built wrappers. */
+function forEachMdastReusedId(
+  content: MdastContent,
+  refs: NodeRefs,
+  visit: (id: number) => void,
+): void {
+  const directId = reusedId(content, refs);
+  if (directId !== undefined) {
+    visit(directId);
+    return;
+  }
+  const rootChildren = (content as { children?: unknown }).children;
+  if (!Array.isArray(rootChildren) || rootChildren.length === 0) return;
+
+  const pending: unknown[] = [];
+  for (const child of rootChildren) pending.push(child);
+  const seen = new WeakSet<object>();
+  seen.add(content);
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node === null || typeof node !== "object") continue;
+    const id = reusedId(node, refs);
+    if (id !== undefined) {
+      visit(id);
+      continue;
+    }
+    if (seen.has(node)) continue;
+    seen.add(node);
+    const children = (node as { children?: unknown }).children;
+    if (Array.isArray(children)) {
+      for (const child of children) pending.push(child);
+    }
+  }
 }
 
 function emitMdastChildrenCommand(

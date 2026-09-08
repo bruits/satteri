@@ -207,6 +207,41 @@ function hastReusedId(node: unknown, refs: NodeRefs): number | undefined {
   return id !== undefined && id !== FOREIGN_REF ? id : undefined;
 }
 
+/** Visit refs encoded by this content, including refs nested in newly built wrappers. */
+function forEachHastReusedId(
+  content: HastContent,
+  refs: NodeRefs,
+  visit: (id: number) => void,
+): void {
+  const directId = hastReusedId(content, refs);
+  if (directId !== undefined) {
+    visit(directId);
+    return;
+  }
+  const rootChildren = (content as { children?: unknown }).children;
+  if (!Array.isArray(rootChildren) || rootChildren.length === 0) return;
+
+  const pending: unknown[] = [];
+  for (const child of rootChildren) pending.push(child);
+  const seen = new WeakSet<object>();
+  seen.add(content);
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node === null || typeof node !== "object") continue;
+    const id = hastReusedId(node, refs);
+    if (id !== undefined) {
+      visit(id);
+      continue;
+    }
+    if (seen.has(node)) continue;
+    seen.add(node);
+    const children = (node as { children?: unknown }).children;
+    if (Array.isArray(children)) {
+      for (const child of children) pending.push(child);
+    }
+  }
+}
+
 function emitHastChildrenCommand(
   buffer: CommandBuffer,
   id: number,
@@ -412,6 +447,18 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "replaceNode", this.#refs);
+    const onlyReplacement = Array.isArray(newNode)
+      ? newNode.length === 1
+        ? newNode[0]
+        : undefined
+      : newNode;
+    if (
+      id === ROOT_NODE_ID &&
+      onlyReplacement !== undefined &&
+      hastReusedId(onlyReplacement, this.#refs) === id
+    ) {
+      return;
+    }
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
       // One command, so the node's replacement is its whole slot and a ref back
@@ -463,43 +510,54 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   /** Rejects the two reuse shapes that can't be spliced by id, at the call site rather than at the end of the compile. */
   #trackReuse(anchorId: number, content: HastContent, op: string, intoSelf: boolean): void {
-    const targetId = hastReusedId(content, this.#refs);
-    if (targetId === undefined) return;
-    // A node is an ancestor of itself, so it cannot become its own child.
-    if (targetId === anchorId) {
-      if (intoSelf) throw reuseAncestorError(op);
-      return;
-    }
-    for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
-      if (cur === targetId) throw reuseAncestorError(op);
-      cur = this.#resolver.parentIdOf(cur);
-    }
-    const edges = (this.#reuseEdges ??= new Map());
-    const seen = new Set<number>([targetId]);
-    const queue = [targetId];
-    let budget = REUSE_SCAN_BUDGET;
-    while (queue.length > 0 && budget > 0) {
-      const next = edges.get(queue.pop()!);
-      if (next === undefined) continue;
-      for (const id of next) {
-        if (id === anchorId) throw reuseCycleError(op);
-        if (seen.add(id)) {
-          queue.push(id);
-          budget--;
+    forEachHastReusedId(content, this.#refs, (targetId) => {
+      // A node is an ancestor of itself, so it cannot become its own child.
+      // Replacement content may deliberately wrap the node being replaced.
+      if (targetId === anchorId) {
+        if (intoSelf) throw reuseAncestorError(op);
+        return;
+      }
+      for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
+        if (cur === targetId) throw reuseAncestorError(op);
+        cur = this.#resolver.parentIdOf(cur);
+      }
+      const edges = (this.#reuseEdges ??= new Map());
+      const seen = new Set<number>([targetId]);
+      const queue = [targetId];
+      let budget = REUSE_SCAN_BUDGET;
+      while (queue.length > 0 && budget > 0) {
+        const next = edges.get(queue.pop()!);
+        if (next === undefined) continue;
+        for (const id of next) {
+          if (id === anchorId) throw reuseCycleError(op);
+          if (seen.add(id)) {
+            queue.push(id);
+            budget--;
+          }
         }
       }
-    }
-    let targets = edges.get(anchorId);
-    if (targets === undefined) edges.set(anchorId, (targets = new Set()));
-    targets.add(targetId);
+      let targets = edges.get(anchorId);
+      if (targets === undefined) edges.set(anchorId, (targets = new Set()));
+      targets.add(targetId);
+    });
   }
 
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
-    this.#splice(requireNid(node, "insertBefore", this.#refs), newNode, "insertBefore", "insertBefore");
+    this.#splice(
+      requireNid(node, "insertBefore", this.#refs),
+      newNode,
+      "insertBefore",
+      "insertBefore",
+    );
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
-    this.#splice(requireNid(node, "insertAfter", this.#refs), newNode, "insertAfter", "insertAfter");
+    this.#splice(
+      requireNid(node, "insertAfter", this.#refs),
+      newNode,
+      "insertAfter",
+      "insertAfter",
+    );
   }
 
   wrapNode(
@@ -519,11 +577,21 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    this.#splice(requireNid(node, "prependChild", this.#refs), childNode, "prependChild", "prependChild");
+    this.#splice(
+      requireNid(node, "prependChild", this.#refs),
+      childNode,
+      "prependChild",
+      "prependChild",
+    );
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    this.#splice(requireNid(node, "appendChild", this.#refs), childNode, "appendChild", "appendChild");
+    this.#splice(
+      requireNid(node, "appendChild", this.#refs),
+      childNode,
+      "appendChild",
+      "appendChild",
+    );
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {

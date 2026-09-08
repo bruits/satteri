@@ -283,6 +283,29 @@ test("a node cannot be made its own child", () => {
   }
 });
 
+test("a node cannot be nested inside new content appended to itself", () => {
+  const plugin = defineMdastPlugin({
+    name: "nested-self-child",
+    blockquote(node, ctx) {
+      ctx.appendChild(node, { type: "blockquote", children: [node] });
+    },
+  });
+  expect(() => markdownToHtml("> x\n", { mdastPlugins: [plugin] })).toThrow(
+    /content that contains the target node/,
+  );
+});
+
+test("replacement content can wrap the node being replaced", () => {
+  const plugin = defineMdastPlugin({
+    name: "nested-self-replacement",
+    blockquote(node, ctx) {
+      ctx.replaceNode(node, { type: "blockquote", children: [node] });
+    },
+  });
+  const { html } = markdownToHtml("> x\n", { mdastPlugins: [plugin] });
+  expect((html.match(/<blockquote>/g) ?? []).length).toBe(2);
+});
+
 test("the root cannot be made its own child", () => {
   const plugin = defineMdastPlugin({
     name: "self-root",
@@ -309,6 +332,45 @@ test("hast: an element cannot be made its own child", () => {
   expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
     /content that contains the target node/,
   );
+});
+
+test("hast: an element cannot be nested inside new content appended to itself", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-nested-self-child",
+    element: {
+      filter: ["em"],
+      visit(node, ctx) {
+        ctx.appendChild(node, {
+          type: "element",
+          tagName: "span",
+          properties: {},
+          children: [node],
+        });
+      },
+    },
+  });
+  expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
+    /content that contains the target node/,
+  );
+});
+
+test("hast: replacement content can wrap the element being replaced", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-nested-self-replacement",
+    element: {
+      filter: ["em"],
+      visit(node, ctx) {
+        ctx.replaceNode(node, {
+          type: "element",
+          tagName: "span",
+          properties: {},
+          children: [node],
+        });
+      },
+    },
+  });
+  const { html } = markdownToHtml("a *b* c\n", { hastPlugins: [plugin] });
+  expect(html).toContain("<span><em>b</em></span>");
 });
 
 test("a long chain of reuses is not mistaken for a cycle", () => {
@@ -340,10 +402,61 @@ test("keeping a node's children keeps a sibling inserted among them", () => {
   expect(html).toContain("<p>b</p>\n<hr>\n<p>c</p>");
 });
 
+test("mixed raw replace arrays preserve references to reused nodes", () => {
+  const plugin = defineMdastPlugin({
+    name: "mixed-raw-reuse",
+    blockquote(node, ctx) {
+      const index = ctx.indexOf(node);
+      if (index === 0) {
+        ctx.setProperty(node, "data", { hName: "section" });
+      } else if (index === 1) {
+        const first = ctx.parent(node).children[0]!;
+        ctx.replaceNode(node, [first, { raw: "tail" }]);
+      }
+    },
+  });
+  const { html } = markdownToHtml(twoQuotes, { mdastPlugins: [plugin] });
+  expect((html.match(/<section>/g) ?? []).length).toBe(2);
+  expect(html).toContain("<p>tail</p>");
+});
+
+test("root self-replacement preserves queued mdast edits", () => {
+  const plugin = defineMdastPlugin({
+    name: "mdast-root-self-replacement",
+    before(root, ctx) {
+      ctx.setProperty(root, "children", [
+        { type: "paragraph", children: [{ type: "text", value: "changed" }] },
+      ]);
+      ctx.replaceNode(root, root);
+    },
+  });
+  expect(markdownToHtml("# old\n", { mdastPlugins: [plugin] }).html).toBe("<p>changed</p>\n");
+});
+
+test("root self-replacement preserves queued hast edits", () => {
+  const plugin = defineHastPlugin({
+    name: "hast-root-self-replacement",
+    before(root, ctx) {
+      ctx.setProperty(root, "children", [
+        {
+          type: "element",
+          tagName: "p",
+          properties: {},
+          children: [{ type: "text", value: "changed" }],
+        },
+      ]);
+      ctx.replaceNode(root, root);
+    },
+  });
+  expect(markdownToHtml("# old\n", { hastPlugins: [plugin] }).html).toBe("<p>changed</p>\n");
+});
+
 test("replaceNode reuses a node the same way whatever form it is passed in", () => {
   const forms = {
-    scalar: (ctx: never, a: never, c: never) => (ctx as never as { replaceNode: Function }).replaceNode(c, a),
-    array1: (ctx: never, a: never, c: never) => (ctx as never as { replaceNode: Function }).replaceNode(c, [a]),
+    scalar: (ctx: never, a: never, c: never) =>
+      (ctx as never as { replaceNode: Function }).replaceNode(c, a),
+    array1: (ctx: never, a: never, c: never) =>
+      (ctx as never as { replaceNode: Function }).replaceNode(c, [a]),
     array2: (ctx: never, a: never, c: never) =>
       (ctx as never as { replaceNode: Function }).replaceNode(c, [
         { type: "paragraph", children: [{ type: "text", value: "X" }] },
