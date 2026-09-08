@@ -39,6 +39,8 @@ export const CMD_WRAP = 0x09;
 export const CMD_REPLACE = 0x0b;
 export const CMD_SET_PROPERTY = 0x0c;
 export const CMD_SET_CHILDREN = 0x0d;
+export const CMD_SET_FIELD = 0x0e;
+export const CMD_SET_ATTRIBUTE = 0x0f;
 
 export const PAYLOAD_RAW = 0x10;
 export const PAYLOAD_OPSTREAM = 0x14;
