@@ -5,6 +5,7 @@
     "packages/satteri": {
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],
       "project": ["src/**/*.ts"],
+      "ignoreUnresolved": ["#workerd-loader", "#workerd-wasm"],
       "ignoreDependencies": [
         "^@bruits/satteri-.+$",
         "@emnapi/core",

@@ -9,6 +9,9 @@ dist
 
 # napi-rs generated platform packages
 packages/satteri/npm/
+packages/satteri/.workerd-*/
+packages/satteri/index.d.cts
+packages/satteri/satteri_napi.wasi.d.cts
 packages/satteri/bench/docs.ts
 
 .DS_Store
