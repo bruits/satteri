@@ -460,7 +460,7 @@ pub fn create_mdx_mdast_handle(
 }
 
 /// One boundary crossing instead of create + serialize + drop; only the plugin path needs a live handle.
-#[napi]
+#[napi(ts_return_type = "Uint8Array")]
 pub fn parse_mdast_wire<'env>(
     env: &'env Env,
     source: String,
@@ -476,7 +476,7 @@ pub fn parse_mdast_wire<'env>(
 }
 
 /// One-crossing parse + convert + serialize for the no-plugin hast tree functions.
-#[napi]
+#[napi(ts_return_type = "Uint8Array")]
 pub fn parse_hast_wire<'env>(
     env: &'env Env,
     source: String,
@@ -546,12 +546,15 @@ pub fn get_mdast_frontmatter(handle: &MdastHandle) -> Result<Option<JsFrontmatte
     Ok(None)
 }
 
-/// Below this, a V8-owned copy beats the ~700 ns external-buffer registration `Uint8Array::new` pays.
+// Copying small native results helps downstream tree decoding. WASM always
+// returns Uint8Array so browser/workerd hosts need no Node Buffer implementation.
+#[cfg(not(target_family = "wasm"))]
 const SMALL_WIRE_LIMIT: usize = 8192;
 
-fn wire_out<'env>(env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+fn wire_out<'env>(_env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'env>, Uint8Array>> {
+    #[cfg(not(target_family = "wasm"))]
     if buf.len() <= SMALL_WIRE_LIMIT {
-        return Ok(Either::A(BufferSlice::copy_from(env, &buf)?));
+        return Ok(Either::A(BufferSlice::copy_from(_env, &buf)?));
     }
     Ok(Either::B(Uint8Array::new(buf)))
 }
@@ -559,7 +562,7 @@ fn wire_out<'env>(env: &'env Env, buf: Vec<u8>) -> Result<Either<BufferSlice<'en
 /// Serialize a handle's arena to the wire-format buffer JS instantiates a
 /// reader from. The kind tag in the header tells the JS side whether to
 /// pick `MdastReader` or `HastReader`.
-#[napi]
+#[napi(ts_return_type = "Uint8Array")]
 pub fn serialize_handle<'env>(
     env: &'env Env,
     handle: AnyHandle,

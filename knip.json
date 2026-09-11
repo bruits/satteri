@@ -5,6 +5,7 @@
     "packages/satteri": {
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],
       "project": ["src/**/*.ts"],
+      "ignoreUnresolved": ["./satteri_napi.wasip1.cjs"],
       "ignoreDependencies": [
         "^@bruits/satteri-.+$",
         "@emnapi/core",
