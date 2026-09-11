@@ -19,6 +19,7 @@
   "types": "./dist/index.d.ts",
   "imports": {
     "#binding": {
+      "workerd": "./dist/binding.workerd.js",
       "browser": "./dist/binding.browser.js",
       "default": "./dist/binding.js"
     }
@@ -26,7 +27,6 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "workerd": "./dist/workerd/index.js",
       "browser": "./dist/index.js",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
@@ -47,10 +47,9 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "build": "pnpm build:ts && pnpm build:binary:native",
     "build:wasm": "pnpm build:ts && pnpm build:binary:wasm",
-    "build:workerd": "pnpm build:ts && node scripts/build-workerd.mjs",
-    "prepack": "pnpm build:workerd",
-    "test:workerd": "node --test test/workerd.test.mjs",
-    "artifacts": "napi create-npm-dirs && napi artifacts",
+    "build:binary:workerd": "napi build --manifest-path ../../crates/satteri-napi-binding/Cargo.toml --output-dir target/wasm32-wasip1 --platform --release --esm --strip --target wasm32-wasip1 --dts index.d.cts",
+    "test:workerd": "pnpm build:ts && pnpm build:binary:workerd && node --test test/workerd.test.mjs",
+    "artifacts": "napi create-npm-dirs && napi artifacts && node patch-binding.js",
     "dev": "tsc --watch",
     "vitest": "vitest",
     "test": "vitest run",
@@ -107,9 +106,11 @@
       "aarch64-apple-darwin",
       "x86_64-pc-windows-msvc",
       "aarch64-pc-windows-msvc",
-      "wasm32-wasip1-threads"
+      "wasm32-wasip1-threads",
+      "wasm32-wasip1"
     ],
     "wasm": {
+      "optionalDependency": false,
       "browser": {
         "asyncInit": true
       }

@@ -5,7 +5,7 @@
     "packages/satteri": {
       "entry": ["bench/**/*.{ts,mjs}", "test/**/*.ts"],
       "project": ["src/**/*.ts"],
-      "ignoreUnresolved": ["#workerd-loader", "#workerd-wasm"],
+      "ignoreUnresolved": ["./satteri_napi.wasip1.cjs"],
       "ignoreDependencies": [
         "^@bruits/satteri-.+$",
         "@emnapi/core",

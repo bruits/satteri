@@ -37,4 +37,4 @@ export {
   textContentHandle,
   walkHandle,
   walkMdastHandle,
-} from "../browser.js";
+} from "@bruits/satteri-wasm32-wasi";

@@ -60,6 +60,9 @@ jobs:
           - host: ubuntu-latest
             target: wasm32-wasip1-threads
             build: pnpm run build:binary:wasm
+          - host: ubuntu-latest
+            target: wasm32-wasip1
+            build: pnpm run build:binary:workerd
 
     name: Build - ${{ matrix.settings.target }}
     runs-on: ${{ matrix.settings.host }}
@@ -117,9 +120,13 @@ jobs:
         run: ${{ matrix.settings.build }}
         shell: bash
 
+      - name: Test workerd binding
+        if: matrix.settings.target == 'wasm32-wasip1'
+        run: pnpm --filter satteri test:workerd
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: matrix.settings.target != 'wasm32-wasip1-threads'
+        if: ${{ !startsWith(matrix.settings.target, 'wasm32-') }}
         with:
           name: bindings-${{ matrix.settings.target }}
           path: packages/satteri/${{ env.APP_NAME }}.*.node
@@ -130,7 +137,19 @@ jobs:
         if: matrix.settings.target == 'wasm32-wasip1-threads'
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: packages/satteri/${{ env.APP_NAME }}.*.wasm
+          path: |
+            packages/satteri/${{ env.APP_NAME }}.wasm32-wasi.wasm
+            packages/satteri/${{ env.APP_NAME }}.wasi*
+            packages/satteri/wasi-worker*
+            packages/satteri/index.js
+          if-no-files-found: error
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: matrix.settings.target == 'wasm32-wasip1'
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: packages/satteri/target/wasm32-wasip1/*
           if-no-files-found: error
 
   release:
@@ -164,7 +183,7 @@ jobs:
         run: pnpm --filter "./packages/*" run build:ts
 
       - name: Prepare NAPI artifacts
-        run: pnpm napi create-npm-dirs && pnpm napi artifacts
+        run: pnpm --filter satteri run artifacts
         working-directory: packages/satteri
 
       - name: Check if release PR merge
@@ -211,7 +230,9 @@ jobs:
 
       - name: Inject optionalDependencies into main package.json
         if: steps.check.outputs.is_release == 'true'
-        run: pnpm napi pre-publish -t npm --skip-optional-publish --no-gh-release
+        run: |
+          pnpm napi pre-publish -t npm --skip-optional-publish --no-gh-release
+          node patch-binding.js --package
         working-directory: packages/satteri
 
       - uses: bruits/sampo/crates/sampo-github-action@f7241754458e1be4073902b2860596340c7d089c # sampo-v0.17.4

@@ -1,5 +1,6 @@
-import { instantiate } from "#workerd-loader";
-import wasmModule from "#workerd-wasm";
+// @ts-nocheck — the optional WASI binding is generated and installed separately
+import { instantiate } from "@bruits/satteri-wasm32-wasip1/workerd";
+import wasmModule from "@bruits/satteri-wasm32-wasip1/wasm.wasm";
 
 // workerd supplies a precompiled module; never fetch or compile Wasm bytes here.
 export const {
@@ -40,4 +41,4 @@ export const {
   textContentHandle,
   walkHandle,
   walkMdastHandle,
-} = await instantiate(wasmModule);
+} = (await instantiate(wasmModule)) as typeof import("../index.js");
