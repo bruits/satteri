@@ -84,7 +84,7 @@ test(
       assert.deepEqual((await readdir(wasmDir)).toSorted(), ["index.js", "satteri.wasm"]);
       await writeFile(
         join(temporaryDir, "worker.js"),
-        await readFile(new URL("./workerd-worker.js", import.meta.url)),
+        await readFile(new URL("./fixtures/workerd-worker.js", import.meta.url)),
       );
       const { outputFiles } = await build({
         absWorkingDir: temporaryDir,

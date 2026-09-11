@@ -49,7 +49,7 @@
     "build:wasm": "pnpm build:ts && pnpm build:binary:wasm",
     "build:workerd": "pnpm build:ts && node scripts/build-workerd.mjs",
     "prepack": "pnpm build:workerd",
-    "test:workerd": "node --test scripts/workerd.test.mjs",
+    "test:workerd": "node --test test/workerd.test.mjs",
     "artifacts": "napi create-npm-dirs && napi artifacts",
     "dev": "tsc --watch",
     "vitest": "vitest",
