@@ -116,111 +116,29 @@ fn parse_deferred_autolinks(bencher: divan::Bencher) {
     bencher.bench(|| satteri_pulldown_cmark::parse(divan::black_box(source.as_str()), opts));
 }
 
-/// Growing paragraphs and synthetic workloads exercise autolink scanning and rendering.
-mod repeated_autolinks {
-    use satteri_pulldown_cmark::{DEFAULT_OPTIONS, parse_no_positions_into};
+/// Repeated emails expose quadratic paragraph-prefix scanning, including across lines.
+#[divan::bench(args = [160, 10240], consts = [false, true])]
+fn parse_repeated_emails<const MULTILINE: bool>(bencher: divan::Bencher, count: usize) {
+    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    let email = if MULTILINE {
+        "someone+tag@example.com\n"
+    } else {
+        "someone+tag@example.com "
+    };
+    let source = email.repeat(count);
+    bencher.bench(|| {
+        satteri_pulldown_cmark::parse_no_positions(divan::black_box(source.as_str()), opts)
+    });
+}
 
-    fn emails(count: usize, multiline: bool) -> String {
-        if multiline {
-            "someone+tag@example.com\n".repeat(count)
-        } else {
-            "someone+tag@example.com ".repeat(count)
-        }
-    }
-
-    #[divan::bench(args = [160, 640, 2560, 10240], consts = [false, true])]
-    fn parse_email<const MULTILINE: bool>(bencher: divan::Bencher, count: usize) {
-        bench_parse(bencher, emails(count, MULTILINE));
-    }
-
-    #[divan::bench(args = [160, 640, 2560, 10240], consts = [false, true])]
-    fn html_email<const MULTILINE: bool>(bencher: divan::Bencher, count: usize) {
-        let source = emails(count, MULTILINE);
-        let mut arena = Some(satteri_arena::Arena::new(String::new()));
-        bencher.bench_local(|| {
-            let (parsed, _) = parse_no_positions_into(
-                divan::black_box(&source),
-                DEFAULT_OPTIONS,
-                arena.take().unwrap(),
-            );
-            divan::black_box(satteri_ast::mdast_to_html(&parsed));
-            arena = Some(parsed);
-        });
-    }
-
-    #[divan::bench(args = [160, 640, 2560, 10240])]
-    fn parse_mixed(bencher: divan::Bencher, count: usize) {
-        // Includes the underscore-triggered email path as well as h/w/@.
-        let source = "_a@example.com https://example.com www.example.com ".repeat(count);
-        bench_parse(bencher, source);
-    }
-
-    #[divan::bench(args = [8, 32, 128, 512])]
-    fn parse_wide_table(bencher: divan::Bencher, columns: usize) {
-        let cell = "word ".repeat(32);
-        let row = vec![cell.as_str(); columns].join(" | ");
-        let divider = vec!["---"; columns].join(" | ");
-        bench_parse(bencher, format!("{row}\n{divider}\n{row}"));
-    }
-
-    #[divan::bench(args = [160, 640, 2560, 10240], consts = [false, true])]
-    fn parse_explicit<const TITLE: bool>(bencher: divan::Bencher, count: usize) {
-        let link = if TITLE {
-            "[example](https://example.com \"title\") "
-        } else {
-            "[example](https://example.com) "
-        };
-        bench_parse(bencher, link.repeat(count));
-    }
-
-    #[divan::bench(args = [160, 640, 2560, 10240])]
-    fn parse_overlapping_protocols(bencher: divan::Bencher, count: usize) {
-        bench_parse(bencher, format!("[a] {}", "http://x.y/".repeat(count)));
-    }
-
-    fn workload(name: &str) -> String {
-        let unit = match name {
-            "plain" => "whether the whole thing works, wherever whichever whenever. ".to_owned(),
-            "mixed-prose" => {
-                "whether the whole thing works, wherever whichever whenever. ".repeat(32)
-                    + "\n\nhttps://example.com\n\n"
-            }
-            "fallback" => "[www.example.com/path ".to_owned(),
-            "entities" => "[www.example.com/a&amp;b ".to_owned(),
-            "encoded-urls" => "[example](https://example.com/點看%zz?q=a&b) ".to_owned(),
-            "explicit" => "[example](https://example.com) ".to_owned(),
-            "relative-links" => "[example](/path) ".to_owned(),
-            "titled-links" => "[example](https://example.com \"title\") ".to_owned(),
-            "escaping" => "\"quoted\" & < > café ".to_owned(),
-            _ => unreachable!("unknown benchmark workload"),
-        };
-        unit.repeat(160)
-    }
-
-    #[divan::bench(args = ["plain", "mixed-prose", "fallback", "entities", "encoded-urls", "explicit", "relative-links", "titled-links", "escaping"])]
-    fn parse_workload(bencher: divan::Bencher, name: &str) {
-        bench_parse(bencher, workload(name));
-    }
-
-    #[divan::bench(args = ["plain", "mixed-prose", "fallback", "entities", "encoded-urls", "explicit", "relative-links", "titled-links", "escaping"])]
-    fn render_workload(bencher: divan::Bencher, name: &str) {
-        let (arena, errors) =
-            satteri_pulldown_cmark::parse_no_positions(&workload(name), DEFAULT_OPTIONS);
-        assert!(errors.is_empty());
-        bencher.bench(|| satteri_ast::mdast_to_html(divan::black_box(&arena)));
-    }
-
-    fn bench_parse(bencher: divan::Bencher, source: String) {
-        let mut arena = Some(satteri_arena::Arena::new(String::new()));
-        bencher.bench_local(|| {
-            let (parsed, _) = parse_no_positions_into(
-                divan::black_box(&source),
-                DEFAULT_OPTIONS,
-                arena.take().unwrap(),
-            );
-            arena = Some(divan::black_box(parsed));
-        });
-    }
+/// Deferred candidates sharing one URL must not repeatedly scan its remaining suffix.
+#[divan::bench(args = [160, 10240])]
+fn parse_overlapping_protocols(bencher: divan::Bencher, count: usize) {
+    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    let source = format!("[a] {}", "http://x.y/".repeat(count));
+    bencher.bench(|| {
+        satteri_pulldown_cmark::parse_no_positions(divan::black_box(source.as_str()), opts)
+    });
 }
 
 /// Full pipeline: Markdown source → Arena → HTML string.
