@@ -16,6 +16,10 @@
 //! reads / mutates `Arena<Mdast>` after building is finished. They live
 //! here so [`arena_build`] stays focused on actually building the arena.
 
+use core::ops::Range;
+#[cfg(feature = "std")]
+use std::sync::LazyLock;
+
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
 use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
@@ -32,10 +36,11 @@ pub(crate) const MDX_EXPLICIT_JSX_DATA: &[u8] = b"{\"_mdxExplicitJsx\":true}";
 /// allowed (skipped) so `https://.foo` (parts=[``, `foo`]) and `https://../`
 /// (parts=[``, ``, ``]) both pass.
 fn is_correct_domain_for_fnr(domain: &[u8]) -> bool {
-    let parts: Vec<&[u8]> = domain.split(|&b| b == b'.').collect();
-    if parts.len() < 2 {
+    let mut parts = domain.rsplit(|&b| b == b'.');
+    let last = parts.next().unwrap();
+    let Some(penultimate) = parts.next() else {
         return false;
-    }
+    };
     let check = |p: &[u8]| -> bool {
         if p.is_empty() {
             return true;
@@ -45,7 +50,7 @@ fn is_correct_domain_for_fnr(domain: &[u8]) -> bool {
         }
         p.iter().any(|&b| b.is_ascii_alphanumeric())
     };
-    check(parts[parts.len() - 1]) && check(parts[parts.len() - 2])
+    check(last) && check(penultimate)
 }
 
 /// Mirror `mdast-util-gfm-autolink-literal`'s `splitUrl`: trim trailing chars
@@ -445,11 +450,12 @@ fn is_email_local_char(b: u8) -> bool {
 }
 
 /// GFM extended email autolink. Given `@` at `at_ix`, walk backward for the
-/// local-part and forward for the domain. Returns `(start, end, "mailto:...")`.
+/// local-part and forward for the domain. Returns a borrowed address without a
+/// `mailto:` prefix; callers allocate the final URL only when needed.
 /// Mirrors `mdast-util-gfm-autolink-literal`: requires a `.` in the domain,
 /// the TLD (last dot-segment) must contain at least one letter, and trailing
 /// `.`/`-`/`_` are trimmed.
-/// Returns (start, end, "mailto:...", retry_needed).
+/// Returns `(start, end, address, retry_needed)`.
 /// `retry_needed` is true when the construct path's prev check failed at
 /// max walkback, forcing find-and-replace to try a shorter start. When
 /// true, remark emits no position because the construct never tokenized
@@ -467,7 +473,7 @@ pub(crate) fn scan_email_autolink(
     bytes: &[u8],
     at_ix: usize,
     dot_needs_alnum: bool,
-) -> Option<(usize, usize, String, bool)> {
+) -> Option<(usize, usize, &str, bool)> {
     if at_ix >= bytes.len() || bytes[at_ix] != b'@' {
         return None;
     }
@@ -548,10 +554,12 @@ pub(crate) fn scan_email_autolink(
         let is_label = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_');
         // A `.` is kept only when the next byte continues a label: an
         // alphanumeric for the construct, or any `[-\w]` for FNR.
-        let after_dot_ok = bytes.get(end + 1).is_some_and(|&n| {
-            n.is_ascii_alphanumeric() || (!dot_needs_alnum && matches!(n, b'-' | b'_'))
-        });
-        if is_label || (b == b'.' && after_dot_ok) {
+        if is_label
+            || (b == b'.'
+                && bytes.get(end + 1).is_some_and(|&n| {
+                    n.is_ascii_alphanumeric() || (!dot_needs_alnum && matches!(n, b'-' | b'_'))
+                }))
+        {
             end += 1;
         } else {
             break;
@@ -583,7 +591,7 @@ pub(crate) fn scan_email_autolink(
     // that above. `_` elsewhere in the domain is permitted.
     let _ = tld;
     let email_str = core::str::from_utf8(&bytes[start..end]).ok()?;
-    Some((start, end, format!("mailto:{email_str}"), retry_needed))
+    Some((start, end, email_str, retry_needed))
 }
 
 /// Re-merge `text + textDirective + text` sibling runs when the text ends
@@ -807,6 +815,7 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
 pub(crate) fn gfm_autolink_literal_pass(
     arena: &mut Arena<Mdast>,
     source_bytes: &[u8],
+    autolink_free_ranges: &[Range<usize>],
     options: crate::Options,
     mut cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
 ) {
@@ -822,11 +831,26 @@ pub(crate) fn gfm_autolink_literal_pass(
         if parent == u32::MAX || parent >= len {
             continue;
         }
+        // Most remaining URL-looking text is already owned by a link. Avoid
+        // reading and rescanning it; deeper ignored ancestors are checked below.
+        if arena.get_node(parent).node_type == MdastNodeType::Link as u8 {
+            continue;
+        }
         let data = arena.get_type_data(id);
         if data.is_empty() {
             continue;
         }
         let sr = StringRef::from_bytes(data);
+        // Only source-backed, unchanged text can reuse tokenization's proof.
+        // Decoded entities/escapes live beyond the source in the string pool.
+        let start = sr.offset as usize;
+        let end = start + sr.len as usize;
+        if !autolink_free_ranges.is_empty() && end <= source_bytes.len() {
+            let index = autolink_free_ranges.partition_point(|range| range.start <= start);
+            if index > 0 && end <= autolink_free_ranges[index - 1].end {
+                continue;
+            }
+        }
         if !has_autolink_trigger(arena.get_str(sr).as_bytes()) {
             continue;
         }
@@ -874,17 +898,9 @@ pub(crate) fn gfm_autolink_literal_pass(
 }
 
 /// `&`/`\` count: an entity or escape can synthesize a decoded trigger the raw bytes lack.
+#[cfg(test)]
 pub(crate) fn gfm_autolink_literal_may_apply(source_bytes: &[u8]) -> bool {
-    memchr::memchr2_iter(b'@', b':', source_bytes).any(|at| trigger_at(source_bytes, at))
-        || www_prefix_present(source_bytes)
-        || memchr::memchr2(b'&', b'\\', source_bytes).is_some()
-}
-
-/// A `www.` literal needs a dot as well, and ruling one out beats walking every `w`.
-fn www_prefix_present(bytes: &[u8]) -> bool {
-    memchr::memchr(b'.', bytes).is_some()
-        && memchr::memchr2_iter(b'w', b'W', bytes)
-            .any(|at| match_autolink_scheme(bytes, at).is_some())
+    has_autolink_trigger(source_bytes) || memchr::memchr2(b'&', b'\\', source_bytes).is_some()
 }
 
 /// One AVX2 vector; below it the trigger scans go scalar instead.
@@ -901,7 +917,41 @@ fn trigger_at(bytes: &[u8], at: usize) -> bool {
 
 /// Keying `www.` on its dot keeps the needle set at three case-exact bytes.
 #[inline]
-fn has_autolink_trigger(bytes: &[u8]) -> bool {
+pub(crate) fn has_autolink_trigger(bytes: &[u8]) -> bool {
+    if bytes.len() >= 64 {
+        let protocol_start = memchr::memchr2(b'@', b':', bytes);
+        if protocol_start.is_some_and(|at| trigger_at(bytes, at)) {
+            return true;
+        }
+        // Reuse substring searchers: constructing their prefilters for every
+        // prose line costs more than searching the line itself.
+        #[cfg(feature = "std")]
+        static SEARCHERS: LazyLock<[memchr::memmem::Finder<'static>; 2]> = LazyLock::new(|| {
+            [
+                memchr::memmem::Finder::new(b"://"),
+                memchr::memmem::Finder::new(b"www."),
+            ]
+        });
+        #[cfg(not(feature = "std"))]
+        let searchers = [
+            memchr::memmem::Finder::new(b"://"),
+            memchr::memmem::Finder::new(b"www."),
+        ];
+        #[cfg(feature = "std")]
+        let searchers = &*SEARCHERS;
+        if protocol_start.is_some_and(|at| {
+            let rest = &bytes[at + 1..];
+            memchr::memchr(b'@', rest).is_some() || searchers[0].find(rest).is_some()
+        }) || searchers[1].find(bytes).is_some()
+        {
+            return true;
+        }
+        if memchr::memchr(b'W', bytes).is_none() {
+            return false;
+        }
+        // Only mixed/upper-case WWW remains. Full stops are rarer than W in prose.
+        return memchr::memchr_iter(b'.', bytes).any(|at| trigger_at(bytes, at));
+    }
     let mut from = 0;
     while let Some(off) = next_trigger_byte(&bytes[from..]) {
         let at = from + off;
@@ -1003,9 +1053,10 @@ pub(crate) fn fnr_previous_ok(bytes: &[u8], ix: usize) -> bool {
 /// `isCorrectDomain` + `splitUrl` validation chain from
 /// `mdast-util-gfm-autolink-literal`.
 ///
-/// Returns `(start, url_end, full_url, raw_end)` where `url_end..raw_end`
+/// Returns `(start, url_end, prefix, raw_end)` where `url_end..raw_end`
 /// is the splitUrl trail (kept as its own text node by `findAndReplace`).
-fn fnr_find_url(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)> {
+/// Store only the prefix: the matched text already contains the rest of the URL.
+fn fnr_find_url(bytes: &[u8], ix: usize) -> Option<(usize, usize, &'static str, usize)> {
     let (proto_len, is_www) = match_autolink_scheme(bytes, ix)?;
     let s = ix;
     if !fnr_previous_ok(bytes, s) {
@@ -1058,25 +1109,20 @@ fn fnr_find_url(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)
     if url_end <= min_nonempty {
         return None;
     }
-    let url_str = core::str::from_utf8(&bytes[s..url_end]).ok()?;
-    let full_url = if is_www {
-        format!("http://{url_str}")
-    } else {
-        url_str.to_string()
-    };
-    Some((s, url_end, full_url, raw_end))
+    core::str::from_utf8(&bytes[s..url_end]).ok()?;
+    Some((s, url_end, if is_www { "http://" } else { "" }, raw_end))
 }
 
 /// FNR's `findEmail` equivalent. Mirrors the
 /// `(?<=^|\s|\p{P}|\p{S})([-.\w+]+)@([-\w]+(?:\.[-\w]+)+)` regex + the
 /// `previous(_, email=true)` + `/[-\d_]$/` rejection.
 ///
-/// Returns `(start, end, "mailto:<addr>", raw_end)`. For emails the regex
+/// Returns `(start, end, "mailto:", raw_end)`. For emails the regex
 /// has no trail, so `raw_end == end`. Uses `scan_email_autolink`'s walkback
 /// (which retries from a shorter start when the max walkback's prev is
 /// `/` or alphanumeric, matching FNR's `previous(_, true)` semantics).
-fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usize)> {
-    let (mut s, e, _url, _retry) = scan_email_autolink(bytes, ix, false)?;
+fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, &'static str, usize)> {
+    let (mut s, e, _address, _retry) = scan_email_autolink(bytes, ix, false)?;
     // The regex's domain class is `[-\w]+(?:\.[-\w]+)+`. The first domain
     // char must be `[-\w]` (alphanumeric, `-`, `_`); `.` is rejected.
     let first_domain = *bytes.get(ix + 1)?;
@@ -1096,8 +1142,8 @@ fn fnr_find_email(bytes: &[u8], ix: usize) -> Option<(usize, usize, String, usiz
     if s >= ix {
         return None;
     }
-    let addr = core::str::from_utf8(&bytes[s..e]).ok()?;
-    Some((s, e, format!("mailto:{addr}"), e))
+    core::str::from_utf8(&bytes[s..e]).ok()?;
+    Some((s, e, "mailto:", e))
 }
 
 /// One aligned run between a Text node's decoded value and its raw source.
@@ -1449,7 +1495,7 @@ fn push_fnr_emails(
     gap_end: usize,
     triggers: &[usize],
     next_trigger: &mut usize,
-    out: &mut Vec<(usize, usize, usize, String)>,
+    out: &mut Vec<(usize, usize, usize, &'static str)>,
 ) {
     let mut last_end = gap_start;
     while let Some(&at) = triggers.get(*next_trigger) {
@@ -1457,10 +1503,10 @@ fn push_fnr_emails(
             return;
         }
         *next_trigger += 1;
-        if let Some((s, end, url, raw_end)) = fnr_find_email(&bytes[..gap_end], at)
+        if let Some((s, end, prefix, raw_end)) = fnr_find_email(&bytes[..gap_end], at)
             && s >= last_end
         {
-            out.push((s, end, raw_end, url));
+            out.push((s, end, raw_end, prefix));
             last_end = raw_end;
         }
     }
@@ -1484,7 +1530,7 @@ fn split_text_with_autolinks_fnr(
     let borrowed_text = arena.get_str(sr);
     let bytes = borrowed_text.as_bytes();
 
-    let mut url_matches: Vec<(usize, usize, usize, String)> = Vec::new();
+    let mut url_matches: Vec<(usize, usize, usize, &'static str)> = Vec::new();
     let mut email_triggers: Vec<usize> = Vec::new();
     let upper = memchr::memchr2(b'H', b'W', bytes).is_some();
     let mut i = 0;
@@ -1492,16 +1538,16 @@ fn split_text_with_autolinks_fnr(
         if bytes[at] == b'@' {
             email_triggers.push(at);
         } else if match_autolink_scheme(bytes, at).is_some()
-            && let Some((s, url_end, url, raw_end)) = fnr_find_url(bytes, at)
+            && let Some((s, url_end, prefix, raw_end)) = fnr_find_url(bytes, at)
         {
-            url_matches.push((s, url_end, raw_end, url));
+            url_matches.push((s, url_end, raw_end, prefix));
             i = raw_end;
             continue;
         }
         i = at + 1;
     }
 
-    let mut matches: Vec<(usize, usize, usize, String)> =
+    let mut matches: Vec<(usize, usize, usize, &'static str)> =
         Vec::with_capacity(url_matches.len() + email_triggers.len());
     let mut trigger = 0;
     let mut gap_start = 0;
@@ -1554,7 +1600,7 @@ fn split_text_with_autolinks_fnr(
 
     let mut new_children: Vec<u32> = Vec::new();
     let mut cursor = 0usize;
-    for (s, url_end, raw_end, url) in matches {
+    for (s, url_end, raw_end, prefix) in matches {
         if s > cursor {
             let chunk = &text[cursor..s];
             let new_text_id = arena.alloc_node(MdastNodeType::Text as u8);
@@ -1566,7 +1612,8 @@ fn split_text_with_autolinks_fnr(
             new_children.push(new_text_id);
         }
         let link_id = arena.alloc_node(MdastNodeType::Link as u8);
-        let url_sr = arena.alloc_string(&url);
+        let prefix_sr = arena.alloc_string(prefix);
+        let url_sr = arena.append_string(prefix_sr, &text[s..url_end]);
         let link_data = LinkData {
             url: url_sr,
             title: StringRef::empty(),
@@ -1748,7 +1795,7 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RawMap, Smart, build_raw_map};
+    use super::{RawMap, Smart, build_raw_map, has_autolink_trigger, trigger_at};
 
     const OFF: Smart = Smart {
         quotes: false,
@@ -1767,6 +1814,36 @@ mod tests {
 
     fn smart_map(source: &str, decoded: &str) -> RawMap {
         build_raw_map(source.as_bytes(), 0, source.len(), decoded, ON).expect("map should build")
+    }
+
+    #[test]
+    fn bulk_autolink_preflight_matches_scalar() {
+        let check = |bytes: &[u8]| {
+            let expected = bytes
+                .iter()
+                .enumerate()
+                .any(|(at, &byte)| matches!(byte, b'@' | b':' | b'.') && trigger_at(bytes, at));
+            assert_eq!(has_autolink_trigger(bytes), expected, "{bytes:?}");
+        };
+        for prefix in 0..96 {
+            for marker in [
+                "www.", "wwww.", "WWW.", "wwW.", "wWw.", "Www.", "wWW.", "WwW.", "WWw.", "ww.x",
+                "://", "@", "w.w.w.",
+            ] {
+                let input = "x".repeat(prefix) + marker + &" ".repeat(128);
+                check(input.as_bytes());
+            }
+        }
+        let mut seed = 1u64;
+        let alphabet = b"hHwW.:@/ abcdef012";
+        for len in 0..512 {
+            let mut bytes = Vec::new();
+            for _ in 0..len {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                bytes.push(alphabet[(seed >> 32) as usize % alphabet.len()]);
+            }
+            check(&bytes);
+        }
     }
 
     #[test]

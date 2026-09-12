@@ -1,8 +1,8 @@
 //! HTML escaping for the HAST renderer.
 //!
-//! The SWAR scanner, the needle folds, and the overlapping tail read are ported
-//! from ox-content and adapted to the needle sets `hast-util-to-html` uses:
-//! <https://github.com/ubugeeei-prod/ox-content/blob/30d64f2b5daec595150c58f4a47aa96bf9b2b056/crates/ox_content_renderer/src/html/escape.rs>
+//! The SWAR scanner, needle folds, and overlapping tail read are adapted from
+//! ubugeeei's MIT-licensed implementation to the needle sets `hast-util-to-html`
+//! uses. The original copyright and permission notice follows.
 //!
 //! Copyright (c) 2024 ubugeeei, MIT License. Permission is hereby granted, free
 //! of charge, to any person obtaining a copy of this software and associated
@@ -47,6 +47,7 @@ const fn needle_table(needles: &[u8]) -> [bool; 256] {
 }
 
 static BODY_TEXT_NEEDLES: [bool; 256] = needle_table(b"&<>");
+static TRIMMED_TEXT_NEEDLES: [bool; 256] = needle_table(b"&<>\r\n");
 static ATTR_VALUE_NEEDLES: [bool; 256] = needle_table(b"&\"'`");
 
 const fn body_text_escape(byte: u8) -> Option<&'static str> {
@@ -184,11 +185,68 @@ fn escape_into(
     }
 }
 
+/// Most MDAST text needs neither line trimming nor escaping. Check those
+/// together before using the general conversion and escaping paths.
+pub(crate) fn escape_trimmed_body_text(out: &mut String, text: &str) {
+    // Preserve the vectorized scans used by the general paths for bulk text.
+    if text.len() >= 32 {
+        escape_html_body_text(out, &crate::convert::trim_lines_for_hast(text));
+        return;
+    }
+    let bytes = text.as_bytes();
+    if can_copy_trimmed_text(bytes) {
+        out.push_str(text);
+    } else {
+        escape_html_body_text(out, &crate::convert::trim_lines_for_hast(text));
+    }
+}
+
+#[inline]
+fn can_copy_trimmed_text(bytes: &[u8]) -> bool {
+    // A lone line ending (or CRLF) has no adjacent space/tab to trim.
+    if bytes.len() <= 1 {
+        return bytes
+            .first()
+            .is_none_or(|&b| !BODY_TEXT_NEEDLES[b as usize]);
+    }
+    if bytes == b"\r\n" {
+        return true;
+    }
+    if bytes.len() < 8 {
+        return !bytes.iter().any(|&b| TRIMMED_TEXT_NEEDLES[b as usize]);
+    }
+    // The fold also admits controls 0x08..=0x0f besides CR/LF. Falling back
+    // for those is harmless; unlike locating an escape, no exact lane is needed.
+    let mask = |word| body_text_mask(word) | has_zero((word | splat(7)) ^ splat(15));
+    let mut i = 0;
+    while let Some(chunk) = bytes[i..].first_chunk::<8>() {
+        if mask(u64::from_le_bytes(*chunk)) != 0 {
+            return false;
+        }
+        i += 8;
+    }
+    i == bytes.len()
+        || mask(u64::from_le_bytes(
+            bytes[bytes.len() - 8..].try_into().unwrap(),
+        )) == 0
+}
+
 /// Append `text` to `out`, escaped for HTML body text.
 ///
 /// Encodes `&`, `<`, and `>`, matching `hast-util-to-html`'s default
 /// serialization of text nodes.
-pub fn escape_html_body_text(out: &mut String, text: &str) {
+pub fn escape_html_body_text(out: &mut String, mut text: &str) {
+    // Bulk text is usually escape-free. Use memchr's runtime vector dispatch
+    // for its first run, then retain the low-overhead SWAR path for dense escapes.
+    if text.len() >= 64 {
+        let Some(at) = memchr::memchr3(b'&', b'<', b'>', text.as_bytes()) else {
+            out.push_str(text);
+            return;
+        };
+        out.push_str(&text[..at]);
+        out.push_str(body_text_escape(text.as_bytes()[at]).unwrap());
+        text = &text[at + 1..];
+    }
     escape_into(
         out,
         text,
@@ -241,9 +299,31 @@ mod tests {
         pulldown_cmark_escape::escape_html_body_text(&mut expected_body, s).unwrap();
         assert_eq!(body, expected_body, "body text: {s:?}");
 
+        let mut trimmed = String::from("prefix:");
+        escape_trimmed_body_text(&mut trimmed, s);
+        let mut expected_trimmed = String::from("prefix:");
+        pulldown_cmark_escape::escape_html_body_text(
+            &mut expected_trimmed,
+            &crate::convert::trim_lines_for_hast(s),
+        )
+        .unwrap();
+        assert_eq!(trimmed, expected_trimmed, "trimmed body text: {s:?}");
+
         let mut attr = String::new();
         escape_html_attr_value(&mut attr, s);
         assert_eq!(attr, char_by_char_attr(s), "attr value: {s:?}");
+    }
+
+    #[test]
+    fn trimmed_body_matches_conversion_at_word_boundaries() {
+        for len in 0..=40 {
+            let prefix = "a".repeat(len);
+            for special in ['\r', '\n', '\t', '\x08', '\x0f', '<', '>', '&', 'é', '😀'] {
+                for suffix in ["", " ", "\r\n \t", " \n", "\t\r"] {
+                    check(&format!("{prefix}{special}{suffix}"));
+                }
+            }
+        }
     }
 
     #[test]
@@ -309,6 +389,27 @@ mod tests {
                     s.push_str("tail");
                     check(&s);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_first_run_preserves_unicode_tails_and_existing_output() {
+        for lead in [0, 1, 31, 32, 63, 64, 65, 1024] {
+            for tail in [
+                "",
+                "&",
+                "<é>&😀",
+                "ordinary text",
+                "&<>".repeat(128).as_str(),
+            ] {
+                let value = "é".repeat(lead) + tail + &"x".repeat(64);
+                check(&value);
+                let mut out = String::from("prefix:");
+                escape_html_body_text(&mut out, &value);
+                let mut expected = String::from("prefix:");
+                pulldown_cmark_escape::escape_html_body_text(&mut expected, &value).unwrap();
+                assert_eq!(out, expected);
             }
         }
     }

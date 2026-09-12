@@ -1,10 +1,10 @@
 //! The fused mdast→HTML emitter must be byte-identical to the two-stage pipeline, its own oracle.
 
-use satteri_arena::{Arena, Mdast};
+use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
 use satteri_ast::hast::{
     Backref, ConvertOptions, hast_arena_to_html, mdast_arena_to_hast_arena_with_options,
 };
-use satteri_ast::mdast::{ListItemData, MdastNodeType};
+use satteri_ast::mdast::{LinkData, ListItemData, MdastNodeType};
 use satteri_ast::try_mdast_to_html_fused;
 use satteri_pulldown_cmark::Options;
 
@@ -458,6 +458,59 @@ fn text_node(arena: &mut Arena<Mdast>, value: &str) -> u32 {
     let text = arena.alloc_string(value);
     arena.set_type_data(id, &text.as_bytes());
     id
+}
+
+#[test]
+fn plain_link_labels_keep_break_trimming_escaping_and_overrides() {
+    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
+    builder.open_node(MdastNodeType::Root as u8);
+    builder.open_node(MdastNodeType::Paragraph as u8);
+    builder.add_leaf(MdastNodeType::Break as u8);
+    let url = builder.alloc_string("https://x.y/?a=1&b=2");
+    let title = builder.alloc_string("title");
+    let link = builder.open_node(MdastNodeType::Link as u8);
+    builder.set_data_current(&LinkData { url, title }.to_bytes());
+    let value = builder.alloc_string(" \tlabel & <tag>\n next");
+    let text = builder.add_leaf(MdastNodeType::Text as u8);
+    builder.arena_mut().set_type_data(text, &value.as_bytes());
+    let mut arena = builder.finish();
+    assert_eq!(
+        both_paths("single text label after break", &arena),
+        "<p><br>\n<a href=\"https://x.y/?a=1&amp;b=2\" title=\"title\">label &amp; &lt;tag&gt;\nnext</a></p>\n",
+    );
+    arena.set_node_data(link, br#"{"hProperties":{"href":"/override"},"hChildren":[{"type":"text","value":"replacement"}]}"#.to_vec());
+    assert_eq!(
+        satteri_ast::mdast_to_html(&arena),
+        "<p><br>\n<a href=\"/override\" title=\"title\">replacement</a></p>\n",
+    );
+}
+
+#[test]
+fn deeply_nested_links_keep_stack_headroom_in_both_sinks() {
+    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
+    builder.open_node(MdastNodeType::Root as u8);
+    let url = builder.alloc_string("/u");
+    for _ in 0..3000 {
+        builder.open_node(MdastNodeType::Link as u8);
+        builder.set_data_current(
+            &LinkData {
+                url,
+                title: StringRef::empty(),
+            }
+            .to_bytes(),
+        );
+    }
+    let text = builder.alloc_string("text");
+    let leaf = builder.add_leaf(MdastNodeType::Text as u8);
+    builder.arena_mut().set_type_data(leaf, &text.as_bytes());
+    for _ in 0..3001 {
+        builder.close_node();
+    }
+    let arena = builder.finish();
+    assert_eq!(
+        both_paths("deep links", &arena),
+        "<a href=\"/u\">".repeat(3000) + "text" + &"</a>".repeat(3000) + "\n"
+    );
 }
 
 fn list_item(arena: &mut Arena<Mdast>, data: &[u8], value: &str) -> u32 {

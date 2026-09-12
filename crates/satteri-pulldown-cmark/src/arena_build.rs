@@ -149,7 +149,7 @@ fn parse_inner(
     let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::from_arena(arena);
 
     // Build the pulldown-cmark parser (runs first pass).
-    let mut inner = ParserInner::new(source, options);
+    let mut inner = ParserInner::new_for_arena(source, options);
     let mut callbacks = DefaultParserCallbacks;
 
     // Open root node. In skip-positions mode the cursor returns the zero
@@ -225,6 +225,31 @@ fn parse_inner(
                 // (they were never opened in the MDAST builder).
                 if image_alt_buf.is_some() && !matches!(item.body, ItemBody::Image(_)) {
                     image_depth = image_depth.saturating_sub(1);
+                    inner.tree.next_sibling(ix);
+                    continue;
+                }
+                // These inline containers cannot claim definitions or extend
+                // block positions. Without line/column tracking their complete
+                // span is already set at open time. MDX must keep the general
+                // path because JSX can leave a different builder node open.
+                if !track_positions
+                    && !mdx
+                    && matches!(
+                        item.body,
+                        ItemBody::Link(_)
+                            | ItemBody::Emphasis
+                            | ItemBody::Strong
+                            | ItemBody::Strikethrough
+                            | ItemBody::Superscript
+                            | ItemBody::Subscript
+                    )
+                    && builder
+                        .arena_ref()
+                        .get_node(builder.current_node_id())
+                        .end_offset
+                        == item.end as u32
+                {
+                    builder.close_node();
                     inner.tree.next_sibling(ix);
                     continue;
                 }
@@ -1201,6 +1226,104 @@ fn parse_inner(
                         );
                         inner.tree.push();
                     }
+                    body @ (ItemBody::LiteralAutolink(_) | ItemBody::LiteralLink { .. }) => {
+                        let (
+                            url,
+                            title,
+                            label_start,
+                            label_end,
+                            label_start_col,
+                            label_end_line,
+                            label_end_col,
+                        ) = match body {
+                            ItemBody::LiteralAutolink(kind) => {
+                                let url = if kind.prefix().is_empty() {
+                                    builder.alloc_string(&source[item.start..item.end])
+                                } else {
+                                    let prefix = builder.alloc_string(kind.prefix());
+                                    builder
+                                        .arena_mut()
+                                        .append_string(prefix, &source[item.start..item.end])
+                                };
+                                (
+                                    url,
+                                    StringRef::empty(),
+                                    start,
+                                    end,
+                                    start_col,
+                                    end_line,
+                                    end_col,
+                                )
+                            }
+                            ItemBody::LiteralLink {
+                                label_len,
+                                dest_len,
+                                title_len,
+                                angle,
+                            } => {
+                                let dest_start =
+                                    item.start + usize::from(label_len) + 3 + usize::from(angle);
+                                let dest = crate::scanners::unescape(
+                                    &source[dest_start..dest_start + usize::from(dest_len)],
+                                    false,
+                                );
+                                let url = if matches!(dest, crate::strings::CowStr::Borrowed(_)) {
+                                    StringRef::new(dest_start as u32, u32::from(dest_len))
+                                } else {
+                                    builder.alloc_string(&dest)
+                                };
+                                let title = if title_len == 0 {
+                                    StringRef::empty()
+                                } else {
+                                    // The scanner accepted a plain quoted title; only
+                                    // spaces/tabs can separate its closing quote from `)`.
+                                    let mut title_end = item.end - 1;
+                                    while crate::scanners::is_space_or_tab(
+                                        source.as_bytes()[title_end - 1],
+                                    ) {
+                                        title_end -= 1;
+                                    }
+                                    StringRef::new(
+                                        (title_end - 1 - usize::from(title_len)) as u32,
+                                        u32::from(title_len),
+                                    )
+                                };
+                                let label_start = start + 1;
+                                let label_end = label_start + u32::from(label_len);
+                                let col = if start_line == 0 { 0 } else { start_col + 1 };
+                                let end_col = if start_line == 0 {
+                                    0
+                                } else {
+                                    col + u32::from(label_len)
+                                };
+                                (url, title, label_start, label_end, col, start_line, end_col)
+                            }
+                            _ => unreachable!(),
+                        };
+                        let link = builder.add_leaf_full(
+                            MdastNodeType::Link as u8,
+                            start,
+                            end,
+                            start_line,
+                            start_col,
+                            end_line,
+                            end_col,
+                            &LinkData { url, title }.to_bytes(),
+                        );
+                        let sr = StringRef::new(label_start, label_end - label_start);
+                        builder.add_only_child_full(
+                            link,
+                            MdastNodeType::Text as u8,
+                            label_start,
+                            label_end,
+                            start_line,
+                            label_start_col,
+                            label_end_line,
+                            label_end_col,
+                            &sr.as_bytes(),
+                        );
+                        inner.tree.next_sibling(cur_ix);
+                    }
                     ItemBody::Link(link_ix) => {
                         let (link_type, dest_url, title, id) = inner.allocs.take_link(link_ix);
                         if let Some(kind) = reference_kind(link_type) {
@@ -1235,8 +1358,8 @@ fn parse_inner(
                             inner.tree[cur_ix].item.end = ref_end as usize;
                         } else {
                             let url_ref = if matches!(link_type, LinkType::Email) {
-                                let mailto = format!("mailto:{}", &*dest_url);
-                                builder.alloc_string(&mailto)
+                                let prefix = builder.alloc_string("mailto:");
+                                builder.arena_mut().append_string(prefix, &dest_url)
                             } else {
                                 builder.alloc_string(&dest_url)
                             };
@@ -1975,7 +2098,7 @@ fn parse_inner(
 
                     // `handle_inline_pass1` fires or unlinks every marker, and a
                     // consumed item range drops the markers inside it.
-                    ItemBody::MaybeAutolink(..) => {
+                    ItemBody::MaybeAutolink(..) | ItemBody::MaybeProtocolAutolink { .. } => {
                         debug_assert!(false, "unresolved autolink marker reached arena_build");
                         inner.tree.next_sibling(cur_ix);
                     }
@@ -2055,10 +2178,14 @@ fn parse_inner(
         {
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
-        if !skip_fnr_autolink && crate::post_passes::gfm_autolink_literal_may_apply(source_bytes) {
+        if !skip_fnr_autolink
+            && (inner.allocs.raw_autolink_trigger
+                || memchr::memchr2(b'&', b'\\', source_bytes).is_some())
+        {
             crate::post_passes::gfm_autolink_literal_pass(
                 &mut arena,
                 source_bytes,
+                &inner.allocs.autolink_free_ranges,
                 options,
                 track_positions.then_some(&mut cursor),
             );
@@ -2980,6 +3107,7 @@ mod autolink_path_probe {
                 crate::post_passes::gfm_autolink_literal_pass(
                     &mut arena,
                     input.as_bytes(),
+                    &[],
                     options,
                     None,
                 );

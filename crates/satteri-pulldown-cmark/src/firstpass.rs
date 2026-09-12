@@ -10,11 +10,11 @@ use unicase::UniCase;
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
 use crate::{
-    HeadingLevel, LinkType, MetadataBlockKind, Options,
+    HeadingLevel, MetadataBlockKind, Options,
     linklabel::{LinkLabel, scan_link_label_rest},
     parse::{
-        Allocations, AutolinkCandidate, DirectiveAttrData, FootnoteDef, HeadingAttributes, Item,
-        ItemBody, LINK_MAX_NESTED_PARENS, LinkDef, scan_containers,
+        Allocations, AutolinkCandidate, AutolinkKind, DirectiveAttrData, FootnoteDef,
+        HeadingAttributes, Item, ItemBody, LINK_MAX_NESTED_PARENS, LinkDef, scan_containers,
     },
     post_passes::{scan_autolink_literal, scan_email_autolink},
     scanners::*,
@@ -26,9 +26,39 @@ pub(crate) fn run_first_pass(
     text: &str,
     options: Options,
 ) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
+    run_first_pass_mode(text, options, false)
+}
+
+pub(crate) fn run_first_pass_mode(
+    text: &str,
+    options: Options,
+    compact_links: bool,
+) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
     // Measured: real-world Markdown yields ~1 tree item per 10 source bytes.
     let start_capacity = max(128, text.len() / 10);
-    let lookup_table = &create_lut(&options);
+    // Only gate raw construct triggers. Keep GFM enabled in `options`: the
+    // fallback must still discover URLs synthesized by entities and escapes.
+    // A document-wide check also remains valid when inline scanning skips over
+    // line boundaries (e.g. code spans and directive labels).
+    let mut allocs = Allocations::new();
+    allocs.raw_autolink_trigger = options.contains(Options::ENABLE_GFM)
+        && crate::post_passes::has_autolink_trigger(text.as_bytes());
+    // Escaped delimiter runs need a known end during tokenization. Without
+    // underscores, an ASCII-alphanumeric domain start guarantees acceptance:
+    // deferring its extent scan cannot introduce a marker for a rejected URL.
+    let link_mode = if !compact_links {
+        LinkMode::Expanded
+    } else if allocs.raw_autolink_trigger && memchr::memchr2(b'\\', b'_', text.as_bytes()).is_none()
+    {
+        LinkMode::DeferredProtocols
+    } else {
+        LinkMode::Compact
+    };
+    let mut lookup_options = options;
+    if !allocs.raw_autolink_trigger {
+        lookup_options.remove(Options::ENABLE_GFM);
+    }
+    let lookup_table = &create_lut(&lookup_options);
     let first_pass = FirstPass {
         text,
         tree: Tree::with_capacity(start_capacity),
@@ -36,7 +66,7 @@ pub(crate) fn run_first_pass(
         last_line_blank: false,
         list_interrupted_paragraph: false,
         refdef_interrupted_paragraph: false,
-        allocs: Allocations::new(),
+        allocs,
         options,
         lookup_table,
         brace_context_next: 0,
@@ -45,6 +75,10 @@ pub(crate) fn run_first_pass(
         #[cfg(feature = "mdx")]
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
         pending_lazy_blockquote_close: false,
+        autolink_prefix: AutolinkPrefix::default(),
+        plain_link_prefix: AutolinkPrefix::default(),
+        table_markers_present: None,
+        link_mode,
     };
     first_pass.run()
 }
@@ -60,9 +94,17 @@ pub(crate) fn run_first_pass(
 // saturate, which is a better behavior.
 const MATH_BRACE_CONTEXT_MAX_NESTING: usize = 25;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkMode {
+    Expanded,
+    Compact,
+    DeferredProtocols,
+}
+
 /// State for the first parsing pass.
 pub(crate) struct FirstPass<'a, 'b> {
     pub(crate) text: &'a str,
+    link_mode: LinkMode,
     pub(crate) tree: Tree<Item>,
     begin_list_item: Option<usize>,
     last_line_blank: bool,
@@ -77,6 +119,12 @@ pub(crate) struct FirstPass<'a, 'b> {
     pub(crate) allocs: Allocations<'a>,
     pub(crate) options: Options,
     lookup_table: &'b LookupTable,
+    /// Shared across lines so multiline paragraphs do not rescan their prefix.
+    autolink_prefix: AutolinkPrefix,
+    // Unlike the raw autolink guard, this skips syntax owned by committed links.
+    plain_link_prefix: AutolinkPrefix,
+    // Needed only when an unindented root paragraph has another ordinary line.
+    table_markers_present: Option<bool>,
     /// Math environment brace nesting.
     brace_context_stack: Vec<u8>,
     brace_context_next: usize,
@@ -105,6 +153,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         while self.tree.spine_len() > 0 {
             self.pop(ix);
         }
+        // Speculative block parsing can visit the same source out of order.
+        self.allocs
+            .autolink_free_ranges
+            .sort_unstable_by_key(|range| range.start);
         (self.tree, self.allocs, self.mdx_errors)
     }
 
@@ -1370,6 +1422,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
 
         let bytes = self.text.as_bytes();
+        let root_paragraph =
+            self.tree.spine_len() == 1 && !self.options.contains(Options::ENABLE_MDX);
         let mut ix = start_ix;
         loop {
             let scan_mode = if self.options.contains(Options::ENABLE_TABLES) && ix == start_ix {
@@ -1401,6 +1455,36 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
 
             ix = next_ix;
+            // An empty physical line or EOF ends a root paragraph without any
+            // container or block-interruption checks. A trailing backslash still
+            // needs the reconciliation below before its hard break is discarded.
+            if root_paragraph
+                && bytes.get(ix).is_none_or(|b| matches!(b, b'\n' | b'\r'))
+                && !matches!(
+                    brk,
+                    Some(Item {
+                        body: ItemBody::HardBreak(true),
+                        ..
+                    })
+                )
+            {
+                break;
+            }
+            // Without containers or MDX, an ASCII-letter start cannot open a
+            // block except a light table header. Tables require a raw ':' or
+            // '|'; cache that document-wide check only if continuation needs it.
+            if root_paragraph
+                && bytes.get(ix).is_some_and(u8::is_ascii_alphabetic)
+                && (!self.options.contains(Options::ENABLE_TABLES)
+                    || !*self
+                        .table_markers_present
+                        .get_or_insert_with(|| memchr::memchr2(b':', b'|', bytes).is_some()))
+            {
+                if let Some(item) = brk {
+                    self.tree.append(item);
+                }
+                continue;
+            }
             let mut line_start = LineStart::new(&bytes[ix..]);
             let tree_position = scan_containers(&self.tree, &mut line_start, self.options);
             let current_container = tree_position == self.tree.spine_len();
@@ -1740,19 +1824,32 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     /// Commit a detected autolink. Only sound when nothing can still block it.
-    fn append_autolink_link(&mut self, d: AutolinkDetection<'a>, begin_text: usize, escaped: bool) {
-        let link_ix = self
-            .allocs
-            .allocate_link(d.link_type, d.url, "".into(), "".into());
-        self.tree.append_text(begin_text, d.start, escaped);
+    fn append_autolink_link(
+        &mut self,
+        candidate: AutolinkCandidate,
+        begin_text: usize,
+        escaped: bool,
+    ) {
+        let AutolinkCandidate { start, end, kind } = candidate;
+        if self.link_mode != LinkMode::Expanded {
+            self.tree.append_text(begin_text, start, escaped);
+            self.tree.append(Item {
+                start,
+                end,
+                body: ItemBody::LiteralAutolink(kind),
+            });
+            return;
+        }
+        let link_ix = self.allocs.allocate_autolink(candidate, self.text);
+        self.tree.append_text(begin_text, start, escaped);
         let link_node_ix = self.tree.append(Item {
-            start: d.start,
-            end: d.end,
+            start,
+            end,
             body: ItemBody::Link(link_ix),
         });
         let text_child = self.tree.create_node(Item {
-            start: d.start,
-            end: d.end,
+            start,
+            end,
             body: ItemBody::Text {
                 backslash_escaped: false,
             },
@@ -1760,26 +1857,64 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree[link_node_ix].child = Some(text_child);
     }
 
+    // Keep link scanning out of parse_line's frame: most lines and table cells
+    // never contain an inline link.
+    #[inline(never)]
+    fn try_append_plain_link(
+        &mut self,
+        start: usize,
+        limit: usize,
+        begin_text: usize,
+        escaped: bool,
+        line_start: usize,
+    ) -> Option<usize> {
+        let floor = self
+            .tree
+            .peek_up()
+            .map(|parent| self.tree[parent].item.start)
+            .unwrap_or(line_start);
+        if self.plain_link_prefix.must_defer(
+            &self.text.as_bytes()[..limit],
+            floor,
+            start,
+            self.options,
+        ) {
+            return None;
+        }
+        let (end, label_end, url, title) = scan_plain_inline_link(self.text, limit, start)?;
+        let label_len = u16::try_from(label_end - start - 1).ok()?;
+        let dest_len = u16::try_from(url.len()).ok()?;
+        let title_len = u16::try_from(title.len()).ok()?;
+        u32::try_from(end).ok()?;
+        self.tree.append_text(begin_text, start, escaped);
+        self.tree.append(Item {
+            start,
+            end,
+            body: ItemBody::LiteralLink {
+                label_len,
+                dest_len,
+                title_len,
+                angle: self.text.as_bytes()[label_end + 2] == b'<',
+            },
+        });
+        self.plain_link_prefix.skip_committed_link(end);
+        Some(end)
+    }
+
     /// Record a detected autolink as a zero-width marker: no byte's
     /// tokenization changes, so the candidate can still be dropped.
     fn append_autolink_marker(
         &mut self,
-        d: AutolinkDetection<'a>,
+        candidate: AutolinkCandidate,
         begin_text: usize,
         escaped: bool,
     ) {
-        let link = self
-            .allocs
-            .allocate_link(d.link_type, d.url, "".into(), "".into());
-        let cand = self.allocs.allocate_autolink_candidate(AutolinkCandidate {
-            start: d.start,
-            end: d.end,
-            link,
-        });
-        self.tree.append_text(begin_text, d.start, escaped);
+        let start = candidate.start;
+        let cand = self.allocs.allocate_autolink_candidate(candidate);
+        self.tree.append_text(begin_text, start, escaped);
         self.tree.append(Item {
-            start: d.start,
-            end: d.start,
+            start,
+            end: start,
             body: ItemBody::MaybeAutolink(cand),
         });
     }
@@ -1815,8 +1950,24 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Ends of deferred candidates still in play. Overlapping candidates are
         // possible, so this is a set; empty in every line without one.
         let mut deferred_ends: Vec<usize> = Vec::new();
+        // A deferred URL may own the opening bracket of a later apparent link.
+        let mut furthest_autolink_end = 0;
 
-        let (final_ix, brk) = iterate_special_bytes(self.lookup_table, bytes, start, |ix, byte| {
+        // Active table parsing can restart at each cell; scanning the rest of
+        // the physical line per cell would turn wide tables quadratic.
+        let lut = self.lookup_table;
+        let scan_start = if matches!(mode, TableParseMode::Active) {
+            start
+        } else {
+            let line_end = plain_inline_line_end(lut, bytes, start);
+            if self.allocs.raw_autolink_trigger
+                && let Some(end) = line_end
+            {
+                self.allocs.record_autolink_free_range(start..end);
+            }
+            line_end.unwrap_or(start)
+        };
+        let (final_ix, brk) = iterate_special_bytes(lut, bytes, scan_start, |ix, byte| {
             match byte {
                 b'\n' | b'\r' => {
                     if let TableParseMode::Active = mode {
@@ -2037,17 +2188,21 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             .peek_up()
                             .map(|nix| self.tree[nix].item.start)
                             .unwrap_or(start);
-                        if let Some((email_start, email_end, full_url)) =
+                        if let Some((email_start, email_end)) =
                             scan_email_forward_from_atext(bytes, ix, begin_text, paragraph_floor)
                             && email_start >= candidate_floor
                         {
-                            let d = AutolinkDetection {
+                            let d = AutolinkCandidate {
                                 start: email_start,
                                 end: email_end,
-                                link_type: LinkType::Email,
-                                url: email_addr(full_url),
+                                kind: AutolinkKind::Email,
                             };
-                            if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
+                            if self.autolink_prefix.must_defer(
+                                bytes,
+                                paragraph_floor,
+                                ix,
+                                self.options,
+                            ) {
                                 candidate_floor = email_start + 1;
                                 // Fall through to attention handling: a
                                 // marker that fires splices those
@@ -2325,6 +2480,23 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     LoopInstruction::ContinueAndSkip(1)
                 }
                 b'[' => {
+                    if self.link_mode != LinkMode::Expanded
+                        && ix >= furthest_autolink_end
+                        && !self.tree.is_in_table()
+                        && let Some(end) = self.try_append_plain_link(
+                            ix,
+                            bytes.len(),
+                            begin_text,
+                            backslash_escaped,
+                            start,
+                        )
+                    {
+                        begin_text = end;
+                        last_inline_emission_end = end;
+                        candidate_floor = end;
+                        backslash_escaped = false;
+                        return LoopInstruction::ContinueAndSkip(end - ix - 1);
+                    }
                     self.tree.append_text(begin_text, ix, backslash_escaped);
                     backslash_escaped = false;
                     self.tree.append(Item {
@@ -2503,6 +2675,49 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         .peek_up()
                         .map(|ix| self.tree[ix].item.start)
                         .unwrap_or(start);
+                    // A cached blocker is only a hint: must_defer checks the
+                    // current scope again. Isolated URLs avoid a second probe.
+                    if self.link_mode == LinkMode::DeferredProtocols
+                        && self.autolink_prefix.has_blocker
+                        && matches!(byte, b'h' | b'H')
+                    {
+                        let Some((prefix_len, _)) =
+                            crate::post_passes::match_autolink_scheme(bytes, ix)
+                        else {
+                            return LoopInstruction::ContinueAndSkip(0);
+                        };
+                        let content_start = ix == paragraph_floor;
+                        if bytes
+                            .get(ix + prefix_len)
+                            .is_some_and(u8::is_ascii_alphanumeric)
+                            && ix >= candidate_floor
+                            && (content_start || ix == 0 || !bytes[ix - 1].is_ascii_alphabetic())
+                            && let Ok(limit) = u32::try_from(bytes.len())
+                            && self.autolink_prefix.must_defer(
+                                bytes,
+                                paragraph_floor,
+                                ix,
+                                self.options,
+                            )
+                        {
+                            furthest_autolink_end = usize::MAX;
+                            self.tree.append_text(begin_text, ix, backslash_escaped);
+                            self.tree.append(Item {
+                                start: ix,
+                                end: ix,
+                                body: ItemBody::MaybeProtocolAutolink {
+                                    limit,
+                                    content_start,
+                                },
+                            });
+                            if ix > begin_text {
+                                backslash_escaped = false;
+                            }
+                            begin_text = ix;
+                            candidate_floor = ix + 1;
+                            return LoopInstruction::ContinueAndSkip(0);
+                        }
+                    }
                     let detection = detect_gfm_autolink(
                         self.text,
                         bytes,
@@ -2514,13 +2729,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     .filter(|d| d.start >= candidate_floor);
                     if let Some(d) = detection {
                         let (cand_start, cand_end) = (d.start, d.end);
-                        if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
+                        if self
+                            .autolink_prefix
+                            .must_defer(bytes, paragraph_floor, ix, self.options)
+                        {
                             candidate_floor = cand_start + 1;
                             // The scan only moves forward, so ends behind it can
                             // never be probed again; dropping them here keeps the
                             // probe in the escape arm off a growing list.
                             deferred_ends.retain(|&e| e > ix);
                             deferred_ends.push(cand_end);
+                            furthest_autolink_end = furthest_autolink_end.max(cand_end);
                             // Leave `begin_text` at the candidate's start: its
                             // bytes stay ordinary text unless the marker fires.
                             self.append_autolink_marker(d, begin_text, backslash_escaped);
@@ -5028,14 +5247,14 @@ fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
 
 /// Walk forward from `start_ix` (an atext-class char like `_`) through
 /// `+`/`-`/`.`/`_`/alphanumeric to find an `@`, then check whether an
-/// email autolink tokenizes exactly at `start_ix..`. Returns `(start, end,
-/// "mailto:..")` on success.
+/// email autolink tokenizes exactly at `start_ix..`. Returns `(start, end)`
+/// on success.
 fn scan_email_forward_from_atext(
     bytes: &[u8],
     underscore_ix: usize,
     begin_text: usize,
     paragraph_start: usize,
-) -> Option<(usize, usize, String)> {
+) -> Option<(usize, usize)> {
     // Walk forward from the `_` through local-part chars to the `@`.
     let mut at_ix = underscore_ix;
     while at_ix < bytes.len() && is_email_local_char(bytes[at_ix]) {
@@ -5049,7 +5268,7 @@ fn scan_email_forward_from_atext(
     // The email construct wins over the emphasis as long as that start is at
     // or after the pending text boundary; otherwise an already-emitted
     // Maybe* token covers it and we must defer to the post-pass.
-    let (sc_start, sc_end, full_url, retry_needed) = scan_email_autolink(bytes, at_ix, true)?;
+    let (sc_start, sc_end, _, retry_needed) = scan_email_autolink(bytes, at_ix, true)?;
     if retry_needed
         || sc_start > underscore_ix
         || sc_start < begin_text
@@ -5057,32 +5276,59 @@ fn scan_email_forward_from_atext(
     {
         return None;
     }
-    Some((sc_start, sc_end, full_url))
+    Some((sc_start, sc_end))
 }
 
 fn is_email_local_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'_')
 }
 
-/// True when a candidate at `pos` must go through `handle_inline_pass1`
-/// instead of being committed on the spot.
-///
-/// True whenever an earlier byte in the block could open a construct that ends
-/// up owning the trigger's bytes: `[` a bracket opener, `<` a pointed autolink
-/// or inline HTML, `` ` `` a code span, `$` a math span.
-fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize, options: Options) -> bool {
-    let before = &bytes[block_start..pos];
-    memchr::memchr3(b'[', b'<', b'`', before).is_some()
-        || (options.has_math() && memchr::memchr(b'$', before).is_some())
+/// Cache of possible inline owners in the prefix of the current block.
+/// Source bytes and options are immutable during a first pass, so extending a
+/// checked prefix is sufficient; rescanning it per candidate would be quadratic.
+/// The plain-link cache can skip syntax already owned by a committed link.
+#[derive(Default)]
+struct AutolinkPrefix {
+    block_start: usize,
+    checked_to: usize,
+    has_blocker: bool,
 }
 
-/// A GFM autolink literal the scanner accepted, before anything is committed
-/// to the tree.
-struct AutolinkDetection<'a> {
-    start: usize,
-    end: usize,
-    link_type: LinkType,
-    url: CowStr<'a>,
+impl AutolinkPrefix {
+    /// A complete link owns its delimiters; they cannot block subsequent links.
+    fn skip_committed_link(&mut self, end: usize) {
+        debug_assert!(!self.has_blocker && end >= self.checked_to);
+        self.checked_to = end;
+    }
+
+    /// A candidate must be deferred to `handle_inline_pass1` when an earlier
+    /// `[`, `<`, backtick, or enabled `$` could open a construct owning its bytes.
+    fn must_defer(
+        &mut self,
+        bytes: &[u8],
+        block_start: usize,
+        pos: usize,
+        options: Options,
+    ) -> bool {
+        // Table reparsing and nested directive labels can change scope or rewind.
+        // Key by the exact source floor, not by a tree index that may be reused.
+        if self.block_start != block_start || pos < self.checked_to {
+            *self = Self {
+                block_start,
+                checked_to: block_start,
+                has_blocker: false,
+            };
+        }
+        if !self.has_blocker {
+            // Include skipped bytes (e.g. committed URLs), not just scanner stops:
+            // the old conservative ownership check also counted delimiters there.
+            let before = &bytes[self.checked_to..pos];
+            self.has_blocker = memchr::memchr3(b'[', b'<', b'`', before).is_some()
+                || (options.has_math() && memchr::memchr(b'$', before).is_some());
+            self.checked_to = pos;
+        }
+        self.has_blocker
+    }
 }
 
 /// `(can_open, can_close)` for the run of `run_len` delimiters at `at`.
@@ -5146,21 +5392,20 @@ fn escaped_delim_run(
 /// GFM resolves in the email construct's favour. `www_end` bounds the search to
 /// the www span, which the committed path skips outright and the deferred path
 /// was already rescanning.
-fn detect_email_inside_www<'a>(
+fn detect_email_inside_www(
     bytes: &[u8],
     ix: usize,
     www_end: usize,
     paragraph_start: usize,
     begin_text: usize,
-) -> Option<AutolinkDetection<'a>> {
+) -> Option<AutolinkCandidate> {
     // `_` is the one atext byte that can precede a www literal, and the
     // attention arm's own email hook already owns that case.
     if ix > 0 && bytes[ix - 1] == b'_' {
         return None;
     }
     let at_ix = ix + memchr::memchr(b'@', &bytes[ix..www_end])?;
-    let (email_start, email_end, full_url, retry_needed) =
-        crate::post_passes::scan_email_autolink(bytes, at_ix, true)?;
+    let (email_start, email_end, _, retry_needed) = scan_email_autolink(bytes, at_ix, true)?;
     // Opening past the trigger is the `@` hook's; opening before it needs an
     // atext predecessor, and `_` is the only one a www literal takes.
     if email_start != ix {
@@ -5174,41 +5419,24 @@ fn detect_email_inside_www<'a>(
         email_start >= begin_text && email_start >= paragraph_start,
         "the trigger is inside the current text run"
     );
-    Some(AutolinkDetection {
+    Some(AutolinkCandidate {
         start: email_start,
         end: email_end,
-        link_type: LinkType::Email,
-        url: email_addr(full_url),
+        kind: AutolinkKind::Email,
     })
-}
-
-/// Out of line: allocating URLs is rare enough that inlining only bloats the loop.
-#[inline(never)]
-fn www_url<'a>(span: &str) -> CowStr<'a> {
-    format!("http://{span}").into()
-}
-
-/// `scan_email_autolink` returns `mailto:<addr>`; arena_build's Email-link path
-/// prepends `mailto:` again, so strip it here.
-#[inline(never)]
-fn email_addr<'a>(mut full_url: String) -> CowStr<'a> {
-    if full_url.starts_with("mailto:") {
-        full_url.drain(.."mailto:".len());
-    }
-    full_url.into()
 }
 
 /// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
 /// only: committing or deferring is the caller's call, since it turns on
 /// state this function cannot see.
-fn detect_gfm_autolink<'a>(
-    text: &'a str,
+fn detect_gfm_autolink(
+    text: &str,
     bytes: &[u8],
     ix: usize,
     byte: u8,
     paragraph_start: usize,
     begin_text: usize,
-) -> Option<AutolinkDetection<'a>> {
+) -> Option<AutolinkCandidate> {
     // Cheap reject first: most triggers in prose can't start an autolink.
     let is_www = match byte {
         b'h' | b'H' | b'w' | b'W' => crate::post_passes::match_autolink_scheme(bytes, ix)?.1,
@@ -5239,15 +5467,14 @@ fn detect_gfm_autolink<'a>(
             {
                 return Some(email);
             }
-            let span = text.get(ix..end)?;
-            Some(AutolinkDetection {
+            text.get(ix..end)?;
+            Some(AutolinkCandidate {
                 start,
                 end,
-                link_type: LinkType::Autolink,
-                url: if is_www {
-                    www_url(span)
+                kind: if is_www {
+                    AutolinkKind::Www
                 } else {
-                    CowStr::Borrowed(span)
+                    AutolinkKind::Url
                 },
             })
         }
@@ -5255,8 +5482,7 @@ fn detect_gfm_autolink<'a>(
             // The local-part walkback can start the link before `ix`. If it
             // would cross an already-emitted Maybe* item, that construct owns
             // the bytes, so leave the email to the post-pass.
-            let (email_start, email_end, full_url, retry_needed) =
-                scan_email_autolink(bytes, ix, true)?;
+            let (email_start, email_end, _, retry_needed) = scan_email_autolink(bytes, ix, true)?;
             if retry_needed {
                 return None;
             }
@@ -5275,11 +5501,10 @@ fn detect_gfm_autolink<'a>(
             {
                 return None;
             }
-            Some(AutolinkDetection {
+            Some(AutolinkCandidate {
                 start: email_start,
                 end: email_end,
-                link_type: LinkType::Email,
-                url: email_addr(full_url),
+                kind: AutolinkKind::Email,
             })
         }
         _ => None,
@@ -5425,6 +5650,56 @@ fn scan_directive_name(bytes: &[u8]) -> Option<(usize, usize)> {
         return None;
     }
     Some((0, len))
+}
+
+/// Recognize a plain ASCII label and a destination, optionally with a simple
+/// quoted title. Everything else stays with the normal inline resolver.
+/// Destination and title syntax stay with the shared scanners.
+fn scan_plain_inline_link(
+    text: &str,
+    limit: usize,
+    start: usize,
+) -> Option<(usize, usize, &str, &str)> {
+    let bytes = &text.as_bytes()[..limit];
+    let label_start = start + 1;
+    let mut label_end = label_start;
+    while bytes
+        .get(label_end)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b' ')
+    {
+        label_end += 1;
+    }
+    if label_end == label_start || bytes.get(label_end..label_end + 2) != Some(b"](") {
+        return None;
+    }
+    let dest_start = label_end + 2;
+    if bytes.get(dest_start).is_some_and(|&b| is_space_or_tab(b)) {
+        return None;
+    }
+    let (len, dest) = scan_link_dest(text, dest_start, LINK_MAX_NESTED_PARENS)?;
+    let dest_end = dest_start + len;
+    if dest_end > limit {
+        return None;
+    }
+    let mut close = dest_end;
+    close += scan_while(&bytes[close..], is_space_or_tab);
+    let mut title = "";
+    if close > dest_end && bytes.get(close) != Some(&b')') {
+        let (length, value) = scan_plain_link_title(text, close)?;
+        close += length;
+        if close > limit {
+            return None;
+        }
+        close += scan_while(&bytes[close..], is_space_or_tab);
+        title = value;
+    }
+    // The line may still become a table header. Its raw pipes must reach the
+    // ordinary tokenizer even though the destination itself accepts them.
+    if bytes.get(close) != Some(&b')') || memchr::memchr(b'|', &bytes[dest_start..close]).is_some()
+    {
+        return None;
+    }
+    Some((close + 1, label_end, dest, title))
 }
 
 /// Parse a directive label `[content]`. Returns (label_start, label_end, total_consumed).
@@ -6389,6 +6664,71 @@ where
     scalar_iterate_special_bytes(lut, bytes, ix, callback)
 }
 
+/// Skip only a whole, marker-free physical line. The normal callback still
+/// handles its terminator, including hard breaks, tables and continuations.
+/// Unlike repeated lookahead from each inline candidate, this costs at most a
+/// constant number of linear scans per line, including mixed prose documents.
+fn plain_inline_line_end(lut: &LookupTable, bytes: &[u8], start: usize) -> Option<usize> {
+    let rest = bytes.get(start..)?;
+    if rest.len() < 128 {
+        return None;
+    }
+    let len = memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len());
+    if len < 128 {
+        return None;
+    }
+    let line = &rest[..len];
+    if lut[b'h' as usize] && crate::post_passes::has_autolink_trigger(line) {
+        return None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if let Some(found) = contains_inline_marker_accelerated(lut, line) {
+        return (!found).then_some(start + len);
+    }
+    (!contains_inline_marker_portable(lut, line)).then_some(start + len)
+}
+
+// Non-autolink inline markers, grouped for the portable memchr search.
+// Both search implementations filter this same set through the active lookup table.
+const INLINE_MARKER_GROUPS: [[u8; 3]; 7] = [
+    *b"*_&", *b"\\[]", *b"<!`", *b"|~^", *b"${}", *b".-:", *b"\"'\0",
+];
+
+fn contains_inline_marker_portable(lut: &LookupTable, line: &[u8]) -> bool {
+    // Disabled markers must not turn ordinary prose into scalar work.
+    for group in &INLINE_MARKER_GROUPS {
+        if let Some(&first) = group.iter().find(|&&b| lut[b as usize]) {
+            let second = if lut[group[1] as usize] {
+                group[1]
+            } else {
+                first
+            };
+            let third = if lut[group[2] as usize] {
+                group[2]
+            } else {
+                first
+            };
+            if memchr::memchr3(first, second, third, line).is_some() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Keep vector-table construction out of the tokenizer's hot stack frame.
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+fn contains_inline_marker_accelerated(lut: &LookupTable, line: &[u8]) -> Option<bool> {
+    let mut low = [0u8; 16];
+    for &byte in INLINE_MARKER_GROUPS.as_flattened() {
+        if lut[byte as usize] {
+            low[(byte & 15) as usize] |= 1 << (byte >> 4);
+        }
+    }
+    satteri_arena::byte_search::contains_ascii_byte_accelerated(line, &low)
+}
+
 const SCAN_BLOCK: usize = 16;
 
 fn scalar_iterate_special_bytes<F, T>(
@@ -6584,4 +6924,78 @@ fn unquote_attribute_value(value: &str) -> &str {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod inline_scan_tests {
+    use super::*;
+
+    #[test]
+    fn plain_line_gate_respects_boundaries_offsets_and_individual_options() {
+        for options in [Options::empty(), Options::all()]
+            .into_iter()
+            .chain(Options::all().iter())
+        {
+            let lut = create_lut(&options);
+            for len in [1, 31, 32, 127, 128, 129, 159, 160, 161, 255, 256, 257] {
+                for start in [0, 1, 15, 31] {
+                    let mut bytes = vec![b'*'; start];
+                    bytes.extend(vec![b'a'; len]);
+                    // Markup beyond the physical line must not block the fast path.
+                    bytes.extend_from_slice(b"\r\n*next* https://example.com");
+                    for at in [0, len / 2, len - 1] {
+                        for byte in 0..=255u8 {
+                            bytes[start + at] = byte;
+                            let rest = &bytes[start..];
+                            let end = rest
+                                .iter()
+                                .position(|b| matches!(b, b'\r' | b'\n'))
+                                .unwrap();
+                            let line = &rest[..end];
+                            let blocked = line.iter().any(|&b| {
+                                lut[b as usize] && !matches!(b, b'h' | b'H' | b'w' | b'W' | b'@')
+                            });
+                            let autolink = lut[b'h' as usize]
+                                && crate::post_passes::has_autolink_trigger(line);
+                            assert_eq!(contains_inline_marker_portable(&lut, line), blocked);
+                            assert_eq!(
+                                plain_inline_line_end(&lut, &bytes, start),
+                                (end >= 128 && !blocked && !autolink).then_some(start + end),
+                                "options={options:?}, len={len}, start={start}, at={at}, byte={byte}"
+                            );
+                        }
+                        bytes[start + at] = b'a';
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plain_line_gate_covers_every_configured_marker() {
+        for options in [Options::empty(), Options::ENABLE_GFM, Options::all()] {
+            let lut = create_lut(&options);
+            for byte in 0..=255u8 {
+                let mut bytes = vec![b'a'; 128];
+                bytes.push(byte);
+                bytes.extend_from_slice(&[b'a'; 32]);
+                let end = bytes
+                    .iter()
+                    .position(|b| matches!(b, b'\n' | b'\r'))
+                    .unwrap_or(bytes.len());
+                let line = &bytes[..end];
+                let autolink = options.contains(Options::ENABLE_GFM)
+                    && crate::post_passes::has_autolink_trigger(line);
+                let marker = line
+                    .iter()
+                    .any(|&b| lut[b as usize] && !matches!(b, b'h' | b'H' | b'w' | b'W' | b'@'));
+                assert_eq!(contains_inline_marker_portable(&lut, line), marker);
+                assert_eq!(
+                    plain_inline_line_end(&lut, &bytes, 0),
+                    (!autolink && !marker).then_some(end),
+                    "options={options:?}, byte={byte}"
+                );
+            }
+        }
+    }
 }

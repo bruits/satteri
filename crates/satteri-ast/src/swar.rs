@@ -1,7 +1,7 @@
 //! Word-at-a-time (SWAR) primitives shared by the crate's byte scanners.
 //!
-//! Ported from ox-content together with the escape scanner; see
-//! [`crate::hast::escape`] for the upstream copyright notice.
+//! Adapted from ubugeeei's MIT-licensed implementation together with the escape
+//! scanner; see [`crate::hast::escape`] for the original copyright and license.
 
 const ONES: u64 = 0x0101_0101_0101_0101;
 const HIGH: u64 = 0x8080_8080_8080_8080;

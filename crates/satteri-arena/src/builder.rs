@@ -135,6 +135,91 @@ impl<K: ArenaKind> ArenaBuilder<K> {
         end_column: u32,
         data: &[u8],
     ) -> u32 {
+        let parent = self.stack.last().map_or(u32::MAX, |&(id, _)| id);
+        let node_id = self.push_leaf_full(
+            parent,
+            node_type,
+            start_offset,
+            end_offset,
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+            data,
+        );
+        if parent != u32::MAX {
+            self.pending_children.push(node_id);
+        }
+        node_id
+    }
+
+    /// Attach a single leaf to the most recently added node, without opening either node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `parent` is not the most recently added node, is still open, or
+    /// already has children. All preconditions are checked before modifying the arena.
+    #[doc(hidden)]
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_only_child_full(
+        &mut self,
+        parent: u32,
+        node_type: u8,
+        start_offset: u32,
+        end_offset: u32,
+        start_line: u32,
+        start_column: u32,
+        end_line: u32,
+        end_column: u32,
+        data: &[u8],
+    ) -> u32 {
+        assert_eq!(
+            Some(parent as usize),
+            self.arena.nodes.len().checked_sub(1),
+            "the parent must be the most recently added node"
+        );
+        // Node IDs increase on insertion, so the newest node can only be open
+        // at the top of the stack. Checking the whole stack would cost O(depth).
+        assert_ne!(
+            self.stack.last().map(|&(id, _)| id),
+            Some(parent),
+            "the parent must be closed"
+        );
+        assert_eq!(self.arena.nodes[parent as usize].children_count, 0);
+        let node_id = self.push_leaf_full(
+            parent,
+            node_type,
+            start_offset,
+            end_offset,
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+            data,
+        );
+        let children_start = self.arena.children.len() as u32;
+        self.arena.children.push(node_id);
+        let node = &mut self.arena.nodes[parent as usize];
+        node.children_start = children_start;
+        node.children_count = 1;
+        node_id
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn push_leaf_full(
+        &mut self,
+        parent: u32,
+        node_type: u8,
+        start_offset: u32,
+        end_offset: u32,
+        start_line: u32,
+        start_column: u32,
+        end_line: u32,
+        end_column: u32,
+        data: &[u8],
+    ) -> u32 {
         let node_id = self.arena.nodes.len() as u32;
         let (data_offset, data_len) = if data.is_empty() {
             (0, 0)
@@ -144,8 +229,6 @@ impl<K: ArenaKind> ArenaBuilder<K> {
             self.arena.pad_type_data_tail(data.len());
             (offset, data.len() as u32)
         };
-        let parent = self.stack.last().map_or(u32::MAX, |&(id, _)| id);
-
         self.arena.nodes.push(ArenaNode {
             id: node_id,
             node_type,
@@ -162,11 +245,6 @@ impl<K: ArenaKind> ArenaBuilder<K> {
             data_offset,
             data_len,
         });
-
-        if parent != u32::MAX {
-            self.pending_children.push(node_id);
-        }
-
         node_id
     }
 
@@ -355,6 +433,138 @@ mod tests {
         builder.close_node();
         let arena = builder.finish();
         assert_eq!(arena.get_children(leaf), &[] as &[u32]);
+    }
+
+    fn assert_single_child_parity<K: ArenaKind>() {
+        for positioned in [false, true] {
+            for data in [&[][..], &[1, 2, 3][..]] {
+                let build = |direct: bool| {
+                    let mut builder = ArenaBuilder::<K>::new("éhello".to_owned());
+                    let line = u32::from(positioned);
+                    builder.open_node(0);
+                    builder.add_leaf_full(1, 0, 2, line, line, line, line * 3, &[]);
+                    let parent = if direct {
+                        builder.add_leaf_full(2, 2, 7, line, line * 3, line, line * 8, data)
+                    } else {
+                        let id = builder.open_node(2);
+                        builder.set_position_current(2, 7, line, line * 3, line, line * 8);
+                        builder.set_data_current(data);
+                        id
+                    };
+                    if direct {
+                        builder.add_only_child_full(
+                            parent,
+                            3,
+                            3,
+                            6,
+                            line,
+                            line * 4,
+                            line,
+                            line * 7,
+                            &[4],
+                        );
+                    } else {
+                        builder.add_leaf_full(3, 3, 6, line, line * 4, line, line * 7, &[4]);
+                        builder.close_node();
+                    }
+                    builder.add_leaf_full(1, 6, 7, line, line * 7, line, line * 8, &[]);
+                    builder.close_node();
+                    builder.finish()
+                };
+                let direct = build(true);
+                let ordinary = build(false);
+                assert_eq!(direct.get_children(0), &[1, 2, 4]);
+                assert_eq!(direct.get_children(2), &[3]);
+                assert_eq!(direct.nodes, ordinary.nodes);
+                assert_eq!(direct.children, ordinary.children);
+                assert_eq!(direct.type_data, ordinary.type_data);
+            }
+        }
+    }
+
+    #[test]
+    fn single_child_construction_matches_open_close_for_both_arena_kinds() {
+        assert_single_child_parity::<crate::kind::Mdast>();
+        assert_single_child_parity::<crate::kind::Hast>();
+    }
+
+    #[test]
+    fn invalid_single_child_attachment_does_not_modify_the_tree() {
+        for open in [false, true] {
+            for latest in [false, true] {
+                if !open && latest {
+                    continue;
+                }
+                let mut builder = ArenaBuilder::<crate::kind::Mdast>::new(String::new());
+                let parent = builder.open_node(0);
+                if !open {
+                    builder.close_node();
+                }
+                if !latest {
+                    builder.add_leaf(1);
+                }
+                let nodes = builder.arena.nodes.clone();
+                let children = builder.arena.children.clone();
+                let data = builder.arena.type_data.clone();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    builder.add_only_child_full(parent, 1, 0, 0, 0, 0, 0, 0, &[1]);
+                }));
+                assert!(result.is_err());
+                assert_eq!(builder.arena.nodes, nodes);
+                assert_eq!(builder.arena.children, children);
+                assert_eq!(builder.arena.type_data, data);
+            }
+        }
+    }
+
+    #[test]
+    fn single_child_construction_preserves_nested_and_reused_arenas() {
+        fn check<K: ArenaKind>() {
+            let build = |reuse: Option<Arena<K>>, direct: bool| {
+                let mut builder = match reuse {
+                    Some(arena) => ArenaBuilder::from_arena(arena),
+                    None => ArenaBuilder::new("example".to_owned()),
+                };
+                for _ in 0..20 {
+                    builder.open_node(0);
+                    for _ in 0..17 {
+                        let parent = if direct {
+                            builder.add_leaf_full(2, 0, 7, 1, 1, 1, 8, &[1, 2, 3])
+                        } else {
+                            let id = builder.open_node(2);
+                            builder.set_position_current(0, 7, 1, 1, 1, 8);
+                            builder.set_data_current(&[1, 2, 3]);
+                            id
+                        };
+                        if direct {
+                            builder.add_only_child_full(parent, 1, 0, 7, 1, 1, 1, 8, &[4]);
+                        } else {
+                            builder.add_leaf_full(1, 0, 7, 1, 1, 1, 8, &[4]);
+                            builder.close_node();
+                        }
+                        builder.add_leaf_full(1, 0, 7, 1, 1, 1, 8, &[]);
+                    }
+                }
+                for _ in 0..20 {
+                    builder.close_node();
+                }
+                builder.finish()
+            };
+            let mut direct = build(None, true);
+            let ordinary = build(None, false);
+            assert_eq!(direct.nodes, ordinary.nodes);
+            assert_eq!(direct.children, ordinary.children);
+            assert_eq!(direct.type_data, ordinary.type_data);
+            direct.reset();
+            direct.string_pool.push_str("example");
+            direct.source_len = 7;
+            let reused = build(Some(direct), true);
+            assert_eq!(reused.nodes, ordinary.nodes);
+            assert_eq!(reused.children, ordinary.children);
+            assert_eq!(reused.type_data, ordinary.type_data);
+        }
+        check::<crate::kind::Mdast>();
+        check::<crate::kind::Hast>();
     }
 
     #[test]

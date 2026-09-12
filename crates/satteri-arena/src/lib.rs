@@ -9,6 +9,8 @@
 
 pub mod arena;
 pub mod builder;
+#[doc(hidden)]
+pub mod byte_search;
 pub mod codec;
 mod generated;
 pub mod kind;
