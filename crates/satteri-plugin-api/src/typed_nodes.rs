@@ -1,30 +1,7 @@
-use satteri_arena::{Arena, ArenaNode, Mdast};
+pub use satteri_arena::NodePosition;
+use satteri_arena::{Arena, Mdast};
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::mdast::codec::*;
-
-/// Position info extracted from an ArenaNode
-#[derive(Debug, Clone, Copy)]
-pub struct NodePosition {
-    pub start_offset: u32,
-    pub end_offset: u32,
-    pub start_line: u32,
-    pub start_column: u32,
-    pub end_line: u32,
-    pub end_column: u32,
-}
-
-impl NodePosition {
-    pub fn from_node(node: &ArenaNode) -> Self {
-        Self {
-            start_offset: node.start_offset,
-            end_offset: node.end_offset,
-            start_line: node.start_line,
-            start_column: node.start_column,
-            end_line: node.end_line,
-            end_column: node.end_column,
-        }
-    }
-}
 
 /// A typed view over a Heading node in the arena.
 pub struct Heading<'a> {

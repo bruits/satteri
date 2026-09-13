@@ -7,14 +7,21 @@ use std::arch::x86_64::{
     _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16,
 };
 
+const AVX2_VECTOR_BYTES: usize = 32;
+// Amortize dispatch and table setup over the four vectors processed per iteration.
+const AVX2_BATCH_BYTES: usize = 4 * AVX2_VECTOR_BYTES;
+
 /// Test a nibble-encoded ASCII set, or return `None` when acceleration is unavailable.
 /// Each low-nibble entry holds matching ASCII high nibbles as bits.
 #[doc(hidden)]
 #[inline]
 pub fn contains_ascii_byte_accelerated(bytes: &[u8], low: &[u8; 16]) -> Option<bool> {
+    if bytes.len() < AVX2_BATCH_BYTES {
+        return None;
+    }
     #[cfg(target_arch = "x86_64")]
-    if bytes.len() >= 128 && std::is_x86_feature_detected!("avx2") {
-        // SAFETY: AVX2 is available and at least 128 bytes are readable.
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 is available and a full vector batch is readable.
         return Some(unsafe { contains_avx2(bytes, low) });
     }
     let _ = (bytes, low);
@@ -24,14 +31,16 @@ pub fn contains_ascii_byte_accelerated(bytes: &[u8], low: &[u8; 16]) -> Option<b
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn contains_avx2(bytes: &[u8], low: &[u8; 16]) -> bool {
-    const HIGH: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
+    // High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
+    const HIGH_NIBBLE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
     // SAFETY: Both tables contain sixteen readable bytes.
     let low = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(low.as_ptr().cast()) });
-    let high = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(HIGH.as_ptr().cast()) });
-    let nibble = _mm256_set1_epi8(15);
+    let high =
+        _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(HIGH_NIBBLE_BITS.as_ptr().cast()) });
+    let nibble = _mm256_set1_epi8(0x0f);
     let zero = _mm256_setzero_si256();
     let matches = |at| {
-        // SAFETY: Both loops below ensure that at <= len - 32.
+        // SAFETY: Both loops below leave a full vector readable at `at`.
         let chunk = unsafe { _mm256_loadu_si256(bytes.as_ptr().add(at).cast()) };
         let lows = _mm256_shuffle_epi8(low, _mm256_and_si256(chunk, nibble));
         let highs =
@@ -41,33 +50,36 @@ unsafe fn contains_avx2(bytes: &[u8], low: &[u8; 16]) -> bool {
     let mut at = 0;
     // Only existence matters: combine four independent vectors before testing
     // their mask, rather than branching and advancing once per vector.
-    while bytes.len() - at >= 128 {
-        let first = _mm256_or_si256(matches(at), matches(at + 32));
-        let second = _mm256_or_si256(matches(at + 64), matches(at + 96));
+    while bytes.len() - at >= AVX2_BATCH_BYTES {
+        let first = _mm256_or_si256(matches(at), matches(at + AVX2_VECTOR_BYTES));
+        let second = _mm256_or_si256(
+            matches(at + 2 * AVX2_VECTOR_BYTES),
+            matches(at + 3 * AVX2_VECTOR_BYTES),
+        );
         let absent = _mm256_cmpeq_epi8(_mm256_or_si256(first, second), zero);
         if _mm256_movemask_epi8(absent) != -1 {
             return true;
         }
-        at += 128;
+        at += AVX2_BATCH_BYTES;
     }
     while at < bytes.len() {
         // Rechecking a suffix avoids an out-of-bounds load or a scalar tail.
-        let absent = _mm256_cmpeq_epi8(matches(at.min(bytes.len() - 32)), zero);
+        let absent = _mm256_cmpeq_epi8(matches(at.min(bytes.len() - AVX2_VECTOR_BYTES)), zero);
         if _mm256_movemask_epi8(absent) != -1 {
             return true;
         }
-        at += 32;
+        at += AVX2_VECTOR_BYTES;
     }
     false
 }
 
 #[cfg(test)]
 mod tests {
-    use super::contains_ascii_byte_accelerated;
+    use super::{AVX2_BATCH_BYTES, contains_ascii_byte_accelerated};
 
     #[test]
     fn short_inputs_decline_acceleration() {
-        for len in 0..128 {
+        for len in 0..AVX2_BATCH_BYTES {
             assert_eq!(
                 contains_ascii_byte_accelerated(&vec![0; len], &[255; 16]),
                 None

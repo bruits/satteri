@@ -5321,7 +5321,7 @@ impl AutolinkPrefix {
         }
         if !self.has_blocker {
             // Include skipped bytes (e.g. committed URLs), not just scanner stops:
-            // the old conservative ownership check also counted delimiters there.
+            // delimiters there can still require deferring later autolinks.
             let before = &bytes[self.checked_to..pos];
             self.has_blocker = memchr::memchr3(b'[', b'<', b'`', before).is_some()
                 || (options.has_math() && memchr::memchr(b'$', before).is_some());
@@ -6664,17 +6664,20 @@ where
     scalar_iterate_special_bytes(lut, bytes, ix, callback)
 }
 
+// Short lines stay with the tokenizer: their preflight scan would duplicate work.
+const PLAIN_LINE_MIN_LEN: usize = 128;
+
 /// Skip only a whole, marker-free physical line. The normal callback still
 /// handles its terminator, including hard breaks, tables and continuations.
 /// Unlike repeated lookahead from each inline candidate, this costs at most a
 /// constant number of linear scans per line, including mixed prose documents.
 fn plain_inline_line_end(lut: &LookupTable, bytes: &[u8], start: usize) -> Option<usize> {
     let rest = bytes.get(start..)?;
-    if rest.len() < 128 {
+    if rest.len() < PLAIN_LINE_MIN_LEN {
         return None;
     }
     let len = memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len());
-    if len < 128 {
+    if len < PLAIN_LINE_MIN_LEN {
         return None;
     }
     let line = &rest[..len];
@@ -6723,7 +6726,7 @@ fn contains_inline_marker_accelerated(lut: &LookupTable, line: &[u8]) -> Option<
     let mut low = [0u8; 16];
     for &byte in INLINE_MARKER_GROUPS.as_flattened() {
         if lut[byte as usize] {
-            low[(byte & 15) as usize] |= 1 << (byte >> 4);
+            low[(byte & 0x0f) as usize] |= 1 << (byte >> 4);
         }
     }
     satteri_arena::byte_search::contains_ascii_byte_accelerated(line, &low)
@@ -6960,7 +6963,8 @@ mod inline_scan_tests {
                             assert_eq!(contains_inline_marker_portable(&lut, line), blocked);
                             assert_eq!(
                                 plain_inline_line_end(&lut, &bytes, start),
-                                (end >= 128 && !blocked && !autolink).then_some(start + end),
+                                (end >= PLAIN_LINE_MIN_LEN && !blocked && !autolink)
+                                    .then_some(start + end),
                                 "options={options:?}, len={len}, start={start}, at={at}, byte={byte}"
                             );
                         }

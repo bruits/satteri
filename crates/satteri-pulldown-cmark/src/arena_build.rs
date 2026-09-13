@@ -3,7 +3,9 @@
 
 use alloc::borrow::Cow;
 
-use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef, line_ending_iter};
+use satteri_arena::{
+    Arena, ArenaBuilder, LineIndex, Mdast, NodePosition, StringRef, line_ending_iter,
+};
 use satteri_ast::mdast::{
     CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
     ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType, ReferenceData,
@@ -1300,26 +1302,30 @@ fn parse_inner(
                             }
                             _ => unreachable!(),
                         };
-                        let link = builder.add_leaf_full(
+                        let link = builder.add_leaf_with_position(
                             MdastNodeType::Link as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
                             &LinkData { url, title }.to_bytes(),
                         );
                         let sr = StringRef::new(label_start, label_end - label_start);
-                        builder.add_only_child_full(
+                        builder.add_only_child_with_position(
                             link,
                             MdastNodeType::Text as u8,
-                            label_start,
-                            label_end,
-                            start_line,
-                            label_start_col,
-                            label_end_line,
-                            label_end_col,
+                            NodePosition {
+                                start_offset: label_start,
+                                end_offset: label_end,
+                                start_line,
+                                start_column: label_start_col,
+                                end_line: label_end_line,
+                                end_column: label_end_col,
+                            },
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);

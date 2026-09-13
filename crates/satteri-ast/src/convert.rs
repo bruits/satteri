@@ -279,10 +279,13 @@ fn next_unsafe(bytes: &[u8], from: usize) -> Option<usize> {
     None
 }
 
+#[cfg(target_arch = "x86_64")]
+const URL_SCAN_VECTOR_BYTES: usize = 16; // One SSSE3 vector.
+
 #[inline]
 fn first_non_url_safe(bytes: &[u8]) -> Option<usize> {
     #[cfg(target_arch = "x86_64")]
-    if bytes.len() >= 16 && std::is_x86_feature_detected!("ssse3") {
+    if bytes.len() >= URL_SCAN_VECTOR_BYTES && std::is_x86_feature_detected!("ssse3") {
         // SAFETY: SSSE3 is available and at least one full vector is readable.
         return unsafe { first_non_url_safe_ssse3(bytes) };
     }
@@ -292,7 +295,10 @@ fn first_non_url_safe(bytes: &[u8]) -> Option<usize> {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "ssse3")]
 unsafe fn first_non_url_safe_ssse3(bytes: &[u8]) -> Option<usize> {
-    use std::arch::x86_64::*;
+    use std::arch::x86_64::{
+        _mm_and_si128, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
+        _mm_setzero_si128, _mm_shuffle_epi8, _mm_srli_epi16,
+    };
     // Each low-nibble entry records which ASCII high nibbles are URL-safe.
     const LOW: [u8; 16] = {
         let safe = url_safe_table();
@@ -300,20 +306,21 @@ unsafe fn first_non_url_safe_ssse3(bytes: &[u8]) -> Option<usize> {
         let mut byte = 0;
         while byte < 128 {
             if safe[byte] {
-                table[byte & 15] |= 1 << (byte >> 4);
+                table[byte & 0x0f] |= 1 << (byte >> 4);
             }
             byte += 1;
         }
         table
     };
-    const HIGH: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
+    // High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
+    const HIGH_NIBBLE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
     // SAFETY: Both tables contain exactly sixteen readable bytes.
     let low_table = unsafe { _mm_loadu_si128(LOW.as_ptr().cast()) };
-    let high_table = unsafe { _mm_loadu_si128(HIGH.as_ptr().cast()) };
-    let nibble = _mm_set1_epi8(15);
+    let high_table = unsafe { _mm_loadu_si128(HIGH_NIBBLE_BITS.as_ptr().cast()) };
+    let nibble = _mm_set1_epi8(0x0f);
     let mut at = 0;
     loop {
-        // SAFETY: The caller guarantees len >= 16; at never exceeds len - 16.
+        // SAFETY: The caller guarantees a full vector; advancing `at` below preserves this.
         let chunk = unsafe { _mm_loadu_si128(bytes.as_ptr().add(at).cast()) };
         let low = _mm_shuffle_epi8(low_table, _mm_and_si128(chunk, nibble));
         let high = _mm_shuffle_epi8(high_table, _mm_and_si128(_mm_srli_epi16(chunk, 4), nibble));
@@ -324,11 +331,11 @@ unsafe fn first_non_url_safe_ssse3(bytes: &[u8]) -> Option<usize> {
         if bad != 0 {
             return Some(at + bad.trailing_zeros() as usize);
         }
-        if at + 16 == bytes.len() {
+        if at + URL_SCAN_VECTOR_BYTES == bytes.len() {
             return None;
         }
         // An overlapping final vector contains only already-checked prefix bytes.
-        at = (at + 16).min(bytes.len() - 16);
+        at = (at + URL_SCAN_VECTOR_BYTES).min(bytes.len() - URL_SCAN_VECTOR_BYTES);
     }
 }
 
@@ -818,12 +825,16 @@ fn line_break_touches_space_or_tab(bytes: &[u8], at: usize) -> bool {
         || bytes.get(at + 1).is_some_and(|&next| is_space_or_tab(next))
 }
 
+// Short text uses SWAR; bulk text amortizes memchr dispatch. Renderers share
+// this cutoff to select separate trimming rather than their combined short-text scan.
+pub(crate) const BULK_LINE_TRIM_MIN_LEN: usize = 32;
+
 /// Every text node pays this scan, so it stays separate from the rewrite it guards.
 /// A trimmed space or tab always sits beside a line break, so an adjacent pair
 /// is the whole condition and `\r\n` needs no case of its own.
 #[inline]
 fn needs_line_trim(bytes: &[u8]) -> bool {
-    if bytes.len() >= 32 {
+    if bytes.len() >= BULK_LINE_TRIM_MIN_LEN {
         return memchr::memchr2_iter(b'\n', b'\r', bytes)
             .any(|at| line_break_touches_space_or_tab(bytes, at));
     }

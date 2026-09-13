@@ -4,7 +4,9 @@
 
 use satteri_arena::{Arena, Mdast, StringRef};
 
-use crate::convert::{ConvertOptions, collect_refs, contains_h_key, trim_lines_for_hast};
+use crate::convert::{
+    BULK_LINE_TRIM_MIN_LEN, ConvertOptions, collect_refs, contains_h_key, trim_lines_for_hast,
+};
 use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
 use crate::hast::escape::{
     escape_html_attr_value, escape_html_body_text, escape_trimmed_body_text,
@@ -214,7 +216,7 @@ impl ConvertSink for HtmlSink<'_> {
 
     fn text_trimmed(&mut self, value: StringRef, _pos: Pos) {
         let text = self.view.get_str(value);
-        if text.len() >= 32 {
+        if text.len() >= BULK_LINE_TRIM_MIN_LEN {
             self.push_text(&trim_lines_for_hast(text));
             return;
         }

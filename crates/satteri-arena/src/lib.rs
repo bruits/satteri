@@ -4,6 +4,7 @@
 //! - `Arena` for owning all nodes and associated data
 //! - `ArenaBuilder` for incremental tree construction
 //! - `ArenaNode` and `StringRef` for zero-copy node representation
+//! - `NodePosition` for source spans used by builders and typed node views
 //! - Raw buffer export/import for binary transfer
 //! - `LineIndex` for offset→(line, column) conversion
 
@@ -23,4 +24,4 @@ pub use builder::ArenaBuilder;
 pub use codec::{decode_string_ref_data, encode_string_ref_data};
 pub use kind::{ArenaKind, Hast, Mdast};
 pub use line_index::{LineIndex, LineIndexCursor, line_ending_iter};
-pub use node::{ArenaNode, NODE_STRUCT_SIZE, StringRef};
+pub use node::{ArenaNode, NODE_STRUCT_SIZE, NodePosition, StringRef};

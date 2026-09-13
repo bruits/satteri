@@ -905,6 +905,8 @@ pub(crate) fn gfm_autolink_literal_may_apply(source_bytes: &[u8]) -> bool {
 
 /// One AVX2 vector; below it the trigger scans go scalar instead.
 const MEMCHR_MIN_LEN: usize = 32;
+// Substring prefilters pay off on bulk prose; short text uses the trigger-byte loop.
+const BULK_AUTOLINK_MIN_LEN: usize = 64;
 
 #[inline]
 fn trigger_at(bytes: &[u8], at: usize) -> bool {
@@ -918,7 +920,7 @@ fn trigger_at(bytes: &[u8], at: usize) -> bool {
 /// Keying `www.` on its dot keeps the needle set at three case-exact bytes.
 #[inline]
 pub(crate) fn has_autolink_trigger(bytes: &[u8]) -> bool {
-    if bytes.len() >= 64 {
+    if bytes.len() >= BULK_AUTOLINK_MIN_LEN {
         let protocol_start = memchr::memchr2(b'@', b':', bytes);
         if protocol_start.is_some_and(|at| trigger_at(bytes, at)) {
             return true;

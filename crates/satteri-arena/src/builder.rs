@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::arena::{Arena, TypeDataWriter};
 use crate::kind::ArenaKind;
-use crate::node::{ArenaNode, StringRef};
+use crate::node::{ArenaNode, NodePosition, StringRef};
 
 /// Builds an `Arena<K>` using an open/close node pattern suitable for
 /// depth-first tree construction (e.g. SAX-style parsers).
@@ -122,6 +122,7 @@ impl<K: ArenaKind> ArenaBuilder<K> {
     }
 
     /// Add a leaf node with position and type data in one call (avoids repeated node lookups).
+    /// For named position fields, use [`Self::add_leaf_with_position`].
     #[inline]
     #[allow(clippy::too_many_arguments)]
     pub fn add_leaf_full(
@@ -135,18 +136,30 @@ impl<K: ArenaKind> ArenaBuilder<K> {
         end_column: u32,
         data: &[u8],
     ) -> u32 {
-        let parent = self.stack.last().map_or(u32::MAX, |&(id, _)| id);
-        let node_id = self.push_leaf_full(
-            parent,
+        self.add_leaf_with_position(
             node_type,
-            start_offset,
-            end_offset,
-            start_line,
-            start_column,
-            end_line,
-            end_column,
+            NodePosition {
+                start_offset,
+                end_offset,
+                start_line,
+                start_column,
+                end_line,
+                end_column,
+            },
             data,
-        );
+        )
+    }
+
+    /// Add a leaf with a source span and type data, without opening a node.
+    #[inline]
+    pub fn add_leaf_with_position(
+        &mut self,
+        node_type: u8,
+        position: NodePosition,
+        data: &[u8],
+    ) -> u32 {
+        let parent = self.stack.last().map_or(u32::MAX, |&(id, _)| id);
+        let node_id = self.push_leaf(parent, node_type, position, data);
         if parent != u32::MAX {
             self.pending_children.push(node_id);
         }
@@ -161,17 +174,11 @@ impl<K: ArenaKind> ArenaBuilder<K> {
     /// already has children. All preconditions are checked before modifying the arena.
     #[doc(hidden)]
     #[inline]
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_only_child_full(
+    pub fn add_only_child_with_position(
         &mut self,
         parent: u32,
         node_type: u8,
-        start_offset: u32,
-        end_offset: u32,
-        start_line: u32,
-        start_column: u32,
-        end_line: u32,
-        end_column: u32,
+        position: NodePosition,
         data: &[u8],
     ) -> u32 {
         assert_eq!(
@@ -187,17 +194,7 @@ impl<K: ArenaKind> ArenaBuilder<K> {
             "the parent must be closed"
         );
         assert_eq!(self.arena.nodes[parent as usize].children_count, 0);
-        let node_id = self.push_leaf_full(
-            parent,
-            node_type,
-            start_offset,
-            end_offset,
-            start_line,
-            start_column,
-            end_line,
-            end_column,
-            data,
-        );
+        let node_id = self.push_leaf(parent, node_type, position, data);
         let children_start = self.arena.children.len() as u32;
         self.arena.children.push(node_id);
         let node = &mut self.arena.nodes[parent as usize];
@@ -207,17 +204,11 @@ impl<K: ArenaKind> ArenaBuilder<K> {
     }
 
     #[inline]
-    #[allow(clippy::too_many_arguments)]
-    fn push_leaf_full(
+    fn push_leaf(
         &mut self,
         parent: u32,
         node_type: u8,
-        start_offset: u32,
-        end_offset: u32,
-        start_line: u32,
-        start_column: u32,
-        end_line: u32,
-        end_column: u32,
+        position: NodePosition,
         data: &[u8],
     ) -> u32 {
         let node_id = self.arena.nodes.len() as u32;
@@ -234,12 +225,12 @@ impl<K: ArenaKind> ArenaBuilder<K> {
             node_type,
             _pad: [0; 3],
             parent,
-            start_offset,
-            end_offset,
-            start_line,
-            start_column,
-            end_line,
-            end_column,
+            start_offset: position.start_offset,
+            end_offset: position.end_offset,
+            start_line: position.start_line,
+            start_column: position.start_column,
+            end_line: position.end_line,
+            end_column: position.end_column,
             children_start: 0,
             children_count: 0,
             data_offset,
@@ -452,15 +443,17 @@ mod tests {
                         id
                     };
                     if direct {
-                        builder.add_only_child_full(
+                        builder.add_only_child_with_position(
                             parent,
                             3,
-                            3,
-                            6,
-                            line,
-                            line * 4,
-                            line,
-                            line * 7,
+                            NodePosition {
+                                start_offset: 3,
+                                end_offset: 6,
+                                start_line: line,
+                                start_column: line * 4,
+                                end_line: line,
+                                end_column: line * 7,
+                            },
                             &[4],
                         );
                     } else {
@@ -475,6 +468,17 @@ mod tests {
                 let ordinary = build(false);
                 assert_eq!(direct.get_children(0), &[1, 2, 4]);
                 assert_eq!(direct.get_children(2), &[3]);
+                assert_eq!(
+                    NodePosition::from_node(direct.get_node(3)),
+                    NodePosition {
+                        start_offset: 3,
+                        end_offset: 6,
+                        start_line: u32::from(positioned),
+                        start_column: u32::from(positioned) * 4,
+                        end_line: u32::from(positioned),
+                        end_column: u32::from(positioned) * 7,
+                    }
+                );
                 assert_eq!(direct.nodes, ordinary.nodes);
                 assert_eq!(direct.children, ordinary.children);
                 assert_eq!(direct.type_data, ordinary.type_data);
@@ -507,7 +511,7 @@ mod tests {
                 let children = builder.arena.children.clone();
                 let data = builder.arena.type_data.clone();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    builder.add_only_child_full(parent, 1, 0, 0, 0, 0, 0, 0, &[1]);
+                    builder.add_only_child_with_position(parent, 1, NodePosition::default(), &[1]);
                 }));
                 assert!(result.is_err());
                 assert_eq!(builder.arena.nodes, nodes);
@@ -537,7 +541,19 @@ mod tests {
                             id
                         };
                         if direct {
-                            builder.add_only_child_full(parent, 1, 0, 7, 1, 1, 1, 8, &[4]);
+                            builder.add_only_child_with_position(
+                                parent,
+                                1,
+                                NodePosition {
+                                    start_offset: 0,
+                                    end_offset: 7,
+                                    start_line: 1,
+                                    start_column: 1,
+                                    end_line: 1,
+                                    end_column: 8,
+                                },
+                                &[4],
+                            );
                         } else {
                             builder.add_leaf_full(1, 0, 7, 1, 1, 1, 8, &[4]);
                             builder.close_node();

@@ -20,6 +20,7 @@
 //! ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 //! DEALINGS IN THE SOFTWARE.
 
+use crate::convert::BULK_LINE_TRIM_MIN_LEN;
 use crate::swar::{has_zero, splat};
 
 /// Flags lanes holding `&`, `<`, or `>`. The fold admits nothing extra because
@@ -189,7 +190,7 @@ fn escape_into(
 /// together before using the general conversion and escaping paths.
 pub(crate) fn escape_trimmed_body_text(out: &mut String, text: &str) {
     // Preserve the vectorized scans used by the general paths for bulk text.
-    if text.len() >= 32 {
+    if text.len() >= BULK_LINE_TRIM_MIN_LEN {
         escape_html_body_text(out, &crate::convert::trim_lines_for_hast(text));
         return;
     }
@@ -217,7 +218,7 @@ fn can_copy_trimmed_text(bytes: &[u8]) -> bool {
     }
     // The fold also admits controls 0x08..=0x0f besides CR/LF. Falling back
     // for those is harmless; unlike locating an escape, no exact lane is needed.
-    let mask = |word| body_text_mask(word) | has_zero((word | splat(7)) ^ splat(15));
+    let mask = |word| body_text_mask(word) | has_zero((word | splat(0x07)) ^ splat(0x0f));
     let mut i = 0;
     while let Some(chunk) = bytes[i..].first_chunk::<8>() {
         if mask(u64::from_le_bytes(*chunk)) != 0 {
@@ -231,6 +232,9 @@ fn can_copy_trimmed_text(bytes: &[u8]) -> bool {
         )) == 0
 }
 
+// Bulk scanning pays off once a clean run amortizes memchr's dispatch overhead.
+const BULK_ESCAPE_MIN_LEN: usize = 64;
+
 /// Append `text` to `out`, escaped for HTML body text.
 ///
 /// Encodes `&`, `<`, and `>`, matching `hast-util-to-html`'s default
@@ -238,7 +242,7 @@ fn can_copy_trimmed_text(bytes: &[u8]) -> bool {
 pub fn escape_html_body_text(out: &mut String, mut text: &str) {
     // Bulk text is usually escape-free. Use memchr's runtime vector dispatch
     // for its first run, then retain the low-overhead SWAR path for dense escapes.
-    if text.len() >= 64 {
+    if text.len() >= BULK_ESCAPE_MIN_LEN {
         let Some(at) = memchr::memchr3(b'&', b'<', b'>', text.as_bytes()) else {
             out.push_str(text);
             return;
