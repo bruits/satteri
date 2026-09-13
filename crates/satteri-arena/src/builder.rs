@@ -121,35 +121,6 @@ impl<K: ArenaKind> ArenaBuilder<K> {
         self.add_leaf(node_type)
     }
 
-    /// Add a leaf node with position and type data in one call (avoids repeated node lookups).
-    /// For named position fields, use [`Self::add_leaf_with_position`].
-    #[inline]
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_leaf_full(
-        &mut self,
-        node_type: u8,
-        start_offset: u32,
-        end_offset: u32,
-        start_line: u32,
-        start_column: u32,
-        end_line: u32,
-        end_column: u32,
-        data: &[u8],
-    ) -> u32 {
-        self.add_leaf_with_position(
-            node_type,
-            NodePosition {
-                start_offset,
-                end_offset,
-                start_line,
-                start_column,
-                end_line,
-                end_column,
-            },
-            data,
-        )
-    }
-
     /// Add a leaf with a source span and type data, without opening a node.
     #[inline]
     pub fn add_leaf_with_position(
@@ -432,10 +403,18 @@ mod tests {
                 let build = |direct: bool| {
                     let mut builder = ArenaBuilder::<K>::new("éhello".to_owned());
                     let line = u32::from(positioned);
+                    let position = |start_offset, end_offset| NodePosition {
+                        start_offset,
+                        end_offset,
+                        start_line: line,
+                        start_column: line * (start_offset + 1),
+                        end_line: line,
+                        end_column: line * (end_offset + 1),
+                    };
                     builder.open_node(0);
-                    builder.add_leaf_full(1, 0, 2, line, line, line, line * 3, &[]);
+                    builder.add_leaf_with_position(1, position(0, 2), &[]);
                     let parent = if direct {
-                        builder.add_leaf_full(2, 2, 7, line, line * 3, line, line * 8, data)
+                        builder.add_leaf_with_position(2, position(2, 7), data)
                     } else {
                         let id = builder.open_node(2);
                         builder.set_position_current(2, 7, line, line * 3, line, line * 8);
@@ -443,24 +422,12 @@ mod tests {
                         id
                     };
                     if direct {
-                        builder.add_only_child_with_position(
-                            parent,
-                            3,
-                            NodePosition {
-                                start_offset: 3,
-                                end_offset: 6,
-                                start_line: line,
-                                start_column: line * 4,
-                                end_line: line,
-                                end_column: line * 7,
-                            },
-                            &[4],
-                        );
+                        builder.add_only_child_with_position(parent, 3, position(3, 6), &[4]);
                     } else {
-                        builder.add_leaf_full(3, 3, 6, line, line * 4, line, line * 7, &[4]);
+                        builder.add_leaf_with_position(3, position(3, 6), &[4]);
                         builder.close_node();
                     }
-                    builder.add_leaf_full(1, 6, 7, line, line * 7, line, line * 8, &[]);
+                    builder.add_leaf_with_position(1, position(6, 7), &[]);
                     builder.close_node();
                     builder.finish()
                 };
@@ -524,6 +491,14 @@ mod tests {
     #[test]
     fn single_child_construction_preserves_nested_and_reused_arenas() {
         fn check<K: ArenaKind>() {
+            let position = NodePosition {
+                start_offset: 0,
+                end_offset: 7,
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 8,
+            };
             let build = |reuse: Option<Arena<K>>, direct: bool| {
                 let mut builder = match reuse {
                     Some(arena) => ArenaBuilder::from_arena(arena),
@@ -533,7 +508,7 @@ mod tests {
                     builder.open_node(0);
                     for _ in 0..17 {
                         let parent = if direct {
-                            builder.add_leaf_full(2, 0, 7, 1, 1, 1, 8, &[1, 2, 3])
+                            builder.add_leaf_with_position(2, position, &[1, 2, 3])
                         } else {
                             let id = builder.open_node(2);
                             builder.set_position_current(0, 7, 1, 1, 1, 8);
@@ -541,24 +516,12 @@ mod tests {
                             id
                         };
                         if direct {
-                            builder.add_only_child_with_position(
-                                parent,
-                                1,
-                                NodePosition {
-                                    start_offset: 0,
-                                    end_offset: 7,
-                                    start_line: 1,
-                                    start_column: 1,
-                                    end_line: 1,
-                                    end_column: 8,
-                                },
-                                &[4],
-                            );
+                            builder.add_only_child_with_position(parent, 1, position, &[4]);
                         } else {
-                            builder.add_leaf_full(1, 0, 7, 1, 1, 1, 8, &[4]);
+                            builder.add_leaf_with_position(1, position, &[4]);
                             builder.close_node();
                         }
-                        builder.add_leaf_full(1, 0, 7, 1, 1, 1, 8, &[]);
+                        builder.add_leaf_with_position(1, position, &[]);
                     }
                 }
                 for _ in 0..20 {

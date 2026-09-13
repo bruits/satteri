@@ -22,7 +22,7 @@ use std::sync::LazyLock;
 
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
-use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, Mdast, NodePosition, StringRef};
 use satteri_ast::mdast::{MdastNodeType, codec::LinkData};
 
 use crate::puncttable::is_punctuation;
@@ -1701,14 +1701,16 @@ pub(crate) fn emit_text_merging(
         }
     }
     let sr = builder.alloc_string(text_value);
-    builder.add_leaf_full(
+    builder.add_leaf_with_position(
         MdastNodeType::Text as u8,
-        start,
-        end,
-        start_line,
-        start_col,
-        end_line,
-        end_col,
+        NodePosition {
+            start_offset: start,
+            end_offset: end,
+            start_line,
+            start_column: start_col,
+            end_line,
+            end_column: end_col,
+        },
         &sr.as_bytes(),
     );
 }

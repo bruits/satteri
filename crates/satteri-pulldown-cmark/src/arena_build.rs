@@ -1010,14 +1010,16 @@ fn parse_inner(
                         let (sl, sc) = cursor.offset_to_line_col(start);
                         let (el, ec) = cursor.offset_to_line_col(run_end);
                         let sr = StringRef::new(start, run_end - start);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::Text as u8,
-                            start,
-                            run_end,
-                            sl,
-                            sc,
-                            el,
-                            ec,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: run_end,
+                                start_line: sl,
+                                start_column: sc,
+                                end_line: el,
+                                end_column: ec,
+                            },
                             &sr.as_bytes(),
                         );
                     }
@@ -1032,6 +1034,15 @@ fn parse_inner(
                     } else {
                         cursor.offset_to_line_col(end)
                     };
+
+                let position = NodePosition {
+                    start_offset: start,
+                    end_offset: end,
+                    start_line,
+                    start_column: start_col,
+                    end_line,
+                    end_column: end_col,
+                };
 
                 // Map ItemBody to arena node.
                 match item.body {
@@ -1304,14 +1315,7 @@ fn parse_inner(
                         };
                         let link = builder.add_leaf_with_position(
                             MdastNodeType::Link as u8,
-                            NodePosition {
-                                start_offset: start,
-                                end_offset: end,
-                                start_line,
-                                start_column: start_col,
-                                end_line,
-                                end_column: end_col,
-                            },
+                            position,
                             &LinkData { url, title }.to_bytes(),
                         );
                         let sr = StringRef::new(label_start, label_end - label_start);
@@ -1726,14 +1730,14 @@ fn parse_inner(
                             } else {
                                 start_line
                             };
-                            builder.add_leaf_full(
+                            builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
-                                pos_start,
-                                end,
-                                pos_start_line,
-                                pos_start_col,
-                                end_line,
-                                end_col,
+                                NodePosition {
+                                    start_offset: pos_start,
+                                    start_line: pos_start_line,
+                                    start_column: pos_start_col,
+                                    ..position
+                                },
                                 &sr.as_bytes(),
                             );
                         }
@@ -1742,14 +1746,9 @@ fn parse_inner(
                     ItemBody::Code(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::InlineCode as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1784,14 +1783,9 @@ fn parse_inner(
                     }
                     ItemBody::Html => {
                         let sr = StringRef::new(start, end - start);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::Html as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1802,14 +1796,9 @@ fn parse_inner(
                             Some(normalized) => builder.alloc_string(&normalized),
                             None => StringRef::new(start, end - start),
                         };
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::Html as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1817,14 +1806,9 @@ fn parse_inner(
                     ItemBody::OwnedInlineHtml(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::Html as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1875,30 +1859,16 @@ fn parse_inner(
                         };
                         if !merged {
                             let sr = builder.alloc_string(break_text);
-                            builder.add_leaf_full(
+                            builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
-                                start,
-                                end,
-                                start_line,
-                                start_col,
-                                end_line,
-                                end_col,
+                                position,
                                 &sr.as_bytes(),
                             );
                         }
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::HardBreak(_) => {
-                        builder.add_leaf_full(
-                            MdastNodeType::Break as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                            &[],
-                        );
+                        builder.add_leaf_with_position(MdastNodeType::Break as u8, position, &[]);
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::Rule => {
@@ -1910,14 +1880,14 @@ fn parse_inner(
                             rule_end -= 1;
                         }
                         let (rule_end_line, rule_end_col) = cursor.offset_to_line_col(rule_end);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::ThematicBreak as u8,
-                            start,
-                            rule_end,
-                            start_line,
-                            start_col,
-                            rule_end_line,
-                            rule_end_col,
+                            NodePosition {
+                                end_offset: rule_end,
+                                end_line: rule_end_line,
+                                end_column: rule_end_col,
+                                ..position
+                            },
                             &[],
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1960,14 +1930,9 @@ fn parse_inner(
                             _pad: [0; 3],
                         }
                         .to_bytes();
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::FootnoteReference as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &data,
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1980,14 +1945,9 @@ fn parse_inner(
                         } else {
                             MdastNodeType::InlineMath
                         };
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             node_type as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &MathData {
                                 meta: StringRef::empty(),
                                 value: sr,
@@ -2000,14 +1960,9 @@ fn parse_inner(
                     ItemBody::MdxFlowExpression(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::MdxFlowExpression as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -2016,14 +1971,9 @@ fn parse_inner(
                     ItemBody::MdxTextExpression(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::MdxTextExpression as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -2032,14 +1982,9 @@ fn parse_inner(
                     ItemBody::MdxEsm(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::MdxjsEsm as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -2088,14 +2033,9 @@ fn parse_inner(
                         };
                         if !merged {
                             let sr = StringRef::new(start, end - start);
-                            builder.add_leaf_full(
+                            builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
-                                start,
-                                end,
-                                start_line,
-                                start_col,
-                                end_line,
-                                end_col,
+                                position,
                                 &sr.as_bytes(),
                             );
                         }
@@ -2366,14 +2306,16 @@ fn emit_pending_refdef(
         label: label_ref,
     }
     .to_bytes();
-    builder.add_leaf_full(
+    builder.add_leaf_with_position(
         MdastNodeType::Definition as u8,
-        start,
-        end,
-        sl,
-        sc,
-        el,
-        ec,
+        NodePosition {
+            start_offset: start,
+            end_offset: end,
+            start_line: sl,
+            start_column: sc,
+            end_line: el,
+            end_column: ec,
+        },
         &data,
     );
 }
