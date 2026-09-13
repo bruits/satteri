@@ -116,6 +116,31 @@ fn parse_deferred_autolinks(bencher: divan::Bencher) {
     bencher.bench(|| satteri_pulldown_cmark::parse(divan::black_box(source.as_str()), opts));
 }
 
+/// Repeated emails expose quadratic paragraph-prefix scanning, including across lines.
+#[divan::bench(args = [160, 10240], consts = [false, true])]
+fn parse_repeated_emails<const MULTILINE: bool>(bencher: divan::Bencher, count: usize) {
+    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    let email = if MULTILINE {
+        "someone+tag@example.com\n"
+    } else {
+        "someone+tag@example.com "
+    };
+    let source = email.repeat(count);
+    bencher.bench(|| {
+        satteri_pulldown_cmark::parse_no_positions(divan::black_box(source.as_str()), opts)
+    });
+}
+
+/// Deferred candidates sharing one URL must not repeatedly scan its remaining suffix.
+#[divan::bench(args = [160, 10240])]
+fn parse_overlapping_protocols(bencher: divan::Bencher, count: usize) {
+    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    let source = format!("[a] {}", "http://x.y/".repeat(count));
+    bencher.bench(|| {
+        satteri_pulldown_cmark::parse_no_positions(divan::black_box(source.as_str()), opts)
+    });
+}
+
 /// Full pipeline: Markdown source → Arena → HTML string.
 #[divan::bench]
 fn full_pipeline_to_html(bencher: divan::Bencher) {

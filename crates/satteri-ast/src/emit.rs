@@ -156,6 +156,19 @@ pub(crate) trait ConvertSink {
     fn finish_source_void(&mut self);
     fn close_element(&mut self, tag: &'static str);
 
+    fn open_link(&mut self, src_id: u32, url: &str, title: StringRef) -> Children {
+        self.open_source_element("a", src_id);
+        self.attr(HREF, AttrValue::text(url));
+        if title.len > 0 {
+            self.attr(TITLE, AttrValue::pooled(title));
+        }
+        self.finish_source_attrs()
+    }
+
+    fn close_link(&mut self) {
+        self.close_element("a");
+    }
+
     fn text(&mut self, value: &str, pos: Pos);
     fn text_pooled(&mut self, value: StringRef, pos: Pos);
     fn text_trimmed(&mut self, value: StringRef, pos: Pos);
@@ -226,15 +239,52 @@ fn enclosing_list_is_loose(node_id: u32, view: &Arena<Mdast>) -> bool {
     list_is_loose(parent_id, view)
 }
 
+#[inline]
 pub(crate) fn emit_node<S: ConvertSink>(
     node_id: u32,
     ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
-    crate::stack::with_headroom(depth, || emit_node_at(node_id, ctx, sink, depth));
+    // Text is a leaf: avoid the large recursive dispatch frame (and its stack
+    // probe) for the most frequent node in both conversion sinks.
+    if ctx.view.get_node(node_id).node_type == MdastNodeType::Text as u8 {
+        emit_text(node_id, ctx.view, sink);
+    } else {
+        crate::stack::with_headroom(depth, || {
+            if ctx.view.get_node(node_id).node_type == MdastNodeType::Link as u8 {
+                emit_link(node_id, ctx, sink, depth);
+            } else {
+                emit_node_at(node_id, ctx, sink, depth);
+            }
+        });
+    }
 }
 
+#[inline]
+fn emit_text<S: ConvertSink>(node_id: u32, view: &Arena<Mdast>, sink: &mut S) {
+    let value = decode_string_ref_data(view.get_type_data(node_id));
+    sink.text_trimmed(value, Pos::Node(node_id));
+}
+
+#[inline]
+fn emit_link<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
+    let link_data = decode_link_data(ctx.view.get_type_data(node_id));
+    let url = normalize_url(ctx.view.get_str(link_data.url));
+    if sink.open_link(node_id, &url, link_data.title) == Children::Recurse {
+        if let &[child] = ctx.view.get_children(node_id)
+            && ctx.view.get_node(child).node_type == MdastNodeType::Text as u8
+        {
+            emit_text(child, ctx.view, sink);
+        } else {
+            emit_children(node_id, ctx, sink, depth);
+        }
+    }
+    sink.close_link();
+}
+
+// Keep the large, uncommon dispatch frame out of the text/link hot paths.
+#[inline(never)]
 fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
     let view = ctx.view;
     match MdastNodeType::from_u8(view.get_node(node_id).node_type) {
@@ -339,10 +389,7 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
             sink.close_element("pre");
         }
 
-        Some(MdastNodeType::Text) => {
-            let value = decode_string_ref_data(view.get_type_data(node_id));
-            sink.text_trimmed(value, Pos::Node(node_id));
-        }
+        Some(MdastNodeType::Text) => emit_text(node_id, view, sink),
 
         Some(MdastNodeType::Emphasis) => emit_inline_wrapper(node_id, "em", ctx, sink, depth),
         Some(MdastNodeType::Strong) => emit_inline_wrapper(node_id, "strong", ctx, sink, depth),
@@ -374,19 +421,7 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
             sink.newline();
         }
 
-        Some(MdastNodeType::Link) => {
-            let link_data = decode_link_data(view.get_type_data(node_id));
-            let url = normalize_url(view.get_str(link_data.url));
-            sink.open_source_element("a", node_id);
-            sink.attr(HREF, AttrValue::text(&url));
-            if link_data.title.len > 0 {
-                sink.attr(TITLE, AttrValue::pooled(link_data.title));
-            }
-            if sink.finish_source_attrs() == Children::Recurse {
-                emit_children(node_id, ctx, sink, depth);
-            }
-            sink.close_element("a");
-        }
+        Some(MdastNodeType::Link) => emit_link(node_id, ctx, sink, depth),
 
         Some(MdastNodeType::Image) => {
             let img_data = decode_image_data(view.get_type_data(node_id));

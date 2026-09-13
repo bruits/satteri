@@ -230,11 +230,20 @@ pub(crate) fn footnote_fragment_id(identifier: &str) -> String {
 #[inline]
 pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
     let bytes = url.as_bytes();
-    if next_unsafe(bytes, 0).is_none() {
+    let Some(first_unsafe) = next_unsafe(bytes, 0) else {
         return std::borrow::Cow::Borrowed(url);
-    }
+    };
+    std::borrow::Cow::Owned(encode_url(url, first_unsafe))
+}
+
+#[inline(never)]
+fn encode_url(url: &str, first_unsafe: usize) -> String {
+    let bytes = url.as_bytes();
     let mut encoded = String::with_capacity(url.len() * 2);
-    for (i, &byte) in bytes.iter().enumerate() {
+    // The checked prefix is ASCII and already normalized; copy it in bulk.
+    encoded.push_str(&url[..first_unsafe]);
+    for (offset, &byte) in bytes[first_unsafe..].iter().enumerate() {
+        let i = first_unsafe + offset;
         let safe = is_url_safe(byte) || (byte == b'%' && pct_safe(bytes, i));
         if safe {
             encoded.push(byte as char);
@@ -244,7 +253,7 @@ pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
             encoded.push(hex_digit(byte & 0xf));
         }
     }
-    std::borrow::Cow::Owned(encoded)
+    encoded
 }
 
 /// micromark's `normalizeUri` keeps a `%` as-is when it is followed by two
@@ -260,7 +269,7 @@ fn pct_safe(bytes: &[u8], i: usize) -> bool {
 /// Offset of the first byte at or after `from` that `normalizeUri` encodes.
 fn next_unsafe(bytes: &[u8], from: usize) -> Option<usize> {
     let mut i = from;
-    while let Some(offset) = bytes[i..].iter().position(|&b| !is_url_safe(b)) {
+    while let Some(offset) = first_non_url_safe(&bytes[i..]) {
         let at = i + offset;
         if bytes[at] != b'%' || !pct_safe(bytes, at) {
             return Some(at);
@@ -270,25 +279,85 @@ fn next_unsafe(bytes: &[u8], from: usize) -> Option<usize> {
     None
 }
 
+#[cfg(target_arch = "x86_64")]
+const URL_SCAN_VECTOR_BYTES: usize = 16; // One SSSE3 vector.
+
+#[inline]
+fn first_non_url_safe(bytes: &[u8]) -> Option<usize> {
+    #[cfg(target_arch = "x86_64")]
+    if bytes.len() >= URL_SCAN_VECTOR_BYTES && std::is_x86_feature_detected!("ssse3") {
+        // SAFETY: SSSE3 is available and at least one full vector is readable.
+        return unsafe { first_non_url_safe_ssse3(bytes) };
+    }
+    bytes.iter().position(|&b| !is_url_safe(b))
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+unsafe fn first_non_url_safe_ssse3(bytes: &[u8]) -> Option<usize> {
+    use std::arch::x86_64::{
+        _mm_and_si128, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
+        _mm_setzero_si128, _mm_shuffle_epi8, _mm_srli_epi16,
+    };
+    // Each low-nibble entry records which ASCII high nibbles are URL-safe.
+    const LOW: [u8; 16] = {
+        let safe = url_safe_table();
+        let mut table = [0; 16];
+        let mut byte = 0;
+        while byte < 128 {
+            if safe[byte] {
+                table[byte & 0x0f] |= 1 << (byte >> 4);
+            }
+            byte += 1;
+        }
+        table
+    };
+    // High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
+    const HIGH_NIBBLE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
+    // SAFETY: Both tables contain exactly sixteen readable bytes.
+    let low_table = unsafe { _mm_loadu_si128(LOW.as_ptr().cast()) };
+    let high_table = unsafe { _mm_loadu_si128(HIGH_NIBBLE_BITS.as_ptr().cast()) };
+    let nibble = _mm_set1_epi8(0x0f);
+    let mut at = 0;
+    loop {
+        // SAFETY: The caller guarantees a full vector; advancing `at` below preserves this.
+        let chunk = unsafe { _mm_loadu_si128(bytes.as_ptr().add(at).cast()) };
+        let low = _mm_shuffle_epi8(low_table, _mm_and_si128(chunk, nibble));
+        let high = _mm_shuffle_epi8(high_table, _mm_and_si128(_mm_srli_epi16(chunk, 4), nibble));
+        let bad = _mm_movemask_epi8(_mm_cmpeq_epi8(
+            _mm_and_si128(low, high),
+            _mm_setzero_si128(),
+        )) as u32;
+        if bad != 0 {
+            return Some(at + bad.trailing_zeros() as usize);
+        }
+        if at + URL_SCAN_VECTOR_BYTES == bytes.len() {
+            return None;
+        }
+        // An overlapping final vector contains only already-checked prefix bytes.
+        at = (at + URL_SCAN_VECTOR_BYTES).min(bytes.len() - URL_SCAN_VECTOR_BYTES);
+    }
+}
+
 const URL_SAFE_BYTES: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\
 0123456789-._~:/?#@!$&'()*+,;=";
 
-const fn url_safe_table() -> [u64; 4] {
-    let mut table = [0u64; 4];
+const fn url_safe_table() -> [bool; 256] {
+    let mut table = [false; 256];
     let mut i = 0;
     while i < URL_SAFE_BYTES.len() {
         let b = URL_SAFE_BYTES[i] as usize;
-        table[b >> 6] |= 1 << (b & 63);
+        table[b] = true;
         i += 1;
     }
     table
 }
 
-static URL_SAFE: [u64; 4] = url_safe_table();
+static URL_SAFE: [bool; 256] = url_safe_table();
 
 #[inline]
 fn is_url_safe(b: u8) -> bool {
-    URL_SAFE[(b >> 6) as usize] & (1 << (b & 63)) != 0
+    URL_SAFE[b as usize]
 }
 
 fn hex_digit(n: u8) -> char {
@@ -756,11 +825,19 @@ fn line_break_touches_space_or_tab(bytes: &[u8], at: usize) -> bool {
         || bytes.get(at + 1).is_some_and(|&next| is_space_or_tab(next))
 }
 
+// Short text uses SWAR; bulk text amortizes memchr dispatch. Renderers share
+// this cutoff to select separate trimming rather than their combined short-text scan.
+pub(crate) const BULK_LINE_TRIM_MIN_LEN: usize = 32;
+
 /// Every text node pays this scan, so it stays separate from the rewrite it guards.
 /// A trimmed space or tab always sits beside a line break, so an adjacent pair
 /// is the whole condition and `\r\n` needs no case of its own.
 #[inline]
 fn needs_line_trim(bytes: &[u8]) -> bool {
+    if bytes.len() >= BULK_LINE_TRIM_MIN_LEN {
+        return memchr::memchr2_iter(b'\n', b'\r', bytes)
+            .any(|at| line_break_touches_space_or_tab(bytes, at));
+    }
     let mut i = 0;
     while let Some(chunk) = bytes[i..].first_chunk::<8>() {
         let mut mask = line_break_mask(u64::from_le_bytes(*chunk));
@@ -1879,18 +1956,65 @@ mod hast_convert_tests {
             if b == b'%' {
                 !pct_safe
             } else {
-                !is_url_safe(b)
+                !URL_SAFE_BYTES.contains(&b)
             }
         })
     }
 
     fn check_normalize_url(url: &str) {
-        let borrowed = matches!(normalize_url(url), std::borrow::Cow::Borrowed(_));
+        let normalized = normalize_url(url);
+        let borrowed = matches!(normalized, std::borrow::Cow::Borrowed(_));
+        let mut expected = String::new();
+        for (i, &byte) in url.as_bytes().iter().enumerate() {
+            let valid_percent = byte == b'%'
+                && url
+                    .as_bytes()
+                    .get(i + 1)
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && url
+                    .as_bytes()
+                    .get(i + 2)
+                    .is_some_and(u8::is_ascii_alphanumeric);
+            if URL_SAFE_BYTES.contains(&byte) || valid_percent {
+                expected.push(byte as char);
+            } else {
+                expected.push_str(&format!("%{byte:02X}"));
+            }
+        }
+        assert_eq!(normalized, expected, "normalized URL differs on {url:?}");
         assert_eq!(
             !borrowed,
             url_needs_encode_scalar(url),
             "normalize_url borrow decision disagrees on {url:?}"
         );
+    }
+
+    #[test]
+    fn url_byte_scan_matches_scalar_at_every_short_offset() {
+        for len in 1..80 {
+            let mut bytes = vec![b'a'; len];
+            for at in 0..len {
+                for byte in 0..=255u8 {
+                    bytes[at] = byte;
+                    let expected = (!is_url_safe(byte)).then_some(at);
+                    assert_eq!(
+                        first_non_url_safe(&bytes),
+                        expected,
+                        "len={len} at={at} byte={byte}"
+                    );
+                }
+                bytes[at] = b'a';
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_url_preserves_safe_prefixes_before_unicode_and_controls() {
+        for prefix in ["", "https://example.com/a%2g?q=1&b=2#", "mailto:a@b.com"] {
+            for byte in 0..=127u8 {
+                check_normalize_url(&format!("{prefix}{}é😀%zz%2g%", byte as char));
+            }
+        }
     }
 
     #[test]

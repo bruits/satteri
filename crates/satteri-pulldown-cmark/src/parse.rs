@@ -57,6 +57,23 @@ pub(crate) struct Item {
     pub body: ItemBody,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum AutolinkKind {
+    Url,
+    Www,
+    Email,
+}
+
+impl AutolinkKind {
+    pub(crate) fn prefix(self) -> &'static str {
+        match self {
+            Self::Url => "",
+            Self::Www => "http://",
+            Self::Email => "mailto:",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub(crate) enum ItemBody {
     // These are possible inline items, need to be resolved in second pass.
@@ -82,6 +99,12 @@ pub(crate) enum ItemBody {
     /// decided in `handle_inline_pass1`, where bracket-resolution state is
     /// known; it never survives into `arena_build`.
     MaybeAutolink(AutolinkCandidateIndex),
+    /// A guaranteed protocol candidate whose extent is scanned only if it fires.
+    /// Keep its scan boundary in the item rather than a separate allocation.
+    MaybeProtocolAutolink {
+        limit: u32,
+        content_start: bool,
+    },
 
     // These are inline items after resolution.
     Emphasis,
@@ -92,6 +115,18 @@ pub(crate) enum ItemBody {
     Math(CowIndex, bool), // true for display math
     Code(CowIndex),
     Link(LinkIndex),
+    // An irrevocably committed autolink with a verbatim source-text label.
+    // Only the arena consumer requests this representation.
+    LiteralAutolink(AutolinkKind),
+    // A committed inline link with a plain ASCII label and optional plain title.
+    // Source lengths avoid allocating a separate record; destinations are
+    // decoded only when the arena consumer needs them.
+    LiteralLink {
+        label_len: u16,
+        dest_len: u16,
+        title_len: u16,
+        angle: bool,
+    },
     Image(LinkIndex),
     FootnoteReference(CowIndex),
     TaskListMarker(bool), // true for checked
@@ -167,6 +202,9 @@ pub(crate) enum ItemBody {
     MdxEsm(CowIndex),
 }
 
+// Inline marker payloads must not enlarge every intermediate tree node.
+const _: () = assert!(size_of::<ItemBody>() == 8);
+
 impl ItemBody {
     pub(crate) fn is_maybe_inline(&self) -> bool {
         use ItemBody::*;
@@ -182,6 +220,7 @@ impl ItemBody {
                 | MaybeLinkClose(..)
                 | MaybeImage
                 | MaybeAutolink(..)
+                | MaybeProtocolAutolink { .. }
         )
     }
     pub(crate) fn is_block_level(&self) -> bool {
@@ -201,12 +240,15 @@ impl ItemBody {
                 | MaybeLinkClose(..)
                 | MaybeImage
                 | MaybeAutolink(..)
+                | MaybeProtocolAutolink { .. }
                 | Emphasis
                 | Strong
                 | Strikethrough
                 | Math(..)
                 | Code(..)
                 | Link(..)
+                | LiteralAutolink(..)
+                | LiteralLink { .. }
                 | Image(..)
                 | FootnoteReference(..)
                 | TaskListMarker(..)
@@ -409,8 +451,13 @@ impl<'input, F> Parser<'input, BrokenLinkCallback<F>> {
 }
 
 impl<'input> ParserInner<'input> {
-    pub(crate) fn new(text: &'input str, options: Options) -> Self {
-        let (mut tree, allocs, firstpass_mdx_errors) = run_first_pass(text, options);
+    /// Unlike the event iterator, the arena consumer can expand committed
+    /// autolinks directly into their final link and text nodes. Keep MDX on
+    /// the ordinary representation used by its inline rewriting paths.
+    pub(crate) fn new_for_arena(text: &'input str, options: Options) -> Self {
+        let compact_links = !options.contains(Options::ENABLE_MDX);
+        let (mut tree, allocs, firstpass_mdx_errors) =
+            crate::firstpass::run_first_pass_mode(text, options, compact_links);
         tree.reset();
         ParserInner {
             text,
@@ -1184,7 +1231,7 @@ impl<'input> ParserInner<'input> {
                         }
                     }
                 }
-                ItemBody::MaybeAutolink(cand_ix) => {
+                body @ (ItemBody::MaybeAutolink(..) | ItemBody::MaybeProtocolAutolink { .. }) => {
                     // An unresolved bracket opener blocks the construct, and
                     // the stack holds exactly those.
                     let next = self.tree[cur_ix].next;
@@ -1201,7 +1248,35 @@ impl<'input> ParserInner<'input> {
                     }
                     // Reusing the marker node as the `Link` keeps the preceding
                     // sibling's `next` pointer valid.
-                    let cand = self.allocs[cand_ix];
+                    let cand = match body {
+                        ItemBody::MaybeAutolink(cand_ix) => self.allocs[cand_ix],
+                        ItemBody::MaybeProtocolAutolink {
+                            limit,
+                            content_start,
+                        } => {
+                            let start = self.tree[cur_ix].item.start;
+                            match crate::post_passes::scan_autolink_literal(
+                                &self.text.as_bytes()[..limit as usize],
+                                start,
+                                content_start,
+                            ) {
+                                Some((_, _, end, false, false)) => AutolinkCandidate {
+                                    start,
+                                    end,
+                                    kind: AutolinkKind::Url,
+                                },
+                                _ => {
+                                    self.tree[cur_ix].item.body = ItemBody::Text {
+                                        backslash_escaped: false,
+                                    };
+                                    prev = cur;
+                                    cur = next;
+                                    continue;
+                                }
+                            }
+                        }
+                        _ => unreachable!(),
+                    };
                     let node_after = scan_nodes_to_ix(&self.tree, next, cand.end);
                     let text_child = self.tree.create_node(Item {
                         start: cand.start,
@@ -1210,10 +1285,11 @@ impl<'input> ParserInner<'input> {
                             backslash_escaped: false,
                         },
                     });
+                    let link = self.allocs.allocate_autolink(cand, self.text);
                     self.tree[cur_ix].item = Item {
                         start: cand.start,
                         end: cand.end,
-                        body: ItemBody::Link(cand.link),
+                        body: ItemBody::Link(link),
                     };
                     self.tree[cur_ix].child = Some(text_child);
                     self.tree[cur_ix].next = node_after;
@@ -2247,6 +2323,9 @@ impl<'input> ParserInner<'input> {
         start_ix: usize,
         node: Option<TreeIndex>,
     ) -> Option<(usize, CowStr<'input>)> {
+        if let Some((len, title)) = scan_plain_link_title(text, start_ix) {
+            return Some((len, title.into()));
+        }
         let bytes = text.as_bytes();
         let open = match bytes.get(start_ix) {
             Some(b @ b'\'') | Some(b @ b'\"') | Some(b @ b'(') => *b,
@@ -3191,15 +3270,15 @@ pub(crate) struct AutolinkCandidateIndex(u32);
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) struct FencedInfoIndex(u32);
 
-/// A GFM autolink literal the first pass found but did not commit to. The
-/// `Link` is allocated up front so firing is only a body swap.
+/// A detected GFM autolink, whether committed immediately or deferred.
+/// Retain only source coordinates and kind; allocate a link only when committed.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct AutolinkCandidate {
     /// Precedes the trigger byte when the email scan walks back over the local
     /// part.
     pub start: usize,
     pub end: usize,
-    pub link: LinkIndex,
+    pub kind: AutolinkKind,
 }
 
 /// A parsed JSX attribute.
@@ -3278,7 +3357,11 @@ pub(crate) struct Allocations<'a> {
     /// definition as its own mdast `definition` node.
     pub refdefs_all: Vec<(LinkLabel<'a>, LinkDef<'a>)>,
     pub footdefs: FootnoteDefs<'a>,
-    links: Vec<(LinkType, CowStr<'a>, CowStr<'a>, CowStr<'a>)>,
+    /// Source-wide preflight shared by tokenization and the arena fallback.
+    pub(crate) raw_autolink_trigger: bool,
+    /// Sorted source spans already proven free of literal autolink triggers.
+    pub(crate) autolink_free_ranges: Vec<Range<usize>>,
+    links: Vec<Option<LinkAllocation<'a>>>,
     cows: Vec<CowStr<'a>>,
     alignments: Vec<Vec<Alignment>>,
     headings: Vec<HeadingAttributes<'a>>,
@@ -3339,12 +3422,32 @@ where
     }
 }
 
+// Keep the uncommon allocation out of the inline resolver's hot frame.
+#[inline(never)]
+fn www_url<'a>(span: &str) -> CowStr<'a> {
+    let mut url = String::with_capacity("http://".len() + span.len());
+    url.push_str("http://");
+    url.push_str(span);
+    url.into()
+}
+
+type LinkAllocation<'a> = (LinkType, CowStr<'a>, CowStr<'a>, CowStr<'a>);
+
+static EMPTY_LINK: LinkAllocation<'static> = (
+    LinkType::ShortcutUnknown,
+    CowStr::Borrowed(""),
+    CowStr::Borrowed(""),
+    CowStr::Borrowed(""),
+);
+
 impl<'a> Allocations<'a> {
     pub fn new() -> Self {
         Self {
             refdefs: RefDefs::default(),
             refdefs_all: Vec::new(),
             footdefs: FootnoteDefs::default(),
+            raw_autolink_trigger: false,
+            autolink_free_ranges: Vec::new(),
             links: Vec::with_capacity(128),
             cows: Vec::new(),
             alignments: Vec::new(),
@@ -3382,6 +3485,7 @@ impl<'a> Allocations<'a> {
         CowIndex(ix)
     }
 
+    #[inline]
     pub fn allocate_link(
         &mut self,
         ty: LinkType,
@@ -3390,8 +3494,35 @@ impl<'a> Allocations<'a> {
         id: CowStr<'a>,
     ) -> LinkIndex {
         let ix = self.links.len() as u32;
-        self.links.push((ty, url, title, id));
+        self.links.push(Some((ty, url, title, id)));
         LinkIndex(ix)
+    }
+
+    #[inline]
+    pub(crate) fn allocate_autolink(
+        &mut self,
+        candidate: AutolinkCandidate,
+        text: &'a str,
+    ) -> LinkIndex {
+        let raw = &text[candidate.start..candidate.end];
+        let url = if candidate.kind == AutolinkKind::Www {
+            www_url(raw)
+        } else {
+            CowStr::Borrowed(raw)
+        };
+        // Email events carry the address alone; the arena consumer adds mailto:.
+        let link_type = if candidate.kind == AutolinkKind::Email {
+            LinkType::Email
+        } else {
+            LinkType::Autolink
+        };
+        self.allocate_link(link_type, url, "".into(), "".into())
+    }
+
+    // A rare long plain line must not put Vec growth temporaries in parse_line's frame.
+    #[inline(never)]
+    pub(crate) fn record_autolink_free_range(&mut self, range: Range<usize>) {
+        self.autolink_free_ranges.push(range);
     }
 
     pub fn allocate_alignment(&mut self, alignment: Vec<Alignment>) -> AlignmentIndex {
@@ -3413,9 +3544,12 @@ impl<'a> Allocations<'a> {
         core::mem::replace(&mut self.cows[ix.0 as usize], "".into())
     }
 
-    pub fn take_link(&mut self, ix: LinkIndex) -> (LinkType, CowStr<'a>, CowStr<'a>, CowStr<'a>) {
-        let default_link = (LinkType::ShortcutUnknown, "".into(), "".into(), "".into());
-        core::mem::replace(&mut self.links[ix.0 as usize], default_link)
+    pub fn take_link(&mut self, ix: LinkIndex) -> LinkAllocation<'a> {
+        // A consumed slot needs only a discriminant, not three replacement
+        // strings. Keep the historical empty value for subsequent reads/takes.
+        self.links[ix.0 as usize]
+            .take()
+            .unwrap_or_else(|| EMPTY_LINK.clone())
     }
 
     pub fn take_alignment(&mut self, ix: AlignmentIndex) -> Vec<Alignment> {
@@ -3476,10 +3610,13 @@ impl<'a> Index<CowIndex> for Allocations<'a> {
 }
 
 impl<'a> Index<LinkIndex> for Allocations<'a> {
-    type Output = (LinkType, CowStr<'a>, CowStr<'a>, CowStr<'a>);
+    type Output = LinkAllocation<'a>;
 
     fn index(&self, ix: LinkIndex) -> &Self::Output {
-        self.links.index(ix.0 as usize)
+        self.links
+            .index(ix.0 as usize)
+            .as_ref()
+            .unwrap_or(&EMPTY_LINK)
     }
 }
 
@@ -3723,6 +3860,9 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::HardBreak(_) => return Event::HardBreak,
         ItemBody::FootnoteReference(cow_ix) => {
             return Event::FootnoteReference(allocs.take_cow(cow_ix));
+        }
+        ItemBody::LiteralAutolink(_) | ItemBody::LiteralLink { .. } => {
+            unreachable!("compact links are only produced for the arena consumer")
         }
         ItemBody::TaskListMarker(checked) => return Event::TaskListMarker(checked),
         ItemBody::Rule => return Event::Rule,

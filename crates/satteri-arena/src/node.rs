@@ -39,6 +39,31 @@ impl StringRef {
     }
 }
 
+/// Source span shared by arena construction and typed node views.
+/// Offsets are bytes; line and column numbers are 1-based, or zero when untracked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NodePosition {
+    pub start_offset: u32,
+    pub end_offset: u32,
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+}
+
+impl NodePosition {
+    pub fn from_node(node: &ArenaNode) -> Self {
+        Self {
+            start_offset: node.start_offset,
+            end_offset: node.end_offset,
+            start_line: node.start_line,
+            start_column: node.start_column,
+            end_line: node.end_line,
+            end_column: node.end_column,
+        }
+    }
+}
+
 /// All positions use byte offsets and 1-based line/column numbers from the
 /// source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

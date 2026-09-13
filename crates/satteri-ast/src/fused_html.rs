@@ -4,9 +4,13 @@
 
 use satteri_arena::{Arena, Mdast, StringRef};
 
-use crate::convert::{ConvertOptions, collect_refs, contains_h_key, trim_lines_for_hast};
+use crate::convert::{
+    BULK_LINE_TRIM_MIN_LEN, ConvertOptions, collect_refs, contains_h_key, trim_lines_for_hast,
+};
 use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
-use crate::hast::escape::{escape_html_attr_value, escape_html_body_text};
+use crate::hast::escape::{
+    escape_html_attr_value, escape_html_body_text, escape_trimmed_body_text,
+};
 use crate::mdast::MdastNodeType;
 
 /// Render `view` to HTML, or `None` when the document or options need the two-stage pipeline.
@@ -74,6 +78,22 @@ impl HtmlSink<'_> {
     }
 
     #[inline]
+    fn enter_element(&mut self) {
+        self.trim = if self.trim == Trim::Node {
+            Trim::FirstChild
+        } else {
+            Trim::None
+        };
+    }
+
+    #[inline]
+    fn leave_element(&mut self) {
+        if self.trim == Trim::FirstChild {
+            self.trim = Trim::None;
+        }
+    }
+
+    #[inline]
     fn open_tag(&mut self, tag: &'static str) {
         self.out.push('<');
         self.out.push_str(tag);
@@ -100,11 +120,7 @@ impl ConvertSink for HtmlSink<'_> {
 
     #[inline]
     fn open_element(&mut self, tag: &'static str, _pos: Pos) {
-        self.trim = if self.trim == Trim::Node {
-            Trim::FirstChild
-        } else {
-            Trim::None
-        };
+        self.enter_element();
         self.open_tag(tag);
     }
 
@@ -164,12 +180,29 @@ impl ConvertSink for HtmlSink<'_> {
 
     #[inline]
     fn close_element(&mut self, tag: &'static str) {
-        if self.trim == Trim::FirstChild {
-            self.trim = Trim::None;
-        }
+        self.leave_element();
         self.out.push_str("</");
         self.out.push_str(tag);
         self.out.push('>');
+    }
+
+    #[inline]
+    fn open_link(&mut self, _src_id: u32, url: &str, title: StringRef) -> Children {
+        self.enter_element();
+        self.out.push_str("<a href=\"");
+        escape_html_attr_value(&mut self.out, url);
+        self.out.push('"');
+        if title.len > 0 {
+            self.write_attr("title", "", self.view.get_str(title));
+        }
+        self.out.push('>');
+        Children::Recurse
+    }
+
+    #[inline]
+    fn close_link(&mut self) {
+        self.leave_element();
+        self.out.push_str("</a>");
     }
 
     fn text(&mut self, value: &str, _pos: Pos) {
@@ -182,8 +215,17 @@ impl ConvertSink for HtmlSink<'_> {
     }
 
     fn text_trimmed(&mut self, value: StringRef, _pos: Pos) {
-        let view = self.view;
-        self.push_text(&trim_lines_for_hast(view.get_str(value)));
+        let text = self.view.get_str(value);
+        if text.len() >= BULK_LINE_TRIM_MIN_LEN {
+            self.push_text(&trim_lines_for_hast(text));
+            return;
+        }
+        let text = if self.take_trim() {
+            text.trim_start_matches([' ', '\t'])
+        } else {
+            text
+        };
+        escape_trimmed_body_text(&mut self.out, text);
     }
 
     fn text_with_trailing_space(&mut self, value: StringRef, _pos: Pos) {
