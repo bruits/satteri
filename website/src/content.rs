@@ -1,11 +1,12 @@
 use maud::{PreEscaped, Render};
 use maudit::content::{
-    ContentSources, MarkdownOptions, glob_markdown_with_options, markdown_entry,
+    ContentSources, MarkdownComponents, MarkdownOptions, glob_markdown_with_options, markdown_entry,
     shortcodes::MarkdownShortcodes,
 };
 use maudit::content_sources;
 use serde::Deserialize;
 
+use crate::heading::DocsHeading;
 use crate::shortcodes;
 
 #[derive(Deserialize, Eq, PartialEq, PartialOrd, Hash, Clone)]
@@ -69,6 +70,7 @@ fn docs_markdown_options() -> MarkdownOptions {
     shortcodes::register(&mut docs_shortcodes);
 
     MarkdownOptions {
+        components: MarkdownComponents::new().heading(DocsHeading),
         highlight_theme: "base16-eighties.dark".into(),
         shortcodes: docs_shortcodes,
         ..Default::default()

@@ -5,6 +5,7 @@ use pagefind::api::PagefindIndex;
 
 mod content;
 mod docs_layout;
+mod heading;
 mod layout;
 mod routes;
 mod shortcodes;
