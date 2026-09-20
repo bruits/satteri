@@ -1,5 +1,4 @@
 use satteri_ast::mdast_to_html;
-use satteri_pulldown_cmark::document::parse_reusing;
 use satteri_pulldown_cmark::{DEFAULT_OPTIONS, parse, parse_no_positions as parse_unpositioned};
 
 /// End-to-end Rust pipeline benchmarks using divan.
@@ -82,32 +81,6 @@ fn parse_markdown(bencher: divan::Bencher) {
     bencher.bench(|| parse(MARKDOWN, opts));
 }
 
-/// Source-backed rendering, including parsing and optional buffer recycling.
-/// Unlike the NAPI benchmarks, this excludes JS string transport.
-#[divan::bench(args = ["markdown", "autolinks", "dense"], consts = [false, true])]
-fn source_document_to_html<const REUSE: bool>(bencher: divan::Bencher, fixture: &str) {
-    let source = match fixture {
-        "markdown" => MARKDOWN.to_owned(),
-        "autolinks" => AUTOLINKS.to_owned(),
-        "dense" => "A paragraph with **emphasis**, [link](target), and `code`.\n\n".repeat(200),
-        _ => unreachable!("benchmark fixture"),
-    };
-    let mut storage = None;
-    bencher.bench_local(|| {
-        let (document, _) = parse_reusing(
-            divan::black_box(&source),
-            DEFAULT_OPTIONS,
-            false,
-            storage.take(),
-        );
-        let html = mdast_to_html(&document);
-        if REUSE {
-            storage = Some(document.into_reusable());
-        }
-        html
-    });
-}
-
 /// Parse MDX source into an Arena.
 #[divan::bench]
 fn parse_mdx(bencher: divan::Bencher) {
@@ -143,27 +116,6 @@ fn parse_deferred_autolinks(bencher: divan::Bencher) {
     let opts = DEFAULT_OPTIONS;
     let source = "[a] ".to_owned() + &"www.a.b x\\* ".repeat(2000);
     bencher.bench(|| parse(divan::black_box(source.as_str()), opts));
-}
-
-/// Repeated emails expose quadratic paragraph-prefix scanning, including across lines.
-#[divan::bench(args = [160, 10240], consts = [false, true])]
-fn parse_repeated_emails<const MULTILINE: bool>(bencher: divan::Bencher, count: usize) {
-    let opts = DEFAULT_OPTIONS;
-    let email = if MULTILINE {
-        "someone+tag@example.com\n"
-    } else {
-        "someone+tag@example.com "
-    };
-    let source = email.repeat(count);
-    bencher.bench(|| parse_unpositioned(divan::black_box(source.as_str()), opts));
-}
-
-/// Deferred candidates sharing one URL must not repeatedly scan its remaining suffix.
-#[divan::bench(args = [160, 10240])]
-fn parse_overlapping_protocols(bencher: divan::Bencher, count: usize) {
-    let opts = DEFAULT_OPTIONS;
-    let source = format!("[a] {}", "http://x.y/".repeat(count));
-    bencher.bench(|| parse_unpositioned(divan::black_box(source.as_str()), opts));
 }
 
 /// Full pipeline: Markdown source → Arena → HTML string.
