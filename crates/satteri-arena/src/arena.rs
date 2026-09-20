@@ -308,6 +308,7 @@ impl<'a, K: ArenaKind> Document<'a, K> {
         self.borrowed_source.map_or(0, str::len) + self.string_pool.len()
     }
 
+    /// Append the complete logical pool, including borrowed source text.
     pub fn append_pool(&self, out: &mut String) {
         out.push_str(self.borrowed_source.unwrap_or(""));
         out.push_str(&self.string_pool);
@@ -326,6 +327,8 @@ impl<'a, K: ArenaKind> Document<'a, K> {
         }
     }
 
+    /// Construct an empty document borrowing `source`, with capacity estimated
+    /// for `count` nodes. Use `get_str`, not `string_pool`, to resolve references.
     pub fn borrowed(source: &'a str, count: usize) -> Self {
         let mut document = Self::with_capacity(String::new(), count, count, count * 8);
         document.borrowed_source = Some(source);
@@ -349,6 +352,8 @@ impl<'a, K: ArenaKind> Document<'a, K> {
         self.rebind("")
     }
 
+    /// Discard the tree and metadata, retaining buffers for a new source borrow.
+    /// Unlike `into_owned`, this does not preserve nodes or string references.
     pub fn rebind<'b>(mut self, source: &'b str) -> Document<'b, K> {
         self.reset();
         self.source_len = source.len() as u32;

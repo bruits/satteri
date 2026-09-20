@@ -2547,6 +2547,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     }
                     b'`' => {
                         let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'`');
+                        // An earlier unresolved run can enclose this apparent pair
+                        // (e.g. ` open ``two`` then `). Without one, equal-width
+                        // runs around ASCII alphanumerics need no normalization.
                         if !self.unresolved_code_seen {
                             let mut close = ix + count;
                             while close < bytes.len() && bytes[close].is_ascii_alphanumeric() {

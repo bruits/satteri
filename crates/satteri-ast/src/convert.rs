@@ -5,7 +5,7 @@ use satteri_arena::{
     Arena, ArenaBuilder, Document, Hast, Mdast, StringRef, decode_string_ref_data,
 };
 
-use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
+use crate::emit::{AttrName, AttrValue, BreakTrim, Children, ConvertSink, EmitCtx, Pos, emit_node};
 use crate::hast::HastNodeType;
 use crate::mdast::{
     ListItemData, MdastNodeType, decode_definition_data, decode_footnote_definition_data,
@@ -1018,30 +1018,26 @@ pub(crate) fn code_span_line_endings_to_spaces(value: &str) -> String {
     out
 }
 
-/// After a `Break` mdast sibling, trim leading spaces and tabs from the text
-/// content of the next sibling's hast output. Matches mdast-util-to-hast's
-/// post-break `trimMarkdownSpaceStart` pass: only the directly-emitted text
-/// node (for text mdast nodes) or the first text child of the emitted element
-/// is touched. No deeper recursion.
+/// Apply the shared post-break target rule to the completed HAST output,
+/// including any metadata-provided replacement children.
 fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     let arena = builder.arena_mut();
-    let target_id = {
-        let node = arena.get_node(node_id);
-        if node.node_type == HastNodeType::Text as u8 {
-            Some(node_id)
-        } else if node.node_type == HastNodeType::Element as u8 {
-            let children = arena.get_children(node_id);
-            children
-                .first()
-                .copied()
-                .filter(|&id| arena.get_node(id).node_type == HastNodeType::Text as u8)
-        } else {
-            None
+    let mut trim = BreakTrim::Node;
+    let mut text_id = node_id;
+    loop {
+        match HastNodeType::from_u8(arena.get_node(text_id).node_type) {
+            Some(HastNodeType::Text) if trim.take_text() => break,
+            Some(HastNodeType::Element) => trim.enter_element(),
+            _ => return,
         }
-    };
-    let Some(text_id) = target_id else {
-        return;
-    };
+        if !trim.needs_child() {
+            return;
+        }
+        let Some(&child) = arena.get_children(text_id).first() else {
+            return;
+        };
+        text_id = child;
+    }
     let (data_off, data_len) = {
         let node = arena.get_node(text_id);
         (node.data_offset as usize, node.data_len as usize)
@@ -1055,11 +1051,7 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     if s_off + s_len > arena.string_pool.len() {
         return;
     }
-    let slice = arena.get_str(sref).as_bytes();
-    let mut i = 0;
-    while i < slice.len() && (slice[i] == b' ' || slice[i] == b'\t') {
-        i += 1;
-    }
+    let i = s_len - trim_markdown_space_start(arena.get_str(sref)).len();
     if i == 0 {
         return;
     }
@@ -1067,9 +1059,20 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     arena.type_data[data_off..data_off + 8].copy_from_slice(&new_ref.as_bytes());
 }
 
-fn produces_hast_output(child_id: u32, view: &Document<'_, Mdast>) -> bool {
-    let raw_type = view.get_node(child_id).node_type;
-    match MdastNodeType::from_u8(raw_type) {
+/// Markdown break trimming excludes newlines and non-ASCII whitespace.
+#[inline(always)]
+pub(crate) fn trim_markdown_space_start(value: &str) -> &str {
+    value.trim_start_matches([' ', '\t'])
+}
+
+/// The direct HTML sink has already excluded h-data, so it can supply `false`
+/// without looking up metadata. Both sinks use the same node visibility rules.
+#[inline(always)]
+pub(crate) fn produces_hast_output(
+    node_type: u8,
+    directive_has_name: impl FnOnce() -> bool,
+) -> bool {
+    match MdastNodeType::from_u8(node_type) {
         Some(
             MdastNodeType::Definition
             | MdastNodeType::Yaml
@@ -1084,7 +1087,7 @@ fn produces_hast_output(child_id: u32, view: &Document<'_, Mdast>) -> bool {
             MdastNodeType::ContainerDirective
             | MdastNodeType::LeafDirective
             | MdastNodeType::TextDirective,
-        ) => HData::read(view, child_id).h_name().is_some(),
+        ) => directive_has_name(),
         _ => true,
     }
 }
@@ -1438,7 +1441,9 @@ impl ConvertSink for HastSink<'_> {
     }
 
     fn produces_output(&self, child_id: u32) -> bool {
-        produces_hast_output(child_id, self.view)
+        produces_hast_output(self.view.get_node(child_id).node_type, || {
+            HData::read(self.view, child_id).h_name().is_some()
+        })
     }
 
     fn has_no_h_data(&self, node_id: u32) -> bool {

@@ -486,6 +486,93 @@ fn plain_link_labels_keep_break_trimming_escaping_and_overrides() {
 }
 
 #[test]
+fn break_trimming_stops_at_the_first_text_child_and_preserves_non_ascii_space() {
+    for (value, trimmed) in [
+        (" \t雪<&>", "雪&lt;&amp;&gt;"),
+        (" \t\u{a0}雪<&>", "\u{a0}雪&lt;&amp;&gt;"),
+    ] {
+        for depth in 0..=2 {
+            let mut builder = ArenaBuilder::<Mdast>::new(String::new());
+            builder.open_node(MdastNodeType::Root as u8);
+            builder.open_node(MdastNodeType::Paragraph as u8);
+            builder.add_leaf(MdastNodeType::Break as u8);
+            for _ in 0..depth {
+                builder.open_node(MdastNodeType::Emphasis as u8);
+            }
+            let value = builder.alloc_string(value);
+            let text = builder.add_leaf(MdastNodeType::Text as u8);
+            builder.arena_mut().set_type_data(text, &value.as_bytes());
+            let arena = builder.finish();
+            let leading = if depth == 2 { " \t" } else { "" };
+            assert_eq!(
+                both_paths("break trim depth and whitespace", &arena),
+                format!(
+                    "<p><br>\n{}{leading}{trimmed}{}</p>\n",
+                    "<em>".repeat(depth),
+                    "</em>".repeat(depth)
+                ),
+            );
+        }
+    }
+}
+
+#[test]
+fn break_trimming_uses_replacement_children_without_skipping_or_recursing() {
+    for (children, expected) in [
+        (r#"[{"type":"text","value":" \tlabel"}]"#, "label"),
+        (
+            r#"[{"type":"text","value":""},{"type":"text","value":" \tlabel"}]"#,
+            " \tlabel",
+        ),
+        (
+            r#"[{"type":"comment","value":"first"},{"type":"text","value":" \tlabel"}]"#,
+            "<!--first--> \tlabel",
+        ),
+        (
+            r#"[{"type":"element","tagName":"em","properties":{},"children":[{"type":"text","value":" \tlabel"}]}]"#,
+            "<em> \tlabel</em>",
+        ),
+        (r#"[]"#, ""),
+    ] {
+        let (mut arena, _) =
+            satteri_pulldown_cmark::parse("before\\\n[original](/u)", Options::empty());
+        let link = arena
+            .nodes
+            .iter()
+            .position(|node| node.node_type == MdastNodeType::Link as u8)
+            .unwrap() as u32;
+        arena.set_node_data(link, format!(r#"{{"hChildren":{children}}}"#).into_bytes());
+        let expected = format!("<p>before<br>\n<a href=\"/u\">{expected}</a></p>\n");
+        assert_eq!(satteri_ast::mdast_to_html(&arena), expected);
+    }
+}
+
+#[test]
+fn directive_visibility_requires_hname_and_preserves_sibling_separators() {
+    for kind in [
+        MdastNodeType::ContainerDirective,
+        MdastNodeType::LeafDirective,
+        MdastNodeType::TextDirective,
+    ] {
+        let (mut arena, _) = satteri_pulldown_cmark::parse("before\n\nafter", Options::empty());
+        let siblings = arena.get_children(0).to_vec();
+        let directive = arena.alloc_node(kind as u8);
+        let text = text_node(&mut arena, "content");
+        arena.set_children(directive, &[text]);
+        arena.set_children(0, &[siblings[0], directive, siblings[1]]);
+        arena.set_node_data(directive, br#"{"private":true}"#.to_vec());
+        assert_eq!(
+            both_paths("hidden directive", &arena),
+            "<p>before</p>\n<p>after</p>\n"
+        );
+        arena.set_node_data(directive, br#"{"hName":"aside"}"#.to_vec());
+        let expected = "<p>before</p>\n<aside>content</aside>\n<p>after</p>\n";
+        assert_eq!(satteri_ast::mdast_to_html(&arena), expected);
+        assert_eq!(two_stage(&arena, &ConvertOptions::default()), expected);
+    }
+}
+
+#[test]
 fn deeply_nested_links_keep_stack_headroom_in_both_sinks() {
     let mut builder = ArenaBuilder::<Mdast>::new(String::new());
     builder.open_node(MdastNodeType::Root as u8);

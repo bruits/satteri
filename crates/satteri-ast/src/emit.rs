@@ -134,9 +134,50 @@ impl<'a> AttrValue<'a> {
     }
 }
 
+/// After a break, trim the next output node if it is text, or its first child
+/// if that node is an element and the child is text. Never descend further.
+/// Streaming output advances this state as it emits; HAST replays it on nodes
+/// after metadata overrides have been applied.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BreakTrim {
+    None,
+    Node,
+    FirstChild,
+}
+
+impl BreakTrim {
+    #[inline(always)]
+    pub(crate) fn take_text(&mut self) -> bool {
+        let pending = *self != Self::None;
+        *self = Self::None;
+        pending
+    }
+
+    #[inline(always)]
+    pub(crate) fn enter_element(&mut self) {
+        *self = if *self == Self::Node {
+            Self::FirstChild
+        } else {
+            Self::None
+        };
+    }
+
+    #[inline(always)]
+    pub(crate) fn needs_child(self) -> bool {
+        self == Self::FirstChild
+    }
+
+    #[inline(always)]
+    pub(crate) fn leave_element(&mut self) {
+        if self.needs_child() {
+            *self = Self::None;
+        }
+    }
+}
+
 /// Opening is split into `open` / `attr`* / `finish` so one sink can collect a property list while the other streams bytes.
 pub(crate) trait ConvertSink {
-    /// What the sink needs to remember across a child to undo a post-`Break` trim.
+    /// Boundary used to identify the first output node of a post-`Break` child.
     type BreakMark: Copy;
 
     fn open_root(&mut self, pos: Pos);
