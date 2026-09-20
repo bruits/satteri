@@ -1,9 +1,10 @@
 //! Arena patching: apply structural patches to the arena in place.
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use satteri_arena::{Arena, ArenaKind, Hast, Mdast, NodePosition};
 
 use crate::commands::CommandError;
-use satteri_arena::{Arena, ArenaKind, Hast, Mdast};
+use crate::stack::with_headroom;
 
 /// Sentinel `node_type` for a *reference* node inside a replacement sub-tree:
 /// "splice the existing original node whose id is stored in this node's
@@ -234,7 +235,7 @@ fn unsupported(reason: &'static str) -> CommandError {
 
 /// Subtree copy by id; the append-only pool keeps type_data StringRefs valid verbatim.
 fn copy_subtree<K: ArenaKind>(arena: &mut Arena<K>, id: u32, depth: u32) -> u32 {
-    crate::stack::with_headroom(depth, || copy_subtree_inner(arena, id, depth))
+    with_headroom(depth, || copy_subtree_inner(arena, id, depth))
 }
 
 fn copy_subtree_inner<K: ArenaKind>(arena: &mut Arena<K>, id: u32, depth: u32) -> u32 {
@@ -245,7 +246,7 @@ fn copy_subtree_inner<K: ArenaKind>(arena: &mut Arena<K>, id: u32, depth: u32) -
     }
     arena.set_position(
         new_id,
-        satteri_arena::NodePosition {
+        NodePosition {
             start_offset: node.start_offset,
             end_offset: node.end_offset,
             start_line: node.start_line,
@@ -279,7 +280,7 @@ fn graft_node<K: ArenaKind>(
     out: &mut Vec<u32>,
     depth: u32,
 ) {
-    crate::stack::with_headroom(depth, || {
+    with_headroom(depth, || {
         graft_node_inner(arena, sub, sub_id, source_base, resolved_refs, out, depth);
     });
 }
@@ -1398,7 +1399,7 @@ fn apply_patches_impl<K: ArenaKind>(
                 }
                 arena.set_position(
                     wrapper_id,
-                    satteri_arena::NodePosition {
+                    NodePosition {
                         start_offset: wrapper.start_offset,
                         end_offset: wrapper.end_offset,
                         start_line: wrapper.start_line,
@@ -1530,9 +1531,10 @@ fn remap_one_ref(data: &mut [u8], off: usize, base: u32) {
 
 #[cfg(test)]
 mod tests {
+    use satteri_arena::{ArenaBuilder, Hast, Mdast};
+
     use super::*;
     use crate::mdast::MdastNodeType;
-    use satteri_arena::{ArenaBuilder, Hast, Mdast};
 
     /// Old `rebuild` contract on a fresh clone: dropped -> error.
     fn rebuild<K: ArenaKind>(
@@ -1567,14 +1569,15 @@ mod tests {
 
     /// Build the "# Hello\n\nWorld" arena for testing.
     fn build_hello_world() -> Arena<Mdast> {
-        use crate::mdast::codec::{encode_heading_data, encode_string_ref_data};
         use satteri_arena::StringRef;
+
+        use crate::mdast::codec::{encode_heading_data, encode_string_ref_data};
 
         let source = "# Hello\n\nWorld".to_string();
         let mut b = ArenaBuilder::<Mdast>::new(source);
 
         b.open_node(MdastNodeType::Root as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 0,
             end_offset: 14,
             start_line: 1,
@@ -1584,7 +1587,7 @@ mod tests {
         });
 
         b.open_node(MdastNodeType::Heading as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 0,
             end_offset: 7,
             start_line: 1,
@@ -1595,7 +1598,7 @@ mod tests {
         b.set_data_current(&encode_heading_data(1));
 
         b.open_node(MdastNodeType::Text as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 2,
             end_offset: 7,
             start_line: 1,
@@ -1609,7 +1612,7 @@ mod tests {
         b.close_node(); // heading
 
         b.open_node(MdastNodeType::Paragraph as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 9,
             end_offset: 14,
             start_line: 2,
@@ -1619,7 +1622,7 @@ mod tests {
         });
 
         b.open_node(MdastNodeType::Text as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 9,
             end_offset: 14,
             start_line: 2,

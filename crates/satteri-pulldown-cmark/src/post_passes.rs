@@ -20,13 +20,16 @@ use core::ops::Range;
 #[cfg(feature = "std")]
 use std::sync::LazyLock;
 
-use crate::document::SourceDocument;
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
 use satteri_arena::{DocumentBuilder, Mdast, NodePosition, StringRef};
-use satteri_ast::mdast::{MdastNodeType, codec::LinkData};
+use satteri_ast::mdast::MdastNodeType;
+use satteri_ast::mdast::codec::LinkData;
 
+use crate::Options;
+use crate::document::SourceDocument;
 use crate::puncttable::is_punctuation;
+use crate::scanners::{scan_ch_repeat, scan_entity};
 
 #[cfg(feature = "mdx")]
 pub(crate) const MDX_EXPLICIT_JSX_DATA: &[u8] = b"{\"_mdxExplicitJsx\":true}";
@@ -819,7 +822,7 @@ pub(crate) fn gfm_autolink_literal_pass(
     arena: &mut SourceDocument<'_>,
     source_bytes: &[u8],
     autolink_free_ranges: &[Range<usize>],
-    options: crate::Options,
+    options: Options,
     mut cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
 ) {
     let len = arena.len() as u32;
@@ -1274,7 +1277,7 @@ fn smart_seg(raw: &[u8], r: usize, dec: &[u8], d: usize, smart: Smart) -> Option
             Some((3, ELLIPSIS.len()))
         }
         b'-' if smart.dashes => {
-            let count = 1 + crate::scanners::scan_ch_repeat(&raw[(r + 1)..], b'-');
+            let count = 1 + scan_ch_repeat(&raw[(r + 1)..], b'-');
             if count < 2 {
                 return None;
             }
@@ -1384,7 +1387,7 @@ fn build_raw_map(
     while r < raw.len() {
         match raw[r] {
             b'&' => {
-                let (len, value) = crate::scanners::scan_entity(&raw[r..]);
+                let (len, value) = scan_entity(&raw[r..]);
                 if let Some(value) = value
                     && dec[d..].starts_with(value.as_bytes())
                 {

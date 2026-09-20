@@ -20,7 +20,7 @@
 //! both kinds would silently misroute nodes. The phantom-typed `Arena<K>`
 //! signature on each entry point makes a cross-kind call a compile error.
 
-use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, NodePosition, StringRef};
 use satteri_ast::commands::CommandError;
 use satteri_ast::hast::codec::decode_element_tag;
 use satteri_ast::hast::{HastNodeType, is_void_element};
@@ -1218,7 +1218,7 @@ fn mdast_wrap_arena_from_tree(mut tree: Arena<Mdast>) -> Result<Arena<Mdast>, Co
     tree.get_node_mut(0).node_type = node.node_type;
     tree.set_position(
         0,
-        satteri_arena::NodePosition {
+        NodePosition {
             start_offset: node.start_offset,
             end_offset: node.end_offset,
             start_line: node.start_line,
@@ -2084,7 +2084,7 @@ mod tests {
         let mut b = ArenaBuilder::<Mdast>::new(source);
 
         b.open_node(MdastNodeType::Root as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 0,
             end_offset: 14,
             start_line: 1,
@@ -2094,7 +2094,7 @@ mod tests {
         });
 
         b.open_node(MdastNodeType::Heading as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 0,
             end_offset: 7,
             start_line: 1,
@@ -2105,7 +2105,7 @@ mod tests {
         b.set_data_current(&encode_heading_data(1));
 
         b.open_node(MdastNodeType::Text as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 2,
             end_offset: 7,
             start_line: 1,
@@ -2119,7 +2119,7 @@ mod tests {
         b.close_node();
 
         b.open_node(MdastNodeType::Paragraph as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 9,
             end_offset: 14,
             start_line: 2,
@@ -2129,7 +2129,7 @@ mod tests {
         });
 
         b.open_node(MdastNodeType::Text as u8);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 9,
             end_offset: 14,
             start_line: 2,

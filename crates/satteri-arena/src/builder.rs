@@ -233,11 +233,11 @@ impl<'a, K: ArenaKind> DocumentBuilder<'a, K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Mdast;
 
     #[test]
     fn simple_open_close() {
-        let mut builder: ArenaBuilder<crate::kind::Mdast> =
-            ArenaBuilder::new("# Hello".to_string());
+        let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::new("# Hello".to_string());
         let root = builder.open_node(0);
         let heading = builder.open_node(2);
         let text = builder.add_leaf(10);
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn finish_closes_open_nodes() {
-        let mut builder: ArenaBuilder<crate::kind::Mdast> = ArenaBuilder::new(String::new());
+        let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::new(String::new());
         builder.open_node(0);
         builder.open_node(1);
         builder.add_leaf(10);
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn leaf_has_no_children() {
-        let mut builder: ArenaBuilder<crate::kind::Mdast> = ArenaBuilder::new(String::new());
+        let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::new(String::new());
         builder.open_node(0);
         let leaf = builder.add_leaf(14);
         builder.close_node();
@@ -277,9 +277,9 @@ mod tests {
 
     #[test]
     fn position_and_data_current() {
-        let mut builder: ArenaBuilder<crate::kind::Mdast> = ArenaBuilder::new("hello".to_string());
+        let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::new("hello".to_string());
         let id = builder.open_node(10);
-        builder.set_position_current(crate::NodePosition {
+        builder.set_position_current(NodePosition {
             start_offset: 0,
             end_offset: 5,
             start_line: 1,

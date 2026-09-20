@@ -58,6 +58,9 @@
 
 use satteri_arena::{Arena, ArenaKind, Hast, LineIndex, Mdast, StringRef};
 
+use crate::hast::generated::walk_type_data::write_hast_type_data_inline;
+use crate::mdast::generated::walk_type_data::write_mdast_type_data_inline;
+
 /// A single subscription: match nodes of a given type, optionally filtered
 /// by tag name (for HAST element nodes).
 #[derive(Debug)]
@@ -292,9 +295,7 @@ fn serialize_mdast_node_inline(
 
     // Fixed-field and name+count+items types are generated from the registry;
     // this returns false for the raw-byte tails handled below.
-    if crate::mdast::generated::walk_type_data::write_mdast_type_data_inline(
-        arena, node_type, type_data, out,
-    ) {
+    if write_mdast_type_data_inline(arena, node_type, type_data, out) {
         return;
     }
 
@@ -392,9 +393,7 @@ fn serialize_hast_node_inline(
 
     // Every typed tail (element, MDX JSX, single-value) is generated from the
     // registry; what's left falls back to a generic length-prefixed blob.
-    if crate::hast::generated::walk_type_data::write_hast_type_data_inline(
-        arena, node_type, type_data, out,
-    ) {
+    if write_hast_type_data_inline(arena, node_type, type_data, out) {
         return;
     }
 
@@ -404,8 +403,9 @@ fn serialize_hast_node_inline(
 
 #[cfg(test)]
 mod tests {
+    use satteri_arena::{ArenaBuilder, NodePosition};
+
     use super::*;
-    use satteri_arena::ArenaBuilder;
 
     #[test]
     fn write_str16_clamps_oversized_strings_at_a_char_boundary() {
@@ -455,7 +455,7 @@ mod tests {
         let mut b = ArenaBuilder::<Hast>::new("❤️😀 ab".to_string());
         b.open_node(0);
         b.open_node(2);
-        b.set_position_current(satteri_arena::NodePosition {
+        b.set_position_current(NodePosition {
             start_offset: 11,
             end_offset: 13,
             start_line: 1,

@@ -1,3 +1,5 @@
+use satteri_ast::hast::mdast_arena_to_hast_arena;
+use satteri_ast::mdast_to_html;
 use satteri_pulldown_cmark::{DEFAULT_OPTIONS, Options, document};
 
 #[test]
@@ -63,11 +65,11 @@ fn direct_and_materialized_readers_agree_on_commonmark_and_extensions() {
             for positions in [false, true] {
                 let (document, errors) = document::parse(source, options, positions);
                 assert!(errors.is_empty());
-                let html = satteri_ast::mdast_to_html(&document);
-                let direct = satteri_ast::hast::mdast_arena_to_hast_arena(&document);
+                let html = mdast_to_html(&document);
+                let direct = mdast_arena_to_hast_arena(&document);
                 let arena = document.into_owned();
-                assert_eq!(html, satteri_ast::mdast_to_html(&arena), "{source:?}");
-                let materialized = satteri_ast::hast::mdast_arena_to_hast_arena(&arena);
+                assert_eq!(html, mdast_to_html(&arena), "{source:?}");
+                let materialized = mdast_arena_to_hast_arena(&arena);
                 assert_eq!(
                     direct.to_raw_buffer(),
                     materialized.to_raw_buffer(),
@@ -115,13 +117,10 @@ fn recycled_storage_clears_source_metadata_and_position_modes() {
                     document::parse_reusing(source, DEFAULT_OPTIONS, positions, storage);
                 assert_eq!(errors, fresh_errors);
                 assert_eq!(
-                    satteri_ast::hast::mdast_arena_to_hast_arena(&reused).to_raw_buffer(),
-                    satteri_ast::hast::mdast_arena_to_hast_arena(&fresh).to_raw_buffer()
+                    mdast_arena_to_hast_arena(&reused).to_raw_buffer(),
+                    mdast_arena_to_hast_arena(&fresh).to_raw_buffer()
                 );
-                assert_eq!(
-                    satteri_ast::mdast_to_html(&reused),
-                    satteri_ast::mdast_to_html(&fresh)
-                );
+                assert_eq!(mdast_to_html(&reused), mdast_to_html(&fresh));
                 storage = Some(reused.into_reusable());
             }
         }
@@ -142,7 +141,7 @@ fn early_strong_keeps_attention_family_registration_order() {
     ] {
         let (document, errors) = document::parse(source, Options::from_bits_truncate(3230), false);
         assert!(errors.is_empty());
-        assert_eq!(satteri_ast::mdast_to_html(&document), expected);
+        assert_eq!(mdast_to_html(&document), expected);
     }
 }
 
@@ -153,7 +152,7 @@ fn owning_the_document_preserves_values_after_releasing_source() {
     let arena = document.into_owned();
     drop(source);
     assert_eq!(
-        satteri_ast::mdast_to_html(&arena),
+        mdast_to_html(&arena),
         "<p>hello &amp; <strong>strong</strong> <code>code</code></p>\n"
     );
 }
@@ -205,7 +204,7 @@ fn compact_strong_preserves_image_alt_and_positions() {
     let (document, errors) = document::parse(source, DEFAULT_OPTIONS, true);
     assert!(errors.is_empty());
     assert_eq!(
-        satteri_ast::mdast_to_html(&document),
+        mdast_to_html(&document),
         "<p>雪 <strong>two\twords</strong> <img src=\"x\" alt=\"alt\"></p>\n"
     );
     let strong = (0..document.len() as u32)

@@ -4,8 +4,18 @@
 // pattern can't be aliased away. Allow it crate-wide.
 #![allow(clippy::type_complexity)]
 
+use std::mem::take;
+use std::result::Result as StdResult;
+
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+use satteri_arena::{Arena, ArenaKind, Document};
+use satteri_ast::hast::mdast_arena_to_hast_arena_into;
+#[cfg(feature = "mdx")]
+use satteri_mdxjs::{compile_hast_arena, parse_error_to_message, simplify_plain_mdx_nodes};
+use satteri_plugin_api::apply_mdast_commands_lenient_with_options;
+use satteri_pulldown_cmark::Options;
+use satteri_pulldown_cmark::document::parse_reusing;
 
 mod generated;
 
@@ -20,9 +30,7 @@ fn encode_output(value: String) -> Either<String, Utf16String> {
 
 /// The JS package packs `Features` into these bits itself: unpacking an options
 /// object here costs ~790 ns per call in named-property lookups, an integer ~0.
-fn parser_options(parse_options: u32, mdx: bool) -> satteri_pulldown_cmark::Options {
-    use satteri_pulldown_cmark::Options;
-
+fn parser_options(parse_options: u32, mdx: bool) -> Options {
     let opts = Options::from_bits_truncate(parse_options);
     if mdx {
         opts | Options::ENABLE_MDX
@@ -260,25 +268,24 @@ pub fn parse_to_html(
 // duplicated entry points for operations whose Rust body is identical
 // across kinds.
 
-use napi::bindgen_prelude::Either;
 use std::cell::RefCell;
 use std::sync::Mutex;
 
+use napi::bindgen_prelude::Either;
 use satteri_arena::{Hast, Mdast};
 use satteri_pulldown_cmark::document::SourceDocument;
 
-type MdastHandle = External<Mutex<satteri_arena::Arena<Mdast>>>;
-type HastHandle = External<Mutex<satteri_arena::Arena<Hast>>>;
+type MdastHandle = External<Mutex<Arena<Mdast>>>;
+type HastHandle = External<Mutex<Arena<Hast>>>;
 type AnyHandle<'a> = Either<&'a MdastHandle, &'a HastHandle>;
 
 fn with_source_document<R, E>(
     source: &str,
-    options: satteri_pulldown_cmark::Options,
-    run: impl FnOnce(&SourceDocument<'_>, &[(usize, String)]) -> std::result::Result<R, E>,
-) -> std::result::Result<R, E> {
+    options: Options,
+    run: impl FnOnce(&SourceDocument<'_>, &[(usize, String)]) -> StdResult<R, E>,
+) -> StdResult<R, E> {
     let storage = MDAST_ARENA_POOL.with(|pool| pool.borrow_mut().pop());
-    let (document, errors) =
-        satteri_pulldown_cmark::document::parse_reusing(source, options, false, storage);
+    let (document, errors) = parse_reusing(source, options, false, storage);
     let result = run(&document, &errors);
     if result.is_ok() {
         release_mdast_arena(document.into_reusable());
@@ -294,25 +301,25 @@ const ARENA_POOL_MAX: usize = 4;
 const ARENA_POOL_MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 
 thread_local! {
-    static MDAST_ARENA_POOL: RefCell<Vec<satteri_arena::Arena<Mdast>>>
+    static MDAST_ARENA_POOL: RefCell<Vec<Arena<Mdast>>>
         = const { RefCell::new(Vec::new()) };
-    static HAST_ARENA_POOL: RefCell<Vec<satteri_arena::Arena<Hast>>>
+    static HAST_ARENA_POOL: RefCell<Vec<Arena<Hast>>>
         = const { RefCell::new(Vec::new()) };
 }
 
 /// A pooled zero-capacity placeholder would shadow the real grown arena below it in the LIFO pool.
-fn poolable<K: satteri_arena::ArenaKind>(arena: &satteri_arena::Arena<K>) -> bool {
+fn poolable<K: ArenaKind>(arena: &Arena<K>) -> bool {
     let retained = arena.retained_bytes();
     retained > 0 && retained <= ARENA_POOL_MAX_RETAINED_BYTES
 }
 
-fn acquire_mdast_arena() -> satteri_arena::Arena<Mdast> {
+fn acquire_mdast_arena() -> Arena<Mdast> {
     MDAST_ARENA_POOL
         .with(|p| p.borrow_mut().pop())
         .unwrap_or_default()
 }
 
-fn release_mdast_arena(arena: satteri_arena::Arena<Mdast>) {
+fn release_mdast_arena(arena: Arena<Mdast>) {
     if !poolable(&arena) {
         return;
     }
@@ -324,13 +331,13 @@ fn release_mdast_arena(arena: satteri_arena::Arena<Mdast>) {
     });
 }
 
-fn acquire_hast_arena() -> satteri_arena::Arena<Hast> {
+fn acquire_hast_arena() -> Arena<Hast> {
     HAST_ARENA_POOL
         .with(|p| p.borrow_mut().pop())
         .unwrap_or_default()
 }
 
-fn release_hast_arena(arena: satteri_arena::Arena<Hast>) {
+fn release_hast_arena(arena: Arena<Hast>) {
     if !poolable(&arena) {
         return;
     }
@@ -344,25 +351,21 @@ fn release_hast_arena(arena: satteri_arena::Arena<Hast>) {
 
 /// The two-stage fallback goes through a pooled HAST arena; the direct emitter needs none.
 fn mdast_to_html_pooled(
-    mdast: &satteri_arena::Document<'_, Mdast>,
+    mdast: &Document<'_, Mdast>,
     convert_opts: &satteri_ast::hast::ConvertOptions,
 ) -> String {
     if let Some(html) = satteri_ast::try_mdast_to_html_fused(mdast, convert_opts) {
         return html;
     }
-    let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        mdast,
-        convert_opts,
-        acquire_hast_arena(),
-    );
+    let hast = mdast_arena_to_hast_arena_into(mdast, convert_opts, acquire_hast_arena());
     let html = satteri_ast::hast::hast_arena_to_html(&hast);
     release_hast_arena(hast);
     html
 }
 
-fn make_parse_fn(mdx: bool, parse_options: u32) -> impl Fn(&str) -> satteri_arena::Arena<Mdast> {
-    move |source: &str| -> satteri_arena::Arena<Mdast> {
-        let opts = satteri_pulldown_cmark::Options::from_bits_truncate(parse_options);
+fn make_parse_fn(mdx: bool, parse_options: u32) -> impl Fn(&str) -> Arena<Mdast> {
+    move |source: &str| -> Arena<Mdast> {
+        let opts = Options::from_bits_truncate(parse_options);
         let (mut parsed, _errors) = satteri_pulldown_cmark::parse(source, opts);
         parsed.mdx = mdx;
         parsed.parse_options = parse_options;
@@ -387,10 +390,10 @@ pub struct JsSubscription {
 /// half-built error state never poisons the pool.
 fn parse_mdast_pooled(
     source: &str,
-    opts: satteri_pulldown_cmark::Options,
+    opts: Options,
     mdx: bool,
     track_positions: bool,
-) -> Result<satteri_arena::Arena<Mdast>> {
+) -> Result<Arena<Mdast>> {
     let reuse = acquire_mdast_arena();
     let (mut mdast, mdx_errors) = if track_positions {
         satteri_pulldown_cmark::parse_into(source, opts, reuse)
@@ -400,7 +403,7 @@ fn parse_mdast_pooled(
     #[cfg(feature = "mdx")]
     if mdx && let Some((offset, msg)) = mdx_errors.first() {
         return Err(napi::Error::from_reason(
-            satteri_mdxjs::parse_error_to_message(source, *offset, msg).to_string(),
+            parse_error_to_message(source, *offset, msg).to_string(),
         ));
     }
     #[cfg(not(feature = "mdx"))]
@@ -430,11 +433,7 @@ fn create_hast_handle_impl(
     } else {
         None
     };
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mdast,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
+    let mut hast = mdast_arena_to_hast_arena_into(&mdast, &convert_opts, acquire_hast_arena());
     release_mdast_arena(mdast);
     hast.mdx = mdx;
     hast.parse_options = opts.bits();
@@ -501,11 +500,7 @@ pub fn parse_hast_wire<'env>(
     let opts = parser_options(parse_options, mdx);
     let convert_opts = js_convert_options_to_rust(*env, convert_options);
     let mdast = parse_mdast_pooled(&source, opts, mdx, track_positions.unwrap_or(true))?;
-    let hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mdast,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
+    let hast = mdast_arena_to_hast_arena_into(&mdast, &convert_opts, acquire_hast_arena());
     release_mdast_arena(mdast);
     let buf = hast.to_raw_buffer();
     release_hast_arena(hast);
@@ -640,19 +635,15 @@ pub fn apply_commands_to_mdast_handle(
 // Patches inside a subtree removed by the same pass are dropped, not fatal.
 // Inline this per-pass wrapper to avoid adding a hot call boundary.
 #[inline(always)]
-fn apply_mdast_commands(
-    arena: &mut satteri_arena::Arena<Mdast>,
-    commands: &[u8],
-) -> Result<(satteri_arena::Arena<Mdast>, u32)> {
-    let owned = std::mem::take(arena);
+fn apply_mdast_commands(arena: &mut Arena<Mdast>, commands: &[u8]) -> Result<(Arena<Mdast>, u32)> {
+    let owned = take(arena);
     let parse = make_parse_fn(owned.mdx, owned.parse_options);
     let options = satteri_plugin_api::MdastCommandOptions {
         escape_raw_html_braces: owned.mdx,
     };
-    let (updated, dropped) = satteri_plugin_api::apply_mdast_commands_lenient_with_options(
-        owned, commands, &parse, options,
-    )
-    .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
+    let (updated, dropped) =
+        apply_mdast_commands_lenient_with_options(owned, commands, &parse, options)
+            .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     Ok((updated, dropped.len() as u32))
 }
 
@@ -669,12 +660,8 @@ pub fn convert_mdast_to_hast_handle(
     let mdx = arena.mdx;
     let parse_options = arena.parse_options;
     let convert_opts = js_convert_options_to_rust(env, convert_options);
-    let owned = std::mem::take(&mut *arena);
-    let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &owned,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
+    let owned = take(&mut *arena);
+    let mut hast = mdast_arena_to_hast_arena_into(&owned, &convert_opts, acquire_hast_arena());
     release_mdast_arena(owned);
     hast.mdx = mdx;
     hast.parse_options = parse_options;
@@ -697,7 +684,7 @@ pub fn apply_commands_and_convert_to_hast_handle(
     let parse_options = arena.parse_options;
     let parse_markdown = make_parse_fn(mdx, parse_options);
     let convert_opts = js_convert_options_to_rust(env, convert_options);
-    let owned = std::mem::take(&mut *arena);
+    let owned = take(&mut *arena);
     let options = satteri_plugin_api::MdastCommandOptions {
         escape_raw_html_braces: mdx,
     };
@@ -708,11 +695,8 @@ pub fn apply_commands_and_convert_to_hast_handle(
         options,
     )
     .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
-    let mut hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mutated,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
+    let mut hast_arena =
+        mdast_arena_to_hast_arena_into(&mutated, &convert_opts, acquire_hast_arena());
     release_mdast_arena(mutated);
     hast_arena.mdx = mdx;
     hast_arena.parse_options = parse_options;
@@ -721,9 +705,7 @@ pub fn apply_commands_and_convert_to_hast_handle(
 
 /// Extract frontmatter from an MDAST arena's root direct children, or `None`
 /// when there's no yaml/toml block at root. Shared by handle and one-shot calls.
-fn extract_mdast_frontmatter(
-    mdast: &satteri_arena::Document<'_, satteri_arena::Mdast>,
-) -> Option<JsFrontmatter> {
+fn extract_mdast_frontmatter(mdast: &Document<'_, Mdast>) -> Option<JsFrontmatter> {
     use satteri_arena::StringRef;
     use satteri_ast::mdast::node::MdastNodeType;
 
@@ -794,11 +776,8 @@ pub fn apply_mdast_commands_and_convert_and_compile(
     let convert_opts = js_convert_options_to_rust(env, convert_options);
     let (mutated, dropped) = apply_mdast_commands(&mut arena, &command_buf)?;
     let frontmatter = extract_mdast_frontmatter(&mutated);
-    let mut hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena_into(
-        &mutated,
-        &convert_opts,
-        acquire_hast_arena(),
-    );
+    let mut hast_arena =
+        mdast_arena_to_hast_arena_into(&mutated, &convert_opts, acquire_hast_arena());
     hast_arena.mdx = mdx;
     release_mdast_arena(mutated);
     let code = compile_hast(&mut hast_arena, options)?;
@@ -953,7 +932,7 @@ pub fn apply_commands_to_handle(handle: &HastHandle, command_buf: Uint8Array) ->
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
 
-    let owned = std::mem::take(&mut *arena);
+    let owned = take(&mut *arena);
     // Lenient: a patch stranded inside a subtree the same pass replaced or
     // removed is dropped rather than fatal — the plugin discarded that subtree,
     // so a transform queued on a node within it is moot. A passed-through child
@@ -1011,7 +990,7 @@ pub fn apply_commands_and_render_handle(
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    let owned = std::mem::take(&mut *arena);
+    let owned = take(&mut *arena);
     let (new_arena, dropped) = satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let html = satteri_ast::hast::hast_arena_to_html(&new_arena);
@@ -1043,7 +1022,7 @@ pub fn apply_commands_and_compile_handle(
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    let owned = std::mem::take(&mut *arena);
+    let owned = take(&mut *arena);
     let (mut new_arena, dropped) =
         satteri_plugin_api::apply_hast_commands_lenient(owned, &command_buf)
             .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
@@ -1122,13 +1101,12 @@ fn to_js_fast_impl(
     with_source_document(source, opts, |mdast, mdx_errors| {
         if let Some((offset, msg)) = mdx_errors.first() {
             return Err(napi::Error::from_reason(
-                satteri_mdxjs::parse_error_to_message(source, *offset, msg).to_string(),
+                parse_error_to_message(source, *offset, msg).to_string(),
             ));
         }
         let frontmatter = extract_mdast_frontmatter(mdast);
         let hast_reuse = acquire_hast_arena();
-        let mut hast =
-            satteri_ast::hast::mdast_arena_to_hast_arena_into(mdast, &convert_opts, hast_reuse);
+        let mut hast = mdast_arena_to_hast_arena_into(mdast, &convert_opts, hast_reuse);
         hast.mdx = mdx;
         let code = compile_hast(&mut hast, options)?;
         release_hast_arena(hast);
@@ -1180,18 +1158,14 @@ pub fn compile_handle(handle: &HastHandle, options: Option<JsMdxOptions>) -> Res
 }
 
 #[cfg(feature = "mdx")]
-fn compile_hast(
-    arena: &mut satteri_arena::Arena<Hast>,
-    options: Option<JsMdxOptions>,
-) -> Result<String> {
+fn compile_hast(arena: &mut Arena<Hast>, options: Option<JsMdxOptions>) -> Result<String> {
     let opts = js_options_to_rust(options);
     let ignore = opts
         .optimize_static
         .as_ref()
         .map_or(&[][..], |config| config.ignore_elements.as_slice());
-    satteri_mdxjs::simplify_plain_mdx_nodes(arena, ignore);
-    satteri_mdxjs::compile_hast_arena(arena, &opts)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+    simplify_plain_mdx_nodes(arena, ignore);
+    compile_hast_arena(arena, &opts).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 /// Parse a JavaScript expression and return its ESTree-compatible AST as a JSON string.
@@ -1274,7 +1248,7 @@ pub fn drop_handle(handle: AnyHandle) -> Result<()> {
             let mut arena = h
                 .lock()
                 .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-            let owned = std::mem::take(&mut *arena);
+            let owned = take(&mut *arena);
             drop(arena);
             release_mdast_arena(owned);
         }
@@ -1282,7 +1256,7 @@ pub fn drop_handle(handle: AnyHandle) -> Result<()> {
             let mut arena = h
                 .lock()
                 .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-            let owned = std::mem::take(&mut *arena);
+            let owned = take(&mut *arena);
             drop(arena);
             release_hast_arena(owned);
         }
@@ -1297,10 +1271,10 @@ mod pool_tests {
     #[test]
     fn zero_capacity_arenas_are_not_pooled() {
         MDAST_ARENA_POOL.with(|pool| pool.borrow_mut().clear());
-        release_mdast_arena(satteri_arena::Arena::<Mdast>::new(String::new()));
+        release_mdast_arena(Arena::<Mdast>::new(String::new()));
         assert_eq!(MDAST_ARENA_POOL.with(|p| p.borrow().len()), 0);
 
-        let mut grown = satteri_arena::Arena::<Mdast>::new(String::new());
+        let mut grown = Arena::<Mdast>::new(String::new());
         grown.nodes.reserve(64);
         release_mdast_arena(grown);
         assert_eq!(MDAST_ARENA_POOL.with(|p| p.borrow().len()), 1);
@@ -1309,7 +1283,7 @@ mod pool_tests {
 
     #[test]
     fn retained_bytes_counts_node_data_and_utf16_offsets() {
-        let mut arena = satteri_arena::Arena::<Mdast>::new(String::new());
+        let mut arena = Arena::<Mdast>::new(String::new());
         let base = arena.retained_bytes();
         arena.node_data.insert(0, vec![0u8; 4096]);
         arena.utf16_offsets.reserve(512);
@@ -1319,18 +1293,21 @@ mod pool_tests {
 
 #[cfg(test)]
 mod document_pool_tests {
+    use satteri_ast::mdast_to_html;
+    use satteri_pulldown_cmark::{DEFAULT_OPTIONS, parse, parse_into};
+
     use super::*;
 
     #[test]
     fn nested_document_use_preserves_the_outer_source() {
         MDAST_ARENA_POOL.with(|pool| pool.borrow_mut().clear());
-        let options = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+        let options = DEFAULT_OPTIONS;
         let rendered = with_source_document("**outer**", options, |outer, _| {
             let nested = with_source_document("inner 雪", options, |inner, _| {
-                Ok::<_, ()>(satteri_ast::mdast_to_html(inner))
+                Ok::<_, ()>(mdast_to_html(inner))
             })?;
             assert_eq!(nested, "<p>inner 雪</p>\n");
-            Ok::<_, ()>(satteri_ast::mdast_to_html(outer))
+            Ok::<_, ()>(mdast_to_html(outer))
         })
         .unwrap();
         assert_eq!(rendered, "<p><strong>outer</strong></p>\n");
@@ -1340,8 +1317,8 @@ mod document_pool_tests {
     #[test]
     fn direct_and_owned_parses_share_storage_without_stale_state() {
         MDAST_ARENA_POOL.with(|pool| pool.borrow_mut().clear());
-        let options = satteri_pulldown_cmark::DEFAULT_OPTIONS;
-        let (mut old, _) = satteri_pulldown_cmark::parse("**old**", options);
+        let options = DEFAULT_OPTIONS;
+        let (mut old, _) = parse("**old**", options);
         old.set_node_data(0, br#"{"hName":"aside"}"#.to_vec());
         old.mdx = true;
         release_mdast_arena(old);
@@ -1349,26 +1326,23 @@ mod document_pool_tests {
         let rendered = with_source_document("new 雪", options, |document, _| {
             assert!(document.node_data.is_empty());
             assert!(!document.mdx);
-            Ok::<_, ()>(satteri_ast::mdast_to_html(document))
+            Ok::<_, ()>(mdast_to_html(document))
         })
         .unwrap();
         assert_eq!(rendered, "<p>new 雪</p>\n");
 
-        let (owned, errors) =
-            satteri_pulldown_cmark::parse_into("next α", options, acquire_mdast_arena());
+        let (owned, errors) = parse_into("next α", options, acquire_mdast_arena());
         assert!(errors.is_empty());
         assert_eq!(owned.source(), "next α");
-        assert_eq!(satteri_ast::mdast_to_html(&owned), "<p>next α</p>\n");
+        assert_eq!(mdast_to_html(&owned), "<p>next α</p>\n");
     }
 
     #[test]
     fn document_errors_do_not_recycle_storage() {
         MDAST_ARENA_POOL.with(|pool| pool.borrow_mut().clear());
-        let error = with_source_document(
-            "discard",
-            satteri_pulldown_cmark::DEFAULT_OPTIONS,
-            |_, _| Err::<(), _>("test failure"),
-        );
+        let error = with_source_document("discard", DEFAULT_OPTIONS, |_, _| {
+            Err::<(), _>("test failure")
+        });
         assert_eq!(error, Err("test failure"));
         assert!(MDAST_ARENA_POOL.with(|pool| pool.borrow().is_empty()));
     }
@@ -1376,7 +1350,7 @@ mod document_pool_tests {
     #[test]
     fn oversized_documents_are_dropped_but_small_ones_are_recycled() {
         MDAST_ARENA_POOL.with(|pool| pool.borrow_mut().clear());
-        let options = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+        let options = DEFAULT_OPTIONS;
         // Code block values are owned, unlike plain source-backed text.
         let source = format!("```\n{}\n```", "x".repeat(ARENA_POOL_MAX_RETAINED_BYTES));
         with_source_document(&source, options, |doc, _| {
@@ -1386,7 +1360,7 @@ mod document_pool_tests {
         .unwrap();
         assert!(MDAST_ARENA_POOL.with(|pool| pool.borrow().is_empty()));
         with_source_document("tiny", options, |doc, _| {
-            assert_eq!(satteri_ast::mdast_to_html(doc), "<p>tiny</p>\n");
+            assert_eq!(mdast_to_html(doc), "<p>tiny</p>\n");
             Ok::<_, ()>(())
         })
         .unwrap();

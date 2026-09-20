@@ -20,7 +20,7 @@
 //! ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 //! DEALINGS IN THE SOFTWARE.
 
-use crate::convert::BULK_LINE_TRIM_MIN_LEN;
+use crate::convert::{BULK_LINE_TRIM_MIN_LEN, trim_lines_for_hast};
 use crate::swar::{has_zero, splat};
 
 /// Flags lanes holding `&`, `<`, or `>`. The fold admits nothing extra because
@@ -191,14 +191,14 @@ fn escape_into(
 pub(crate) fn escape_trimmed_body_text(out: &mut String, text: &str) {
     // Preserve the vectorized scans used by the general paths for bulk text.
     if text.len() >= BULK_LINE_TRIM_MIN_LEN {
-        escape_html_body_text(out, &crate::convert::trim_lines_for_hast(text));
+        escape_html_body_text(out, &trim_lines_for_hast(text));
         return;
     }
     let bytes = text.as_bytes();
     if can_copy_trimmed_text(bytes) {
         out.push_str(text);
     } else {
-        escape_html_body_text(out, &crate::convert::trim_lines_for_hast(text));
+        escape_html_body_text(out, &trim_lines_for_hast(text));
     }
 }
 
@@ -308,7 +308,7 @@ mod tests {
         let mut expected_trimmed = String::from("prefix:");
         pulldown_cmark_escape::escape_html_body_text(
             &mut expected_trimmed,
-            &crate::convert::trim_lines_for_hast(s),
+            &trim_lines_for_hast(s),
         )
         .unwrap();
         assert_eq!(trimmed, expected_trimmed, "trimmed body text: {s:?}");

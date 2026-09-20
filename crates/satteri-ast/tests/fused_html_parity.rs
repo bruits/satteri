@@ -5,8 +5,10 @@ use satteri_ast::hast::{
     Backref, ConvertOptions, hast_arena_to_html, mdast_arena_to_hast_arena_with_options,
 };
 use satteri_ast::mdast::{LinkData, ListItemData, MdastNodeType};
-use satteri_ast::try_mdast_to_html_fused;
-use satteri_pulldown_cmark::Options;
+use satteri_ast::{mdast_to_html, mdast_to_html_with_options, try_mdast_to_html_fused};
+#[cfg(feature = "mdx")]
+use satteri_pulldown_cmark::MDX_OPTIONS;
+use satteri_pulldown_cmark::{DEFAULT_OPTIONS, Options, parse};
 
 const SPEC_JSON: &str =
     include_str!("../../satteri-pulldown-cmark/third_party/CommonMark/spec.json");
@@ -113,8 +115,8 @@ fn everything() -> Options {
 fn option_matrix() -> Vec<(&'static str, Options)> {
     vec![
         ("empty", Options::empty()),
-        ("default", satteri_pulldown_cmark::DEFAULT_OPTIONS),
-        ("mdx", satteri_pulldown_cmark::MDX_OPTIONS),
+        ("default", DEFAULT_OPTIONS),
+        ("mdx", MDX_OPTIONS),
         ("all", everything()),
         ("all-no-mdx", everything() - Options::ENABLE_MDX),
     ]
@@ -137,7 +139,7 @@ fn has_h_data(arena: &Arena<Mdast>) -> bool {
 }
 
 fn assert_parity(label: &str, source: &str, parse_options: Options, convert: &ConvertOptions) {
-    let (arena, _) = satteri_pulldown_cmark::parse(source, parse_options);
+    let (arena, _) = parse(source, parse_options);
     let expected = two_stage(&arena, convert);
     match try_mdast_to_html_fused(&arena, convert) {
         Some(actual) => assert_eq!(
@@ -151,7 +153,7 @@ fn assert_parity(label: &str, source: &str, parse_options: Options, convert: &Co
     }
 
     assert_eq!(
-        satteri_ast::mdast_to_html_with_options(&arena, convert),
+        mdast_to_html_with_options(&arena, convert),
         expected,
         "{label}: entry point diverged\ninput: {source:?}"
     );
@@ -426,7 +428,7 @@ fn custom_convert_options_are_byte_identical() {
             assert_parity(
                 &format!("{label} / {source_label}"),
                 source,
-                satteri_pulldown_cmark::DEFAULT_OPTIONS,
+                DEFAULT_OPTIONS,
                 convert,
             );
         }
@@ -435,8 +437,7 @@ fn custom_convert_options_are_byte_identical() {
 
 #[test]
 fn node_data_falls_back_to_two_stage() {
-    let (mut arena, _) =
-        satteri_pulldown_cmark::parse("Hello\n", satteri_pulldown_cmark::DEFAULT_OPTIONS);
+    let (mut arena, _) = parse("Hello\n", DEFAULT_OPTIONS);
     let para_id = (0..arena.len() as u32)
         .find(|&id| {
             arena.get_node(id).node_type == satteri_ast::mdast::MdastNodeType::Paragraph as u8
@@ -448,7 +449,7 @@ fn node_data_falls_back_to_two_stage() {
         "fused path must decline when a node carries data"
     );
     assert!(
-        satteri_ast::mdast_to_html(&arena).contains("<section>Hello</section>"),
+        mdast_to_html(&arena).contains("<section>Hello</section>"),
         "two-stage fallback lost the hName override"
     );
 }
@@ -480,7 +481,7 @@ fn plain_link_labels_keep_break_trimming_escaping_and_overrides() {
     );
     arena.set_node_data(link, br#"{"hProperties":{"href":"/override"},"hChildren":[{"type":"text","value":"replacement"}]}"#.to_vec());
     assert_eq!(
-        satteri_ast::mdast_to_html(&arena),
+        mdast_to_html(&arena),
         "<p><br>\n<a href=\"/override\" title=\"title\">replacement</a></p>\n",
     );
 }
@@ -534,8 +535,7 @@ fn break_trimming_uses_replacement_children_without_skipping_or_recursing() {
         ),
         (r#"[]"#, ""),
     ] {
-        let (mut arena, _) =
-            satteri_pulldown_cmark::parse("before\\\n[original](/u)", Options::empty());
+        let (mut arena, _) = parse("before\\\n[original](/u)", Options::empty());
         let link = arena
             .nodes
             .iter()
@@ -543,7 +543,7 @@ fn break_trimming_uses_replacement_children_without_skipping_or_recursing() {
             .unwrap() as u32;
         arena.set_node_data(link, format!(r#"{{"hChildren":{children}}}"#).into_bytes());
         let expected = format!("<p>before<br>\n<a href=\"/u\">{expected}</a></p>\n");
-        assert_eq!(satteri_ast::mdast_to_html(&arena), expected);
+        assert_eq!(mdast_to_html(&arena), expected);
     }
 }
 
@@ -554,7 +554,7 @@ fn directive_visibility_requires_hname_and_preserves_sibling_separators() {
         MdastNodeType::LeafDirective,
         MdastNodeType::TextDirective,
     ] {
-        let (mut arena, _) = satteri_pulldown_cmark::parse("before\n\nafter", Options::empty());
+        let (mut arena, _) = parse("before\n\nafter", Options::empty());
         let siblings = arena.get_children(0).to_vec();
         let directive = arena.alloc_node(kind as u8);
         let text = text_node(&mut arena, "content");
@@ -567,7 +567,7 @@ fn directive_visibility_requires_hname_and_preserves_sibling_separators() {
         );
         arena.set_node_data(directive, br#"{"hName":"aside"}"#.to_vec());
         let expected = "<p>before</p>\n<aside>content</aside>\n<p>after</p>\n";
-        assert_eq!(satteri_ast::mdast_to_html(&arena), expected);
+        assert_eq!(mdast_to_html(&arena), expected);
         assert_eq!(two_stage(&arena, &ConvertOptions::default()), expected);
     }
 }
@@ -692,8 +692,7 @@ fn list_item_without_a_list_parent_renders_on_both_paths() {
 /// Only h-shaped `data` needs the HAST pipeline; plugin-private blobs stay on the fused path.
 #[test]
 fn unrelated_node_data_stays_fused() {
-    let (mut arena, _) =
-        satteri_pulldown_cmark::parse("Hello\n", satteri_pulldown_cmark::DEFAULT_OPTIONS);
+    let (mut arena, _) = parse("Hello\n", DEFAULT_OPTIONS);
     arena.set_node_data(0, br#"{"unrelated":1}"#.to_vec());
     let convert = ConvertOptions::default();
     assert_eq!(

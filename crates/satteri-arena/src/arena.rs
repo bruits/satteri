@@ -399,6 +399,7 @@ pub struct TypeDataWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Hast;
     use crate::kind::Mdast;
 
     #[test]
@@ -446,8 +447,8 @@ mod tests {
             assert_eq!(owned.get_str(value), "β new");
         }
         // Text tags from the registry; both codecs contain one StringRef.
-        check::<crate::Mdast>(10);
-        check::<crate::Hast>(2);
+        check::<Mdast>(10);
+        check::<Hast>(2);
     }
 
     #[test]
@@ -510,7 +511,7 @@ mod tests {
         let id = arena.alloc_node(0);
         arena.set_position(
             id,
-            crate::NodePosition {
+            NodePosition {
                 start_offset: 0,
                 end_offset: 10,
                 start_line: 1,

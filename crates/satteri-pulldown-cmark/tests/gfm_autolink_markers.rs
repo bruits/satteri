@@ -4,21 +4,23 @@
 //! `arena_build`.
 
 use satteri_arena::StringRef;
+use satteri_ast::hast::{hast_arena_to_html, mdast_arena_to_hast_arena};
 use satteri_ast::mdast::{MdastNodeType, decode_link_data};
+use satteri_ast::mdast_to_html;
 use satteri_pulldown_cmark::{Event, Options, Parser, Tag, parse, parse_no_positions};
 
 fn html(input: &str) -> String {
     let (arena, _) = parse(input, Options::ENABLE_GFM | Options::ENABLE_MATH);
-    satteri_ast::mdast_to_html(&arena)
+    mdast_to_html(&arena)
 }
 
 fn assert_html(input: &str, options: Options, expected: &str) {
     for parser in [parse, parse_no_positions] {
         let (arena, errors) = parser(input, options);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(satteri_ast::mdast_to_html(&arena), expected);
-        let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&arena);
-        assert_eq!(satteri_ast::hast::hast_arena_to_html(&hast), expected);
+        assert_eq!(mdast_to_html(&arena), expected);
+        let hast = mdast_arena_to_hast_arena(&arena);
+        assert_eq!(hast_arena_to_html(&hast), expected);
     }
 }
 
@@ -278,16 +280,13 @@ fn deferred_protocols_respect_the_construct_that_owns_them() {
                 [vec!["https://x.y"], expected.clone()].concat(),
                 "{source:?}"
             );
-            let output = satteri_ast::mdast_to_html(&arena);
-            let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&arena);
-            assert_eq!(output, satteri_ast::hast::hast_arena_to_html(&hast));
+            let output = mdast_to_html(&arena);
+            let hast = mdast_arena_to_hast_arena(&arena);
+            assert_eq!(output, hast_arena_to_html(&hast));
             // An unrelated paragraph must not change later link ownership.
             let (prefixed, errors) = parser(&format!("_\n\n{source}"), options);
             assert!(errors.is_empty());
-            assert_eq!(
-                satteri_ast::mdast_to_html(&prefixed),
-                format!("<p>_</p>\n{output}")
-            );
+            assert_eq!(mdast_to_html(&prefixed), format!("<p>_</p>\n{output}"));
         }
     }
 }

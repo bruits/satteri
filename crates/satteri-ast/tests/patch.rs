@@ -1,6 +1,6 @@
 //! Integration tests for in-place arena patching, over the "# Hello\n\nWorld" arena.
 
-use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
+use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, NodePosition};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::patch::{Patch, PatchContent, apply_patches_in_place, apply_patches_strict};
@@ -79,7 +79,7 @@ fn build_hello_world() -> Arena<Mdast> {
     let mut b = ArenaBuilder::<Mdast>::new(source);
 
     b.open_node(MdastNodeType::Root as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 14,
         start_line: 1,
@@ -89,7 +89,7 @@ fn build_hello_world() -> Arena<Mdast> {
     });
 
     b.open_node(MdastNodeType::Heading as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 7,
         start_line: 1,
@@ -100,7 +100,7 @@ fn build_hello_world() -> Arena<Mdast> {
     b.set_data_current(&encode_heading_data(1));
 
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 2,
         end_offset: 7,
         start_line: 1,
@@ -114,7 +114,7 @@ fn build_hello_world() -> Arena<Mdast> {
     b.close_node(); // heading
 
     b.open_node(MdastNodeType::Paragraph as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 9,
         end_offset: 14,
         start_line: 2,
@@ -124,7 +124,7 @@ fn build_hello_world() -> Arena<Mdast> {
     });
 
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 9,
         end_offset: 14,
         start_line: 2,
@@ -1041,7 +1041,7 @@ fn grafted_payload_nodes_get_no_position() {
 
     let mut b = ArenaBuilder::<Mdast>::new("**bold**".to_string());
     b.open_node(MdastNodeType::Root as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 8,
         start_line: 1,
@@ -1050,7 +1050,7 @@ fn grafted_payload_nodes_get_no_position() {
         end_column: 9,
     });
     b.open_node(MdastNodeType::Strong as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 8,
         start_line: 1,
@@ -1059,7 +1059,7 @@ fn grafted_payload_nodes_get_no_position() {
         end_column: 9,
     });
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 2,
         end_offset: 6,
         start_line: 1,

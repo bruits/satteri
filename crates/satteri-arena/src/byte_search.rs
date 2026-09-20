@@ -6,6 +6,8 @@ use std::arch::x86_64::{
     _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_or_si256, _mm256_set1_epi8,
     _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16,
 };
+#[cfg(target_arch = "x86_64")]
+use std::is_x86_feature_detected;
 
 // High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
 #[cfg(target_arch = "x86_64")]
@@ -24,7 +26,7 @@ pub fn contains_ascii_byte_accelerated(bytes: &[u8], low: &[u8; 16]) -> Option<b
         return None;
     }
     #[cfg(target_arch = "x86_64")]
-    if std::is_x86_feature_detected!("avx2") {
+    if is_x86_feature_detected!("avx2") {
         // SAFETY: AVX2 is available and a full vector batch is readable.
         return Some(unsafe { contains_avx2(bytes, low) });
     }
@@ -84,7 +86,7 @@ pub fn next_ascii_mask(bytes: &[u8], low: &[u8; 16]) -> Option<(usize, u32)> {
         return None;
     }
     #[cfg(target_arch = "x86_64")]
-    if std::is_x86_feature_detected!("avx2") {
+    if is_x86_feature_detected!("avx2") {
         // SAFETY: Runtime dispatch establishes AVX2 support.
         return Some(unsafe { next_mask_avx2(bytes, low) });
     }
@@ -120,6 +122,8 @@ unsafe fn next_mask_avx2(bytes: &[u8], low: &[u8; 16]) -> (usize, u32) {
 
 #[cfg(test)]
 mod tests {
+    use std::array::from_fn;
+
     use super::{AVX2_BATCH_BYTES, contains_ascii_byte_accelerated};
 
     #[test]
@@ -209,8 +213,8 @@ mod tests {
             state as u8
         };
         for _ in 0..1024 {
-            let low = std::array::from_fn(|_| next());
-            let bytes: [u8; 321] = std::array::from_fn(|_| next());
+            let low = from_fn(|_| next());
+            let bytes: [u8; 321] = from_fn(|_| next());
             for start in 0..32 {
                 let slice = &bytes[start..];
                 let expected = slice

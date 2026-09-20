@@ -1,3 +1,5 @@
+use satteri_ast::hast::mdast_arena_to_hast_arena;
+use satteri_ast::mdast_to_html;
 use satteri_pulldown_cmark::{Options, parse};
 
 const ISSUE_MARKDOWN: &str = "This is an MDX page! You can access it using `/mdx`.
@@ -29,7 +31,7 @@ fn decoded_values_leave_the_source_unchanged() {
     let (arena, _) = parse(input, Options::empty());
     assert_eq!(arena.source(), input);
     assert_eq!(
-        satteri_ast::mdast_to_html(&arena),
+        mdast_to_html(&arena),
         "<p><img src=\"/?q=a&amp;b\" alt=\"image\"></p>\n"
     );
 }
@@ -59,7 +61,7 @@ fn a_leading_bom_is_outside_the_source_and_the_position_space() {
 #[test]
 fn mdast_to_hast_conversion_preserves_the_source_boundary() {
     let (mdast, _) = parse(ISSUE_MARKDOWN, Options::empty());
-    let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
+    let hast = mdast_arena_to_hast_arena(&mdast);
     // HAST reuses the MDAST pool for StringRefs; its source view must still match.
     assert_eq!(hast.source(), ISSUE_MARKDOWN);
 }

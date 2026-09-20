@@ -1,12 +1,18 @@
 //! Convert an MDAST arena to a HAST arena.
 
+use std::borrow::Cow;
+#[cfg(target_arch = "x86_64")]
+use std::is_x86_feature_detected;
+
 use rustc_hash::FxHashMap;
 use satteri_arena::{
-    Arena, ArenaBuilder, Document, Hast, Mdast, StringRef, decode_string_ref_data,
+    Arena, ArenaBuilder, Document, Hast, Mdast, NodePosition, StringRef, decode_string_ref_data,
 };
 
 use crate::emit::{AttrName, AttrValue, BreakTrim, Children, ConvertSink, EmitCtx, Pos, emit_node};
 use crate::hast::HastNodeType;
+#[cfg(feature = "from-html")]
+use crate::hast::from_html::raw_to_hast_arena;
 use crate::mdast::{
     ListItemData, MdastNodeType, decode_definition_data, decode_footnote_definition_data,
     decode_list_item_data, decode_reference_data,
@@ -230,12 +236,12 @@ pub(crate) fn footnote_fragment_id(identifier: &str) -> String {
 }
 
 #[inline]
-pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn normalize_url(url: &str) -> Cow<'_, str> {
     let bytes = url.as_bytes();
     let Some(first_unsafe) = next_unsafe(bytes, 0) else {
-        return std::borrow::Cow::Borrowed(url);
+        return Cow::Borrowed(url);
     };
-    std::borrow::Cow::Owned(encode_url(url, first_unsafe))
+    Cow::Owned(encode_url(url, first_unsafe))
 }
 
 #[inline(never)]
@@ -287,7 +293,7 @@ const URL_SCAN_VECTOR_BYTES: usize = 16; // One SSSE3 vector.
 #[inline]
 fn first_non_url_safe(bytes: &[u8]) -> Option<usize> {
     #[cfg(target_arch = "x86_64")]
-    if bytes.len() >= URL_SCAN_VECTOR_BYTES && std::is_x86_feature_detected!("ssse3") {
+    if bytes.len() >= URL_SCAN_VECTOR_BYTES && is_x86_feature_detected!("ssse3") {
         // SAFETY: SSSE3 is available and at least one full vector is readable.
         return unsafe { first_non_url_safe_ssse3(bytes) };
     }
@@ -477,7 +483,7 @@ fn mdast_arena_to_hast_arena_impl(
     let arena = sink.finish();
     #[cfg(feature = "from-html")]
     if options.raw_html {
-        return crate::hast::from_html::raw_to_hast_arena(&arena);
+        return raw_to_hast_arena(&arena);
     }
     arena
 }
@@ -799,11 +805,11 @@ fn add_text_node(builder: &mut ArenaBuilder<Hast>, text: &str) -> u32 {
 /// get trimmed). Returns `Cow::Borrowed` when the value is unchanged so the
 /// caller can reuse the original `StringRef`.
 #[inline]
-pub(crate) fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn trim_lines_for_hast(value: &str) -> Cow<'_, str> {
     if !needs_line_trim(value.as_bytes()) {
-        return std::borrow::Cow::Borrowed(value);
+        return Cow::Borrowed(value);
     }
-    std::borrow::Cow::Owned(trim_lines_rewrite(value))
+    Cow::Owned(trim_lines_rewrite(value))
 }
 
 const fn is_line_break(byte: u8) -> bool {
@@ -926,7 +932,7 @@ fn copy_position_to(
     if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
         builder.arena_mut().set_position(
             target_id,
-            satteri_arena::NodePosition {
+            NodePosition {
                 start_offset: node.start_offset,
                 end_offset: node.end_offset,
                 start_line: node.start_line,
@@ -992,7 +998,7 @@ fn copy_position(node_id: u32, view: &Document<'_, Mdast>, builder: &mut ArenaBu
     // `Location`. `readPosition` gates plugin `node.position` on the line, so a
     // non-opted-in plugin still sees `undefined`.
     if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
-        builder.set_position_current(satteri_arena::NodePosition {
+        builder.set_position_current(NodePosition {
             start_offset: node.start_offset,
             end_offset: node.end_offset,
             start_line: node.start_line,
@@ -1167,15 +1173,14 @@ impl<'a> HastSink<'a> {
             Pos::Span(first, last) => {
                 let f = self.view.get_node(first);
                 let l = self.view.get_node(last);
-                self.builder
-                    .set_position_current(satteri_arena::NodePosition {
-                        start_offset: f.start_offset,
-                        end_offset: l.end_offset,
-                        start_line: f.start_line,
-                        start_column: f.start_column,
-                        end_line: l.end_line,
-                        end_column: l.end_column,
-                    });
+                self.builder.set_position_current(NodePosition {
+                    start_offset: f.start_offset,
+                    end_offset: l.end_offset,
+                    start_line: f.start_line,
+                    start_column: f.start_column,
+                    end_line: l.end_line,
+                    end_column: l.end_column,
+                });
             }
         }
     }
@@ -1189,7 +1194,7 @@ impl<'a> HastSink<'a> {
                 let l = self.view.get_node(last);
                 self.builder.arena_mut().set_position(
                     node_id,
-                    satteri_arena::NodePosition {
+                    NodePosition {
                         start_offset: f.start_offset,
                         end_offset: l.end_offset,
                         start_line: f.start_line,
@@ -1373,8 +1378,8 @@ impl ConvertSink for HastSink<'_> {
     fn text_trimmed(&mut self, value: StringRef, pos: Pos) {
         let raw = self.view.get_str(value);
         match trim_lines_for_hast(raw) {
-            std::borrow::Cow::Borrowed(_) => self.add_text_ref(value, pos),
-            std::borrow::Cow::Owned(trimmed) => {
+            Cow::Borrowed(_) => self.add_text_ref(value, pos),
+            Cow::Owned(trimmed) => {
                 let text_ref = self.builder.alloc_string(&trimmed);
                 self.add_text_ref(text_ref, pos);
             }
@@ -1538,7 +1543,7 @@ impl ConvertSink for HastSink<'_> {
         let node = view.get_node(node_id);
         self.builder.arena_mut().set_position(
             leaf_id,
-            satteri_arena::NodePosition {
+            NodePosition {
                 start_offset: node.start_offset,
                 end_offset: node.end_offset,
                 start_line: node.start_line,
@@ -1972,7 +1977,7 @@ mod hast_convert_tests {
 
     fn check_normalize_url(url: &str) {
         let normalized = normalize_url(url);
-        let borrowed = matches!(normalized, std::borrow::Cow::Borrowed(_));
+        let borrowed = matches!(normalized, Cow::Borrowed(_));
         let mut expected = String::new();
         for (i, &byte) in url.as_bytes().iter().enumerate() {
             let valid_percent = byte == b'%'
@@ -2058,7 +2063,7 @@ mod hast_convert_tests {
             "", "x", "a\nb", "a\r\nb", "\n", "\r\n", "a b", " lead", "end ",
         ] {
             assert!(
-                matches!(trim_lines_for_hast(value), std::borrow::Cow::Borrowed(_)),
+                matches!(trim_lines_for_hast(value), Cow::Borrowed(_)),
                 "expected a borrow for {value:?}"
             );
         }

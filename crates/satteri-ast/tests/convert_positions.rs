@@ -4,16 +4,13 @@
 //! (or, for synthesized leaves like the checkbox `<input>`, the parent
 //! MDAST node's position).
 
-use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, decode_string_ref_data};
-use satteri_ast::hast::{
-    HastNodeType,
-    codec::{decode_element_prop, decode_element_prop_count, decode_element_tag},
-    mdast_arena_to_hast_arena,
+use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, NodePosition, decode_string_ref_data};
+use satteri_ast::hast::codec::{
+    decode_element_prop, decode_element_prop_count, decode_element_tag,
 };
-use satteri_ast::mdast::{
-    MdastNodeType,
-    codec::{encode_definition_data, encode_reference_data},
-};
+use satteri_ast::hast::{HastNodeType, mdast_arena_to_hast_arena};
+use satteri_ast::mdast::MdastNodeType;
+use satteri_ast::mdast::codec::{encode_definition_data, encode_reference_data};
 
 fn parse(md: &str) -> Arena<Mdast> {
     satteri_pulldown_cmark::parse(md, satteri_pulldown_cmark::DEFAULT_OPTIONS).0
@@ -304,7 +301,7 @@ fn synth_reference_arena(ref_type: MdastNodeType) -> (Arena<Mdast>, u32) {
     let mut b = ArenaBuilder::<Mdast>::new(source);
 
     b.open_node(MdastNodeType::Root as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 13,
         start_line: 1,
@@ -314,7 +311,7 @@ fn synth_reference_arena(ref_type: MdastNodeType) -> (Arena<Mdast>, u32) {
     });
 
     b.open_node(MdastNodeType::Paragraph as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 12,
         start_line: 1,
@@ -326,7 +323,7 @@ fn synth_reference_arena(ref_type: MdastNodeType) -> (Arena<Mdast>, u32) {
     let ref_id = b.open_node(ref_type as u8);
     // Non-trivial position so assert_position_matches can actually catch
     // a bug: start and end differ from the paragraph's.
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 4,
         end_offset: 12,
         start_line: 1,

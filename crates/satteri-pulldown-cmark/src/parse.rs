@@ -20,27 +20,31 @@
 
 //! Tree-based two pass parser.
 
-use alloc::{borrow::ToOwned, boxed::Box, collections::VecDeque, string::String, vec::Vec};
-use core::{
-    cell::Cell,
-    cmp::{max, min},
-    iter::FusedIterator,
-    num::NonZeroU32,
-    ops::{Index, Range},
-};
+use alloc::borrow::ToOwned;
+use alloc::boxed::Box;
+use alloc::collections::VecDeque;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cell::Cell;
+use core::cmp::{max, min};
+use core::iter::FusedIterator;
+use core::num::NonZeroU32;
+use core::ops::{Index, Range};
+
 use rustc_hash::FxHashMap;
 use unicase::UniCase;
 
+use crate::firstpass::{delim_run_is_valid, run_first_pass, run_first_pass_mode};
+use crate::linklabel::{FootnoteLabel, LinkLabel, ReferenceLabel, scan_link_label_rest};
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
+use crate::post_passes::scan_autolink_literal;
+use crate::scanners::*;
+use crate::strings::CowStr;
+use crate::tree::{Tree, TreeIndex};
 use crate::{
     Alignment, BlockQuoteKind, CodeBlockKind, DirectiveKind, Event, HeadingLevel, LinkType,
-    MetadataBlockKind, Options, Tag, TagEnd,
-    firstpass::run_first_pass,
-    linklabel::{FootnoteLabel, LinkLabel, ReferenceLabel, scan_link_label_rest},
-    scanners::*,
-    strings::CowStr,
-    tree::{Tree, TreeIndex},
+    MetadataBlockKind, Options, Tag, TagEnd, strip_leading_bom,
 };
 
 // Allowing arbitrary depth nested parentheses inside link destinations
@@ -386,7 +390,7 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
     ///
     /// See the [`ParserCallbacks`] trait for a list of callbacks that can be overridden.
     pub fn new_with_callbacks(text: &'input str, options: Options, callbacks: CB) -> Self {
-        let text = crate::strip_leading_bom(text);
+        let text = strip_leading_bom(text);
         let (mut tree, allocs, _firstpass_mdx_errors) = run_first_pass(text, options);
         tree.reset();
         let inline_stack = Default::default();
@@ -463,7 +467,7 @@ impl<'input> ParserInner<'input> {
     pub(crate) fn new_for_arena(text: &'input str, options: Options) -> Self {
         let compact_links = !options.contains(Options::ENABLE_MDX);
         let (mut tree, allocs, firstpass_mdx_errors) =
-            crate::firstpass::run_first_pass_mode(text, options, compact_links);
+            run_first_pass_mode(text, options, compact_links);
         tree.reset();
         ParserInner {
             text,
@@ -784,10 +788,10 @@ impl<'input> ParserInner<'input> {
                             let end = start + total_len;
                             let node = scan_nodes_to_ix(&self.tree, self.tree[cur_ix].next, end);
                             let raw = &block_text[start..end];
-                            let col = crate::mdx::column_at(block_text.as_bytes(), start);
-                            let jsx_data = crate::mdx::parse_jsx_tag_with_column(raw, col, 0);
+                            let col = column_at(block_text.as_bytes(), start);
+                            let jsx_data = parse_jsx_tag_with_column(raw, col, 0);
                             let mut allocator = oxc_allocator::Allocator::default();
-                            crate::mdx::validate_jsx_expressions(
+                            validate_jsx_expressions(
                                 raw,
                                 &jsx_data.attrs,
                                 |rel| start + rel,
@@ -1274,7 +1278,7 @@ impl<'input> ParserInner<'input> {
                             content_start,
                         } => {
                             let start = self.tree[cur_ix].item.start;
-                            match crate::post_passes::scan_autolink_literal(
+                            match scan_autolink_literal(
                                 &self.text.as_bytes()[..limit as usize],
                                 start,
                                 content_start,
@@ -1363,7 +1367,7 @@ impl<'input> ParserInner<'input> {
                         backslash_escaped: true,
                     };
                     let c = self.text.as_bytes()[self.tree[cur_ix].item.start];
-                    if !crate::firstpass::delim_run_is_valid(c, count - 1, self.options) {
+                    if !delim_run_is_valid(c, count - 1, self.options) {
                         let mut scan = self.tree[cur_ix].next;
                         for _ in 1..count {
                             let Some(next_ix) = scan else { break };
@@ -4021,7 +4025,9 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
 
 #[cfg(test)]
 mod test {
-    use alloc::{borrow::ToOwned, string::ToString, vec::Vec};
+    use alloc::borrow::ToOwned;
+    use alloc::string::ToString;
+    use alloc::vec::Vec;
 
     use super::*;
     use crate::tree::Node;

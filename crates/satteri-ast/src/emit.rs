@@ -15,6 +15,7 @@ use crate::mdast::{
     decode_list_item_data, decode_math_data, decode_reference_data, decode_table_alignments,
 };
 use crate::shared::{PROP_INT, PROP_SPACE_SEP, PROP_STRING};
+use crate::stack::with_headroom;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Pos {
@@ -292,7 +293,7 @@ pub(crate) fn emit_node<S: ConvertSink>(
     if ctx.view.get_node(node_id).node_type == MdastNodeType::Text as u8 {
         emit_text(node_id, ctx.view, sink);
     } else {
-        crate::stack::with_headroom(depth, || {
+        with_headroom(depth, || {
             if ctx.view.get_node(node_id).node_type == MdastNodeType::Link as u8 {
                 emit_link(node_id, ctx, sink, depth);
             } else {
@@ -696,7 +697,7 @@ fn emit_list_items<S: ConvertSink>(list_id: u32, ctx: &EmitCtx<'_, '_>, sink: &m
         if MdastNodeType::from_u8(view.get_node(child_id).node_type)
             == Some(MdastNodeType::ListItem)
         {
-            crate::stack::with_headroom(depth + 1, || {
+            with_headroom(depth + 1, || {
                 emit_list_item(child_id, items_are_loose, ctx, sink, depth + 1)
             });
         } else {
@@ -1192,8 +1193,9 @@ fn emit_footnote_backrefs<S: ConvertSink>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use satteri_property_info::property_to_attribute;
+
+    use super::*;
 
     /// The streaming sink writes attribute names the arena sink derives from property names.
     #[test]

@@ -1,13 +1,16 @@
 //! Source-backed semantic document built by the existing grammar traversal.
 //! Syntax records remain transient; semantic records have stable, dense IDs.
-use satteri_arena::Mdast;
+use satteri_arena::{Document, Mdast};
 
-pub type SourceDocument<'a> = satteri_arena::Document<'a, Mdast>;
+use crate::Options;
+use crate::arena_build::parse_document;
+
+pub type SourceDocument<'a> = Document<'a, Mdast>;
 
 /// Resolve a document using the same grammar and semantic passes as owned arenas.
 pub fn parse(
     source: &str,
-    options: crate::Options,
+    options: Options,
     track_positions: bool,
 ) -> (SourceDocument<'_>, Vec<(usize, String)>) {
     parse_reusing(source, options, track_positions, None)
@@ -16,11 +19,11 @@ pub fn parse(
 /// Parse using buffers returned by [`SourceDocument::into_reusable`].
 pub fn parse_reusing<'a>(
     source: &'a str,
-    options: crate::Options,
+    options: Options,
     track_positions: bool,
     storage: Option<SourceDocument<'static>>,
 ) -> (SourceDocument<'a>, Vec<(usize, String)>) {
-    crate::arena_build::parse_document(
+    parse_document(
         source,
         options,
         track_positions,

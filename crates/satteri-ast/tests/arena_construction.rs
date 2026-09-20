@@ -1,6 +1,6 @@
 //! Integration tests for arena construction.
 
-use satteri_arena::{Arena, ArenaBuilder, Mdast};
+use satteri_arena::{Arena, ArenaBuilder, Mdast, NodePosition};
 use satteri_ast::mdast::MdastNodeType;
 
 #[test]
@@ -9,7 +9,7 @@ fn heading_with_text_child() {
     let mut builder = ArenaBuilder::<Mdast>::new(source.to_string());
 
     let root_id = builder.open_node(MdastNodeType::Root as u8);
-    builder.set_position_current(satteri_arena::NodePosition {
+    builder.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 7,
         start_line: 1,
@@ -19,7 +19,7 @@ fn heading_with_text_child() {
     });
 
     let heading_id = builder.open_node(MdastNodeType::Heading as u8);
-    builder.set_position_current(satteri_arena::NodePosition {
+    builder.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 7,
         start_line: 1,
@@ -29,7 +29,7 @@ fn heading_with_text_child() {
     });
 
     let text_id = builder.open_node(MdastNodeType::Text as u8);
-    builder.set_position_current(satteri_arena::NodePosition {
+    builder.set_position_current(NodePosition {
         start_offset: 2,
         end_offset: 7,
         start_line: 1,
@@ -119,7 +119,7 @@ fn arena_direct_methods() {
 
     arena.set_position(
         root,
-        satteri_arena::NodePosition {
+        NodePosition {
             start_offset: 0,
             end_offset: 7,
             start_line: 1,
@@ -130,7 +130,7 @@ fn arena_direct_methods() {
     );
     arena.set_position(
         para,
-        satteri_arena::NodePosition {
+        NodePosition {
             start_offset: 0,
             end_offset: 7,
             start_line: 1,
@@ -141,7 +141,7 @@ fn arena_direct_methods() {
     );
     arena.set_position(
         text,
-        satteri_arena::NodePosition {
+        NodePosition {
             start_offset: 0,
             end_offset: 7,
             start_line: 1,

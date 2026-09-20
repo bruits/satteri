@@ -15,6 +15,7 @@ use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
     PROP_STRING, PROP_TOKEN_LIST,
 };
+use crate::stack::with_headroom;
 
 /// Render HTML from an arena.
 pub fn hast_arena_to_html(arena: &Document<'_, Hast>) -> String {
@@ -100,7 +101,7 @@ pub(crate) fn render_node_inner<'cb>(
     on_mdx: Option<&mut OnMdx<'cb>>,
     depth: u32,
 ) {
-    crate::stack::with_headroom(depth, || {
+    with_headroom(depth, || {
         render_node_at(node_id, view, out, context, on_mdx, depth);
     });
 }

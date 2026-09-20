@@ -1,3 +1,6 @@
+use satteri_ast::mdast_to_html;
+#[cfg(feature = "mdx")]
+use satteri_pulldown_cmark::MDX_OPTIONS;
 use satteri_pulldown_cmark::{
     DEFAULT_OPTIONS, Event, Options, Parser, Tag, document, parse, parse_no_positions,
 };
@@ -82,7 +85,7 @@ fn source_spans_preserve_delimiters_continuations_and_autolinks() {
     for (source, expected) in cases {
         let (arena, errors) = parse_no_positions(source, Options::from_bits_truncate(3230));
         assert!(errors.is_empty(), "{source:?}");
-        assert_eq!(satteri_ast::mdast_to_html(&arena), expected, "{source:?}");
+        assert_eq!(mdast_to_html(&arena), expected, "{source:?}");
     }
 }
 
@@ -127,7 +130,7 @@ fn deferred_autolinks_preserve_partially_consumed_strong_delimiters() {
     for options in [
         DEFAULT_OPTIONS,
         #[cfg(feature = "mdx")]
-        satteri_pulldown_cmark::MDX_OPTIONS,
+        MDX_OPTIONS,
     ] {
         for (source, expected) in cases {
             for track_positions in [true, false] {
@@ -137,14 +140,10 @@ fn deferred_autolinks_preserve_partially_consumed_strong_delimiters() {
                     parse_no_positions(source, options)
                 };
                 assert!(errors.is_empty(), "{source:?}");
-                assert_eq!(satteri_ast::mdast_to_html(&arena), expected, "{source:?}");
+                assert_eq!(mdast_to_html(&arena), expected, "{source:?}");
                 let (borrowed, errors) = document::parse(source, options, track_positions);
                 assert!(errors.is_empty(), "{source:?}");
-                assert_eq!(
-                    satteri_ast::mdast_to_html(&borrowed),
-                    expected,
-                    "{source:?}"
-                );
+                assert_eq!(mdast_to_html(&borrowed), expected, "{source:?}");
             }
         }
         let events: Vec<_> = Parser::new_ext(cases[0].0, options).collect();

@@ -1,26 +1,34 @@
 //! The first pass resolves all block structure, generating an AST. Within a block, items
 //! are in a linear chain with potential inline markup identified.
 
-use alloc::{string::String, vec::Vec};
-use core::{cmp::max, ops::Range};
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cmp::max;
+use core::ops::Range;
 
+#[cfg(target_arch = "x86_64")]
+use satteri_arena::byte_search::contains_ascii_byte_accelerated;
+use satteri_arena::byte_search::next_ascii_mask;
 use satteri_arena::line_ending_iter;
+#[cfg(feature = "mdx")]
+use satteri_arena::mdx_types::Location;
 use unicase::UniCase;
 
+use crate::linklabel::{LinkLabel, scan_link_label_rest};
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
-use crate::{
-    HeadingLevel, MetadataBlockKind, Options,
-    linklabel::{LinkLabel, scan_link_label_rest},
-    parse::{
-        Allocations, AutolinkCandidate, AutolinkKind, DirectiveAttrData, FootnoteDef,
-        HeadingAttributes, Item, ItemBody, LINK_MAX_NESTED_PARENS, LinkDef, scan_containers,
-    },
-    post_passes::{scan_autolink_literal, scan_email_autolink},
-    scanners::*,
-    strings::CowStr,
-    tree::{Tree, TreeIndex},
+use crate::parse::{
+    Allocations, AutolinkCandidate, AutolinkKind, DirectiveAttrData, FootnoteDef,
+    HeadingAttributes, Item, ItemBody, LINK_MAX_NESTED_PARENS, LinkDef, scan_containers,
 };
+use crate::post_passes::{
+    has_autolink_trigger, match_autolink_scheme, scan_autolink_literal, scan_email_autolink,
+    smart_dash_run,
+};
+use crate::scanners::*;
+use crate::strings::CowStr;
+use crate::tree::{Tree, TreeIndex};
+use crate::{HeadingLevel, MetadataBlockKind, Options};
 
 pub(crate) fn run_first_pass(
     text: &str,
@@ -41,8 +49,8 @@ pub(crate) fn run_first_pass_mode(
     // A document-wide check also remains valid when inline scanning skips over
     // line boundaries (e.g. code spans and directive labels).
     let mut allocs = Allocations::new();
-    allocs.raw_autolink_trigger = options.contains(Options::ENABLE_GFM)
-        && crate::post_passes::has_autolink_trigger(text.as_bytes());
+    allocs.raw_autolink_trigger =
+        options.contains(Options::ENABLE_GFM) && has_autolink_trigger(text.as_bytes());
     // Escaped delimiter runs need a known end during tokenization. Without
     // underscores, an ASCII-alphanumeric domain start guarantees acceptance:
     // deferring its extent scan cannot introduce a marker for a rejected URL.
@@ -920,7 +928,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 if !candidate.is_empty() {
                     use crate::mdx::EsmParseResult;
                     let mut allocator = oxc_allocator::Allocator::default();
-                    match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                    match try_parse_esm(candidate, &mut allocator) {
                         EsmParseResult::Complete => {}
                         EsmParseResult::Incomplete => {
                             let mut pos = ix + final_end;
@@ -951,7 +959,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 }
                                 final_end = pos - ix;
                                 let candidate = self.text[ix..ix + final_end].trim_end();
-                                match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                                match try_parse_esm(candidate, &mut allocator) {
                                     EsmParseResult::Complete => break,
                                     EsmParseResult::Incomplete => continue,
                                     EsmParseResult::Error => break,
@@ -2457,22 +2465,17 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 // Without this, `{h<}` etc. silently produce a
                                 // phantom mdxTextExpression and only error at
                                 // JS emit. Allocator is reused across calls.
-                                if let Some((err_offset, detail)) =
-                                    crate::mdx::try_parse_expression_body(
-                                        &normalized,
-                                        &mut self.mdx_expr_allocator,
-                                    )
-                                {
+                                if let Some((err_offset, detail)) = try_parse_expression_body(
+                                    &normalized,
+                                    &mut self.mdx_expr_allocator,
+                                ) {
                                     // For single-line bodies the map is empty and
                                     // the normalized text is a verbatim slice, so a
                                     // direct offset is exact; multi-line bodies
                                     // resolve through the map.
                                     let source_offset =
-                                        satteri_arena::mdx_types::Location::relative_to_absolute(
-                                            &offset_map,
-                                            err_offset,
-                                        )
-                                        .unwrap_or(ix + content_start + err_offset);
+                                        Location::relative_to_absolute(&offset_map, err_offset)
+                                            .unwrap_or(ix + content_start + err_offset);
                                     self.mdx_errors.push((
                                         source_offset,
                                         format!("Could not parse expression with oxc: {detail}"),
@@ -2750,7 +2753,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             } else if count == 3 {
                                 ItemBody::SynthesizeChar('—')
                             } else {
-                                let buf = crate::post_passes::smart_dash_run(count);
+                                let buf = smart_dash_run(count);
                                 ItemBody::SynthesizeText(self.allocs.allocate_cow(buf.into()))
                             };
 
@@ -2807,9 +2810,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             && self.autolink_prefix.has_blocker
                             && matches!(byte, b'h' | b'H')
                         {
-                            let Some((prefix_len, _)) =
-                                crate::post_passes::match_autolink_scheme(bytes, ix)
-                            else {
+                            let Some((prefix_len, _)) = match_autolink_scheme(bytes, ix) else {
                                 break 'marker 0;
                             };
                             let content_start = ix == paragraph_floor;
@@ -4159,7 +4160,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if self.options.contains(Options::ENABLE_MDX) {
             let inner_start = header_start + range.start;
             let inner_end = header_start + range.end;
-            crate::mdx::try_parse_expression_body(
+            try_parse_expression_body(
                 &self.text[inner_start..inner_end],
                 &mut self.mdx_expr_allocator,
             )?;
@@ -5309,7 +5310,7 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize, has_math: bool) -> boo
             offset = i + 1;
             continue;
         }
-        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..])
+        if let Some(len) = scan_mdx_inline_jsx(&bytes[pos..])
             && pos + len > ix
         {
             return true;
@@ -5367,7 +5368,7 @@ fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
             i = j + 2;
             continue;
         }
-        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[j..])
+        if let Some(len) = scan_mdx_inline_jsx(&bytes[j..])
             && j + len > pos
         {
             return true;
@@ -5568,7 +5569,7 @@ fn detect_gfm_autolink(
 ) -> Option<AutolinkCandidate> {
     // Cheap reject first: most triggers in prose can't start an autolink.
     let is_www = match byte {
-        b'h' | b'H' | b'w' | b'W' => crate::post_passes::match_autolink_scheme(bytes, ix)?.1,
+        b'h' | b'H' | b'w' | b'W' => match_autolink_scheme(bytes, ix)?.1,
         b'@' => {
             // Email requires at least one atext char immediately before @.
             if ix == 0 || !is_email_local_char(bytes[ix - 1]) {
@@ -6732,8 +6733,7 @@ fn next_special_byte(lut: &LookupTable, bytes: &[u8], mut ix: usize) -> usize {
             // Dense delimiters never incur vector dispatch or table loads.
             if bytes.len() - ix >= 64
                 && !lut[bytes[ix] as usize]
-                && let Some((offset, mask)) =
-                    satteri_arena::byte_search::next_ascii_mask(&bytes[ix..], &lut.low)
+                && let Some((offset, mask)) = next_ascii_mask(&bytes[ix..], &lut.low)
             {
                 ix += offset;
                 if mask != 0 {
@@ -6763,7 +6763,7 @@ fn plain_inline_line_end(lut: &LookupTable, bytes: &[u8], start: usize) -> Optio
         return None;
     }
     let line = &rest[..len];
-    if lut[b'h' as usize] && crate::post_passes::has_autolink_trigger(line) {
+    if lut[b'h' as usize] && has_autolink_trigger(line) {
         return None;
     }
     #[cfg(target_arch = "x86_64")]
@@ -6811,7 +6811,7 @@ fn contains_inline_marker_accelerated(lut: &LookupTable, line: &[u8]) -> Option<
             low[(byte & 0x0f) as usize] |= 1 << (byte >> 4);
         }
     }
-    satteri_arena::byte_search::contains_ascii_byte_accelerated(line, &low)
+    contains_ascii_byte_accelerated(line, &low)
 }
 
 const SCAN_BLOCK: usize = 16;
@@ -7033,8 +7033,7 @@ mod inline_scan_tests {
                             let blocked = line.iter().any(|&b| {
                                 lut[b as usize] && !matches!(b, b'h' | b'H' | b'w' | b'W' | b'@')
                             });
-                            let autolink = lut[b'h' as usize]
-                                && crate::post_passes::has_autolink_trigger(line);
+                            let autolink = lut[b'h' as usize] && has_autolink_trigger(line);
                             assert_eq!(contains_inline_marker_portable(&lut, line), blocked);
                             assert_eq!(
                                 plain_inline_line_end(&lut, &bytes, start),
@@ -7063,8 +7062,7 @@ mod inline_scan_tests {
                     .position(|b| matches!(b, b'\n' | b'\r'))
                     .unwrap_or(bytes.len());
                 let line = &bytes[..end];
-                let autolink = options.contains(Options::ENABLE_GFM)
-                    && crate::post_passes::has_autolink_trigger(line);
+                let autolink = options.contains(Options::ENABLE_GFM) && has_autolink_trigger(line);
                 let marker = line
                     .iter()
                     .any(|&b| lut[b as usize] && !matches!(b, b'h' | b'H' | b'w' | b'W' | b'@'));

@@ -18,14 +18,30 @@ use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
 };
 
+use crate::firstpass::{
+    extend_indented_code_block, extend_inner_blockquote_through_outer_markers,
+    extend_list_in_blockquote_through_marker_lines, extend_list_item_to_next_sibling_content,
+    mdast_position_end,
+};
 use crate::linklabel::LinkLabel;
 #[cfg(feature = "mdx")]
 use crate::parse::JsxAttr;
-use crate::parse::{HeadingAttributes, ItemBody, LinkDef, ParserInner};
-use crate::{Alignment, HeadingLevel, LinkType, Options};
-
+use crate::parse::{HeadingAttributes, Item, ItemBody, LinkDef, ParserInner};
 #[cfg(feature = "mdx")]
 use crate::post_passes::MDX_EXPLICIT_JSX_DATA;
+#[cfg(feature = "mdx")]
+use crate::post_passes::mdx_mark_and_unravel;
+use crate::post_passes::{
+    emit_text_merging, gfm_autolink_literal_pass, merge_directive_port_splits, merge_text,
+};
+use crate::puncttable::is_ascii_punctuation;
+use crate::scanners::{is_space_or_tab, unescape};
+use crate::strings::CowStr;
+use crate::tree::{Tree, TreeIndex};
+use crate::{
+    Alignment, DefaultParserCallbacks, HeadingLevel, LinkType, MetadataBlockKind, Options,
+    document, strip_leading_bom,
+};
 
 /// Default options: GFM (tables, strikethrough, task lists, autolink-literal),
 /// footnotes, math, YAML metadata.
@@ -93,8 +109,7 @@ fn parse_inner(
     track_positions: bool,
     reuse: Option<Arena<Mdast>>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    let (document, errors) =
-        crate::document::parse_reusing(source, options, track_positions, reuse);
+    let (document, errors) = document::parse_reusing(source, options, track_positions, reuse);
     (document.into_owned(), errors)
 }
 
@@ -105,7 +120,7 @@ pub(crate) fn parse_document<'a>(
     storage: Option<SourceDocument<'static>>,
     #[cfg(test)] skip_fnr_autolink: bool,
 ) -> (SourceDocument<'a>, Vec<(usize, String)>) {
-    let source = crate::strip_leading_bom(source);
+    let source = strip_leading_bom(source);
 
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
     // feature set. Expand it into the granular flags the parser checks so
@@ -134,7 +149,7 @@ pub(crate) fn parse_document<'a>(
     let mut cursor = line_index.cursor();
 
     let mut inner = ParserInner::new_for_arena(source, options);
-    let mut callbacks = crate::DefaultParserCallbacks;
+    let mut callbacks = DefaultParserCallbacks;
     let mut document = storage.map_or_else(
         || SourceDocument::borrowed(source, inner.tree.semantic_capacity_hint()),
         |storage| storage.rebind(source),
@@ -249,11 +264,7 @@ pub(crate) fn parse_document<'a>(
                     && matches!(source.as_bytes().get(item.end - 1), Some(b'\n' | b'\r'))
                 {
                     let parent_body = inner.tree.peek_up().map(|p| inner.tree[p].item.body);
-                    crate::firstpass::mdast_position_end(
-                        &item,
-                        source.as_bytes(),
-                        parent_body.as_ref(),
-                    )
+                    mdast_position_end(&item, source.as_bytes(), parent_body.as_ref())
                 } else {
                     item.end as u32
                 };
@@ -326,7 +337,7 @@ pub(crate) fn parse_document<'a>(
                             let code_start_column = builder.arena_ref().get_node(id).start_column;
                             let parent_body =
                                 inner.tree.peek_up().map(|p| &inner.tree[p].item.body);
-                            if let Some(ext) = crate::firstpass::extend_indented_code_block(
+                            if let Some(ext) = extend_indented_code_block(
                                 &item,
                                 source.as_bytes(),
                                 parent_body,
@@ -540,14 +551,12 @@ pub(crate) fn parse_document<'a>(
                                 let (el, ec) = cursor.offset_to_line_col(first_nl);
                                 (first_nl, el, ec)
                             };
-                        if let Some(extended) =
-                            crate::firstpass::extend_list_item_to_next_sibling_content(
-                                &inner.tree,
-                                ix,
-                                source.as_bytes(),
-                                cont_end,
-                            )
-                        {
+                        if let Some(extended) = extend_list_item_to_next_sibling_content(
+                            &inner.tree,
+                            ix,
+                            source.as_bytes(),
+                            cont_end,
+                        ) {
                             cont_end = extended;
                             let (el, ec) = cursor.offset_to_line_col(cont_end);
                             cont_end_line = el;
@@ -571,14 +580,12 @@ pub(crate) fn parse_document<'a>(
                             } else {
                                 (end, end_line, end_col)
                             };
-                        if let Some(extended) =
-                            crate::firstpass::extend_list_in_blockquote_through_marker_lines(
-                                &inner.tree,
-                                ix,
-                                source.as_bytes(),
-                                cont_end,
-                            )
-                        {
+                        if let Some(extended) = extend_list_in_blockquote_through_marker_lines(
+                            &inner.tree,
+                            ix,
+                            source.as_bytes(),
+                            cont_end,
+                        ) {
                             cont_end = extended;
                             let (el, ec) = cursor.offset_to_line_col(cont_end);
                             cont_end_line = el;
@@ -767,14 +774,12 @@ pub(crate) fn parse_document<'a>(
                             (end, end_line, end_col)
                         };
 
-                        if let Some(extended) =
-                            crate::firstpass::extend_inner_blockquote_through_outer_markers(
-                                &inner.tree,
-                                ix,
-                                source.as_bytes(),
-                                cont_end,
-                            )
-                        {
+                        if let Some(extended) = extend_inner_blockquote_through_outer_markers(
+                            &inner.tree,
+                            ix,
+                            source.as_bytes(),
+                            cont_end,
+                        ) {
                             cont_end = extended;
                             let (el, ec) = cursor.offset_to_line_col(cont_end);
                             cont_end_line = el;
@@ -932,7 +937,7 @@ pub(crate) fn parse_document<'a>(
                     collect_text_run(&inner.tree, cur_ix, &item, source.as_bytes())
                 {
                     let (end_line, end_column) = cursor.offset_to_line_col(run_end);
-                    let merged = crate::post_passes::merge_text(
+                    let merged = merge_text(
                         &mut builder,
                         &source[item.start..run_end as usize],
                         NodePosition {
@@ -1329,11 +1334,11 @@ pub(crate) fn parse_document<'a>(
                             } => {
                                 let dest_start =
                                     item.start + usize::from(label_len) + 3 + usize::from(angle);
-                                let dest = crate::scanners::unescape(
+                                let dest = unescape(
                                     &source[dest_start..dest_start + usize::from(dest_len)],
                                     false,
                                 );
-                                let url = if matches!(dest, crate::strings::CowStr::Borrowed(_)) {
+                                let url = if matches!(dest, CowStr::Borrowed(_)) {
                                     StringRef::new(dest_start as u32, u32::from(dest_len))
                                 } else {
                                     builder.alloc_string(&dest)
@@ -1344,9 +1349,7 @@ pub(crate) fn parse_document<'a>(
                                     // The scanner accepted a plain quoted title; only
                                     // spaces/tabs can separate its closing quote from `)`.
                                     let mut title_end = item.end - 1;
-                                    while crate::scanners::is_space_or_tab(
-                                        source.as_bytes()[title_end - 1],
-                                    ) {
+                                    while is_space_or_tab(source.as_bytes()[title_end - 1]) {
                                         title_end -= 1;
                                     }
                                     StringRef::new(
@@ -1561,8 +1564,8 @@ pub(crate) fn parse_document<'a>(
                     }
                     ItemBody::MetadataBlock(kind) => {
                         let node_type = match kind {
-                            crate::MetadataBlockKind::YamlStyle => MdastNodeType::Yaml,
-                            crate::MetadataBlockKind::PlusesStyle => MdastNodeType::Toml,
+                            MetadataBlockKind::YamlStyle => MdastNodeType::Yaml,
+                            MetadataBlockKind::PlusesStyle => MdastNodeType::Toml,
                         };
                         builder.open_node_with_position(
                             node_type as u8,
@@ -1805,7 +1808,7 @@ pub(crate) fn parse_document<'a>(
 
                         // Merge with previous sibling text node when
                         // adjacent or separated by a gap (backslash escape).
-                        if !crate::post_passes::merge_text(&mut builder, text_value, position) {
+                        if !merge_text(&mut builder, text_value, position) {
                             let (sr, pos_start, pos_start_col) = if backslash_escaped && start > 0 {
                                 (
                                     builder.alloc_string(text_value),
@@ -1876,16 +1879,12 @@ pub(crate) fn parse_document<'a>(
                     }
                     ItemBody::SynthesizeText(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
-                        crate::post_passes::emit_text_merging(&mut builder, &cow, position);
+                        emit_text_merging(&mut builder, &cow, position);
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::SynthesizeChar(c) => {
                         let mut buffer = [0; 4];
-                        crate::post_passes::emit_text_merging(
-                            &mut builder,
-                            c.encode_utf8(&mut buffer),
-                            position,
-                        );
+                        emit_text_merging(&mut builder, c.encode_utf8(&mut buffer), position);
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::Html => {
@@ -1934,7 +1933,7 @@ pub(crate) fn parse_document<'a>(
                                 "\n"
                             }
                         };
-                        if !crate::post_passes::merge_text(&mut builder, break_text, position) {
+                        if !merge_text(&mut builder, break_text, position) {
                             let sr = builder.alloc_string(break_text);
                             builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
@@ -2078,7 +2077,7 @@ pub(crate) fn parse_document<'a>(
                     | ItemBody::MaybeLinkClose(..)
                     | ItemBody::MaybeImage => {
                         let text_value: &str = &source[item.start..item.end];
-                        if !crate::post_passes::merge_text(&mut builder, text_value, position) {
+                        if !merge_text(&mut builder, text_value, position) {
                             let sr = StringRef::new(start, end - start);
                             builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
@@ -2155,7 +2154,7 @@ pub(crate) fn parse_document<'a>(
     #[cfg(feature = "mdx")]
     if options.contains(Options::ENABLE_MDX) && memchr::memchr2(b'<', b'{', source_bytes).is_some()
     {
-        crate::post_passes::mdx_mark_and_unravel(&mut arena);
+        mdx_mark_and_unravel(&mut arena);
     }
 
     // GFM extension: promote bare URLs (http://…, https://…, www.…) inside
@@ -2170,14 +2169,14 @@ pub(crate) fn parse_document<'a>(
         if options.contains(Options::ENABLE_DIRECTIVE)
             && memchr::memmem::find(source_bytes, b"://").is_some()
         {
-            crate::post_passes::merge_directive_port_splits(&mut arena);
+            merge_directive_port_splits(&mut arena);
         }
         let needs_autolink = inner.allocs.raw_autolink_trigger
             || memchr::memchr2(b'&', b'\\', source_bytes).is_some();
         #[cfg(test)]
         let needs_autolink = needs_autolink && !skip_fnr_autolink;
         if needs_autolink {
-            crate::post_passes::gfm_autolink_literal_pass(
+            gfm_autolink_literal_pass(
                 &mut arena,
                 source_bytes,
                 &inner.allocs.autolink_free_ranges,
@@ -2242,11 +2241,11 @@ fn strip_absent_constructs(source: &str, options: Options) -> Options {
 
 /// Joins only items whose emitted value equals their own source bytes exactly, so the run's slice is the run's value.
 fn collect_text_run(
-    tree: &crate::tree::Tree<crate::parse::Item>,
-    first_ix: crate::tree::TreeIndex,
-    first: &crate::parse::Item,
+    tree: &Tree<Item>,
+    first_ix: TreeIndex,
+    first: &Item,
     source: &[u8],
-) -> Option<(crate::tree::TreeIndex, u32)> {
+) -> Option<(TreeIndex, u32)> {
     if !matches!(
         first.body,
         ItemBody::Text {
@@ -2341,7 +2340,7 @@ fn emit_pending_refdef(
     let raw_label = extract_definition_label(source, start).unwrap_or(label_str);
     // remark decodes HTML entities AND backslash escapes in the refdef label.
     // `&amp;` → `&`, `&AElig;` → `Æ`, etc. Invalid entities pass through.
-    let unescaped = crate::scanners::unescape(raw_label, false);
+    let unescaped = unescape(raw_label, false);
     let label_ref = if unescaped.as_ref() == raw_label {
         builder.alloc_string(raw_label)
     } else {
@@ -2510,10 +2509,7 @@ fn unescape_label_backslashes(s: &str) -> Option<String> {
     let mut i = 0;
     let mut changed = false;
     while i < bytes.len() {
-        if bytes[i] == b'\\'
-            && i + 1 < bytes.len()
-            && crate::puncttable::is_ascii_punctuation(bytes[i + 1])
-        {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && is_ascii_punctuation(bytes[i + 1]) {
             out.push_str(&s[last..i]);
             out.push(bytes[i + 1] as char);
             i += 2;
@@ -2815,8 +2811,11 @@ fn encode_jsx_element_data(
 /// `test/conformance/autolink-path.test.ts` holds remark to the same tables.
 #[cfg(test)]
 mod autolink_path_probe {
-    use super::{MdastNodeType, Options, SourceDocument, parse_document};
     use satteri_ast::mdast::decode_link_data;
+
+    use super::{MdastNodeType, Options, SourceDocument, parse_document};
+    use crate::document;
+    use crate::post_passes::{gfm_autolink_literal_may_apply, gfm_autolink_literal_pass};
 
     /// The JS conformance features: GFM, no frontmatter, no math.
     const PROBE_OPTIONS: Options = Options::from_bits_truncate(
@@ -3101,15 +3100,9 @@ mod autolink_path_probe {
                 .chain(DECODE_SYNTHESIZED_TRIGGERS)
                 .chain(IGNORED_OR_TRUNCATED_SHAPES)
             {
-                let (mut arena, _) = crate::document::parse(input, options, true);
+                let (mut arena, _) = document::parse(input, options, true);
                 let before = satteri_ast::mdast_to_html(&arena);
-                crate::post_passes::gfm_autolink_literal_pass(
-                    &mut arena,
-                    input.as_bytes(),
-                    &[],
-                    options,
-                    None,
-                );
+                gfm_autolink_literal_pass(&mut arena, input.as_bytes(), &[], options, None);
                 assert_eq!(before, satteri_ast::mdast_to_html(&arena), "{input:?}");
             }
         }
@@ -3120,7 +3113,7 @@ mod autolink_path_probe {
     fn the_gate_corpus_exercises_both_verdicts() {
         for input in NO_POSSIBLE_TRIGGER {
             assert!(
-                !crate::post_passes::gfm_autolink_literal_may_apply(input.as_bytes()),
+                !gfm_autolink_literal_may_apply(input.as_bytes()),
                 "{input:?}"
             );
         }
@@ -3130,7 +3123,7 @@ mod autolink_path_probe {
             .chain(FNR_PATH_LINKS)
         {
             assert!(
-                crate::post_passes::gfm_autolink_literal_may_apply(input.as_bytes()),
+                gfm_autolink_literal_may_apply(input.as_bytes()),
                 "{input:?}"
             );
         }

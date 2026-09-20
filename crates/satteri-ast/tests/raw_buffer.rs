@@ -1,13 +1,13 @@
 //! Integration tests for raw buffer export.
 
-use satteri_arena::{ArenaBuilder, Mdast, NODE_STRUCT_SIZE};
+use satteri_arena::{ArenaBuilder, Mdast, NODE_STRUCT_SIZE, NodePosition};
 use satteri_ast::mdast::{MdastNodeType, encode_heading_data};
 
 fn build_test_arena() -> satteri_arena::Arena<Mdast> {
     let mut builder = ArenaBuilder::<Mdast>::new("# Hello\n\nParagraph.".to_string());
 
     builder.open_node(MdastNodeType::Root as u8);
-    builder.set_position_current(satteri_arena::NodePosition {
+    builder.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 20,
         start_line: 1,
@@ -17,7 +17,7 @@ fn build_test_arena() -> satteri_arena::Arena<Mdast> {
     });
 
     let heading = builder.open_node(MdastNodeType::Heading as u8);
-    builder.set_position_current(satteri_arena::NodePosition {
+    builder.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 7,
         start_line: 1,
@@ -31,7 +31,7 @@ fn build_test_arena() -> satteri_arena::Arena<Mdast> {
     builder.close_node(); // heading
 
     let _para = builder.open_node(MdastNodeType::Paragraph as u8);
-    builder.set_position_current(satteri_arena::NodePosition {
+    builder.set_position_current(NodePosition {
         start_offset: 9,
         end_offset: 19,
         start_line: 3,

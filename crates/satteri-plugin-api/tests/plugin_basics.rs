@@ -1,5 +1,6 @@
-use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
-use satteri_ast::mdast::{MdastNodeType, codec::*};
+use satteri_arena::{Arena, ArenaBuilder, Mdast, NodePosition, StringRef};
+use satteri_ast::mdast::MdastNodeType;
+use satteri_ast::mdast::codec::*;
 use satteri_plugin_api::*;
 
 /// Build a simple arena:
@@ -22,7 +23,7 @@ fn build_test_arena() -> Arena<Mdast> {
 
     // Heading depth=1
     b.open_node(MdastNodeType::Heading as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 0,
         end_offset: 7,
         start_line: 1,
@@ -34,7 +35,7 @@ fn build_test_arena() -> Arena<Mdast> {
 
     // Text "Hello"
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 2,
         end_offset: 7,
         start_line: 1,
@@ -49,7 +50,7 @@ fn build_test_arena() -> Arena<Mdast> {
 
     // Paragraph
     b.open_node(MdastNodeType::Paragraph as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 9,
         end_offset: 14,
         start_line: 3,
@@ -60,7 +61,7 @@ fn build_test_arena() -> Arena<Mdast> {
 
     // Text "World"
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(satteri_arena::NodePosition {
+    b.set_position_current(NodePosition {
         start_offset: 9,
         end_offset: 14,
         start_line: 3,

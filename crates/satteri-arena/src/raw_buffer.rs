@@ -249,8 +249,8 @@ impl<K: ArenaKind> Document<'_, K> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Arena;
     use crate::kind::Mdast;
+    use crate::{Arena, NodePosition};
 
     /// Text tag: a single StringRef at offset 0 in the generated remap table.
     const TEXT: u8 = 7;
@@ -276,7 +276,7 @@ mod tests {
         let root = arena.alloc_node(0);
         arena.set_position(
             root,
-            crate::NodePosition {
+            NodePosition {
                 start_offset: 0,
                 end_offset: 308,
                 start_line: 1,
@@ -288,7 +288,7 @@ mod tests {
         let text = arena.alloc_node(TEXT);
         arena.set_position(
             text,
-            crate::NodePosition {
+            NodePosition {
                 start_offset: 1,
                 end_offset: 8,
                 start_line: 1,
@@ -301,7 +301,7 @@ mod tests {
         let tail = arena.alloc_node(TEXT);
         arena.set_position(
             tail,
-            crate::NodePosition {
+            NodePosition {
                 start_offset: 260,
                 end_offset: 300,
                 start_line: 1,
@@ -314,7 +314,7 @@ mod tests {
         let synthesized = arena.alloc_node(TEXT);
         arena.set_position(
             synthesized,
-            crate::NodePosition {
+            NodePosition {
                 start_offset: 999,
                 end_offset: 999,
                 start_line: 0,
