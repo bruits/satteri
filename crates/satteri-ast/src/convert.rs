@@ -304,8 +304,8 @@ fn first_non_url_safe(bytes: &[u8]) -> Option<usize> {
 #[target_feature(enable = "ssse3")]
 unsafe fn first_non_url_safe_ssse3(bytes: &[u8]) -> Option<usize> {
     use std::arch::x86_64::{
-        _mm_and_si128, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
-        _mm_setzero_si128, _mm_shuffle_epi8, _mm_srli_epi16,
+        _mm_and_si128, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set_epi64x,
+        _mm_set1_epi8, _mm_setzero_si128, _mm_shuffle_epi8, _mm_srli_epi16,
     };
     // Each low-nibble entry records which ASCII high nibbles are URL-safe.
     const LOW: [u8; 16] = {
@@ -322,9 +322,10 @@ unsafe fn first_non_url_safe_ssse3(bytes: &[u8]) -> Option<usize> {
     };
     // High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
     const HIGH_NIBBLE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
-    // SAFETY: Both tables contain exactly sixteen readable bytes.
-    let low_table = unsafe { _mm_loadu_si128(LOW.as_ptr().cast()) };
-    let high_table = unsafe { _mm_loadu_si128(HIGH_NIBBLE_BITS.as_ptr().cast()) };
+    let low = u128::from_ne_bytes(LOW);
+    let low_table = _mm_set_epi64x((low >> 64) as i64, low as i64);
+    let high = u128::from_ne_bytes(HIGH_NIBBLE_BITS);
+    let high_table = _mm_set_epi64x((high >> 64) as i64, high as i64);
     let nibble = _mm_set1_epi8(0x0f);
     let mut at = 0;
     loop {

@@ -2,7 +2,7 @@
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{
-    _mm_loadu_si128, _mm256_and_si256, _mm256_broadcastsi128_si256, _mm256_cmpeq_epi8,
+    __m128i, _mm_set_epi64x, _mm256_and_si256, _mm256_broadcastsi128_si256, _mm256_cmpeq_epi8,
     _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_or_si256, _mm256_set1_epi8,
     _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16,
 };
@@ -35,12 +35,18 @@ pub fn contains_ascii_byte_accelerated(bytes: &[u8], low: &[u8; 16]) -> Option<b
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
+#[target_feature(enable = "sse2")]
+fn nibble_table(bytes: &[u8; 16]) -> __m128i {
+    let bits = u128::from_ne_bytes(*bytes);
+    _mm_set_epi64x((bits >> 64) as i64, bits as i64)
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn contains_avx2(bytes: &[u8], low: &[u8; 16]) -> bool {
-    // SAFETY: Both tables contain sixteen readable bytes.
-    let low = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(low.as_ptr().cast()) });
-    let high =
-        _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(HIGH_NIBBLE_BITS.as_ptr().cast()) });
+    let low = _mm256_broadcastsi128_si256(nibble_table(low));
+    let high = _mm256_broadcastsi128_si256(nibble_table(&HIGH_NIBBLE_BITS));
     let nibble = _mm256_set1_epi8(0x0f);
     let zero = _mm256_setzero_si256();
     let matches = |at| {
@@ -97,10 +103,8 @@ pub fn next_ascii_mask(bytes: &[u8], low: &[u8; 16]) -> Option<(usize, u32)> {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn next_mask_avx2(bytes: &[u8], low: &[u8; 16]) -> (usize, u32) {
-    // SAFETY: Each table holds sixteen readable bytes.
-    let low = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(low.as_ptr().cast()) });
-    let high =
-        _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(HIGH_NIBBLE_BITS.as_ptr().cast()) });
+    let low = _mm256_broadcastsi128_si256(nibble_table(low));
+    let high = _mm256_broadcastsi128_si256(nibble_table(&HIGH_NIBBLE_BITS));
     let nibble = _mm256_set1_epi8(0x0f);
     let zero = _mm256_setzero_si256();
     let mut at = 0;
