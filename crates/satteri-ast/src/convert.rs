@@ -2,7 +2,7 @@
 
 use rustc_hash::FxHashMap;
 use satteri_arena::{
-    Arena, ArenaBuilder, ArenaRead, Hast, Mdast, StringRef, decode_string_ref_data,
+    Arena, ArenaBuilder, Document, Hast, Mdast, StringRef, decode_string_ref_data,
 };
 
 use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
@@ -27,7 +27,7 @@ struct HData {
 }
 
 impl HData {
-    fn read(view: &impl ArenaRead<Mdast>, node_id: u32) -> Self {
+    fn read(view: &Document<'_, Mdast>, node_id: u32) -> Self {
         let bytes = match view.get_node_data(node_id) {
             Some(b) if !b.is_empty() => b,
             _ => return HData { root: None },
@@ -211,7 +211,7 @@ fn emit_h_child(builder: &mut ArenaBuilder<Hast>, child: &serde_json::Value) {
         "comment" => {
             let value = obj.get("value").and_then(|v| v.as_str()).unwrap_or("");
             let value_ref = builder.alloc_string(value);
-            let leaf_id = builder.add_leaf_raw(HastNodeType::Comment as u8);
+            let leaf_id = builder.add_leaf(HastNodeType::Comment as u8);
             builder
                 .arena_mut()
                 .set_type_data(leaf_id, &value_ref.as_bytes());
@@ -420,13 +420,13 @@ impl Default for ConvertOptions {
 }
 
 /// Convert an MDAST arena directly to a HAST arena using default options.
-pub fn mdast_arena_to_hast_arena(source: &impl ArenaRead<Mdast>) -> Arena<Hast> {
+pub fn mdast_arena_to_hast_arena(source: &Document<'_, Mdast>) -> Arena<Hast> {
     mdast_arena_to_hast_arena_impl(source, &ConvertOptions::default(), None)
 }
 
 /// Convert an MDAST arena to a HAST arena with the given conversion options.
 pub fn mdast_arena_to_hast_arena_with_options(
-    source: &impl ArenaRead<Mdast>,
+    source: &Document<'_, Mdast>,
     options: &ConvertOptions,
 ) -> Arena<Hast> {
     mdast_arena_to_hast_arena_impl(source, options, None)
@@ -436,7 +436,7 @@ pub fn mdast_arena_to_hast_arena_with_options(
 /// fills it in instead of allocating a fresh arena. Saves the per-compile
 /// `Vec` and `String` mallocs that dominate the cost on tiny inputs.
 pub fn mdast_arena_to_hast_arena_into(
-    source: &impl ArenaRead<Mdast>,
+    source: &Document<'_, Mdast>,
     options: &ConvertOptions,
     reuse: Arena<Hast>,
 ) -> Arena<Hast> {
@@ -444,7 +444,7 @@ pub fn mdast_arena_to_hast_arena_into(
 }
 
 fn mdast_arena_to_hast_arena_impl(
-    source: &impl ArenaRead<Mdast>,
+    source: &Document<'_, Mdast>,
     options: &ConvertOptions,
     reuse: Option<Arena<Hast>>,
 ) -> Arena<Hast> {
@@ -464,7 +464,7 @@ fn mdast_arena_to_hast_arena_impl(
     source.append_pool(&mut hast_arena.string_pool);
     // Reuses the MDAST pool (heap included) so StringRefs stay valid; the
     // original-input prefix is identical, so carry the boundary over.
-    hast_arena.source_len = source.source_len();
+    hast_arena.source_len = source.source_len;
     let builder: ArenaBuilder<Hast> = ArenaBuilder::from_arena(hast_arena);
     let refs = collect_refs(source);
     let ctx = EmitCtx {
@@ -507,7 +507,7 @@ pub(crate) struct CollectedRefs<'src> {
 
 /// Flat probe over the node array for the two types [`collect_refs`] resolves.
 #[inline]
-fn has_any_ref_node(view: &impl ArenaRead<Mdast>) -> bool {
+fn has_any_ref_node(view: &Document<'_, Mdast>) -> bool {
     let definition = MdastNodeType::Definition as u8;
     let footnote_definition = MdastNodeType::FootnoteDefinition as u8;
     (0..view.len() as u32)
@@ -515,7 +515,7 @@ fn has_any_ref_node(view: &impl ArenaRead<Mdast>) -> bool {
         .any(|n| n.node_type == definition || n.node_type == footnote_definition)
 }
 
-pub(crate) fn collect_refs(view: &impl ArenaRead<Mdast>) -> CollectedRefs<'_> {
+pub(crate) fn collect_refs<'a>(view: &'a Document<'_, Mdast>) -> CollectedRefs<'a> {
     let mut defs: FxHashMap<&str, Definition> = FxHashMap::default();
     let mut fn_def_nodes: FxHashMap<&str, u32> = FxHashMap::default();
 
@@ -590,7 +590,7 @@ pub(crate) fn collect_refs(view: &impl ArenaRead<Mdast>) -> CollectedRefs<'_> {
     // directive renders its own mdast children: it is dropped without an
     // `hName`, and `hChildren` replaces those children. Counting a ref that
     // won't render forces an empty footnote `<section>`.
-    fn walk_main_refs(view: &impl ArenaRead<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
+    fn walk_main_refs(view: &Document<'_, Mdast>, node_id: u32, refs: &mut Vec<u32>) {
         let node = view.get_node(node_id);
         let ty = MdastNodeType::from_u8(node.node_type);
         if ty == Some(MdastNodeType::FootnoteDefinition) {
@@ -642,7 +642,7 @@ pub(crate) fn collect_refs(view: &impl ArenaRead<Mdast>) -> CollectedRefs<'_> {
     // Walk each queued def body to pick up nested refs. Because defs can
     // reference each other, the queue may grow while we iterate — index into
     // it by position rather than borrowing an iterator.
-    fn walk_body_refs(view: &impl ArenaRead<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
+    fn walk_body_refs(view: &Document<'_, Mdast>, node_id: u32, refs: &mut Vec<u32>) {
         let node = view.get_node(node_id);
         if MdastNodeType::from_u8(node.node_type) == Some(MdastNodeType::FootnoteReference) {
             refs.push(node_id);
@@ -749,7 +749,7 @@ struct PropData {
 }
 
 #[inline]
-pub(crate) fn list_contains_task_item(list_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
+pub(crate) fn list_contains_task_item(list_id: u32, view: &Document<'_, Mdast>) -> bool {
     for &child_id in view.get_children(list_id) {
         let child = view.get_node(child_id);
         if MdastNodeType::from_u8(child.node_type) != Some(MdastNodeType::ListItem) {
@@ -782,7 +782,7 @@ fn write_element_data(builder: &mut ArenaBuilder<Hast>, tag_ref: StringRef, prop
 }
 
 fn open_element_with_props(builder: &mut ArenaBuilder<Hast>, tag: &str, props: &[PropData]) -> u32 {
-    let id = builder.open_node_raw(HastNodeType::Element as u8);
+    let id = builder.open_node(HastNodeType::Element as u8);
     let tag_ref = builder.alloc_string(tag);
     write_element_data(builder, tag_ref, props);
     id
@@ -897,7 +897,7 @@ fn trim_lines_rewrite(value: &str) -> String {
 /// builder; only valid because the builder's source pool starts as a clone of
 /// the view's source, so source-derived offsets address the same bytes.
 fn add_text_node_with_ref(builder: &mut ArenaBuilder<Hast>, text_ref: StringRef) -> u32 {
-    let leaf_id = builder.add_leaf_raw(HastNodeType::Text as u8);
+    let leaf_id = builder.add_leaf(HastNodeType::Text as u8);
     builder
         .arena_mut()
         .set_type_data(leaf_id, &text_ref.as_bytes());
@@ -906,7 +906,7 @@ fn add_text_node_with_ref(builder: &mut ArenaBuilder<Hast>, text_ref: StringRef)
 
 fn add_raw_node(builder: &mut ArenaBuilder<Hast>, html: &str) -> u32 {
     let html_ref = builder.alloc_string(html);
-    let leaf_id = builder.add_leaf_raw(HastNodeType::Raw as u8);
+    let leaf_id = builder.add_leaf(HastNodeType::Raw as u8);
     builder
         .arena_mut()
         .set_type_data(leaf_id, &html_ref.as_bytes());
@@ -918,7 +918,7 @@ fn add_raw_node(builder: &mut ArenaBuilder<Hast>, html: &str) -> u32 {
 fn copy_position_to(
     target_id: u32,
     src_node_id: u32,
-    view: &impl ArenaRead<Mdast>,
+    view: &Document<'_, Mdast>,
     builder: &mut ArenaBuilder<Hast>,
 ) {
     let node = view.get_node(src_node_id);
@@ -926,12 +926,14 @@ fn copy_position_to(
     if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
         builder.arena_mut().set_position(
             target_id,
-            node.start_offset,
-            node.end_offset,
-            node.start_line,
-            node.start_column,
-            node.end_line,
-            node.end_column,
+            satteri_arena::NodePosition {
+                start_offset: node.start_offset,
+                end_offset: node.end_offset,
+                start_line: node.start_line,
+                start_column: node.start_column,
+                end_line: node.end_line,
+                end_column: node.end_column,
+            },
         );
     }
 }
@@ -983,21 +985,21 @@ fn encode_code_node_data(lang: &str, meta: &str) -> Vec<u8> {
     buf
 }
 
-fn copy_position(node_id: u32, view: &impl ArenaRead<Mdast>, builder: &mut ArenaBuilder<Hast>) {
+fn copy_position(node_id: u32, view: &Document<'_, Mdast>, builder: &mut ArenaBuilder<Hast>) {
     let node = view.get_node(node_id);
     // Skip-positions mode leaves line/col 0 but the parser still records byte
     // offsets; copy them so MDX codegen resolves line:col on demand via
     // `Location`. `readPosition` gates plugin `node.position` on the line, so a
     // non-opted-in plugin still sees `undefined`.
     if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
-        builder.set_position_current(
-            node.start_offset,
-            node.end_offset,
-            node.start_line,
-            node.start_column,
-            node.end_line,
-            node.end_column,
-        );
+        builder.set_position_current(satteri_arena::NodePosition {
+            start_offset: node.start_offset,
+            end_offset: node.end_offset,
+            start_line: node.start_line,
+            start_column: node.start_column,
+            end_line: node.end_line,
+            end_column: node.end_column,
+        });
     }
 }
 
@@ -1065,7 +1067,7 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     arena.type_data[data_off..data_off + 8].copy_from_slice(&new_ref.as_bytes());
 }
 
-fn produces_hast_output(child_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
+fn produces_hast_output(child_id: u32, view: &Document<'_, Mdast>) -> bool {
     let raw_type = view.get_node(child_id).node_type;
     match MdastNodeType::from_u8(raw_type) {
         Some(
@@ -1087,13 +1089,13 @@ fn produces_hast_output(child_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
     }
 }
 
-pub(crate) fn extract_text_content(node_id: u32, view: &impl ArenaRead<Mdast>) -> String {
+pub(crate) fn extract_text_content(node_id: u32, view: &Document<'_, Mdast>) -> String {
     let mut out = String::new();
     extract_text_recursive(node_id, view, &mut out);
     out
 }
 
-fn extract_text_recursive(node_id: u32, view: &impl ArenaRead<Mdast>, out: &mut String) {
+fn extract_text_recursive(node_id: u32, view: &Document<'_, Mdast>, out: &mut String) {
     let node = view.get_node(node_id);
     if node.node_type == MdastNodeType::Text as u8 {
         let data = view.get_type_data(node_id);
@@ -1118,9 +1120,9 @@ struct PendingAttr {
 }
 
 /// The sink that materializes property lists, positions, and `hName` overrides.
-struct HastSink<'a, V: ArenaRead<Mdast>> {
+struct HastSink<'a> {
     builder: ArenaBuilder<Hast>,
-    view: &'a V,
+    view: &'a Document<'a, Mdast>,
     /// Shared by every block separator; avoids re-pushing a single byte into the pool.
     newline_ref: StringRef,
     attrs: [PendingAttr; MAX_INLINE_ATTRS],
@@ -1130,8 +1132,8 @@ struct HastSink<'a, V: ArenaRead<Mdast>> {
     h: Option<HData>,
 }
 
-impl<'a, V: ArenaRead<Mdast>> HastSink<'a, V> {
-    fn new(mut builder: ArenaBuilder<Hast>, view: &'a V) -> Self {
+impl<'a> HastSink<'a> {
+    fn new(mut builder: ArenaBuilder<Hast>, view: &'a Document<'a, Mdast>) -> Self {
         let newline_ref = builder.alloc_string("\n");
         let empty = PendingAttr {
             name: "",
@@ -1162,14 +1164,15 @@ impl<'a, V: ArenaRead<Mdast>> HastSink<'a, V> {
             Pos::Span(first, last) => {
                 let f = self.view.get_node(first);
                 let l = self.view.get_node(last);
-                self.builder.set_position_current(
-                    f.start_offset,
-                    l.end_offset,
-                    f.start_line,
-                    f.start_column,
-                    l.end_line,
-                    l.end_column,
-                );
+                self.builder
+                    .set_position_current(satteri_arena::NodePosition {
+                        start_offset: f.start_offset,
+                        end_offset: l.end_offset,
+                        start_line: f.start_line,
+                        start_column: f.start_column,
+                        end_line: l.end_line,
+                        end_column: l.end_column,
+                    });
             }
         }
     }
@@ -1183,12 +1186,14 @@ impl<'a, V: ArenaRead<Mdast>> HastSink<'a, V> {
                 let l = self.view.get_node(last);
                 self.builder.arena_mut().set_position(
                     node_id,
-                    f.start_offset,
-                    l.end_offset,
-                    f.start_line,
-                    f.start_column,
-                    l.end_line,
-                    l.end_column,
+                    satteri_arena::NodePosition {
+                        start_offset: f.start_offset,
+                        end_offset: l.end_offset,
+                        start_line: f.start_line,
+                        start_column: f.start_column,
+                        end_line: l.end_line,
+                        end_column: l.end_column,
+                    },
                 );
             }
         }
@@ -1252,11 +1257,11 @@ impl<'a, V: ArenaRead<Mdast>> HastSink<'a, V> {
     }
 }
 
-impl<V: ArenaRead<Mdast>> ConvertSink for HastSink<'_, V> {
+impl ConvertSink for HastSink<'_> {
     type BreakMark = usize;
 
     fn open_root(&mut self, pos: Pos) {
-        self.builder.open_node_raw(HastNodeType::Root as u8);
+        self.builder.open_node(HastNodeType::Root as u8);
         self.apply_pos_current(pos);
     }
 
@@ -1267,7 +1272,7 @@ impl<V: ArenaRead<Mdast>> ConvertSink for HastSink<'_, V> {
     #[inline]
     fn open_element(&mut self, tag: &'static str, pos: Pos) {
         debug_assert!(self.h.is_none());
-        self.builder.open_node_raw(HastNodeType::Element as u8);
+        self.builder.open_node(HastNodeType::Element as u8);
         self.tag = tag;
         self.pos = pos;
         self.attr_count = 0;
@@ -1275,7 +1280,7 @@ impl<V: ArenaRead<Mdast>> ConvertSink for HastSink<'_, V> {
 
     #[inline]
     fn open_source_element(&mut self, tag: &'static str, src_id: u32) {
-        self.builder.open_node_raw(HastNodeType::Element as u8);
+        self.builder.open_node(HastNodeType::Element as u8);
         self.tag = tag;
         self.pos = Pos::Node(src_id);
         self.attr_count = 0;
@@ -1492,7 +1497,7 @@ impl<V: ArenaRead<Mdast>> ConvertSink for HastSink<'_, V> {
             attr_tuples.push(decode_mdx_jsx_attr(mdast_data, i));
         }
 
-        self.builder.open_node_raw(hast_type);
+        self.builder.open_node(hast_type);
         let encoded = encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit_jsx);
         self.builder.set_data_current(&encoded);
         if let Some(mdast_nd) = view.get_node_data(node_id)
@@ -1521,19 +1526,21 @@ impl<V: ArenaRead<Mdast>> ConvertSink for HastSink<'_, V> {
             view.get_str(decode_expression_data(data).value)
         };
         let value_ref = self.builder.alloc_string(value);
-        let leaf_id = self.builder.add_leaf_raw(hast_type);
+        let leaf_id = self.builder.add_leaf(hast_type);
         self.builder
             .arena_mut()
             .set_type_data(leaf_id, &value_ref.as_bytes());
         let node = view.get_node(node_id);
         self.builder.arena_mut().set_position(
             leaf_id,
-            node.start_offset,
-            node.end_offset,
-            node.start_line,
-            node.start_column,
-            node.end_line,
-            node.end_column,
+            satteri_arena::NodePosition {
+                start_offset: node.start_offset,
+                end_offset: node.end_offset,
+                start_line: node.start_line,
+                start_column: node.start_column,
+                end_line: node.end_line,
+                end_column: node.end_column,
+            },
         );
     }
 }

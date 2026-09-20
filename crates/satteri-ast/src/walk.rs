@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn write_str16_clamps_oversized_strings_at_a_char_boundary() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(0);
+        b.open_node(0);
         // 65534 ASCII bytes, then a 2-byte char straddling the u16 limit.
         let big = format!("{}é{}", "a".repeat(65534), "b".repeat(100));
         let sref = b.alloc_string(&big);
@@ -453,9 +453,16 @@ mod tests {
     /// bytes 11..13, UTF-16 units 5..7 (❤️ and 😀 are 2 units each).
     fn build_multibyte_text_arena() -> Arena<Hast> {
         let mut b = ArenaBuilder::<Hast>::new("❤️😀 ab".to_string());
-        b.open_node_raw(0);
-        b.open_node_raw(2);
-        b.set_position_current(11, 13, 1, 6, 1, 8);
+        b.open_node(0);
+        b.open_node(2);
+        b.set_position_current(satteri_arena::NodePosition {
+            start_offset: 11,
+            end_offset: 13,
+            start_line: 1,
+            start_column: 6,
+            end_line: 1,
+            end_column: 8,
+        });
         let val_ref = b.alloc_string("ab");
         let mut td = [0u8; 8];
         td[0..4].copy_from_slice(&val_ref.offset.to_le_bytes());
@@ -498,9 +505,9 @@ mod tests {
 
     fn build_hast_with_elements(tags: &[&str]) -> Arena<Hast> {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(0); // HAST root
+        b.open_node(0); // HAST root
         for tag in tags {
-            b.open_node_raw(1); // HAST element
+            b.open_node(1); // HAST element
             let tag_ref = b.alloc_string(tag);
             let mut type_data = Vec::with_capacity(16);
             type_data.extend_from_slice(&tag_ref.offset.to_le_bytes());
@@ -509,7 +516,7 @@ mod tests {
             type_data.extend_from_slice(&0u32.to_le_bytes()); // pad
             b.set_data_current(&type_data);
             // text child
-            b.open_node_raw(2);
+            b.open_node(2);
             let val_ref = b.alloc_string("hello");
             let mut td = [0u8; 8];
             td[0..4].copy_from_slice(&val_ref.offset.to_le_bytes());

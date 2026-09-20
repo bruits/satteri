@@ -245,12 +245,14 @@ fn copy_subtree_inner<K: ArenaKind>(arena: &mut Arena<K>, id: u32, depth: u32) -
     }
     arena.set_position(
         new_id,
-        node.start_offset,
-        node.end_offset,
-        node.start_line,
-        node.start_column,
-        node.end_line,
-        node.end_column,
+        satteri_arena::NodePosition {
+            start_offset: node.start_offset,
+            end_offset: node.end_offset,
+            start_line: node.start_line,
+            start_column: node.start_column,
+            end_line: node.end_line,
+            end_column: node.end_column,
+        },
     );
     let type_data = arena.get_type_data(id).to_vec();
     if !type_data.is_empty() {
@@ -1396,12 +1398,14 @@ fn apply_patches_impl<K: ArenaKind>(
                 }
                 arena.set_position(
                     wrapper_id,
-                    wrapper.start_offset,
-                    wrapper.end_offset,
-                    wrapper.start_line,
-                    wrapper.start_column,
-                    wrapper.end_line,
-                    wrapper.end_column,
+                    satteri_arena::NodePosition {
+                        start_offset: wrapper.start_offset,
+                        end_offset: wrapper.end_offset,
+                        start_line: wrapper.start_line,
+                        start_column: wrapper.start_column,
+                        end_line: wrapper.end_line,
+                        end_column: wrapper.end_column,
+                    },
                 );
                 let wrapper_data = parent_tree.get_type_data(0).to_vec();
                 if !wrapper_data.is_empty() {
@@ -1570,24 +1574,59 @@ mod tests {
         let mut b = ArenaBuilder::<Mdast>::new(source);
 
         b.open_node(MdastNodeType::Root as u8);
-        b.set_position_current(0, 14, 1, 1, 2, 6);
+        b.set_position_current(satteri_arena::NodePosition {
+            start_offset: 0,
+            end_offset: 14,
+            start_line: 1,
+            start_column: 1,
+            end_line: 2,
+            end_column: 6,
+        });
 
         b.open_node(MdastNodeType::Heading as u8);
-        b.set_position_current(0, 7, 1, 1, 1, 8);
+        b.set_position_current(satteri_arena::NodePosition {
+            start_offset: 0,
+            end_offset: 7,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 8,
+        });
         b.set_data_current(&encode_heading_data(1));
 
         b.open_node(MdastNodeType::Text as u8);
-        b.set_position_current(2, 7, 1, 3, 1, 8);
+        b.set_position_current(satteri_arena::NodePosition {
+            start_offset: 2,
+            end_offset: 7,
+            start_line: 1,
+            start_column: 3,
+            end_line: 1,
+            end_column: 8,
+        });
         b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
         b.close_node(); // text
 
         b.close_node(); // heading
 
         b.open_node(MdastNodeType::Paragraph as u8);
-        b.set_position_current(9, 14, 2, 1, 2, 6);
+        b.set_position_current(satteri_arena::NodePosition {
+            start_offset: 9,
+            end_offset: 14,
+            start_line: 2,
+            start_column: 1,
+            end_line: 2,
+            end_column: 6,
+        });
 
         b.open_node(MdastNodeType::Text as u8);
-        b.set_position_current(9, 14, 2, 1, 2, 6);
+        b.set_position_current(satteri_arena::NodePosition {
+            start_offset: 9,
+            end_offset: 14,
+            start_line: 2,
+            start_column: 1,
+            end_line: 2,
+            end_column: 6,
+        });
         b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
         b.close_node(); // text
 
@@ -1939,9 +1978,9 @@ mod tests {
         use crate::mdast::codec::encode_string_ref_data;
 
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
 
-        b.open_node_raw(HastNodeType::Element as u8);
+        b.open_node(HastNodeType::Element as u8);
         // Element type_data: tag_ref(0..8), prop_count(8..12), pad(12..16)
         let tag = b.alloc_string("h1");
         let mut td = vec![0u8; 16];
@@ -1949,7 +1988,7 @@ mod tests {
         td[4..8].copy_from_slice(&tag.len.to_le_bytes());
         b.set_data_current(&td);
 
-        b.open_node_raw(HastNodeType::Text as u8);
+        b.open_node(HastNodeType::Text as u8);
         let text = b.alloc_string("Hello");
         b.set_data_current(&encode_string_ref_data(text));
         b.close_node(); // text
@@ -1960,7 +1999,7 @@ mod tests {
 
         // Build wrapper: div element
         let mut wb = ArenaBuilder::<Hast>::new(String::new());
-        wb.open_node_raw(HastNodeType::Element as u8);
+        wb.open_node(HastNodeType::Element as u8);
         let div_tag = wb.alloc_string("div");
         let mut div_td = vec![0u8; 16];
         div_td[0..4].copy_from_slice(&div_tag.offset.to_le_bytes());
@@ -2430,7 +2469,7 @@ mod tests {
         // heading's original text node.
         let mut replacement = ArenaBuilder::<Mdast>::new(String::new());
         replacement.open_node(MdastNodeType::Blockquote as u8);
-        replacement.open_node_raw(REF_NODE_TYPE);
+        replacement.open_node(REF_NODE_TYPE);
         replacement.set_data_current(&text_in_heading.to_le_bytes());
         replacement.close_node();
         replacement.close_node();
@@ -2571,7 +2610,7 @@ mod tests {
         if let Some(w) = wrapper {
             b.open_node(w as u8);
         }
-        b.open_node_raw(REF_NODE_TYPE);
+        b.open_node(REF_NODE_TYPE);
         b.set_data_current(&target.to_le_bytes());
         b.close_node();
         if wrapper.is_some() {

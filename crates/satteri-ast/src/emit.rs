@@ -2,7 +2,7 @@
 
 use core::fmt::Write;
 
-use satteri_arena::{ArenaRead, Mdast, StringRef, decode_string_ref_data};
+use satteri_arena::{Document, Mdast, StringRef, decode_string_ref_data};
 
 use crate::convert::{
     Backref, CollectedRefs, ConvertOptions, code_span_line_endings_to_spaces, extract_text_content,
@@ -197,8 +197,8 @@ pub(crate) trait ConvertSink {
     fn mdx_leaf(&mut self, node_id: u32, node_type: MdastNodeType);
 }
 
-pub(crate) struct EmitCtx<'a, 'src, V: ArenaRead<Mdast>> {
-    pub(crate) view: &'a V,
+pub(crate) struct EmitCtx<'a, 'src> {
+    pub(crate) view: &'a Document<'a, Mdast>,
     pub(crate) refs: &'a CollectedRefs<'src>,
     pub(crate) options: &'a ConvertOptions,
 }
@@ -211,18 +211,18 @@ fn open_plain<S: ConvertSink>(sink: &mut S, tag: &'static str, pos: Pos) {
 
 /// Plugins build list nodes by hand, so every list decode is sized before it reads.
 #[inline]
-fn list_data_of(node_id: u32, view: &impl ArenaRead<Mdast>) -> Option<ListData> {
+fn list_data_of(node_id: u32, view: &Document<'_, Mdast>) -> Option<ListData> {
     let data = view.get_type_data(node_id);
     (data.len() >= size_of::<ListData>()).then(|| decode_list_data(data))
 }
 
 #[inline]
-fn list_item_data_of(node_id: u32, view: &impl ArenaRead<Mdast>) -> Option<ListItemData> {
+fn list_item_data_of(node_id: u32, view: &Document<'_, Mdast>) -> Option<ListItemData> {
     let data = view.get_type_data(node_id);
     (data.len() >= size_of::<ListItemData>()).then(|| decode_list_item_data(data))
 }
 
-fn list_is_loose(list_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
+fn list_is_loose(list_id: u32, view: &Document<'_, Mdast>) -> bool {
     list_data_of(list_id, view).is_some_and(|d| d.spread)
         || view
             .get_children(list_id)
@@ -231,7 +231,7 @@ fn list_is_loose(list_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
 }
 
 /// A list item can be reparented onto anything, including nothing.
-fn enclosing_list_is_loose(node_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
+fn enclosing_list_is_loose(node_id: u32, view: &Document<'_, Mdast>) -> bool {
     let parent_id = view.get_node(node_id).parent;
     if parent_id as usize >= view.len() {
         return false;
@@ -242,7 +242,7 @@ fn enclosing_list_is_loose(node_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
 #[inline]
 pub(crate) fn emit_node<S: ConvertSink>(
     node_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -262,18 +262,13 @@ pub(crate) fn emit_node<S: ConvertSink>(
 }
 
 #[inline]
-fn emit_text<S: ConvertSink>(node_id: u32, view: &impl ArenaRead<Mdast>, sink: &mut S) {
+fn emit_text<S: ConvertSink>(node_id: u32, view: &Document<'_, Mdast>, sink: &mut S) {
     let value = decode_string_ref_data(view.get_type_data(node_id));
     sink.text_trimmed(value, Pos::Node(node_id));
 }
 
 #[inline]
-fn emit_link<S: ConvertSink>(
-    node_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
-    sink: &mut S,
-    depth: u32,
-) {
+fn emit_link<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
     let link_data = decode_link_data(ctx.view.get_type_data(node_id));
     let url = normalize_url(ctx.view.get_str(link_data.url));
     if sink.open_link(node_id, &url, link_data.title) == Children::Recurse {
@@ -290,12 +285,7 @@ fn emit_link<S: ConvertSink>(
 
 // Keep the large, uncommon dispatch frame out of the text/link hot paths.
 #[inline(never)]
-fn emit_node_at<S: ConvertSink>(
-    node_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
-    sink: &mut S,
-    depth: u32,
-) {
+fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
     let view = ctx.view;
     match MdastNodeType::from_u8(view.get_node(node_id).node_type) {
         Some(MdastNodeType::Root) => {
@@ -609,7 +599,7 @@ fn emit_node_at<S: ConvertSink>(
 fn emit_inline_wrapper<S: ConvertSink>(
     node_id: u32,
     tag: &'static str,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -620,12 +610,7 @@ fn emit_inline_wrapper<S: ConvertSink>(
     sink.close_element(tag);
 }
 
-fn emit_children<S: ConvertSink>(
-    node_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
-    sink: &mut S,
-    depth: u32,
-) {
+fn emit_children<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
     let view = ctx.view;
     let break_ty = MdastNodeType::Break as u8;
     let mut prev_was_break = false;
@@ -639,7 +624,7 @@ fn emit_children<S: ConvertSink>(
 
 fn emit_children_with_newlines<S: ConvertSink>(
     node_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -659,12 +644,7 @@ fn emit_children_with_newlines<S: ConvertSink>(
 }
 
 /// Looseness is a property of the list, so resolving it per item would be quadratic.
-fn emit_list_items<S: ConvertSink>(
-    list_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
-    sink: &mut S,
-    depth: u32,
-) {
+fn emit_list_items<S: ConvertSink>(list_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
     let view = ctx.view;
     let items_are_loose = list_is_loose(list_id, view);
     sink.newline();
@@ -688,7 +668,7 @@ fn emit_list_items<S: ConvertSink>(
 fn emit_list_item<S: ConvertSink>(
     node_id: u32,
     list_is_loose: bool,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -709,7 +689,7 @@ fn emit_list_item<S: ConvertSink>(
 
 fn emit_children_wrapped<S: ConvertSink>(
     node_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -738,7 +718,7 @@ fn emit_checkbox<S: ConvertSink>(item_data: ListItemData, sink: &mut S) {
 fn emit_children_with_newlines_task<S: ConvertSink>(
     node_id: u32,
     task: Option<ListItemData>,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -783,7 +763,7 @@ fn emit_children_with_newlines_task<S: ConvertSink>(
 fn emit_children_unwrap_paragraphs_task<S: ConvertSink>(
     node_id: u32,
     task: Option<ListItemData>,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -817,12 +797,7 @@ fn emit_children_unwrap_paragraphs_task<S: ConvertSink>(
     }
 }
 
-fn emit_table<S: ConvertSink>(
-    node_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
-    sink: &mut S,
-    depth: u32,
-) {
+fn emit_table<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
     let view = ctx.view;
     let alignments = decode_table_alignments(view.get_type_data(node_id));
     sink.open_source_element("table", node_id);
@@ -858,7 +833,7 @@ fn emit_table_row<S: ConvertSink>(
     row_id: u32,
     is_header: bool,
     alignments: &[ColumnAlign],
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -913,11 +888,7 @@ fn open_cell<S: ConvertSink>(
     sink.finish_attrs();
 }
 
-fn emit_footnote_reference<S: ConvertSink>(
-    node_id: u32,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
-    sink: &mut S,
-) {
+fn emit_footnote_reference<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S) {
     let view = ctx.view;
     let data = view.get_type_data(node_id);
     if data.len() < 20 {
@@ -962,11 +933,7 @@ fn emit_footnote_reference<S: ConvertSink>(
     sink.close_element("sup");
 }
 
-fn emit_footnotes_section<S: ConvertSink>(
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
-    sink: &mut S,
-    depth: u32,
-) {
+fn emit_footnotes_section<S: ConvertSink>(ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
     if ctx.refs.footnote_defs.is_empty() {
         return;
     }
@@ -1061,7 +1028,7 @@ fn emit_paragraph_with_backrefs<S: ConvertSink>(
     identifier: &str,
     number: usize,
     total_refs: usize,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
@@ -1133,7 +1100,7 @@ fn emit_footnote_backrefs<S: ConvertSink>(
     number: usize,
     total_refs: usize,
     li_children: bool,
-    ctx: &EmitCtx<'_, '_, impl ArenaRead<Mdast>>,
+    ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
 ) {
     let label = BackrefTemplate::new(&ctx.options.footnote_back_label);

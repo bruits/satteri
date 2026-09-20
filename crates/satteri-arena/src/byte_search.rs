@@ -7,6 +7,10 @@ use std::arch::x86_64::{
     _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16,
 };
 
+// High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
+#[cfg(target_arch = "x86_64")]
+const HIGH_NIBBLE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
+
 const AVX2_VECTOR_BYTES: usize = 32;
 // Amortize dispatch and table setup over the four vectors processed per iteration.
 const AVX2_BATCH_BYTES: usize = 4 * AVX2_VECTOR_BYTES;
@@ -31,8 +35,6 @@ pub fn contains_ascii_byte_accelerated(bytes: &[u8], low: &[u8; 16]) -> Option<b
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn contains_avx2(bytes: &[u8], low: &[u8; 16]) -> bool {
-    // High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
-    const HIGH_NIBBLE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
     // SAFETY: Both tables contain sixteen readable bytes.
     let low = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(low.as_ptr().cast()) });
     let high =
@@ -93,11 +95,11 @@ pub fn next_ascii_mask(bytes: &[u8], low: &[u8; 16]) -> Option<(usize, u32)> {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn next_mask_avx2(bytes: &[u8], low: &[u8; 16]) -> (usize, u32) {
-    const HIGH: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
     // SAFETY: Each table holds sixteen readable bytes.
     let low = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(low.as_ptr().cast()) });
-    let high = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(HIGH.as_ptr().cast()) });
-    let nibble = _mm256_set1_epi8(15);
+    let high =
+        _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(HIGH_NIBBLE_BITS.as_ptr().cast()) });
+    let nibble = _mm256_set1_epi8(0x0f);
     let zero = _mm256_setzero_si256();
     let mut at = 0;
     while bytes.len() - at >= AVX2_VECTOR_BYTES {

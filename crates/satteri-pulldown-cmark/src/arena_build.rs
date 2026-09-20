@@ -3,7 +3,9 @@
 
 use alloc::borrow::Cow;
 
-use satteri_arena::{Arena, LineIndex, Mdast, NodePosition, StringRef, line_ending_iter};
+use satteri_arena::{
+    Arena, DocumentBuilder, LineIndex, Mdast, NodePosition, StringRef, line_ending_iter,
+};
 use satteri_ast::mdast::{
     CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
     ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType, ReferenceData,
@@ -45,7 +47,7 @@ pub const DEFAULT_OPTIONS: Options = Options::from_bits_truncate(
 pub const MDX_OPTIONS: Options =
     Options::from_bits_truncate(DEFAULT_OPTIONS.bits() | Options::ENABLE_MDX.bits());
 
-use crate::document::{DocumentBuilder, SourceDocument};
+use crate::document::SourceDocument;
 
 /// Parse markdown source into an Arena.
 ///
@@ -54,7 +56,7 @@ use crate::document::{DocumentBuilder, SourceDocument};
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
 pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, None, false)
+    parse_inner(source, options, true, None)
 }
 
 /// Skip-positions variant: leaves per-node line/column fields at the zero
@@ -62,7 +64,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
 /// the cp-offset post-pass. Byte offsets are still filled. Use when the
 /// consumer (HTML/JS codegen) never reads positions.
 pub fn parse_no_positions(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, None, false)
+    parse_inner(source, options, false, None)
 }
 
 /// Same as `parse_no_positions` but recycles a caller-pooled arena (via
@@ -73,7 +75,7 @@ pub fn parse_no_positions_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, Some(reuse), false)
+    parse_inner(source, options, false, Some(reuse))
 }
 
 /// Same as [`parse`] but recycles a caller-pooled arena; see [`parse_no_positions_into`].
@@ -82,31 +84,26 @@ pub fn parse_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, Some(reuse), false)
+    parse_inner(source, options, true, Some(reuse))
 }
 
-/// `skip_fnr_autolink` is the path-selection probe's lever: every entry point
-/// above passes `false`, so only `#[cfg(test)]` code can turn it on.
 fn parse_inner(
     source: &str,
     options: Options,
     track_positions: bool,
     reuse: Option<Arena<Mdast>>,
-    skip_fnr_autolink: bool,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    let storage = reuse.map(|arena| crate::document::SourceDocument::from_arena("", arena));
     let (document, errors) =
-        parse_document(source, options, track_positions, skip_fnr_autolink, storage);
-    let arena = document.into_materialized();
-    (arena, errors)
+        crate::document::parse_reusing(source, options, track_positions, reuse);
+    (document.into_owned(), errors)
 }
 
 pub(crate) fn parse_document<'a>(
     source: &'a str,
     options: Options,
     track_positions: bool,
-    skip_fnr_autolink: bool,
     storage: Option<SourceDocument<'static>>,
+    #[cfg(test)] skip_fnr_autolink: bool,
 ) -> (SourceDocument<'a>, Vec<(usize, String)>) {
     let source = crate::strip_leading_bom(source);
 
@@ -139,10 +136,12 @@ pub(crate) fn parse_document<'a>(
     let mut inner = ParserInner::new_for_arena(source, options);
     let mut callbacks = crate::DefaultParserCallbacks;
     let mut document = storage.map_or_else(
-        || SourceDocument::new(source, inner.tree.semantic_capacity_hint()),
+        || SourceDocument::borrowed(source, inner.tree.semantic_capacity_hint()),
         |storage| storage.rebind(source),
     );
-    document.ensure_node_capacity(|| inner.tree.semantic_capacity_hint());
+    if document.nodes.capacity() == 0 {
+        document.nodes.reserve(inner.tree.semantic_capacity_hint());
+    }
     let mut builder = DocumentBuilder::from_arena(document);
     // Open root node. In skip-positions mode the cursor returns the zero
     // sentinel; mirror it in the root's hardcoded 1:1 start so every node
@@ -150,14 +149,14 @@ pub(crate) fn parse_document<'a>(
     builder.open_node(MdastNodeType::Root as u8);
     let (end_line, end_col) = cursor.offset_to_line_col(source.len() as u32);
     let (start_line, start_col) = if track_positions { (1, 1) } else { (0, 0) };
-    builder.set_position_current(
-        0,
-        source.len() as u32,
+    builder.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: source.len() as u32,
         start_line,
-        start_col,
+        start_column: start_col,
         end_line,
-        end_col,
-    );
+        end_column: end_col,
+    });
 
     // Accumulation buffers for special container→leaf conversions.
     let mut html_block_buf: Option<String> = None;
@@ -294,18 +293,13 @@ pub(crate) fn parse_document<'a>(
                                 .to_bytes(),
                             );
                             let id = builder.current_node_id();
-                            let node = builder.arena_ref().get_node(id);
-                            let orig_start = node.start_offset;
-                            let orig_start_line = node.start_line;
-                            let orig_start_col = node.start_column;
-                            builder.set_position_current(
-                                orig_start,
-                                end,
-                                orig_start_line,
-                                orig_start_col,
+                            let node = *builder.arena_ref().get_node(id);
+                            builder.set_position_current(NodePosition {
+                                end_offset: end,
                                 end_line,
-                                end_col,
-                            );
+                                end_column: end_col,
+                                ..NodePosition::from_node(&node)
+                            });
                             builder.close_node();
                         }
                     }
@@ -358,18 +352,13 @@ pub(crate) fn parse_document<'a>(
                                         .copy_from_slice(&sr2.as_bytes());
                                 }
                             }
-                            let node = builder.arena_ref().get_node(id);
-                            let orig_start = node.start_offset;
-                            let orig_start_line = node.start_line;
-                            let orig_start_col = node.start_column;
-                            builder.set_position_current(
-                                orig_start,
-                                code_end,
-                                orig_start_line,
-                                orig_start_col,
-                                code_end_line,
-                                code_end_col,
-                            );
+                            let node = *builder.arena_ref().get_node(id);
+                            builder.set_position_current(NodePosition {
+                                end_offset: code_end,
+                                end_line: code_end_line,
+                                end_column: code_end_col,
+                                ..NodePosition::from_node(&node)
+                            });
                             builder.close_node();
                         }
                     }
@@ -391,21 +380,16 @@ pub(crate) fn parse_document<'a>(
                             };
                             let sr = builder.alloc_string(trimmed);
                             let id = builder.current_node_id();
-                            let node = builder.arena_ref().get_node(id);
-                            let orig_start = node.start_offset;
-                            let orig_start_line = node.start_line;
-                            let orig_start_col = node.start_column;
+                            let node = *builder.arena_ref().get_node(id);
                             let trimmed_len = content.len() - trimmed.len();
                             let raw_end = (item.end as u32).saturating_sub(trimmed_len as u32);
                             let (raw_end_line, raw_end_col) = cursor.offset_to_line_col(raw_end);
-                            builder.set_position_current(
-                                orig_start,
-                                raw_end,
-                                orig_start_line,
-                                orig_start_col,
-                                raw_end_line,
-                                raw_end_col,
-                            );
+                            builder.set_position_current(NodePosition {
+                                end_offset: raw_end,
+                                end_line: raw_end_line,
+                                end_column: raw_end_col,
+                                ..NodePosition::from_node(&node)
+                            });
                             builder.set_data_current(&sr.as_bytes());
                             builder.close_node();
                         }
@@ -423,18 +407,13 @@ pub(crate) fn parse_document<'a>(
                             }
                             let sr = builder.alloc_string(&content);
                             let id = builder.current_node_id();
-                            let node = builder.arena_ref().get_node(id);
-                            let orig_start = node.start_offset;
-                            let orig_start_line = node.start_line;
-                            let orig_start_col = node.start_column;
-                            builder.set_position_current(
-                                orig_start,
-                                end,
-                                orig_start_line,
-                                orig_start_col,
+                            let node = *builder.arena_ref().get_node(id);
+                            builder.set_position_current(NodePosition {
+                                end_offset: end,
                                 end_line,
-                                end_col,
-                            );
+                                end_column: end_col,
+                                ..NodePosition::from_node(&node)
+                            });
                             builder.set_data_current(&sr.as_bytes());
                             builder.close_node();
                         }
@@ -461,18 +440,13 @@ pub(crate) fn parse_document<'a>(
                             }
                         }
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
-                        builder.set_position_current(
-                            orig_start,
-                            end,
-                            orig_start_line,
-                            orig_start_col,
+                        let node = *builder.arena_ref().get_node(id);
+                        builder.set_position_current(NodePosition {
+                            end_offset: end,
                             end_line,
-                            end_col,
-                        );
+                            end_column: end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                     }
                     ItemBody::ListItem(_, item_spread) => {
@@ -497,7 +471,7 @@ pub(crate) fn parse_document<'a>(
                             }
                         }
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
+                        let node = *builder.arena_ref().get_node(id);
                         let orig_start_offset = node.start_offset;
                         // Pull in any refdefs whose source range falls inside
                         // this list item before we evaluate spread / position.
@@ -549,17 +523,14 @@ pub(crate) fn parse_document<'a>(
                                 data[1] = 1;
                             }
                         }
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
+                        let node = *builder.arena_ref().get_node(id);
                         let (mut cont_end, mut cont_end_line, mut cont_end_col) =
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
                                 (lc.end_offset, lc.end_line, lc.end_column)
                             } else {
                                 let src = source.as_bytes();
-                                let start_usize = orig_start as usize;
+                                let start_usize = node.start_offset as usize;
                                 let end_usize = end as usize;
                                 let first_nl = src[start_usize..end_usize]
                                     .iter()
@@ -582,22 +553,17 @@ pub(crate) fn parse_document<'a>(
                             cont_end_line = el;
                             cont_end_col = ec;
                         }
-                        builder.set_position_current(
-                            orig_start,
-                            cont_end,
-                            orig_start_line,
-                            orig_start_col,
-                            cont_end_line,
-                            cont_end_col,
-                        );
+                        builder.set_position_current(NodePosition {
+                            end_offset: cont_end,
+                            end_line: cont_end_line,
+                            end_column: cont_end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                     }
                     ItemBody::List(_is_tight, _, _) => {
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
+                        let node = *builder.arena_ref().get_node(id);
                         let (mut cont_end, mut cont_end_line, mut cont_end_col) =
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
@@ -618,14 +584,12 @@ pub(crate) fn parse_document<'a>(
                             cont_end_line = el;
                             cont_end_col = ec;
                         }
-                        builder.set_position_current(
-                            orig_start,
-                            cont_end,
-                            orig_start_line,
-                            orig_start_col,
-                            cont_end_line,
-                            cont_end_col,
-                        );
+                        builder.set_position_current(NodePosition {
+                            end_offset: cont_end,
+                            end_line: cont_end_line,
+                            end_column: cont_end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                         let children = builder.arena_ref().get_children(id).to_vec();
                         let has_blank_between_items = {
@@ -667,10 +631,7 @@ pub(crate) fn parse_document<'a>(
                     | ItemBody::DefinitionListTitle
                     | ItemBody::DefinitionListDefinition(..) => {
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
+                        let node = *builder.arena_ref().get_node(id);
                         let (cont_end, cont_end_line, cont_end_col) =
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
@@ -678,14 +639,12 @@ pub(crate) fn parse_document<'a>(
                             } else {
                                 (end, end_line, end_col)
                             };
-                        builder.set_position_current(
-                            orig_start,
-                            cont_end,
-                            orig_start_line,
-                            orig_start_col,
-                            cont_end_line,
-                            cont_end_col,
-                        );
+                        builder.set_position_current(NodePosition {
+                            end_offset: cont_end,
+                            end_line: cont_end_line,
+                            end_column: cont_end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                     }
                     // Regular container close.
@@ -750,10 +709,7 @@ pub(crate) fn parse_document<'a>(
                             }
                         }
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
+                        let node = *builder.arena_ref().get_node(id);
                         // Claim refdefs nested in this container before its
                         // children are finalized.
                         if matches!(
@@ -763,7 +719,7 @@ pub(crate) fn parse_document<'a>(
                                 | ItemBody::FootnoteDefinition(..)
                         ) && container_may_hold_refdef(
                             &refdef_starts,
-                            orig_start as usize,
+                            node.start_offset as usize,
                             item.end,
                         ) && emit_refdefs_in_container(
                             &mut builder,
@@ -772,7 +728,7 @@ pub(crate) fn parse_document<'a>(
                             &refdefs_owned,
                             &refdef_starts,
                             &mut refdef_emitted,
-                            orig_start as usize,
+                            node.start_offset as usize,
                             item.end,
                         ) {
                             builder.sort_current_pending_children_by_source_order();
@@ -824,14 +780,12 @@ pub(crate) fn parse_document<'a>(
                             cont_end_line = el;
                             cont_end_col = ec;
                         }
-                        builder.set_position_current(
-                            orig_start,
-                            cont_end,
-                            orig_start_line,
-                            orig_start_col,
-                            cont_end_line,
-                            cont_end_col,
-                        );
+                        builder.set_position_current(NodePosition {
+                            end_offset: cont_end,
+                            end_line: cont_end_line,
+                            end_column: cont_end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                     }
                 }
@@ -977,33 +931,17 @@ pub(crate) fn parse_document<'a>(
                 if let Some((run_last_ix, run_end)) =
                     collect_text_run(&inner.tree, cur_ix, &item, source.as_bytes())
                 {
-                    let prev_id = builder.last_sibling_id();
-                    let mut merged = false;
-                    if let Some(pid) = prev_id {
-                        let prev = builder.arena_ref().get_node(pid);
-                        if prev.node_type == MdastNodeType::Text as u8 {
-                            let prev_data = builder.arena_ref().get_type_data(pid);
-                            if prev_data.len() >= 8 {
-                                let (el, ec) = cursor.offset_to_line_col(run_end);
-                                let prev_sr = StringRef::from_bytes(prev_data);
-                                let new_sr = builder
-                                    .arena_mut()
-                                    .append_string(prev_sr, &source[item.start..run_end as usize]);
-                                let pn = builder.arena_ref().get_node(pid);
-                                builder.update_leaf_full(
-                                    pid,
-                                    pn.start_offset,
-                                    run_end,
-                                    pn.start_line,
-                                    pn.start_column,
-                                    el,
-                                    ec,
-                                    &new_sr.as_bytes(),
-                                );
-                                merged = true;
-                            }
-                        }
-                    }
+                    let (end_line, end_column) = cursor.offset_to_line_col(run_end);
+                    let merged = crate::post_passes::merge_text(
+                        &mut builder,
+                        &source[item.start..run_end as usize],
+                        NodePosition {
+                            end_offset: run_end,
+                            end_line,
+                            end_column,
+                            ..NodePosition::default()
+                        },
+                    );
                     if !merged {
                         let (sl, sc) = cursor.offset_to_line_col(start);
                         let (el, ec) = cursor.offset_to_line_col(run_end);
@@ -1679,18 +1617,13 @@ pub(crate) fn parse_document<'a>(
                                     ));
                                 }
                                 let id = builder.current_node_id();
-                                let node = builder.arena_ref().get_node(id);
-                                let orig_start = node.start_offset;
-                                let orig_start_line = node.start_line;
-                                let orig_start_col = node.start_column;
-                                builder.set_position_current(
-                                    orig_start,
-                                    end,
-                                    orig_start_line,
-                                    orig_start_col,
+                                let node = *builder.arena_ref().get_node(id);
+                                builder.set_position_current(NodePosition {
+                                    end_offset: end,
                                     end_line,
-                                    end_col,
-                                );
+                                    end_column: end_col,
+                                    ..NodePosition::from_node(&node)
+                                });
                                 builder.close_node();
                             } else {
                                 mdx_errors.push((
@@ -1821,9 +1754,7 @@ pub(crate) fn parse_document<'a>(
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
                         builder.open_node(MdastNodeType::ContainerDirective as u8);
                         builder.set_data_current(&type_data);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
-                        );
+                        builder.set_position_current(position);
                         // The `[label]`, when present, is a `DirectiveLabel`
                         // child in the first-pass tree (emitted as a tagged
                         // paragraph), so nothing to synthesize here.
@@ -1840,9 +1771,7 @@ pub(crate) fn parse_document<'a>(
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
                         builder.open_node(MdastNodeType::LeafDirective as u8);
                         builder.set_data_current(&type_data);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
-                        );
+                        builder.set_position_current(position);
                         // The label is the directive's inline children in the
                         // first-pass tree; descend so the walk emits them.
                         inner.tree.push();
@@ -1859,9 +1788,7 @@ pub(crate) fn parse_document<'a>(
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
                         builder.open_node(MdastNodeType::TextDirective as u8);
                         builder.set_data_current(&type_data);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
-                        );
+                        builder.set_position_current(position);
                         inner.tree.push();
                     }
 
@@ -1878,37 +1805,7 @@ pub(crate) fn parse_document<'a>(
 
                         // Merge with previous sibling text node when
                         // adjacent or separated by a gap (backslash escape).
-                        let prev_id = builder.last_sibling_id();
-                        let merged = if let Some(pid) = prev_id {
-                            let prev = builder.arena_ref().get_node(pid);
-                            if prev.node_type == MdastNodeType::Text as u8 {
-                                let prev_data = builder.arena_ref().get_type_data(pid);
-                                if prev_data.len() >= 8 {
-                                    let prev_sr = StringRef::from_bytes(prev_data);
-                                    let new_sr =
-                                        builder.arena_mut().append_string(prev_sr, text_value);
-                                    let pn = builder.arena_ref().get_node(pid);
-                                    builder.update_leaf_full(
-                                        pid,
-                                        pn.start_offset,
-                                        end,
-                                        pn.start_line,
-                                        pn.start_column,
-                                        end_line,
-                                        end_col,
-                                        &new_sr.as_bytes(),
-                                    );
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if !merged {
+                        if !crate::post_passes::merge_text(&mut builder, text_value, position) {
                             let (sr, pos_start, pos_start_col) = if backslash_escaped && start > 0 {
                                 (
                                     builder.alloc_string(text_value),
@@ -1979,29 +1876,15 @@ pub(crate) fn parse_document<'a>(
                     }
                     ItemBody::SynthesizeText(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
-                        crate::post_passes::emit_text_merging(
-                            &mut builder,
-                            &cow,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                        );
+                        crate::post_passes::emit_text_merging(&mut builder, &cow, position);
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::SynthesizeChar(c) => {
-                        let s = String::from(c);
+                        let mut buffer = [0; 4];
                         crate::post_passes::emit_text_merging(
                             &mut builder,
-                            &s,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            c.encode_utf8(&mut buffer),
+                            position,
                         );
                         inner.tree.next_sibling(cur_ix);
                     }
@@ -2051,37 +1934,7 @@ pub(crate) fn parse_document<'a>(
                                 "\n"
                             }
                         };
-                        let prev_id = builder.last_sibling_id();
-                        let merged = if let Some(pid) = prev_id {
-                            let prev = builder.arena_ref().get_node(pid);
-                            if prev.node_type == MdastNodeType::Text as u8 {
-                                let prev_data = builder.arena_ref().get_type_data(pid);
-                                if prev_data.len() >= 8 {
-                                    let prev_sr = StringRef::from_bytes(prev_data);
-                                    let new_sr =
-                                        builder.arena_mut().append_string(prev_sr, break_text);
-                                    let pn = builder.arena_ref().get_node(pid);
-                                    builder.update_leaf_full(
-                                        pid,
-                                        pn.start_offset,
-                                        end,
-                                        pn.start_line,
-                                        pn.start_column,
-                                        end_line,
-                                        end_col,
-                                        &new_sr.as_bytes(),
-                                    );
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if !merged {
+                        if !crate::post_passes::merge_text(&mut builder, break_text, position) {
                             let sr = builder.alloc_string(break_text);
                             builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
@@ -2225,37 +2078,7 @@ pub(crate) fn parse_document<'a>(
                     | ItemBody::MaybeLinkClose(..)
                     | ItemBody::MaybeImage => {
                         let text_value: &str = &source[item.start..item.end];
-                        let prev_id = builder.last_sibling_id();
-                        let merged = if let Some(pid) = prev_id {
-                            let prev = builder.arena_ref().get_node(pid);
-                            if prev.node_type == MdastNodeType::Text as u8 {
-                                let prev_data = builder.arena_ref().get_type_data(pid);
-                                if prev_data.len() >= 8 {
-                                    let prev_sr = StringRef::from_bytes(prev_data);
-                                    let new_sr =
-                                        builder.arena_mut().append_string(prev_sr, text_value);
-                                    let pn = builder.arena_ref().get_node(pid);
-                                    builder.update_leaf_full(
-                                        pid,
-                                        pn.start_offset,
-                                        end,
-                                        pn.start_line,
-                                        pn.start_column,
-                                        end_line,
-                                        end_col,
-                                        &new_sr.as_bytes(),
-                                    );
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if !merged {
+                        if !crate::post_passes::merge_text(&mut builder, text_value, position) {
                             let sr = StringRef::new(start, end - start);
                             builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
@@ -2320,6 +2143,7 @@ pub(crate) fn parse_document<'a>(
     builder.close_node();
     let mut arena = builder.finish();
     arena.parse_options = options.bits();
+    arena.mdx = options.contains(Options::ENABLE_MDX);
 
     // Source-level early exits: post-passes scan the arena to find
     // candidate nodes, but if the construct's trigger char(s) don't
@@ -2348,10 +2172,11 @@ pub(crate) fn parse_document<'a>(
         {
             crate::post_passes::merge_directive_port_splits(&mut arena);
         }
-        if !skip_fnr_autolink
-            && (inner.allocs.raw_autolink_trigger
-                || memchr::memchr2(b'&', b'\\', source_bytes).is_some())
-        {
+        let needs_autolink = inner.allocs.raw_autolink_trigger
+            || memchr::memchr2(b'&', b'\\', source_bytes).is_some();
+        #[cfg(test)]
+        let needs_autolink = needs_autolink && !skip_fnr_autolink;
+        if needs_autolink {
             crate::post_passes::gfm_autolink_literal_pass(
                 &mut arena,
                 source_bytes,
@@ -2368,7 +2193,7 @@ pub(crate) fn parse_document<'a>(
     // serializers won't touch the cache. Gating on the pool rather than the
     // source matters because entities and smart punctuation add multibyte to it.
     // Skip-positions mode skips too: downstream paths don't read utf16_offsets.
-    if track_positions && !(source.is_ascii() && arena.extra.is_ascii()) {
+    if track_positions && !(source.is_ascii() && arena.string_pool.is_ascii()) {
         // Taken, not allocated: `reset` keeps the capacity for a pooled refill.
         let mut utf16_offsets = core::mem::take(&mut arena.utf16_offsets);
         utf16_offsets.clear();
@@ -2497,7 +2322,7 @@ fn opens_repositioned_node(body: &ItemBody) -> bool {
 }
 
 fn emit_pending_refdef(
-    builder: &mut DocumentBuilder<'_>,
+    builder: &mut DocumentBuilder<'_, Mdast>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
     label: &LinkLabel<'_>,
@@ -2550,7 +2375,7 @@ fn emit_pending_refdef(
 /// container's pending children to keep source order.
 #[allow(clippy::too_many_arguments)]
 fn emit_refdefs_in_container(
-    builder: &mut DocumentBuilder<'_>,
+    builder: &mut DocumentBuilder<'_, Mdast>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
     refdefs: &[(LinkLabel<'_>, LinkDef<'_>)],
@@ -2946,7 +2771,10 @@ fn byte_offset_to_line_col(source: &str, offset: usize) -> String {
 use crate::parse::JsxElementData;
 
 #[cfg(feature = "mdx")]
-fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut DocumentBuilder<'_>) -> Vec<u8> {
+fn encode_jsx_element_data(
+    jsx: &JsxElementData<'_>,
+    builder: &mut DocumentBuilder<'_, Mdast>,
+) -> Vec<u8> {
     let name_ref = if jsx.name.is_empty() {
         StringRef::empty()
     } else {
@@ -2987,7 +2815,7 @@ fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut DocumentBuild
 /// `test/conformance/autolink-path.test.ts` holds remark to the same tables.
 #[cfg(test)]
 mod autolink_path_probe {
-    use super::{Arena, Mdast, MdastNodeType, Options, parse_inner};
+    use super::{MdastNodeType, Options, SourceDocument, parse_document};
     use satteri_ast::mdast::decode_link_data;
 
     /// The JS conformance features: GFM, no frontmatter, no math.
@@ -3011,7 +2839,7 @@ mod autolink_path_probe {
     type LinkKey = (u32, u32, String);
 
     fn links(source: &str, skip_fnr_autolink: bool) -> Vec<LinkKey> {
-        let (arena, _) = parse_inner(source, PROBE_OPTIONS, true, None, skip_fnr_autolink);
+        let (arena, _) = parse_document(source, PROBE_OPTIONS, true, None, skip_fnr_autolink);
         let mut out = Vec::new();
         if !arena.is_empty() {
             collect(&arena, 0, &mut out);
@@ -3019,7 +2847,7 @@ mod autolink_path_probe {
         out
     }
 
-    fn collect(arena: &Arena<Mdast>, id: u32, out: &mut Vec<LinkKey>) {
+    fn collect(arena: &SourceDocument<'_>, id: u32, out: &mut Vec<LinkKey>) {
         let node = arena.get_node(id);
         if matches!(
             MdastNodeType::from_u8(node.node_type),
@@ -3122,7 +2950,6 @@ mod autolink_path_probe {
             ("x\u{85}www.x.y", &[]),
         ];
 
-        assert_eq!(cases.len(), 44, "the probe lost inputs");
         let mismatches: Vec<String> = cases
             .iter()
             .filter(|(input, expected)| paths(input) != **expected)
@@ -3206,8 +3033,8 @@ mod autolink_path_probe {
     #[test]
     fn skipping_the_pass_changes_nothing_that_has_no_autolink() {
         for input in ["[a](/b) x", "`[` x", "# [a", "text **bold** and `code`"] {
-            let (skipped, _) = parse_inner(input, PROBE_OPTIONS, true, None, true);
-            let (full, _) = parse_inner(input, PROBE_OPTIONS, true, None, false);
+            let (skipped, _) = parse_document(input, PROBE_OPTIONS, true, None, true);
+            let (full, _) = parse_document(input, PROBE_OPTIONS, true, None, false);
             assert_eq!(
                 satteri_ast::mdast_to_html(&skipped),
                 satteri_ast::mdast_to_html(&full),

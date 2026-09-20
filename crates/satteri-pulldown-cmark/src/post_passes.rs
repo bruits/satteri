@@ -20,10 +20,10 @@ use core::ops::Range;
 #[cfg(feature = "std")]
 use std::sync::LazyLock;
 
-use crate::document::{DocumentBuilder, SourceDocument};
+use crate::document::SourceDocument;
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
-use satteri_arena::{NodePosition, StringRef};
+use satteri_arena::{DocumentBuilder, Mdast, NodePosition, StringRef};
 use satteri_ast::mdast::{MdastNodeType, codec::LinkData};
 
 use crate::puncttable::is_punctuation;
@@ -784,12 +784,14 @@ pub(crate) fn merge_directive_port_splits(arena: &mut SourceDocument<'_>) {
             arena.set_type_data(text_id, &merged_sr.as_bytes());
             arena.set_position(
                 text_id,
-                text_node_start,
-                end_offset,
-                start_line,
-                start_column,
-                end_line,
-                end_column,
+                NodePosition {
+                    start_offset: text_node_start,
+                    end_offset,
+                    start_line,
+                    start_column,
+                    end_line,
+                    end_column,
+                },
             );
             // The leading text's brackets were already folded into
             // `unmatched_open_bracket` at the top of the loop; fold in the
@@ -1471,20 +1473,27 @@ fn build_raw_map(
 ///
 /// Line and column aren't optional: the exposed `position.*.offset` is derived
 /// from them downstream, so a zero line would serialize garbage.
-fn pos_for(
+fn position_for_decoded_range(
     map: &RawMap,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
-    d_lo: usize,
-    d_hi: usize,
-) -> Option<(u32, u32, u32, u32, u32, u32)> {
-    let so = map.raw_start_of(d_lo)? as u32;
-    let eo = map.raw_end_of(d_hi)? as u32;
-    if eo < so {
+    start: usize,
+    end: usize,
+) -> Option<NodePosition> {
+    let start_offset = map.raw_start_of(start)? as u32;
+    let end_offset = map.raw_end_of(end)? as u32;
+    if end_offset < start_offset {
         return None;
     }
-    let (sl, sc) = cursor.offset_to_line_col(so);
-    let (el, ec) = cursor.offset_to_line_col(eo);
-    Some((so, eo, sl, sc, el, ec))
+    let (start_line, start_column) = cursor.offset_to_line_col(start_offset);
+    let (end_line, end_column) = cursor.offset_to_line_col(end_offset);
+    Some(NodePosition {
+        start_offset,
+        end_offset,
+        start_line,
+        start_column,
+        end_line,
+        end_column,
+    })
 }
 
 /// Email matches inside `gap_start..gap_end`, consuming the triggers there.
@@ -1596,9 +1605,8 @@ fn split_text_with_autolinks_fnr(
         );
     }
     let mut cursor = cursor;
-    let mut pos_for = |lo: usize, hi: usize| -> Option<(u32, u32, u32, u32, u32, u32)> {
-        let map = map.as_ref()?;
-        pos_for(map, cursor.as_deref_mut()?, lo, hi)
+    let mut position_for = |start: usize, end: usize| {
+        position_for_decoded_range(map.as_ref()?, cursor.as_deref_mut()?, start, end)
     };
 
     let mut new_children: Vec<u32> = Vec::new();
@@ -1609,8 +1617,8 @@ fn split_text_with_autolinks_fnr(
             let new_text_id = arena.alloc_node(MdastNodeType::Text as u8);
             let chunk_sr = arena.alloc_string(chunk);
             arena.set_type_data(new_text_id, &chunk_sr.as_bytes());
-            if let Some((so, eo, sl, sc, el, ec)) = pos_for(cursor, s) {
-                arena.set_position(new_text_id, so, eo, sl, sc, el, ec);
+            if let Some(position) = position_for(cursor, s) {
+                arena.set_position(new_text_id, position);
             }
             new_children.push(new_text_id);
         }
@@ -1625,9 +1633,9 @@ fn split_text_with_autolinks_fnr(
         let link_text_id = arena.alloc_node(MdastNodeType::Text as u8);
         let disp_sr = arena.alloc_string(&text[s..url_end]);
         arena.set_type_data(link_text_id, &disp_sr.as_bytes());
-        if let Some((so, eo, sl, sc, el, ec)) = pos_for(s, url_end) {
-            arena.set_position(link_id, so, eo, sl, sc, el, ec);
-            arena.set_position(link_text_id, so, eo, sl, sc, el, ec);
+        if let Some(position) = position_for(s, url_end) {
+            arena.set_position(link_id, position);
+            arena.set_position(link_text_id, position);
         }
         arena.set_children(link_id, &[link_text_id]);
         new_children.push(link_id);
@@ -1641,8 +1649,8 @@ fn split_text_with_autolinks_fnr(
             let trail_id = arena.alloc_node(MdastNodeType::Text as u8);
             let trail_sr = arena.alloc_string(trail_chunk);
             arena.set_type_data(trail_id, &trail_sr.as_bytes());
-            if let Some((so, eo, sl, sc, el, ec)) = pos_for(url_end, raw_end) {
-                arena.set_position(trail_id, so, eo, sl, sc, el, ec);
+            if let Some(position) = position_for(url_end, raw_end) {
+                arena.set_position(trail_id, position);
             }
             new_children.push(trail_id);
         }
@@ -1653,8 +1661,8 @@ fn split_text_with_autolinks_fnr(
         let new_text_id = arena.alloc_node(MdastNodeType::Text as u8);
         let chunk_sr = arena.alloc_string(chunk);
         arena.set_type_data(new_text_id, &chunk_sr.as_bytes());
-        if let Some((so, eo, sl, sc, el, ec)) = pos_for(cursor, bytes.len()) {
-            arena.set_position(new_text_id, so, eo, sl, sc, el, ec);
+        if let Some(position) = position_for(cursor, bytes.len()) {
+            arena.set_position(new_text_id, position);
         }
         new_children.push(new_text_id);
     }
@@ -1666,54 +1674,49 @@ fn split_text_with_autolinks_fnr(
 /// sibling text node when possible. Matches the behavior remark inherits
 /// from `mdast-util-from-markdown`, which coalesces adjacent text nodes
 /// that result from entity decoding, character synthesis, etc.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_text_merging(
-    builder: &mut DocumentBuilder<'_>,
-    text_value: &str,
-    start: u32,
-    end: u32,
-    start_line: u32,
-    start_col: u32,
-    end_line: u32,
-    end_col: u32,
+    builder: &mut DocumentBuilder<'_, Mdast>,
+    text: &str,
+    position: NodePosition,
 ) {
-    if let Some(pid) = builder.last_sibling_id() {
-        let prev = builder.arena_ref().get_node(pid);
-        if prev.node_type == MdastNodeType::Text as u8 {
-            let prev_data = builder.arena_ref().get_type_data(pid);
-            if prev_data.len() >= 8 {
-                let prev_sr = StringRef::from_bytes(prev_data);
-                let prev_text = builder.arena_ref().get_str(prev_sr);
-                let combined = [prev_text, text_value].concat();
-                let new_sr = builder.alloc_string(&combined);
-                let pn = builder.arena_ref().get_node(pid);
-                builder.update_leaf_full(
-                    pid,
-                    pn.start_offset,
-                    end,
-                    pn.start_line,
-                    pn.start_column,
-                    end_line,
-                    end_col,
-                    &new_sr.as_bytes(),
-                );
-                return;
-            }
-        }
+    if !merge_text(builder, text, position) {
+        let value = builder.alloc_string(text);
+        builder.add_leaf_with_position(MdastNodeType::Text as u8, position, &value.as_bytes());
     }
-    let sr = builder.alloc_string(text_value);
-    builder.add_leaf_with_position(
-        MdastNodeType::Text as u8,
+}
+
+/// Extend a preceding text sibling, retaining its start and the new text's end.
+/// Callers choose borrowed or computed storage only when a new leaf is needed.
+#[inline]
+pub(crate) fn merge_text(
+    builder: &mut DocumentBuilder<'_, Mdast>,
+    text: &str,
+    position: NodePosition,
+) -> bool {
+    let Some(id) = builder.last_sibling_id() else {
+        return false;
+    };
+    let previous = *builder.arena_ref().get_node(id);
+    if previous.node_type != MdastNodeType::Text as u8 {
+        return false;
+    }
+    let data = builder.arena_ref().get_type_data(id);
+    if data.len() < 8 {
+        return false;
+    }
+    let value = StringRef::from_bytes(data);
+    let value = builder.arena_mut().append_string(value, text);
+    builder.update_leaf(
+        id,
         NodePosition {
-            start_offset: start,
-            end_offset: end,
-            start_line,
-            start_column: start_col,
-            end_line,
-            end_column: end_col,
+            start_offset: previous.start_offset,
+            start_line: previous.start_line,
+            start_column: previous.start_column,
+            ..position
         },
-        &sr.as_bytes(),
+        &value.as_bytes(),
     );
+    true
 }
 
 #[cfg(feature = "mdx")]
@@ -1772,11 +1775,11 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut SourceDocument<'_>) {
             let child = arena.get_node(child_id);
             match MdastNodeType::from_u8(child.node_type) {
                 Some(MdastNodeType::MdxJsxTextElement) => {
-                    arena.get_node_mut(child_id).node_type = MdastNodeType::MdxJsxFlowElement as u8;
+                    arena.set_node_type(child_id, MdastNodeType::MdxJsxFlowElement as u8);
                     promoted.push(child_id);
                 }
                 Some(MdastNodeType::MdxTextExpression) => {
-                    arena.get_node_mut(child_id).node_type = MdastNodeType::MdxFlowExpression as u8;
+                    arena.set_node_type(child_id, MdastNodeType::MdxFlowExpression as u8);
                     promoted.push(child_id);
                 }
                 Some(MdastNodeType::Text) => {

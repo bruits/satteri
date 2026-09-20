@@ -18,16 +18,10 @@ pub mod kind;
 pub mod line_index;
 pub mod mdx_types;
 pub mod node;
-#[doc(hidden)]
-pub mod node_store;
 pub mod raw_buffer;
-pub mod read;
-pub use arena::{Arena, TypeDataWriter};
-pub use builder::ArenaBuilder;
+pub use arena::{Arena, Document, TypeDataWriter};
+pub use builder::{ArenaBuilder, DocumentBuilder};
 pub use codec::{decode_string_ref_data, encode_string_ref_data};
 pub use kind::{ArenaKind, Hast, Mdast};
 pub use line_index::{LineIndex, LineIndexCursor, line_ending_iter};
 pub use node::{ArenaNode, NODE_STRUCT_SIZE, NodePosition, StringRef};
-#[doc(hidden)]
-pub use node_store::NodeStore;
-pub use read::ArenaRead;

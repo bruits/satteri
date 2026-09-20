@@ -9,21 +9,49 @@ fn build_test_arena() -> Arena<Mdast> {
     b.open_node(MdastNodeType::Root as u8);
 
     b.open_node(MdastNodeType::Heading as u8);
-    b.set_position_current(0, 7, 1, 1, 1, 8);
+    b.set_position_current(satteri_arena::NodePosition {
+        start_offset: 0,
+        end_offset: 7,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 8,
+    });
     b.set_data_current(&encode_heading_data(1));
 
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(2, 7, 1, 3, 1, 8);
+    b.set_position_current(satteri_arena::NodePosition {
+        start_offset: 2,
+        end_offset: 7,
+        start_line: 1,
+        start_column: 3,
+        end_line: 1,
+        end_column: 8,
+    });
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
     b.close_node();
 
     b.close_node();
 
     b.open_node(MdastNodeType::Paragraph as u8);
-    b.set_position_current(9, 14, 3, 1, 3, 6);
+    b.set_position_current(satteri_arena::NodePosition {
+        start_offset: 9,
+        end_offset: 14,
+        start_line: 3,
+        start_column: 1,
+        end_line: 3,
+        end_column: 6,
+    });
 
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(9, 14, 3, 1, 3, 6);
+    b.set_position_current(satteri_arena::NodePosition {
+        start_offset: 9,
+        end_offset: 14,
+        start_line: 3,
+        start_column: 1,
+        end_line: 3,
+        end_column: 6,
+    });
     b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
     b.close_node();
 

@@ -470,12 +470,12 @@ fn emit(
                 }
             }
             NodeData::Doctype => {
-                builder.add_leaf_raw(HastNodeType::Doctype as u8);
+                builder.add_leaf(HastNodeType::Doctype as u8);
             }
             NodeData::Text { contents } => {
                 let text = scrub_markers(contents, leaked);
                 let text_ref = builder.alloc_string(&text);
-                let leaf = builder.add_leaf_raw(HastNodeType::Text as u8);
+                let leaf = builder.add_leaf(HastNodeType::Text as u8);
                 builder
                     .arena_mut()
                     .set_type_data(leaf, &text_ref.as_bytes());
@@ -483,7 +483,7 @@ fn emit(
             NodeData::Comment { contents } => {
                 let text = scrub_markers(contents, leaked);
                 let text_ref = builder.alloc_string(&text);
-                let leaf = builder.add_leaf_raw(HastNodeType::Comment as u8);
+                let leaf = builder.add_leaf(HastNodeType::Comment as u8);
                 builder
                     .arena_mut()
                     .set_type_data(leaf, &text_ref.as_bytes());
@@ -509,7 +509,7 @@ fn emit(
                 };
                 let child_space = element_space.inside(&name.local);
                 let props = parsed_props(builder, attrs, leaked, element_space);
-                let element = builder.open_node_raw(HastNodeType::Element as u8);
+                let element = builder.open_node(HastNodeType::Element as u8);
                 let data = encode_element_data(tag_ref, &props);
                 builder.arena_mut().set_type_data(element, &data);
 
@@ -601,11 +601,11 @@ fn emit_arena_node(
             }
         }
         Some(HastNodeType::Doctype) => {
-            builder.add_leaf_raw(HastNodeType::Doctype as u8);
+            builder.add_leaf(HastNodeType::Doctype as u8);
         }
         Some(HastNodeType::Text | HastNodeType::Comment | HastNodeType::Raw) if data.len() >= 8 => {
             let value_ref = builder.alloc_string(src.get_str(decode_text_data(data)));
-            let leaf = builder.add_leaf_raw(node_type);
+            let leaf = builder.add_leaf(node_type);
             builder
                 .arena_mut()
                 .set_type_data(leaf, &value_ref.as_bytes());
@@ -624,7 +624,7 @@ fn emit_arena_node(
                     )
                 })
                 .collect();
-            let element = builder.open_node_raw(HastNodeType::Element as u8);
+            let element = builder.open_node(HastNodeType::Element as u8);
             let encoded = encode_element_data(tag_ref, &props);
             builder.arena_mut().set_type_data(element, &encoded);
             stack.push(EmitTask::Close);
@@ -648,7 +648,7 @@ fn emit_arena_node(
                     )
                 })
                 .collect();
-            let element = builder.open_node_raw(node_type);
+            let element = builder.open_node(node_type);
             let encoded = encode_mdx_jsx_element_data(name_ref, &attrs, explicit);
             builder.arena_mut().set_type_data(element, &encoded);
             // Reparse rather than copy, so raw HTML nested inside the MDX
@@ -663,7 +663,7 @@ fn emit_arena_node(
             | HastNodeType::MdxEsm,
         ) if data.len() >= 8 => {
             let value_ref = builder.alloc_string(src.get_str(decode_text_data(data)));
-            let leaf = builder.add_leaf_raw(node_type);
+            let leaf = builder.add_leaf(node_type);
             builder
                 .arena_mut()
                 .set_type_data(leaf, &value_ref.as_bytes());
@@ -837,7 +837,7 @@ pub fn html_to_hast_arena(html: &str) -> Arena<Hast> {
     let nodes = sink.nodes.into_inner();
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    builder.open_node_raw(HastNodeType::Root as u8);
+    builder.open_node(HastNodeType::Root as u8);
     emit(
         &nodes,
         &nodes[0].children,
@@ -856,7 +856,7 @@ pub fn html_fragment_to_hast_arena(html: &str, space: HtmlSpace) -> Arena<Hast> 
     let (nodes, roots, _) = parse_fragment_nodes(html, None, space);
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    builder.open_node_raw(HastNodeType::Root as u8);
+    builder.open_node(HastNodeType::Root as u8);
     emit(&nodes, &roots, &mut builder, None, space);
     builder.close_node();
     builder.finish()
@@ -904,7 +904,7 @@ pub fn html_fragment_to_wrap_arena(html: &str) -> Result<Arena<Hast>, String> {
 /// tree is rebuilt from serialised HTML.
 pub fn raw_to_hast_arena(arena: &Arena<Hast>) -> Arena<Hast> {
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    builder.open_node_raw(HastNodeType::Root as u8);
+    builder.open_node(HastNodeType::Root as u8);
     reparse_children_into(arena, 0, &mut builder, HtmlSpace::Html);
     builder.close_node();
     builder.finish()
@@ -1320,12 +1320,12 @@ mod tests {
     /// A `<div>` split across two raw nodes with a real element between them.
     fn arena_with_split_raw() -> Arena<Hast> {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
 
         add_raw_node(&mut b, r#"<div class="n">"#);
         open_element(&mut b, "p", &[]);
         let t = b.alloc_string("hi");
-        let text = b.add_leaf_raw(HastNodeType::Text as u8);
+        let text = b.add_leaf(HastNodeType::Text as u8);
         b.arena_mut().set_type_data(text, &t.as_bytes());
         b.close_node();
         add_raw_node(&mut b, "</div>");
@@ -1355,17 +1355,17 @@ mod tests {
         use crate::shared::MDX_ATTR_EXPRESSION_PROP;
 
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
 
         // raw "<section>" + <Foo bar={1}>hi</Foo> + raw "</section>"
         let open = b.alloc_string("<section>");
-        let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
+        let leaf = b.add_leaf(HastNodeType::Raw as u8);
         b.arena_mut().set_type_data(leaf, &open.as_bytes());
 
         let name = b.alloc_string("Foo");
         let attr_name = b.alloc_string("bar");
         let attr_value = b.alloc_string("1");
-        let mdx = b.open_node_raw(HastNodeType::MdxJsxElement as u8);
+        let mdx = b.open_node(HastNodeType::MdxJsxElement as u8);
         let data = encode_mdx_jsx_element_data(
             name,
             &[(MDX_ATTR_EXPRESSION_PROP, attr_name, attr_value)],
@@ -1373,12 +1373,12 @@ mod tests {
         );
         b.arena_mut().set_type_data(mdx, &data);
         let hi = b.alloc_string("hi");
-        let text = b.add_leaf_raw(HastNodeType::Text as u8);
+        let text = b.add_leaf(HastNodeType::Text as u8);
         b.arena_mut().set_type_data(text, &hi.as_bytes());
         b.close_node(); // </Foo>
 
         let close = b.alloc_string("</section>");
-        let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
+        let leaf = b.add_leaf(HastNodeType::Raw as u8);
         b.arena_mut().set_type_data(leaf, &close.as_bytes());
 
         b.close_node(); // </root>
@@ -1436,7 +1436,7 @@ mod tests {
     #[test]
     fn raw_reparse_recurses_into_mdx_element_children() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
 
         open_mdx_element(&mut b, "Note");
         add_raw_node(&mut b, "<em>hi</em>");
@@ -1474,7 +1474,7 @@ mod tests {
 
     fn add_raw_node(b: &mut ArenaBuilder<Hast>, html: &str) {
         let r = b.alloc_string(html);
-        let leaf = b.add_leaf_raw(HastNodeType::Raw as u8);
+        let leaf = b.add_leaf(HastNodeType::Raw as u8);
         b.arena_mut().set_type_data(leaf, &r.as_bytes());
     }
 
@@ -1485,7 +1485,7 @@ mod tests {
             .iter()
             .map(|&(name, kind, value)| (b.alloc_string(name), kind, b.alloc_string(value)))
             .collect();
-        let el = b.open_node_raw(HastNodeType::Element as u8);
+        let el = b.open_node(HastNodeType::Element as u8);
         let data = encode_element_data(tag, &props);
         b.arena_mut().set_type_data(el, &data);
     }
@@ -1500,7 +1500,7 @@ mod tests {
     #[cfg(feature = "mdx")]
     fn open_mdx_element(b: &mut ArenaBuilder<Hast>, name: &str) {
         let name = b.alloc_string(name);
-        let mdx = b.open_node_raw(HastNodeType::MdxJsxElement as u8);
+        let mdx = b.open_node(HastNodeType::MdxJsxElement as u8);
         let data = encode_mdx_jsx_element_data(name, &[], true);
         b.arena_mut().set_type_data(mdx, &data);
     }
@@ -1511,7 +1511,7 @@ mod tests {
     #[test]
     fn raw_reparse_keeps_svg_schema_inside_mdx_svg_element() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         open_mdx_element(&mut b, "svg");
         add_raw_node(&mut b, r#"<path fill-rule="evenodd" stroke-width="2"/>"#);
         b.close_node(); // </svg>
@@ -1534,7 +1534,7 @@ mod tests {
     #[test]
     fn raw_reparse_keeps_html_schema_inside_non_svg_mdx_element() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         open_mdx_element(&mut b, "Foo");
         add_raw_node(&mut b, r#"<path fill-rule="evenodd"/>"#);
         b.close_node(); // </Foo>
@@ -1553,7 +1553,7 @@ mod tests {
     #[test]
     fn raw_reparse_keeps_html_elements_inside_mdx_svg_element() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         open_mdx_element(&mut b, "svg");
         add_raw_node(&mut b, r#"<p class="a">x</p>"#);
         b.close_node(); // </svg>
@@ -1573,7 +1573,7 @@ mod tests {
     #[test]
     fn raw_reparse_serializes_svg_properties_inside_mdx_svg_element() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         open_mdx_element(&mut b, "svg");
         open_element(&mut b, "path", &[("fillRule", PROP_STRING, "evenodd")]);
         b.close_node(); // </path>
@@ -1593,7 +1593,7 @@ mod tests {
     #[test]
     fn raw_reparse_keeps_svg_schema_across_nested_mdx_elements() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         open_mdx_element(&mut b, "svg");
         open_mdx_element(&mut b, "Foo");
         add_raw_node(&mut b, r#"<path fill-rule="evenodd"/>"#);
@@ -1614,7 +1614,7 @@ mod tests {
     #[test]
     fn raw_reparse_keeps_svg_schema_for_mdx_element_inside_raw_svg() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         add_raw_node(&mut b, "<svg>");
         open_mdx_element(&mut b, "Foo");
         add_raw_node(&mut b, r#"<path fill-rule="evenodd"/>"#);
@@ -1637,7 +1637,7 @@ mod tests {
     #[test]
     fn raw_reparse_exits_svg_schema_for_mdx_element_inside_raw_foreign_object() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         add_raw_node(&mut b, "<svg><foreignObject>");
         open_mdx_element(&mut b, "Foo");
         add_raw_node(&mut b, r#"<path fill-rule="evenodd"/>"#);
@@ -1659,7 +1659,7 @@ mod tests {
     #[test]
     fn raw_reparse_exits_svg_schema_inside_mdx_foreign_object() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         open_mdx_element(&mut b, "svg");
         open_mdx_element(&mut b, "foreignObject");
         add_raw_node(&mut b, r#"<path fill-rule="evenodd"/>"#);
@@ -1680,7 +1680,7 @@ mod tests {
     #[test]
     fn raw_reparse_ignores_forged_stitch_markers() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         add_raw_node(&mut b, "<!--satteri:stitch:0-->");
         add_mdx_foo(&mut b);
         b.close_node();
@@ -1710,7 +1710,7 @@ mod tests {
     #[test]
     fn raw_reparse_scrubs_markers_swallowed_by_raw_text_elements() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         add_raw_node(&mut b, "<script>alert(1)");
         add_mdx_foo(&mut b);
         add_raw_node(&mut b, "</script>");
@@ -1734,7 +1734,7 @@ mod tests {
     #[test]
     fn raw_reparse_scrubs_markers_swallowed_into_tags() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         add_raw_node(&mut b, "<div ");
         add_mdx_foo(&mut b);
         add_raw_node(&mut b, "class=\"x\">hi</div>");
@@ -1758,7 +1758,7 @@ mod tests {
     #[test]
     fn raw_reparse_scrubs_markers_merged_into_unterminated_comments() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Root as u8);
         add_raw_node(&mut b, "<!--oops ");
         add_mdx_foo(&mut b);
         b.close_node();

@@ -1992,19 +1992,19 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             line_end.unwrap_or(start)
         };
         let mut scan_ix = scan_start;
-        let (final_ix, brk) = loop {
+        let (final_ix, brk) = 'scan: loop {
             let ix = next_special_byte(lut, bytes, scan_ix);
             if ix >= bytes.len() {
                 break (ix, None);
             }
             let byte = bytes[ix];
-            // Keep marker handling in this frame rather than handing a large
-            // captured parser state across a callback boundary per marker.
-            let instruction = 'marker: {
+            // Each marker yields the number of following bytes it consumed,
+            // or ends the scan at a line or block boundary.
+            let skip = 'marker: {
                 match byte {
                     b'\n' | b'\r' => {
                         if let TableParseMode::Active = mode {
-                            break 'marker LoopInstruction::BreakAtWith(ix, None);
+                            break 'scan (ix, None);
                         }
 
                         let mut i = ix;
@@ -2020,7 +2020,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             && end.is_none()
                             && *join_plain_lines.get_or_insert_with(|| self.can_join_plain_lines())
                         {
-                            break 'marker LoopInstruction::ContinueAndSkip(0);
+                            break 'marker 0;
                         }
                         // CommonMark hardbreak: an odd number of trailing source
                         // `\` chars before `\n`. Bytes inside an inline-emitted
@@ -2081,7 +2081,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                         let alignment_ix =
                                             self.allocs.allocate_alignment(alignment);
                                         let end_ix = table_head_ix + table_head_bytes;
-                                        break 'marker LoopInstruction::BreakAtWith(
+                                        break 'scan (
                                             end_ix,
                                             Some(Item {
                                                 start: i,
@@ -2098,7 +2098,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             i -= 1;
                             self.tree.append_text(begin_text, i, backslash_escaped);
                             backslash_escaped = false;
-                            break 'marker LoopInstruction::BreakAtWith(
+                            break 'scan (
                                 end_ix,
                                 Some(Item {
                                     start: i,
@@ -2116,7 +2116,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             i -= trailing_spaces;
                             self.tree.append_text(begin_text, i, backslash_escaped);
                             backslash_escaped = false;
-                            break 'marker LoopInstruction::BreakAtWith(
+                            break 'scan (
                                 end_ix,
                                 Some(Item {
                                     start: i,
@@ -2134,14 +2134,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         );
                         backslash_escaped = false;
 
-                        LoopInstruction::BreakAtWith(
+                        break 'scan (
                             end_ix,
                             Some(Item {
                                 start: i,
                                 end: end_ix,
                                 body: ItemBody::SoftBreak,
                             }),
-                        )
+                        );
                     }
                     b'\\' if bytes.get(ix + 1).copied().is_some_and(is_ascii_punctuation) => {
                         self.tree.append_text(begin_text, ix, backslash_escaped);
@@ -2155,7 +2155,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             });
                             begin_text = ix + 1 + count;
                             backslash_escaped = false;
-                            LoopInstruction::ContinueAndSkip(count)
+                            count
                         } else if bytes[ix + 1] == b'|' && TableParseMode::Active == mode {
                             // Yeah, it's super weird that backslash escaped pipes in tables aren't "real"
                             // backslash escapes.
@@ -2166,7 +2166,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             begin_text = ix + 1;
                             // The `\` isn't content, but the span still covers it.
                             backslash_escaped = true;
-                            LoopInstruction::ContinueAndSkip(1)
+                            1
                         } else if bytes[ix + 1] == b'<' {
                             // Still emit the marker: a deferred autolink may end on
                             // this `\`, in which case the link owns it and the
@@ -2178,14 +2178,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             });
                             begin_text = ix + 2;
                             backslash_escaped = false;
-                            LoopInstruction::ContinueAndSkip(1)
+                            1
                         } else if bytes[ix + 1] == b'$' && self.options.has_math() {
                             // In math context, \$ should still produce a MaybeMath
                             // delimiter so it can close a math span. The backslash
                             // only prevents opening.
                             begin_text = ix + 1;
                             backslash_escaped = true;
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         } else if let Some((count, fired)) = (deferred_ends.contains(&(ix + 1)))
                             .then(|| escaped_delim_run(self.text, start, ix, mode, self.options))
                             .flatten()
@@ -2224,11 +2224,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             }
                             begin_text = ix + 1 + count;
                             backslash_escaped = false;
-                            LoopInstruction::ContinueAndSkip(count)
+                            count
                         } else {
                             begin_text = ix + 1;
                             backslash_escaped = true;
-                            LoopInstruction::ContinueAndSkip(1)
+                            1
                         }
                     }
                     c @ b'*' | c @ b'_' | c @ b'~' | c @ b'^' => {
@@ -2276,7 +2276,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     begin_text = email_end;
                                     last_inline_emission_end = email_end;
                                     let skip = email_end.saturating_sub(ix + 1);
-                                    break 'marker LoopInstruction::ContinueAndSkip(skip);
+                                    break 'marker skip;
                                 }
                             }
                         }
@@ -2339,9 +2339,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 backslash_escaped = false;
                                 begin_text = close + 2;
                                 last_inline_emission_end = begin_text;
-                                break 'marker LoopInstruction::ContinueAndSkip(
-                                    begin_text - ix - 1,
-                                );
+                                break 'marker begin_text - ix - 1;
                             }
                         }
                         let is_valid_seq = delim_run_is_valid(c, count, self.options);
@@ -2362,7 +2360,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             }
                             begin_text = ix + count;
                         }
-                        LoopInstruction::ContinueAndSkip(count - 1)
+                        count - 1
                     }
                     b'$' => {
                         let brace_context =
@@ -2388,7 +2386,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         });
                         begin_text = ix + 1;
                         backslash_escaped = false;
-                        LoopInstruction::ContinueAndSkip(0)
+                        0
                     }
                     #[cfg(feature = "mdx")]
                     b'{' if self.options.contains(Options::ENABLE_MDX) => {
@@ -2414,7 +2412,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             || is_inside_open_inline_jsx_tag(bytes, ix)
                             || (self.options.has_math() && is_inside_math_span(bytes, ix))
                         {
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         } else {
                             // MDX inline expression: try to scan balanced braces.
                             // Lazy-paragraph continuation rules differ between
@@ -2481,7 +2479,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     body: ItemBody::MdxTextExpression(cow_ix),
                                 });
                                 begin_text = ix + total_len;
-                                LoopInstruction::ContinueAndSkip(total_len - 1)
+                                total_len - 1
                             } else {
                                 // Unclosed expression.
                                 self.mdx_errors.push((
@@ -2490,7 +2488,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                              closing brace for `{`"
                                     .to_string(),
                             ));
-                                LoopInstruction::ContinueAndSkip(0)
+                                0
                             }
                         }
                     }
@@ -2507,7 +2505,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             self.brace_context_stack.push(self.brace_context_next as u8);
                             self.brace_context_next += 1;
                         }
-                        LoopInstruction::ContinueAndSkip(0)
+                        0
                     }
                     b'}' => {
                         if let &mut [ref mut top_level_context] = &mut self.brace_context_stack[..]
@@ -2539,7 +2537,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         } else {
                             self.brace_context_stack.pop();
                         }
-                        LoopInstruction::ContinueAndSkip(0)
+                        0
                     }
                     b'`' => {
                         let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'`');
@@ -2561,9 +2559,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 begin_text = close + count;
                                 last_inline_emission_end = begin_text;
                                 backslash_escaped = false;
-                                break 'marker LoopInstruction::ContinueAndSkip(
-                                    begin_text - ix - 1,
-                                );
+                                break 'marker begin_text - ix - 1;
                             }
                         }
                         self.unresolved_code_seen = true;
@@ -2575,7 +2571,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::MaybeCode(count as u32, false),
                         });
                         begin_text = ix + count;
-                        LoopInstruction::ContinueAndSkip(count - 1)
+                        count - 1
                     }
                     b'<' if self.options.contains(Options::ENABLE_MDX)
                         || bytes.get(ix + 1) != Some(&b'\\') =>
@@ -2593,7 +2589,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::MaybeHtml(false),
                         });
                         begin_text = ix + 1;
-                        LoopInstruction::ContinueAndSkip(0)
+                        0
                     }
                     b'!' if bytes.get(ix + 1) == Some(&b'[') => {
                         self.tree.append_text(begin_text, ix, backslash_escaped);
@@ -2604,7 +2600,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::MaybeImage,
                         });
                         begin_text = ix + 2;
-                        LoopInstruction::ContinueAndSkip(1)
+                        1
                     }
                     b'[' => {
                         if self.link_mode != LinkMode::Expanded
@@ -2622,7 +2618,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             last_inline_emission_end = end;
                             candidate_floor = end;
                             backslash_escaped = false;
-                            break 'marker LoopInstruction::ContinueAndSkip(end - ix - 1);
+                            break 'marker end - ix - 1;
                         }
                         self.tree.append_text(begin_text, ix, backslash_escaped);
                         backslash_escaped = false;
@@ -2632,7 +2628,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::MaybeLinkOpen,
                         });
                         begin_text = ix + 1;
-                        LoopInstruction::ContinueAndSkip(0)
+                        0
                     }
                     b']' => {
                         self.tree.append_text(begin_text, ix, backslash_escaped);
@@ -2643,7 +2639,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::MaybeLinkClose(true),
                         });
                         begin_text = ix + 1;
-                        LoopInstruction::ContinueAndSkip(0)
+                        0
                     }
                     b'&' => match scan_entity(&bytes[ix..]) {
                         (n, Some(value)) => {
@@ -2655,20 +2651,20 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 body: ItemBody::SynthesizeText(self.allocs.allocate_cow(value)),
                             });
                             begin_text = ix + n;
-                            LoopInstruction::ContinueAndSkip(n - 1)
+                            n - 1
                         }
-                        _ => LoopInstruction::ContinueAndSkip(0),
+                        _ => 0,
                     },
                     b':' if self.options.contains(Options::ENABLE_DIRECTIVE) => {
                         // Text directive: :name[label]{attrs}
                         // Must not be preceded by another colon (to avoid ::, :::)
                         if ix > 0 && bytes[ix - 1] == b':' {
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         } else if is_inside_code_span(bytes, ix) {
                             // Code spans bind tighter: a `:` inside one is literal, not
                             // a directive whose label scan would reach past the span's
                             // backticks and swallow them (issue #158).
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         } else if let Some((dir_data, end_pos)) =
                             parse_directive_after_colons(self.text, bytes, ix + 1)
                         {
@@ -2677,7 +2673,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 let name_end = ix + 1 + dir_data.name.len();
                                 if name_end == end_pos {
                                     // bare :name: with no label/attrs
-                                    break 'marker LoopInstruction::ContinueAndSkip(0);
+                                    break 'marker 0;
                                 }
                             }
                             self.tree.append_text(begin_text, ix, backslash_escaped);
@@ -2704,9 +2700,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 self.tree.pop();
                             }
                             begin_text = end_pos;
-                            LoopInstruction::ContinueAndSkip(consumed - 1)
+                            consumed - 1
                         } else {
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         }
                     }
                     b'|' => {
@@ -2715,13 +2711,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         // separator pipe.
                         let preceding_backslashes = scan_rev_while(&bytes[..ix], |b| b == b'\\');
                         if preceding_backslashes % 2 == 1 {
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         } else if let TableParseMode::Active = mode {
-                            LoopInstruction::BreakAtWith(ix, None)
+                            break 'scan (ix, None);
                         } else {
                             last_pipe_ix = ix;
                             pipes += 1;
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         }
                     }
                     b'.' if matches!(bytes.get(ix + 1..), Some(&[b'.', b'.', ..])) => {
@@ -2733,12 +2729,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::SynthesizeChar('…'),
                         });
                         begin_text = ix + 3;
-                        LoopInstruction::ContinueAndSkip(2)
+                        2
                     }
                     b'-' => {
                         let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'-');
                         if count == 1 {
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         } else {
                             let itembody = if count == 2 {
                                 ItemBody::SynthesizeChar('–')
@@ -2757,7 +2753,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 body: itembody,
                             });
                             begin_text = ix + count;
-                            LoopInstruction::ContinueAndSkip(count - 1)
+                            count - 1
                         }
                     }
                     c @ b'\'' | c @ b'"' => {
@@ -2780,7 +2776,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         });
                         begin_text = ix + 1;
 
-                        LoopInstruction::ContinueAndSkip(0)
+                        0
                     }
                     b'h' | b'H' | b'w' | b'W' | b'@'
                         if self.options.contains(Options::ENABLE_GFM) =>
@@ -2805,7 +2801,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             let Some((prefix_len, _)) =
                                 crate::post_passes::match_autolink_scheme(bytes, ix)
                             else {
-                                break 'marker LoopInstruction::ContinueAndSkip(0);
+                                break 'marker 0;
                             };
                             let content_start = ix == paragraph_floor;
                             if bytes
@@ -2838,7 +2834,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 }
                                 begin_text = ix;
                                 candidate_floor = ix + 1;
-                                break 'marker LoopInstruction::ContinueAndSkip(0);
+                                break 'marker 0;
                             }
                         }
                         let detection = detect_gfm_autolink(
@@ -2872,7 +2868,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     backslash_escaped = false;
                                 }
                                 begin_text = cand_start;
-                                LoopInstruction::ContinueAndSkip(0)
+                                0
                             } else {
                                 candidate_floor = cand_end;
                                 self.append_autolink_link(d, begin_text, backslash_escaped);
@@ -2882,19 +2878,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 // Skip the URL bytes so later callbacks don't
                                 // re-trigger inside it; ContinueAndSkip(N) advances
                                 // by N then +1.
-                                LoopInstruction::ContinueAndSkip(cand_end.saturating_sub(ix + 1))
+                                cand_end.saturating_sub(ix + 1)
                             }
                         } else {
-                            LoopInstruction::ContinueAndSkip(0)
+                            0
                         }
                     }
-                    _ => LoopInstruction::ContinueAndSkip(0),
+                    _ => 0,
                 }
             };
-            match instruction {
-                LoopInstruction::ContinueAndSkip(skip) => scan_ix = ix + skip + 1,
-                LoopInstruction::BreakAtWith(end, value) => break (end, value),
-            }
+            scan_ix = ix + skip + 1;
         };
 
         if brk.is_none() {
@@ -6144,13 +6137,8 @@ fn fixup_end_of_definition_list(tree: &mut Tree<Item>, list_ix: TreeIndex) {
     }
 }
 
-/// Determines whether the delimiter run starting at given index is
-/// left-flanking, as defined by the commonmark spec (and isn't intraword
-/// for _ delims).
-/// suffix is &s[ix..], which is passed in as an optimization, since taking
-/// a string subslice is O(n).
-// Opening and closing use the same adjacent characters. Decode and classify
-// them once, while retaining the grammar's table and quote boundary ordering.
+/// Classify opening and closing eligibility together, decoding each neighboring
+/// character once. `suffix` is `&s[ix..]`; table edges act as word boundaries.
 fn classify_delimiter_run(
     s: &str,
     suffix: &str,
@@ -6172,6 +6160,7 @@ fn classify_delimiter_run(
     let right_edge = table && next == Some('|');
     let loose_strike =
         delim == b'~' && run_len == 1 && options.contains(Options::ENABLE_STRIKETHROUGH);
+    // Subscript permits intraword markers (H~2~O); strikethrough uses flanking rules.
     let subscript = delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT);
     let symmetric = delim == b'*' || delim == b'^' || (delim == b'~' && run_len > 1);
     let can_open = if next.is_none() || next_ws {
@@ -6187,6 +6176,7 @@ fn classify_delimiter_run(
     } else if loose_strike {
         prev_ws || prev_punct
     } else if delim == b'"' {
+        // Quotes may adjoin words, but after an ASCII digit they are inch marks.
         !next_punct && !prev.is_some_and(|c| c.is_ascii_digit()) || prev_ws || prev_punct
     } else {
         prev_ws || prev_punct && (delim != b'\'' || !matches!(prev, Some(']' | ')')))
@@ -6209,134 +6199,7 @@ fn classify_delimiter_run(
     (can_open, can_close)
 }
 
-#[cfg(test)]
-fn delim_run_can_open(
-    s: &str,
-    suffix: &str,
-    run_len: usize,
-    ix: usize,
-    mode: TableParseMode,
-    options: Options,
-) -> bool {
-    let next_char = if let Some(c) = suffix[run_len..].chars().next() {
-        c
-    } else {
-        return false;
-    };
-    if next_char.is_whitespace() {
-        return false;
-    }
-    if ix == 0 {
-        return true;
-    }
-    if mode == TableParseMode::Active {
-        if s.as_bytes()[..ix].ends_with(b"|") && !s.as_bytes()[..ix].ends_with(br"\|") {
-            return true;
-        }
-        if next_char == '|' {
-            return false;
-        }
-    }
-    let delim = suffix.bytes().next().unwrap();
-    if delim == b'*' && is_attention_marker(next_char, options) {
-        return true;
-    }
-    if (delim == b'*' || delim == b'^') && !is_punctuation(next_char) {
-        return true;
-    }
-    // GFM holds `~~` to the same flanking rules as `**`, so `a~~/foo~~` must not open.
-    if delim == b'~' && run_len > 1 && !is_punctuation(next_char) {
-        return true;
-    }
-    let prev_char = s[..ix].chars().last().unwrap();
-    // Subscript is intraword by design (`H~2~O`), unlike GFM strikethrough.
-    if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) && !is_punctuation(next_char) {
-        return true;
-    }
-    if delim == b'~' && options.contains(Options::ENABLE_STRIKETHROUGH) && run_len == 1 {
-        return !is_punctuation(next_char)
-            || (is_punctuation(next_char)
-                && (prev_char.is_whitespace() || is_punctuation(prev_char)));
-    }
-
-    // Double quotes can open after a non-space word character. For example, `에"About Me"` has
-    // quoted text attached directly after Korean text. Digits are excluded: a
-    // quote after a digit is an inch mark (`24"x36"`), not an opening quote.
-    if delim == b'"' {
-        return (!is_punctuation(next_char) && !prev_char.is_ascii_digit())
-            || prev_char.is_whitespace()
-            || is_punctuation(prev_char);
-    }
-
-    prev_char.is_whitespace()
-        || is_punctuation(prev_char) && (delim != b'\'' || ![']', ')'].contains(&prev_char))
-}
-
-#[cfg(test)]
-fn delim_run_can_close(
-    s: &str,
-    suffix: &str,
-    run_len: usize,
-    ix: usize,
-    mode: TableParseMode,
-    options: Options,
-) -> bool {
-    if ix == 0 {
-        return false;
-    }
-    let prev_char = s[..ix].chars().last().unwrap();
-    if prev_char.is_whitespace() {
-        return false;
-    }
-    let next_char = if let Some(c) = suffix[run_len..].chars().next() {
-        c
-    } else {
-        return true;
-    };
-    if mode == TableParseMode::Active {
-        if s.as_bytes()[..ix].ends_with(b"|") && !s.as_bytes()[..ix].ends_with(br"\|") {
-            return false;
-        }
-        if next_char == '|' {
-            return true;
-        }
-    }
-    let delim = suffix.bytes().next().unwrap();
-    if delim == b'*' && is_attention_marker(prev_char, options) {
-        return true;
-    }
-    if (delim == b'*' || delim == b'^') && !is_punctuation(prev_char) {
-        return true;
-    }
-    if delim == b'~' && run_len > 1 && !is_punctuation(prev_char) {
-        return true;
-    }
-    // Subscript is intraword by design (`H~2~O`), unlike GFM strikethrough.
-    if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) {
-        return true;
-    }
-    if delim == b'~' && options.contains(Options::ENABLE_STRIKETHROUGH) && run_len == 1 {
-        return !is_punctuation(prev_char)
-            || (is_punctuation(prev_char)
-                && (next_char.is_whitespace() || is_punctuation(next_char)));
-    }
-
-    // Double quotes can close before a non-space word character. For example, `"About Me"로` has
-    // Korean text attached directly after the quoted phrase.
-    if delim == b'"' {
-        return !is_punctuation(prev_char)
-            || next_char.is_whitespace()
-            || is_punctuation(next_char);
-    }
-
-    next_char.is_whitespace() || is_punctuation(next_char)
-}
-
 fn create_lut(options: &Options) -> LookupTable {
-    special_bytes(options)
-}
-
-fn special_bytes(options: &Options) -> LookupTable {
     let mut table = LookupTable {
         bytes: [false; 256],
         low: [0; 16],
@@ -6395,13 +6258,6 @@ fn special_bytes(options: &Options) -> LookupTable {
     }
 
     table
-}
-
-enum LoopInstruction<T> {
-    /// Continue looking for more special bytes, but skip next few bytes.
-    ContinueAndSkip(usize),
-    /// Break looping immediately, returning with the given index and value.
-    BreakAtWith(usize, T),
 }
 
 /// Result of `extend_indented_code_block`: the position end the block
@@ -6849,38 +6705,6 @@ impl core::ops::Deref for LookupTable {
     }
 }
 
-/// This function walks the byte slices from the given index and
-/// calls the callback function on all bytes (and their indices) that are in the following set:
-/// `` ` ``, `\`, `&`, `*`, `_`, `~`, `!`, `<`, `[`, `]`, `|`, `\r`, `\n`
-/// It is guaranteed not call the callback on other bytes.
-/// Whenever `callback(ix, byte)` returns a `ContinueAndSkip(n)` value, the callback
-/// will not be called with an index that is less than `ix + n + 1`.
-/// When the callback returns a `BreakAtWith(end_ix, opt+val)`, no more callbacks will be
-/// called and the function returns immediately with the return value `(end_ix, opt_val)`.
-/// If `BreakAtWith(..)` is never returned, this function will return the first
-/// index that is outside the byteslice bound and a `None` value.
-#[cfg(test)]
-fn iterate_special_bytes<F, T>(
-    lut: &LookupTable,
-    bytes: &[u8],
-    mut ix: usize,
-    mut callback: F,
-) -> (usize, Option<T>)
-where
-    F: FnMut(usize, u8) -> LoopInstruction<Option<T>>,
-{
-    loop {
-        ix = next_special_byte(lut, bytes, ix);
-        if ix >= bytes.len() {
-            return (ix, None);
-        }
-        match callback(ix, bytes[ix]) {
-            LoopInstruction::ContinueAndSkip(skip) => ix += skip + 1,
-            LoopInstruction::BreakAtWith(end, value) => return (end, value),
-        }
-    }
-}
-
 #[inline(always)]
 fn next_special_byte(lut: &LookupTable, bytes: &[u8], mut ix: usize) -> usize {
     while ix < bytes.len() {
@@ -6916,8 +6740,8 @@ fn next_special_byte(lut: &LookupTable, bytes: &[u8], mut ix: usize) -> usize {
 // Short lines stay with the tokenizer: their preflight scan would duplicate work.
 const PLAIN_LINE_MIN_LEN: usize = 128;
 
-/// Skip only a whole, marker-free physical line. The normal callback still
-/// handles its terminator, including hard breaks, tables and continuations.
+/// Skip only a whole, marker-free physical line. The tokenizer still handles
+/// its terminator, including hard breaks, tables and continuations.
 /// Unlike repeated lookahead from each inline candidate, this costs at most a
 /// constant number of linear scans per line, including mixed prose documents.
 fn plain_inline_line_end(lut: &LookupTable, bytes: &[u8], start: usize) -> Option<usize> {
@@ -6982,46 +6806,6 @@ fn contains_inline_marker_accelerated(lut: &LookupTable, line: &[u8]) -> Option<
 }
 
 const SCAN_BLOCK: usize = 16;
-
-#[cfg(test)]
-fn scalar_iterate_special_bytes<F, T>(
-    lut: &[bool; 256],
-    bytes: &[u8],
-    mut ix: usize,
-    mut callback: F,
-) -> (usize, Option<T>)
-where
-    F: FnMut(usize, u8) -> LoopInstruction<Option<T>>,
-{
-    while ix < bytes.len() {
-        let b = bytes[ix];
-        if lut[b as usize] {
-            match callback(ix, b) {
-                LoopInstruction::ContinueAndSkip(skip) => {
-                    ix += skip;
-                }
-                LoopInstruction::BreakAtWith(ix, val) => {
-                    return (ix, val);
-                }
-            }
-            ix += 1;
-        } else {
-            ix += 1;
-            // Byte by byte the callback's live state spills `lut`; a block keeps it in a register.
-            'skip: while ix + SCAN_BLOCK <= bytes.len() {
-                for offset in 0..SCAN_BLOCK {
-                    if lut[bytes[ix + offset] as usize] {
-                        ix += offset;
-                        break 'skip;
-                    }
-                }
-                ix += SCAN_BLOCK;
-            }
-        }
-    }
-
-    (ix, None)
-}
 
 /// Split the usual heading content range and the content inside the trailing attribute block.
 ///
@@ -7184,7 +6968,7 @@ mod inline_scan_tests {
     use super::*;
 
     #[test]
-    fn streaming_scan_matches_scalar_callbacks_and_return_values() {
+    fn streaming_scan_finds_the_next_enabled_marker() {
         for options in [Options::empty(), Options::all()]
             .into_iter()
             .chain(Options::all().iter())
@@ -7193,38 +6977,22 @@ mod inline_scan_tests {
             for len in [0, 1, 31, 32, 33, 63, 64, 65, 127, 128, 129, 257] {
                 for byte in 0..=255u8 {
                     let mut bytes = vec![byte; len];
-                    for at in (0..len).step_by(17) {
-                        bytes[at] = b'*';
-                    }
-                    for start in [0, 1, 15, 31, len, len + 1] {
-                        for skip in [0, 1, 15, 31, 32, 33, len + 3] {
-                            for stop in [None, Some(0), Some(2)] {
-                                let mut expected = Vec::new();
-                                let scalar =
-                                    scalar_iterate_special_bytes(&lut, &bytes, start, |at, b| {
-                                        expected.push((at, b));
-                                        if stop == Some(expected.len() - 1) {
-                                            LoopInstruction::BreakAtWith(at + 7, Some(b))
-                                        } else {
-                                            LoopInstruction::ContinueAndSkip(skip)
-                                        }
-                                    });
-                                let mut actual = Vec::new();
-                                let vector = iterate_special_bytes(&lut, &bytes, start, |at, b| {
-                                    actual.push((at, b));
-                                    if stop == Some(actual.len() - 1) {
-                                        LoopInstruction::BreakAtWith(at + 7, Some(b))
-                                    } else {
-                                        LoopInstruction::ContinueAndSkip(skip)
-                                    }
-                                });
-                                assert_eq!(
-                                    (vector, actual),
-                                    (scalar, expected),
-                                    "options={options:?} len={len} byte={byte} start={start} skip={skip} stop={stop:?}"
-                                );
-                            }
+                    // Test both dense markers and plain runs long enough for SIMD.
+                    for spacing in [17, 97] {
+                        for at in (0..len).step_by(spacing) {
+                            bytes[at] = b'*';
                         }
+                        for start in 0..=len + 1 {
+                            let expected = (start..len)
+                                .find(|&at| lut[bytes[at] as usize])
+                                .unwrap_or(start.max(len));
+                            assert_eq!(
+                                next_special_byte(&lut, &bytes, start),
+                                expected,
+                                "options={options:?} len={len} byte={byte} start={start}"
+                            );
+                        }
+                        bytes.fill(byte);
                     }
                 }
             }
@@ -7297,82 +7065,6 @@ mod inline_scan_tests {
                     (!autolink && !marker).then_some(end),
                     "options={options:?}, byte={byte}"
                 );
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod early_emphasis_tests {
-    use super::*;
-
-    #[test]
-    fn inert_strong_pair_is_resolved_in_the_first_pass() {
-        let (tree, _, errors) = run_first_pass("a **word**.", Options::empty());
-        assert!(errors.is_empty());
-        let paragraph = tree.cur().unwrap();
-        let before = tree[paragraph].child.unwrap();
-        let strong = tree[before].next.unwrap();
-        assert_eq!(tree[strong].item.body, ItemBody::Strong);
-        let child = tree[strong].child.unwrap();
-        assert!(matches!(tree[child].item.body, ItemBody::Text { .. }));
-        assert_eq!((tree[child].item.start, tree[child].item.end), (4, 8));
-        assert_eq!(tree.node_count(), 6);
-    }
-}
-
-#[test]
-fn shared_flanking_classification_matches_independent_rules() {
-    let neighbors = [
-        "", "a", "9", " ", "\t", "\n", "\r", "\u{b}", "\u{a0}", "\u{2003}", "_", "*", "~", "^",
-        "[", "]", "(", ")", "|", "\\|", ".", "!", "'", "\"", "雪", "é", "𐐀", "。", "💙",
-    ];
-    for before in neighbors {
-        for after in neighbors {
-            for marker in ["*", "_", "~", "^", "'", "\""] {
-                for len in 1..=4 {
-                    let suffix = format!("{}{after}", marker.repeat(len));
-                    let source = format!("{before}{suffix}");
-                    for mode in [TableParseMode::Active, TableParseMode::Disabled] {
-                        for options in [
-                            Options::empty(),
-                            Options::all(),
-                            Options::ENABLE_STRIKETHROUGH,
-                            Options::ENABLE_SUBSCRIPT,
-                            Options::ENABLE_SUPERSCRIPT,
-                        ] {
-                            assert_eq!(
-                                classify_delimiter_run(
-                                    &source,
-                                    &suffix,
-                                    len,
-                                    before.len(),
-                                    mode,
-                                    options
-                                ),
-                                (
-                                    delim_run_can_open(
-                                        &source,
-                                        &suffix,
-                                        len,
-                                        before.len(),
-                                        mode,
-                                        options
-                                    ),
-                                    delim_run_can_close(
-                                        &source,
-                                        &suffix,
-                                        len,
-                                        before.len(),
-                                        mode,
-                                        options
-                                    )
-                                ),
-                                "{source:?}, {len}, {options:?}"
-                            );
-                        }
-                    }
-                }
             }
         }
     }

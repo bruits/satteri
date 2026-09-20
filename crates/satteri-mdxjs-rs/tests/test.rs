@@ -718,14 +718,14 @@ fn optimize_static_raw_and_comment_groups_stay_raw_html()
     use satteri_mdxjs::compile_hast_arena;
 
     let mut builder = ArenaBuilder::<Hast>::new(String::new());
-    builder.open_node_raw(HastNodeType::Root as u8);
+    builder.open_node(HastNodeType::Root as u8);
 
     let ignored_paragraph = |builder: &mut ArenaBuilder<Hast>| {
         let tag = builder.alloc_string("p");
         let value = builder.alloc_string("x");
-        builder.open_node_raw(HastNodeType::Element as u8);
+        builder.open_node(HastNodeType::Element as u8);
         builder.set_data_current(&encode_element_data(tag, &[]));
-        let text = builder.add_leaf_raw(HastNodeType::Text as u8);
+        let text = builder.add_leaf(HastNodeType::Text as u8);
         builder
             .arena_mut()
             .set_type_data(text, &encode_text_data(value));
@@ -734,14 +734,14 @@ fn optimize_static_raw_and_comment_groups_stay_raw_html()
 
     ignored_paragraph(&mut builder);
     let comment_value = builder.alloc_string(" keep me ");
-    let comment = builder.add_leaf_raw(HastNodeType::Comment as u8);
+    let comment = builder.add_leaf(HastNodeType::Comment as u8);
     builder
         .arena_mut()
         .set_type_data(comment, &encode_text_data(comment_value));
 
     ignored_paragraph(&mut builder);
     let raw_value = builder.alloc_string("<hr data-keep>");
-    let raw = builder.add_leaf_raw(HastNodeType::Raw as u8);
+    let raw = builder.add_leaf(HastNodeType::Raw as u8);
     builder
         .arena_mut()
         .set_type_data(raw, &encode_text_data(raw_value));

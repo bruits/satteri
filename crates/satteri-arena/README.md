@@ -2,7 +2,9 @@
 
 Arena allocator and binary buffer primitives for Sätteri, a high-performance Markdown and MDX processor.
 
-`ArenaRead<K>` provides read-only access to resolved trees without requiring a particular node or string-pool layout. It returns node snapshots by value and also works through references, `Box`, `Arc`, and lock guards. Owned `Arena<K>` storage remains a `Vec<ArenaNode>`; its `get_node` and `get_node_mut` methods still return references.
+`Document<'a, K>` stores resolved MDAST or HAST nodes with borrowed or owned source text. `Arena<K>` is the owned form of the same type. `into_owned()` copies borrowed source text into the string pool without rebuilding nodes or changing references.
+
+`DocumentBuilder` constructs either ownership form; `ArenaBuilder` names its owned form. Position setters and leaf construction take `NodePosition` rather than separate offset, line, and column arguments. The JS API and wire layout are unchanged.
 
 ## Development
 

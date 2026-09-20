@@ -2,7 +2,7 @@
 //!
 //! Output is byte-identical to `mdast_arena_to_hast_arena` + `hast_arena_to_html`.
 
-use satteri_arena::{ArenaRead, Mdast, StringRef};
+use satteri_arena::{Document, Mdast, StringRef};
 
 use crate::convert::{
     BULK_LINE_TRIM_MIN_LEN, ConvertOptions, collect_refs, contains_h_key, trim_lines_for_hast,
@@ -15,10 +15,10 @@ use crate::mdast::MdastNodeType;
 
 /// Render `view` to HTML, or `None` when the document or options need the two-stage pipeline.
 pub(crate) fn mdast_to_html_fused(
-    view: &impl ArenaRead<Mdast>,
+    view: &Document<'_, Mdast>,
     options: &ConvertOptions,
 ) -> Option<String> {
-    if view.is_empty() || view.node_data().values().any(|blob| contains_h_key(blob)) {
+    if view.is_empty() || view.node_data.values().any(|blob| contains_h_key(blob)) {
         return None;
     }
     #[cfg(feature = "from-html")]
@@ -49,13 +49,13 @@ enum Trim {
 }
 
 /// The sink that writes HTML bytes, allocating nothing per element.
-struct HtmlSink<'a, V: ArenaRead<Mdast>> {
+struct HtmlSink<'a> {
     out: String,
-    view: &'a V,
+    view: &'a Document<'a, Mdast>,
     trim: Trim,
 }
 
-impl<V: ArenaRead<Mdast>> HtmlSink<'_, V> {
+impl HtmlSink<'_> {
     fn finish(self) -> String {
         let mut out = self.out;
         if !out.is_empty() && !out.ends_with('\n') {
@@ -112,7 +112,7 @@ impl<V: ArenaRead<Mdast>> HtmlSink<'_, V> {
     }
 }
 
-impl<V: ArenaRead<Mdast>> ConvertSink for HtmlSink<'_, V> {
+impl ConvertSink for HtmlSink<'_> {
     type BreakMark = ();
 
     #[inline(always)]

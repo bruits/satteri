@@ -5,4 +5,4 @@ cargo/satteri: patch
 npm/satteri: patch
 ---
 
-Improved Markdown parsing and HTML rendering performance, including plain text, code spans, and strong emphasis, without changing output or plugin behavior.
+Improved Markdown parsing and HTML rendering performance, including plain text, code spans, and strong emphasis, without changing output or plugin behavior. Reduced unnecessary allocations when compiling MDX with configured ignored elements.
