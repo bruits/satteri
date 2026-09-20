@@ -1,8 +1,8 @@
 //! HTML escaping for the HAST renderer.
 //!
-//! The SWAR scanner, needle folds, and overlapping tail read are adapted from
-//! ubugeeei's MIT-licensed implementation to the needle sets `hast-util-to-html`
-//! uses. The original copyright and permission notice follows.
+//! The SWAR scanner, the needle folds, and the overlapping tail read are ported
+//! from ox-content and adapted to the needle sets `hast-util-to-html` uses:
+//! <https://github.com/ubugeeei-prod/ox-content/blob/30d64f2b5daec595150c58f4a47aa96bf9b2b056/crates/ox_content_renderer/src/html/escape.rs>
 //!
 //! Copyright (c) 2024 ubugeeei, MIT License. Permission is hereby granted, free
 //! of charge, to any person obtaining a copy of this software and associated
