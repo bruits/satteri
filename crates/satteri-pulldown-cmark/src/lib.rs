@@ -866,3 +866,6 @@ impl Options {
         )
     }
 }
+
+#[doc(hidden)]
+pub mod document;

@@ -109,11 +109,15 @@ pub(crate) enum ItemBody {
     // These are inline items after resolution.
     Emphasis,
     Strong,
+    // Compact resolved strong with an inert source-text child.
+    SourceStrong,
     Strikethrough,
     Superscript,
     Subscript,
     Math(CowIndex, bool), // true for display math
     Code(CowIndex),
+    // A normalized code value still in the source, inside symmetric padding.
+    SourceCode(u32),
     Link(LinkIndex),
     // An irrevocably committed autolink with a verbatim source-text label.
     // Only the arena consumer requests this representation.
@@ -243,9 +247,11 @@ impl ItemBody {
                 | MaybeProtocolAutolink { .. }
                 | Emphasis
                 | Strong
+                | SourceStrong
                 | Strikethrough
                 | Math(..)
                 | Code(..)
+                | SourceCode(..)
                 | Link(..)
                 | LiteralAutolink(..)
                 | LiteralLink { .. }
@@ -549,7 +555,9 @@ impl<'input> ParserInner<'input> {
     ///
     /// Note: there's some potential for optimization here, but that's future work.
     pub(crate) fn handle_inline(&mut self, callbacks: &mut dyn ParserCallbacks<'input>) {
-        self.handle_inline_pass1(callbacks);
+        if !self.handle_inline_pass1(callbacks) {
+            return;
+        }
         // Resolve attention (emphasis/strong) and strikethrough/sub/sup. Two
         // delimiter families that can cross, so the resolve order matters,
         // mirroring micromark:
@@ -655,6 +663,9 @@ impl<'input> ParserInner<'input> {
         let mut cur = start;
         while let Some(cur_ix) = cur {
             match self.tree[cur_ix].item.body {
+                // The first pass may have already resolved an inert strong
+                // pair. Its tokenized marker still determines family order.
+                ItemBody::Strong | ItemBody::SourceStrong => return Some(b'*'),
                 ItemBody::MaybeEmphasis(..) => {
                     let c = bytes[self.tree[cur_ix].item.start];
                     if is_marker(c) {
@@ -716,7 +727,8 @@ impl<'input> ParserInner<'input> {
     /// This function handles both inline HTML and code spans, because they have
     /// the same precedence. It also handles links, even though they have lower
     /// precedence, because the URL of links must not be processed.
-    fn handle_inline_pass1(&mut self, callbacks: &mut dyn ParserCallbacks<'input>) {
+    fn handle_inline_pass1(&mut self, callbacks: &mut dyn ParserCallbacks<'input>) -> bool {
+        let mut needs_attention = false;
         let mut cur = self.tree.cur();
         let mut prev = None;
 
@@ -725,6 +737,13 @@ impl<'input> ParserInner<'input> {
         self.unclosed_paren_title_floor.set(usize::MAX);
 
         while let Some(mut cur_ix) = cur {
+            let body = self.tree[cur_ix].item.body;
+            // Code resolution cannot introduce attention. Other unresolved
+            // constructs may expose or synthesize markers, so remain conservative.
+            needs_attention |= body.is_maybe_inline() && !matches!(body, ItemBody::MaybeCode(..));
+            if let Some(child) = self.tree[cur_ix].child {
+                needs_attention |= self.scope_has_unresolved(Some(child));
+            }
             match self.tree[cur_ix].item.body {
                 ItemBody::MaybeHtml(preceded_by_backslash) => {
                     if preceded_by_backslash {
@@ -1738,6 +1757,7 @@ impl<'input> ParserInner<'input> {
         self.wikilink_stack.clear();
         self.code_delims.clear();
         self.math_delims.clear();
+        needs_attention
     }
 
     /// The construct opening on the byte after a URL-ending `\`. The first
@@ -2585,16 +2605,32 @@ impl<'input> ParserInner<'input> {
         }
         let cow: CowStr<'input> = strip_span_padding(buf, spanned_text);
 
+        // A borrowed, symmetrically padded value needs no allocation record or
+        // later copy into the semantic string pool. Keep it in the syntax item.
+        let code_start = self.tree[open].item.start + usize::from(preceding_backslash);
+        let code_end = self.tree[close].item.end;
+        let body = match &cow {
+            CowStr::Borrowed(value) => {
+                let value_start = value.as_ptr().addr() - self.text.as_ptr().addr();
+                let padding = value_start - code_start;
+                if padding == code_end - (value_start + value.len()) {
+                    ItemBody::SourceCode(padding as u32)
+                } else {
+                    ItemBody::Code(self.allocs.allocate_cow(cow))
+                }
+            }
+            _ => ItemBody::Code(self.allocs.allocate_cow(cow)),
+        };
         if preceding_backslash {
             self.tree[open].item.body = ItemBody::Text {
                 backslash_escaped: true,
             };
             self.tree[open].item.end = self.tree[open].item.start + 1;
             self.tree[open].next = Some(close);
-            self.tree[close].item.body = ItemBody::Code(self.allocs.allocate_cow(cow));
+            self.tree[close].item.body = body;
             self.tree[close].item.start = self.tree[open].item.start + 1;
         } else {
-            self.tree[open].item.body = ItemBody::Code(self.allocs.allocate_cow(cow));
+            self.tree[open].item.body = body;
             self.tree[open].item.end = self.tree[close].item.end;
             self.tree[open].next = self.tree[close].next;
         }
@@ -3850,6 +3886,11 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
     let tag = match item.body {
         ItemBody::Text { .. } => return Event::Text(text[item.start..item.end].into()),
         ItemBody::Code(cow_ix) => return Event::Code(allocs.take_cow(cow_ix)),
+        ItemBody::SourceCode(padding) => {
+            return Event::Code(
+                text[item.start + padding as usize..item.end - padding as usize].into(),
+            );
+        }
         ItemBody::SynthesizeText(cow_ix) => return Event::Text(allocs.take_cow(cow_ix)),
         ItemBody::SynthesizeChar(c) => return Event::Text(c.into()),
         ItemBody::HtmlBlock(_) => Tag::HtmlBlock,
@@ -3861,7 +3902,7 @@ fn item_to_event<'a>(item: Item, text: &'a str, allocs: &mut Allocations<'a>) ->
         ItemBody::FootnoteReference(cow_ix) => {
             return Event::FootnoteReference(allocs.take_cow(cow_ix));
         }
-        ItemBody::LiteralAutolink(_) | ItemBody::LiteralLink { .. } => {
+        ItemBody::LiteralAutolink(_) | ItemBody::LiteralLink { .. } | ItemBody::SourceStrong => {
             unreachable!("compact links are only produced for the arena consumer")
         }
         ItemBody::TaskListMarker(checked) => return Event::TaskListMarker(checked),

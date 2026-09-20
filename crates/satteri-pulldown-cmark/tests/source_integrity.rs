@@ -18,12 +18,20 @@ const b = 4;
 fn source_is_the_verbatim_input() {
     let (arena, _) = parse(ISSUE_MARKDOWN, Options::empty());
     assert_eq!(arena.source(), ISSUE_MARKDOWN);
-    // URL and inline-code text appear once in the input but are duplicated in
-    // the heap past the boundary, so count occurrences rather than `contains`.
-    assert!(arena.string_pool().len() > ISSUE_MARKDOWN.len());
+    // Unchanged values may borrow the source rather than being duplicated.
     assert_eq!(arena.source().matches("placehold.co").count(), 1);
-    assert!(arena.string_pool().matches("placehold.co").count() > 1);
     assert_eq!(arena.source().matches("/mdx").count(), 1);
+}
+
+#[test]
+fn decoded_values_leave_the_source_unchanged() {
+    let input = "![image](/?q=a&amp;b)";
+    let (arena, _) = parse(input, Options::empty());
+    assert_eq!(arena.source(), input);
+    assert_eq!(
+        satteri_ast::mdast_to_html(&arena),
+        "<p><img src=\"/?q=a&amp;b\" alt=\"image\"></p>\n"
+    );
 }
 
 #[test]

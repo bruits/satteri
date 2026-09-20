@@ -79,6 +79,32 @@ fn parse_markdown(bencher: divan::Bencher) {
     bencher.bench(|| satteri_pulldown_cmark::parse(MARKDOWN, opts));
 }
 
+/// Source-backed rendering, including parsing and optional buffer recycling.
+/// Unlike the NAPI benchmarks, this excludes JS string transport.
+#[divan::bench(args = ["markdown", "autolinks", "dense"], consts = [false, true])]
+fn source_document_to_html<const REUSE: bool>(bencher: divan::Bencher, fixture: &str) {
+    let source = match fixture {
+        "markdown" => MARKDOWN.to_owned(),
+        "autolinks" => AUTOLINKS.to_owned(),
+        "dense" => "A paragraph with **emphasis**, [link](target), and `code`.\n\n".repeat(200),
+        _ => unreachable!("benchmark fixture"),
+    };
+    let mut storage = None;
+    bencher.bench_local(|| {
+        let (document, _) = satteri_pulldown_cmark::document::parse_reusing(
+            divan::black_box(&source),
+            satteri_pulldown_cmark::DEFAULT_OPTIONS,
+            false,
+            storage.take(),
+        );
+        let html = satteri_ast::mdast_to_html(&document);
+        if REUSE {
+            storage = Some(document.into_reusable());
+        }
+        html
+    });
+}
+
 /// Parse MDX source into an Arena.
 #[divan::bench]
 fn parse_mdx(bencher: divan::Bencher) {

@@ -1,11 +1,9 @@
-//! Direct arena builder: walks the pulldown-cmark internal tree and builds
-//! a `satteri_arena::Arena` without going through the Event iterator.
+//! Resolve parser syntax into a source-backed semantic document.
+//! Public arena entry points own the same records without reparsing.
 
 use alloc::borrow::Cow;
 
-use satteri_arena::{
-    Arena, ArenaBuilder, LineIndex, Mdast, NodePosition, StringRef, line_ending_iter,
-};
+use satteri_arena::{Arena, LineIndex, Mdast, NodePosition, StringRef, line_ending_iter};
 use satteri_ast::mdast::{
     CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
     ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType, ReferenceData,
@@ -21,7 +19,7 @@ use satteri_ast::shared::{
 use crate::linklabel::LinkLabel;
 #[cfg(feature = "mdx")]
 use crate::parse::JsxAttr;
-use crate::parse::{DefaultParserCallbacks, HeadingAttributes, ItemBody, LinkDef, ParserInner};
+use crate::parse::{HeadingAttributes, ItemBody, LinkDef, ParserInner};
 use crate::{Alignment, HeadingLevel, LinkType, Options};
 
 #[cfg(feature = "mdx")]
@@ -46,6 +44,8 @@ pub const DEFAULT_OPTIONS: Options = Options::from_bits_truncate(
 #[cfg(feature = "mdx")]
 pub const MDX_OPTIONS: Options =
     Options::from_bits_truncate(DEFAULT_OPTIONS.bits() | Options::ENABLE_MDX.bits());
+
+use crate::document::{DocumentBuilder, SourceDocument};
 
 /// Parse markdown source into an Arena.
 ///
@@ -94,6 +94,20 @@ fn parse_inner(
     reuse: Option<Arena<Mdast>>,
     skip_fnr_autolink: bool,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
+    let storage = reuse.map(|arena| crate::document::SourceDocument::from_arena("", arena));
+    let (document, errors) =
+        parse_document(source, options, track_positions, skip_fnr_autolink, storage);
+    let arena = document.into_materialized();
+    (arena, errors)
+}
+
+pub(crate) fn parse_document<'a>(
+    source: &'a str,
+    options: Options,
+    track_positions: bool,
+    skip_fnr_autolink: bool,
+    storage: Option<SourceDocument<'static>>,
+) -> (SourceDocument<'a>, Vec<(usize, String)>) {
     let source = crate::strip_leading_bom(source);
 
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
@@ -122,38 +136,14 @@ fn parse_inner(
     };
     let mut cursor = line_index.cursor();
 
-    // Measured: ~1 node/16 bytes, ~11 type-data bytes/node, pool up to ~2.5x source.
-    let estimated_nodes = source.len() / 16 + 16;
-    let source_extra = source.len() * 2;
-    let arena = if let Some(mut a) = reuse {
-        // Recycle: clear all per-document state but keep the already-grown
-        // `Vec` / `String` allocations. For tiny inputs the saved `malloc`s
-        // are the dominant cost, since the actual parse and convert work is
-        // already sub-microsecond.
-        a.reset();
-        a.string_pool.reserve(source.len() + source_extra);
-        a.string_pool.push_str(source);
-        a.source_len = source.len() as u32;
-        a.nodes.reserve(estimated_nodes);
-        a.children.reserve(estimated_nodes);
-        a.type_data.reserve(estimated_nodes * 12);
-        a
-    } else {
-        let mut source_buf = String::with_capacity(source.len() + source_extra);
-        source_buf.push_str(source);
-        Arena::<Mdast>::with_capacity(
-            source_buf,
-            estimated_nodes,
-            estimated_nodes,
-            estimated_nodes * 12,
-        )
-    };
-    let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::from_arena(arena);
-
-    // Build the pulldown-cmark parser (runs first pass).
     let mut inner = ParserInner::new_for_arena(source, options);
-    let mut callbacks = DefaultParserCallbacks;
-
+    let mut callbacks = crate::DefaultParserCallbacks;
+    let mut document = storage.map_or_else(
+        || SourceDocument::new(source, inner.tree.semantic_capacity_hint()),
+        |storage| storage.rebind(source),
+    );
+    document.ensure_node_capacity(|| inner.tree.semantic_capacity_hint());
+    let mut builder = DocumentBuilder::from_arena(document);
     // Open root node. In skip-positions mode the cursor returns the zero
     // sentinel; mirror it in the root's hardcoded 1:1 start so every node
     // carries a consistent "no position" marker (byte offsets stay filled).
@@ -854,7 +844,6 @@ fn parse_inner(
                 // tight lists.
 
                 let mut item = inner.tree[cur_ix].item;
-                // Resolve inline markup if needed.
                 if item.body.is_maybe_inline() {
                     inner.handle_inline(&mut callbacks);
                     item = inner.tree[cur_ix].item;
@@ -916,6 +905,15 @@ fn parse_inner(
                         ItemBody::Code(cow_ix) => {
                             let cow = inner.allocs.take_cow(*cow_ix);
                             buf.push_str(&cow);
+                        }
+                        ItemBody::SourceStrong => {
+                            buf.push_str(&source[item.start + 2..item.end - 2]);
+                        }
+                        ItemBody::SourceCode(padding) => {
+                            buf.push_str(
+                                &source
+                                    [item.start + *padding as usize..item.end - *padding as usize],
+                            );
                         }
                         ItemBody::SoftBreak => {
                             // Alt text keeps the break rather than collapsing it
@@ -1047,9 +1045,17 @@ fn parse_inner(
                 // Map ItemBody to arena node.
                 match item.body {
                     ItemBody::Paragraph | ItemBody::TightParagraph => {
-                        builder.open_node(MdastNodeType::Paragraph as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Paragraph as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         if mdx {
                             paragraph_open_depth.push(builder.stack_depth());
@@ -1060,9 +1066,17 @@ fn parse_inner(
                         // A container directive label: a `paragraph` tagged with
                         // `directiveLabel`, whose inline children were tokenized
                         // by the normal inline pass.
-                        builder.open_node(MdastNodeType::Paragraph as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Paragraph as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         let para_id = builder.current_node_id();
                         builder
@@ -1075,11 +1089,18 @@ fn parse_inner(
                     }
                     ItemBody::Heading(level, heading_ix) => {
                         let depth = heading_level_to_u8(level);
-                        builder.open_node(MdastNodeType::Heading as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Heading as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[depth],
                         );
-                        builder.set_data_current(&[depth]);
                         // Conveyed as `data.hProperties`, which the mdast->hast
                         // pass emits as `id`/`class`/custom attributes.
                         if let Some(heading_ix) = heading_ix
@@ -1092,9 +1113,17 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::BlockQuote(_) => {
-                        builder.open_node(MdastNodeType::Blockquote as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Blockquote as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         if mdx {
                             container_jsx_snapshot
@@ -1103,9 +1132,17 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::MathBlock(_) => {
-                        builder.open_node(MdastNodeType::Math as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Math as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
@@ -1128,9 +1165,17 @@ fn parse_inner(
                         } else {
                             builder.alloc_string(meta_str)
                         };
-                        builder.open_node(MdastNodeType::Code as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Code as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         let cd = CodeData {
                             lang: lang_ref,
@@ -1144,9 +1189,17 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::IndentCodeBlock(_) => {
-                        builder.open_node(MdastNodeType::Code as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Code as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         let cd = CodeData {
                             lang: StringRef::empty(),
@@ -1162,9 +1215,17 @@ fn parse_inner(
                     ItemBody::List(_is_tight, c, listitem_start) => {
                         let ordered = c == b'.' || c == b')';
                         let start_num = if ordered { listitem_start } else { 0 };
-                        builder.open_node(MdastNodeType::List as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::List as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         let ld = ListData {
                             start: start_num,
@@ -1176,11 +1237,18 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::ListItem(_, spread) => {
-                        builder.open_node(MdastNodeType::ListItem as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::ListItem as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &ListItemData { checked: 2, spread }.to_bytes(),
                         );
-                        builder.set_data_current(&ListItemData { checked: 2, spread }.to_bytes());
                         if mdx {
                             container_jsx_snapshot.push((MdastNodeType::ListItem, jsx_stack.len()));
                         }
@@ -1197,45 +1265,92 @@ fn parse_inner(
                                 Alignment::Right => ColumnAlign::Right,
                             })
                             .collect();
-                        builder.open_node(MdastNodeType::Table as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Table as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &encode_table_data(&aligns),
                         );
-                        builder.set_data_current(&encode_table_data(&aligns));
                         inner.tree.push();
                     }
                     ItemBody::TableHead | ItemBody::TableRow => {
-                        builder.open_node(MdastNodeType::TableRow as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::TableRow as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::TableCell => {
-                        builder.open_node(MdastNodeType::TableCell as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::TableCell as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::Emphasis => {
-                        builder.open_node(MdastNodeType::Emphasis as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Emphasis as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::Strong => {
-                        builder.open_node(MdastNodeType::Strong as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Strong as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::Strikethrough => {
-                        builder.open_node(MdastNodeType::Delete as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Delete as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
@@ -1346,20 +1461,18 @@ fn parse_inner(
                                 None => builder.alloc_string(label_src),
                             };
                             let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
-                            builder.open_node(MdastNodeType::LinkReference as u8);
-                            builder.set_position_current(
-                                start,
-                                ref_end,
-                                start_line,
-                                start_col,
-                                ref_end_line,
-                                ref_end_col,
+                            builder.open_node_with_position(
+                                MdastNodeType::LinkReference as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: ref_end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line: ref_end_line,
+                                    end_column: ref_end_col,
+                                },
+                                &encode_reference_data(identifier_ref, label_ref, kind),
                             );
-                            builder.set_data_current(&encode_reference_data(
-                                identifier_ref,
-                                label_ref,
-                                kind,
-                            ));
                             // The generic container-close path reads
                             // `item.end` and overrides the position we just
                             // set. For Collapsed references we need the span
@@ -1378,11 +1491,16 @@ fn parse_inner(
                             } else {
                                 builder.alloc_string(&title)
                             };
-                            builder.open_node(MdastNodeType::Link as u8);
-                            builder.set_position_current(
-                                start, end, start_line, start_col, end_line, end_col,
-                            );
-                            builder.set_data_current(
+                            builder.open_node_with_position(
+                                MdastNodeType::Link as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line,
+                                    end_column: end_col,
+                                },
                                 &LinkData {
                                     url: url_ref,
                                     title: title_ref,
@@ -1404,21 +1522,23 @@ fn parse_inner(
                                 None => builder.alloc_string(label_src),
                             };
                             let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
-                            builder.open_node(MdastNodeType::ImageReference as u8);
-                            builder.set_position_current(
-                                start,
-                                ref_end,
-                                start_line,
-                                start_col,
-                                ref_end_line,
-                                ref_end_col,
+                            builder.open_node_with_position(
+                                MdastNodeType::ImageReference as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: ref_end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line: ref_end_line,
+                                    end_column: ref_end_col,
+                                },
+                                &encode_image_reference_data(
+                                    identifier_ref,
+                                    label_ref,
+                                    kind,
+                                    StringRef::empty(),
+                                ),
                             );
-                            builder.set_data_current(&encode_image_reference_data(
-                                identifier_ref,
-                                label_ref,
-                                kind,
-                                StringRef::empty(),
-                            ));
                             // Same fix as LinkReference: the generic close
                             // path reads `item.end`, which ignores the
                             // trailing `[]` for Collapsed refs. Sync it.
@@ -1431,11 +1551,16 @@ fn parse_inner(
                                 builder.alloc_string(&title)
                             };
                             let alt_ref = StringRef::empty();
-                            builder.open_node(MdastNodeType::Image as u8);
-                            builder.set_position_current(
-                                start, end, start_line, start_col, end_line, end_col,
-                            );
-                            builder.set_data_current(
+                            builder.open_node_with_position(
+                                MdastNodeType::Image as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line,
+                                    end_column: end_col,
+                                },
                                 &ImageData {
                                     url: url_ref,
                                     alt: alt_ref,
@@ -1462,11 +1587,16 @@ fn parse_inner(
                             Some(unescaped) => builder.alloc_string(&unescaped),
                             None => builder.alloc_string(&label_cow),
                         };
-                        builder.open_node(MdastNodeType::FootnoteDefinition as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
-                        );
-                        builder.set_data_current(
+                        builder.open_node_with_position(
+                            MdastNodeType::FootnoteDefinition as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
                             &FootnoteDefinitionData {
                                 identifier: id_sr,
                                 label: label_sr,
@@ -1476,9 +1606,17 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::HtmlBlock(_) => {
-                        builder.open_node(MdastNodeType::Html as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Html as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         html_block_buf = Some(String::with_capacity(128));
                         inner.tree.push();
@@ -1488,9 +1626,17 @@ fn parse_inner(
                             crate::MetadataBlockKind::YamlStyle => MdastNodeType::Yaml,
                             crate::MetadataBlockKind::PlusesStyle => MdastNodeType::Toml,
                         };
-                        builder.open_node(node_type as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            node_type as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         html_block_buf = Some(String::with_capacity(128));
                         inner.tree.push();
@@ -1559,11 +1705,18 @@ fn parse_inner(
                                 MdastNodeType::MdxJsxTextElement
                             };
                             let data = encode_jsx_element_data(&jsx, &mut builder);
-                            builder.open_node(node_type as u8);
-                            builder.set_position_current(
-                                start, end, start_line, start_col, end_line, end_col,
+                            builder.open_node_with_position(
+                                node_type as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line,
+                                    end_column: end_col,
+                                },
+                                &data,
                             );
-                            builder.set_data_current(&data);
                             let id = builder.current_node_id();
                             builder
                                 .arena_mut()
@@ -1579,23 +1732,47 @@ fn parse_inner(
                     }
 
                     ItemBody::DefinitionList(_) => {
-                        builder.open_node(MdastNodeType::DescriptionList as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::DescriptionList as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::DefinitionListTitle => {
-                        builder.open_node(MdastNodeType::DescriptionTerm as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::DescriptionTerm as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::DefinitionListDefinition(_, loose) => {
-                        builder.open_node(MdastNodeType::DescriptionDetails as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::DescriptionDetails as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         // `loose` is per-dd (firstpass sets it when a blank line
                         // precedes this definition's `:` marker).
@@ -1604,16 +1781,32 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::Superscript => {
-                        builder.open_node(MdastNodeType::Superscript as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Superscript as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::Subscript => {
-                        builder.open_node(MdastNodeType::Subscript as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Subscript as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
@@ -1741,6 +1934,37 @@ fn parse_inner(
                                 &sr.as_bytes(),
                             );
                         }
+                        inner.tree.next_sibling(cur_ix);
+                    }
+                    ItemBody::SourceStrong => {
+                        let strong = builder.add_leaf_with_position(
+                            MdastNodeType::Strong as u8,
+                            position,
+                            &[],
+                        );
+                        let sr = StringRef::new(start + 2, end - start - 4);
+                        builder.add_only_child_with_position(
+                            strong,
+                            MdastNodeType::Text as u8,
+                            NodePosition {
+                                start_offset: start + 2,
+                                end_offset: end - 2,
+                                start_line,
+                                start_column: if start_line == 0 { 0 } else { start_col + 2 },
+                                end_line,
+                                end_column: if end_line == 0 { 0 } else { end_col - 2 },
+                            },
+                            &sr.as_bytes(),
+                        );
+                        inner.tree.next_sibling(cur_ix);
+                    }
+                    ItemBody::SourceCode(padding) => {
+                        let sr = StringRef::new(start + padding, end - start - padding * 2);
+                        builder.add_leaf_with_position(
+                            MdastNodeType::InlineCode as u8,
+                            position,
+                            &sr.as_bytes(),
+                        );
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::Code(cow_ix) => {
@@ -2144,12 +2368,12 @@ fn parse_inner(
     // serializers won't touch the cache. Gating on the pool rather than the
     // source matters because entities and smart punctuation add multibyte to it.
     // Skip-positions mode skips too: downstream paths don't read utf16_offsets.
-    if track_positions && !arena.string_pool.is_ascii() {
+    if track_positions && !(source.is_ascii() && arena.extra.is_ascii()) {
         // Taken, not allocated: `reset` keeps the capacity for a pooled refill.
         let mut utf16_offsets = core::mem::take(&mut arena.utf16_offsets);
         utf16_offsets.clear();
-        utf16_offsets.reserve(arena.nodes.len());
-        for node in &arena.nodes {
+        utf16_offsets.reserve(arena.len());
+        for node in (0..arena.len() as u32).map(|id| arena.get_node(id)) {
             let pair = if node.start_line == 0 && node.start_offset == 0 {
                 (0u32, 0u32)
             } else {
@@ -2273,7 +2497,7 @@ fn opens_repositioned_node(body: &ItemBody) -> bool {
 }
 
 fn emit_pending_refdef(
-    builder: &mut ArenaBuilder<Mdast>,
+    builder: &mut DocumentBuilder<'_>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
     label: &LinkLabel<'_>,
@@ -2326,7 +2550,7 @@ fn emit_pending_refdef(
 /// container's pending children to keep source order.
 #[allow(clippy::too_many_arguments)]
 fn emit_refdefs_in_container(
-    builder: &mut ArenaBuilder<Mdast>,
+    builder: &mut DocumentBuilder<'_>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
     refdefs: &[(LinkLabel<'_>, LinkDef<'_>)],
@@ -2722,7 +2946,7 @@ fn byte_offset_to_line_col(source: &str, offset: usize) -> String {
 use crate::parse::JsxElementData;
 
 #[cfg(feature = "mdx")]
-fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<Mdast>) -> Vec<u8> {
+fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut DocumentBuilder<'_>) -> Vec<u8> {
     let name_ref = if jsx.name.is_empty() {
         StringRef::empty()
     } else {
@@ -3050,7 +3274,7 @@ mod autolink_path_probe {
                 .chain(DECODE_SYNTHESIZED_TRIGGERS)
                 .chain(IGNORED_OR_TRUNCATED_SHAPES)
             {
-                let (mut arena, _) = parse_inner(input, options, true, None, false);
+                let (mut arena, _) = crate::document::parse(input, options, true);
                 let before = satteri_ast::mdast_to_html(&arena);
                 crate::post_passes::gfm_autolink_literal_pass(
                     &mut arena,

@@ -1497,11 +1497,19 @@ pub(crate) fn is_ascii_punctuation(c: u8) -> bool {
     c < 128 && (PUNCT_MASKS_ASCII[(c / 16) as usize] & (1 << (c & 15))) != 0
 }
 
+// Keep the ASCII classification small enough to inline without duplicating
+// the Unicode table search at each delimiter boundary.
+#[inline]
 pub(crate) fn is_punctuation(c: char) -> bool {
-    let cp = c as u32;
-    if cp < 128 {
-        return is_ascii_punctuation(cp as u8);
+    if c.is_ascii() {
+        is_ascii_punctuation(c as u8)
+    } else {
+        is_unicode_punctuation(c as u32)
     }
+}
+
+#[inline(never)]
+fn is_unicode_punctuation(cp: u32) -> bool {
     if cp > 0x1FBCA {
         return false;
     }

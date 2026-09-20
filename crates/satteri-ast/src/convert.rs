@@ -1,7 +1,9 @@
 //! Convert an MDAST arena to a HAST arena.
 
 use rustc_hash::FxHashMap;
-use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, StringRef, decode_string_ref_data};
+use satteri_arena::{
+    Arena, ArenaBuilder, ArenaRead, Hast, Mdast, StringRef, decode_string_ref_data,
+};
 
 use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
 use crate::hast::HastNodeType;
@@ -25,7 +27,7 @@ struct HData {
 }
 
 impl HData {
-    fn read(view: &Arena<Mdast>, node_id: u32) -> Self {
+    fn read(view: &impl ArenaRead<Mdast>, node_id: u32) -> Self {
         let bytes = match view.get_node_data(node_id) {
             Some(b) if !b.is_empty() => b,
             _ => return HData { root: None },
@@ -418,13 +420,13 @@ impl Default for ConvertOptions {
 }
 
 /// Convert an MDAST arena directly to a HAST arena using default options.
-pub fn mdast_arena_to_hast_arena(source: &Arena<Mdast>) -> Arena<Hast> {
+pub fn mdast_arena_to_hast_arena(source: &impl ArenaRead<Mdast>) -> Arena<Hast> {
     mdast_arena_to_hast_arena_impl(source, &ConvertOptions::default(), None)
 }
 
 /// Convert an MDAST arena to a HAST arena with the given conversion options.
 pub fn mdast_arena_to_hast_arena_with_options(
-    source: &Arena<Mdast>,
+    source: &impl ArenaRead<Mdast>,
     options: &ConvertOptions,
 ) -> Arena<Hast> {
     mdast_arena_to_hast_arena_impl(source, options, None)
@@ -434,7 +436,7 @@ pub fn mdast_arena_to_hast_arena_with_options(
 /// fills it in instead of allocating a fresh arena. Saves the per-compile
 /// `Vec` and `String` mallocs that dominate the cost on tiny inputs.
 pub fn mdast_arena_to_hast_arena_into(
-    source: &Arena<Mdast>,
+    source: &impl ArenaRead<Mdast>,
     options: &ConvertOptions,
     reuse: Arena<Hast>,
 ) -> Arena<Hast> {
@@ -442,31 +444,27 @@ pub fn mdast_arena_to_hast_arena_into(
 }
 
 fn mdast_arena_to_hast_arena_impl(
-    source: &Arena<Mdast>,
+    source: &impl ArenaRead<Mdast>,
     options: &ConvertOptions,
     reuse: Option<Arena<Hast>>,
 ) -> Arena<Hast> {
-    let src = source.string_pool();
     let n = source.len();
-    // Measured: HAST runs ~1.3x the MDAST node count and ~1.33x its pool.
     let node_estimate = n + n / 2;
-    let pool_estimate = src.len() + src.len() / 2;
+    let pool_estimate = source.pool_len() + source.pool_len() / 2;
     let mut hast_arena = if let Some(mut a) = reuse {
         a.reset();
-        a.string_pool.reserve(pool_estimate);
-        a.string_pool.push_str(src);
         a.nodes.reserve(node_estimate);
         a.children.reserve(node_estimate);
         a.type_data.reserve(n * 20);
         a
     } else {
-        let mut pool = String::with_capacity(pool_estimate);
-        pool.push_str(src);
-        Arena::<Hast>::with_capacity(pool, node_estimate, node_estimate, n * 20)
+        Arena::<Hast>::with_capacity(String::new(), node_estimate, node_estimate, n * 20)
     };
+    hast_arena.string_pool.reserve(pool_estimate);
+    source.append_pool(&mut hast_arena.string_pool);
     // Reuses the MDAST pool (heap included) so StringRefs stay valid; the
     // original-input prefix is identical, so carry the boundary over.
-    hast_arena.source_len = source.source_len;
+    hast_arena.source_len = source.source_len();
     let builder: ArenaBuilder<Hast> = ArenaBuilder::from_arena(hast_arena);
     let refs = collect_refs(source);
     let ctx = EmitCtx {
@@ -509,15 +507,15 @@ pub(crate) struct CollectedRefs<'src> {
 
 /// Flat probe over the node array for the two types [`collect_refs`] resolves.
 #[inline]
-fn has_any_ref_node(view: &Arena<Mdast>) -> bool {
+fn has_any_ref_node(view: &impl ArenaRead<Mdast>) -> bool {
     let definition = MdastNodeType::Definition as u8;
     let footnote_definition = MdastNodeType::FootnoteDefinition as u8;
-    view.nodes
-        .iter()
+    (0..view.len() as u32)
+        .map(|id| view.get_node(id))
         .any(|n| n.node_type == definition || n.node_type == footnote_definition)
 }
 
-pub(crate) fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
+pub(crate) fn collect_refs(view: &impl ArenaRead<Mdast>) -> CollectedRefs<'_> {
     let mut defs: FxHashMap<&str, Definition> = FxHashMap::default();
     let mut fn_def_nodes: FxHashMap<&str, u32> = FxHashMap::default();
 
@@ -592,7 +590,7 @@ pub(crate) fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     // directive renders its own mdast children: it is dropped without an
     // `hName`, and `hChildren` replaces those children. Counting a ref that
     // won't render forces an empty footnote `<section>`.
-    fn walk_main_refs(view: &Arena<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
+    fn walk_main_refs(view: &impl ArenaRead<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
         let node = view.get_node(node_id);
         let ty = MdastNodeType::from_u8(node.node_type);
         if ty == Some(MdastNodeType::FootnoteDefinition) {
@@ -644,7 +642,7 @@ pub(crate) fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     // Walk each queued def body to pick up nested refs. Because defs can
     // reference each other, the queue may grow while we iterate — index into
     // it by position rather than borrowing an iterator.
-    fn walk_body_refs(view: &Arena<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
+    fn walk_body_refs(view: &impl ArenaRead<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
         let node = view.get_node(node_id);
         if MdastNodeType::from_u8(node.node_type) == Some(MdastNodeType::FootnoteReference) {
             refs.push(node_id);
@@ -751,7 +749,7 @@ struct PropData {
 }
 
 #[inline]
-pub(crate) fn list_contains_task_item(list_id: u32, view: &Arena<Mdast>) -> bool {
+pub(crate) fn list_contains_task_item(list_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
     for &child_id in view.get_children(list_id) {
         let child = view.get_node(child_id);
         if MdastNodeType::from_u8(child.node_type) != Some(MdastNodeType::ListItem) {
@@ -920,7 +918,7 @@ fn add_raw_node(builder: &mut ArenaBuilder<Hast>, html: &str) -> u32 {
 fn copy_position_to(
     target_id: u32,
     src_node_id: u32,
-    view: &Arena<Mdast>,
+    view: &impl ArenaRead<Mdast>,
     builder: &mut ArenaBuilder<Hast>,
 ) {
     let node = view.get_node(src_node_id);
@@ -985,7 +983,7 @@ fn encode_code_node_data(lang: &str, meta: &str) -> Vec<u8> {
     buf
 }
 
-fn copy_position(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>) {
+fn copy_position(node_id: u32, view: &impl ArenaRead<Mdast>, builder: &mut ArenaBuilder<Hast>) {
     let node = view.get_node(node_id);
     // Skip-positions mode leaves line/col 0 but the parser still records byte
     // offsets; copy them so MDX codegen resolves line:col on demand via
@@ -1052,11 +1050,10 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     let sref = StringRef::from_bytes(&arena.type_data[data_off..data_off + 8]);
     let s_off = sref.offset as usize;
     let s_len = sref.len as usize;
-    let source_bytes = arena.string_pool.as_bytes();
-    if s_off + s_len > source_bytes.len() {
+    if s_off + s_len > arena.string_pool.len() {
         return;
     }
-    let slice = &source_bytes[s_off..s_off + s_len];
+    let slice = arena.get_str(sref).as_bytes();
     let mut i = 0;
     while i < slice.len() && (slice[i] == b' ' || slice[i] == b'\t') {
         i += 1;
@@ -1068,7 +1065,7 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     arena.type_data[data_off..data_off + 8].copy_from_slice(&new_ref.as_bytes());
 }
 
-fn produces_hast_output(child_id: u32, view: &Arena<Mdast>) -> bool {
+fn produces_hast_output(child_id: u32, view: &impl ArenaRead<Mdast>) -> bool {
     let raw_type = view.get_node(child_id).node_type;
     match MdastNodeType::from_u8(raw_type) {
         Some(
@@ -1090,13 +1087,13 @@ fn produces_hast_output(child_id: u32, view: &Arena<Mdast>) -> bool {
     }
 }
 
-pub(crate) fn extract_text_content(node_id: u32, view: &Arena<Mdast>) -> String {
+pub(crate) fn extract_text_content(node_id: u32, view: &impl ArenaRead<Mdast>) -> String {
     let mut out = String::new();
     extract_text_recursive(node_id, view, &mut out);
     out
 }
 
-fn extract_text_recursive(node_id: u32, view: &Arena<Mdast>, out: &mut String) {
+fn extract_text_recursive(node_id: u32, view: &impl ArenaRead<Mdast>, out: &mut String) {
     let node = view.get_node(node_id);
     if node.node_type == MdastNodeType::Text as u8 {
         let data = view.get_type_data(node_id);
@@ -1121,9 +1118,9 @@ struct PendingAttr {
 }
 
 /// The sink that materializes property lists, positions, and `hName` overrides.
-struct HastSink<'a> {
+struct HastSink<'a, V: ArenaRead<Mdast>> {
     builder: ArenaBuilder<Hast>,
-    view: &'a Arena<Mdast>,
+    view: &'a V,
     /// Shared by every block separator; avoids re-pushing a single byte into the pool.
     newline_ref: StringRef,
     attrs: [PendingAttr; MAX_INLINE_ATTRS],
@@ -1133,8 +1130,8 @@ struct HastSink<'a> {
     h: Option<HData>,
 }
 
-impl<'a> HastSink<'a> {
-    fn new(mut builder: ArenaBuilder<Hast>, view: &'a Arena<Mdast>) -> Self {
+impl<'a, V: ArenaRead<Mdast>> HastSink<'a, V> {
+    fn new(mut builder: ArenaBuilder<Hast>, view: &'a V) -> Self {
         let newline_ref = builder.alloc_string("\n");
         let empty = PendingAttr {
             name: "",
@@ -1255,7 +1252,7 @@ impl<'a> HastSink<'a> {
     }
 }
 
-impl ConvertSink for HastSink<'_> {
+impl<V: ArenaRead<Mdast>> ConvertSink for HastSink<'_, V> {
     type BreakMark = usize;
 
     fn open_root(&mut self, pos: Pos) {

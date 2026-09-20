@@ -1,6 +1,6 @@
 //! Post-passes that transform the built MDAST tree.
 //!
-//! `arena_build::parse` produces a structurally complete `Arena<Mdast>`
+//! `arena_build::parse` produces a structurally complete `SourceDocument<'_>`
 //! that matches micromark's tokenizer output. The remark ecosystem then
 //! layers several `mdast-util-*` / `remark-*` plugins on top to:
 //!
@@ -13,16 +13,17 @@
 //! parser (firstpass `DirectiveLabel` and the leaf/text directive children).
 //!
 //! Each of those is a self-contained tree-walking transformation that
-//! reads / mutates `Arena<Mdast>` after building is finished. They live
+//! reads / mutates `SourceDocument<'_>` after building is finished. They live
 //! here so [`arena_build`] stays focused on actually building the arena.
 
 use core::ops::Range;
 #[cfg(feature = "std")]
 use std::sync::LazyLock;
 
+use crate::document::{DocumentBuilder, SourceDocument};
 #[cfg(feature = "mdx")]
 use satteri_arena::decode_string_ref_data;
-use satteri_arena::{Arena, ArenaBuilder, Mdast, NodePosition, StringRef};
+use satteri_arena::{NodePosition, StringRef};
 use satteri_ast::mdast::{MdastNodeType, codec::LinkData};
 
 use crate::puncttable::is_punctuation;
@@ -641,7 +642,7 @@ fn port_merge_autolinks(merged: &str, host_end: usize) -> bool {
         .is_some_and(|(_, _, url_end, _, _)| url_end > host_end)
 }
 
-pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
+pub(crate) fn merge_directive_port_splits(arena: &mut SourceDocument<'_>) {
     // Explicitly skip Link / LinkReference — a bracketed link's label text
     // intentionally preserves `text + textDirective + text` splits (remark
     // keeps them because autolink doesn't recurse into labels).
@@ -813,7 +814,7 @@ pub(crate) fn merge_directive_port_splits(arena: &mut Arena<Mdast>) {
 /// fire (preceded by a digit, inside a failed `<...>` autolink, across
 /// container prefixes).
 pub(crate) fn gfm_autolink_literal_pass(
-    arena: &mut Arena<Mdast>,
+    arena: &mut SourceDocument<'_>,
     source_bytes: &[u8],
     autolink_free_ranges: &[Range<usize>],
     options: crate::Options,
@@ -1518,7 +1519,7 @@ fn push_fnr_emails(
 /// everything left over (including characters stripped off a match's tail)
 /// becomes a sibling Text node.
 fn split_text_with_autolinks_fnr(
-    arena: &mut Arena<Mdast>,
+    arena: &mut SourceDocument<'_>,
     text_id: u32,
     source_bytes: &[u8],
     cursor: Option<&mut satteri_arena::LineIndexCursor<'_, '_>>,
@@ -1667,7 +1668,7 @@ fn split_text_with_autolinks_fnr(
 /// that result from entity decoding, character synthesis, etc.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_text_merging(
-    builder: &mut ArenaBuilder<Mdast>,
+    builder: &mut DocumentBuilder<'_>,
     text_value: &str,
     start: u32,
     end: u32,
@@ -1716,7 +1717,7 @@ pub(crate) fn emit_text_merging(
 }
 
 #[cfg(feature = "mdx")]
-pub(crate) fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
+pub(crate) fn mdx_mark_and_unravel(arena: &mut SourceDocument<'_>) {
     let len = arena.len() as u32;
     // Only paragraphs containing inline MDX nodes can be promoted; without
     // any in the arena the per-paragraph work below is guaranteed wasted.

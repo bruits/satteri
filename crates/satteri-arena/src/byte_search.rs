@@ -73,6 +73,49 @@ unsafe fn contains_avx2(bytes: &[u8], low: &[u8; 16]) -> bool {
     false
 }
 
+/// Return the first matching full vector and its byte mask. A zero mask points
+/// at the unscanned scalar tail. `None` means vector dispatch is unavailable.
+#[doc(hidden)]
+#[inline]
+pub fn next_ascii_mask(bytes: &[u8], low: &[u8; 16]) -> Option<(usize, u32)> {
+    if bytes.len() < AVX2_VECTOR_BYTES {
+        return None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: Runtime dispatch establishes AVX2 support.
+        return Some(unsafe { next_mask_avx2(bytes, low) });
+    }
+    let _ = (bytes, low);
+    None
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn next_mask_avx2(bytes: &[u8], low: &[u8; 16]) -> (usize, u32) {
+    const HIGH: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
+    // SAFETY: Each table holds sixteen readable bytes.
+    let low = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(low.as_ptr().cast()) });
+    let high = _mm256_broadcastsi128_si256(unsafe { _mm_loadu_si128(HIGH.as_ptr().cast()) });
+    let nibble = _mm256_set1_epi8(15);
+    let zero = _mm256_setzero_si256();
+    let mut at = 0;
+    while bytes.len() - at >= AVX2_VECTOR_BYTES {
+        // SAFETY: The loop condition establishes a full readable vector.
+        let chunk = unsafe { _mm256_loadu_si256(bytes.as_ptr().add(at).cast()) };
+        let lows = _mm256_shuffle_epi8(low, _mm256_and_si256(chunk, nibble));
+        let highs =
+            _mm256_shuffle_epi8(high, _mm256_and_si256(_mm256_srli_epi16(chunk, 4), nibble));
+        let absent = _mm256_cmpeq_epi8(_mm256_and_si256(lows, highs), zero);
+        let mask = !(_mm256_movemask_epi8(absent) as u32);
+        if mask != 0 {
+            return (at, mask);
+        }
+        at += AVX2_VECTOR_BYTES;
+    }
+    (at, 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AVX2_BATCH_BYTES, contains_ascii_byte_accelerated};
