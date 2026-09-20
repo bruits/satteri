@@ -2260,6 +2260,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                     self.options,
                                 ) {
                                     candidate_floor = email_start + 1;
+                                    furthest_autolink_end = furthest_autolink_end.max(email_end);
                                     // Fall through to attention handling: a
                                     // marker that fires splices those
                                     // delimiters away, and a blocked one
@@ -2291,9 +2292,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             self.options,
                         );
                         // A non-dual-purpose pair around inert text cannot compete
-                        // with another attention run. Build its resolved shape now,
-                        // rather than allocating one temporary node per marker.
-                        if c == b'*' && count == 2 && can_open && !can_close {
+                        // with another attention run. A deferred autolink can still
+                        // consume part of it, so only resolve pairs beyond its reach.
+                        if c == b'*'
+                            && count == 2
+                            && can_open
+                            && !can_close
+                            && ix >= furthest_autolink_end
+                        {
                             let content_start = ix + count;
                             let mut close = content_start;
                             while close < bytes.len()
