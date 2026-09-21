@@ -59,6 +59,9 @@ import {
   requireRootReplacement,
   ROOT_NODE_ID,
   rootReplacementError,
+  REUSE_SCAN_BUDGET,
+  reuseAncestorError,
+  reuseCycleError,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -204,6 +207,41 @@ function hastReusedId(node: unknown, refs: NodeRefs): number | undefined {
   return id !== undefined && id !== FOREIGN_REF ? id : undefined;
 }
 
+/** Visit refs encoded by this content, including refs nested in newly built wrappers. */
+function forEachHastReusedId(
+  content: HastContent,
+  refs: NodeRefs,
+  visit: (id: number) => void,
+): void {
+  const directId = hastReusedId(content, refs);
+  if (directId !== undefined) {
+    visit(directId);
+    return;
+  }
+  const rootChildren = (content as { children?: unknown }).children;
+  if (!Array.isArray(rootChildren) || rootChildren.length === 0) return;
+
+  const pending: unknown[] = [];
+  for (const child of rootChildren) pending.push(child);
+  const seen = new WeakSet<object>();
+  seen.add(content);
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node === null || typeof node !== "object") continue;
+    const id = hastReusedId(node, refs);
+    if (id !== undefined) {
+      visit(id);
+      continue;
+    }
+    if (seen.has(node)) continue;
+    seen.add(node);
+    const children = (node as { children?: unknown }).children;
+    if (Array.isArray(children)) {
+      for (const child of children) pending.push(child);
+    }
+  }
+}
+
 function emitHastChildrenCommand(
   buffer: CommandBuffer,
   id: number,
@@ -227,11 +265,29 @@ function emitHastTree(
   id: number,
   node: HastNode,
   refs: NodeRefs,
+  allowRootRef = false,
 ): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitHastOp(buffer, node, true, refs),
+    emitHastOp(buffer, node, true, refs, false, allowRootRef),
   );
   if (!ok) throw unencodableContentError(node);
+}
+
+/** Replace `id` with several nodes in one command, root-wrapped so the engine
+ *  splices the children in place of the node. */
+function emitHastMultiReplace(
+  buffer: CommandBuffer,
+  id: number,
+  nodes: readonly HastContent[],
+  refs: NodeRefs,
+): void {
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
+    buffer.open(HAST_ROOT);
+    for (const n of nodes) if (!emitHastOp(buffer, n, false, refs)) return false;
+    buffer.close();
+    return true;
+  });
+  if (!ok) throw unencodableContentError(nodes);
 }
 
 // Root replacement needs a separate encoder because per-node encoding rejects root payloads.
@@ -290,9 +346,10 @@ function emitHastOp(
   isRoot: boolean,
   refs: NodeRefs,
   document = false,
+  allowRootRef = false,
 ): boolean {
   if (node === null || typeof node !== "object") return false;
-  if (!isRoot) {
+  if (!isRoot || allowRootRef) {
     const id = hastReusedId(node, refs);
     if (id !== undefined) {
       w.ref(id);
@@ -353,6 +410,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
   readonly #refs: NodeRefs;
+  /** Anchor id → existing nodes spliced there; null until a visitor reuses one. */
+  #reuseEdges: Map<number, Set<number>> | null = null;
   readonly fileURL: URL | undefined;
   readonly data: Data;
   readonly sourceFormat: SourceFormat;
@@ -388,9 +447,27 @@ class HastVisitorContextImpl implements HastVisitorContext {
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
     const id = requireNid(node, "replaceNode", this.#refs);
+    const onlyReplacement = Array.isArray(newNode)
+      ? newNode.length === 1
+        ? newNode[0]
+        : undefined
+      : newNode;
+    if (
+      id === ROOT_NODE_ID &&
+      onlyReplacement !== undefined &&
+      hastReusedId(onlyReplacement, this.#refs) === id
+    ) {
+      return;
+    }
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // Replace last so earlier insertions can still reference the target node.
+      // One command, so the node's replacement is its whole slot and a ref back
+      // to it resolves to all of it rather than to the last element.
+      if (id !== ROOT_NODE_ID && newNode.length > 1) {
+        emitHastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
+        this.#pendingNodes.delete(id);
+        return;
+      }
       let previous: HastContent | undefined;
       for (const n of newNode) {
         if (previous !== undefined)
@@ -402,7 +479,8 @@ class HastVisitorContextImpl implements HastVisitorContext {
       } else if (id === ROOT_NODE_ID) {
         emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
       } else {
-        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs);
+        this.#trackReuse(id, previous, "replaceNode", false);
+        emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs, true);
       }
       // Discard the queued replacement so later setProperty calls cannot resurrect it.
       this.#pendingNodes.delete(id);
@@ -412,20 +490,74 @@ class HastVisitorContextImpl implements HastVisitorContext {
       emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
       return;
     }
-    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs);
+    this.#trackReuse(id, newNode, "replaceNode", false);
+    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true);
     this.#pendingNodes.set(id, newNode);
   }
 
+  #splice(
+    anchorId: number,
+    content: HastContent | HastContent[],
+    op: StructuralOp,
+    label: string,
+  ): void {
+    const intoSelf = op === "prependChild" || op === "appendChild";
+    for (const n of asArray(content)) {
+      this.#trackReuse(anchorId, n, label, intoSelf);
+      emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
+    }
+  }
+
+  /** Rejects the two reuse shapes that can't be spliced by id, at the call site rather than at the end of the compile. */
+  #trackReuse(anchorId: number, content: HastContent, op: string, intoSelf: boolean): void {
+    forEachHastReusedId(content, this.#refs, (targetId) => {
+      // A node is an ancestor of itself, so it cannot become its own child.
+      // Replacement content may deliberately wrap the node being replaced.
+      if (targetId === anchorId) {
+        if (intoSelf) throw reuseAncestorError(op);
+        return;
+      }
+      for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
+        if (cur === targetId) throw reuseAncestorError(op);
+        cur = this.#resolver.parentIdOf(cur);
+      }
+      const edges = (this.#reuseEdges ??= new Map());
+      const seen = new Set<number>([targetId]);
+      const queue = [targetId];
+      let budget = REUSE_SCAN_BUDGET;
+      while (queue.length > 0 && budget > 0) {
+        const next = edges.get(queue.pop()!);
+        if (next === undefined) continue;
+        for (const id of next) {
+          if (id === anchorId) throw reuseCycleError(op);
+          if (seen.add(id)) {
+            queue.push(id);
+            budget--;
+          }
+        }
+      }
+      let targets = edges.get(anchorId);
+      if (targets === undefined) edges.set(anchorId, (targets = new Set()));
+      targets.add(targetId);
+    });
+  }
+
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "insertBefore", this.#refs);
-    for (const n of asArray(newNode))
-      emitHastTree(this.#commandBuffer, "insertBefore", id, n, this.#refs);
+    this.#splice(
+      requireNid(node, "insertBefore", this.#refs),
+      newNode,
+      "insertBefore",
+      "insertBefore",
+    );
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "insertAfter", this.#refs);
-    for (const n of asArray(newNode))
-      emitHastTree(this.#commandBuffer, "insertAfter", id, n, this.#refs);
+    this.#splice(
+      requireNid(node, "insertAfter", this.#refs),
+      newNode,
+      "insertAfter",
+      "insertAfter",
+    );
   }
 
   wrapNode(
@@ -445,26 +577,32 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "prependChild", this.#refs);
-    for (const n of asArray(childNode))
-      emitHastTree(this.#commandBuffer, "prependChild", id, n, this.#refs);
+    this.#splice(
+      requireNid(node, "prependChild", this.#refs),
+      childNode,
+      "prependChild",
+      "prependChild",
+    );
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    const id = requireNid(node, "appendChild", this.#refs);
-    for (const n of asArray(childNode))
-      emitHastTree(this.#commandBuffer, "appendChild", id, n, this.#refs);
+    this.#splice(
+      requireNid(node, "appendChild", this.#refs),
+      childNode,
+      "appendChild",
+      "appendChild",
+    );
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
     const children = "children" in node ? node.children : [];
-    if (index <= 0 || children.length === 0) {
-      this.prependChild(node, childNode);
-    } else if (index >= children.length) {
-      this.appendChild(node, childNode);
-    } else {
-      this.insertBefore(children[index]!, childNode);
-    }
+    const [anchor, op] =
+      index <= 0 || children.length === 0
+        ? ([node, "prependChild"] as const)
+        : index >= children.length
+          ? ([node, "appendChild"] as const)
+          : ([children[index]!, "insertBefore"] as const);
+    this.#splice(requireNid(anchor, "insertChildAt", this.#refs), childNode, op, "insertChildAt");
   }
 
   removeChildAt(node: HastNode, index: number): void {
@@ -707,7 +845,7 @@ function applyHastVisitResult(
     returnBuffer.setProperty(nodeId, "value", (result as { value: string }).value);
     return;
   }
-  emitHastTree(returnBuffer, "replace", nodeId, result, refs);
+  emitHastTree(returnBuffer, "replace", nodeId, result, refs, true);
 }
 
 // Explicit field checks avoid allocating Object.keys on the per-text-node hot path.

@@ -43,19 +43,29 @@ for (const tag of Object.keys(HAST_STUB_FIELDS)) {
 const FALLBACK_DESCRIPTORS = stubDescriptors([]);
 
 export class HastChildStub {
-  _resolver: HastResolver;
-  _id: number;
+  readonly #resolver: HastResolver;
+  readonly #id: number;
   type: string;
 
   constructor(resolver: HastResolver, id: number, nodeType: number) {
-    this._resolver = resolver;
-    this._id = id;
+    this.#resolver = resolver;
+    this.#id = id;
     this.type = TYPE_NAME_BY_TAG[nodeType] ?? `unknown(${nodeType})`;
     installStubDescriptors(this, HAST_STUB_DESCRIPTORS[nodeType] ?? FALLBACK_DESCRIPTORS);
   }
 
   /** @internal */
   get _refs(): NodeRefs {
-    return this._resolver.refs;
+    return this.#resolver.refs;
+  }
+
+  /** @internal */
+  get _id(): number {
+    return this.#id;
+  }
+
+  /** @internal */
+  _materialize(): object {
+    return this.#resolver.materializeOne(this.#id);
   }
 }
