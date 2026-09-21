@@ -21,7 +21,7 @@ import {
   type HastHandle,
   type HastHookFn,
 } from "./hast/hast-visitor.js";
-import { markHandleMutated } from "./lazy-child-resolver.js";
+import { markHandleMutated, releaseHandleReferences } from "./lazy-child-resolver.js";
 import {
   resolveMdastSubscriptions,
   visitMdastHandle,
@@ -43,7 +43,7 @@ export type MdastPipelineResult = {
 
 // Invalidate retained child stubs before their arena is freed.
 export function releaseHandle(handle: AnyHandle, invalidateStubs: boolean): void {
-  if (invalidateStubs) markHandleMutated(handle);
+  if (invalidateStubs) releaseHandleReferences(handle);
   dropHandle(handle);
 }
 

@@ -34,6 +34,12 @@ export function markHandleMutated(handle: AnyHandle): void {
   }
 }
 
+export function releaseHandleReferences(handle: AnyHandle): void {
+  markHandleMutated(handle);
+  // Retained contexts keep their own refs; do not keep the table alive until native handle GC.
+  HANDLE_NODE_REFS.delete(handle);
+}
+
 const NO_PARENT = 0xffffffff;
 
 // Immutable snapshots can be shared by resolvers until the next arena mutation.
