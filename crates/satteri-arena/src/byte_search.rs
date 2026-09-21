@@ -1,0 +1,233 @@
+//! Internal ASCII byte-set searching.
+
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::{
+    __m128i, _mm_set_epi64x, _mm256_and_si256, _mm256_broadcastsi128_si256, _mm256_cmpeq_epi8,
+    _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_or_si256, _mm256_set1_epi8,
+    _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_srli_epi16,
+};
+#[cfg(target_arch = "x86_64")]
+use std::is_x86_feature_detected;
+
+// High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
+#[cfg(target_arch = "x86_64")]
+const HIGH_NIBBLE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
+
+const AVX2_VECTOR_BYTES: usize = 32;
+// Amortize dispatch and table setup over the four vectors processed per iteration.
+const AVX2_BATCH_BYTES: usize = 4 * AVX2_VECTOR_BYTES;
+
+/// Test a nibble-encoded ASCII set, or return `None` when acceleration is unavailable.
+/// Each low-nibble entry holds matching ASCII high nibbles as bits.
+#[doc(hidden)]
+#[inline]
+pub fn contains_ascii_byte_accelerated(bytes: &[u8], low: &[u8; 16]) -> Option<bool> {
+    if bytes.len() < AVX2_BATCH_BYTES {
+        return None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 is available and a full vector batch is readable.
+        return Some(unsafe { contains_avx2(bytes, low) });
+    }
+    let _ = (bytes, low);
+    None
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+#[target_feature(enable = "sse2")]
+fn nibble_table(bytes: &[u8; 16]) -> __m128i {
+    let bits = u128::from_ne_bytes(*bytes);
+    _mm_set_epi64x((bits >> 64) as i64, bits as i64)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn contains_avx2(bytes: &[u8], low: &[u8; 16]) -> bool {
+    let low = _mm256_broadcastsi128_si256(nibble_table(low));
+    let high = _mm256_broadcastsi128_si256(nibble_table(&HIGH_NIBBLE_BITS));
+    let nibble = _mm256_set1_epi8(0x0f);
+    let zero = _mm256_setzero_si256();
+    let matches = |at| {
+        // SAFETY: Both loops below leave a full vector readable at `at`.
+        let chunk = unsafe { _mm256_loadu_si256(bytes.as_ptr().add(at).cast()) };
+        let lows = _mm256_shuffle_epi8(low, _mm256_and_si256(chunk, nibble));
+        let highs =
+            _mm256_shuffle_epi8(high, _mm256_and_si256(_mm256_srli_epi16(chunk, 4), nibble));
+        _mm256_and_si256(lows, highs)
+    };
+    let mut at = 0;
+    // Only existence matters: combine four independent vectors before testing
+    // their mask, rather than branching and advancing once per vector.
+    while bytes.len() - at >= AVX2_BATCH_BYTES {
+        let first = _mm256_or_si256(matches(at), matches(at + AVX2_VECTOR_BYTES));
+        let second = _mm256_or_si256(
+            matches(at + 2 * AVX2_VECTOR_BYTES),
+            matches(at + 3 * AVX2_VECTOR_BYTES),
+        );
+        let absent = _mm256_cmpeq_epi8(_mm256_or_si256(first, second), zero);
+        if _mm256_movemask_epi8(absent) != -1 {
+            return true;
+        }
+        at += AVX2_BATCH_BYTES;
+    }
+    while at < bytes.len() {
+        // Rechecking a suffix avoids an out-of-bounds load or a scalar tail.
+        let absent = _mm256_cmpeq_epi8(matches(at.min(bytes.len() - AVX2_VECTOR_BYTES)), zero);
+        if _mm256_movemask_epi8(absent) != -1 {
+            return true;
+        }
+        at += AVX2_VECTOR_BYTES;
+    }
+    false
+}
+
+/// Return the first matching full vector and its byte mask. A zero mask points
+/// at the unscanned scalar tail. `None` means vector dispatch is unavailable.
+#[doc(hidden)]
+#[inline]
+pub fn next_ascii_mask(bytes: &[u8], low: &[u8; 16]) -> Option<(usize, u32)> {
+    if bytes.len() < AVX2_VECTOR_BYTES {
+        return None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx2") {
+        // SAFETY: Runtime dispatch establishes AVX2 support.
+        return Some(unsafe { next_mask_avx2(bytes, low) });
+    }
+    let _ = (bytes, low);
+    None
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn next_mask_avx2(bytes: &[u8], low: &[u8; 16]) -> (usize, u32) {
+    let low = _mm256_broadcastsi128_si256(nibble_table(low));
+    let high = _mm256_broadcastsi128_si256(nibble_table(&HIGH_NIBBLE_BITS));
+    let nibble = _mm256_set1_epi8(0x0f);
+    let zero = _mm256_setzero_si256();
+    let mut at = 0;
+    while bytes.len() - at >= AVX2_VECTOR_BYTES {
+        // SAFETY: The loop condition establishes a full readable vector.
+        let chunk = unsafe { _mm256_loadu_si256(bytes.as_ptr().add(at).cast()) };
+        let lows = _mm256_shuffle_epi8(low, _mm256_and_si256(chunk, nibble));
+        let highs =
+            _mm256_shuffle_epi8(high, _mm256_and_si256(_mm256_srli_epi16(chunk, 4), nibble));
+        let absent = _mm256_cmpeq_epi8(_mm256_and_si256(lows, highs), zero);
+        let mask = !(_mm256_movemask_epi8(absent) as u32);
+        if mask != 0 {
+            return (at, mask);
+        }
+        at += AVX2_VECTOR_BYTES;
+    }
+    (at, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::array::from_fn;
+
+    use super::{AVX2_BATCH_BYTES, contains_ascii_byte_accelerated};
+
+    #[test]
+    fn short_inputs_decline_acceleration() {
+        for len in 0..AVX2_BATCH_BYTES {
+            assert_eq!(
+                contains_ascii_byte_accelerated(&vec![0; len], &[255; 16]),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn accelerated_search_matches_every_byte_at_vector_boundaries() {
+        for low in [[0; 16], [255; 16], [0x55; 16], [0xaa; 16]] {
+            for len in 128..193 {
+                let mut bytes = vec![255; len + 31];
+                for offset in [0, 1, 15, 31] {
+                    let slice = &mut bytes[offset..offset + len];
+                    for at in [
+                        0,
+                        1,
+                        15,
+                        16,
+                        31,
+                        32,
+                        63,
+                        64,
+                        95,
+                        96,
+                        len - 33,
+                        len - 32,
+                        len - 17,
+                        len - 16,
+                        len - 1,
+                    ] {
+                        for byte in 0..=255u8 {
+                            slice[at] = byte;
+                            let expected =
+                                byte < 128 && low[(byte & 15) as usize] & (1 << (byte >> 4)) != 0;
+                            if let Some(found) = contains_ascii_byte_accelerated(slice, &low) {
+                                assert_eq!(
+                                    found, expected,
+                                    "len={len}, offset={offset}, at={at}, byte={byte}"
+                                );
+                            }
+                        }
+                        slice[at] = 255;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn singleton_sets_distinguish_every_ascii_byte_and_reject_non_ascii() {
+        for needle in 0..128u8 {
+            let mut low = [0; 16];
+            low[(needle & 15) as usize] = 1 << (needle >> 4);
+            for len in [128, 129, 159, 160, 161, 255, 256, 257] {
+                // Exact-sized allocations also make tail overreads visible to memory checkers.
+                let mut bytes = vec![255; len].into_boxed_slice();
+                for at in [0, 15, 31, len - 33, len - 32, len - 1] {
+                    for byte in 0..=255u8 {
+                        bytes[at] = byte;
+                        if let Some(found) = contains_ascii_byte_accelerated(&bytes, &low) {
+                            assert_eq!(
+                                found,
+                                byte == needle,
+                                "needle={needle}, byte={byte}, len={len}, at={at}"
+                            );
+                        }
+                    }
+                    bytes[at] = 255;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arbitrary_ascii_sets_match_scalar_search() {
+        let mut state = 0x18273645u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as u8
+        };
+        for _ in 0..1024 {
+            let low = from_fn(|_| next());
+            let bytes: [u8; 321] = from_fn(|_| next());
+            for start in 0..32 {
+                let slice = &bytes[start..];
+                let expected = slice
+                    .iter()
+                    .any(|&b| b < 128 && low[(b & 15) as usize] & (1 << (b >> 4)) != 0);
+                if let Some(found) = contains_ascii_byte_accelerated(slice, &low) {
+                    assert_eq!(found, expected);
+                }
+            }
+        }
+    }
+}

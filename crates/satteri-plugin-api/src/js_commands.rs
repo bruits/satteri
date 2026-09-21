@@ -20,7 +20,7 @@
 //! both kinds would silently misroute nodes. The phantom-typed `Arena<K>`
 //! signature on each entry point makes a cross-kind call a compile error.
 
-use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, NodePosition, StringRef};
 use satteri_ast::commands::CommandError;
 use satteri_ast::hast::codec::decode_element_tag;
 use satteri_ast::hast::{HastNodeType, is_void_element};
@@ -336,7 +336,7 @@ impl Default for MdastCommandOptions {
 /// original id (u32 LE) in its type_data. The apply resolves it by splicing
 /// that original subtree and applying any pending patch on it.
 fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
-    let id = builder.open_node_raw(REF_NODE_TYPE);
+    let id = builder.open_node(REF_NODE_TYPE);
     builder.set_data_current(&ref_id.to_le_bytes());
     builder.close_node();
     id
@@ -1218,12 +1218,14 @@ fn mdast_wrap_arena_from_tree(mut tree: Arena<Mdast>) -> Result<Arena<Mdast>, Co
     tree.get_node_mut(0).node_type = node.node_type;
     tree.set_position(
         0,
-        node.start_offset,
-        node.end_offset,
-        node.start_line,
-        node.start_column,
-        node.end_line,
-        node.end_column,
+        NodePosition {
+            start_offset: node.start_offset,
+            end_offset: node.end_offset,
+            start_line: node.start_line,
+            start_column: node.start_column,
+            end_line: node.end_line,
+            end_column: node.end_column,
+        },
     );
     tree.set_type_data(0, &type_data);
     tree.set_children(0, &children);
@@ -2082,24 +2084,59 @@ mod tests {
         let mut b = ArenaBuilder::<Mdast>::new(source);
 
         b.open_node(MdastNodeType::Root as u8);
-        b.set_position_current(0, 14, 1, 1, 2, 6);
+        b.set_position_current(NodePosition {
+            start_offset: 0,
+            end_offset: 14,
+            start_line: 1,
+            start_column: 1,
+            end_line: 2,
+            end_column: 6,
+        });
 
         b.open_node(MdastNodeType::Heading as u8);
-        b.set_position_current(0, 7, 1, 1, 1, 8);
+        b.set_position_current(NodePosition {
+            start_offset: 0,
+            end_offset: 7,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 8,
+        });
         b.set_data_current(&encode_heading_data(1));
 
         b.open_node(MdastNodeType::Text as u8);
-        b.set_position_current(2, 7, 1, 3, 1, 8);
+        b.set_position_current(NodePosition {
+            start_offset: 2,
+            end_offset: 7,
+            start_line: 1,
+            start_column: 3,
+            end_line: 1,
+            end_column: 8,
+        });
         b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
         b.close_node();
 
         b.close_node();
 
         b.open_node(MdastNodeType::Paragraph as u8);
-        b.set_position_current(9, 14, 2, 1, 2, 6);
+        b.set_position_current(NodePosition {
+            start_offset: 9,
+            end_offset: 14,
+            start_line: 2,
+            start_column: 1,
+            end_line: 2,
+            end_column: 6,
+        });
 
         b.open_node(MdastNodeType::Text as u8);
-        b.set_position_current(9, 14, 2, 1, 2, 6);
+        b.set_position_current(NodePosition {
+            start_offset: 9,
+            end_offset: 14,
+            start_line: 2,
+            start_column: 1,
+            end_line: 2,
+            end_column: 6,
+        });
         b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
         b.close_node();
 
@@ -2491,8 +2528,8 @@ mod tests {
         use satteri_ast::hast::node::HastNodeType;
 
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(HastNodeType::Root as u8);
-        b.open_node_raw(HastNodeType::Element as u8);
+        b.open_node(HastNodeType::Root as u8);
+        b.open_node(HastNodeType::Element as u8);
         let tag_ref = b.alloc_string("div");
         let prop_tuples: Vec<(StringRef, u8, StringRef)> = props
             .iter()

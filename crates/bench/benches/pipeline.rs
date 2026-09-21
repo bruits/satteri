@@ -1,3 +1,6 @@
+use satteri_ast::mdast_to_html;
+use satteri_pulldown_cmark::{DEFAULT_OPTIONS, parse, parse_no_positions as parse_unpositioned};
+
 /// End-to-end Rust pipeline benchmarks using divan.
 ///
 /// Covers the real entry points: parse, Markdown → HTML, and MDX → JS.
@@ -51,8 +54,7 @@ fn hast_with_link_replaces() -> (
     satteri_arena::Arena<satteri_arena::Hast>,
     Vec<satteri_ast::patch::Patch<satteri_arena::Hast>>,
 ) {
-    let (mdast, _) =
-        satteri_pulldown_cmark::parse(MARKDOWN, satteri_pulldown_cmark::DEFAULT_OPTIONS);
+    let (mdast, _) = parse(MARKDOWN, DEFAULT_OPTIONS);
     let hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
     let patches = satteri_bench::link_replace_patches(&hast);
     assert!(patches.len() > 10, "fixture should contain many links");
@@ -75,35 +77,35 @@ fn apply_link_replaces(bencher: divan::Bencher) {
 /// Parse Markdown source into an Arena.
 #[divan::bench]
 fn parse_markdown(bencher: divan::Bencher) {
-    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
-    bencher.bench(|| satteri_pulldown_cmark::parse(MARKDOWN, opts));
+    let opts = DEFAULT_OPTIONS;
+    bencher.bench(|| parse(MARKDOWN, opts));
 }
 
 /// Parse MDX source into an Arena.
 #[divan::bench]
 fn parse_mdx(bencher: divan::Bencher) {
     let opts = satteri_pulldown_cmark::MDX_OPTIONS;
-    bencher.bench(|| satteri_pulldown_cmark::parse(MDX, opts));
+    bencher.bench(|| parse(MDX, opts));
 }
 
 /// Parse Markdown without position tracking. Used by `markdown_to_html_fast`
 /// and `mdx_to_js_fast` where downstream output doesn't carry positions.
 #[divan::bench]
 fn parse_no_positions(bencher: divan::Bencher) {
-    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
-    bencher.bench(|| satteri_pulldown_cmark::parse_no_positions(MARKDOWN, opts));
+    let opts = DEFAULT_OPTIONS;
+    bencher.bench(|| parse_unpositioned(MARKDOWN, opts));
 }
 
 #[divan::bench]
 fn parse_autolinks(bencher: divan::Bencher) {
-    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
-    bencher.bench(|| satteri_pulldown_cmark::parse(AUTOLINKS, opts));
+    let opts = DEFAULT_OPTIONS;
+    bencher.bench(|| parse(AUTOLINKS, opts));
 }
 
 #[divan::bench]
 fn parse_autolinks_no_positions(bencher: divan::Bencher) {
-    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
-    bencher.bench(|| satteri_pulldown_cmark::parse_no_positions(AUTOLINKS, opts));
+    let opts = DEFAULT_OPTIONS;
+    bencher.bench(|| parse_unpositioned(AUTOLINKS, opts));
 }
 
 /// One paragraph of autolink candidates whose decision is deferred by the
@@ -111,27 +113,27 @@ fn parse_autolinks_no_positions(bencher: divan::Bencher) {
 /// shape exercises is the easiest place for the first pass to go quadratic.
 #[divan::bench]
 fn parse_deferred_autolinks(bencher: divan::Bencher) {
-    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    let opts = DEFAULT_OPTIONS;
     let source = "[a] ".to_owned() + &"www.a.b x\\* ".repeat(2000);
-    bencher.bench(|| satteri_pulldown_cmark::parse(divan::black_box(source.as_str()), opts));
+    bencher.bench(|| parse(divan::black_box(source.as_str()), opts));
 }
 
 /// Full pipeline: Markdown source → Arena → HTML string.
 #[divan::bench]
 fn full_pipeline_to_html(bencher: divan::Bencher) {
-    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    let opts = DEFAULT_OPTIONS;
     bencher.bench(|| {
-        let (arena, _) = satteri_pulldown_cmark::parse(MARKDOWN, opts);
-        satteri_ast::mdast_to_html(&arena)
+        let (arena, _) = parse(MARKDOWN, opts);
+        mdast_to_html(&arena)
     });
 }
 
 #[divan::bench]
 fn full_pipeline_to_html_autolinks(bencher: divan::Bencher) {
-    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS;
+    let opts = DEFAULT_OPTIONS;
     bencher.bench(|| {
-        let (arena, _) = satteri_pulldown_cmark::parse(AUTOLINKS, opts);
-        satteri_ast::mdast_to_html(&arena)
+        let (arena, _) = parse(AUTOLINKS, opts);
+        mdast_to_html(&arena)
     });
 }
 

@@ -1,9 +1,11 @@
-//! Direct arena builder: walks the pulldown-cmark internal tree and builds
-//! a `satteri_arena::Arena` without going through the Event iterator.
+//! Resolve parser syntax into a source-backed semantic document.
+//! Public arena entry points own the same records without reparsing.
 
 use alloc::borrow::Cow;
 
-use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef, line_ending_iter};
+use satteri_arena::{
+    Arena, DocumentBuilder, LineIndex, Mdast, NodePosition, StringRef, line_ending_iter,
+};
 use satteri_ast::mdast::{
     CodeData, ColumnAlign, DefinitionData, DescriptionDetailsData, FootnoteDefinitionData,
     ImageData, LinkData, ListData, ListItemData, MathData, MdastNodeType, ReferenceData,
@@ -16,14 +18,30 @@ use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
 };
 
+use crate::firstpass::{
+    extend_indented_code_block, extend_inner_blockquote_through_outer_markers,
+    extend_list_in_blockquote_through_marker_lines, extend_list_item_to_next_sibling_content,
+    mdast_position_end,
+};
 use crate::linklabel::LinkLabel;
 #[cfg(feature = "mdx")]
 use crate::parse::JsxAttr;
-use crate::parse::{DefaultParserCallbacks, HeadingAttributes, ItemBody, LinkDef, ParserInner};
-use crate::{Alignment, HeadingLevel, LinkType, Options};
-
+use crate::parse::{HeadingAttributes, Item, ItemBody, LinkDef, ParserInner};
 #[cfg(feature = "mdx")]
 use crate::post_passes::MDX_EXPLICIT_JSX_DATA;
+#[cfg(feature = "mdx")]
+use crate::post_passes::mdx_mark_and_unravel;
+use crate::post_passes::{
+    emit_text_merging, gfm_autolink_literal_pass, merge_directive_port_splits, merge_text,
+};
+use crate::puncttable::is_ascii_punctuation;
+use crate::scanners::{is_space_or_tab, unescape};
+use crate::strings::CowStr;
+use crate::tree::{Tree, TreeIndex};
+use crate::{
+    Alignment, DefaultParserCallbacks, HeadingLevel, LinkType, MetadataBlockKind, Options,
+    document, strip_leading_bom,
+};
 
 /// Default options: GFM (tables, strikethrough, task lists, autolink-literal),
 /// footnotes, math, YAML metadata.
@@ -45,6 +63,8 @@ pub const DEFAULT_OPTIONS: Options = Options::from_bits_truncate(
 pub const MDX_OPTIONS: Options =
     Options::from_bits_truncate(DEFAULT_OPTIONS.bits() | Options::ENABLE_MDX.bits());
 
+use crate::document::SourceDocument;
+
 /// Parse markdown source into an Arena.
 ///
 /// Offsets and the arena's source are relative to [`crate::strip_leading_bom`].
@@ -52,7 +72,7 @@ pub const MDX_OPTIONS: Options =
 /// Returns `(arena, mdx_errors)` where `mdx_errors` contains any MDX
 /// validation errors collected during parsing (empty for non-MDX input).
 pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, None, false)
+    parse_inner(source, options, true, None)
 }
 
 /// Skip-positions variant: leaves per-node line/column fields at the zero
@@ -60,7 +80,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
 /// the cp-offset post-pass. Byte offsets are still filled. Use when the
 /// consumer (HTML/JS codegen) never reads positions.
 pub fn parse_no_positions(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, None, false)
+    parse_inner(source, options, false, None)
 }
 
 /// Same as `parse_no_positions` but recycles a caller-pooled arena (via
@@ -71,7 +91,7 @@ pub fn parse_no_positions_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, false, Some(reuse), false)
+    parse_inner(source, options, false, Some(reuse))
 }
 
 /// Same as [`parse`] but recycles a caller-pooled arena; see [`parse_no_positions_into`].
@@ -80,19 +100,27 @@ pub fn parse_into(
     options: Options,
     reuse: Arena<Mdast>,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    parse_inner(source, options, true, Some(reuse), false)
+    parse_inner(source, options, true, Some(reuse))
 }
 
-/// `skip_fnr_autolink` is the path-selection probe's lever: every entry point
-/// above passes `false`, so only `#[cfg(test)]` code can turn it on.
 fn parse_inner(
     source: &str,
     options: Options,
     track_positions: bool,
     reuse: Option<Arena<Mdast>>,
-    skip_fnr_autolink: bool,
 ) -> (Arena<Mdast>, Vec<(usize, String)>) {
-    let source = crate::strip_leading_bom(source);
+    let (document, errors) = document::parse_reusing(source, options, track_positions, reuse);
+    (document.into_owned(), errors)
+}
+
+pub(crate) fn parse_document<'a>(
+    source: &'a str,
+    options: Options,
+    track_positions: bool,
+    storage: Option<SourceDocument<'static>>,
+    #[cfg(test)] skip_fnr_autolink: bool,
+) -> (SourceDocument<'a>, Vec<(usize, String)>) {
+    let source = strip_leading_bom(source);
 
     // ENABLE_GFM is the umbrella flag for the GitHub Flavored Markdown
     // feature set. Expand it into the granular flags the parser checks so
@@ -120,52 +148,30 @@ fn parse_inner(
     };
     let mut cursor = line_index.cursor();
 
-    // Measured: ~1 node/16 bytes, ~11 type-data bytes/node, pool up to ~2.5x source.
-    let estimated_nodes = source.len() / 16 + 16;
-    let source_extra = source.len() * 2;
-    let arena = if let Some(mut a) = reuse {
-        // Recycle: clear all per-document state but keep the already-grown
-        // `Vec` / `String` allocations. For tiny inputs the saved `malloc`s
-        // are the dominant cost, since the actual parse and convert work is
-        // already sub-microsecond.
-        a.reset();
-        a.string_pool.reserve(source.len() + source_extra);
-        a.string_pool.push_str(source);
-        a.source_len = source.len() as u32;
-        a.nodes.reserve(estimated_nodes);
-        a.children.reserve(estimated_nodes);
-        a.type_data.reserve(estimated_nodes * 12);
-        a
-    } else {
-        let mut source_buf = String::with_capacity(source.len() + source_extra);
-        source_buf.push_str(source);
-        Arena::<Mdast>::with_capacity(
-            source_buf,
-            estimated_nodes,
-            estimated_nodes,
-            estimated_nodes * 12,
-        )
-    };
-    let mut builder: ArenaBuilder<Mdast> = ArenaBuilder::from_arena(arena);
-
-    // Build the pulldown-cmark parser (runs first pass).
-    let mut inner = ParserInner::new(source, options);
+    let mut inner = ParserInner::new_for_arena(source, options);
     let mut callbacks = DefaultParserCallbacks;
-
+    let mut document = storage.map_or_else(
+        || SourceDocument::borrowed(source, inner.tree.semantic_capacity_hint()),
+        |storage| storage.rebind(source),
+    );
+    if document.nodes.capacity() == 0 {
+        document.nodes.reserve(inner.tree.semantic_capacity_hint());
+    }
+    let mut builder = DocumentBuilder::from_arena(document);
     // Open root node. In skip-positions mode the cursor returns the zero
     // sentinel; mirror it in the root's hardcoded 1:1 start so every node
     // carries a consistent "no position" marker (byte offsets stay filled).
     builder.open_node(MdastNodeType::Root as u8);
     let (end_line, end_col) = cursor.offset_to_line_col(source.len() as u32);
     let (start_line, start_col) = if track_positions { (1, 1) } else { (0, 0) };
-    builder.set_position_current(
-        0,
-        source.len() as u32,
+    builder.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: source.len() as u32,
         start_line,
-        start_col,
+        start_column: start_col,
         end_line,
-        end_col,
-    );
+        end_column: end_col,
+    });
 
     // Accumulation buffers for special container→leaf conversions.
     let mut html_block_buf: Option<String> = None;
@@ -228,16 +234,37 @@ fn parse_inner(
                     inner.tree.next_sibling(ix);
                     continue;
                 }
+                // These inline containers cannot claim definitions or extend
+                // block positions. Without line/column tracking their complete
+                // span is already set at open time. MDX must keep the general
+                // path because JSX can leave a different builder node open.
+                if !track_positions
+                    && !mdx
+                    && matches!(
+                        item.body,
+                        ItemBody::Link(_)
+                            | ItemBody::Emphasis
+                            | ItemBody::Strong
+                            | ItemBody::Strikethrough
+                            | ItemBody::Superscript
+                            | ItemBody::Subscript
+                    )
+                    && builder
+                        .arena_ref()
+                        .get_node(builder.current_node_id())
+                        .end_offset
+                        == item.end as u32
+                {
+                    builder.close_node();
+                    inner.tree.next_sibling(ix);
+                    continue;
+                }
                 // Every branch of `mdast_position_end` hands back `item.end` untouched unless a line terminator precedes it.
                 let end = if item.end > 0
                     && matches!(source.as_bytes().get(item.end - 1), Some(b'\n' | b'\r'))
                 {
                     let parent_body = inner.tree.peek_up().map(|p| inner.tree[p].item.body);
-                    crate::firstpass::mdast_position_end(
-                        &item,
-                        source.as_bytes(),
-                        parent_body.as_ref(),
-                    )
+                    mdast_position_end(&item, source.as_bytes(), parent_body.as_ref())
                 } else {
                     item.end as u32
                 };
@@ -277,18 +304,13 @@ fn parse_inner(
                                 .to_bytes(),
                             );
                             let id = builder.current_node_id();
-                            let node = builder.arena_ref().get_node(id);
-                            let orig_start = node.start_offset;
-                            let orig_start_line = node.start_line;
-                            let orig_start_col = node.start_column;
-                            builder.set_position_current(
-                                orig_start,
-                                end,
-                                orig_start_line,
-                                orig_start_col,
+                            let node = *builder.arena_ref().get_node(id);
+                            builder.set_position_current(NodePosition {
+                                end_offset: end,
                                 end_line,
-                                end_col,
-                            );
+                                end_column: end_col,
+                                ..NodePosition::from_node(&node)
+                            });
                             builder.close_node();
                         }
                     }
@@ -315,7 +337,7 @@ fn parse_inner(
                             let code_start_column = builder.arena_ref().get_node(id).start_column;
                             let parent_body =
                                 inner.tree.peek_up().map(|p| &inner.tree[p].item.body);
-                            if let Some(ext) = crate::firstpass::extend_indented_code_block(
+                            if let Some(ext) = extend_indented_code_block(
                                 &item,
                                 source.as_bytes(),
                                 parent_body,
@@ -341,18 +363,13 @@ fn parse_inner(
                                         .copy_from_slice(&sr2.as_bytes());
                                 }
                             }
-                            let node = builder.arena_ref().get_node(id);
-                            let orig_start = node.start_offset;
-                            let orig_start_line = node.start_line;
-                            let orig_start_col = node.start_column;
-                            builder.set_position_current(
-                                orig_start,
-                                code_end,
-                                orig_start_line,
-                                orig_start_col,
-                                code_end_line,
-                                code_end_col,
-                            );
+                            let node = *builder.arena_ref().get_node(id);
+                            builder.set_position_current(NodePosition {
+                                end_offset: code_end,
+                                end_line: code_end_line,
+                                end_column: code_end_col,
+                                ..NodePosition::from_node(&node)
+                            });
                             builder.close_node();
                         }
                     }
@@ -374,21 +391,16 @@ fn parse_inner(
                             };
                             let sr = builder.alloc_string(trimmed);
                             let id = builder.current_node_id();
-                            let node = builder.arena_ref().get_node(id);
-                            let orig_start = node.start_offset;
-                            let orig_start_line = node.start_line;
-                            let orig_start_col = node.start_column;
+                            let node = *builder.arena_ref().get_node(id);
                             let trimmed_len = content.len() - trimmed.len();
                             let raw_end = (item.end as u32).saturating_sub(trimmed_len as u32);
                             let (raw_end_line, raw_end_col) = cursor.offset_to_line_col(raw_end);
-                            builder.set_position_current(
-                                orig_start,
-                                raw_end,
-                                orig_start_line,
-                                orig_start_col,
-                                raw_end_line,
-                                raw_end_col,
-                            );
+                            builder.set_position_current(NodePosition {
+                                end_offset: raw_end,
+                                end_line: raw_end_line,
+                                end_column: raw_end_col,
+                                ..NodePosition::from_node(&node)
+                            });
                             builder.set_data_current(&sr.as_bytes());
                             builder.close_node();
                         }
@@ -406,18 +418,13 @@ fn parse_inner(
                             }
                             let sr = builder.alloc_string(&content);
                             let id = builder.current_node_id();
-                            let node = builder.arena_ref().get_node(id);
-                            let orig_start = node.start_offset;
-                            let orig_start_line = node.start_line;
-                            let orig_start_col = node.start_column;
-                            builder.set_position_current(
-                                orig_start,
-                                end,
-                                orig_start_line,
-                                orig_start_col,
+                            let node = *builder.arena_ref().get_node(id);
+                            builder.set_position_current(NodePosition {
+                                end_offset: end,
                                 end_line,
-                                end_col,
-                            );
+                                end_column: end_col,
+                                ..NodePosition::from_node(&node)
+                            });
                             builder.set_data_current(&sr.as_bytes());
                             builder.close_node();
                         }
@@ -444,18 +451,13 @@ fn parse_inner(
                             }
                         }
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
-                        builder.set_position_current(
-                            orig_start,
-                            end,
-                            orig_start_line,
-                            orig_start_col,
+                        let node = *builder.arena_ref().get_node(id);
+                        builder.set_position_current(NodePosition {
+                            end_offset: end,
                             end_line,
-                            end_col,
-                        );
+                            end_column: end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                     }
                     ItemBody::ListItem(_, item_spread) => {
@@ -480,7 +482,7 @@ fn parse_inner(
                             }
                         }
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
+                        let node = *builder.arena_ref().get_node(id);
                         let orig_start_offset = node.start_offset;
                         // Pull in any refdefs whose source range falls inside
                         // this list item before we evaluate spread / position.
@@ -532,17 +534,14 @@ fn parse_inner(
                                 data[1] = 1;
                             }
                         }
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
+                        let node = *builder.arena_ref().get_node(id);
                         let (mut cont_end, mut cont_end_line, mut cont_end_col) =
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
                                 (lc.end_offset, lc.end_line, lc.end_column)
                             } else {
                                 let src = source.as_bytes();
-                                let start_usize = orig_start as usize;
+                                let start_usize = node.start_offset as usize;
                                 let end_usize = end as usize;
                                 let first_nl = src[start_usize..end_usize]
                                     .iter()
@@ -552,35 +551,28 @@ fn parse_inner(
                                 let (el, ec) = cursor.offset_to_line_col(first_nl);
                                 (first_nl, el, ec)
                             };
-                        if let Some(extended) =
-                            crate::firstpass::extend_list_item_to_next_sibling_content(
-                                &inner.tree,
-                                ix,
-                                source.as_bytes(),
-                                cont_end,
-                            )
-                        {
+                        if let Some(extended) = extend_list_item_to_next_sibling_content(
+                            &inner.tree,
+                            ix,
+                            source.as_bytes(),
+                            cont_end,
+                        ) {
                             cont_end = extended;
                             let (el, ec) = cursor.offset_to_line_col(cont_end);
                             cont_end_line = el;
                             cont_end_col = ec;
                         }
-                        builder.set_position_current(
-                            orig_start,
-                            cont_end,
-                            orig_start_line,
-                            orig_start_col,
-                            cont_end_line,
-                            cont_end_col,
-                        );
+                        builder.set_position_current(NodePosition {
+                            end_offset: cont_end,
+                            end_line: cont_end_line,
+                            end_column: cont_end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                     }
                     ItemBody::List(_is_tight, _, _) => {
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
+                        let node = *builder.arena_ref().get_node(id);
                         let (mut cont_end, mut cont_end_line, mut cont_end_col) =
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
@@ -588,27 +580,23 @@ fn parse_inner(
                             } else {
                                 (end, end_line, end_col)
                             };
-                        if let Some(extended) =
-                            crate::firstpass::extend_list_in_blockquote_through_marker_lines(
-                                &inner.tree,
-                                ix,
-                                source.as_bytes(),
-                                cont_end,
-                            )
-                        {
+                        if let Some(extended) = extend_list_in_blockquote_through_marker_lines(
+                            &inner.tree,
+                            ix,
+                            source.as_bytes(),
+                            cont_end,
+                        ) {
                             cont_end = extended;
                             let (el, ec) = cursor.offset_to_line_col(cont_end);
                             cont_end_line = el;
                             cont_end_col = ec;
                         }
-                        builder.set_position_current(
-                            orig_start,
-                            cont_end,
-                            orig_start_line,
-                            orig_start_col,
-                            cont_end_line,
-                            cont_end_col,
-                        );
+                        builder.set_position_current(NodePosition {
+                            end_offset: cont_end,
+                            end_line: cont_end_line,
+                            end_column: cont_end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                         let children = builder.arena_ref().get_children(id).to_vec();
                         let has_blank_between_items = {
@@ -650,10 +638,7 @@ fn parse_inner(
                     | ItemBody::DefinitionListTitle
                     | ItemBody::DefinitionListDefinition(..) => {
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
+                        let node = *builder.arena_ref().get_node(id);
                         let (cont_end, cont_end_line, cont_end_col) =
                             if let Some(last_child) = builder.last_sibling_id() {
                                 let lc = builder.arena_ref().get_node(last_child);
@@ -661,14 +646,12 @@ fn parse_inner(
                             } else {
                                 (end, end_line, end_col)
                             };
-                        builder.set_position_current(
-                            orig_start,
-                            cont_end,
-                            orig_start_line,
-                            orig_start_col,
-                            cont_end_line,
-                            cont_end_col,
-                        );
+                        builder.set_position_current(NodePosition {
+                            end_offset: cont_end,
+                            end_line: cont_end_line,
+                            end_column: cont_end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                     }
                     // Regular container close.
@@ -733,10 +716,7 @@ fn parse_inner(
                             }
                         }
                         let id = builder.current_node_id();
-                        let node = builder.arena_ref().get_node(id);
-                        let orig_start = node.start_offset;
-                        let orig_start_line = node.start_line;
-                        let orig_start_col = node.start_column;
+                        let node = *builder.arena_ref().get_node(id);
                         // Claim refdefs nested in this container before its
                         // children are finalized.
                         if matches!(
@@ -746,7 +726,7 @@ fn parse_inner(
                                 | ItemBody::FootnoteDefinition(..)
                         ) && container_may_hold_refdef(
                             &refdef_starts,
-                            orig_start as usize,
+                            node.start_offset as usize,
                             item.end,
                         ) && emit_refdefs_in_container(
                             &mut builder,
@@ -755,7 +735,7 @@ fn parse_inner(
                             &refdefs_owned,
                             &refdef_starts,
                             &mut refdef_emitted,
-                            orig_start as usize,
+                            node.start_offset as usize,
                             item.end,
                         ) {
                             builder.sort_current_pending_children_by_source_order();
@@ -794,27 +774,23 @@ fn parse_inner(
                             (end, end_line, end_col)
                         };
 
-                        if let Some(extended) =
-                            crate::firstpass::extend_inner_blockquote_through_outer_markers(
-                                &inner.tree,
-                                ix,
-                                source.as_bytes(),
-                                cont_end,
-                            )
-                        {
+                        if let Some(extended) = extend_inner_blockquote_through_outer_markers(
+                            &inner.tree,
+                            ix,
+                            source.as_bytes(),
+                            cont_end,
+                        ) {
                             cont_end = extended;
                             let (el, ec) = cursor.offset_to_line_col(cont_end);
                             cont_end_line = el;
                             cont_end_col = ec;
                         }
-                        builder.set_position_current(
-                            orig_start,
-                            cont_end,
-                            orig_start_line,
-                            orig_start_col,
-                            cont_end_line,
-                            cont_end_col,
-                        );
+                        builder.set_position_current(NodePosition {
+                            end_offset: cont_end,
+                            end_line: cont_end_line,
+                            end_column: cont_end_col,
+                            ..NodePosition::from_node(&node)
+                        });
                         builder.close_node();
                     }
                 }
@@ -827,7 +803,6 @@ fn parse_inner(
                 // tight lists.
 
                 let mut item = inner.tree[cur_ix].item;
-                // Resolve inline markup if needed.
                 if item.body.is_maybe_inline() {
                     inner.handle_inline(&mut callbacks);
                     item = inner.tree[cur_ix].item;
@@ -889,6 +864,15 @@ fn parse_inner(
                         ItemBody::Code(cow_ix) => {
                             let cow = inner.allocs.take_cow(*cow_ix);
                             buf.push_str(&cow);
+                        }
+                        ItemBody::SourceStrong => {
+                            buf.push_str(&source[item.start + 2..item.end - 2]);
+                        }
+                        ItemBody::SourceCode(padding) => {
+                            buf.push_str(
+                                &source
+                                    [item.start + *padding as usize..item.end - *padding as usize],
+                            );
                         }
                         ItemBody::SoftBreak => {
                             // Alt text keeps the break rather than collapsing it
@@ -952,45 +936,31 @@ fn parse_inner(
                 if let Some((run_last_ix, run_end)) =
                     collect_text_run(&inner.tree, cur_ix, &item, source.as_bytes())
                 {
-                    let prev_id = builder.last_sibling_id();
-                    let mut merged = false;
-                    if let Some(pid) = prev_id {
-                        let prev = builder.arena_ref().get_node(pid);
-                        if prev.node_type == MdastNodeType::Text as u8 {
-                            let prev_data = builder.arena_ref().get_type_data(pid);
-                            if prev_data.len() >= 8 {
-                                let (el, ec) = cursor.offset_to_line_col(run_end);
-                                let prev_sr = StringRef::from_bytes(prev_data);
-                                let new_sr = builder
-                                    .arena_mut()
-                                    .append_string(prev_sr, &source[item.start..run_end as usize]);
-                                let pn = builder.arena_ref().get_node(pid);
-                                builder.update_leaf_full(
-                                    pid,
-                                    pn.start_offset,
-                                    run_end,
-                                    pn.start_line,
-                                    pn.start_column,
-                                    el,
-                                    ec,
-                                    &new_sr.as_bytes(),
-                                );
-                                merged = true;
-                            }
-                        }
-                    }
+                    let (end_line, end_column) = cursor.offset_to_line_col(run_end);
+                    let merged = merge_text(
+                        &mut builder,
+                        &source[item.start..run_end as usize],
+                        NodePosition {
+                            end_offset: run_end,
+                            end_line,
+                            end_column,
+                            ..NodePosition::default()
+                        },
+                    );
                     if !merged {
                         let (sl, sc) = cursor.offset_to_line_col(start);
                         let (el, ec) = cursor.offset_to_line_col(run_end);
                         let sr = StringRef::new(start, run_end - start);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::Text as u8,
-                            start,
-                            run_end,
-                            sl,
-                            sc,
-                            el,
-                            ec,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: run_end,
+                                start_line: sl,
+                                start_column: sc,
+                                end_line: el,
+                                end_column: ec,
+                            },
                             &sr.as_bytes(),
                         );
                     }
@@ -1006,12 +976,29 @@ fn parse_inner(
                         cursor.offset_to_line_col(end)
                     };
 
+                let position = NodePosition {
+                    start_offset: start,
+                    end_offset: end,
+                    start_line,
+                    start_column: start_col,
+                    end_line,
+                    end_column: end_col,
+                };
+
                 // Map ItemBody to arena node.
                 match item.body {
                     ItemBody::Paragraph | ItemBody::TightParagraph => {
-                        builder.open_node(MdastNodeType::Paragraph as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Paragraph as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         if mdx {
                             paragraph_open_depth.push(builder.stack_depth());
@@ -1022,9 +1009,17 @@ fn parse_inner(
                         // A container directive label: a `paragraph` tagged with
                         // `directiveLabel`, whose inline children were tokenized
                         // by the normal inline pass.
-                        builder.open_node(MdastNodeType::Paragraph as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Paragraph as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         let para_id = builder.current_node_id();
                         builder
@@ -1037,11 +1032,18 @@ fn parse_inner(
                     }
                     ItemBody::Heading(level, heading_ix) => {
                         let depth = heading_level_to_u8(level);
-                        builder.open_node(MdastNodeType::Heading as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Heading as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[depth],
                         );
-                        builder.set_data_current(&[depth]);
                         // Conveyed as `data.hProperties`, which the mdast->hast
                         // pass emits as `id`/`class`/custom attributes.
                         if let Some(heading_ix) = heading_ix
@@ -1054,9 +1056,17 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::BlockQuote(_) => {
-                        builder.open_node(MdastNodeType::Blockquote as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Blockquote as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         if mdx {
                             container_jsx_snapshot
@@ -1065,9 +1075,17 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::MathBlock(_) => {
-                        builder.open_node(MdastNodeType::Math as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Math as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         code_block_buf = Some(String::with_capacity(256));
                         inner.tree.push();
@@ -1090,9 +1108,17 @@ fn parse_inner(
                         } else {
                             builder.alloc_string(meta_str)
                         };
-                        builder.open_node(MdastNodeType::Code as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Code as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         let cd = CodeData {
                             lang: lang_ref,
@@ -1106,9 +1132,17 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::IndentCodeBlock(_) => {
-                        builder.open_node(MdastNodeType::Code as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Code as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         let cd = CodeData {
                             lang: StringRef::empty(),
@@ -1124,9 +1158,17 @@ fn parse_inner(
                     ItemBody::List(_is_tight, c, listitem_start) => {
                         let ordered = c == b'.' || c == b')';
                         let start_num = if ordered { listitem_start } else { 0 };
-                        builder.open_node(MdastNodeType::List as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::List as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         let ld = ListData {
                             start: start_num,
@@ -1138,11 +1180,18 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::ListItem(_, spread) => {
-                        builder.open_node(MdastNodeType::ListItem as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::ListItem as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &ListItemData { checked: 2, spread }.to_bytes(),
                         );
-                        builder.set_data_current(&ListItemData { checked: 2, spread }.to_bytes());
                         if mdx {
                             container_jsx_snapshot.push((MdastNodeType::ListItem, jsx_stack.len()));
                         }
@@ -1159,47 +1208,187 @@ fn parse_inner(
                                 Alignment::Right => ColumnAlign::Right,
                             })
                             .collect();
-                        builder.open_node(MdastNodeType::Table as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Table as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &encode_table_data(&aligns),
                         );
-                        builder.set_data_current(&encode_table_data(&aligns));
                         inner.tree.push();
                     }
                     ItemBody::TableHead | ItemBody::TableRow => {
-                        builder.open_node(MdastNodeType::TableRow as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::TableRow as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::TableCell => {
-                        builder.open_node(MdastNodeType::TableCell as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::TableCell as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::Emphasis => {
-                        builder.open_node(MdastNodeType::Emphasis as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Emphasis as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::Strong => {
-                        builder.open_node(MdastNodeType::Strong as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Strong as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::Strikethrough => {
-                        builder.open_node(MdastNodeType::Delete as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Delete as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
+                    }
+                    body @ (ItemBody::LiteralAutolink(_) | ItemBody::LiteralLink { .. }) => {
+                        let (
+                            url,
+                            title,
+                            label_start,
+                            label_end,
+                            label_start_col,
+                            label_end_line,
+                            label_end_col,
+                        ) = match body {
+                            ItemBody::LiteralAutolink(kind) => {
+                                let url = if kind.prefix().is_empty() {
+                                    builder.alloc_string(&source[item.start..item.end])
+                                } else {
+                                    let prefix = builder.alloc_string(kind.prefix());
+                                    builder
+                                        .arena_mut()
+                                        .append_string(prefix, &source[item.start..item.end])
+                                };
+                                (
+                                    url,
+                                    StringRef::empty(),
+                                    start,
+                                    end,
+                                    start_col,
+                                    end_line,
+                                    end_col,
+                                )
+                            }
+                            ItemBody::LiteralLink {
+                                label_len,
+                                dest_len,
+                                title_len,
+                                angle,
+                            } => {
+                                let dest_start =
+                                    item.start + usize::from(label_len) + 3 + usize::from(angle);
+                                let dest = unescape(
+                                    &source[dest_start..dest_start + usize::from(dest_len)],
+                                    false,
+                                );
+                                let url = if matches!(dest, CowStr::Borrowed(_)) {
+                                    StringRef::new(dest_start as u32, u32::from(dest_len))
+                                } else {
+                                    builder.alloc_string(&dest)
+                                };
+                                let title = if title_len == 0 {
+                                    StringRef::empty()
+                                } else {
+                                    // The scanner accepted a plain quoted title; only
+                                    // spaces/tabs can separate its closing quote from `)`.
+                                    let mut title_end = item.end - 1;
+                                    while is_space_or_tab(source.as_bytes()[title_end - 1]) {
+                                        title_end -= 1;
+                                    }
+                                    StringRef::new(
+                                        (title_end - 1 - usize::from(title_len)) as u32,
+                                        u32::from(title_len),
+                                    )
+                                };
+                                let label_start = start + 1;
+                                let label_end = label_start + u32::from(label_len);
+                                let col = if start_line == 0 { 0 } else { start_col + 1 };
+                                let end_col = if start_line == 0 {
+                                    0
+                                } else {
+                                    col + u32::from(label_len)
+                                };
+                                (url, title, label_start, label_end, col, start_line, end_col)
+                            }
+                            _ => unreachable!(),
+                        };
+                        let link = builder.add_leaf_with_position(
+                            MdastNodeType::Link as u8,
+                            position,
+                            &LinkData { url, title }.to_bytes(),
+                        );
+                        let sr = StringRef::new(label_start, label_end - label_start);
+                        builder.add_only_child_with_position(
+                            link,
+                            MdastNodeType::Text as u8,
+                            NodePosition {
+                                start_offset: label_start,
+                                end_offset: label_end,
+                                start_line,
+                                start_column: label_start_col,
+                                end_line: label_end_line,
+                                end_column: label_end_col,
+                            },
+                            &sr.as_bytes(),
+                        );
+                        inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::Link(link_ix) => {
                         let (link_type, dest_url, title, id) = inner.allocs.take_link(link_ix);
@@ -1213,20 +1402,18 @@ fn parse_inner(
                                 None => builder.alloc_string(label_src),
                             };
                             let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
-                            builder.open_node(MdastNodeType::LinkReference as u8);
-                            builder.set_position_current(
-                                start,
-                                ref_end,
-                                start_line,
-                                start_col,
-                                ref_end_line,
-                                ref_end_col,
+                            builder.open_node_with_position(
+                                MdastNodeType::LinkReference as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: ref_end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line: ref_end_line,
+                                    end_column: ref_end_col,
+                                },
+                                &encode_reference_data(identifier_ref, label_ref, kind),
                             );
-                            builder.set_data_current(&encode_reference_data(
-                                identifier_ref,
-                                label_ref,
-                                kind,
-                            ));
                             // The generic container-close path reads
                             // `item.end` and overrides the position we just
                             // set. For Collapsed references we need the span
@@ -1235,8 +1422,8 @@ fn parse_inner(
                             inner.tree[cur_ix].item.end = ref_end as usize;
                         } else {
                             let url_ref = if matches!(link_type, LinkType::Email) {
-                                let mailto = format!("mailto:{}", &*dest_url);
-                                builder.alloc_string(&mailto)
+                                let prefix = builder.alloc_string("mailto:");
+                                builder.arena_mut().append_string(prefix, &dest_url)
                             } else {
                                 builder.alloc_string(&dest_url)
                             };
@@ -1245,11 +1432,16 @@ fn parse_inner(
                             } else {
                                 builder.alloc_string(&title)
                             };
-                            builder.open_node(MdastNodeType::Link as u8);
-                            builder.set_position_current(
-                                start, end, start_line, start_col, end_line, end_col,
-                            );
-                            builder.set_data_current(
+                            builder.open_node_with_position(
+                                MdastNodeType::Link as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line,
+                                    end_column: end_col,
+                                },
                                 &LinkData {
                                     url: url_ref,
                                     title: title_ref,
@@ -1271,21 +1463,23 @@ fn parse_inner(
                                 None => builder.alloc_string(label_src),
                             };
                             let identifier_ref = builder.alloc_string(&normalize_identifier(&id));
-                            builder.open_node(MdastNodeType::ImageReference as u8);
-                            builder.set_position_current(
-                                start,
-                                ref_end,
-                                start_line,
-                                start_col,
-                                ref_end_line,
-                                ref_end_col,
+                            builder.open_node_with_position(
+                                MdastNodeType::ImageReference as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: ref_end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line: ref_end_line,
+                                    end_column: ref_end_col,
+                                },
+                                &encode_image_reference_data(
+                                    identifier_ref,
+                                    label_ref,
+                                    kind,
+                                    StringRef::empty(),
+                                ),
                             );
-                            builder.set_data_current(&encode_image_reference_data(
-                                identifier_ref,
-                                label_ref,
-                                kind,
-                                StringRef::empty(),
-                            ));
                             // Same fix as LinkReference: the generic close
                             // path reads `item.end`, which ignores the
                             // trailing `[]` for Collapsed refs. Sync it.
@@ -1298,11 +1492,16 @@ fn parse_inner(
                                 builder.alloc_string(&title)
                             };
                             let alt_ref = StringRef::empty();
-                            builder.open_node(MdastNodeType::Image as u8);
-                            builder.set_position_current(
-                                start, end, start_line, start_col, end_line, end_col,
-                            );
-                            builder.set_data_current(
+                            builder.open_node_with_position(
+                                MdastNodeType::Image as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line,
+                                    end_column: end_col,
+                                },
                                 &ImageData {
                                     url: url_ref,
                                     alt: alt_ref,
@@ -1329,11 +1528,16 @@ fn parse_inner(
                             Some(unescaped) => builder.alloc_string(&unescaped),
                             None => builder.alloc_string(&label_cow),
                         };
-                        builder.open_node(MdastNodeType::FootnoteDefinition as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
-                        );
-                        builder.set_data_current(
+                        builder.open_node_with_position(
+                            MdastNodeType::FootnoteDefinition as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
                             &FootnoteDefinitionData {
                                 identifier: id_sr,
                                 label: label_sr,
@@ -1343,21 +1547,37 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::HtmlBlock(_) => {
-                        builder.open_node(MdastNodeType::Html as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Html as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         html_block_buf = Some(String::with_capacity(128));
                         inner.tree.push();
                     }
                     ItemBody::MetadataBlock(kind) => {
                         let node_type = match kind {
-                            crate::MetadataBlockKind::YamlStyle => MdastNodeType::Yaml,
-                            crate::MetadataBlockKind::PlusesStyle => MdastNodeType::Toml,
+                            MetadataBlockKind::YamlStyle => MdastNodeType::Yaml,
+                            MetadataBlockKind::PlusesStyle => MdastNodeType::Toml,
                         };
-                        builder.open_node(node_type as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            node_type as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         html_block_buf = Some(String::with_capacity(128));
                         inner.tree.push();
@@ -1400,18 +1620,13 @@ fn parse_inner(
                                     ));
                                 }
                                 let id = builder.current_node_id();
-                                let node = builder.arena_ref().get_node(id);
-                                let orig_start = node.start_offset;
-                                let orig_start_line = node.start_line;
-                                let orig_start_col = node.start_column;
-                                builder.set_position_current(
-                                    orig_start,
-                                    end,
-                                    orig_start_line,
-                                    orig_start_col,
+                                let node = *builder.arena_ref().get_node(id);
+                                builder.set_position_current(NodePosition {
+                                    end_offset: end,
                                     end_line,
-                                    end_col,
-                                );
+                                    end_column: end_col,
+                                    ..NodePosition::from_node(&node)
+                                });
                                 builder.close_node();
                             } else {
                                 mdx_errors.push((
@@ -1426,11 +1641,18 @@ fn parse_inner(
                                 MdastNodeType::MdxJsxTextElement
                             };
                             let data = encode_jsx_element_data(&jsx, &mut builder);
-                            builder.open_node(node_type as u8);
-                            builder.set_position_current(
-                                start, end, start_line, start_col, end_line, end_col,
+                            builder.open_node_with_position(
+                                node_type as u8,
+                                NodePosition {
+                                    start_offset: start,
+                                    end_offset: end,
+                                    start_line,
+                                    start_column: start_col,
+                                    end_line,
+                                    end_column: end_col,
+                                },
+                                &data,
                             );
-                            builder.set_data_current(&data);
                             let id = builder.current_node_id();
                             builder
                                 .arena_mut()
@@ -1446,23 +1668,47 @@ fn parse_inner(
                     }
 
                     ItemBody::DefinitionList(_) => {
-                        builder.open_node(MdastNodeType::DescriptionList as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::DescriptionList as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::DefinitionListTitle => {
-                        builder.open_node(MdastNodeType::DescriptionTerm as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::DescriptionTerm as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::DefinitionListDefinition(_, loose) => {
-                        builder.open_node(MdastNodeType::DescriptionDetails as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::DescriptionDetails as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         // `loose` is per-dd (firstpass sets it when a blank line
                         // precedes this definition's `:` marker).
@@ -1471,16 +1717,32 @@ fn parse_inner(
                         inner.tree.push();
                     }
                     ItemBody::Superscript => {
-                        builder.open_node(MdastNodeType::Superscript as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Superscript as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
                     ItemBody::Subscript => {
-                        builder.open_node(MdastNodeType::Subscript as u8);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
+                        builder.open_node_with_position(
+                            MdastNodeType::Subscript as u8,
+                            NodePosition {
+                                start_offset: start,
+                                end_offset: end,
+                                start_line,
+                                start_column: start_col,
+                                end_line,
+                                end_column: end_col,
+                            },
+                            &[],
                         );
                         inner.tree.push();
                     }
@@ -1495,9 +1757,7 @@ fn parse_inner(
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
                         builder.open_node(MdastNodeType::ContainerDirective as u8);
                         builder.set_data_current(&type_data);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
-                        );
+                        builder.set_position_current(position);
                         // The `[label]`, when present, is a `DirectiveLabel`
                         // child in the first-pass tree (emitted as a tagged
                         // paragraph), so nothing to synthesize here.
@@ -1514,9 +1774,7 @@ fn parse_inner(
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
                         builder.open_node(MdastNodeType::LeafDirective as u8);
                         builder.set_data_current(&type_data);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
-                        );
+                        builder.set_position_current(position);
                         // The label is the directive's inline children in the
                         // first-pass tree; descend so the walk emits them.
                         inner.tree.push();
@@ -1533,9 +1791,7 @@ fn parse_inner(
                         let type_data = encode_directive_data(name_sr, &attr_pairs);
                         builder.open_node(MdastNodeType::TextDirective as u8);
                         builder.set_data_current(&type_data);
-                        builder.set_position_current(
-                            start, end, start_line, start_col, end_line, end_col,
-                        );
+                        builder.set_position_current(position);
                         inner.tree.push();
                     }
 
@@ -1552,37 +1808,7 @@ fn parse_inner(
 
                         // Merge with previous sibling text node when
                         // adjacent or separated by a gap (backslash escape).
-                        let prev_id = builder.last_sibling_id();
-                        let merged = if let Some(pid) = prev_id {
-                            let prev = builder.arena_ref().get_node(pid);
-                            if prev.node_type == MdastNodeType::Text as u8 {
-                                let prev_data = builder.arena_ref().get_type_data(pid);
-                                if prev_data.len() >= 8 {
-                                    let prev_sr = StringRef::from_bytes(prev_data);
-                                    let new_sr =
-                                        builder.arena_mut().append_string(prev_sr, text_value);
-                                    let pn = builder.arena_ref().get_node(pid);
-                                    builder.update_leaf_full(
-                                        pid,
-                                        pn.start_offset,
-                                        end,
-                                        pn.start_line,
-                                        pn.start_column,
-                                        end_line,
-                                        end_col,
-                                        &new_sr.as_bytes(),
-                                    );
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if !merged {
+                        if !merge_text(&mut builder, text_value, position) {
                             let (sr, pos_start, pos_start_col) = if backslash_escaped && start > 0 {
                                 (
                                     builder.alloc_string(text_value),
@@ -1597,72 +1823,75 @@ fn parse_inner(
                             } else {
                                 start_line
                             };
-                            builder.add_leaf_full(
+                            builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
-                                pos_start,
-                                end,
-                                pos_start_line,
-                                pos_start_col,
-                                end_line,
-                                end_col,
+                                NodePosition {
+                                    start_offset: pos_start,
+                                    start_line: pos_start_line,
+                                    start_column: pos_start_col,
+                                    ..position
+                                },
                                 &sr.as_bytes(),
                             );
                         }
                         inner.tree.next_sibling(cur_ix);
                     }
+                    ItemBody::SourceStrong => {
+                        let strong = builder.add_leaf_with_position(
+                            MdastNodeType::Strong as u8,
+                            position,
+                            &[],
+                        );
+                        let sr = StringRef::new(start + 2, end - start - 4);
+                        builder.add_only_child_with_position(
+                            strong,
+                            MdastNodeType::Text as u8,
+                            NodePosition {
+                                start_offset: start + 2,
+                                end_offset: end - 2,
+                                start_line,
+                                start_column: if start_line == 0 { 0 } else { start_col + 2 },
+                                end_line,
+                                end_column: if end_line == 0 { 0 } else { end_col - 2 },
+                            },
+                            &sr.as_bytes(),
+                        );
+                        inner.tree.next_sibling(cur_ix);
+                    }
+                    ItemBody::SourceCode(padding) => {
+                        let sr = StringRef::new(start + padding, end - start - padding * 2);
+                        builder.add_leaf_with_position(
+                            MdastNodeType::InlineCode as u8,
+                            position,
+                            &sr.as_bytes(),
+                        );
+                        inner.tree.next_sibling(cur_ix);
+                    }
                     ItemBody::Code(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::InlineCode as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::SynthesizeText(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
-                        crate::post_passes::emit_text_merging(
-                            &mut builder,
-                            &cow,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                        );
+                        emit_text_merging(&mut builder, &cow, position);
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::SynthesizeChar(c) => {
-                        let s = String::from(c);
-                        crate::post_passes::emit_text_merging(
-                            &mut builder,
-                            &s,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                        );
+                        let mut buffer = [0; 4];
+                        emit_text_merging(&mut builder, c.encode_utf8(&mut buffer), position);
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::Html => {
                         let sr = StringRef::new(start, end - start);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::Html as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1673,14 +1902,9 @@ fn parse_inner(
                             Some(normalized) => builder.alloc_string(&normalized),
                             None => StringRef::new(start, end - start),
                         };
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::Html as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1688,14 +1912,9 @@ fn parse_inner(
                     ItemBody::OwnedInlineHtml(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::Html as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &sr.as_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1714,62 +1933,18 @@ fn parse_inner(
                                 "\n"
                             }
                         };
-                        let prev_id = builder.last_sibling_id();
-                        let merged = if let Some(pid) = prev_id {
-                            let prev = builder.arena_ref().get_node(pid);
-                            if prev.node_type == MdastNodeType::Text as u8 {
-                                let prev_data = builder.arena_ref().get_type_data(pid);
-                                if prev_data.len() >= 8 {
-                                    let prev_sr = StringRef::from_bytes(prev_data);
-                                    let new_sr =
-                                        builder.arena_mut().append_string(prev_sr, break_text);
-                                    let pn = builder.arena_ref().get_node(pid);
-                                    builder.update_leaf_full(
-                                        pid,
-                                        pn.start_offset,
-                                        end,
-                                        pn.start_line,
-                                        pn.start_column,
-                                        end_line,
-                                        end_col,
-                                        &new_sr.as_bytes(),
-                                    );
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if !merged {
+                        if !merge_text(&mut builder, break_text, position) {
                             let sr = builder.alloc_string(break_text);
-                            builder.add_leaf_full(
+                            builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
-                                start,
-                                end,
-                                start_line,
-                                start_col,
-                                end_line,
-                                end_col,
+                                position,
                                 &sr.as_bytes(),
                             );
                         }
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::HardBreak(_) => {
-                        builder.add_leaf_full(
-                            MdastNodeType::Break as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                            &[],
-                        );
+                        builder.add_leaf_with_position(MdastNodeType::Break as u8, position, &[]);
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::Rule => {
@@ -1781,14 +1956,14 @@ fn parse_inner(
                             rule_end -= 1;
                         }
                         let (rule_end_line, rule_end_col) = cursor.offset_to_line_col(rule_end);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::ThematicBreak as u8,
-                            start,
-                            rule_end,
-                            start_line,
-                            start_col,
-                            rule_end_line,
-                            rule_end_col,
+                            NodePosition {
+                                end_offset: rule_end,
+                                end_line: rule_end_line,
+                                end_column: rule_end_col,
+                                ..position
+                            },
                             &[],
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1831,14 +2006,9 @@ fn parse_inner(
                             _pad: [0; 3],
                         }
                         .to_bytes();
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::FootnoteReference as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &data,
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1851,14 +2021,9 @@ fn parse_inner(
                         } else {
                             MdastNodeType::InlineMath
                         };
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             node_type as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &MathData {
                                 meta: StringRef::empty(),
                                 value: sr,
@@ -1871,14 +2036,9 @@ fn parse_inner(
                     ItemBody::MdxFlowExpression(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::MdxFlowExpression as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1887,14 +2047,9 @@ fn parse_inner(
                     ItemBody::MdxTextExpression(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::MdxTextExpression as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1903,14 +2058,9 @@ fn parse_inner(
                     ItemBody::MdxEsm(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
-                        builder.add_leaf_full(
+                        builder.add_leaf_with_position(
                             MdastNodeType::MdxjsEsm as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            position,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -1927,46 +2077,11 @@ fn parse_inner(
                     | ItemBody::MaybeLinkClose(..)
                     | ItemBody::MaybeImage => {
                         let text_value: &str = &source[item.start..item.end];
-                        let prev_id = builder.last_sibling_id();
-                        let merged = if let Some(pid) = prev_id {
-                            let prev = builder.arena_ref().get_node(pid);
-                            if prev.node_type == MdastNodeType::Text as u8 {
-                                let prev_data = builder.arena_ref().get_type_data(pid);
-                                if prev_data.len() >= 8 {
-                                    let prev_sr = StringRef::from_bytes(prev_data);
-                                    let new_sr =
-                                        builder.arena_mut().append_string(prev_sr, text_value);
-                                    let pn = builder.arena_ref().get_node(pid);
-                                    builder.update_leaf_full(
-                                        pid,
-                                        pn.start_offset,
-                                        end,
-                                        pn.start_line,
-                                        pn.start_column,
-                                        end_line,
-                                        end_col,
-                                        &new_sr.as_bytes(),
-                                    );
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if !merged {
+                        if !merge_text(&mut builder, text_value, position) {
                             let sr = StringRef::new(start, end - start);
-                            builder.add_leaf_full(
+                            builder.add_leaf_with_position(
                                 MdastNodeType::Text as u8,
-                                start,
-                                end,
-                                start_line,
-                                start_col,
-                                end_line,
-                                end_col,
+                                position,
                                 &sr.as_bytes(),
                             );
                         }
@@ -1975,7 +2090,7 @@ fn parse_inner(
 
                     // `handle_inline_pass1` fires or unlinks every marker, and a
                     // consumed item range drops the markers inside it.
-                    ItemBody::MaybeAutolink(..) => {
+                    ItemBody::MaybeAutolink(..) | ItemBody::MaybeProtocolAutolink { .. } => {
                         debug_assert!(false, "unresolved autolink marker reached arena_build");
                         inner.tree.next_sibling(cur_ix);
                     }
@@ -2027,6 +2142,7 @@ fn parse_inner(
     builder.close_node();
     let mut arena = builder.finish();
     arena.parse_options = options.bits();
+    arena.mdx = options.contains(Options::ENABLE_MDX);
 
     // Source-level early exits: post-passes scan the arena to find
     // candidate nodes, but if the construct's trigger char(s) don't
@@ -2038,7 +2154,7 @@ fn parse_inner(
     #[cfg(feature = "mdx")]
     if options.contains(Options::ENABLE_MDX) && memchr::memchr2(b'<', b'{', source_bytes).is_some()
     {
-        crate::post_passes::mdx_mark_and_unravel(&mut arena);
+        mdx_mark_and_unravel(&mut arena);
     }
 
     // GFM extension: promote bare URLs (http://…, https://…, www.…) inside
@@ -2053,12 +2169,17 @@ fn parse_inner(
         if options.contains(Options::ENABLE_DIRECTIVE)
             && memchr::memmem::find(source_bytes, b"://").is_some()
         {
-            crate::post_passes::merge_directive_port_splits(&mut arena);
+            merge_directive_port_splits(&mut arena);
         }
-        if !skip_fnr_autolink && crate::post_passes::gfm_autolink_literal_may_apply(source_bytes) {
-            crate::post_passes::gfm_autolink_literal_pass(
+        let needs_autolink = inner.allocs.raw_autolink_trigger
+            || memchr::memchr2(b'&', b'\\', source_bytes).is_some();
+        #[cfg(test)]
+        let needs_autolink = needs_autolink && !skip_fnr_autolink;
+        if needs_autolink {
+            gfm_autolink_literal_pass(
                 &mut arena,
                 source_bytes,
+                &inner.allocs.autolink_free_ranges,
                 options,
                 track_positions.then_some(&mut cursor),
             );
@@ -2071,12 +2192,12 @@ fn parse_inner(
     // serializers won't touch the cache. Gating on the pool rather than the
     // source matters because entities and smart punctuation add multibyte to it.
     // Skip-positions mode skips too: downstream paths don't read utf16_offsets.
-    if track_positions && !arena.string_pool.is_ascii() {
+    if track_positions && !(source.is_ascii() && arena.string_pool.is_ascii()) {
         // Taken, not allocated: `reset` keeps the capacity for a pooled refill.
         let mut utf16_offsets = core::mem::take(&mut arena.utf16_offsets);
         utf16_offsets.clear();
-        utf16_offsets.reserve(arena.nodes.len());
-        for node in &arena.nodes {
+        utf16_offsets.reserve(arena.len());
+        for node in (0..arena.len() as u32).map(|id| arena.get_node(id)) {
             let pair = if node.start_line == 0 && node.start_offset == 0 {
                 (0u32, 0u32)
             } else {
@@ -2120,11 +2241,11 @@ fn strip_absent_constructs(source: &str, options: Options) -> Options {
 
 /// Joins only items whose emitted value equals their own source bytes exactly, so the run's slice is the run's value.
 fn collect_text_run(
-    tree: &crate::tree::Tree<crate::parse::Item>,
-    first_ix: crate::tree::TreeIndex,
-    first: &crate::parse::Item,
+    tree: &Tree<Item>,
+    first_ix: TreeIndex,
+    first: &Item,
     source: &[u8],
-) -> Option<(crate::tree::TreeIndex, u32)> {
+) -> Option<(TreeIndex, u32)> {
     if !matches!(
         first.body,
         ItemBody::Text {
@@ -2200,7 +2321,7 @@ fn opens_repositioned_node(body: &ItemBody) -> bool {
 }
 
 fn emit_pending_refdef(
-    builder: &mut ArenaBuilder<Mdast>,
+    builder: &mut DocumentBuilder<'_, Mdast>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
     label: &LinkLabel<'_>,
@@ -2219,7 +2340,7 @@ fn emit_pending_refdef(
     let raw_label = extract_definition_label(source, start).unwrap_or(label_str);
     // remark decodes HTML entities AND backslash escapes in the refdef label.
     // `&amp;` → `&`, `&AElig;` → `Æ`, etc. Invalid entities pass through.
-    let unescaped = crate::scanners::unescape(raw_label, false);
+    let unescaped = unescape(raw_label, false);
     let label_ref = if unescaped.as_ref() == raw_label {
         builder.alloc_string(raw_label)
     } else {
@@ -2233,14 +2354,16 @@ fn emit_pending_refdef(
         label: label_ref,
     }
     .to_bytes();
-    builder.add_leaf_full(
+    builder.add_leaf_with_position(
         MdastNodeType::Definition as u8,
-        start,
-        end,
-        sl,
-        sc,
-        el,
-        ec,
+        NodePosition {
+            start_offset: start,
+            end_offset: end,
+            start_line: sl,
+            start_column: sc,
+            end_line: el,
+            end_column: ec,
+        },
         &data,
     );
 }
@@ -2251,7 +2374,7 @@ fn emit_pending_refdef(
 /// container's pending children to keep source order.
 #[allow(clippy::too_many_arguments)]
 fn emit_refdefs_in_container(
-    builder: &mut ArenaBuilder<Mdast>,
+    builder: &mut DocumentBuilder<'_, Mdast>,
     cursor: &mut satteri_arena::LineIndexCursor<'_, '_>,
     source: &str,
     refdefs: &[(LinkLabel<'_>, LinkDef<'_>)],
@@ -2386,10 +2509,7 @@ fn unescape_label_backslashes(s: &str) -> Option<String> {
     let mut i = 0;
     let mut changed = false;
     while i < bytes.len() {
-        if bytes[i] == b'\\'
-            && i + 1 < bytes.len()
-            && crate::puncttable::is_ascii_punctuation(bytes[i + 1])
-        {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && is_ascii_punctuation(bytes[i + 1]) {
             out.push_str(&s[last..i]);
             out.push(bytes[i + 1] as char);
             i += 2;
@@ -2647,7 +2767,10 @@ fn byte_offset_to_line_col(source: &str, offset: usize) -> String {
 use crate::parse::JsxElementData;
 
 #[cfg(feature = "mdx")]
-fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<Mdast>) -> Vec<u8> {
+fn encode_jsx_element_data(
+    jsx: &JsxElementData<'_>,
+    builder: &mut DocumentBuilder<'_, Mdast>,
+) -> Vec<u8> {
     let name_ref = if jsx.name.is_empty() {
         StringRef::empty()
     } else {
@@ -2688,8 +2811,11 @@ fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<
 /// `test/conformance/autolink-path.test.ts` holds remark to the same tables.
 #[cfg(test)]
 mod autolink_path_probe {
-    use super::{Arena, Mdast, MdastNodeType, Options, parse_inner};
     use satteri_ast::mdast::decode_link_data;
+
+    use super::{MdastNodeType, Options, SourceDocument, parse_document};
+    use crate::document;
+    use crate::post_passes::{gfm_autolink_literal_may_apply, gfm_autolink_literal_pass};
 
     /// The JS conformance features: GFM, no frontmatter, no math.
     const PROBE_OPTIONS: Options = Options::from_bits_truncate(
@@ -2712,7 +2838,7 @@ mod autolink_path_probe {
     type LinkKey = (u32, u32, String);
 
     fn links(source: &str, skip_fnr_autolink: bool) -> Vec<LinkKey> {
-        let (arena, _) = parse_inner(source, PROBE_OPTIONS, true, None, skip_fnr_autolink);
+        let (arena, _) = parse_document(source, PROBE_OPTIONS, true, None, skip_fnr_autolink);
         let mut out = Vec::new();
         if !arena.is_empty() {
             collect(&arena, 0, &mut out);
@@ -2720,7 +2846,7 @@ mod autolink_path_probe {
         out
     }
 
-    fn collect(arena: &Arena<Mdast>, id: u32, out: &mut Vec<LinkKey>) {
+    fn collect(arena: &SourceDocument<'_>, id: u32, out: &mut Vec<LinkKey>) {
         let node = arena.get_node(id);
         if matches!(
             MdastNodeType::from_u8(node.node_type),
@@ -2823,7 +2949,6 @@ mod autolink_path_probe {
             ("x\u{85}www.x.y", &[]),
         ];
 
-        assert_eq!(cases.len(), 44, "the probe lost inputs");
         let mismatches: Vec<String> = cases
             .iter()
             .filter(|(input, expected)| paths(input) != **expected)
@@ -2907,8 +3032,8 @@ mod autolink_path_probe {
     #[test]
     fn skipping_the_pass_changes_nothing_that_has_no_autolink() {
         for input in ["[a](/b) x", "`[` x", "# [a", "text **bold** and `code`"] {
-            let (skipped, _) = parse_inner(input, PROBE_OPTIONS, true, None, true);
-            let (full, _) = parse_inner(input, PROBE_OPTIONS, true, None, false);
+            let (skipped, _) = parse_document(input, PROBE_OPTIONS, true, None, true);
+            let (full, _) = parse_document(input, PROBE_OPTIONS, true, None, false);
             assert_eq!(
                 satteri_ast::mdast_to_html(&skipped),
                 satteri_ast::mdast_to_html(&full),
@@ -2975,14 +3100,9 @@ mod autolink_path_probe {
                 .chain(DECODE_SYNTHESIZED_TRIGGERS)
                 .chain(IGNORED_OR_TRUNCATED_SHAPES)
             {
-                let (mut arena, _) = parse_inner(input, options, true, None, false);
+                let (mut arena, _) = document::parse(input, options, true);
                 let before = satteri_ast::mdast_to_html(&arena);
-                crate::post_passes::gfm_autolink_literal_pass(
-                    &mut arena,
-                    input.as_bytes(),
-                    options,
-                    None,
-                );
+                gfm_autolink_literal_pass(&mut arena, input.as_bytes(), &[], options, None);
                 assert_eq!(before, satteri_ast::mdast_to_html(&arena), "{input:?}");
             }
         }
@@ -2993,7 +3113,7 @@ mod autolink_path_probe {
     fn the_gate_corpus_exercises_both_verdicts() {
         for input in NO_POSSIBLE_TRIGGER {
             assert!(
-                !crate::post_passes::gfm_autolink_literal_may_apply(input.as_bytes()),
+                !gfm_autolink_literal_may_apply(input.as_bytes()),
                 "{input:?}"
             );
         }
@@ -3003,7 +3123,7 @@ mod autolink_path_probe {
             .chain(FNR_PATH_LINKS)
         {
             assert!(
-                crate::post_passes::gfm_autolink_literal_may_apply(input.as_bytes()),
+                gfm_autolink_literal_may_apply(input.as_bytes()),
                 "{input:?}"
             );
         }

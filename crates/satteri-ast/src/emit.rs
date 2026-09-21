@@ -2,7 +2,7 @@
 
 use core::fmt::Write;
 
-use satteri_arena::{Arena, Mdast, StringRef, decode_string_ref_data};
+use satteri_arena::{Document, Mdast, StringRef, decode_string_ref_data};
 
 use crate::convert::{
     Backref, CollectedRefs, ConvertOptions, code_span_line_endings_to_spaces, extract_text_content,
@@ -15,6 +15,7 @@ use crate::mdast::{
     decode_list_item_data, decode_math_data, decode_reference_data, decode_table_alignments,
 };
 use crate::shared::{PROP_INT, PROP_SPACE_SEP, PROP_STRING};
+use crate::stack::with_headroom;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Pos {
@@ -134,9 +135,50 @@ impl<'a> AttrValue<'a> {
     }
 }
 
+/// After a break, trim the next output node if it is text, or its first child
+/// if that node is an element and the child is text. Never descend further.
+/// Streaming output advances this state as it emits; HAST replays it on nodes
+/// after metadata overrides have been applied.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BreakTrim {
+    None,
+    Node,
+    FirstChild,
+}
+
+impl BreakTrim {
+    #[inline(always)]
+    pub(crate) fn take_text(&mut self) -> bool {
+        let pending = *self != Self::None;
+        *self = Self::None;
+        pending
+    }
+
+    #[inline(always)]
+    pub(crate) fn enter_element(&mut self) {
+        *self = if *self == Self::Node {
+            Self::FirstChild
+        } else {
+            Self::None
+        };
+    }
+
+    #[inline(always)]
+    pub(crate) fn needs_child(self) -> bool {
+        self == Self::FirstChild
+    }
+
+    #[inline(always)]
+    pub(crate) fn leave_element(&mut self) {
+        if self.needs_child() {
+            *self = Self::None;
+        }
+    }
+}
+
 /// Opening is split into `open` / `attr`* / `finish` so one sink can collect a property list while the other streams bytes.
 pub(crate) trait ConvertSink {
-    /// What the sink needs to remember across a child to undo a post-`Break` trim.
+    /// Boundary used to identify the first output node of a post-`Break` child.
     type BreakMark: Copy;
 
     fn open_root(&mut self, pos: Pos);
@@ -155,6 +197,19 @@ pub(crate) trait ConvertSink {
     fn finish_void(&mut self);
     fn finish_source_void(&mut self);
     fn close_element(&mut self, tag: &'static str);
+
+    fn open_link(&mut self, src_id: u32, url: &str, title: StringRef) -> Children {
+        self.open_source_element("a", src_id);
+        self.attr(HREF, AttrValue::text(url));
+        if title.len > 0 {
+            self.attr(TITLE, AttrValue::pooled(title));
+        }
+        self.finish_source_attrs()
+    }
+
+    fn close_link(&mut self) {
+        self.close_element("a");
+    }
 
     fn text(&mut self, value: &str, pos: Pos);
     fn text_pooled(&mut self, value: StringRef, pos: Pos);
@@ -185,7 +240,7 @@ pub(crate) trait ConvertSink {
 }
 
 pub(crate) struct EmitCtx<'a, 'src> {
-    pub(crate) view: &'a Arena<Mdast>,
+    pub(crate) view: &'a Document<'a, Mdast>,
     pub(crate) refs: &'a CollectedRefs<'src>,
     pub(crate) options: &'a ConvertOptions,
 }
@@ -198,18 +253,18 @@ fn open_plain<S: ConvertSink>(sink: &mut S, tag: &'static str, pos: Pos) {
 
 /// Plugins build list nodes by hand, so every list decode is sized before it reads.
 #[inline]
-fn list_data_of(node_id: u32, view: &Arena<Mdast>) -> Option<ListData> {
+fn list_data_of(node_id: u32, view: &Document<'_, Mdast>) -> Option<ListData> {
     let data = view.get_type_data(node_id);
     (data.len() >= size_of::<ListData>()).then(|| decode_list_data(data))
 }
 
 #[inline]
-fn list_item_data_of(node_id: u32, view: &Arena<Mdast>) -> Option<ListItemData> {
+fn list_item_data_of(node_id: u32, view: &Document<'_, Mdast>) -> Option<ListItemData> {
     let data = view.get_type_data(node_id);
     (data.len() >= size_of::<ListItemData>()).then(|| decode_list_item_data(data))
 }
 
-fn list_is_loose(list_id: u32, view: &Arena<Mdast>) -> bool {
+fn list_is_loose(list_id: u32, view: &Document<'_, Mdast>) -> bool {
     list_data_of(list_id, view).is_some_and(|d| d.spread)
         || view
             .get_children(list_id)
@@ -218,7 +273,7 @@ fn list_is_loose(list_id: u32, view: &Arena<Mdast>) -> bool {
 }
 
 /// A list item can be reparented onto anything, including nothing.
-fn enclosing_list_is_loose(node_id: u32, view: &Arena<Mdast>) -> bool {
+fn enclosing_list_is_loose(node_id: u32, view: &Document<'_, Mdast>) -> bool {
     let parent_id = view.get_node(node_id).parent;
     if parent_id as usize >= view.len() {
         return false;
@@ -226,15 +281,52 @@ fn enclosing_list_is_loose(node_id: u32, view: &Arena<Mdast>) -> bool {
     list_is_loose(parent_id, view)
 }
 
+#[inline]
 pub(crate) fn emit_node<S: ConvertSink>(
     node_id: u32,
     ctx: &EmitCtx<'_, '_>,
     sink: &mut S,
     depth: u32,
 ) {
-    crate::stack::with_headroom(depth, || emit_node_at(node_id, ctx, sink, depth));
+    // Text is a leaf: avoid the large recursive dispatch frame (and its stack
+    // probe) for the most frequent node in both conversion sinks.
+    if ctx.view.get_node(node_id).node_type == MdastNodeType::Text as u8 {
+        emit_text(node_id, ctx.view, sink);
+    } else {
+        with_headroom(depth, || {
+            if ctx.view.get_node(node_id).node_type == MdastNodeType::Link as u8 {
+                emit_link(node_id, ctx, sink, depth);
+            } else {
+                emit_node_at(node_id, ctx, sink, depth);
+            }
+        });
+    }
 }
 
+#[inline]
+fn emit_text<S: ConvertSink>(node_id: u32, view: &Document<'_, Mdast>, sink: &mut S) {
+    let value = decode_string_ref_data(view.get_type_data(node_id));
+    sink.text_trimmed(value, Pos::Node(node_id));
+}
+
+#[inline]
+fn emit_link<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
+    let link_data = decode_link_data(ctx.view.get_type_data(node_id));
+    let url = normalize_url(ctx.view.get_str(link_data.url));
+    if sink.open_link(node_id, &url, link_data.title) == Children::Recurse {
+        if let &[child] = ctx.view.get_children(node_id)
+            && ctx.view.get_node(child).node_type == MdastNodeType::Text as u8
+        {
+            emit_text(child, ctx.view, sink);
+        } else {
+            emit_children(node_id, ctx, sink, depth);
+        }
+    }
+    sink.close_link();
+}
+
+// Keep the large, uncommon dispatch frame out of the text/link hot paths.
+#[inline(never)]
 fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut S, depth: u32) {
     let view = ctx.view;
     match MdastNodeType::from_u8(view.get_node(node_id).node_type) {
@@ -339,10 +431,7 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
             sink.close_element("pre");
         }
 
-        Some(MdastNodeType::Text) => {
-            let value = decode_string_ref_data(view.get_type_data(node_id));
-            sink.text_trimmed(value, Pos::Node(node_id));
-        }
+        Some(MdastNodeType::Text) => emit_text(node_id, view, sink),
 
         Some(MdastNodeType::Emphasis) => emit_inline_wrapper(node_id, "em", ctx, sink, depth),
         Some(MdastNodeType::Strong) => emit_inline_wrapper(node_id, "strong", ctx, sink, depth),
@@ -374,19 +463,7 @@ fn emit_node_at<S: ConvertSink>(node_id: u32, ctx: &EmitCtx<'_, '_>, sink: &mut 
             sink.newline();
         }
 
-        Some(MdastNodeType::Link) => {
-            let link_data = decode_link_data(view.get_type_data(node_id));
-            let url = normalize_url(view.get_str(link_data.url));
-            sink.open_source_element("a", node_id);
-            sink.attr(HREF, AttrValue::text(&url));
-            if link_data.title.len > 0 {
-                sink.attr(TITLE, AttrValue::pooled(link_data.title));
-            }
-            if sink.finish_source_attrs() == Children::Recurse {
-                emit_children(node_id, ctx, sink, depth);
-            }
-            sink.close_element("a");
-        }
+        Some(MdastNodeType::Link) => emit_link(node_id, ctx, sink, depth),
 
         Some(MdastNodeType::Image) => {
             let img_data = decode_image_data(view.get_type_data(node_id));
@@ -620,7 +697,7 @@ fn emit_list_items<S: ConvertSink>(list_id: u32, ctx: &EmitCtx<'_, '_>, sink: &m
         if MdastNodeType::from_u8(view.get_node(child_id).node_type)
             == Some(MdastNodeType::ListItem)
         {
-            crate::stack::with_headroom(depth + 1, || {
+            with_headroom(depth + 1, || {
                 emit_list_item(child_id, items_are_loose, ctx, sink, depth + 1)
             });
         } else {
@@ -1116,8 +1193,9 @@ fn emit_footnote_backrefs<S: ConvertSink>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use satteri_property_info::property_to_attribute;
+
+    use super::*;
 
     /// The streaming sink writes attribute names the arena sink derives from property names.
     #[test]

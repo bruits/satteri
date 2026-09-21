@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use satteri_arena::{Arena, Hast};
+use satteri_arena::{Document, Hast};
 use satteri_property_info::{PropKind, find_property};
 
 use crate::hast::codec::{
@@ -15,10 +15,11 @@ use crate::shared::{
     PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP,
     PROP_STRING, PROP_TOKEN_LIST,
 };
+use crate::stack::with_headroom;
 
 /// Render HTML from an arena.
-pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
-    let mut out = String::with_capacity(arena.string_pool().len());
+pub fn hast_arena_to_html(arena: &Document<'_, Hast>) -> String {
+    let mut out = String::with_capacity(arena.pool_len());
     render_node(0, arena, &mut out, false, false);
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
@@ -37,7 +38,7 @@ pub fn hast_arena_to_html(arena: &Arena<Hast>) -> String {
 /// switch back to HTML at SVG integration points for text and void-element rules.
 pub fn render_node(
     node_id: u32,
-    view: &Arena<Hast>,
+    view: &Document<'_, Hast>,
     out: &mut String,
     in_raw_text: bool,
     in_svg: bool,
@@ -80,7 +81,7 @@ impl RenderOptions {
 /// Render a subtree with separate attribute-schema and content-namespace options.
 pub fn render_node_with_options(
     node_id: u32,
-    view: &Arena<Hast>,
+    view: &Document<'_, Hast>,
     out: &mut String,
     options: RenderOptions,
 ) {
@@ -94,20 +95,20 @@ pub(crate) type OnMdx<'a> = dyn FnMut(&mut String, u32) + 'a;
 /// them; `None` skips them.
 pub(crate) fn render_node_inner<'cb>(
     node_id: u32,
-    view: &Arena<Hast>,
+    view: &Document<'_, Hast>,
     out: &mut String,
     context: RenderOptions,
     on_mdx: Option<&mut OnMdx<'cb>>,
     depth: u32,
 ) {
-    crate::stack::with_headroom(depth, || {
+    with_headroom(depth, || {
         render_node_at(node_id, view, out, context, on_mdx, depth);
     });
 }
 
 fn render_node_at<'cb>(
     node_id: u32,
-    view: &Arena<Hast>,
+    view: &Document<'_, Hast>,
     out: &mut String,
     context: RenderOptions,
     mut on_mdx: Option<&mut OnMdx<'cb>>,

@@ -16,21 +16,22 @@
 
 use std::mem::offset_of;
 
-use crate::arena::Arena;
+use crate::arena::Document;
 use crate::generated::layout::header;
 use crate::kind::ArenaKind;
 use crate::node::{ArenaNode, NODE_STRUCT_SIZE};
 
 pub(crate) const BUFFER_MAGIC: [u8; 4] = *b"MDAR";
 
-impl<K: ArenaKind> Arena<K> {
+impl<K: ArenaKind> Document<'_, K> {
     /// Serialize to a flat byte buffer:
     /// `[Header][nodes][children u32s][type_data][source][node_data]`
     pub fn to_raw_buffer(&self) -> Vec<u8> {
+        let pool = self.contiguous_pool();
         let nodes_bytes = self.nodes.len() * NODE_STRUCT_SIZE;
         let children_bytes = self.children.len() * 4;
         let type_data_bytes = self.type_data.len();
-        let string_pool_bytes = self.string_pool.len();
+        let string_pool_bytes = pool.len();
 
         // Sort node_data entries by node_id for deterministic output.
         let mut node_data_entries: Vec<(u32, &Vec<u8>)> =
@@ -42,13 +43,13 @@ impl<K: ArenaKind> Arena<K> {
             .map(|(_, v)| 4 /* id */ + 4 /* len */ + v.len())
             .sum();
 
-        let pool_is_ascii = self.string_pool.is_ascii();
+        let pool_is_ascii = pool.is_ascii();
 
         // Backs every byte-to-UTF-16 conversion below without a `LineIndex` rebuild.
         let mut multibyte_starts: Vec<u32> = Vec::new();
         let mut multibyte_shifts: Vec<u32> = Vec::new();
         if !pool_is_ascii {
-            let bytes = self.string_pool.as_bytes();
+            let bytes = pool.as_bytes();
             let mut shift = 0u32;
             let mut i = 0;
             while i < bytes.len() {
@@ -138,7 +139,7 @@ impl<K: ArenaKind> Arena<K> {
         put(header::CHILDREN_OFFSET, children_offset);
         put(header::TYPE_DATA_LEN, self.type_data.len() as u32);
         put(header::TYPE_DATA_OFFSET, type_data_offset);
-        put(header::STRING_POOL_LEN, self.string_pool.len() as u32);
+        put(header::STRING_POOL_LEN, pool.len() as u32);
         put(header::STRING_POOL_OFFSET, string_pool_offset);
         put(header::NODE_DATA_COUNT, node_data_count);
         put(header::NODE_DATA_OFFSET, node_data_offset);
@@ -232,7 +233,7 @@ impl<K: ArenaKind> Arena<K> {
         } else {
             buf.extend_from_slice(&self.type_data);
         }
-        buf.extend_from_slice(self.string_pool.as_bytes());
+        buf.extend_from_slice(pool.as_bytes());
 
         // node_data entries: [id:u32][len:u32][bytes...]
         for (id, data) in node_data_entries {
@@ -249,6 +250,7 @@ impl<K: ArenaKind> Arena<K> {
 mod tests {
     use super::*;
     use crate::kind::Mdast;
+    use crate::{Arena, NodePosition};
 
     /// Text tag: a single StringRef at offset 0 in the generated remap table.
     const TEXT: u8 = 7;
@@ -272,15 +274,55 @@ mod tests {
         pool.push_str(&"x".repeat(300));
         let mut arena: Arena<Mdast> = Arena::new(pool);
         let root = arena.alloc_node(0);
-        arena.set_position(root, 0, 308, 1, 1, 2, 1);
+        arena.set_position(
+            root,
+            NodePosition {
+                start_offset: 0,
+                end_offset: 308,
+                start_line: 1,
+                start_column: 1,
+                end_line: 2,
+                end_column: 1,
+            },
+        );
         let text = arena.alloc_node(TEXT);
-        arena.set_position(text, 1, 8, 1, 2, 1, 6);
+        arena.set_position(
+            text,
+            NodePosition {
+                start_offset: 1,
+                end_offset: 8,
+                start_line: 1,
+                start_column: 2,
+                end_line: 1,
+                end_column: 6,
+            },
+        );
         arena.set_type_data(text, &[1, 0, 0, 0, 7, 0, 0, 0]);
         let tail = arena.alloc_node(TEXT);
-        arena.set_position(tail, 260, 300, 1, 258, 1, 298);
+        arena.set_position(
+            tail,
+            NodePosition {
+                start_offset: 260,
+                end_offset: 300,
+                start_line: 1,
+                start_column: 258,
+                end_line: 1,
+                end_column: 298,
+            },
+        );
         arena.set_type_data(tail, &[4, 1, 0, 0, 40, 0, 0, 0]);
         let synthesized = arena.alloc_node(TEXT);
-        arena.set_position(synthesized, 999, 999, 0, 0, 0, 0);
+        arena.set_position(
+            synthesized,
+            NodePosition {
+                start_offset: 999,
+                end_offset: 999,
+                start_line: 0,
+                start_column: 0,
+                end_line: 0,
+                end_column: 0,
+            },
+        );
         arena.set_children(root, &[text, tail, synthesized]);
 
         let buf = arena.to_raw_buffer();

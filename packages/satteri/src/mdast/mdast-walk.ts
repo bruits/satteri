@@ -5,6 +5,7 @@ import {
   type EpochCache,
 } from "../lazy-child-resolver.js";
 import type { MdastNode } from "../types.js";
+import { VisitorNode } from "../visitor-node.js";
 import { crossPipelineForeign, FOREIGN_REF, type NodeRefs } from "../visitor-shared.js";
 import { readPosition, rstr, ru32 } from "../wire-read.js";
 import { MdastChildStub } from "./child-stub.js";
@@ -18,7 +19,7 @@ const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
 export function getNodeId(node: MdastNode, refs: NodeRefs): number | undefined {
   // Spread copies must be treated as new content, not as references to the original arena node.
   if (node instanceof MdastChildStub) return node._refs === refs ? node._id : FOREIGN_REF;
-  const id = refs.get(node);
+  const id = VisitorNode.getNodeId(node, refs) ?? refs.get(node);
   if (id !== undefined) return id;
   // An unregistered non-enumerable ID belongs to a different tree; enumerable copies carry no identity.
   const d = Object.getOwnPropertyDescriptor(node, "_nodeId");
@@ -145,7 +146,7 @@ export function readMdastMatchedNode(
 
   const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
 
-  const node: Record<string, unknown> = { type: typeName };
+  const node: Record<string, unknown> = new VisitorNode(typeName, resolver.refs, nodeId);
   if (position !== undefined) node.position = position;
   if (childCount > 0) {
     makeLazyChildren(node, view, buf, childIdsPos, childTypesPos, childCount, resolver);
@@ -186,8 +187,6 @@ export function readMdastMatchedNode(
   if (childCount === 0 && !LEAF_TYPES.has(nodeType) && !leafCustom) {
     node.children = [];
   }
-
-  resolver.refs.set(node, nodeId);
 
   if (initialData) {
     node.data = initialData;

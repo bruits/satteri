@@ -1,10 +1,18 @@
 //! Convert an MDAST arena to a HAST arena.
 
-use rustc_hash::FxHashMap;
-use satteri_arena::{Arena, ArenaBuilder, Hast, Mdast, StringRef, decode_string_ref_data};
+use std::borrow::Cow;
+#[cfg(target_arch = "x86_64")]
+use std::is_x86_feature_detected;
 
-use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
+use rustc_hash::FxHashMap;
+use satteri_arena::{
+    Arena, ArenaBuilder, Document, Hast, Mdast, NodePosition, StringRef, decode_string_ref_data,
+};
+
+use crate::emit::{AttrName, AttrValue, BreakTrim, Children, ConvertSink, EmitCtx, Pos, emit_node};
 use crate::hast::HastNodeType;
+#[cfg(feature = "from-html")]
+use crate::hast::from_html::raw_to_hast_arena;
 use crate::mdast::{
     ListItemData, MdastNodeType, decode_definition_data, decode_footnote_definition_data,
     decode_list_item_data, decode_reference_data,
@@ -25,7 +33,7 @@ struct HData {
 }
 
 impl HData {
-    fn read(view: &Arena<Mdast>, node_id: u32) -> Self {
+    fn read(view: &Document<'_, Mdast>, node_id: u32) -> Self {
         let bytes = match view.get_node_data(node_id) {
             Some(b) if !b.is_empty() => b,
             _ => return HData { root: None },
@@ -209,7 +217,7 @@ fn emit_h_child(builder: &mut ArenaBuilder<Hast>, child: &serde_json::Value) {
         "comment" => {
             let value = obj.get("value").and_then(|v| v.as_str()).unwrap_or("");
             let value_ref = builder.alloc_string(value);
-            let leaf_id = builder.add_leaf_raw(HastNodeType::Comment as u8);
+            let leaf_id = builder.add_leaf(HastNodeType::Comment as u8);
             builder
                 .arena_mut()
                 .set_type_data(leaf_id, &value_ref.as_bytes());
@@ -228,13 +236,22 @@ pub(crate) fn footnote_fragment_id(identifier: &str) -> String {
 }
 
 #[inline]
-pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn normalize_url(url: &str) -> Cow<'_, str> {
     let bytes = url.as_bytes();
-    if next_unsafe(bytes, 0).is_none() {
-        return std::borrow::Cow::Borrowed(url);
-    }
+    let Some(first_unsafe) = next_unsafe(bytes, 0) else {
+        return Cow::Borrowed(url);
+    };
+    Cow::Owned(encode_url(url, first_unsafe))
+}
+
+#[inline(never)]
+fn encode_url(url: &str, first_unsafe: usize) -> String {
+    let bytes = url.as_bytes();
     let mut encoded = String::with_capacity(url.len() * 2);
-    for (i, &byte) in bytes.iter().enumerate() {
+    // The checked prefix is ASCII and already normalized; copy it in bulk.
+    encoded.push_str(&url[..first_unsafe]);
+    for (offset, &byte) in bytes[first_unsafe..].iter().enumerate() {
+        let i = first_unsafe + offset;
         let safe = is_url_safe(byte) || (byte == b'%' && pct_safe(bytes, i));
         if safe {
             encoded.push(byte as char);
@@ -244,7 +261,7 @@ pub(crate) fn normalize_url(url: &str) -> std::borrow::Cow<'_, str> {
             encoded.push(hex_digit(byte & 0xf));
         }
     }
-    std::borrow::Cow::Owned(encoded)
+    encoded
 }
 
 /// micromark's `normalizeUri` keeps a `%` as-is when it is followed by two
@@ -260,7 +277,7 @@ fn pct_safe(bytes: &[u8], i: usize) -> bool {
 /// Offset of the first byte at or after `from` that `normalizeUri` encodes.
 fn next_unsafe(bytes: &[u8], from: usize) -> Option<usize> {
     let mut i = from;
-    while let Some(offset) = bytes[i..].iter().position(|&b| !is_url_safe(b)) {
+    while let Some(offset) = first_non_url_safe(&bytes[i..]) {
         let at = i + offset;
         if bytes[at] != b'%' || !pct_safe(bytes, at) {
             return Some(at);
@@ -270,25 +287,86 @@ fn next_unsafe(bytes: &[u8], from: usize) -> Option<usize> {
     None
 }
 
+#[cfg(target_arch = "x86_64")]
+const URL_SCAN_VECTOR_BYTES: usize = 16; // One SSSE3 vector.
+
+#[inline]
+fn first_non_url_safe(bytes: &[u8]) -> Option<usize> {
+    #[cfg(target_arch = "x86_64")]
+    if bytes.len() >= URL_SCAN_VECTOR_BYTES && is_x86_feature_detected!("ssse3") {
+        // SAFETY: SSSE3 is available and at least one full vector is readable.
+        return unsafe { first_non_url_safe_ssse3(bytes) };
+    }
+    bytes.iter().position(|&b| !is_url_safe(b))
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+unsafe fn first_non_url_safe_ssse3(bytes: &[u8]) -> Option<usize> {
+    use std::arch::x86_64::{
+        _mm_and_si128, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set_epi64x,
+        _mm_set1_epi8, _mm_setzero_si128, _mm_shuffle_epi8, _mm_srli_epi16,
+    };
+    // Each low-nibble entry records which ASCII high nibbles are URL-safe.
+    const LOW: [u8; 16] = {
+        let safe = url_safe_table();
+        let mut table = [0; 16];
+        let mut byte = 0;
+        while byte < 128 {
+            if safe[byte] {
+                table[byte & 0x0f] |= 1 << (byte >> 4);
+            }
+            byte += 1;
+        }
+        table
+    };
+    // High nibbles 0..=7 map to their membership bit; 8..=15 reject non-ASCII bytes.
+    const HIGH_NIBBLE_BITS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 0, 0, 0, 0, 0, 0, 0, 0];
+    let low = u128::from_ne_bytes(LOW);
+    let low_table = _mm_set_epi64x((low >> 64) as i64, low as i64);
+    let high = u128::from_ne_bytes(HIGH_NIBBLE_BITS);
+    let high_table = _mm_set_epi64x((high >> 64) as i64, high as i64);
+    let nibble = _mm_set1_epi8(0x0f);
+    let mut at = 0;
+    loop {
+        // SAFETY: The caller guarantees a full vector; advancing `at` below preserves this.
+        let chunk = unsafe { _mm_loadu_si128(bytes.as_ptr().add(at).cast()) };
+        let low = _mm_shuffle_epi8(low_table, _mm_and_si128(chunk, nibble));
+        let high = _mm_shuffle_epi8(high_table, _mm_and_si128(_mm_srli_epi16(chunk, 4), nibble));
+        let bad = _mm_movemask_epi8(_mm_cmpeq_epi8(
+            _mm_and_si128(low, high),
+            _mm_setzero_si128(),
+        )) as u32;
+        if bad != 0 {
+            return Some(at + bad.trailing_zeros() as usize);
+        }
+        if at + URL_SCAN_VECTOR_BYTES == bytes.len() {
+            return None;
+        }
+        // An overlapping final vector contains only already-checked prefix bytes.
+        at = (at + URL_SCAN_VECTOR_BYTES).min(bytes.len() - URL_SCAN_VECTOR_BYTES);
+    }
+}
+
 const URL_SAFE_BYTES: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\
 0123456789-._~:/?#@!$&'()*+,;=";
 
-const fn url_safe_table() -> [u64; 4] {
-    let mut table = [0u64; 4];
+const fn url_safe_table() -> [bool; 256] {
+    let mut table = [false; 256];
     let mut i = 0;
     while i < URL_SAFE_BYTES.len() {
         let b = URL_SAFE_BYTES[i] as usize;
-        table[b >> 6] |= 1 << (b & 63);
+        table[b] = true;
         i += 1;
     }
     table
 }
 
-static URL_SAFE: [u64; 4] = url_safe_table();
+static URL_SAFE: [bool; 256] = url_safe_table();
 
 #[inline]
 fn is_url_safe(b: u8) -> bool {
-    URL_SAFE[(b >> 6) as usize] & (1 << (b & 63)) != 0
+    URL_SAFE[b as usize]
 }
 
 fn hex_digit(n: u8) -> char {
@@ -349,13 +427,13 @@ impl Default for ConvertOptions {
 }
 
 /// Convert an MDAST arena directly to a HAST arena using default options.
-pub fn mdast_arena_to_hast_arena(source: &Arena<Mdast>) -> Arena<Hast> {
+pub fn mdast_arena_to_hast_arena(source: &Document<'_, Mdast>) -> Arena<Hast> {
     mdast_arena_to_hast_arena_impl(source, &ConvertOptions::default(), None)
 }
 
 /// Convert an MDAST arena to a HAST arena with the given conversion options.
 pub fn mdast_arena_to_hast_arena_with_options(
-    source: &Arena<Mdast>,
+    source: &Document<'_, Mdast>,
     options: &ConvertOptions,
 ) -> Arena<Hast> {
     mdast_arena_to_hast_arena_impl(source, options, None)
@@ -365,7 +443,7 @@ pub fn mdast_arena_to_hast_arena_with_options(
 /// fills it in instead of allocating a fresh arena. Saves the per-compile
 /// `Vec` and `String` mallocs that dominate the cost on tiny inputs.
 pub fn mdast_arena_to_hast_arena_into(
-    source: &Arena<Mdast>,
+    source: &Document<'_, Mdast>,
     options: &ConvertOptions,
     reuse: Arena<Hast>,
 ) -> Arena<Hast> {
@@ -373,28 +451,24 @@ pub fn mdast_arena_to_hast_arena_into(
 }
 
 fn mdast_arena_to_hast_arena_impl(
-    source: &Arena<Mdast>,
+    source: &Document<'_, Mdast>,
     options: &ConvertOptions,
     reuse: Option<Arena<Hast>>,
 ) -> Arena<Hast> {
-    let src = source.string_pool();
     let n = source.len();
-    // Measured: HAST runs ~1.3x the MDAST node count and ~1.33x its pool.
     let node_estimate = n + n / 2;
-    let pool_estimate = src.len() + src.len() / 2;
+    let pool_estimate = source.pool_len() + source.pool_len() / 2;
     let mut hast_arena = if let Some(mut a) = reuse {
         a.reset();
-        a.string_pool.reserve(pool_estimate);
-        a.string_pool.push_str(src);
         a.nodes.reserve(node_estimate);
         a.children.reserve(node_estimate);
         a.type_data.reserve(n * 20);
         a
     } else {
-        let mut pool = String::with_capacity(pool_estimate);
-        pool.push_str(src);
-        Arena::<Hast>::with_capacity(pool, node_estimate, node_estimate, n * 20)
+        Arena::<Hast>::with_capacity(String::new(), node_estimate, node_estimate, n * 20)
     };
+    hast_arena.string_pool.reserve(pool_estimate);
+    source.append_pool(&mut hast_arena.string_pool);
     // Reuses the MDAST pool (heap included) so StringRefs stay valid; the
     // original-input prefix is identical, so carry the boundary over.
     hast_arena.source_len = source.source_len;
@@ -410,7 +484,7 @@ fn mdast_arena_to_hast_arena_impl(
     let arena = sink.finish();
     #[cfg(feature = "from-html")]
     if options.raw_html {
-        return crate::hast::from_html::raw_to_hast_arena(&arena);
+        return raw_to_hast_arena(&arena);
     }
     arena
 }
@@ -440,15 +514,15 @@ pub(crate) struct CollectedRefs<'src> {
 
 /// Flat probe over the node array for the two types [`collect_refs`] resolves.
 #[inline]
-fn has_any_ref_node(view: &Arena<Mdast>) -> bool {
+fn has_any_ref_node(view: &Document<'_, Mdast>) -> bool {
     let definition = MdastNodeType::Definition as u8;
     let footnote_definition = MdastNodeType::FootnoteDefinition as u8;
-    view.nodes
-        .iter()
+    (0..view.len() as u32)
+        .map(|id| view.get_node(id))
         .any(|n| n.node_type == definition || n.node_type == footnote_definition)
 }
 
-pub(crate) fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
+pub(crate) fn collect_refs<'a>(view: &'a Document<'_, Mdast>) -> CollectedRefs<'a> {
     let mut defs: FxHashMap<&str, Definition> = FxHashMap::default();
     let mut fn_def_nodes: FxHashMap<&str, u32> = FxHashMap::default();
 
@@ -523,7 +597,7 @@ pub(crate) fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     // directive renders its own mdast children: it is dropped without an
     // `hName`, and `hChildren` replaces those children. Counting a ref that
     // won't render forces an empty footnote `<section>`.
-    fn walk_main_refs(view: &Arena<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
+    fn walk_main_refs(view: &Document<'_, Mdast>, node_id: u32, refs: &mut Vec<u32>) {
         let node = view.get_node(node_id);
         let ty = MdastNodeType::from_u8(node.node_type);
         if ty == Some(MdastNodeType::FootnoteDefinition) {
@@ -575,7 +649,7 @@ pub(crate) fn collect_refs(view: &Arena<Mdast>) -> CollectedRefs<'_> {
     // Walk each queued def body to pick up nested refs. Because defs can
     // reference each other, the queue may grow while we iterate — index into
     // it by position rather than borrowing an iterator.
-    fn walk_body_refs(view: &Arena<Mdast>, node_id: u32, refs: &mut Vec<u32>) {
+    fn walk_body_refs(view: &Document<'_, Mdast>, node_id: u32, refs: &mut Vec<u32>) {
         let node = view.get_node(node_id);
         if MdastNodeType::from_u8(node.node_type) == Some(MdastNodeType::FootnoteReference) {
             refs.push(node_id);
@@ -682,7 +756,7 @@ struct PropData {
 }
 
 #[inline]
-pub(crate) fn list_contains_task_item(list_id: u32, view: &Arena<Mdast>) -> bool {
+pub(crate) fn list_contains_task_item(list_id: u32, view: &Document<'_, Mdast>) -> bool {
     for &child_id in view.get_children(list_id) {
         let child = view.get_node(child_id);
         if MdastNodeType::from_u8(child.node_type) != Some(MdastNodeType::ListItem) {
@@ -715,7 +789,7 @@ fn write_element_data(builder: &mut ArenaBuilder<Hast>, tag_ref: StringRef, prop
 }
 
 fn open_element_with_props(builder: &mut ArenaBuilder<Hast>, tag: &str, props: &[PropData]) -> u32 {
-    let id = builder.open_node_raw(HastNodeType::Element as u8);
+    let id = builder.open_node(HastNodeType::Element as u8);
     let tag_ref = builder.alloc_string(tag);
     write_element_data(builder, tag_ref, props);
     id
@@ -732,11 +806,11 @@ fn add_text_node(builder: &mut ArenaBuilder<Hast>, text: &str) -> u32 {
 /// get trimmed). Returns `Cow::Borrowed` when the value is unchanged so the
 /// caller can reuse the original `StringRef`.
 #[inline]
-pub(crate) fn trim_lines_for_hast(value: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn trim_lines_for_hast(value: &str) -> Cow<'_, str> {
     if !needs_line_trim(value.as_bytes()) {
-        return std::borrow::Cow::Borrowed(value);
+        return Cow::Borrowed(value);
     }
-    std::borrow::Cow::Owned(trim_lines_rewrite(value))
+    Cow::Owned(trim_lines_rewrite(value))
 }
 
 const fn is_line_break(byte: u8) -> bool {
@@ -756,11 +830,19 @@ fn line_break_touches_space_or_tab(bytes: &[u8], at: usize) -> bool {
         || bytes.get(at + 1).is_some_and(|&next| is_space_or_tab(next))
 }
 
+// Short text uses SWAR; bulk text amortizes memchr dispatch. Renderers share
+// this cutoff to select separate trimming rather than their combined short-text scan.
+pub(crate) const BULK_LINE_TRIM_MIN_LEN: usize = 32;
+
 /// Every text node pays this scan, so it stays separate from the rewrite it guards.
 /// A trimmed space or tab always sits beside a line break, so an adjacent pair
 /// is the whole condition and `\r\n` needs no case of its own.
 #[inline]
 fn needs_line_trim(bytes: &[u8]) -> bool {
+    if bytes.len() >= BULK_LINE_TRIM_MIN_LEN {
+        return memchr::memchr2_iter(b'\n', b'\r', bytes)
+            .any(|at| line_break_touches_space_or_tab(bytes, at));
+    }
     let mut i = 0;
     while let Some(chunk) = bytes[i..].first_chunk::<8>() {
         let mut mask = line_break_mask(u64::from_le_bytes(*chunk));
@@ -822,7 +904,7 @@ fn trim_lines_rewrite(value: &str) -> String {
 /// builder; only valid because the builder's source pool starts as a clone of
 /// the view's source, so source-derived offsets address the same bytes.
 fn add_text_node_with_ref(builder: &mut ArenaBuilder<Hast>, text_ref: StringRef) -> u32 {
-    let leaf_id = builder.add_leaf_raw(HastNodeType::Text as u8);
+    let leaf_id = builder.add_leaf(HastNodeType::Text as u8);
     builder
         .arena_mut()
         .set_type_data(leaf_id, &text_ref.as_bytes());
@@ -831,7 +913,7 @@ fn add_text_node_with_ref(builder: &mut ArenaBuilder<Hast>, text_ref: StringRef)
 
 fn add_raw_node(builder: &mut ArenaBuilder<Hast>, html: &str) -> u32 {
     let html_ref = builder.alloc_string(html);
-    let leaf_id = builder.add_leaf_raw(HastNodeType::Raw as u8);
+    let leaf_id = builder.add_leaf(HastNodeType::Raw as u8);
     builder
         .arena_mut()
         .set_type_data(leaf_id, &html_ref.as_bytes());
@@ -843,7 +925,7 @@ fn add_raw_node(builder: &mut ArenaBuilder<Hast>, html: &str) -> u32 {
 fn copy_position_to(
     target_id: u32,
     src_node_id: u32,
-    view: &Arena<Mdast>,
+    view: &Document<'_, Mdast>,
     builder: &mut ArenaBuilder<Hast>,
 ) {
     let node = view.get_node(src_node_id);
@@ -851,12 +933,14 @@ fn copy_position_to(
     if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
         builder.arena_mut().set_position(
             target_id,
-            node.start_offset,
-            node.end_offset,
-            node.start_line,
-            node.start_column,
-            node.end_line,
-            node.end_column,
+            NodePosition {
+                start_offset: node.start_offset,
+                end_offset: node.end_offset,
+                start_line: node.start_line,
+                start_column: node.start_column,
+                end_line: node.end_line,
+                end_column: node.end_column,
+            },
         );
     }
 }
@@ -908,21 +992,21 @@ fn encode_code_node_data(lang: &str, meta: &str) -> Vec<u8> {
     buf
 }
 
-fn copy_position(node_id: u32, view: &Arena<Mdast>, builder: &mut ArenaBuilder<Hast>) {
+fn copy_position(node_id: u32, view: &Document<'_, Mdast>, builder: &mut ArenaBuilder<Hast>) {
     let node = view.get_node(node_id);
     // Skip-positions mode leaves line/col 0 but the parser still records byte
     // offsets; copy them so MDX codegen resolves line:col on demand via
     // `Location`. `readPosition` gates plugin `node.position` on the line, so a
     // non-opted-in plugin still sees `undefined`.
     if node.start_line > 0 || node.start_offset > 0 || node.end_offset > 0 {
-        builder.set_position_current(
-            node.start_offset,
-            node.end_offset,
-            node.start_line,
-            node.start_column,
-            node.end_line,
-            node.end_column,
-        );
+        builder.set_position_current(NodePosition {
+            start_offset: node.start_offset,
+            end_offset: node.end_offset,
+            start_line: node.start_line,
+            start_column: node.start_column,
+            end_line: node.end_line,
+            end_column: node.end_column,
+        });
     }
 }
 
@@ -941,30 +1025,26 @@ pub(crate) fn code_span_line_endings_to_spaces(value: &str) -> String {
     out
 }
 
-/// After a `Break` mdast sibling, trim leading spaces and tabs from the text
-/// content of the next sibling's hast output. Matches mdast-util-to-hast's
-/// post-break `trimMarkdownSpaceStart` pass: only the directly-emitted text
-/// node (for text mdast nodes) or the first text child of the emitted element
-/// is touched. No deeper recursion.
+/// Apply the shared post-break target rule to the completed HAST output,
+/// including any metadata-provided replacement children.
 fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     let arena = builder.arena_mut();
-    let target_id = {
-        let node = arena.get_node(node_id);
-        if node.node_type == HastNodeType::Text as u8 {
-            Some(node_id)
-        } else if node.node_type == HastNodeType::Element as u8 {
-            let children = arena.get_children(node_id);
-            children
-                .first()
-                .copied()
-                .filter(|&id| arena.get_node(id).node_type == HastNodeType::Text as u8)
-        } else {
-            None
+    let mut trim = BreakTrim::Node;
+    let mut text_id = node_id;
+    loop {
+        match HastNodeType::from_u8(arena.get_node(text_id).node_type) {
+            Some(HastNodeType::Text) if trim.take_text() => break,
+            Some(HastNodeType::Element) => trim.enter_element(),
+            _ => return,
         }
-    };
-    let Some(text_id) = target_id else {
-        return;
-    };
+        if !trim.needs_child() {
+            return;
+        }
+        let Some(&child) = arena.get_children(text_id).first() else {
+            return;
+        };
+        text_id = child;
+    }
     let (data_off, data_len) = {
         let node = arena.get_node(text_id);
         (node.data_offset as usize, node.data_len as usize)
@@ -975,15 +1055,10 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     let sref = StringRef::from_bytes(&arena.type_data[data_off..data_off + 8]);
     let s_off = sref.offset as usize;
     let s_len = sref.len as usize;
-    let source_bytes = arena.string_pool.as_bytes();
-    if s_off + s_len > source_bytes.len() {
+    if s_off + s_len > arena.string_pool.len() {
         return;
     }
-    let slice = &source_bytes[s_off..s_off + s_len];
-    let mut i = 0;
-    while i < slice.len() && (slice[i] == b' ' || slice[i] == b'\t') {
-        i += 1;
-    }
+    let i = s_len - trim_markdown_space_start(arena.get_str(sref)).len();
     if i == 0 {
         return;
     }
@@ -991,9 +1066,20 @@ fn trim_leading_ws_after_break(builder: &mut ArenaBuilder<Hast>, node_id: u32) {
     arena.type_data[data_off..data_off + 8].copy_from_slice(&new_ref.as_bytes());
 }
 
-fn produces_hast_output(child_id: u32, view: &Arena<Mdast>) -> bool {
-    let raw_type = view.get_node(child_id).node_type;
-    match MdastNodeType::from_u8(raw_type) {
+/// Markdown break trimming excludes newlines and non-ASCII whitespace.
+#[inline(always)]
+pub(crate) fn trim_markdown_space_start(value: &str) -> &str {
+    value.trim_start_matches([' ', '\t'])
+}
+
+/// The direct HTML sink has already excluded h-data, so it can supply `false`
+/// without looking up metadata. Both sinks use the same node visibility rules.
+#[inline(always)]
+pub(crate) fn produces_hast_output(
+    node_type: u8,
+    directive_has_name: impl FnOnce() -> bool,
+) -> bool {
+    match MdastNodeType::from_u8(node_type) {
         Some(
             MdastNodeType::Definition
             | MdastNodeType::Yaml
@@ -1008,18 +1094,18 @@ fn produces_hast_output(child_id: u32, view: &Arena<Mdast>) -> bool {
             MdastNodeType::ContainerDirective
             | MdastNodeType::LeafDirective
             | MdastNodeType::TextDirective,
-        ) => HData::read(view, child_id).h_name().is_some(),
+        ) => directive_has_name(),
         _ => true,
     }
 }
 
-pub(crate) fn extract_text_content(node_id: u32, view: &Arena<Mdast>) -> String {
+pub(crate) fn extract_text_content(node_id: u32, view: &Document<'_, Mdast>) -> String {
     let mut out = String::new();
     extract_text_recursive(node_id, view, &mut out);
     out
 }
 
-fn extract_text_recursive(node_id: u32, view: &Arena<Mdast>, out: &mut String) {
+fn extract_text_recursive(node_id: u32, view: &Document<'_, Mdast>, out: &mut String) {
     let node = view.get_node(node_id);
     if node.node_type == MdastNodeType::Text as u8 {
         let data = view.get_type_data(node_id);
@@ -1046,7 +1132,7 @@ struct PendingAttr {
 /// The sink that materializes property lists, positions, and `hName` overrides.
 struct HastSink<'a> {
     builder: ArenaBuilder<Hast>,
-    view: &'a Arena<Mdast>,
+    view: &'a Document<'a, Mdast>,
     /// Shared by every block separator; avoids re-pushing a single byte into the pool.
     newline_ref: StringRef,
     attrs: [PendingAttr; MAX_INLINE_ATTRS],
@@ -1057,7 +1143,7 @@ struct HastSink<'a> {
 }
 
 impl<'a> HastSink<'a> {
-    fn new(mut builder: ArenaBuilder<Hast>, view: &'a Arena<Mdast>) -> Self {
+    fn new(mut builder: ArenaBuilder<Hast>, view: &'a Document<'a, Mdast>) -> Self {
         let newline_ref = builder.alloc_string("\n");
         let empty = PendingAttr {
             name: "",
@@ -1088,14 +1174,14 @@ impl<'a> HastSink<'a> {
             Pos::Span(first, last) => {
                 let f = self.view.get_node(first);
                 let l = self.view.get_node(last);
-                self.builder.set_position_current(
-                    f.start_offset,
-                    l.end_offset,
-                    f.start_line,
-                    f.start_column,
-                    l.end_line,
-                    l.end_column,
-                );
+                self.builder.set_position_current(NodePosition {
+                    start_offset: f.start_offset,
+                    end_offset: l.end_offset,
+                    start_line: f.start_line,
+                    start_column: f.start_column,
+                    end_line: l.end_line,
+                    end_column: l.end_column,
+                });
             }
         }
     }
@@ -1109,12 +1195,14 @@ impl<'a> HastSink<'a> {
                 let l = self.view.get_node(last);
                 self.builder.arena_mut().set_position(
                     node_id,
-                    f.start_offset,
-                    l.end_offset,
-                    f.start_line,
-                    f.start_column,
-                    l.end_line,
-                    l.end_column,
+                    NodePosition {
+                        start_offset: f.start_offset,
+                        end_offset: l.end_offset,
+                        start_line: f.start_line,
+                        start_column: f.start_column,
+                        end_line: l.end_line,
+                        end_column: l.end_column,
+                    },
                 );
             }
         }
@@ -1182,7 +1270,7 @@ impl ConvertSink for HastSink<'_> {
     type BreakMark = usize;
 
     fn open_root(&mut self, pos: Pos) {
-        self.builder.open_node_raw(HastNodeType::Root as u8);
+        self.builder.open_node(HastNodeType::Root as u8);
         self.apply_pos_current(pos);
     }
 
@@ -1193,7 +1281,7 @@ impl ConvertSink for HastSink<'_> {
     #[inline]
     fn open_element(&mut self, tag: &'static str, pos: Pos) {
         debug_assert!(self.h.is_none());
-        self.builder.open_node_raw(HastNodeType::Element as u8);
+        self.builder.open_node(HastNodeType::Element as u8);
         self.tag = tag;
         self.pos = pos;
         self.attr_count = 0;
@@ -1201,7 +1289,7 @@ impl ConvertSink for HastSink<'_> {
 
     #[inline]
     fn open_source_element(&mut self, tag: &'static str, src_id: u32) {
-        self.builder.open_node_raw(HastNodeType::Element as u8);
+        self.builder.open_node(HastNodeType::Element as u8);
         self.tag = tag;
         self.pos = Pos::Node(src_id);
         self.attr_count = 0;
@@ -1291,8 +1379,8 @@ impl ConvertSink for HastSink<'_> {
     fn text_trimmed(&mut self, value: StringRef, pos: Pos) {
         let raw = self.view.get_str(value);
         match trim_lines_for_hast(raw) {
-            std::borrow::Cow::Borrowed(_) => self.add_text_ref(value, pos),
-            std::borrow::Cow::Owned(trimmed) => {
+            Cow::Borrowed(_) => self.add_text_ref(value, pos),
+            Cow::Owned(trimmed) => {
                 let text_ref = self.builder.alloc_string(&trimmed);
                 self.add_text_ref(text_ref, pos);
             }
@@ -1359,7 +1447,9 @@ impl ConvertSink for HastSink<'_> {
     }
 
     fn produces_output(&self, child_id: u32) -> bool {
-        produces_hast_output(child_id, self.view)
+        produces_hast_output(self.view.get_node(child_id).node_type, || {
+            HData::read(self.view, child_id).h_name().is_some()
+        })
     }
 
     fn has_no_h_data(&self, node_id: u32) -> bool {
@@ -1418,7 +1508,7 @@ impl ConvertSink for HastSink<'_> {
             attr_tuples.push(decode_mdx_jsx_attr(mdast_data, i));
         }
 
-        self.builder.open_node_raw(hast_type);
+        self.builder.open_node(hast_type);
         let encoded = encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit_jsx);
         self.builder.set_data_current(&encoded);
         if let Some(mdast_nd) = view.get_node_data(node_id)
@@ -1447,19 +1537,21 @@ impl ConvertSink for HastSink<'_> {
             view.get_str(decode_expression_data(data).value)
         };
         let value_ref = self.builder.alloc_string(value);
-        let leaf_id = self.builder.add_leaf_raw(hast_type);
+        let leaf_id = self.builder.add_leaf(hast_type);
         self.builder
             .arena_mut()
             .set_type_data(leaf_id, &value_ref.as_bytes());
         let node = view.get_node(node_id);
         self.builder.arena_mut().set_position(
             leaf_id,
-            node.start_offset,
-            node.end_offset,
-            node.start_line,
-            node.start_column,
-            node.end_line,
-            node.end_column,
+            NodePosition {
+                start_offset: node.start_offset,
+                end_offset: node.end_offset,
+                start_line: node.start_line,
+                start_column: node.start_column,
+                end_line: node.end_line,
+                end_column: node.end_column,
+            },
         );
     }
 }
@@ -1879,18 +1971,65 @@ mod hast_convert_tests {
             if b == b'%' {
                 !pct_safe
             } else {
-                !is_url_safe(b)
+                !URL_SAFE_BYTES.contains(&b)
             }
         })
     }
 
     fn check_normalize_url(url: &str) {
-        let borrowed = matches!(normalize_url(url), std::borrow::Cow::Borrowed(_));
+        let normalized = normalize_url(url);
+        let borrowed = matches!(normalized, Cow::Borrowed(_));
+        let mut expected = String::new();
+        for (i, &byte) in url.as_bytes().iter().enumerate() {
+            let valid_percent = byte == b'%'
+                && url
+                    .as_bytes()
+                    .get(i + 1)
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && url
+                    .as_bytes()
+                    .get(i + 2)
+                    .is_some_and(u8::is_ascii_alphanumeric);
+            if URL_SAFE_BYTES.contains(&byte) || valid_percent {
+                expected.push(byte as char);
+            } else {
+                expected.push_str(&format!("%{byte:02X}"));
+            }
+        }
+        assert_eq!(normalized, expected, "normalized URL differs on {url:?}");
         assert_eq!(
             !borrowed,
             url_needs_encode_scalar(url),
             "normalize_url borrow decision disagrees on {url:?}"
         );
+    }
+
+    #[test]
+    fn url_byte_scan_matches_scalar_at_every_short_offset() {
+        for len in 1..80 {
+            let mut bytes = vec![b'a'; len];
+            for at in 0..len {
+                for byte in 0..=255u8 {
+                    bytes[at] = byte;
+                    let expected = (!is_url_safe(byte)).then_some(at);
+                    assert_eq!(
+                        first_non_url_safe(&bytes),
+                        expected,
+                        "len={len} at={at} byte={byte}"
+                    );
+                }
+                bytes[at] = b'a';
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_url_preserves_safe_prefixes_before_unicode_and_controls() {
+        for prefix in ["", "https://example.com/a%2g?q=1&b=2#", "mailto:a@b.com"] {
+            for byte in 0..=127u8 {
+                check_normalize_url(&format!("{prefix}{}é😀%zz%2g%", byte as char));
+            }
+        }
     }
 
     #[test]
@@ -1925,7 +2064,7 @@ mod hast_convert_tests {
             "", "x", "a\nb", "a\r\nb", "\n", "\r\n", "a b", " lead", "end ",
         ] {
             assert!(
-                matches!(trim_lines_for_hast(value), std::borrow::Cow::Borrowed(_)),
+                matches!(trim_lines_for_hast(value), Cow::Borrowed(_)),
                 "expected a borrow for {value:?}"
             );
         }

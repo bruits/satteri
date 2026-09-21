@@ -21,7 +21,7 @@ import {
   type HastHandle,
   type HastHookFn,
 } from "./hast/hast-visitor.js";
-import { markHandleMutated } from "./lazy-child-resolver.js";
+import { markHandleMutated, releaseHandleReferences } from "./lazy-child-resolver.js";
 import {
   resolveMdastSubscriptions,
   visitMdastHandle,
@@ -43,7 +43,7 @@ export type MdastPipelineResult = {
 
 // Invalidate retained child stubs before their arena is freed.
 export function releaseHandle(handle: AnyHandle, invalidateStubs: boolean): void {
-  if (invalidateStubs) markHandleMutated(handle);
+  if (invalidateStubs) releaseHandleReferences(handle);
   dropHandle(handle);
 }
 
@@ -272,18 +272,16 @@ export function createHastHandleFromMdast(
     : createMdastHandle(source, parseOptions, trackPositions);
   const sourceFormat: SourceFormat = mdx ? "mdx" : "markdown";
 
-  const mdastMayHaveStubs = mdastPlugins.length > 0;
-
   // Conversion empties the arena on success; finally also releases it on failure.
   const finalize = (r: MdastPipelineResult): HastWithFrontmatter => {
     try {
       const frontmatter = readFrontmatter(r.handle);
       // Conversion empties the MDAST arena, invalidating retained child stubs.
-      if (mdastMayHaveStubs) markHandleMutated(r.handle);
+      markHandleMutated(r.handle);
       const hastHandle = convertMdastToHastHandle(r.handle, nativeConvertOptions);
       return { hastHandle, frontmatter };
     } finally {
-      releaseHandle(r.handle, mdastMayHaveStubs);
+      releaseHandle(r.handle, true);
     }
   };
 
@@ -298,13 +296,13 @@ export function createHastHandleFromMdast(
 
     if (mdastResult instanceof Promise) {
       return mdastResult.then(finalize, (err) => {
-        releaseHandle(mdastHandle, mdastMayHaveStubs);
+        releaseHandle(mdastHandle, true);
         throw err;
       });
     }
     return finalize(mdastResult);
   } catch (err) {
-    releaseHandle(mdastHandle, mdastMayHaveStubs);
+    releaseHandle(mdastHandle, true);
     throw err;
   }
 }

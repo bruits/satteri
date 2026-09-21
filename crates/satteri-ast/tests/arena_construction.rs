@@ -1,6 +1,6 @@
 //! Integration tests for arena construction.
 
-use satteri_arena::{Arena, ArenaBuilder, Mdast};
+use satteri_arena::{Arena, ArenaBuilder, Mdast, NodePosition};
 use satteri_ast::mdast::MdastNodeType;
 
 #[test]
@@ -9,13 +9,34 @@ fn heading_with_text_child() {
     let mut builder = ArenaBuilder::<Mdast>::new(source.to_string());
 
     let root_id = builder.open_node(MdastNodeType::Root as u8);
-    builder.set_position_current(0, 7, 1, 1, 1, 8);
+    builder.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: 7,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 8,
+    });
 
     let heading_id = builder.open_node(MdastNodeType::Heading as u8);
-    builder.set_position_current(0, 7, 1, 1, 1, 8);
+    builder.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: 7,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 8,
+    });
 
     let text_id = builder.open_node(MdastNodeType::Text as u8);
-    builder.set_position_current(2, 7, 1, 3, 1, 8);
+    builder.set_position_current(NodePosition {
+        start_offset: 2,
+        end_offset: 7,
+        start_line: 1,
+        start_column: 3,
+        end_line: 1,
+        end_column: 8,
+    });
     builder.close_node(); // text
 
     builder.close_node(); // heading
@@ -96,9 +117,39 @@ fn arena_direct_methods() {
     let para = arena.alloc_node(MdastNodeType::Paragraph as u8);
     let text = arena.alloc_node(MdastNodeType::Text as u8);
 
-    arena.set_position(root, 0, 7, 1, 1, 1, 8);
-    arena.set_position(para, 0, 7, 1, 1, 1, 8);
-    arena.set_position(text, 0, 7, 1, 1, 1, 8);
+    arena.set_position(
+        root,
+        NodePosition {
+            start_offset: 0,
+            end_offset: 7,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 8,
+        },
+    );
+    arena.set_position(
+        para,
+        NodePosition {
+            start_offset: 0,
+            end_offset: 7,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 8,
+        },
+    );
+    arena.set_position(
+        text,
+        NodePosition {
+            start_offset: 0,
+            end_offset: 7,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 8,
+        },
+    );
 
     arena.set_children(root, &[para]);
     arena.set_children(para, &[text]);

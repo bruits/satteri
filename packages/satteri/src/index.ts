@@ -122,7 +122,7 @@ import {
 import { featuresToNative } from "./compile.js";
 import type { Features } from "./compile.js";
 import type { AnyHandle } from "./handles.js";
-import { markHandleMutated } from "./lazy-child-resolver.js";
+import { markHandleMutated, releaseHandleReferences } from "./lazy-child-resolver.js";
 
 type NativeConvertOptions = NonNullable<Parameters<typeof napiCreateHastHandle>[2]>;
 
@@ -197,7 +197,7 @@ export function convertMdastToHastHandle(
 }
 
 export function dropHandle(handle: AnyHandle): void {
-  markHandleMutated(handle);
+  releaseHandleReferences(handle);
   napiDropHandle(handle);
 }
 

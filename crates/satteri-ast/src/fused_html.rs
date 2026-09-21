@@ -2,15 +2,24 @@
 //!
 //! Output is byte-identical to `mdast_arena_to_hast_arena` + `hast_arena_to_html`.
 
-use satteri_arena::{Arena, Mdast, StringRef};
+use satteri_arena::{Document, Mdast, StringRef};
 
-use crate::convert::{ConvertOptions, collect_refs, contains_h_key, trim_lines_for_hast};
-use crate::emit::{AttrName, AttrValue, Children, ConvertSink, EmitCtx, Pos, emit_node};
-use crate::hast::escape::{escape_html_attr_value, escape_html_body_text};
+use crate::convert::{
+    BULK_LINE_TRIM_MIN_LEN, ConvertOptions, collect_refs, contains_h_key, produces_hast_output,
+    trim_lines_for_hast, trim_markdown_space_start,
+};
+use crate::emit::{AttrName, AttrValue, BreakTrim, Children, ConvertSink, EmitCtx, Pos, emit_node};
+use crate::hast::escape::{
+    escape_html_attr_value, escape_html_body_text, escape_trimmed_body_text,
+};
+#[cfg(feature = "mdx")]
 use crate::mdast::MdastNodeType;
 
 /// Render `view` to HTML, or `None` when the document or options need the two-stage pipeline.
-pub(crate) fn mdast_to_html_fused(view: &Arena<Mdast>, options: &ConvertOptions) -> Option<String> {
+pub(crate) fn mdast_to_html_fused(
+    view: &Document<'_, Mdast>,
+    options: &ConvertOptions,
+) -> Option<String> {
     if view.is_empty() || view.node_data.values().any(|blob| contains_h_key(blob)) {
         return None;
     }
@@ -25,27 +34,19 @@ pub(crate) fn mdast_to_html_fused(view: &Arena<Mdast>, options: &ConvertOptions)
         options,
     };
     let mut sink = HtmlSink {
-        out: String::with_capacity(view.string_pool().len()),
+        out: String::with_capacity(view.pool_len()),
         view,
-        trim: Trim::None,
+        trim: BreakTrim::None,
     };
     emit_node(0, &ctx, &mut sink, 0);
     Some(sink.finish())
 }
 
-/// After a `Break`, only the next sibling's own text or its element's first text child is trimmed.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Trim {
-    None,
-    Node,
-    FirstChild,
-}
-
 /// The sink that writes HTML bytes, allocating nothing per element.
 struct HtmlSink<'a> {
     out: String,
-    view: &'a Arena<Mdast>,
-    trim: Trim,
+    view: &'a Document<'a, Mdast>,
+    trim: BreakTrim,
 }
 
 impl HtmlSink<'_> {
@@ -57,16 +58,9 @@ impl HtmlSink<'_> {
         out
     }
 
-    #[inline]
-    fn take_trim(&mut self) -> bool {
-        let pending = self.trim != Trim::None;
-        self.trim = Trim::None;
-        pending
-    }
-
     fn push_text(&mut self, text: &str) {
-        let text = if self.take_trim() {
-            text.trim_start_matches([' ', '\t'])
+        let text = if self.trim.take_text() {
+            trim_markdown_space_start(text)
         } else {
             text
         };
@@ -100,11 +94,7 @@ impl ConvertSink for HtmlSink<'_> {
 
     #[inline]
     fn open_element(&mut self, tag: &'static str, _pos: Pos) {
-        self.trim = if self.trim == Trim::Node {
-            Trim::FirstChild
-        } else {
-            Trim::None
-        };
+        self.trim.enter_element();
         self.open_tag(tag);
     }
 
@@ -115,7 +105,7 @@ impl ConvertSink for HtmlSink<'_> {
 
     #[inline]
     fn open_void(&mut self, tag: &'static str, _pos: Pos) {
-        self.trim = Trim::None;
+        self.trim = BreakTrim::None;
         self.open_tag(tag);
     }
 
@@ -164,12 +154,29 @@ impl ConvertSink for HtmlSink<'_> {
 
     #[inline]
     fn close_element(&mut self, tag: &'static str) {
-        if self.trim == Trim::FirstChild {
-            self.trim = Trim::None;
-        }
+        self.trim.leave_element();
         self.out.push_str("</");
         self.out.push_str(tag);
         self.out.push('>');
+    }
+
+    #[inline]
+    fn open_link(&mut self, _src_id: u32, url: &str, title: StringRef) -> Children {
+        self.trim.enter_element();
+        self.out.push_str("<a href=\"");
+        escape_html_attr_value(&mut self.out, url);
+        self.out.push('"');
+        if title.len > 0 {
+            self.write_attr("title", "", self.view.get_str(title));
+        }
+        self.out.push('>');
+        Children::Recurse
+    }
+
+    #[inline]
+    fn close_link(&mut self) {
+        self.trim.leave_element();
+        self.out.push_str("</a>");
     }
 
     fn text(&mut self, value: &str, _pos: Pos) {
@@ -182,8 +189,17 @@ impl ConvertSink for HtmlSink<'_> {
     }
 
     fn text_trimmed(&mut self, value: StringRef, _pos: Pos) {
-        let view = self.view;
-        self.push_text(&trim_lines_for_hast(view.get_str(value)));
+        let text = self.view.get_str(value);
+        if text.len() >= BULK_LINE_TRIM_MIN_LEN {
+            self.push_text(&trim_lines_for_hast(text));
+            return;
+        }
+        let text = if self.trim.take_text() {
+            trim_markdown_space_start(text)
+        } else {
+            text
+        };
+        escape_trimmed_body_text(&mut self.out, text);
     }
 
     fn text_with_trailing_space(&mut self, value: StringRef, _pos: Pos) {
@@ -200,13 +216,13 @@ impl ConvertSink for HtmlSink<'_> {
     }
 
     fn raw_html(&mut self, value: &str, _pos: Pos) {
-        self.trim = Trim::None;
+        self.trim = BreakTrim::None;
         self.out.push_str(value);
     }
 
     #[inline]
     fn newline(&mut self) {
-        self.trim = Trim::None;
+        self.trim = BreakTrim::None;
         self.out.push('\n');
     }
 
@@ -216,31 +232,19 @@ impl ConvertSink for HtmlSink<'_> {
     #[inline]
     fn mark_break_boundary(&mut self, after_break: bool) {
         if after_break {
-            self.trim = Trim::Node;
+            self.trim = BreakTrim::Node;
         }
     }
 
     #[inline]
     fn apply_break_trim(&mut self, after_break: bool, _mark: ()) {
         if after_break {
-            self.trim = Trim::None;
+            self.trim = BreakTrim::None;
         }
     }
 
-    /// Mirrors `convert::produces_hast_output`: without an `hName` a directive never renders.
     fn produces_output(&self, child_id: u32) -> bool {
-        !matches!(
-            MdastNodeType::from_u8(self.view.get_node(child_id).node_type),
-            Some(
-                MdastNodeType::Definition
-                    | MdastNodeType::Yaml
-                    | MdastNodeType::Toml
-                    | MdastNodeType::FootnoteDefinition
-                    | MdastNodeType::ContainerDirective
-                    | MdastNodeType::LeafDirective
-                    | MdastNodeType::TextDirective
-            )
-        )
+        produces_hast_output(self.view.get_node(child_id).node_type, || false)
     }
 
     #[inline(always)]

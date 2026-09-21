@@ -156,6 +156,11 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
 
     installNodeData(node, reader.getNodeData(nodeId), spec.label, nodeId);
 
+    if (cache.frozen) {
+      // All fields are eager until the children getter is installed below.
+      for (const value of Object.values(node)) deepFreeze(value);
+    }
+
     if (spec.hasChildren(nodeType, node, reader, nodeId)) {
       Object.defineProperty(
         node,
@@ -165,14 +170,6 @@ export function createMaterializer<TReader extends MaterializerReader, TNode ext
     }
 
     if (cache.frozen) {
-      // Inspect descriptors to avoid triggering lazy children getters while freezing.
-      const descriptors = Object.getOwnPropertyDescriptors(node);
-      for (const key of Object.keys(descriptors)) {
-        const desc = descriptors[key];
-        if (desc !== undefined && "value" in desc) {
-          deepFreeze(desc.value);
-        }
-      }
       Object.freeze(node);
     }
 

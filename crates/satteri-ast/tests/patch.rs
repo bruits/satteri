@@ -1,6 +1,6 @@
 //! Integration tests for in-place arena patching, over the "# Hello\n\nWorld" arena.
 
-use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast};
+use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, NodePosition};
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::patch::{Patch, PatchContent, apply_patches_in_place, apply_patches_strict};
@@ -79,24 +79,59 @@ fn build_hello_world() -> Arena<Mdast> {
     let mut b = ArenaBuilder::<Mdast>::new(source);
 
     b.open_node(MdastNodeType::Root as u8);
-    b.set_position_current(0, 14, 1, 1, 2, 6);
+    b.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: 14,
+        start_line: 1,
+        start_column: 1,
+        end_line: 2,
+        end_column: 6,
+    });
 
     b.open_node(MdastNodeType::Heading as u8);
-    b.set_position_current(0, 7, 1, 1, 1, 8);
+    b.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: 7,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 8,
+    });
     b.set_data_current(&encode_heading_data(1));
 
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(2, 7, 1, 3, 1, 8);
+    b.set_position_current(NodePosition {
+        start_offset: 2,
+        end_offset: 7,
+        start_line: 1,
+        start_column: 3,
+        end_line: 1,
+        end_column: 8,
+    });
     b.set_data_current(&encode_string_ref_data(StringRef::new(2, 5)));
     b.close_node();
 
     b.close_node(); // heading
 
     b.open_node(MdastNodeType::Paragraph as u8);
-    b.set_position_current(9, 14, 2, 1, 2, 6);
+    b.set_position_current(NodePosition {
+        start_offset: 9,
+        end_offset: 14,
+        start_line: 2,
+        start_column: 1,
+        end_line: 2,
+        end_column: 6,
+    });
 
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(9, 14, 2, 1, 2, 6);
+    b.set_position_current(NodePosition {
+        start_offset: 9,
+        end_offset: 14,
+        start_line: 2,
+        start_column: 1,
+        end_line: 2,
+        end_column: 6,
+    });
     b.set_data_current(&encode_string_ref_data(StringRef::new(9, 5)));
     b.close_node();
 
@@ -912,8 +947,8 @@ fn hast_element_with_properties_round_trip() {
     // Original HAST: root > text("seed"). We replace the text with an
     // element so the new element's tag + props all need remap.
     let mut b = ArenaBuilder::<Hast>::new("seed".to_string());
-    b.open_node_raw(HastNodeType::Root as u8);
-    b.open_node_raw(HastNodeType::Text as u8);
+    b.open_node(HastNodeType::Root as u8);
+    b.open_node(HastNodeType::Text as u8);
     b.set_data_current(&encode_text_data(StringRef::new(0, 4)));
     b.close_node();
     b.close_node();
@@ -921,7 +956,7 @@ fn hast_element_with_properties_round_trip() {
     let text_id = orig.get_children(0)[0];
 
     let mut sub = ArenaBuilder::<Hast>::new("padding-padding-".to_string());
-    sub.open_node_raw(HastNodeType::Element as u8);
+    sub.open_node(HastNodeType::Element as u8);
     let tag = sub.alloc_string("a");
     let href_name = sub.alloc_string("href");
     let href_value = sub.alloc_string("https://example.com");
@@ -1006,11 +1041,32 @@ fn grafted_payload_nodes_get_no_position() {
 
     let mut b = ArenaBuilder::<Mdast>::new("**bold**".to_string());
     b.open_node(MdastNodeType::Root as u8);
-    b.set_position_current(0, 8, 1, 1, 1, 9);
+    b.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: 8,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 9,
+    });
     b.open_node(MdastNodeType::Strong as u8);
-    b.set_position_current(0, 8, 1, 1, 1, 9);
+    b.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: 8,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 9,
+    });
     b.open_node(MdastNodeType::Text as u8);
-    b.set_position_current(2, 6, 1, 3, 1, 7);
+    b.set_position_current(NodePosition {
+        start_offset: 2,
+        end_offset: 6,
+        start_line: 1,
+        start_column: 3,
+        end_line: 1,
+        end_column: 7,
+    });
     let value = b.alloc_string("bold");
     b.set_data_current(&encode_string_ref_data(value));
     b.close_node();
@@ -1183,15 +1239,15 @@ fn hast_text_round_trip_with_source_base() {
     // Original HAST: root > element. We replace the element with a Text
     // node whose StringRef must be remapped from the sub-arena's source.
     let mut b = ArenaBuilder::<Hast>::new("seed".to_string());
-    b.open_node_raw(HastNodeType::Root as u8);
-    b.open_node_raw(HastNodeType::Element as u8);
+    b.open_node(HastNodeType::Root as u8);
+    b.open_node(HastNodeType::Element as u8);
     b.close_node();
     b.close_node();
     let orig = b.finish();
     let elem_id = orig.get_children(0)[0];
 
     let mut sub = ArenaBuilder::<Hast>::new("padding-padding-".to_string());
-    sub.open_node_raw(HastNodeType::Text as u8);
+    sub.open_node(HastNodeType::Text as u8);
     let value = sub.alloc_string("Hello, world!");
     sub.set_data_current(&encode_text_data(value));
     sub.close_node();
@@ -1220,15 +1276,15 @@ fn hast_empty_text_child_ref_with_nonzero_offset_is_remapped() {
 
     // Root > [Text "é", Element <pre>]
     let mut b = ArenaBuilder::<Hast>::new("é".to_string());
-    b.open_node_raw(HastNodeType::Root as u8);
+    b.open_node(HastNodeType::Root as u8);
 
     // Add `Text "é"` which starts at byte 0 and is 2 bytes long in UTF-8.
-    b.open_node_raw(HastNodeType::Text as u8);
+    b.open_node(HastNodeType::Text as u8);
     b.set_data_current(&encode_text_data(StringRef::new(0, 2)));
     b.close_node();
 
     // Add `Element <pre>`.
-    b.open_node_raw(HastNodeType::Element as u8);
+    b.open_node(HastNodeType::Element as u8);
     let pre = b.alloc_string("pre");
     b.set_data_current(&encode_element_data(pre, &[]));
     b.close_node();
@@ -1239,13 +1295,13 @@ fn hast_empty_text_child_ref_with_nonzero_offset_is_remapped() {
 
     // Replace `<pre></pre>` by `<a></a>` with an empty text child.
     let mut sub = ArenaBuilder::<Hast>::new(String::new());
-    sub.open_node_raw(HastNodeType::Element as u8);
+    sub.open_node(HastNodeType::Element as u8);
 
     // Add `Element <a>`.
     let tag = sub.alloc_string("a");
     sub.set_data_current(&encode_element_data(tag, &[]));
 
-    sub.open_node_raw(HastNodeType::Text as u8);
+    sub.open_node(HastNodeType::Text as u8);
 
     // Add the empty text node. With the tag "a" taking up bytes 0..1 in the arena, the empty text
     // starts at byte 1 and has a length of 0.
@@ -1529,7 +1585,7 @@ fn replace_with_ref_to_self_splices_once() {
     sub.open_node(HastNodeType::Element as u8);
     let div_tag = sub.alloc_string("div");
     sub.set_data_current(&encode_element_data(div_tag, &[]));
-    sub.open_node_raw(REF_NODE_TYPE);
+    sub.open_node(REF_NODE_TYPE);
     sub.set_data_current(&heading_id.to_le_bytes());
     sub.close_node(); // ref
     sub.close_node(); // div
@@ -1722,7 +1778,7 @@ fn wrap_applies_prepend_and_append_child_on_wrapped_node() {
 fn ref_payload_mdast(target: u32) -> Arena<Mdast> {
     use satteri_ast::patch::REF_NODE_TYPE;
     let mut b = ArenaBuilder::<Mdast>::new(String::new());
-    b.open_node_raw(REF_NODE_TYPE);
+    b.open_node(REF_NODE_TYPE);
     b.set_data_current(&target.to_le_bytes());
     b.close_node();
     b.finish()
@@ -1966,10 +2022,10 @@ fn ref_used_twice_duplicates_target() {
 
     let mut sub = ArenaBuilder::<Mdast>::new(String::new());
     sub.open_node(MdastNodeType::Paragraph as u8);
-    sub.open_node_raw(REF_NODE_TYPE);
+    sub.open_node(REF_NODE_TYPE);
     sub.set_data_current(&text_in_heading.to_le_bytes());
     sub.close_node();
-    sub.open_node_raw(REF_NODE_TYPE);
+    sub.open_node(REF_NODE_TYPE);
     sub.set_data_current(&text_in_heading.to_le_bytes());
     sub.close_node();
     sub.close_node();

@@ -7,6 +7,7 @@ import {
   type EpochCache,
 } from "../lazy-child-resolver.js";
 import type { Position } from "../types.js";
+import { VisitorNode } from "../visitor-node.js";
 import { crossPipelineForeign, FOREIGN_REF, type NodeRefs } from "../visitor-shared.js";
 import { readPosition, rstr } from "../wire-read.js";
 import { HastChildStub } from "./child-stub.js";
@@ -55,7 +56,7 @@ function attachParseExpression(node: HastNode, parseFn: NapiParseFn): void {
 export function getNodeId(node: HastNode, refs: NodeRefs): number | undefined {
   if (node instanceof WalkElement) return node._refs === refs ? node._nid : FOREIGN_REF;
   if (node instanceof HastChildStub) return node._refs === refs ? node._id : FOREIGN_REF;
-  const id = refs.get(node);
+  const id = VisitorNode.getNodeId(node, refs) ?? refs.get(node);
   if (id !== undefined) return id;
   const d = Object.getOwnPropertyDescriptor(node, "_nodeId");
   if (d !== undefined && !d.enumerable) return FOREIGN_REF;
@@ -238,14 +239,15 @@ function readTextFromBinary(
   refs: NodeRefs,
 ): HastNode {
   const value = readWalkHastValue(view, buf, offset, nodeType);
-  const base: Record<string, unknown> = {
-    type: TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`,
-    value,
-  };
+  const base: Record<string, unknown> = new VisitorNode(
+    TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`,
+    refs,
+    nodeId,
+  );
+  base.value = value;
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   const node = base as unknown as HastNode;
-  refs.set(node, nodeId);
   if (nodeType === HAST_MDX_FLOW_EXPRESSION || nodeType === HAST_MDX_TEXT_EXPRESSION) {
     attachParseExpression(node, napiParseExpression);
   } else if (nodeType === HAST_MDX_ESM) {
@@ -270,10 +272,11 @@ function readMdxJsxFromBinary(
   const { name, attributes } = readWalkMdxJsx(view, buf, offset);
 
   const typeName = nodeType === HAST_MDX_JSX_ELEMENT ? "mdxJsxFlowElement" : "mdxJsxTextElement";
-  const base: Record<string, unknown> = { type: typeName, name, attributes };
+  const base: Record<string, unknown> = new VisitorNode(typeName, resolver.refs, nodeId);
+  base.name = name;
+  base.attributes = attributes;
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
-  resolver.refs.set(base, nodeId);
   makeLazyChildren(base, view, buf, childIdsPos, childTypesPos, childCount, resolver);
   return base as unknown as HastNode;
 }
@@ -348,7 +351,11 @@ export function readMatchedNode(
       data,
     );
   }
-  const base: Record<string, unknown> = { type: TYPE_NAMES[nodeType] ?? `unknown(${nodeType})` };
+  const base: Record<string, unknown> = new VisitorNode(
+    TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`,
+    resolver.refs,
+    nodeId,
+  );
   if (position !== undefined) base.position = position;
   if (data !== null) base.data = data;
   if (nodeType === HAST_ROOT) {
@@ -359,7 +366,6 @@ export function readMatchedNode(
     }
   }
   const node = base as unknown as HastNode;
-  resolver.refs.set(node, nodeId);
   return node;
 }
 

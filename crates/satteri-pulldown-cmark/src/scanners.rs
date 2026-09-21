@@ -1419,7 +1419,27 @@ fn scan_attribute_value(
     Some(i)
 }
 
+/// A single-line quoted title that needs no decoding. More complex titles,
+/// including parenthesized ones, stay with the container-aware inline scanner.
+#[inline]
+pub(crate) fn scan_plain_link_title(text: &str, start: usize) -> Option<(usize, &str)> {
+    let bytes = text.as_bytes();
+    let quote = *bytes.get(start)?;
+    if !matches!(quote, b'\'' | b'"') {
+        return None;
+    }
+    let mut end = start + 1;
+    while bytes
+        .get(end)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b' ')
+    {
+        end += 1;
+    }
+    (bytes.get(end) == Some(&quote)).then(|| (end + 1 - start, &text[start + 1..end]))
+}
+
 // Remove backslash escapes and resolve entities
+#[inline]
 pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> CowStr<'a> {
     let input = input.into();
     let bytes = input.as_bytes();
@@ -1428,6 +1448,13 @@ pub(crate) fn unescape<'a, I: Into<CowStr<'a>>>(input: I, is_in_table: bool) -> 
     let Some(first) = memchr::memchr2(b'\\', b'&', bytes) else {
         return input;
     };
+    unescape_from(input, first, is_in_table)
+}
+
+// Keep the common borrowed-string return out of the rewriting frame.
+#[inline(never)]
+fn unescape_from(input: CowStr<'_>, first: usize, is_in_table: bool) -> CowStr<'_> {
+    let bytes = input.as_bytes();
     let mut result = String::new();
     let mut mark = 0;
     let mut i = first;
