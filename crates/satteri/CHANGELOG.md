@@ -1,5 +1,14 @@
 # satteri
 
+## 0.2.14 — 2026-09-26
+
+### Patch changes
+
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved Markdown parsing, HAST conversion, and HTML rendering performance for prose, tables, links, autolinks, code spans, and strong emphasis. Reduced unnecessary allocations when compiling MDX with configured ignored elements, and fixed panics and incorrect strong-emphasis output when an autolink immediately follows an inline link.
+  
+  Changed Rust tree APIs to use `Document` for both borrowed and owned source text, with `NodePosition` arguments for construction and position setters. JavaScript APIs and wire layouts are unchanged. — Thanks @Princesseuh!
+- Updated dependencies: satteri-ast (Cargo)@0.6.0, satteri-mdxjs (Cargo)@0.3.14, satteri-pulldown-cmark (Cargo)@0.6.4
+
 ## 0.2.13 — 2026-08-19
 
 ### Patch changes

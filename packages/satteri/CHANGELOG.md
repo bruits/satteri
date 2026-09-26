@@ -1,5 +1,39 @@
 # satteri
 
+## 0.11.0 — 2026-09-26
+
+### Minor changes
+
+- [81be9ae](https://github.com/bruits/satteri/commit/81be9aecd95870a747162e6034ab7a8e7d3bc143) Added `ctx.setField` for a node's own fields and `ctx.setAttribute` for `attributes` entries, so plugins can now rename elements, MDX JSX elements and directives, and set directive attributes. `ctx.setProperty` keeps setting HAST element properties; using it for fields or MDX JSX attributes is deprecated, and it is deprecated outright on MDAST. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved MDAST and HAST plugin performance for visitors, full-tree traversal, and small documents. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `position: false` faster and fixes cases were it could lower performance by accident compared to enabling positions. — Thanks @Princesseuh!
+- [371b584](https://github.com/bruits/satteri/commit/371b584fdc0271ad8c193532172f24812d4c4c18) Added Android ARM64 native binding support. — Thanks @dcavalcante for your first contribution 🎉!
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed SVG script and style text being corrupted and elements with HTML void-element names losing children or absorbing siblings during HTML serialization and rawHtml reparsing. HTML content inside SVG integration points keeps its normal serialization rules, including with optimizeStatic. — Thanks @gtritchie!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made parsing, HTML rendering, and tree building faster, by 3% to 35% depending on the document and output, with the largest gains on small documents. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `markdownToMdast`, `markdownToHast`, and the MDX tree functions faster and less memory-hungry, with the largest gains on text-heavy and non-ASCII documents. — Thanks @Princesseuh!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Fixed list-valued properties on HAST elements: numeric items (like `coords`) no longer disappear, lists are separated by comma or space according to the schema of the element they sit in, and a comma-separated attribute parsed from HTML round-trips unchanged. — Thanks @Princesseuh!
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved Markdown parsing, HAST conversion, and HTML rendering performance for prose, tables, links, autolinks, code spans, and strong emphasis. Reduced unnecessary allocations when compiling MDX with configured ignored elements, and fixed panics and incorrect strong-emphasis output when an autolink immediately follows an inline link.
+  
+  Changed Rust tree APIs to use `Document` for both borrowed and owned source text, with `NodePosition` arguments for construction and position setters. JavaScript APIs and wire layouts are unchanged. — Thanks @Princesseuh!
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved MDAST and HAST visitor performance, especially for text-heavy plugins. Retaining HAST visitor nodes after compilation can use more memory. — Thanks @Princesseuh!
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed `rawHtml` losing the SVG attribute schema for raw HTML inside a JSX `<svg>` element, so `fill-rule` now maps to `fillRule` instead of passing through as an unknown property. — Thanks @gtritchie!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Fixed list and list-item nodes sometimes having corrupted values — Thanks @Princesseuh!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Fixed text inside an element nested in `<script>` or `<style>` rendering unescaped; only text directly inside those elements is left as-is. — Thanks @Princesseuh!
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Added `hastToHtml`, which serializes a HAST tree, a single node, or a list of nodes back to an HTML string, the reverse of `htmlToHast`. — Thanks @Princesseuh!
+- [b2e7533](https://github.com/bruits/satteri/commit/b2e7533b3e29ed98d5004f844ca9c2e155ee7c40) Added plugin support to the tree functions: `markdownToMdast` and `mdxToMdast` accept `mdastPlugins`, and `markdownToHast` and `mdxToHast` accept both `mdastPlugins` and `hastPlugins`, alongside `fileURL` and `data` as the compile functions already do.
+  
+  ```ts
+  const tree = markdownToHast(source, {
+    mdastPlugins: [myMdastPlugin],
+    hastPlugins: [myHastPlugin],
+  });
+  ```
+  
+  As with `markdownToHtml`, an async plugin makes the call return a promise. — Thanks @Princesseuh!
+
 ## 0.10.5 — 2026-08-19
 
 ### Patch changes

@@ -1,5 +1,16 @@
 # satteri-plugin-api
 
+## 0.6.0 — 2026-09-26
+
+### Minor changes
+
+- [81be9ae](https://github.com/bruits/satteri/commit/81be9aecd95870a747162e6034ab7a8e7d3bc143) Added `ctx.setField` for a node's own fields and `ctx.setAttribute` for `attributes` entries, so plugins can now rename elements, MDX JSX elements and directives, and set directive attributes. `ctx.setProperty` keeps setting HAST element properties; using it for fields or MDX JSX attributes is deprecated, and it is deprecated outright on MDAST. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [4171b78](https://github.com/bruits/satteri/commit/4171b78ae86ed815c7e6040715e96e49e7b74969) Added `hastToHtml`, which serializes a HAST tree, a single node, or a list of nodes back to an HTML string, the reverse of `htmlToHast`. — Thanks @Princesseuh!
+- Updated dependencies: satteri-arena (Cargo)@0.4.0, satteri-ast (Cargo)@0.6.0
+
 ## 0.5.3 — 2026-08-19
 
 ### Patch changes
