@@ -20,6 +20,8 @@ import {
   CMD_WRAP,
   CMD_REPLACE,
   CMD_SET_PROPERTY,
+  CMD_SET_FIELD,
+  CMD_SET_ATTRIBUTE,
   PAYLOAD_RAW,
   RAW_LITERAL_BRACES,
   PAYLOAD_OPSTREAM,
@@ -143,6 +145,18 @@ export class CommandBuffer extends OpWriter {
   }
 
   setProperty(nodeId: number, key: string, value: unknown): void {
+    this.#writeNamedValue(CMD_SET_PROPERTY, nodeId, key, value);
+  }
+
+  setField(nodeId: number, key: string, value: unknown): void {
+    this.#writeNamedValue(CMD_SET_FIELD, nodeId, key, value);
+  }
+
+  setAttribute(nodeId: number, name: string, value: unknown): void {
+    this.#writeNamedValue(CMD_SET_ATTRIBUTE, nodeId, name, value);
+  }
+
+  #writeNamedValue(cmd: number, nodeId: number, key: string, value: unknown): void {
     this.#assertNotEncoding();
     let valueType: number;
     let str: string;
@@ -168,7 +182,7 @@ export class CommandBuffer extends OpWriter {
     }
 
     this.ensure(6);
-    this.buf[this.n++] = CMD_SET_PROPERTY;
+    this.buf[this.n++] = cmd;
     this.writeU32(nodeId);
     this.buf[this.n++] = valueType;
     this.utf8WithU32Len(key);

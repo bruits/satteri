@@ -36,7 +36,7 @@ import {
   PROP_TOKEN_LIST,
   PROP_STRING,
 } from "../op-stream.js";
-import type { Data, HastRaw, MdxJsxAttributeUnion, SourceFormat } from "../types.js";
+import type { Data, HastRaw, SourceFormat } from "../types.js";
 import { HAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
 import { type HastNode } from "./hast-materializer.js";
 import { encodeTokenList } from "./element-props.js";
@@ -62,6 +62,8 @@ import {
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
+  type SettableScalarFieldKey,
+  withMdxJsxAttribute,
 } from "../visitor-shared.js";
 
 export type { HastHandle };
@@ -129,6 +131,24 @@ export interface HastVisitorContext {
   ): void;
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<HastNode>, index: number): void;
+  /** Replace a scalar field on the node itself, such as `tagName`, `name`, or `value`. */
+  setField<N extends HastNode, K extends SettableScalarFieldKey<N>>(
+    node: Readonly<N>,
+    key: K,
+    value: Exclude<N[K], undefined>,
+  ): void;
+  /** `children` is structural and every parent accepts it, including node-type unions. */
+  setField(node: Readonly<HastNode>, key: "children", value: readonly HastContent[]): void;
+  /** `data` is an open per-node bag serialized to JSON. `null` clears it. */
+  setField(node: Readonly<HastNode>, key: "data", value: Record<string, unknown> | null): void;
+  /** Set one entry in an MDX JSX element's `attributes`. */
+  setAttribute(node: Readonly<HastNode>, name: string, value: unknown): void;
+  /**
+   * Set one entry in a hast element's `properties`.
+   *
+   * Using this for node fields or MDX JSX attributes is deprecated; use
+   * `setField` or `setAttribute` respectively.
+   */
   setProperty(node: Readonly<HastNode>, key: string, value: unknown): void;
   /** Collect the concatenated text of all descendant text nodes (like DOM textContent). */
   textContent(node: Readonly<HastNode>): string;
@@ -383,7 +403,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   removeNode(node: HastNode): void {
-    this.#commandBuffer.removeNode(requireNid(node, "removeNode", this.#refs));
+    const id = requireNid(node, "removeNode", this.#refs);
+    this.#commandBuffer.removeNode(id);
+    this.#pendingNodes.delete(id);
   }
 
   replaceNode(node: HastNode, newNode: HastContent | HastContent[]): void {
@@ -404,15 +426,15 @@ class HastVisitorContextImpl implements HastVisitorContext {
       } else {
         emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs);
       }
-      // Discard the queued replacement so later setProperty calls cannot resurrect it.
-      this.#pendingNodes.delete(id);
+      if (previous === undefined) this.#pendingNodes.delete(id);
+      else this.#pendingNodes.set(id, previous);
       return;
     }
     if (id === ROOT_NODE_ID) {
       emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
-      return;
+    } else {
+      emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs);
     }
-    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs);
     this.#pendingNodes.set(id, newNode);
   }
 
@@ -496,33 +518,50 @@ class HastVisitorContextImpl implements HastVisitorContext {
     }
 
     if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
-      // Fold attributes into queued replacements so the rebuild cannot overwrite later setProperty calls.
-      const pending = this.#pendingNodes.get(id) as
-        | MdxJsxFlowElementHast
-        | MdxJsxTextElementHast
-        | undefined;
-      if (pending !== undefined) {
-        const updated = { ...pending };
-        const attrs: MdxJsxAttributeUnion[] = [...(updated.attributes ?? [])];
-        const idx = attrs.findIndex((a) => a.type === "mdxJsxAttribute" && a.name === key);
-        if (idx !== -1) attrs.splice(idx, 1);
-        // Space-join arrays to match the binary path’s list-valued property encoding.
-        const attrValue =
-          value === true || value === null || value === undefined
-            ? null
-            : typeof value === "string"
-              ? value
-              : Array.isArray(value)
-                ? value.join(" ")
-                : String(value);
-        attrs.push({ type: "mdxJsxAttribute", name: key, value: attrValue });
-        updated.attributes = attrs;
-        this.replaceNode(node, updated);
-        return;
-      }
+      if (this.#foldPendingJsxAttribute(node, id, key, value)) return;
     }
 
     this.#commandBuffer.setProperty(id, key, value);
+  }
+
+  setField(node: HastNode, key: string, value: unknown): void {
+    const id = requireNid(node, "setField", this.#refs);
+    if (this.#foldPendingField(node, id, key, value)) return;
+    if (key === "children") {
+      if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+        throw unencodableContentError(value);
+      }
+      return;
+    }
+    if (key === "data") {
+      this.#commandBuffer.setField(id, key, value != null ? JSON.stringify(value) : null);
+      return;
+    }
+    this.#commandBuffer.setField(id, key, value);
+  }
+
+  setAttribute(node: HastNode, name: string, value: unknown): void {
+    const id = requireNid(node, "setAttribute", this.#refs);
+    if (this.#foldPendingJsxAttribute(node, id, name, value)) return;
+    this.#commandBuffer.setAttribute(id, name, value);
+  }
+
+  /** A queued replacement would discard the field, so fold it into a fresh replacement. */
+  #foldPendingField(node: HastNode, id: number, key: string, value: unknown): boolean {
+    const pending = this.#pendingNodes.get(id);
+    if (pending === undefined) return false;
+    this.replaceNode(node, { ...pending, [key]: value } as HastNode);
+    return true;
+  }
+
+  /** A queued replacement would discard the attribute, so fold it in instead. */
+  #foldPendingJsxAttribute(node: HastNode, id: number, name: string, value: unknown): boolean {
+    const pending = this.#pendingNodes.get(id);
+    if (pending?.type !== "mdxJsxFlowElement" && pending?.type !== "mdxJsxTextElement") {
+      return false;
+    }
+    this.replaceNode(node, withMdxJsxAttribute(pending, name, value));
+    return true;
   }
 
   textContent(node: HastNode): string {

@@ -49,6 +49,8 @@ pub const CMD_WRAP: u8 = 0x09;
 pub const CMD_REPLACE: u8 = 0x0b;
 pub const CMD_SET_PROPERTY: u8 = 0x0c; // [valueType: u8][name str][value str], PROP_* value kinds
 pub const CMD_SET_CHILDREN: u8 = 0x0d; // payload is a Root-wrapped child list
+pub const CMD_SET_FIELD: u8 = 0x0e; // [valueType: u8][name str][value str], PROP_* value kinds; name is a node field
+pub const CMD_SET_ATTRIBUTE: u8 = 0x0f; // [valueType: u8][name str][value str], PROP_* value kinds; name is an `attributes` entry
 
 // Structural-command payload types (0x10+, a range distinct from commands).
 pub const PAYLOAD_RAW: u8 = 0x10; // [flags: u8][len: u32 LE][utf8] — re-parsed as markdown; see RAW_* flags

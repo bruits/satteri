@@ -92,6 +92,8 @@ import {
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
+  type SettableScalarFieldKey,
+  withMdxJsxAttribute,
 } from "../visitor-shared.js";
 import { ru32 } from "../wire-read.js";
 import { MDAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
@@ -139,6 +141,7 @@ const requireNid = makeRequireNid(getNodeId);
 export class MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
   readonly #diagnostics: MdastDiagnostic[];
+  readonly #pendingNodes: Map<number, MdastTarget> = new Map();
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
@@ -190,7 +193,9 @@ export class MdastVisitorContext {
   }
 
   removeNode(node: Readonly<MdastTarget>): void {
-    this.#commandBuffer.removeNode(requireNid(node as MdastNode, "removeNode", this.#refs));
+    const id = requireNid(node as MdastNode, "removeNode", this.#refs);
+    this.#commandBuffer.removeNode(id);
+    this.#pendingNodes.delete(id);
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
@@ -281,15 +286,98 @@ export class MdastVisitorContext {
       } else {
         emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs);
       }
+      if (previous !== undefined && !isRawMdastContent(previous)) {
+        this.#pendingNodes.set(id, previous);
+      } else {
+        this.#pendingNodes.delete(id);
+      }
       return;
     }
     if (id === ROOT_NODE_ID && !isRawMdastContent(newNode)) {
       emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
-      return;
+    } else {
+      emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs);
     }
-    emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs);
+    if (isRawMdastContent(newNode)) this.#pendingNodes.delete(id);
+    else this.#pendingNodes.set(id, newNode);
   }
 
+  setField<N extends MdastTarget, K extends SettableScalarFieldKey<N>>(
+    node: Readonly<N>,
+    key: K,
+    value: Exclude<N[K], undefined>,
+  ): void;
+  /** `children` is structural and every parent accepts it, including node-type unions. */
+  setField(node: Readonly<MdastTarget>, key: "children", value: readonly MdastTarget[]): void;
+  /** `data` is an open per-node bag serialized to JSON. `null` clears it. */
+  setField(node: Readonly<MdastTarget>, key: "data", value: Record<string, unknown> | null): void;
+  setField(node: Readonly<MdastTarget>, key: string, value: unknown): void {
+    const id = requireNid(node as MdastNode, "setField", this.#refs);
+    if (this.#foldPendingField(node, id, key, value)) return;
+    if (key === "children") {
+      if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
+        throw unencodableContentError(value);
+      }
+      return;
+    }
+    if (key === "data") value = value != null ? JSON.stringify(value) : null;
+    this.#commandBuffer.setField(id, key, value);
+  }
+
+  /** Set one string entry in a directive's `attributes`. */
+  setAttribute(
+    node: Readonly<ContainerDirective | LeafDirective | TextDirective>,
+    name: string,
+    value: string,
+  ): void;
+  /** Set one entry in an MDX JSX element's `attributes`. */
+  setAttribute(
+    node: Readonly<MdxJsxFlowElement | MdxJsxTextElement>,
+    name: string,
+    value: unknown,
+  ): void;
+  setAttribute(node: Readonly<MdastTarget>, name: string, value: unknown): void {
+    const id = requireNid(node as MdastNode, "setAttribute", this.#refs);
+    const target = this.#pendingNodes.get(id) ?? node;
+    if (isDirective(target) && typeof value !== "string") {
+      throw new TypeError("setAttribute: directive attributes must be strings");
+    }
+    if (this.#foldPendingAttribute(node, id, name, value)) return;
+    this.#commandBuffer.setAttribute(id, name, value);
+  }
+
+  /** A queued replacement would discard the field, so fold it into a fresh replacement. */
+  #foldPendingField(node: Readonly<MdastTarget>, id: number, key: string, value: unknown): boolean {
+    const pending = this.#pendingNodes.get(id);
+    if (pending === undefined) return false;
+    this.replaceNode(node, { ...pending, [key]: value } as MdastTarget);
+    return true;
+  }
+
+  /** A queued replacement would discard the attribute, so fold it in instead. */
+  #foldPendingAttribute(
+    node: Readonly<MdastTarget>,
+    id: number,
+    name: string,
+    value: unknown,
+  ): boolean {
+    const pending = this.#pendingNodes.get(id);
+    if (pending === undefined) return false;
+    if (isDirective(pending)) {
+      this.replaceNode(node, {
+        ...pending,
+        attributes: { ...pending.attributes, [name]: value as string },
+      });
+      return true;
+    }
+    if (isMdxJsxElement(pending)) {
+      this.replaceNode(node, withMdxJsxAttribute(pending, name, value));
+      return true;
+    }
+    return false;
+  }
+
+  /** @deprecated MDAST has no property container; use `setField`. */
   setProperty<N extends MdastTarget, K extends keyof N & string>(
     node: Readonly<N>,
     key: K,
@@ -642,6 +730,24 @@ function isRawMdastContent(
 ): content is RawMdastContent | RawHtmlMdastContent {
   const c = content as unknown as Record<string, unknown>;
   return typeof c.raw === "string" || typeof c.rawHtml === "string";
+}
+
+function isDirective(
+  node: Readonly<MdastTarget>,
+): node is ContainerDirective | LeafDirective | TextDirective {
+  return (
+    node.type === "containerDirective" ||
+    node.type === "leafDirective" ||
+    node.type === "textDirective"
+  );
+}
+
+function isMdxJsxElement(
+  node: Readonly<MdastTarget>,
+): node is MdxJsxFlowElement | MdxJsxTextElement {
+  return (
+    (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") && "attributes" in node
+  );
 }
 
 // Keep direct method calls so structural command dispatch stays monomorphic.
