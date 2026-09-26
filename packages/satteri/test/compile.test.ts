@@ -1391,6 +1391,20 @@ describe("mdxToJs", () => {
     expect(js).not.toContain("fill-rule");
   });
 
+  test("elementAttributeNameCase: 'react' keeps SVG `datatype` apart from custom `data-*` (#250)", () => {
+    const { code: js } = markdownToJs(
+      '<svg datatype="rdf" data-foo="1"></svg>\n\n<div data-type="custom"></div>\n',
+      { features: { rawHtml: true } },
+    );
+    // `datatype` is a real SVG attribute (hast `dataType`), so React casing
+    // must not kebab-case it like a custom data property.
+    expect(js).toContain('datatype: "rdf"');
+    expect(js).toContain('"data-foo": "1"');
+    // On HTML elements `dataType` is only ever the custom `data-type`.
+    expect(js).toContain('"data-type": "custom"');
+    expect(js).not.toContain('"data-type": "rdf"');
+  });
+
   test.each([
     ["script", 'if (a<b && c) { const label = "&copy;"; }'],
     ["style", 'a::before { content: "<b>&copy;"; }'],
