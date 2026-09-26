@@ -1,5 +1,17 @@
 # satteri-napi
 
+## 0.5.5 — 2026-09-26
+
+### Patch changes
+
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved MDAST and HAST plugin performance for visitors, full-tree traversal, and small documents. — Thanks @Princesseuh!
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed SVG script and style text being corrupted and elements with HTML void-element names losing children or absorbing siblings during HTML serialization and rawHtml reparsing. HTML content inside SVG integration points keeps its normal serialization rules, including with optimizeStatic. — Thanks @gtritchie!
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved Markdown parsing, HAST conversion, and HTML rendering performance for prose, tables, links, autolinks, code spans, and strong emphasis. Reduced unnecessary allocations when compiling MDX with configured ignored elements, and fixed panics and incorrect strong-emphasis output when an autolink immediately follows an inline link.
+  
+  Changed Rust tree APIs to use `Document` for both borrowed and owned source text, with `NodePosition` arguments for construction and position setters. JavaScript APIs and wire layouts are unchanged. — Thanks @Princesseuh!
+- [d4be776](https://github.com/bruits/satteri/commit/d4be77613774f600b08037a769f0d29a671d3a24) Fixed `rawHtml` losing the SVG attribute schema for raw HTML inside a JSX `<svg>` element, so `fill-rule` now maps to `fillRule` instead of passing through as an unknown property. — Thanks @gtritchie!
+- Updated dependencies: satteri-arena (Cargo)@0.4.0, satteri-ast (Cargo)@0.6.0, satteri-mdxjs (Cargo)@0.3.14, satteri-plugin-api (Cargo)@0.6.0, satteri-pulldown-cmark (Cargo)@0.6.4
+
 ## 0.5.4 — 2026-08-19
 
 ### Patch changes

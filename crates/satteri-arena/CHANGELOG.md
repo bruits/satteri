@@ -1,5 +1,19 @@
 # satteri-arena
 
+## 0.4.0 — 2026-09-26
+
+### Minor changes
+
+- [5a49ee3](https://github.com/bruits/satteri/commit/5a49ee38bc0002c29d55df3d378285e90ab93ac4) Improved Markdown parsing, HAST conversion, and HTML rendering performance for prose, tables, links, autolinks, code spans, and strong emphasis. Reduced unnecessary allocations when compiling MDX with configured ignored elements, and fixed panics and incorrect strong-emphasis output when an autolink immediately follows an inline link.
+  
+  Changed Rust tree APIs to use `Document` for both borrowed and owned source text, with `NodePosition` arguments for construction and position setters. JavaScript APIs and wire layouts are unchanged. — Thanks @Princesseuh!
+
+### Patch changes
+
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `position: false` faster and fixes cases were it could lower performance by accident compared to enabling positions. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made parsing, HTML rendering, and tree building faster, by 3% to 35% depending on the document and output, with the largest gains on small documents. — Thanks @Princesseuh!
+- [af7e7ed](https://github.com/bruits/satteri/commit/af7e7ed74db87f163c22094a9a5790e1abdaf4e7) Made `markdownToMdast`, `markdownToHast`, and the MDX tree functions faster and less memory-hungry, with the largest gains on text-heavy and non-ASCII documents. — Thanks @Princesseuh!
+
 ## 0.3.1 — 2026-08-19
 
 ### Patch changes
