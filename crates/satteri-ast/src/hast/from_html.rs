@@ -559,8 +559,10 @@ fn parsed_props(
 /// html5ever splits foreign attrs into prefix + local; the tables key `prefix:local`.
 fn qualified_attr_name(name: &QualName) -> std::borrow::Cow<'_, str> {
     match &name.prefix {
-        Some(prefix) => std::borrow::Cow::Owned(format!("{prefix}:{}", name.local)),
-        None => std::borrow::Cow::Borrowed(&name.local),
+        Some(prefix) if !prefix.is_empty() => {
+            std::borrow::Cow::Owned(format!("{prefix}:{}", name.local))
+        }
+        _ => std::borrow::Cow::Borrowed(&name.local),
     }
 }
 
@@ -993,6 +995,15 @@ mod tests {
             assert_eq!(tags(&reparsed), ["svg", tag]);
             assert_eq!(crate::hast::text_content(&reparsed, 0), "a<b & &copy;");
         }
+    }
+
+    #[test]
+    fn mathml_default_namespace_round_trips() {
+        let html = r#"<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math>"#;
+        assert_eq!(
+            hast_arena_to_html(&html_fragment_to_hast_arena(html, HtmlSpace::Html)),
+            format!("{html}\n")
+        );
     }
 
     #[test]
