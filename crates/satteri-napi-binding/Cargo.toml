@@ -10,8 +10,8 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "3", default-features = false, features = ["napi8"] }
-napi-derive = "3"
+napi = { version = "3.12.3", default-features = false, features = ["napi8"] }
+napi-derive = "3.6.4"
 satteri-arena = { workspace = true }
 satteri-ast = { workspace = true }
 satteri-mdxjs = { workspace = true, optional = true }
@@ -31,4 +31,4 @@ mdx = [
 from-html = ["satteri-ast/from-html", "satteri-plugin-api/from-html"]
 
 [build-dependencies]
-napi-build = "2"
+napi-build = "2.4.2"

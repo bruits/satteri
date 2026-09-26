@@ -1,5 +1,9 @@
-// @ts-nocheck — WASM browser binding has no type declarations
-export {
+// @ts-nocheck — the optional WASI binding is generated and installed separately
+import { instantiate } from "@bruits/satteri-wasm32-wasip1/workerd";
+import wasmModule from "@bruits/satteri-wasm32-wasip1/wasm.wasm";
+
+// workerd supplies a precompiled module; never fetch or compile Wasm bytes here.
+export const {
   applyCommandsAndCompileHandle,
   applyCommandsAndConvertToHastHandle,
   applyCommandsAndRenderHandle,
@@ -37,4 +41,4 @@ export {
   textContentHandle,
   walkHandle,
   walkMdastHandle,
-} from "@bruits/satteri-wasm32-wasi";
+} = (await instantiate(wasmModule)) as typeof import("../index.js");
