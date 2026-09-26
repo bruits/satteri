@@ -48,13 +48,12 @@ impl<'a> LineIndex<'a> {
     pub fn from_source(source: &'a str) -> Self {
         let bytes = source.as_bytes();
         let all_ascii = bytes.is_ascii();
-        let line_count_estimate = bytes.len() / 40 + 1;
+        // Real markdown averages ~21-27 bytes per line.
+        let line_count_estimate = bytes.len() / 24 + 1;
         let mut offsets = Vec::with_capacity(line_count_estimate);
         offsets.push(0u32);
         if all_ascii {
-            for nl_idx in line_ending_iter(bytes) {
-                offsets.push(nl_idx as u32 + 1);
-            }
+            push_line_starts(bytes, &mut offsets);
             return LineIndex {
                 source: bytes,
                 line_offsets: offsets,
@@ -63,11 +62,13 @@ impl<'a> LineIndex<'a> {
                 disabled: false,
             };
         }
-        let mut line_meta = Vec::with_capacity(line_count_estimate);
-        let mut utf16_count: u32 = 0;
-        let mut last_byte: usize = 0;
-        for nl_idx in line_ending_iter(bytes) {
-            let line = &bytes[last_byte..=nl_idx];
+        push_line_starts(bytes, &mut offsets);
+        let mut line_meta = Vec::with_capacity(offsets.len());
+        let mut utf16_count = 0u32;
+        for i in 0..offsets.len() {
+            let start = offsets[i] as usize;
+            let end = offsets.get(i + 1).map_or(bytes.len(), |&e| e as usize);
+            let line = &bytes[start..end];
             let is_ascii = line.is_ascii();
             line_meta.push(LineMeta {
                 utf16_offset: utf16_count,
@@ -78,15 +79,7 @@ impl<'a> LineIndex<'a> {
             } else {
                 utf16_len_bytes(line)
             };
-            offsets.push(nl_idx as u32 + 1);
-            last_byte = nl_idx + 1;
         }
-        // Final line (no trailing newline): describe whether it is ASCII so
-        // lookups falling on it can fast-path too.
-        line_meta.push(LineMeta {
-            utf16_offset: utf16_count,
-            is_ascii: bytes[last_byte..].is_ascii(),
-        });
         LineIndex {
             source: bytes,
             line_offsets: offsets,
@@ -98,12 +91,20 @@ impl<'a> LineIndex<'a> {
 
     /// Create a cursor for O(1) amortized lookups when offsets are roughly ascending.
     pub fn cursor(&self) -> LineIndexCursor<'_, 'a> {
-        LineIndexCursor {
+        let mut cursor = LineIndexCursor {
             index: self,
             disabled: self.disabled,
-            last_line_idx: 0,
-            last_line_col: (u32::MAX, (0, 0)),
+            line_idx: 0,
+            line_start: 0,
+            line_len: u32::MAX,
+            line_is_ascii: true,
+            col_byte: 0,
+            col_units: 0,
+        };
+        if !self.disabled {
+            cursor.set_line(0);
         }
+        cursor
     }
 
     /// UTF-16 offset for a 1-based `(line, col)` pair from this index;
@@ -121,17 +122,23 @@ impl<'a> LineIndex<'a> {
     }
 }
 
-/// A cursor over a `LineIndex` that remembers its last position for O(1) amortized lookups.
+/// A cursor over a `LineIndex` that remembers the line it last resolved, so
+/// any lookup landing on the same line costs two compares and a subtract.
 ///
 /// When offsets arrive in roughly ascending order (as they do from a parser),
-/// the cursor scans forward from the last known line instead of binary-searching.
+/// line changes scan forward from the current line instead of binary-searching.
 pub struct LineIndexCursor<'idx, 'src> {
     index: &'idx LineIndex<'src>,
     /// Mirrored off the index so the skip-positions early-out is one local load.
     disabled: bool,
-    last_line_idx: usize,
-    /// One-entry memo; a sibling's end offset is usually the next one's start.
-    last_line_col: (u32, (u32, u32)),
+    line_idx: usize,
+    /// `line_len` saturates on the last line so any tail offset stays in the window.
+    line_start: u32,
+    line_len: u32,
+    line_is_ascii: bool,
+    /// Invariant: `col_units` is the UTF-16 length of `line_start..col_byte`.
+    col_byte: u32,
+    col_units: u32,
 }
 
 impl LineIndexCursor<'_, '_> {
@@ -140,22 +147,17 @@ impl LineIndexCursor<'_, '_> {
         if self.disabled {
             return (0, 0);
         }
-        if offset == self.last_line_col.0 {
-            return self.last_line_col.1;
+        let mut rel = offset.wrapping_sub(self.line_start);
+        if rel >= self.line_len {
+            self.move_to(offset);
+            rel = offset - self.line_start;
         }
-        self.offset_to_line_col_tracked(offset)
-    }
-
-    #[inline(never)]
-    fn offset_to_line_col_tracked(&mut self, offset: u32) -> (u32, u32) {
-        let (idx, line_start) = self.find_line_idx(offset);
-        let col = if self.index.all_ascii || self.index.line_meta[idx].is_ascii {
-            offset - line_start + 1
+        let col = if self.line_is_ascii {
+            rel + 1
         } else {
-            utf16_len_bytes(&self.index.source[line_start as usize..offset as usize]) + 1
+            self.utf16_col(offset) + 1
         };
-        self.last_line_col = (offset, (idx as u32 + 1, col));
-        self.last_line_col.1
+        (self.line_idx as u32 + 1, col)
     }
 
     /// Convert a byte offset into the source to a UTF-16 offset;
@@ -163,27 +165,25 @@ impl LineIndexCursor<'_, '_> {
     /// indices, not bytes.
     #[inline]
     pub fn byte_to_utf16_offset(&mut self, byte_offset: u32) -> u32 {
-        if self.index.all_ascii || self.index.disabled {
+        if self.index.all_ascii || self.disabled {
             return byte_offset;
         }
-        let (idx, line_start) = self.find_line_idx(byte_offset);
-        let meta = self.index.line_meta[idx];
-        if meta.is_ascii {
-            meta.utf16_offset + (byte_offset - line_start)
+        if byte_offset.wrapping_sub(self.line_start) >= self.line_len {
+            self.move_to(byte_offset);
+        }
+        let meta = self.index.line_meta[self.line_idx];
+        if self.line_is_ascii {
+            meta.utf16_offset + (byte_offset - self.line_start)
         } else {
-            meta.utf16_offset
-                + utf16_len_bytes(&self.index.source[line_start as usize..byte_offset as usize])
+            meta.utf16_offset + self.utf16_col(byte_offset)
         }
     }
 
-    /// Returns the line index and that line's start byte offset, so callers
-    /// skip a second bounds-checked `line_offsets` read for a start already
-    /// located.
-    #[inline]
-    fn find_line_idx(&mut self, offset: u32) -> (usize, u32) {
+    #[inline(never)]
+    fn move_to(&mut self, offset: u32) {
         let offsets = &self.index.line_offsets;
         let len = offsets.len();
-        let mut idx = self.last_line_idx;
+        let mut idx = self.line_idx;
         // Nearby offsets are the common case; far jumps binary-search instead.
         const LINEAR_STEPS: usize = 4;
         if offset >= offsets[idx] {
@@ -207,8 +207,34 @@ impl LineIndexCursor<'_, '_> {
                 }
             }
         }
-        self.last_line_idx = idx;
-        (idx, offsets[idx])
+        self.set_line(idx);
+    }
+
+    fn set_line(&mut self, idx: usize) {
+        self.line_idx = idx;
+        self.line_start = self.index.line_offsets[idx];
+        self.line_len = match self.index.line_offsets.get(idx + 1) {
+            Some(&next) => next - self.line_start,
+            None => u32::MAX - self.line_start,
+        };
+        self.line_is_ascii = match self.index.line_meta.get(idx) {
+            Some(meta) => meta.is_ascii,
+            None => true,
+        };
+        self.col_byte = self.line_start;
+        self.col_units = 0;
+    }
+
+    /// 0-based UTF-16 column of `offset` inside the current (non-ASCII) line.
+    fn utf16_col(&mut self, offset: u32) -> u32 {
+        if offset < self.col_byte {
+            self.col_byte = self.line_start;
+            self.col_units = 0;
+        }
+        self.col_units +=
+            utf16_len_bytes(&self.index.source[self.col_byte as usize..offset as usize]);
+        self.col_byte = offset;
+        self.col_units
     }
 }
 
@@ -218,6 +244,75 @@ impl LineIndexCursor<'_, '_> {
 pub fn line_ending_iter(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
     memchr::memchr2_iter(b'\n', b'\r', bytes)
         .filter(move |&i| bytes[i] == b'\n' || bytes.get(i + 1) != Some(&b'\n'))
+}
+
+const SWAR_LO: u64 = 0x0101_0101_0101_0101;
+const SWAR_HI: u64 = 0x8080_8080_8080_8080;
+
+/// High bit set on every byte equal to `b` (exact, no false positives).
+#[inline]
+fn eq_mask(w: u64, b: u8) -> u64 {
+    let x = w ^ (SWAR_LO * b as u64);
+    x.wrapping_sub(SWAR_LO) & !x & SWAR_HI
+}
+
+/// Must agree with `line_ending_iter` on which bytes end a line (CRLF counts once).
+fn push_line_starts(bytes: &[u8], offsets: &mut Vec<u32>) {
+    // Word-at-a-time beats memchr2 here: markdown's line density makes memchr re-pay its SIMD setup per line.
+    if memchr::memchr(b'\r', bytes).is_none() {
+        push_newline_starts(bytes, offsets);
+    } else {
+        push_line_starts_cr(bytes, offsets);
+    }
+}
+
+/// `\r`-free fast path: every `\n` ends a line, no CRLF pairing to check.
+fn push_newline_starts(bytes: &[u8], offsets: &mut Vec<u32>) {
+    let mut base = 0usize;
+    for block in bytes.chunks_exact(32) {
+        let m0 = eq_mask(u64::from_le_bytes(block[0..8].try_into().unwrap()), b'\n');
+        let m1 = eq_mask(u64::from_le_bytes(block[8..16].try_into().unwrap()), b'\n');
+        let m2 = eq_mask(u64::from_le_bytes(block[16..24].try_into().unwrap()), b'\n');
+        let m3 = eq_mask(u64::from_le_bytes(block[24..32].try_into().unwrap()), b'\n');
+        if m0 | m1 | m2 | m3 != 0 {
+            for (k, m) in [m0, m1, m2, m3].into_iter().enumerate() {
+                let mut hits = m;
+                while hits != 0 {
+                    let j = base + k * 8 + (hits.trailing_zeros() as usize >> 3);
+                    hits &= hits - 1;
+                    offsets.push(j as u32 + 1);
+                }
+            }
+        }
+        base += 32;
+    }
+    for (j, &b) in bytes.iter().enumerate().skip(base) {
+        if b == b'\n' {
+            offsets.push(j as u32 + 1);
+        }
+    }
+}
+
+fn push_line_starts_cr(bytes: &[u8], offsets: &mut Vec<u32>) {
+    let mut base = 0usize;
+    for chunk in bytes.chunks_exact(8) {
+        let w = u64::from_le_bytes(chunk.try_into().unwrap());
+        let mut hits = eq_mask(w, b'\n') | eq_mask(w, b'\r');
+        while hits != 0 {
+            let j = base + (hits.trailing_zeros() as usize >> 3);
+            hits &= hits - 1;
+            if bytes[j] == b'\n' || bytes.get(j + 1) != Some(&b'\n') {
+                offsets.push(j as u32 + 1);
+            }
+        }
+        base += 8;
+    }
+    for j in base..bytes.len() {
+        let b = bytes[j];
+        if b == b'\n' || (b == b'\r' && bytes.get(j + 1) != Some(&b'\n')) {
+            offsets.push(j as u32 + 1);
+        }
+    }
 }
 
 /// UTF-16 length of a UTF-8 byte slice. Continuation bytes (`0b10xxxxxx`)
@@ -405,6 +500,77 @@ mod tests {
                 idx.utf16_offset_at(line, col),
                 c.byte_to_utf16_offset(byte_offset)
             );
+        }
+    }
+
+    #[test]
+    fn backward_lookups_rescan_correctly() {
+        // Descending offsets on a multibyte line force the incremental
+        // column progress to reset; both directions must agree.
+        let idx = LineIndex::from_source("aあbいc\nxyz");
+        let mut c = idx.cursor();
+        let forward: Vec<_> = [0u32, 1, 4, 5, 8, 9]
+            .iter()
+            .map(|&o| c.offset_to_line_col(o))
+            .collect();
+        let backward: Vec<_> = [9u32, 8, 5, 4, 1, 0]
+            .iter()
+            .map(|&o| c.offset_to_line_col(o))
+            .collect();
+        let mut reversed = backward.clone();
+        reversed.reverse();
+        assert_eq!(forward, reversed);
+    }
+
+    #[test]
+    fn fused_scan_matches_line_ending_iter() {
+        let cases = [
+            "",
+            "a",
+            "\n",
+            "\r",
+            "\r\n",
+            "\n\r",
+            "aaaaaaa\nbbbbbbbb\r\ncc",
+            "ð12345\n1234567ð\nxxxxxxxx\ryyyyyyyy\r\n😀abcdefgh\nz",
+            "abcdefg\r\nhijklmn\r\nðpqrst\nuvwxyz",
+            "é\né\né\né\né\né\né\né\n",
+            "seven77\rñ\r\nlong ascii line that spans several words before its end\nð",
+            "ascii tail line with the multibyte character é hiding near the end\n1234567",
+            "a long pure ascii line that comfortably crosses one 32-byte block boundary\nsecond line with é multibyte content also crossing a block boundary here\nand a trailing ascii line long enough to cross yet another block boundary\n",
+            "0123456789012345678901234567890\n0123456789012345678901234567890\nx😀\n0123456789012345678901234567890\ntail-é",
+        ];
+        for src in cases {
+            let idx = LineIndex::from_source(src);
+            let mut expect = vec![0u32];
+            for nl in line_ending_iter(src.as_bytes()) {
+                expect.push(nl as u32 + 1);
+            }
+            assert_eq!(idx.line_offsets, expect, "offsets for {src:?}");
+            if idx.all_ascii {
+                assert!(idx.line_meta.is_empty());
+                continue;
+            }
+            assert_eq!(idx.line_meta.len(), idx.line_offsets.len());
+            let bytes = src.as_bytes();
+            let mut utf16_count = 0u32;
+            for (i, &start) in idx.line_offsets.iter().enumerate() {
+                let end = idx
+                    .line_offsets
+                    .get(i + 1)
+                    .map_or(bytes.len(), |&e| e as usize);
+                let line = &bytes[start as usize..end];
+                assert_eq!(
+                    idx.line_meta[i].is_ascii,
+                    line.is_ascii(),
+                    "line {i} of {src:?}"
+                );
+                assert_eq!(
+                    idx.line_meta[i].utf16_offset, utf16_count,
+                    "line {i} of {src:?}"
+                );
+                utf16_count += utf16_len_bytes(line);
+            }
         }
     }
 }

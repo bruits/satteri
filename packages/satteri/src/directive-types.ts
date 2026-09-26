@@ -1,9 +1,4 @@
-// Manually-defined directive AST node types.
-//
-// These replicate the type definitions from mdast-util-directive so we can
-// avoid pulling in that package (and its transitive deps) just for the
-// node interfaces. The shapes match what `getDirectiveData` returns from
-// the Rust arena: `name: string`, `attributes: Record<string, string>`.
+// Local interfaces avoid a runtime dependency on mdast-util-directive.
 
 import type {
   BlockContent,
@@ -13,10 +8,7 @@ import type {
   PhrasingContent,
 } from "mdast";
 
-// Even though `null` and `undefined` values are omitted in both Sätteri and mdast-util-directive,
-// they're allowed in the type definitions here to match the mdast-util-directive type.
-// https://github.com/syntax-tree/mdast-util-directive/blob/a683327fafc4e48f81caf8d09d15fef8dd42a627/lib/index.js#L212-L213
-// https://github.com/syntax-tree/mdast-util-directive/blob/main/index.d.ts#L49
+// Accept nullish attribute values for compatibility with mdast-util-directive.
 export type DirectiveAttributes = Record<string, string | null | undefined>;
 
 export interface ContainerDirective extends MdastParent {
@@ -56,8 +48,7 @@ declare module "mdast" {
   }
 
   interface ParagraphData {
-    // `true` on a container directive's first child paragraph when that
-    // paragraph is the directive label (`:::note[label]`).
+    /** Marks a container directive’s label paragraph (`:::note[label]`). */
     directiveLabel?: boolean | null | undefined;
   }
 

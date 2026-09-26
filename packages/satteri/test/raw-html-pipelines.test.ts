@@ -1,12 +1,7 @@
 import { test, expect } from "vitest";
 import { markdownToHtml, markdownToJs, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 
-// `rawHtml` is applied during MDAST→HAST conversion, so every pipeline (the
-// no-plugin fast path, the MDAST-plugin fused tail, and the full
-// plugin-capable path) must reparse embedded raw HTML identically.
-
-// The class whitespace and the missing <tbody> are only normalized when the
-// reparse actually ran, so they discriminate reparsed from verbatim output.
+// Class whitespace and implied tbody distinguish reparsed HTML from verbatim output.
 const src = '<div class="a  b">\n\n**hi**\n\n</div>\n\n<table><tr><td>x</td></tr></table>\n';
 
 function sync<T>(r: T | Promise<T>): T {
@@ -66,8 +61,6 @@ test("rawHtml off leaves raw HTML verbatim on every path", () => {
   expect(html).not.toContain("<tbody>");
 });
 
-// In JS output raw HTML has no representation at all, so the reparse is the only
-// way it survives, unlike HTML output, which keeps it verbatim.
 function expectReparsedJs(code: string) {
   expect(code).toContain('className: "a b"');
   expect(code).toContain('tbody: "tbody"');
@@ -109,7 +102,6 @@ test("markdownToJs drops raw HTML on every path when rawHtml is off", () => {
     expect(code).not.toContain("<div");
     expect(code).not.toContain("<table");
     expect(code).not.toContain('tbody: "tbody"');
-    // The Markdown inside the raw block still compiles.
     expect(code).toContain('strong: "strong"');
   }
 });

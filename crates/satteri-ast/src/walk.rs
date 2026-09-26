@@ -58,6 +58,9 @@
 
 use satteri_arena::{Arena, ArenaKind, Hast, LineIndex, Mdast, StringRef};
 
+use crate::hast::generated::walk_type_data::write_hast_type_data_inline;
+use crate::mdast::generated::walk_type_data::write_mdast_type_data_inline;
+
 /// A single subscription: match nodes of a given type, optionally filtered
 /// by tag name (for HAST element nodes).
 #[derive(Debug)]
@@ -119,8 +122,11 @@ fn walk_and_collect_inner<K: ArenaKind>(
     // parse-time cache when intact, else a one-shot `LineIndex` (rebuilds
     // and position mutations drop the cache).
     let cached = arena.utf16_offsets.len() == arena.nodes.len();
-    let line_index = (!cached && !arena.string_pool().is_ascii())
-        .then(|| LineIndex::from_source(arena.string_pool()));
+    // The line check spares skip-positions mode an index nothing below consults.
+    let line_index = (!cached
+        && !arena.string_pool().is_ascii()
+        && arena.nodes.iter().any(|n| n.start_line != 0))
+    .then(|| LineIndex::from_source(arena.string_pool()));
     let mut offset_cursor = line_index.as_ref().map(|index| index.cursor());
 
     // Build fast lookup: node_type → list of (subscription_index, tag_filter)
@@ -289,9 +295,7 @@ fn serialize_mdast_node_inline(
 
     // Fixed-field and name+count+items types are generated from the registry;
     // this returns false for the raw-byte tails handled below.
-    if crate::mdast::generated::walk_type_data::write_mdast_type_data_inline(
-        arena, node_type, type_data, out,
-    ) {
+    if write_mdast_type_data_inline(arena, node_type, type_data, out) {
         return;
     }
 
@@ -389,9 +393,7 @@ fn serialize_hast_node_inline(
 
     // Every typed tail (element, MDX JSX, single-value) is generated from the
     // registry; what's left falls back to a generic length-prefixed blob.
-    if crate::hast::generated::walk_type_data::write_hast_type_data_inline(
-        arena, node_type, type_data, out,
-    ) {
+    if write_hast_type_data_inline(arena, node_type, type_data, out) {
         return;
     }
 
@@ -401,13 +403,14 @@ fn serialize_hast_node_inline(
 
 #[cfg(test)]
 mod tests {
+    use satteri_arena::{ArenaBuilder, NodePosition};
+
     use super::*;
-    use satteri_arena::ArenaBuilder;
 
     #[test]
     fn write_str16_clamps_oversized_strings_at_a_char_boundary() {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(0);
+        b.open_node(0);
         // 65534 ASCII bytes, then a 2-byte char straddling the u16 limit.
         let big = format!("{}é{}", "a".repeat(65534), "b".repeat(100));
         let sref = b.alloc_string(&big);
@@ -450,9 +453,16 @@ mod tests {
     /// bytes 11..13, UTF-16 units 5..7 (❤️ and 😀 are 2 units each).
     fn build_multibyte_text_arena() -> Arena<Hast> {
         let mut b = ArenaBuilder::<Hast>::new("❤️😀 ab".to_string());
-        b.open_node_raw(0);
-        b.open_node_raw(2);
-        b.set_position_current(11, 13, 1, 6, 1, 8);
+        b.open_node(0);
+        b.open_node(2);
+        b.set_position_current(NodePosition {
+            start_offset: 11,
+            end_offset: 13,
+            start_line: 1,
+            start_column: 6,
+            end_line: 1,
+            end_column: 8,
+        });
         let val_ref = b.alloc_string("ab");
         let mut td = [0u8; 8];
         td[0..4].copy_from_slice(&val_ref.offset.to_le_bytes());
@@ -495,9 +505,9 @@ mod tests {
 
     fn build_hast_with_elements(tags: &[&str]) -> Arena<Hast> {
         let mut b = ArenaBuilder::<Hast>::new(String::new());
-        b.open_node_raw(0); // HAST root
+        b.open_node(0); // HAST root
         for tag in tags {
-            b.open_node_raw(1); // HAST element
+            b.open_node(1); // HAST element
             let tag_ref = b.alloc_string(tag);
             let mut type_data = Vec::with_capacity(16);
             type_data.extend_from_slice(&tag_ref.offset.to_le_bytes());
@@ -506,7 +516,7 @@ mod tests {
             type_data.extend_from_slice(&0u32.to_le_bytes()); // pad
             b.set_data_current(&type_data);
             // text child
-            b.open_node_raw(2);
+            b.open_node(2);
             let val_ref = b.alloc_string("hello");
             let mut td = [0u8; 8];
             td[0..4].copy_from_slice(&val_ref.offset.to_le_bytes());

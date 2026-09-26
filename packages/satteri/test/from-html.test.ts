@@ -4,7 +4,6 @@ import rehypeStringify from "rehype-stringify";
 import { htmlToHast } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 
-/** Collect element tag names in document order. */
 function tags(node: HastNode, out: string[] = []): string[] {
   if (node.type === "element") out.push(node.tagName);
   if ("children" in node && node.children) {
@@ -13,7 +12,6 @@ function tags(node: HastNode, out: string[] = []): string[] {
   return out;
 }
 
-/** Depth-first find the first element with the given tag name. */
 function findElement(node: HastNode, tagName: string): HastNode | undefined {
   if (node.type === "element" && node.tagName === tagName) return node;
   if ("children" in node && node.children) {
@@ -98,7 +96,6 @@ describe("htmlToHast", () => {
     const tree = htmlToHast(`<a href="/x" class="y" download tabindex="2">z</a>`);
     const a = findElement(tree, "a");
     assertNodeType(a, "element");
-    // `class` → `className` array, `download` → boolean, `tabindex` → number.
     expect(a.properties).toMatchObject({
       href: "/x",
       className: ["y"],
@@ -151,7 +148,6 @@ describe("htmlToHast", () => {
   });
 
   test("recovers from misnested tags", () => {
-    // The stray <b> is foster-parented out of the table.
     const tree = htmlToHast("<table><b>x</b><tr><td>y</td></tr></table>");
     expect(tags(tree)).toContain("tbody");
     expect(findElement(tree, "b")).toBeDefined();
@@ -159,8 +155,6 @@ describe("htmlToHast", () => {
   });
 
   test("preserves <template> content", () => {
-    // Template content is emitted as `children` rather than the standard hast
-    // `content` root, which the arena has no field for.
     const tree = htmlToHast("<template><p>hi</p></template>");
     const template = findElement(tree, "template");
     assertNodeType(template, "element");

@@ -1,6 +1,3 @@
-/** Decode an MDX JSX attribute from its wire `(kind, name, value)` — shared by
- *  the generated mdast tail decoder and the hast path so the kind dispatch lives
- *  once. Expression/spread values carry phantom-space sentinels, restored here. */
 import { restorePhantomSpaces } from "./phantom.js";
 import type { MdxJsxAttributeUnion } from "./types.js";
 

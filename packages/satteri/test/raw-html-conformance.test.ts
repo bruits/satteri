@@ -7,19 +7,6 @@ import rehypeStringify from "rehype-stringify";
 import { markdownToHast } from "../src/index.js";
 import type { HastNode } from "../src/hast/hast-materializer.js";
 
-/**
- * Conformance suite for the `rawHtml` feature (the `rehype-raw` equivalent).
- *
- * Each input is run through both:
- *  - Sätteri: `markdownToHast(md, { features: { rawHtml: true } })`
- *  - unified: remark-parse → remark-rehype (allowDangerousHtml) → rehype-raw
- *
- * and compared two ways: serialized HTML (via rehype-stringify) and the hast
- * tree itself (structure + normalized properties, positions stripped). The
- * inputs are chosen so Sätteri's baseline Markdown→hast already matches
- * remark-rehype's; the feature under test is the raw-HTML reparsing.
- */
-
 const reference = unified()
   .use(remarkParse)
   .use(remarkRehype, { allowDangerousHtml: true })
@@ -34,7 +21,6 @@ const stringify = (tree: HastNode): string =>
     .use(rehypeStringify)
     .stringify(tree as never);
 
-/** Keep only structural fields so trees compare regardless of positions/internals. */
 function clean(node: HastNode): unknown {
   const out: Record<string, unknown> = { type: node.type };
   if (node.type === "element") {
@@ -64,7 +50,6 @@ const cases: Array<{ name: string; md: string }> = [
   { name: "table with implied tbody", md: `<table><tr><td>y</td></tr></table>` },
   { name: "void + boolean attrs", md: `<input type="checkbox" checked>` },
   { name: "heading then raw", md: `# Hi\n\n<p class="x">para</p>` },
-  // Boolean coercion: true only for empty or name-matching values.
   { name: "boolean with false value", md: `<input disabled="false">` },
   { name: "boolean with zero value", md: `<input checked="0">` },
   { name: "boolean repeating its name", md: `<option selected="selected">x</option>` },
@@ -78,7 +63,6 @@ const cases: Array<{ name: string; md: string }> = [
     name: "boolean-ish values stay strings",
     md: `<div contenteditable="true" draggable="false" spellcheck aria-hidden="true">x</div>`,
   },
-  // Number coercion follows JavaScript Number() semantics.
   { name: "number simple", md: `<img width="3">` },
   { name: "number float", md: `<img width="3.5">` },
   { name: "number exponent", md: `<img width="1e3">` },
@@ -94,19 +78,16 @@ const cases: Array<{ name: string; md: string }> = [
   { name: "number empty stays string", md: `<img width="">` },
   { name: "negative tabindex", md: `<div tabindex="-1">x</div>` },
   { name: "aria number", md: `<div aria-valuenow="5">x</div>` },
-  // List coercion.
   { name: "space-separated with mixed whitespace", md: `<div class="a\tb\nc  d ">x</div>` },
   { name: "space-separated empty", md: `<div class="">x</div>` },
   { name: "comma-separated with spaces", md: `<input accept=".png, .jpg">` },
   { name: "comma-separated trailing comma", md: `<input accept=".png,">` },
   { name: "comma-separated interior empty item", md: `<input accept=".png,,.jpg">` },
   { name: "coords items become numbers", md: `<area coords="1,2, 3">` },
-  // data-* and unknown attributes.
   { name: "data attribute with digit segment", md: `<div data-x-1="y">z</div>` },
   { name: "data attribute multi segment", md: `<div data-a-b-c="1">x</div>` },
   { name: "bare data attribute", md: `<div data-foo>x</div>` },
   { name: "unknown attributes pass through", md: `<div foo="bar" my-attr="1">x</div>` },
-  // SVG schema.
   {
     name: "svg attributes keep casing",
     md: `<svg viewBox="0 0 10 10"><path fill-rule="evenodd" stroke-width="2"/></svg>`,
@@ -120,8 +101,6 @@ const cases: Array<{ name: string; md: string }> = [
     name: "svg xlink sprite",
     md: `<svg xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="#icon" xml:lang="en" foo:bar="x"/></svg>`,
   },
-  // Structure: context-sensitive elements outside their usual homes survive
-  // (the fragment parses in a template context).
   { name: "bare td", md: `<td headers=" h1  h2 ">x</td>` },
   { name: "bare tr", md: `<tr><td>a</td><td>b</td></tr>` },
   { name: "bare thead", md: `<thead><tr><th>h</th></tr></thead>` },

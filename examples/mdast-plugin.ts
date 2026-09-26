@@ -1,6 +1,5 @@
 import { markdownToHtml, defineMdastPlugin } from "satteri";
 
-// Replace emoji shortcodes in text nodes
 const emojis = defineMdastPlugin({
   name: "emojis",
   text(node, ctx) {
@@ -10,7 +9,6 @@ const emojis = defineMdastPlugin({
   },
 });
 
-// Unwrap images from paragraphs (like remark-unwrap-images)
 const unwrapImages = defineMdastPlugin({
   name: "unwrap-images",
   paragraph(node) {

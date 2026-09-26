@@ -235,6 +235,73 @@ pre#demo-highlight code {
 .prose h3 {
   font-weight: 600;
 }
+.prose :is(h1, h2, h3, h4, h5, h6) {
+  position: relative;
+  scroll-margin-top: 2.2rem;
+}
+.prose .docs-heading-anchor {
+  position: absolute;
+  inset-inline-start: -1.5rem;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  color: var(--color-tertiary);
+  opacity: 1;
+  text-decoration: none;
+  transform: translateY(-50%);
+  transition: opacity 0.15s;
+}
+.prose .docs-heading-anchor:hover,
+.prose :is(h1, h2, h3, h4, h5, h6):focus-within .docs-heading-anchor {
+  color: var(--color-ink);
+  opacity: 1;
+}
+.prose .docs-heading-anchor:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+@media (hover: hover) {
+  .prose .docs-heading-anchor {
+    opacity: 0;
+  }
+  .prose :is(h1, h2, h3, h4, h5, h6):hover .docs-heading-anchor {
+    opacity: 1;
+  }
+}
+.prose .docs-heading-symbol {
+  font-size: 0.8em;
+  line-height: 1;
+}
+.prose .docs-heading-anchor .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 767px) {
+  .prose :is(h1, h2, h3, h4, h5, h6) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    scroll-margin-top: 4.5rem;
+  }
+  .prose .docs-heading-anchor {
+    position: static;
+    order: 1;
+    padding: 0;
+    margin-inline-start: 0.25em;
+    transform: none;
+    vertical-align: baseline;
+  }
+}
 .prose ul {
   padding-left: 1.4em;
   list-style: disc;

@@ -302,8 +302,6 @@ describe("Math HAST conformance", () => {
   });
 });
 
-// Verified against remark-math configured the same way so future drift on
-// either side surfaces here.
 describe("Math singleDollarTextMath:false conformance (vs remark-math)", () => {
   test("currency prose keeps dollars literal", () => {
     assertNoSingleDollarMathMdastConformance("the deficit grew from $50 to $100 billion");
@@ -348,8 +346,6 @@ describe("Math singleDollarTextMath:false conformance (vs remark-math)", () => {
   });
 });
 
-// A math span's leading/trailing line ending is stripped like a space, and a
-// lone `\r` ends a line just as `\n` does.
 describe("Math MDAST conformance: line endings around a span", () => {
   const FLAVORS: [string, string][] = [
     ["LF", "\n"],

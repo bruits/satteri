@@ -1,9 +1,11 @@
 //! Codec helpers for HAST type-specific data encoding/decoding.
 //!
 //! Element type_data layout:
+//! ```text
 //!   [tag_name: StringRef(8B)][prop_count: u32(4B)][_pad: u32(4B)] = 16-byte header
 //!   then prop_count * PropertyEntry (20 bytes each):
 //!     [name: StringRef(8B)][value_type: u8(1B)][_pad: [u8;3](3B)][value: StringRef(8B)]
+//! ```
 //!
 //! Text/Comment/Raw type_data: just StringRef (8 bytes).
 

@@ -24,9 +24,6 @@ const asyncHast = defineHastPlugin({
   },
 });
 
-// `ResolveInput` matches factories structurally. A factory taking a ctx is not
-// assignable to `() => infer Def`, so if that pattern loses its parameters the
-// async plugin behind it goes unseen and these flip to `false`.
 const ctxFactoryAsync = markdownToHtml("x", {
   mdastPlugins: [(ctx: PluginFactoryContext) => (ctx.sourceFormat === "mdx" ? asyncMdast : null)],
 });
@@ -47,12 +44,9 @@ const nestedCtxFactoryAsync = markdownToHtml("x", {
 });
 export type _NestedCtxFactoryAsync = Expect<IsPromise<typeof nestedCtxFactoryAsync>>;
 
-// A zero-argument factory keeps working, and keeps narrowing.
 const legacyFactoryAsync = markdownToHtml("x", { mdastPlugins: [() => asyncMdast] });
 export type _LegacyFactoryAsync = Expect<IsPromise<typeof legacyFactoryAsync>>;
 
-// The other direction: nothing async in the list must stay synchronous, so the
-// fix above cannot pass by making everything a Promise.
 const ctxFactorySync = markdownToHtml("x", {
   mdastPlugins: [(ctx: PluginFactoryContext) => (ctx.source ? syncMdast : null)],
 });
@@ -67,13 +61,11 @@ export type _SkipOnlySync = ExpectFalse<IsPromise<typeof skipOnly>>;
 const plainSync = markdownToHtml("x", { mdastPlugins: [syncMdast] });
 export type _PlainSync = ExpectFalse<IsPromise<typeof plainSync>>;
 
-// Skip values must be accepted wherever an entry is, including from a factory.
 markdownToHtml("x", {
   mdastPlugins: [null, undefined, false, syncMdast, [null, syncMdast], () => undefined],
   hastPlugins: [false, () => null],
 });
 
-// The ctx is read-only enough to be useful without a cast.
 markdownToHtml("x", {
   mdastPlugins: [
     (ctx: PluginFactoryContext) => {
@@ -86,7 +78,6 @@ markdownToHtml("x", {
   ],
 });
 
-// Readonly from the start: relaxing it later is additive, adding it is not.
 markdownToHtml("x", {
   mdastPlugins: [
     (ctx: PluginFactoryContext) => {
@@ -103,10 +94,8 @@ markdownToHtml("x", {
   ],
 });
 
-// A factory may take no parameter at all.
 markdownToHtml("x", { mdastPlugins: [() => syncMdast] });
 
-// On its own, a factory's ctx is contextually typed and needs no annotation.
 markdownToHtml("x", {
   mdastPlugins: [({ sourceFormat }) => (sourceFormat === "mdx" ? syncMdast : null)],
 });

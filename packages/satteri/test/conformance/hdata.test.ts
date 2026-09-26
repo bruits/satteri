@@ -11,17 +11,10 @@ import { markdownToHtml, defineMdastPlugin } from "../../src/index.js";
 import type { MdastPluginInstance } from "../../src/mdast/mdast-visitor.js";
 import type { MdastNode } from "../../src/types.js";
 
-// Each test exercises an mdast plugin that mirrors the canonical remark idiom
-// of mutating `node.data.hName`/`hProperties`/`hChildren`. We run the same
-// transform through both pipelines and compare the resulting HTML so satteri
-// stays observably identical to remark-rehype's `applyData` semantics.
-
 type MdastPluginFactory = () => MdastPluginInstance;
 
 interface RemarkPluginAndSatteri {
-  /** Mutates the mdast tree in place — the remark idiom. */
   remark: (tree: MdastRoot) => void;
-  /** Equivalent satteri plugin shape. */
   satteri: MdastPluginFactory;
 }
 
@@ -45,9 +38,7 @@ function referenceHtml(md: string, plugin: RemarkPluginAndSatteri["remark"]): st
   return normalize(String(processor.processSync(md)));
 }
 
-// The plugin is built dynamically (computed visitor key), so its type is the
-// wide `MdastPluginInstance` and `markdownToHtml` can't prove the run is sync.
-// We `await` the maybe-async result rather than asserting it.
+// Computed visitor keys erase sync-return inference, so await the potentially async result.
 async function satteriHtml(md: string, plugin: MdastPluginFactory): Promise<string> {
   const { html } = await markdownToHtml(md, {
     features: { directive: true, gfm: true, frontmatter: false, math: false },
@@ -70,9 +61,6 @@ async function assertHtmlMatches(md: string, plugin: RemarkPluginAndSatteri): Pr
   const got = await satteriHtml(md, plugin.satteri);
   expect(got).toBe(ref);
 }
-
-// Helpers that do the same thing on both sides for the common case where the
-// mdast plugin only writes data fields.
 
 interface DataPatch {
   hName?: string;
@@ -286,8 +274,6 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 
   test("hProperties null strips an existing override", () => {
-    // First add then remove on a paragraph: end state should match the no-op
-    // case — vanilla `<p>`.
     return assertHtmlMatches("plain", {
       remark: mutateOnRemark((n) => n.type === "paragraph", {
         hProperties: { className: null as unknown as string[] },
@@ -335,19 +321,13 @@ describe("data.hName / hProperties / hChildren conformance vs remark-rehype", ()
   });
 });
 
-// Hints set on a *freshly emitted* node — the canonical upstream-Starlight
-// `remarkAsides` idiom. The case `setProperty` can't cover at all, since the
-// node didn't exist before the plugin ran.
-
 interface DataHints {
   hName?: string;
   hProperties?: Record<string, unknown>;
   hChildren?: ElementContent[];
 }
 
-// Single laundering boundary for the asides shape: the mdast type spec
-// forbids `Paragraph` as `Paragraph["children"]`, but a paragraph rendered as
-// `<aside>` wrapping further paragraphs is exactly what we're testing.
+// An aside-rendering paragraph may contain paragraphs even though the MDAST type forbids them.
 function mkParagraph(data: DataHints, children: readonly MdastNodes[]): MdastNodes {
   return { type: "paragraph", data, children: [...children] } as unknown as MdastNodes;
 }

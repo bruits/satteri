@@ -1,16 +1,3 @@
-// Distilled from a hand-crafted GFM autolink differential matrix (3,234 cases,
-// families A–L) run against `remark-parse` + `remark-gfm`. Every case kept here is
-// one the committed suite did not already exercise, and one whose behaviour no
-// other kept case repeats: where the matrix enumerated a rule over a vocabulary,
-// only the members that sit on a boundary of that rule survive.
-//
-// Each row carries the URLs satteri must produce, so a row that stops linking
-// (or starts linking something new) fails on its own terms and not only through
-// the tree comparison.
-//
-// This half covers autolinks in context: the constructs that contain them, the
-// constructs they collide with, line endings, and bracket state.
-
 import { describe, test, expect } from "vitest";
 import {
   assertExtMdastConformance,
@@ -24,12 +11,7 @@ import {
 } from "./helpers.js";
 import type { UrlNode } from "./helpers.js";
 
-// Family D: containing constructs. One case per construct, with a second inner
-// only where the inner changes the answer.
-//
-// The two `_`-delimited rows wrap an email whose local part starts with `_`, so the
-// opening delimiter and the local part compete for the same character.
-describe("family D: containing constructs — emphasis", () => {
+describe("containing constructs — emphasis", () => {
   test.each([
     ["*www.example.com*\n", ["http://www.example.com"]],
     ["**www.example.com**\n", ["http://www.example.com"]],
@@ -44,7 +26,7 @@ describe("family D: containing constructs — emphasis", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — code spans", () => {
+describe("containing constructs — code spans", () => {
   test.each([
     ["`www.example.com`\n", []],
     ["``www.example.com``\n", []],
@@ -54,7 +36,7 @@ describe("family D: containing constructs — code spans", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — links and images", () => {
+describe("containing constructs — links and images", () => {
   test.each([
     ["[www.example.com](/dest)\n", ["/dest"]],
     ["[a](www.example.com)\n", ["www.example.com"]],
@@ -72,7 +54,7 @@ describe("family D: containing constructs — links and images", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — the `](URL)x` overrun", () => {
+describe("containing constructs — the `](URL)x` overrun", () => {
   test.each([
     ["[a](www.example.com)x\n", ["www.example.com"]],
     ["[a](/d)www.example.com\n", ["/d", "http://www.example.com"]],
@@ -84,7 +66,7 @@ describe("family D: containing constructs — the `](URL)x` overrun", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — headings", () => {
+describe("containing constructs — headings", () => {
   test.each([
     ["# www.example.com\n", ["http://www.example.com"]],
     ["### www.example.com ###\n", ["http://www.example.com"]],
@@ -93,7 +75,7 @@ describe("family D: containing constructs — headings", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — blockquotes", () => {
+describe("containing constructs — blockquotes", () => {
   test.each([
     ["> www.example.com\n", ["http://www.example.com"]],
     [">www.example.com\n", ["http://www.example.com"]],
@@ -103,7 +85,7 @@ describe("family D: containing constructs — blockquotes", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — lists", () => {
+describe("containing constructs — lists", () => {
   test.each([
     ["- www.example.com\n", ["http://www.example.com"]],
     ["1. www.example.com\n", ["http://www.example.com"]],
@@ -112,7 +94,7 @@ describe("family D: containing constructs — lists", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — tables", () => {
+describe("containing constructs — tables", () => {
   test.each([
     ["| a |\n| - |\n| www.example.com |\n", ["http://www.example.com"]],
     ["| www.example.com | b |\n| - | - |\n| c | d |\n", ["http://www.example.com"]],
@@ -125,7 +107,7 @@ describe("family D: containing constructs — tables", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — footnotes", () => {
+describe("containing constructs — footnotes", () => {
   test.each([
     ["a[^1]\n\n[^1]: www.example.com\n", ["http://www.example.com"]],
     ["a[^www.example.com]\n\n[^www.example.com]: x\n", []],
@@ -134,7 +116,7 @@ describe("family D: containing constructs — footnotes", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — HTML", () => {
+describe("containing constructs — HTML", () => {
   test.each([
     ["<b>www.example.com</b>\n", ["http://www.example.com"]],
     ["a <b> www.example.com\n", ["http://www.example.com"]],
@@ -146,7 +128,7 @@ describe("family D: containing constructs — HTML", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — CommonMark autolinks", () => {
+describe("containing constructs — CommonMark autolinks", () => {
   test.each([
     ["<www.example.com>\n", ["http://www.example.com"]],
     ["<user@example.com>\n", ["mailto:user@example.com"]],
@@ -155,7 +137,7 @@ describe("family D: containing constructs — CommonMark autolinks", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — code blocks", () => {
+describe("containing constructs — code blocks", () => {
   test.each([
     ["    www.example.com\n", []],
     ["```\nwww.example.com\n```\n", []],
@@ -164,7 +146,7 @@ describe("family D: containing constructs — code blocks", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — block boundaries", () => {
+describe("containing constructs — block boundaries", () => {
   test.each([
     ["www.example.com\n\n---\n", ["http://www.example.com"]],
     ["---\nwww.example.com\n", ["http://www.example.com"]],
@@ -173,7 +155,7 @@ describe("family D: containing constructs — block boundaries", () => {
   ])("%j", conforms);
 });
 
-describe("family D: containing constructs — math", () => {
+describe("containing constructs — math", () => {
   test.each([
     ["$www.example.com$\n", []],
     ["$$www.example.com$$\n", []],
@@ -186,8 +168,7 @@ describe("family D: containing constructs — math", () => {
   });
 });
 
-// Family E: shapes where an autolink meets another construct.
-describe("family E: adjacent autolinks", () => {
+describe("adjacent autolinks", () => {
   test.each([
     ["www.a.com www.b.com", ["http://www.a.com", "http://www.b.com"]],
     ["www.a.comwww.b.com", ["http://www.a.comwww.b.com"]],
@@ -202,7 +183,7 @@ describe("family E: adjacent autolinks", () => {
   ])("%j", conforms);
 });
 
-describe("family E: touching construct delimiters", () => {
+describe("touching construct delimiters", () => {
   test.each([
     ["*www.a.com*www.b.com*", ["http://www.a.com*www.b.com"]],
     ["www.a.com*www.b.com", ["http://www.a.com*www.b.com"]],
@@ -214,7 +195,7 @@ describe("family E: touching construct delimiters", () => {
   ])("%j", conforms);
 });
 
-describe("family E: brackets around a trigger", () => {
+describe("brackets around a trigger", () => {
   test.each([
     ["[www.example.com", ["http://www.example.com"]],
     ["[[www.example.com", ["http://www.example.com"]],
@@ -230,7 +211,7 @@ describe("family E: brackets around a trigger", () => {
   ])("%j", conforms);
 });
 
-describe("family E: trigger casing on the bracket-blocked path", () => {
+describe("trigger casing on the bracket-blocked path", () => {
   test.each([
     ["[WWW.EXAMPLE.COM", ["http://WWW.EXAMPLE.COM"]],
     ["[Www.Example.Com", ["http://Www.Example.Com"]],
@@ -243,7 +224,7 @@ describe("family E: trigger casing on the bracket-blocked path", () => {
   ])("%j", conforms);
 });
 
-describe("family E: escapes", () => {
+describe("escapes", () => {
   test.each([
     ["\\www.example.com", ["http://www.example.com"]],
     ["\\[www.example.com", ["http://www.example.com"]],
@@ -263,7 +244,7 @@ describe("family E: escapes", () => {
   ])("%j", conforms);
 });
 
-describe("family E: character references", () => {
+describe("character references", () => {
   test.each([
     ["&#104;ttp://example.com", ["http://example.com"]],
     ["&#119;ww.example.com", ["http://www.example.com"]],
@@ -280,7 +261,7 @@ describe("family E: character references", () => {
   ])("%j", conforms);
 });
 
-describe("family E: link destinations", () => {
+describe("link destinations", () => {
   test.each([
     ["[a](http://x.y)b", ["http://x.y"]],
     ["[a](www.x.y)b", ["www.x.y"]],
@@ -298,9 +279,7 @@ describe("family E: link destinations", () => {
   ])("%j", conforms);
 });
 
-// The rest of the deferred-splice family is in link-edge-cases.test.ts; these
-// are the shapes it does not carry.
-describe("family E: the deferred splice", () => {
+describe("the deferred splice", () => {
   test.each([
     ["[a] www.x.y\\`code`", ["http://www.x.y\\`code`"]],
     ["<a> www.x.y\\<b>", ["http://www.x.y\\"]],
@@ -309,8 +288,7 @@ describe("family E: the deferred splice", () => {
   ])("%j", conforms);
 });
 
-// Family F: line endings.
-describe("family F: line endings", () => {
+describe("line endings", () => {
   test.each([
     ["www.example.com\r\n", ["http://www.example.com"]],
     ["x\r\nwww.example.com\r\n", ["http://www.example.com"]],
@@ -322,9 +300,7 @@ describe("family F: line endings", () => {
   ])("%j", conforms);
 });
 
-// Family I: constructs that shift offsets before the link, including the ones
-// that push it onto the find-and-replace path.
-describe("family I: position stress", () => {
+describe("position stress", () => {
   test.each([
     ["你好 www.example.com", ["http://www.example.com"]],
     ["你好[www.example.com", ["http://www.example.com"]],
@@ -349,12 +325,7 @@ describe("family I: position stress", () => {
   ])("%j", conforms);
 });
 
-// Family K covers bracket state and the deferred-autolink decision: a closed `[…]`
-// stops blocking a later trigger even when it resolved to nothing, so the URL
-// before it must not run on. The separator decides whether the second trigger is
-// reachable at all, so the rows below are the label/separator/trigger
-// combinations that answer differently, not the full cross-product.
-describe("family K: bracket balance — a label that never blocked", () => {
+describe("bracket balance — a label that never blocked", () => {
   test.each([
     ["[a]www.b.com\n", ["http://www.b.com"]],
     ["[a]_u@b.com\n", ["mailto:_u@b.com"]],
@@ -371,7 +342,7 @@ describe("family K: bracket balance — a label that never blocked", () => {
   ])("%j", conforms);
 });
 
-describe("family K: bracket balance — an unbalanced opener still blocks", () => {
+describe("bracket balance — an unbalanced opener still blocks", () => {
   test.each([
     ["[awww.b.com\n", []],
     ["[au@b.com\n", ["mailto:au@b.com"]],
@@ -400,7 +371,7 @@ describe("family K: bracket balance — an unbalanced opener still blocks", () =
   ])("%j", conforms);
 });
 
-describe("family K: bracket balance — a label ending in a trigger", () => {
+describe("bracket balance — a label ending in a trigger", () => {
   test.each([
     ["[www.a.com] www.b.com\n", ["http://www.a.com", "http://www.b.com"]],
     ["[www.a.com] _u@b.com\n", ["http://www.a.com", "mailto:_u@b.com"]],
@@ -429,7 +400,7 @@ describe("family K: bracket balance — a label ending in a trigger", () => {
   ])("%j", conforms);
 });
 
-describe("family K: a closed label and a second trigger", () => {
+describe("a closed label and a second trigger", () => {
   test.each([
     [
       "[www.a.com]www.b.com www.c.com\n",
@@ -450,8 +421,7 @@ describe("family K: a closed label and a second trigger", () => {
   ])("%j", conforms);
 });
 
-// Family L: reference definitions and footnote definitions.
-describe("family L: definitions", () => {
+describe("definitions", () => {
   test.each([
     ["[a]: /x 'www.example.com'\n\n[a]\n", []],
     ["[www.example.com]: /x\n\n[www.example.com]\n", []],
@@ -464,11 +434,8 @@ describe("family L: definitions", () => {
   ])("%j", conforms);
 });
 
-// Deliberate divergence (see website/content/docs/divergences.md):
-// mdast-util-gfm-task-list-item pulls a task item's paragraph start back over
-// the checkbox only when the paragraph's first child is a text node. An
-// autolink first child is the case the doc's examples do not name.
-describe("family D: paragraph start in a task list item (documented divergence)", () => {
+// remark includes a task checkbox in paragraph positions only when the first child is text.
+describe("paragraph start in a task list item (documented divergence)", () => {
   test("an autolink first child keeps satteri's uniform start", () => {
     const md = "- [ ] www.example.com\n";
     const paragraphStart = (tree: unknown): number => {
@@ -485,9 +452,6 @@ describe("family D: paragraph start in a task list item (documented divergence)"
   });
 });
 
-// The deferred path reaches the same construct-ordering decision through
-// `candidate_floor` rather than through the committed path's skip, and the
-// block containers each re-enter the scanner at a content start.
 describe("email and `www` triggering at the same offset, per container", () => {
   test.each([
     "[a] www.x.ya@b.cd",

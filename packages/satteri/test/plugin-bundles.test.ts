@@ -8,7 +8,11 @@ import {
 } from "../src/index.js";
 import type { MarkdownToHtmlResult, MdastPluginEntry } from "../src/index.js";
 
-/** Records its name on each heading, making run order observable. */
+const cyclic = (): unknown[] => [cyclic];
+
+const nest = (depth: number, plugin: MdastPluginEntry): MdastPluginEntry =>
+  depth === 0 ? plugin : () => nest(depth - 1, plugin);
+
 function recordMdast(order: string[], name: string) {
   return defineMdastPlugin({
     name,
@@ -18,7 +22,6 @@ function recordMdast(order: string[], name: string) {
   });
 }
 
-/** HAST counterpart of `recordMdast`. */
 function recordHast(order: string[], name: string) {
   return defineHastPlugin({
     name,
@@ -187,8 +190,6 @@ describe("nested plugin lists", () => {
     expect(order).toEqual(["a", "b", "c", "d"]);
   });
 
-  // The point of allowing it: plugins in one bundle can share state that resets
-  // per document, which an array of separate factories cannot express.
   test("a factory returning a bundle gives its plugins shared per-compile state", () => {
     const snapshots: string[][] = [];
     const preset = () => {
@@ -217,8 +218,6 @@ describe("nested plugin lists", () => {
   });
 
   test("a factory that returns itself is rejected, naming the option", () => {
-    const cyclic = (): unknown[] => [cyclic];
-
     expect(() => markdownToHtml("# T", { mdastPlugins: [cyclic as never] })).toThrowError(
       /^mdastPlugins: plugin factory nesting is too deep/,
     );
@@ -229,8 +228,6 @@ describe("nested plugin lists", () => {
 
   test("factories nest ten deep, and the eleventh is rejected", () => {
     const order: string[] = [];
-    const nest = (depth: number, plugin: MdastPluginEntry): MdastPluginEntry =>
-      depth === 0 ? plugin : () => nest(depth - 1, plugin);
 
     markdownToHtml("# T", { mdastPlugins: [nest(10, recordMdast(order, "deep"))] });
     expect(order).toEqual(["deep"]);
@@ -344,8 +341,6 @@ describe("nested plugin lists", () => {
     expect(order).toEqual(["first", "remove", "hast"]);
   });
 
-  // markdownToJs shares its pipeline with mdxToJs but parses as Markdown, so
-  // the bundle has to survive the non-MDX branch too.
   test("a bundled plugin sees Markdown, not MDX, in markdownToJs", () => {
     const seen: string[] = [];
     const collect = defineMdastPlugin({
@@ -361,8 +356,6 @@ describe("nested plugin lists", () => {
     expect(code).toContain("not an expression");
   });
 
-  // Ordering across a bundle boundary has to hold for custom nodes too: the
-  // second plugin only sees the node because the first one already ran.
   test("a bundled plugin sees the custom node an earlier one in the bundle created", () => {
     const seen: string[] = [];
     const create = defineMdastPlugin({

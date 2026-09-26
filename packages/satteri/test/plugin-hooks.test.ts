@@ -241,7 +241,6 @@ describe("mdast lifecycle hooks", () => {
     });
     expect(code).toContain('import { Aside } from "./aside.js"');
     expect(code).toContain('export const meta = { layout: "docs" }');
-    // The injected import participates in compilation, so <Aside> is a real binding.
     expect(code).toContain("_jsx(Aside,");
     expect(code).not.toContain("_missingMdxReference");
     expect(code.indexOf("import { Aside }")).toBeLessThan(code.indexOf("export const meta"));

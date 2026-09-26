@@ -1,14 +1,3 @@
-// Round-trip oracle for the structural op-stream — the correctness guard now
-// that the op-stream is the only declarative encoding (the JSON/JsNode path is
-// gone). Each case replaces the document's single paragraph (or `p` element)
-// with a declarative tree, compiles it to the op-stream, applies it, then
-// materializes the result and asserts it deep-equals the *input* tree. This
-// pins the real contract end to end — what a plugin declares is what the arena
-// reads back — rather than only that two encoders agreed. Synthesized
-// replacement nodes carry no source position, so the readback matches the
-// input literal exactly. The payload-type byte is asserted so a regression that
-// silently failed to compile would surface as an error, not a vacuous pass.
-
 import { test, expect } from "vitest";
 import {
   createMdastHandle,
@@ -40,8 +29,6 @@ interface MdastCaseOpts {
   features?: Features;
 }
 
-/** Replace the doc's single paragraph with `replacement` through the op-stream,
- *  then materialize and return the replaced subtree (root's only child). */
 function roundTripMdast(replacement: MdastNode, opts: MdastCaseOpts): MdastNode {
   const md = "Hello *world*.\n";
   const handle = opts.mdx ? createMdxMdastHandle(md) : createMdastHandle(md, opts.features);
@@ -143,7 +130,6 @@ test("mdast round-trip: table with align (including none)", () => {
 });
 
 test("mdast round-trip: descriptionDetails with spread=false (tight)", () => {
-  // The MDAST_CUSTOM_SAMPLES entry covers spread=true; pin the tight path too.
   expectMdastRoundTrip({
     type: "descriptionDetails",
     spread: false,
@@ -178,8 +164,6 @@ test("mdast round-trip: containerDirective with attributes", () => {
   );
 });
 
-// `_mdxExplicitJsx` is a private marker not declared on the Data interfaces;
-// declare it locally so the node literal stays fully typed (no casts).
 interface ExplicitJsxData extends MdxJsxFlowElementData {
   _mdxExplicitJsx: true;
 }
@@ -234,16 +218,13 @@ test("mdast round-trip: empty strings ride OP_STR", () => {
     children: [
       { type: "text", value: "" },
       { type: "inlineCode", value: "" },
-      // A null title is skipped on encode and reads back null, so the
-      // empty-url link round-trips exactly.
       { type: "link", url: "", title: null, children: [{ type: "text", value: "x" }] },
     ],
   } satisfies MdastNode);
 });
 
 test("mdast round-trip: depth and start at their stored maxima", () => {
-  // Deliberately outside `Heading["depth"]`'s 1-6 literal union: the wire
-  // stores a u8 and the 255 boundary is exactly what's pinned here.
+  // Use the u8 wire boundary even though MDAST heading depths are restricted to 1–6.
   expectMdastRoundTrip(rawMdast({ type: "heading", depth: 255, children: [] }));
   expectMdastRoundTrip({
     type: "list",
@@ -308,7 +289,6 @@ test("hast round-trip: element with properties and nested children", () => {
       },
     },
   });
-  // The hast visitor applies its commands internally.
   visitHastHandle(handle, plugin, resolveSubscriptions(plugin), getHandleSource(handle), undefined);
   const tree = materializeHastTree(new HastReader(serializeHandle(handle)));
   expect(tree.children).toHaveLength(1);
@@ -333,8 +313,6 @@ test("hast round-trip: non-ASCII property and MDX JSX attribute values", () => {
   expect(roundTripHast(jsx, true)).toEqual(jsx);
 });
 
-/** Replace the doc's single `p` element with `replacement` through the
- *  op-stream, then materialize and return the replaced subtree. */
 function roundTripHast(replacement: HastNode, mdx = false): HastNode {
   const md = "Hello world.\n";
   const handle = mdx ? createMdxHastHandle(md) : createHastHandle(md);
@@ -353,23 +331,13 @@ function roundTripHast(replacement: HastNode, mdx = false): HastNode {
   return tree.children[0] as HastNode;
 }
 
-// Footgun backstop: every variable-length `custom` node type must survive an
-// op-stream round-trip. A forgotten or drifted encode/decode arm yields empty
-// type_data, so the type's distinguishing field goes missing and the matching
-// case fails here. The coverage loop fails if a new custom type is added to the
-// registry without a sample, forcing a test that would catch the same bug.
-
 type Check = (n: Record<string, unknown>) => void;
 
-/** Widen a node to its raw field map for the sample checks; the unions'
- *  interfaces have no index signature, so the direct cast is rejected. */
 function fields(n: object): Record<string, unknown> {
   return n as Record<string, unknown>;
 }
 
-/** Build a deliberately out-of-spec node for wire-boundary fixtures (e.g. a
- *  depth past Heading's 1-6, or text directly under a listItem); the encoder
- *  must round-trip the bytes verbatim regardless of mdast validity. */
+// Invalid MDAST fixtures verify wire encoding independently of AST schema validation.
 function rawMdast(node: object): MdastNode {
   return node as MdastNode;
 }
@@ -377,8 +345,7 @@ function rawMdast(node: object): MdastNode {
 const MDAST_CUSTOM_SAMPLES: Record<string, { node: MdastNode; opts: MdastCaseOpts; check: Check }> =
   {
     list: {
-      // Deliberately type-loose: text directly under listItem is not valid
-      // flow content, but the encoder must still round-trip it verbatim.
+      // Invalid child placement must still round-trip through the wire encoder.
       node: rawMdast({
         type: "list",
         ordered: true,

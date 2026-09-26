@@ -34,9 +34,6 @@ describe("fuzz: MDX eval conformance", () => {
         writeFileSync(issuesPath, report + "\n");
       }
 
-      // All kinds count as failures, including `both-error-disagree`
-      // (mdx-js rejects, satteri evaluates) — those are real coverage
-      // gaps unless explicitly listed in `KNOWN_MDX_EVAL_DIVERGENCES`.
       const inputs = unique.map((i) => `${i.kind}: ${JSON.stringify(i.input)}`);
       expect
         .soft(unique, `Found ${unique.length} MDX conformance issue(s):\n${inputs.join("\n")}`)

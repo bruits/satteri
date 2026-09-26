@@ -61,6 +61,9 @@ pub(crate) struct Tree<T> {
 }
 
 impl<T: Default> Tree<T> {
+    pub(crate) fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
     // Indices start at one, so we place a dummy value at index zero.
     // The alternative would be subtracting one from every TreeIndex
     // every time we convert it to usize to index our nodes.
@@ -196,6 +199,24 @@ impl<T: Default> Tree<T> {
 }
 
 impl Tree<Item> {
+    /// Cold construction must account for children encoded in compact items.
+    /// Pooled documents retain their capacity and do not need this scan.
+    pub(crate) fn semantic_capacity_hint(&self) -> usize {
+        self.node_count()
+            + self
+                .nodes
+                .iter()
+                .filter(|node| {
+                    matches!(
+                        node.item.body,
+                        ItemBody::SourceStrong
+                            | ItemBody::LiteralLink { .. }
+                            | ItemBody::LiteralAutolink(_)
+                    )
+                })
+                .count()
+    }
+
     /// Truncates the preceding siblings to the given end position,
     /// and returns the new current node.
     pub(crate) fn truncate_siblings(&mut self, end_byte_ix: usize) {

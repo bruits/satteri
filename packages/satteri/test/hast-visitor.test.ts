@@ -27,15 +27,12 @@ function setup(source = "# Hello\n\nWorld") {
   return { handle, source: src };
 }
 
-// Basic visitor behaviour (handle-based)
-
 describe("visitHastHandle - basic behaviour", () => {
   test("visitor with no subscriptions produces no mutations", () => {
     const { handle, source } = setup();
     const plugin = {};
     const subs = resolveSubscriptions(plugin);
     visitHastHandle(handle, plugin, subs, source, undefined);
-    // No crash, no mutations, handle still renders
     expect(renderHandle(handle)).toContain("Hello");
   });
 
@@ -132,8 +129,6 @@ describe("resolveSubscriptions - malformed filtered visitors", () => {
   });
 });
 
-// Mutations (end-to-end via handle)
-
 describe("visitHastHandle - mutations", () => {
   test("returning a node from element() creates a replace mutation", () => {
     const { handle, source } = setup();
@@ -161,9 +156,6 @@ describe("visitHastHandle - mutations", () => {
     expect(html).not.toContain("<h1>");
   });
 
-  // Regression: returning a wrapper whose children include the visited node
-  // re-parents it. The node is spliced back by reference, and the rebuild must
-  // splice it once rather than re-applying the replacement and recursing.
   test("element() may re-parent the visited node into its replacement", () => {
     const { handle, source } = setup("# Hello");
     const plugin = defineHastPlugin({
@@ -186,8 +178,6 @@ describe("visitHastHandle - mutations", () => {
     expect(html.trim()).toBe("<div><h1>Hello</h1></div>");
   });
 
-  // The real Starlight autolink-headings shape: wrap each heading in a <div>
-  // holding the original heading plus a freshly built anchor-link sibling.
   test("element() re-parents the visited node alongside a freshly built sibling", () => {
     const { handle, source } = setup("# Hello");
     const plugin = defineHastPlugin({
@@ -309,9 +299,6 @@ describe("visitHastHandle - mutations", () => {
     expect(html).toContain("<div><h1>Hello</h1></div>");
   });
 
-  // A wrapper may declare its own children; they are kept as siblings after the
-  // wrapped node. The Starlight autolink shape (heading + anchor link),
-  // expressed without re-parenting the visited node into a replacement.
   test("context.wrapNode() keeps the wrapper's own children after the wrapped node", () => {
     const { handle, source } = setup("# Hello");
     const plugin = {
@@ -445,7 +432,6 @@ describe("visitHastHandle - mutations", () => {
     }
   });
 
-  // Runtime companion to the compile-time parity check in hast-visitor.ts.
   test("context.wrapNode() accepts every parent-capable HAST type", () => {
     const wrappers: HastParentContent[] = [
       { type: "element", tagName: "div", properties: {}, children: [] },
@@ -491,7 +477,6 @@ describe("visitHastHandle - mutations", () => {
     expect(wrapped?.type === "element" && wrapped.tagName).toBe("h1");
   });
 
-  // Regression #182: a leaf wrapper silently dropped or displaced the node.
   test("context.wrapNode() rejects a leaf node as the wrapper", () => {
     const { handle, source } = setup("# Hello");
     const plugin = {
@@ -816,8 +801,6 @@ describe("visitHastHandle - mutations", () => {
           const parent = ctx.parent(node);
           if (!parent) throw new Error("h1 must have a parent");
           const h1 = parent.children.find((c) => c.type === "element") as Element;
-          // containers are frozen eagerly at construction; reading children
-          // just materializes more frozen nodes
           const text = h1.children[0] as Text;
           expect(Object.isFrozen(parent)).toBe(true);
           expect(Object.isFrozen(h1)).toBe(true);
@@ -872,7 +855,6 @@ describe("visitHastHandle - mutations", () => {
           expect(() => {
             (children as ElementContent[]).push({ type: "text", value: "junk" });
           }).toThrow(TypeError);
-          // memoized: a later read returns the same, untouched array
           expect(parent.children).toBe(children);
           expect(parent.children.length).toBe(1);
         },
@@ -892,14 +874,12 @@ describe("visitHastHandle - mutations", () => {
         filter: ["em"],
         visit(node, ctx) {
           ran = true;
-          // materialized without touching its children
           const parent = ctx.parent(node) as Element;
           expect(parent.tagName).toBe("p");
           expect(Object.isFrozen(parent)).toBe(true);
           expect(() => {
             (parent as { tagName: string }).tagName = "div";
           }).toThrow(TypeError);
-          // children still materialize fine afterwards
           expect(parent.children.some((c) => c.type === "element")).toBe(true);
         },
       },
@@ -920,18 +900,14 @@ describe("visitHastHandle - mutations", () => {
           ran = true;
           if (node.type !== "element") throw new Error("expected element");
           const [first, em] = node.children as [Text, Element];
-          // cold stub, field not yet read: getter-only accessor rejects writes
           expect(() => {
             (first as { value: string }).value = "X";
           }).toThrow(TypeError);
-          // first read forces the pass snapshot and memoizes the value...
           expect(first.value).toBe("a ");
-          // ...and the memoized field is still read-only
           expect(() => {
             (first as { value: string }).value = "Y";
           }).toThrow(TypeError);
           expect(first.value).toBe("a ");
-          // hot path: children materialize as deep-frozen real nodes
           const emText = em.children[0] as Text;
           expect(Object.isFrozen(emText)).toBe(true);
           expect(() => {
@@ -1250,8 +1226,6 @@ describe("visitHastHandle - mutations", () => {
   });
 });
 
-// Diagnostics
-
 describe("visitHastHandle - diagnostics", () => {
   test("context.report() collects diagnostics", () => {
     const { handle, source } = setup();
@@ -1273,12 +1247,9 @@ describe("visitHastHandle - diagnostics", () => {
   });
 });
 
-// Context properties
-
 describe("visitHastHandle - context", () => {
   test("ctx.source and ctx.fileURL are available", () => {
     const handle = createHastHandle("# Hello\n\nWorld");
-    // Pass the original source explicitly (the real pipeline does this)
     const originalSource = "# Hello\n\nWorld";
     let capturedSource = "";
     let capturedFileURL: URL | undefined;
@@ -1358,8 +1329,6 @@ describe("visitHastHandle - context", () => {
   });
 });
 
-// Materialize (still uses buffer path, independent of visitor changes)
-
 describe("materializeHastTree", () => {
   test("materializes a tree from a HAST buffer", () => {
     const handle = createHastHandle("# Hello\n\nWorld");
@@ -1402,8 +1371,6 @@ describe("materializeHastTree", () => {
     }
   });
 });
-
-// MDX JSX attributes on HAST nodes
 
 function findHastNode(node: HastNode, type: string): HastNode | null {
   if (node.type === type) return node;
@@ -1536,10 +1503,6 @@ describe("mdxjsEsm visitor", () => {
   });
 });
 
-// Lazy-children lifecycle: matched nodes resolve `.children` from a snapshot
-// taken during the pass; after the pass the arena may be rebuilt with new ids,
-// so a first-time read must fail loudly instead of mapping stale ids.
-
 describe("visitHastHandle - lazy children lifecycle", () => {
   test("async visitor reads `.children` in a deferred callback", async () => {
     const { handle, source } = setup();
@@ -1612,7 +1575,7 @@ describe("visitHastHandle - lazy children lifecycle", () => {
       },
     });
     visitHastHandle(handle, pinAndRetain, resolveSubscriptions(pinAndRetain), source, undefined);
-    // Rewriting the retained paragraph itself makes the assertion discriminating: live re-read = "Changed"
+    // Change the retained node itself so an accidental live reread produces a different value.
     const mutator = defineHastPlugin({
       name: "rewrite-p",
       element: {
@@ -1653,7 +1616,7 @@ describe("visitHastHandle - lazy children lifecycle", () => {
       element: {
         filter: ["h1"],
         visit(node) {
-          void node.children; // materialize (and cache) during the pass
+          void node.children;
           retained = node;
         },
       },
@@ -1704,10 +1667,6 @@ describe("visitHastHandle - text value swap", () => {
   });
 });
 
-// Ref-stub children: `.children` of a matched node returns id+type stubs that
-// defer the arena snapshot until a real field is read, so passthrough children
-// compile to one-word refs without ever materializing.
-
 describe("visitHastHandle - child stubs", () => {
   test("passthrough replaceNode keeps children rendering correctly", () => {
     const { handle, source } = setup("[hello **bold**](/x)");
@@ -1736,9 +1695,9 @@ describe("visitHastHandle - child stubs", () => {
       element: {
         filter: ["ul"],
         visit(node, ctx) {
-          // `type` is eager on stubs: this filter needs no materialization.
           const items = node.children.filter((c) => c.type === "element");
-          ctx.setProperty(node, "children", items.reverse());
+          items.reverse();
+          ctx.setProperty(node, "children", items);
         },
       },
     });
@@ -1758,8 +1717,6 @@ describe("visitHastHandle - child stubs", () => {
         filter: ["h1"],
         visit(node, ctx) {
           retained = node.children;
-          // A mutation: the arena rebuilds after the pass, so stale ids must
-          // refuse to materialize.
           ctx.setProperty(node, "id", "x");
         },
       },
@@ -1784,8 +1741,6 @@ describe("visitHastHandle - child stubs", () => {
       },
     });
     visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
-    // The wrapped dropHandle bumps the handle epoch, so a deferred snapshot of
-    // the dropped arena fails with the retention error, not a RangeError.
     dropHandle(handle);
     const stub = retained[0]!;
     expect(stub.type).toBe("text");
@@ -1801,7 +1756,6 @@ describe("visitHastHandle - child stubs", () => {
         visit(node, ctx) {
           const first = node.children[0]!;
           if (first.type !== "text") return;
-          // A ref here would splice the original text and drop the edit.
           const copy = { ...first, value: "Edited" };
           ctx.replaceNode(node, {
             type: "element",
@@ -1824,8 +1778,6 @@ test("a spread copy of a matched node is new content, not a reused ref", () => {
     element: {
       filter: ["h1"],
       visit(node, ctx) {
-        // Spread copies must not inherit arena identity: an inherited id would
-        // splice the original node and silently drop the copy's edits.
         const copy = { ...node, tagName: "h2", properties: {}, children: [...node.children] };
         ctx.replaceNode(node, {
           type: "element",
@@ -1850,8 +1802,6 @@ test("a bare spread replacement keeps properties and children without re-specify
     element: {
       filter: ["a"],
       visit(node, ctx) {
-        // `properties`/`children` are own enumerable getters on matched nodes,
-        // so a plain spread must carry them — and none of the internals.
         const copy = { ...node, tagName: "h2" };
         copyKeys = Object.keys(copy);
         ctx.replaceNode(node, copy);
@@ -1905,8 +1855,6 @@ test("a bare root as replacement content fails loudly", () => {
   ).toThrow(/cannot encode replacement content of type "root"/);
 });
 
-// ctx.parent()/indexOf(): same contract as the MDAST side (visitor.test.ts).
-
 test("parent climbs from a nested element to the root", () => {
   const { handle, source } = setup("> quoted *text*\n");
   const chain: string[] = [];
@@ -1915,7 +1863,6 @@ test("parent climbs from a nested element to the root", () => {
     element: {
       filter: ["em"],
       visit(node, ctx) {
-        // Climbing reassigns from a possibly-root parent, so the loop var widens.
         let p: HastNode | undefined = ctx.parent(node);
         while (p) {
           chain.push(p.type === "element" ? p.tagName : p.type);
@@ -1970,7 +1917,6 @@ test("indexOf counts the whitespace text nodes between blocks", () => {
     },
   });
   visitHastHandle(handle, plugin, resolveSubscriptions(plugin), source, undefined);
-  // Root children are [p, "\n", p]: the second paragraph sits at index 2.
   expect(indexes).toEqual([0, undefined, 2, undefined]);
 });
 

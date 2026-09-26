@@ -1,23 +1,44 @@
 //! Integration tests for raw buffer export.
 
-use satteri_arena::{ArenaBuilder, Mdast, NODE_STRUCT_SIZE};
+use satteri_arena::{ArenaBuilder, Mdast, NODE_STRUCT_SIZE, NodePosition};
 use satteri_ast::mdast::{MdastNodeType, encode_heading_data};
 
 fn build_test_arena() -> satteri_arena::Arena<Mdast> {
     let mut builder = ArenaBuilder::<Mdast>::new("# Hello\n\nParagraph.".to_string());
 
     builder.open_node(MdastNodeType::Root as u8);
-    builder.set_position_current(0, 20, 1, 1, 3, 11);
+    builder.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: 20,
+        start_line: 1,
+        start_column: 1,
+        end_line: 3,
+        end_column: 11,
+    });
 
     let heading = builder.open_node(MdastNodeType::Heading as u8);
-    builder.set_position_current(0, 7, 1, 1, 1, 8);
+    builder.set_position_current(NodePosition {
+        start_offset: 0,
+        end_offset: 7,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 8,
+    });
     builder.set_data_current(&encode_heading_data(1));
 
     builder.add_leaf(MdastNodeType::Text as u8); // "Hello"
     builder.close_node(); // heading
 
     let _para = builder.open_node(MdastNodeType::Paragraph as u8);
-    builder.set_position_current(9, 19, 3, 1, 3, 11);
+    builder.set_position_current(NodePosition {
+        start_offset: 9,
+        end_offset: 19,
+        start_line: 3,
+        start_column: 1,
+        end_line: 3,
+        end_column: 11,
+    });
     builder.add_leaf(MdastNodeType::Text as u8); // "Paragraph."
     builder.close_node(); // paragraph
 

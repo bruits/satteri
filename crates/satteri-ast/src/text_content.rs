@@ -73,8 +73,8 @@ mod tests {
     #[test]
     fn single_text_node() {
         let mut b = ArenaBuilder::<Mdast>::new(String::new());
-        b.open_node_raw(0);
-        b.open_node_raw(2);
+        b.open_node(0);
+        b.open_node(2);
         let td = make_text_type_data(&mut b, "hello");
         b.set_data_current(&td);
         b.close_node();
@@ -87,16 +87,16 @@ mod tests {
     #[test]
     fn nested_elements_with_text() {
         let mut b = ArenaBuilder::<Mdast>::new(String::new());
-        b.open_node_raw(0);
-        b.open_node_raw(1);
+        b.open_node(0);
+        b.open_node(1);
         {
-            b.open_node_raw(2);
+            b.open_node(2);
             let td = make_text_type_data(&mut b, "Hello ");
             b.set_data_current(&td);
             b.close_node();
-            b.open_node_raw(1);
+            b.open_node(1);
             {
-                b.open_node_raw(2);
+                b.open_node(2);
                 let td = make_text_type_data(&mut b, "world");
                 b.set_data_current(&td);
                 b.close_node();
@@ -112,20 +112,20 @@ mod tests {
     #[test]
     fn skips_non_text_nodes() {
         let mut b = ArenaBuilder::<Mdast>::new(String::new());
-        b.open_node_raw(0);
-        b.open_node_raw(2);
+        b.open_node(0);
+        b.open_node(2);
         let td = make_text_type_data(&mut b, "a");
         b.set_data_current(&td);
         b.close_node();
-        b.open_node_raw(3);
+        b.open_node(3);
         let td = make_text_type_data(&mut b, "COMMENT");
         b.set_data_current(&td);
         b.close_node();
-        b.open_node_raw(5);
+        b.open_node(5);
         let td = make_text_type_data(&mut b, "RAW");
         b.set_data_current(&td);
         b.close_node();
-        b.open_node_raw(2);
+        b.open_node(2);
         let td = make_text_type_data(&mut b, "b");
         b.set_data_current(&td);
         b.close_node();
@@ -137,12 +137,12 @@ mod tests {
     #[test]
     fn includes_expression_nodes() {
         let mut b = ArenaBuilder::<Mdast>::new(String::new());
-        b.open_node_raw(0);
-        b.open_node_raw(2);
+        b.open_node(0);
+        b.open_node(2);
         let td = make_text_type_data(&mut b, "Hello ");
         b.set_data_current(&td);
         b.close_node();
-        b.open_node_raw(14);
+        b.open_node(14);
         let td = make_text_type_data(&mut b, "frontmatter.name");
         b.set_data_current(&td);
         b.close_node();
@@ -158,8 +158,8 @@ mod tests {
     fn value_at_nonzero_offset() {
         // Simulate a node where the StringRef is at offset 8 (like mdast Image alt)
         let mut b = ArenaBuilder::<Mdast>::new(String::new());
-        b.open_node_raw(0);
-        b.open_node_raw(42); // fake node type
+        b.open_node(0);
+        b.open_node(42); // fake node type
         let sr = b.alloc_string("alt text");
         let mut td = vec![0u8; 16]; // 8 bytes padding + 8 bytes StringRef
         td[8..12].copy_from_slice(&sr.offset.to_le_bytes());

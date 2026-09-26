@@ -1,28 +1,17 @@
-/**
- * Shared machinery for walk-path child stubs (see `hast/child-stub.ts` and
- * `mdast/child-stub.ts`): lightweight stand-ins that carry arena id + type
- * eagerly and defer the full-arena snapshot until a plugin reads a real field.
- * Passthrough children (the common replaceNode shape) thus compile to one-word
- * refs without ever serializing the arena.
- */
+// Child stubs let unchanged children pass through as arena references without serializing the tree.
 
-/** The slice of `LazyChildResolver` a stub getter needs. */
 interface StubResolver {
   materializeOne(id: number): object;
 }
 
-/** Stub host shape: `_id`/`_resolver` are enumerable plain fields for
- *  construction speed; spread/identity rules are enforced by the visitors' `nid()`. */
 interface StubHost {
   _resolver: StubResolver;
   _id: number;
 }
 
-/** Stub → materialized arena node, filled on the first real-field read. */
 const REAL_NODES = new WeakMap<object, Record<string, unknown>>();
 
-/** One shared memoizing getter per field name, so stubs install shared
- *  descriptor templates instead of allocating per-field closures per node. */
+// Share getters across stubs to avoid allocating a closure for every field of every node.
 const FIELD_GETTERS = new Map<string, (this: StubHost) => unknown>();
 
 function fieldGetter(key: string): (this: StubHost) => unknown {
@@ -35,7 +24,7 @@ function fieldGetter(key: string): (this: StubHost) => unknown {
         REAL_NODES.set(this, real);
       }
       const value = real[key];
-      // Mirrors the deep-frozen node it forwards to; nothing redefines a stub field after this.
+      // Stub fields must remain as immutable as the frozen nodes they expose.
       Object.defineProperty(this, key, {
         value,
         writable: false,
@@ -51,14 +40,7 @@ function fieldGetter(key: string): (this: StubHost) => unknown {
 
 export type StubDescriptorEntry = readonly [string, PropertyDescriptor];
 
-/**
- * Descriptor entries for one node type's stub fields. Own enumerable getters
- * so a spread copy carries correct values. `position`/`data` ride on every
- * stub; they may yield `undefined` where a materialized node omits the key —
- * accepted drift, invisible to `toEqual`. Installed one `defineProperty` at a
- * time: `Object.defineProperties` re-validates the whole map per call and
- * costs nearly double.
- */
+// Individual defineProperty calls avoid the descriptor-map validation cost of defineProperties.
 export function stubDescriptors(fields: readonly string[]): readonly StubDescriptorEntry[] {
   const entries: StubDescriptorEntry[] = [];
   for (const key of [...fields, "position", "data"]) {
@@ -78,8 +60,7 @@ export function installStubDescriptors(
   }
 }
 
-/** Node tags are dense small ints, so the per-child stub loop indexes flat
- *  arrays instead of paying Map/dictionary lookups. */
+// Dense node tags allow array indexing on the per-child hot path.
 export function flatByTag<T>(table: Readonly<Record<number, T>>): readonly (T | undefined)[] {
   const flat: (T | undefined)[] = [];
   for (const tag of Object.keys(table)) {

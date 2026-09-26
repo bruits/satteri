@@ -15,7 +15,7 @@ import {
 import { visitMdastHandle, resolveMdastSubscriptions } from "../../src/mdast/mdast-visitor.js";
 import { defineMdastPlugin } from "../../src/plugin.js";
 
-// The default remark harness has no definition lists; remark-definition-list is the reference.
+// Use remark-definition-list because the default reference parser has no definition-list support.
 
 function html(md: string, features: Record<string, unknown> = { definitionList: true }): string {
   const r = markdownToHtml(md, { features });
@@ -48,10 +48,6 @@ describe("definition list: HTML", () => {
 });
 
 describe("definition list: per-dd tight/loose (matches mdast-util-definition-list)", () => {
-  // Each definition is loose (its <dd> keeps an inner <p>) iff a blank line
-  // directly precedes its own `:` marker, the same per-dd rule as
-  // mdast-util-definition-list, verified against that library.
-
   test("blank before the 2nd definition makes only the 2nd loose", () => {
     const out = html("Apple\n:   Red.\n\n:   Green.\n");
     expect(out).toContain("<dd>Red.</dd>");
@@ -145,7 +141,6 @@ describe("definition list: block content, nesting & positions", () => {
   });
 
   test("several term lines become separate <dt> / descriptionTerm nodes", () => {
-    // Matches mdast-util-definition-list: each term line is its own term.
     const out = html("Term 1\nTerm 2\n:   Shared.\n");
     expect(out).toContain("<dt>Term 1</dt>");
     expect(out).toContain("<dt>Term 2</dt>");
@@ -192,7 +187,7 @@ describe("definition list: block content, nesting & positions", () => {
         },
       }),
     );
-    expect(dls).toBe(2); // outer + nested
+    expect(dls).toBe(2);
     expect(terms).toEqual(["Outer", "Inner"]);
   });
 
@@ -213,7 +208,6 @@ describe("definition list: block content, nesting & positions", () => {
         },
       }),
     );
-    // dt is the term on line 1; dd is the definition on line 2; dl spans both.
     expect(pos.dt?.start).toMatchObject({ line: 1, column: 1 });
     expect(pos.dt?.end.line).toBe(1);
     expect(pos.dd?.start.line).toBe(2);
@@ -221,7 +215,6 @@ describe("definition list: block content, nesting & positions", () => {
     expect(pos.dd!.end.column).toBeGreaterThan(pos.dd!.start.column);
     expect(pos.dl?.start).toMatchObject({ line: 1, column: 1 });
     expect(pos.dl?.end.line).toBe(2);
-    // The dl's end offset must reach at least its last child's end.
     expect(pos.dl!.end.offset).toBeGreaterThanOrEqual(pos.dd!.end.offset!);
   });
 
@@ -239,7 +232,6 @@ describe("definition list: block content, nesting & positions", () => {
       commandBuffer: Uint8Array;
     };
     const hast = applyCommandsAndConvertToHastHandle(handle, result.commandBuffer);
-    // Tight by default (<dd>Red.</dd>); the mutation makes it loose (wrapped <p>).
     expect(renderHandle(hast)).toContain("<dd>\n<p>Red.</p>\n</dd>");
   });
 
@@ -272,8 +264,6 @@ describe("definition list: disabled by default (never break userspace)", () => {
 });
 
 describe("definition list: the marker requires whitespace (matches reference)", () => {
-  // pandoc / mdast-util-definition-list require whitespace after the colon.
-  // A colon glued to content is not a marker, so the line stays a paragraph.
   test("a colon glued to content (`:tada:`) is not a marker", () => {
     const out = html("Apple\n:tada:\n");
     expect(out).not.toContain("<dl>");
@@ -305,8 +295,6 @@ describe("definition list: the marker requires whitespace (matches reference)", 
 });
 
 describe("definition list: term–definition association (matches reference)", () => {
-  // A term may be one blank line from its definition (loose); two or more
-  // blank lines disconnect them, matching pandoc / mdast-util-definition-list.
   test("one blank line keeps the term (loose definition)", () => {
     const out = html("Apple\n\n:   Red.\n");
     expect(out).toContain("<dt>Apple</dt>");
@@ -437,7 +425,6 @@ describe("definition list: MDX", () => {
       features: { definitionList: true },
     });
     if (r instanceof Promise) throw new Error("expected sync");
-    // The `<dl>` reaches the compiled component and the JSX tag survives.
     expect(r.code).toContain('"dl"');
     expect(r.code).toContain("Foo");
   });
@@ -464,8 +451,6 @@ describe("definition list: MDX", () => {
 
   test("a definition list nested in a <dd> compiles under MDX", () => {
     const code = mdxCode("Outer\n\n:   Inner\n    :   Deep.\n");
-    // The nested structure survives compilation: dl/dt/dd tags and the inner
-    // term/definition text all reach the compiled output.
     expect(code).toContain('"dl"');
     expect(code).toContain('"dd"');
     expect(code).toContain("Outer");
@@ -521,7 +506,10 @@ function satteriMdastShape(md: string): NodeShape[] {
 }
 
 function collapseTagWhitespace(h: string): string {
-  return h.replace(/>\s+</g, "><").replace(/\s+<\//g, "</").trim();
+  return h
+    .replace(/>\s+</g, "><")
+    .replace(/\s+<\//g, "</")
+    .trim();
 }
 
 describe("definition list: conformance vs remark-definition-list", () => {
@@ -560,7 +548,7 @@ describe("definition list: conformance vs remark-definition-list", () => {
     }
   });
 
-  // Deliberate divergence: multi-block definitions render loose per pandoc, not newline-joined.
+  // Multi-block definitions are deliberately loose, following Pandoc.
   test("multi-block tight definition renders loose, unlike the reference", () => {
     const md = "Apple\n:   Red.\n\n    More red.\n";
     expect(collapseTagWhitespace(html(md))).toBe(

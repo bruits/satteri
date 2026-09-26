@@ -9,12 +9,9 @@ import type {
 } from "mdast";
 import type { Literal as HastLiteral, Nodes as HastStdNodes } from "hast";
 
-// Re-export standard position types from unist.
 export type { Position, Point } from "unist";
 
-// Re-export MDX types from our local definitions.
-// Importing these also registers them in the mdast/hast content maps
-// via module augmentation (declare module 'mdast' / 'hast').
+// These exports also register MDX nodes in the mdast/hast content maps.
 export type {
   MdxJsxFlowElement,
   MdxJsxTextElement,
@@ -31,7 +28,6 @@ export type {
   MdxjsEsmHast,
 } from "./mdx-types.js";
 
-// Re-export directive types (also augments the mdast content maps).
 export type {
   ContainerDirective,
   LeafDirective,
@@ -128,10 +124,6 @@ declare module "mdast" {
   }
 }
 
-// The standard mdx packages augment hast with mdxJsxFlowElement/
-// mdxJsxTextElement and mdxFlowExpression/mdxTextExpression. We only need
-// to register "raw" here since it has no standard package.
-
 export interface HastRaw extends HastLiteral {
   type: "raw";
 }
@@ -217,8 +209,21 @@ export interface BufferHeader {
   typeDataOffset: number;
   stringPoolLen: number;
   stringPoolOffset: number;
-  /** Number of nodes that carry an extra JSON `data` blob. */
   nodeDataCount: number;
   /** Offset of the node-data section: `[id u32][len u32][bytes...]` repeated. */
   nodeDataOffset: number;
+}
+
+/** @internal Derived reader state for the fused wire decode; `B`/`W` suffixes are byte vs u32-word units. */
+export interface ArenaWire {
+  u8: Uint8Array;
+  u32: Uint32Array;
+  nodesB: number;
+  nodesW: number;
+  strideB: number;
+  strideW: number;
+  childrenW: number;
+  typeDataB: number;
+  /** Refs arrive in UTF-16 units, so substring on the decoded pool is exact. */
+  pool: string;
 }

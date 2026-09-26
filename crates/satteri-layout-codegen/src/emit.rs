@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::schema::{
-    ArenaStruct, Js, Layout, Node, SetSlot, Slot, TailJs, TailLayout, Wire, WireTable,
+    ArenaStruct, Field, Js, Layout, Node, SetSlot, Slot, Tail, TailJs, TailLayout, Wire, WireTable,
 };
 
 const HEADER_RS: &str =
@@ -128,6 +128,118 @@ pub fn walk_rs(fn_name: &str, kind: &str, layouts: &[Layout], tails: &[TailLayou
         out.push_str("        }\n");
     }
     out.push_str("        _ => return false,\n    }\n    true\n}\n");
+    out
+}
+
+fn remap_arm(out: &mut String, layouts: &[Layout], tails: &[TailLayout]) {
+    for layout in layouts {
+        let refs: Vec<&Field> = layout
+            .fields
+            .iter()
+            .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
+            .collect();
+        if refs.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "        {} => {{", tag_pattern(&layout.tags));
+        for f in &refs {
+            let _ = writeln!(out, "            remap_ref(data, {}, remap);", f.offset);
+        }
+        out.push_str("        }\n");
+    }
+    for t in tails {
+        let tail = &t.tail;
+        let head_refs: Vec<&Field> = tail
+            .head
+            .iter()
+            .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
+            .collect();
+        let item_refs: Vec<&Field> = tail
+            .item
+            .iter()
+            .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
+            .collect();
+        if head_refs.is_empty() && item_refs.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "        {} => {{", tag_pattern(&t.tags));
+        for f in &head_refs {
+            let _ = writeln!(out, "            remap_ref(data, {}, remap);", f.offset);
+        }
+        if !item_refs.is_empty() {
+            let _ = writeln!(out, "            if data.len() >= {} {{", tail.items_offset);
+            let _ = writeln!(
+                out,
+                "                let stored = u32::from_le_bytes(data[{}..{}].try_into().unwrap()) as usize;",
+                tail.count_offset,
+                tail.count_offset + 4
+            );
+            let _ = writeln!(
+                out,
+                "                let count = stored.min((data.len() - {}) / {});",
+                tail.items_offset, tail.stride
+            );
+            out.push_str("                for i in 0..count {\n");
+            let _ = writeln!(
+                out,
+                "                    let base = {} + i * {};",
+                tail.items_offset, tail.stride
+            );
+            for f in &item_refs {
+                if f.offset == 0 {
+                    out.push_str("                    remap_ref(data, base, remap);\n");
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "                    remap_ref(data, base + {}, remap);",
+                        f.offset
+                    );
+                }
+            }
+            out.push_str("                }\n            }\n");
+        }
+        out.push_str("        }\n");
+    }
+}
+
+/// The serialize-time StringRef byte-to-UTF-16 remap over a wire `type_data` copy.
+pub fn remap_refs_rs(
+    mdast_layouts: &[Layout],
+    mdast_tails: &[TailLayout],
+    hast_layouts: &[Layout],
+    hast_tails: &[TailLayout],
+) -> String {
+    let mut out = String::from(HEADER_RS);
+    out.push_str(
+        "/// Both ends of a ref sit on char boundaries, so the UTF-16 remap is exact; absent optional fields are out of bounds and left untouched.\n\
+         fn remap_ref(data: &mut [u8], off: usize, remap: &mut dyn FnMut(u32) -> u32) {\n\
+         \x20   let Some(bytes) = data.get_mut(off..off + 8) else {\n\
+         \x20       return;\n\
+         \x20   };\n\
+         \x20   let start = u32::from_le_bytes(bytes[0..4].try_into().unwrap());\n\
+         \x20   let len = u32::from_le_bytes(bytes[4..8].try_into().unwrap());\n\
+         \x20   let new_start = remap(start);\n\
+         \x20   let new_len = remap(start + len) - new_start;\n\
+         \x20   bytes[0..4].copy_from_slice(&new_start.to_le_bytes());\n\
+         \x20   bytes[4..8].copy_from_slice(&new_len.to_le_bytes());\n\
+         }\n\n",
+    );
+    for (fn_name, layouts, tails) in [
+        ("remap_mdast_string_refs", mdast_layouts, mdast_tails),
+        ("remap_hast_string_refs", hast_layouts, hast_tails),
+    ] {
+        let _ = writeln!(
+            out,
+            "/// Remap every StringRef in one node's wire `type_data` blob.\n\
+             #[allow(clippy::manual_range_patterns)]\n\
+             pub(crate) fn {fn_name}(node_type: u8, data: &mut [u8], remap: &mut dyn FnMut(u32) -> u32) {{\n\
+             \x20   match node_type {{",
+        );
+        remap_arm(&mut out, layouts, tails);
+        out.push_str("        _ => {}\n    }\n}\n\n");
+    }
+    out.truncate(out.trim_end().len());
+    out.push('\n');
     out
 }
 
@@ -694,11 +806,18 @@ fn ts_field(f: &crate::schema::Field) -> String {
 /// node except `root`), and the `{prefix}_OPSTREAM_TYPES` replay set. With
 /// `variant_maps`, also the PascalCase `NodeType` / `NodeTypeName` maps that
 /// `mdast-reader.ts` re-exports.
+/// Which side of the schema's leaf/container partition a kind's read paths consume.
+pub enum Leafness {
+    Leaves(&'static [u8]),
+    Containers(&'static [u8]),
+}
+
 pub fn node_types_ts(
     nodes: &[Node],
     prefix: &str,
     opstream_excluded: &[&str],
     variant_maps: bool,
+    leafness: Leafness,
 ) -> String {
     for ex in opstream_excluded {
         assert!(
@@ -707,13 +826,11 @@ pub fn node_types_ts(
         );
     }
     let mut out = String::from(HEADER_TS);
-    out.push_str("/** Node-type tag -> canonical AST name. */\n");
     out.push_str("export const TYPE_NAMES: Readonly<Record<number, string>> = {\n");
     for node in nodes {
         let _ = writeln!(out, "  {}: {:?},", node.tag, node.name);
     }
     out.push_str("};\n\n");
-    out.push_str("/** Canonical AST name -> node-type tag. */\n");
     out.push_str("export const NAME_TO_TYPE: Readonly<Record<string, number>> = {\n");
     for node in nodes {
         let _ = writeln!(out, "  {:?}: {},", node.name, node.tag);
@@ -733,15 +850,11 @@ pub fn node_types_ts(
         }
         out.push_str("};\n\n");
     }
-    out.push_str("/** Names a plugin can subscribe to (every node except `root`). */\n");
     out.push_str("export const VISITOR_KEYS: ReadonlySet<string> = new Set([\n");
     for node in nodes.iter().filter(|n| n.name != "root") {
         let _ = writeln!(out, "  {:?},", node.name);
     }
     out.push_str("]);\n\n");
-    out.push_str("/** Name -> tag for the types the op-stream can encode; one lookup gates AND\n");
-    out.push_str(" *  resolves the emit-path tag. Excluded names (see `*_OPSTREAM_EXCLUDED` in\n");
-    out.push_str(" *  schema.rs) have no encoding — the visitor throws for them. */\n");
     let _ = writeln!(
         out,
         "export const {prefix}_OPSTREAM_TYPES: Readonly<Record<string, number>> = {{"
@@ -753,11 +866,6 @@ pub fn node_types_ts(
         let _ = writeln!(out, "  {}: {},", node.name, node.tag);
     }
     out.push_str("};\n\n");
-    out.push_str(
-        "/** Names of the variable-length `custom` node types (hand-written or\n\
-         \x20*  `Tail`-generated codec). The op-stream round-trip oracle asserts it covers\n\
-         \x20*  every one, so a forgotten or drifted encode/decode arm fails loudly. */\n",
-    );
     let _ = writeln!(
         out,
         "export const {prefix}_CUSTOM_TYPES: readonly string[] = ["
@@ -765,7 +873,32 @@ pub fn node_types_ts(
     for node in nodes.iter().filter(|n| n.custom) {
         let _ = writeln!(out, "  {:?},", node.name);
     }
-    out.push_str("];\n");
+    out.push_str("];\n\n");
+
+    let list = |tags: &[u8]| {
+        tags.iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // One orientation per kind, matching what the read paths consume; the full
+    // partition is still schema-validated by `validate_leafness`.
+    match leafness {
+        Leafness::Leaves(tags) => {
+            let _ = writeln!(
+                out,
+                "export const LEAF_TYPES: ReadonlySet<number> = new Set([{}]);",
+                list(tags)
+            );
+        }
+        Leafness::Containers(tags) => {
+            let _ = writeln!(
+                out,
+                "export const CONTAINER_TYPES: ReadonlySet<number> = new Set([{}]);",
+                list(tags)
+            );
+        }
+    }
     out
 }
 
@@ -786,8 +919,7 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
     out.push_str("import { ru16, ru32, rstr } from \"../../wire-read.js\";\n");
     out.push_str("import { restorePhantomSpaces } from \"../../phantom.js\";\n");
     out.push_str("import { decodeMdxJsxAttr } from \"../../mdx-attr.js\";\n");
-    out.push_str("import { decodeColumnAlign } from \"../column-align.js\";\n");
-    out.push_str("import type { MdastReader } from \"../mdast-reader.js\";\n\n");
+    out.push_str("import { decodeColumnAlign } from \"../column-align.js\";\n\n");
     out.push_str("type FieldKind = \"str16\" | \"str32\" | \"u8\";\n\n");
     out.push_str("interface LayoutField {\n");
     out.push_str("  readonly js: string;\n");
@@ -799,9 +931,6 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
     out.push_str("  readonly skip?: boolean;\n");
     out.push_str("  readonly phantom?: boolean;\n");
     out.push_str("}\n\n");
-    out.push_str(
-        "/** Walk-wire fields per node-type tag (see Rust `write_mdast_type_data_inline`). */\n",
-    );
     out.push_str("const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {\n");
     for layout in layouts {
         let fields = layout
@@ -816,8 +945,6 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
         }
     }
     out.push_str("};\n\n");
-    out.push_str("/** Materialized property names per tag (the non-skip `js` names above),\n");
-    out.push_str(" *  exported for the child-stub field tables. */\n");
     out.push_str(
         "export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {\n",
     );
@@ -834,12 +961,6 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
         }
     }
     out.push_str("};\n\n");
-    out.push_str(
-        "/** Walk-wire tail descriptors (a name head, then a counted item list) for\n\
-         \x20*  the variable-length attribute types the generic decoder below handles\n\
-         \x20*  without a hand-written case: `map` is a string key/value object\n\
-         \x20*  (directives), `jsx` a typed MDX-JSX attribute array. */\n",
-    );
     out.push_str("const MDAST_TAILS: Readonly<Record<number, TailDescriptor>> = {\n");
     for t in tails {
         let assembly = match t.tail.js {
@@ -881,14 +1002,447 @@ pub fn layout_ts(layouts: &[Layout], tails: &[TailLayout]) -> String {
         }
     }
     out.push_str("};\n\n");
-    out.push_str(DECODER_TS);
-    out.push_str(STORED_DECODER_TS);
+    out.push_str(DECODER_PRELUDE_TS);
+    out.push_str(&walk_plain_string_fast_path_ts(layouts));
+    out.push_str(DECODER_BODY_TS);
     out
 }
 
-/// The generic decoder is type-agnostic, so it is emitted verbatim — its only
-/// per-type input is `MDAST_LAYOUTS` above.
-const DECODER_TS: &str = r#"interface TailField {
+/// One wire-decode call per node for the fused tree materializers, emitted so the hand-written files stay at reader level.
+pub fn fused_wire_ts(mdast_nodes: &[Node], hast_nodes: &[Node]) -> String {
+    use crate::schema::ARENA_NODE_FIELDS;
+    let word = |name: &str| -> usize {
+        ARENA_NODE_FIELDS
+            .iter()
+            .find(|(f, _)| *f == name)
+            .expect("known ArenaNode field")
+            .1
+            / 4
+    };
+    let p = word("start_offset");
+    let pos = [
+        word("end_offset") - p,
+        word("start_line") - p,
+        word("start_column") - p,
+        word("end_line") - p,
+        word("end_column") - p,
+    ];
+
+    let mut enums: Vec<&'static [&'static str]> = Vec::new();
+    for node in mdast_nodes.iter().chain(hast_nodes) {
+        for field in node.fields {
+            if let Js::Enum(values) = field.js_kind
+                && !enums.contains(&values)
+            {
+                enums.push(values);
+            }
+        }
+    }
+
+    let mut out = String::from(HEADER_TS);
+    out.push_str(
+        "import type { Position } from \"unist\";\n\
+         import type { ArenaWire } from \"../types.js\";\n\
+         import type { HastProperty } from \"../hast/hast-reader.js\";\n\
+         import { decodeElementProp } from \"../hast/element-props.js\";\n\
+         import { restorePhantomSpaces } from \"../phantom.js\";\n\
+         import { W_START_OFFSET, W_DATA_LEN, W_DATA_OFFSET } from \"./arena-layout.js\";\n\n",
+    );
+    for (i, values) in enums.iter().enumerate() {
+        let list = values
+            .iter()
+            .map(|v| format!("{v:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "const FUSED_ENUM_{i} = [{list}] as const;");
+    }
+    if !enums.is_empty() {
+        out.push('\n');
+    }
+
+    for (fn_name, nodes) in [
+        ("readMdastWireNode", mdast_nodes),
+        ("readHastWireNode", hast_nodes),
+    ] {
+        out.push_str(&fused_node_fn(fn_name, nodes, &enums, &pos));
+    }
+    out.truncate(out.trim_end().len());
+    out.push('\n');
+    out
+}
+
+fn is_plain_fields(fields: &[Field]) -> bool {
+    let significant: Vec<&Field> = fields
+        .iter()
+        .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+        .collect();
+    let [field] = significant.as_slice() else {
+        return false;
+    };
+    field.offset == 0 && !field.phantom && matches!(field.js_kind, Js::Str)
+}
+
+/// Position install plus a per-tag straight-line field decode; `false` hands the tag
+/// to the caller's reader path (the user-defined node, struct scalars, non-element tails).
+fn fused_node_fn(
+    fn_name: &str,
+    nodes: &[Node],
+    enums: &[&'static [&'static str]],
+    pos: &[usize; 5],
+) -> String {
+    let mut field_groups: Vec<(Vec<u8>, &'static [Field])> = Vec::new();
+    let mut element_tags: Vec<u8> = Vec::new();
+    let mut element_tail: Option<Tail> = None;
+    let mut bare_tags: Vec<u8> = Vec::new();
+    for node in nodes {
+        // The user-defined node keeps its reader path: the hand-written
+        // decode renames its stored `name` to the open `node.type`.
+        if node.name == "custom" {
+            continue;
+        }
+        if let Some(tail) = node.tail {
+            if matches!(tail.js, Some(TailJs::ElementProps { .. })) {
+                element_tags.push(node.tag);
+                element_tail = Some(tail);
+            }
+            continue;
+        }
+        let significant = node
+            .fields
+            .iter()
+            .any(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip));
+        if significant {
+            match field_groups.iter_mut().find(|(_, f)| *f == node.fields) {
+                Some((tags, _)) => tags.push(node.tag),
+                None => field_groups.push((vec![node.tag], node.fields)),
+            }
+        } else if node.set_slots.is_empty() && !node.custom {
+            bare_tags.push(node.tag);
+        }
+    }
+    field_groups.sort_by_key(|(_, fields)| !is_plain_fields(fields));
+
+    let [end_off, start_line, start_col, end_line, end_col] = *pos;
+    let mut out = format!(
+        "export function {fn_name}(\n\
+         \x20 wire: ArenaWire,\n\
+         \x20 nodeId: number,\n\
+         \x20 nodeType: number,\n\
+         \x20 node: object,\n\
+         ): boolean {{\n\
+         \x20 const {{ u8, u32, pool }} = wire;\n\
+         \x20 const w = wire.nodesW + nodeId * wire.strideW;\n\
+         \x20 const wp = w + W_START_OFFSET;\n\
+         \x20 const startLine = u32[wp + {start_line}] ?? 0;\n\
+         \x20 if (startLine !== 0) {{\n\
+         \x20   (node as {{ position?: Position }}).position = {{\n\
+         \x20     start: {{ offset: u32[wp] ?? 0, line: startLine, column: u32[wp + {start_col}] ?? 0 }},\n\
+         \x20     end: {{ offset: u32[wp + {end_off}] ?? 0, line: u32[wp + {end_line}] ?? 0, column: u32[wp + {end_col}] ?? 0 }},\n\
+         \x20   }};\n\
+         \x20 }}\n\
+         \x20 const n = node as Record<string, unknown>;\n\
+         \x20 switch (nodeType) {{\n"
+    );
+
+    for (tags, fields) in &field_groups {
+        for tag in tags {
+            let _ = writeln!(out, "    case {tag}:");
+        }
+        out.push_str("    {\n");
+        out.push_str("      const dl = u32[w + W_DATA_LEN] ?? 0;\n");
+        out.push_str("      const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;\n");
+        for (i, field) in fields
+            .iter()
+            .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+            .enumerate()
+        {
+            out.push_str(&fused_field_stmt(field, i, enums));
+        }
+        out.push_str("      return true;\n    }\n");
+    }
+
+    if let Some(tail) = element_tail {
+        for tag in &element_tags {
+            let _ = writeln!(out, "    case {tag}:");
+        }
+        out.push_str(&fused_element_arm(&tail));
+    }
+
+    if !bare_tags.is_empty() {
+        for tag in &bare_tags {
+            let _ = writeln!(out, "    case {tag}:");
+        }
+        out.push_str("      return true;\n");
+    }
+
+    out.push_str("    default:\n      return false;\n  }\n}\n\n");
+    out
+}
+
+fn word_expr(base: &str, w: usize) -> String {
+    if w == 0 {
+        base.to_string()
+    } else {
+        format!("{base} + {w}")
+    }
+}
+
+fn fused_field_stmt(field: &Field, index: usize, enums: &[&'static [&'static str]]) -> String {
+    let js = field.js;
+    let off = field.offset;
+    if matches!(field.wire, Wire::U8) {
+        let d = field.u8_default;
+        let read = format!("dl > {off} ? (u8[(db << 2) + {off}] ?? {d}) : {d}");
+        return match field.js_kind {
+            Js::Enum(values) => {
+                let slot = enums.iter().position(|e| *e == values).unwrap_or(0);
+                format!(
+                    "      const b{index} = {read};\n      n.{js} = FUSED_ENUM_{slot}[b{index}] ?? FUSED_ENUM_{slot}[0];\n"
+                )
+            }
+            _ => format!("      n.{js} = {read};\n"),
+        };
+    }
+    let end = off + 8;
+    let idx0 = word_expr("db", off / 4);
+    let idx1 = word_expr("db", off / 4 + 1);
+    let head = format!("      const o{index} = u32[{idx0}] ?? 0;\n");
+    let sub = format!("pool.substring(o{index}, o{index} + (u32[{idx1}] ?? 0))");
+    let read = format!("dl >= {end} ? {sub} : \"\"");
+    let read = if field.phantom {
+        format!("restorePhantomSpaces({read})")
+    } else {
+        read
+    };
+    match field.js_kind {
+        Js::StrNull => format!(
+            "{head}      const s{index} = {read};\n      n.{js} = s{index} === \"\" ? null : s{index};\n"
+        ),
+        _ => format!("{head}      n.{js} = {read};\n"),
+    }
+}
+
+fn fused_element_arm(tail: &Tail) -> String {
+    let tag0 = word_expr("db", tail.head[0].offset / 4);
+    let tag1 = word_expr("db", tail.head[0].offset / 4 + 1);
+    let count_word = tail.count_offset / 4;
+    let items_word = tail.items_offset / 4;
+    let stride_words = tail.stride / 4;
+    let min_bytes = tail.items_offset;
+    let refs: Vec<&Field> = tail
+        .item
+        .iter()
+        .filter(|f| matches!(f.wire, Wire::Str16 | Wire::Str32))
+        .collect();
+    let name0 = word_expr("base", refs[0].offset / 4);
+    let name1 = word_expr("base", refs[0].offset / 4 + 1);
+    let value0 = word_expr("base", refs[1].offset / 4);
+    let value1 = word_expr("base", refs[1].offset / 4 + 1);
+    let kind_byte = tail
+        .item
+        .iter()
+        .find(|f| matches!(f.wire, Wire::U8))
+        .expect("element kind byte")
+        .offset;
+    format!(
+        "    {{\n\
+         \x20     const dl = u32[w + W_DATA_LEN] ?? 0;\n\
+         \x20     const db = (wire.typeDataB + (u32[w + W_DATA_OFFSET] ?? 0)) >> 2;\n\
+         \x20     let tagName = \"\";\n\
+         \x20     const properties: Record<string, HastProperty[\"value\"]> = {{}};\n\
+         \x20     if (dl >= {min_bytes}) {{\n\
+         \x20       const toff = u32[{tag0}] ?? 0;\n\
+         \x20       tagName = pool.substring(toff, toff + (u32[{tag1}] ?? 0));\n\
+         \x20       const count = u32[{count_expr}] ?? 0;\n\
+         \x20       for (let i = 0; i < count; i++) {{\n\
+         \x20         const base = db + {items_word} + i * {stride_words};\n\
+         \x20         const noff = u32[{name0}] ?? 0;\n\
+         \x20         const voff = u32[{value0}] ?? 0;\n\
+         \x20         properties[pool.substring(noff, noff + (u32[{name1}] ?? 0))] = decodeElementProp(\n\
+         \x20           u8[(base << 2) + {kind_byte}] ?? 0,\n\
+         \x20           pool.substring(voff, voff + (u32[{value1}] ?? 0)),\n\
+         \x20         );\n\
+         \x20       }}\n\
+         \x20     }}\n\
+         \x20     n.tagName = tagName;\n\
+         \x20     n.properties = properties;\n\
+         \x20     return true;\n\
+         \x20   }}\n",
+        count_expr = word_expr("db", count_word),
+    )
+}
+
+/// The TS decode twin of the generated Rust walk serializer (`hast/generated/walk_type_data.rs`): the hand-written visitor keeps node shaping and laziness, this owns the byte-walking.
+pub fn hast_walk_decode_ts(hast_layouts: &[Layout], hast_tails: &[TailLayout]) -> String {
+    let phantom_tags: Vec<u8> = hast_layouts
+        .iter()
+        .filter(|l| l.fields.iter().any(|f| f.phantom))
+        .flat_map(|l| l.tags.iter().copied())
+        .collect();
+    let phantom_cond = phantom_tags
+        .iter()
+        .map(|t| format!("nodeType === {t}"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+
+    let mut out = String::from(HEADER_TS);
+    out.push_str(
+        "import { rstr } from \"../../wire-read.js\";\n\
+         import { restorePhantomSpaces } from \"../../phantom.js\";\n\
+         import { decodeElementProp } from \"../element-props.js\";\n\
+         import { decodeMdxJsxAttr } from \"../../mdx-attr.js\";\n\
+         import type { MdxJsxAttributeUnion } from \"../../types.js\";\n\n",
+    );
+
+    out.push_str(
+        "export function readWalkElementTag(view: DataView, buf: Uint8Array, pos: number): string {\n\
+         \x20 return rstr(buf, pos + 2, view.getUint16(pos, true));\n\
+         }\n\n\
+         export function walkElementPropsAt(view: DataView, pos: number): number {\n\
+         \x20 return pos + 2 + view.getUint16(pos, true);\n\
+         }\n\n\
+         export function walkElementPropCount(view: DataView, propsAt: number): number {\n\
+         \x20 return view.getUint16(propsAt, true);\n\
+         }\n\n",
+    );
+
+    let element = hast_tails
+        .iter()
+        .find(|t| matches!(t.tail.js, Some(TailJs::ElementProps { .. })))
+        .expect("hast element tail");
+    let _ = writeln!(
+        out,
+        "export function decodeWalkElementProps(\n\
+         \x20 view: DataView,\n\
+         \x20 buf: Uint8Array,\n\
+         \x20 pos: number,\n\
+         ): Record<string, string | number | boolean | (string | number)[]> {{\n\
+         \x20 const count = view.getUint16(pos, true);\n\
+         \x20 pos += 2;\n\
+         \x20 const properties: Record<string, string | number | boolean | (string | number)[]> = {{}};\n\
+         \x20 for (let i = 0; i < count; i++) {{"
+    );
+    out.push_str(&walk_entry_reads(&element.tail));
+    out.push_str(
+        "    properties[name] = decodeElementProp(kind, value);\n\
+         \x20 }\n\
+         \x20 return properties;\n\
+         }\n\n",
+    );
+
+    let _ = writeln!(
+        out,
+        "export function readWalkHastValue(\n\
+         \x20 view: DataView,\n\
+         \x20 buf: Uint8Array,\n\
+         \x20 offset: number,\n\
+         \x20 nodeType: number,\n\
+         ): string {{\n\
+         \x20 const value = rstr(buf, offset + 4, view.getUint32(offset, true));\n\
+         \x20 return {phantom_cond} ? restorePhantomSpaces(value) : value;\n\
+         }}\n"
+    );
+
+    let jsx = hast_tails
+        .iter()
+        .find(|t| matches!(t.tail.js, Some(TailJs::JsxAttrs { .. })))
+        .expect("hast mdx jsx tail");
+    let _ = writeln!(
+        out,
+        "// A zero-length name represents an MDX fragment.\n\
+         export function readWalkMdxJsx(\n\
+         \x20 view: DataView,\n\
+         \x20 buf: Uint8Array,\n\
+         \x20 pos: number,\n\
+         ): {{ name: string | null; attributes: MdxJsxAttributeUnion[] }} {{\n\
+         \x20 const headLen = view.getUint16(pos, true);\n\
+         \x20 pos += 2;\n\
+         \x20 const headName = headLen > 0 ? rstr(buf, pos, headLen) : null;\n\
+         \x20 pos += headLen;\n\
+         \x20 const count = view.getUint16(pos, true);\n\
+         \x20 pos += 2;\n\
+         \x20 const attributes: MdxJsxAttributeUnion[] = [];\n\
+         \x20 for (let i = 0; i < count; i++) {{"
+    );
+    out.push_str(&walk_entry_reads(&jsx.tail));
+    out.push_str(
+        "    attributes.push(decodeMdxJsxAttr(kind, name, value));\n\
+         \x20 }\n\
+         \x20 return { name: headName, attributes };\n\
+         }\n",
+    );
+    out
+}
+
+/// Sequential walk-wire reads for one tail entry, in schema field order; each
+/// wire kind fixes the framing (str16: u16 len, str32: u32 len, u8: one byte).
+fn walk_entry_reads(tail: &Tail) -> String {
+    let mut out = String::new();
+    let mut fields: Vec<&Field> = tail.item.iter().collect();
+    fields.sort_by_key(|f| f.offset);
+    for field in fields {
+        let js = field.js;
+        match field.wire {
+            Wire::U8 => {
+                let _ = writeln!(out, "    const {js} = buf[pos] ?? 0;\n    pos += 1;");
+            }
+            Wire::Str16 => {
+                let _ = writeln!(
+                    out,
+                    "    const {js}Len = view.getUint16(pos, true);\n\
+                     \x20   pos += 2;\n\
+                     \x20   const {js} = rstr(buf, pos, {js}Len);\n\
+                     \x20   pos += {js}Len;"
+                );
+            }
+            Wire::Str32 => {
+                let _ = writeln!(
+                    out,
+                    "    const {js}Len = view.getUint32(pos, true);\n\
+                     \x20   pos += 4;\n\
+                     \x20   const {js} = rstr(buf, pos, {js}Len);\n\
+                     \x20   pos += {js}Len;"
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Single-`str32` layouts dominate walks; one named store skips the descriptor loop the unoptimized tiers pay for.
+fn walk_plain_string_fast_path_ts(layouts: &[Layout]) -> String {
+    let mut out = String::new();
+    for layout in layouts {
+        if !is_plain_string_layout(layout) {
+            continue;
+        }
+        let fields: Vec<&Field> = layout
+            .fields
+            .iter()
+            .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+            .collect();
+        let [field] = fields.as_slice() else {
+            continue;
+        };
+        if !matches!(field.wire, Wire::Str32) {
+            continue;
+        }
+        let cond = layout
+            .tags
+            .iter()
+            .map(|t| format!("nodeType === {t}"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        let js = field.js;
+        let _ = writeln!(out, "  if ({cond}) {{");
+        out.push_str("    const len = ru32(view, start);\n");
+        let _ = writeln!(out, "    node.{js} = rstr(buf, start + 4, len);");
+        out.push_str("    return true;\n  }\n");
+    }
+    out
+}
+
+const DECODER_PRELUDE_TS: &str = r#"interface TailField {
   readonly js: string;
   readonly kind: FieldKind;
   readonly phantom?: boolean;
@@ -897,20 +1451,12 @@ const DECODER_TS: &str = r#"interface TailField {
 interface TailDescriptor {
   readonly head: readonly TailField[];
   readonly item: readonly TailField[];
-  // Exactly one assembly is present: `map` for a string key/value object,
-  // `jsx` for a typed MDX-JSX attribute array (kind-dispatched per item),
-  // `bytes` for an enum-byte array (table column alignment).
+  // The schema guarantees exactly one assembly kind per tail.
   readonly map?: { readonly attrsKey: string; readonly key: string; readonly value: string };
   readonly jsx?: { readonly attrsKey: string };
   readonly bytes?: { readonly attrsKey: string };
 }
 
-/**
- * Decode a node's type-specific `type_data` from the walk buffer onto `node`,
- * driven by `MDAST_LAYOUTS` (fixed-field types) and `MDAST_TAILS` (counted
- * attribute lists). Returns `false` for tags in neither, so the caller falls
- * through to the remaining hand-written cases (list, listItem).
- */
 export function decodeMdastTypeData(
   view: DataView,
   buf: Uint8Array,
@@ -918,7 +1464,9 @@ export function decodeMdastTypeData(
   nodeType: number,
   node: Record<string, unknown>,
 ): boolean {
-  const fields = MDAST_LAYOUTS[nodeType];
+"#;
+
+const DECODER_BODY_TS: &str = r#"  const fields = MDAST_LAYOUTS[nodeType];
   if (fields !== undefined) {
     let pos = start;
     for (const f of fields) {
@@ -942,9 +1490,7 @@ export function decodeMdastTypeData(
   const tail = MDAST_TAILS[nodeType];
   if (tail !== undefined) {
     let pos = start;
-    // Reads are inlined and advance `pos` in place (no per-field tuple): this
-    // runs per attribute item in the matched-node decode path, and the
-    // unoptimized tiers CodSpeed measures won't elide the allocation.
+    // Inline reads avoid allocating a tuple per attribute field in unoptimized V8 tiers.
     for (const f of tail.head) {
       let value: string | number;
       if (f.kind === "u8") {
@@ -957,7 +1503,6 @@ export function decodeMdastTypeData(
         pos += len;
         value = f.phantom ? restorePhantomSpaces(raw) : raw;
       }
-      // MDX JSX elements carry a nullable name (empty → null); map heads keep it.
       node[f.js] = tail.jsx !== undefined && value === "" ? null : value;
     }
     const count = ru16(view, pos);
@@ -1009,42 +1554,17 @@ export function decodeMdastTypeData(
 }
 "#;
 
-/// The arena-snapshot decoder: the same `MDAST_LAYOUTS`, but resolving each
-/// `StringRef` from the string pool instead of reading an inline wire.
-const STORED_DECODER_TS: &str = r#"
-/**
- * Attach a node's fixed `type_data` fields, materialized from the arena
- * snapshot, driven by `MDAST_LAYOUTS`. Returns `false` for tags with no entry,
- * so the materializer falls through to its hand-written cases (list, table,
- * directives, MDX JSX). Fields are eager plain stores.
- */
-export function materializeMdastFields(
-  reader: MdastReader,
-  node: object,
-  nodeId: number,
-  nodeType: number,
-): boolean {
-  const fields = MDAST_LAYOUTS[nodeType];
-  if (fields === undefined) return false;
-  const out = node as Record<string, unknown>;
-  for (const f of fields) {
-    if (f.skip) continue;
-    if (f.kind === "u8") {
-      // Short type_data falls back to the layout's declared default,
-      // matching the Rust walk serializer.
-      const b = reader.fieldU8(nodeId, f.offset, f.default ?? 0);
-      out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
-    } else {
-      // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
-      // reads as empty, mirroring the Rust decoders' bounds checks.
-      const raw = reader.fieldString(nodeId, f.offset);
-      const s = f.nullable && raw === "" ? null : raw;
-      out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;
-    }
-  }
-  return true;
+fn is_plain_string_layout(layout: &Layout) -> bool {
+    let fields: Vec<&Field> = layout
+        .fields
+        .iter()
+        .filter(|f| !matches!(f.js_kind, Js::Const(_) | Js::Skip))
+        .collect();
+    let [field] = fields.as_slice() else {
+        return false;
+    };
+    field.offset == 0 && !field.phantom && matches!(field.js_kind, Js::Str)
 }
-"#;
 
 fn wire_value(value: u8, hex: bool) -> String {
     if hex {
@@ -1100,24 +1620,11 @@ pub fn wire_constants_rs(tables: &[&WireTable], module_doc: &[&str]) -> String {
 /// The TS wire-constants module (every table; Rust-only `cfg`s are ignored).
 pub fn wire_constants_ts(tables: &[&WireTable]) -> String {
     let mut out = String::from(HEADER_TS);
-    out.push_str(
-        "// JS<->Rust wire-protocol byte values, declared once in\n\
-         // `satteri-layout-codegen/src/schema.rs`. Rust twins live in\n\
-         // `satteri-plugin-api/src/generated/wire_constants.rs` and\n\
-         // `satteri-ast/src/generated/wire_constants.rs`.\n",
-    );
     for table in tables {
         out.push('\n');
-        for line in table.doc {
-            let _ = writeln!(out, "// {line}");
-        }
         for c in table.consts {
             let val = wire_value(c.value, table.hex);
-            if c.doc.is_empty() {
-                let _ = writeln!(out, "export const {} = {val};", c.name);
-            } else {
-                let _ = writeln!(out, "export const {} = {val}; // {}", c.name, c.doc);
-            }
+            let _ = writeln!(out, "export const {} = {val};", c.name);
         }
     }
     out
@@ -1183,29 +1690,35 @@ pub fn arena_layout_rs() -> String {
 pub fn arena_layout_ts() -> String {
     use crate::schema::{ARENA_HEADER_FIELDS, ARENA_KINDS, ARENA_MAGIC, ARENA_NODE_FIELDS};
     let mut out = String::from(HEADER_TS);
-    out.push_str(
-        "// Arena raw-buffer layout, declared once in `satteri-layout-codegen/src/schema.rs`.\n\
-         // The Rust side is pinned to these offsets by the compile-time asserts in\n\
-         // `satteri-arena/src/generated/layout.rs`.\n\n",
-    );
-    let _ = writeln!(
-        out,
-        "/** `b\"MDAR\"` magic, read as a little-endian u32. */\nexport const ARENA_MAGIC = 0x{ARENA_MAGIC:08x};\n"
-    );
-    out.push_str("/** `Arena<K>` kind tags carried in the header's `kind` field. */\n");
+    let _ = writeln!(out, "export const ARENA_MAGIC = 0x{ARENA_MAGIC:08x};\n");
     for (kind, tag) in ARENA_KINDS {
         let _ = writeln!(out, "export const KIND_{} = {tag};", kind.to_uppercase());
     }
     out.push('\n');
-    out.push_str(
-        "/** `ArenaNode` `#[repr(C)]` field byte offsets (u32 fields; `node_type` is a u8). */\n",
-    );
     out.push_str("export const FIELD = {\n");
     for (field, offset) in ARENA_NODE_FIELDS {
         let _ = writeln!(out, "  {field}: {offset},");
     }
     out.push_str("} as const;\n\n");
-    out.push_str("/** Raw-buffer header byte offsets (4-byte fields, u32 LE). */\n");
+    for (field, offset) in ARENA_NODE_FIELDS {
+        if matches!(
+            *field,
+            "parent"
+                | "start_offset"
+                | "children_start"
+                | "children_count"
+                | "data_offset"
+                | "data_len"
+        ) {
+            let _ = writeln!(
+                out,
+                "export const W_{} = {};",
+                field.to_uppercase(),
+                offset / 4
+            );
+        }
+    }
+    out.push('\n');
     out.push_str("export const HEADER = {\n");
     for (i, name) in ARENA_HEADER_FIELDS.iter().enumerate() {
         let _ = writeln!(out, "  {name}: {},", i * 4);
@@ -1237,15 +1750,35 @@ pub fn parse_options_rs() -> String {
 pub fn parse_options_ts() -> String {
     use crate::schema::PARSE_OPTION_BITS;
     let mut out = String::from(HEADER_TS);
-    out.push_str(
-        "// Parser option bits, declared once in `satteri-layout-codegen/src/schema.rs`.\n\
-         // `featuresToNative` packs them into the `parseOptions` integer the NAPI entry\n\
-         // points take; the compile-time asserts in\n\
-         // `satteri-napi-binding/src/generated/parse_options.rs` pin them to the real\n\
-         // `satteri_pulldown_cmark::Options` flags.\n\n",
-    );
     for (flag, bit) in PARSE_OPTION_BITS {
         let _ = writeln!(out, "export const {flag} = 1 << {bit};");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::{HAST_NODES, MDAST_NODES};
+
+    /// The user-defined node must stay on the reader path (the `name` -> `node.type` rename lives there), and hast Element's hand-codec `custom` flag must not evict its arm.
+    #[test]
+    fn fused_decode_classifies_the_custom_flagged_nodes() {
+        let out = fused_wire_ts(MDAST_NODES, HAST_NODES);
+        let hast_at = out
+            .find("export function readHastWireNode")
+            .expect("hast decode fn");
+        let (mdast_fn, hast_fn) = out.split_at(hast_at);
+        let custom = MDAST_NODES
+            .iter()
+            .find(|n| n.name == "custom")
+            .expect("custom node");
+        assert!(!mdast_fn.contains(&format!("case {}:", custom.tag)));
+        let element = HAST_NODES
+            .iter()
+            .find(|n| n.name == "element")
+            .expect("element node");
+        assert!(hast_fn.contains(&format!("case {}:", element.tag)));
+        assert!(hast_fn.contains("tagName"));
+    }
 }

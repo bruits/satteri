@@ -10,10 +10,7 @@ import {
 } from "./helpers.js";
 import type { UrlNode } from "./helpers.js";
 
-// Telling satteri's two autolink routes apart needs parser internals, so that
-// half of the probe is `autolink_path_probe` in `crates/satteri-pulldown-cmark`.
-// These tables are the shared contract: here they pin remark's classification,
-// there satteri's.
+// These classifications are shared with the Rust autolink_path_probe tests.
 
 type PathKind = "construct" | "fnr" | "none";
 
@@ -33,7 +30,7 @@ function collectLinks(tree: unknown): AnyNode[] {
   return out;
 }
 
-/** remark: a positioned `link` came from micromark, a bare one from findAndReplace. */
+// In remark, positions distinguish tokenizer links from find-and-replace links.
 function referencePaths(input: string): PathKind[] {
   return collectLinks(referenceMdast(input)).map((link) => (link.position ? "construct" : "fnr"));
 }
@@ -42,11 +39,7 @@ function referencePath(input: string): PathKind {
   return referencePaths(input)[0] ?? "none";
 }
 
-// Every shape where the three opener states (still open, closed-and-failed,
-// closed-and-resolved) differ, plus every construct that can swallow a bracket
-// before the trigger sees it.
 const PROBE_INPUTS: Array<[string, PathKind[]]> = [
-  // Bracket-opener states.
   ["[a](/b) www.x.y", ["construct", "construct"]],
   ["[a [b](/c) www.x.y", ["construct", "fnr"]],
   ["[a] www.x.y", ["construct"]],
@@ -55,30 +48,24 @@ const PROBE_INPUTS: Array<[string, PathKind[]]> = [
   ["[a\nwww.x.y", ["fnr"]],
   ["[a\n\nwww.x.y", ["construct"]],
   ["# [a www.x.y", ["fnr"]],
-  // Brackets consumed by an enclosing construct before the trigger.
   ["[a `]` www.x.y", ["fnr"]],
   ["`[` www.x.y", ["construct"]],
   ["[a ``]`` www.x.y", ["fnr"]],
   ["``[`` www.x.y", ["construct"]],
   ["<span a='['> www.x.y", ["construct"]],
   ["[a <http://q.r/]> www.x.y", ["construct", "fnr"]],
-  // A trigger inside a link destination the parser has already resolved.
   ["[a](https://x.y)x", ["construct"]],
   ["[a](www.x.y)x", ["construct"]],
-  // …and inside one it never resolves, so the trigger sees ordinary bytes.
   ["[[x]](https://x.y)x\n\n[x]: /", ["construct"]],
   ["[[x]](www.a.com)y\n\n[x]: /", ["construct"]],
   ["[foo][bar](https://x.y)x\n\n[bar]: /", ["construct"]],
   ["[[a](/b)](https://x.y)x", ["construct", "construct"]],
-  // Unclosed or non-resolving brackets around a trigger.
   ["[www.a.com", ["fnr"]],
   ["[www.a.com]", ["fnr"]],
   ["[www.a.com](", ["fnr"]],
   ["![www.a.com", ["fnr"]],
   ["[foo][www.a.com]", ["fnr"]],
   ["[https://a.com](", ["fnr"]],
-  // A `]` balances its opener even when nothing resolves, so a trigger past
-  // it is no longer blocked and the URL before it can't run on.
   ["[www.a.com]www.b.com", ["fnr", "construct"]],
   ["[www.a.com]]www.b.com", ["fnr", "construct"]],
   ["[www.a.com]http://b.com", ["fnr", "construct"]],
@@ -86,12 +73,8 @@ const PROBE_INPUTS: Array<[string, PathKind[]]> = [
   ["[www.a.com]_u@b.com", ["fnr", "construct"]],
   ["[http://a.com]www.b.com", ["fnr", "construct"]],
   ["a[www.a.com]www.b.com", ["fnr", "construct"]],
-  // The opener is still unbalanced, so both triggers stay blocked.
   ["[[www.a.com]www.b.com", ["fnr"]],
-  // No opener at all: `]` is an ordinary URL byte.
   ["www.a.com]www.b.com", ["construct"]],
-  // Preceding-character rules. `www.` takes a fixed whitelist, `http://`
-  // rejects only ASCII letters, and email rejects `/` and atext.
   ["www.x.y", ["construct"]],
   [".www.x.y", ["fnr"]],
   [".http://x.y", ["construct"]],
@@ -103,10 +86,6 @@ const PROBE_INPUTS: Array<[string, PathKind[]]> = [
   ["x\u{85}www.x.y", []],
 ];
 
-// The triggers have disagreeing preceding-character rules, and what the
-// construct path blocks falls through to find-and-replace, which wants
-// whitespace or punctuation. The fourth is a `www.` literal and an email at
-// the same offset, so it also pins which construct is tried first.
 const TRIGGERS = ["www.x.y", "http://x.y", "a@b.cd", "www.x@y.zz"] as const;
 const PRECEDING_RULES: Array<{
   prefix: string;
@@ -147,10 +126,8 @@ const PRECEDING_RULES: Array<{
     name: "zero-width space (Cf)",
     paths: ["none", "construct", "construct", "construct"],
   },
-  // U+FEFF is not `White_Space`, yet find-and-replace takes it as a boundary.
-  // Prefixed with a letter to keep leading-BOM handling out of it.
+  // Prefix U+FEFF with a letter so leading-BOM handling cannot affect this boundary test.
   { prefix: "a﻿", name: "byte order mark", paths: ["fnr", "construct", "construct", "construct"] },
-  // U+0085 is `White_Space`, but find-and-replace does not take it as a boundary.
   { prefix: "\u{85}", name: "next line", paths: ["none", "construct", "construct", "construct"] },
 ];
 
@@ -162,12 +139,8 @@ describe("GFM autolink preceding-character rules", () => {
   });
 });
 
-// Deliberate divergence: remark reads the preceding character as one UTF-16
-// code unit, so an astral one is a lone surrogate and always rejected; satteri
-// classifies the whole scalar. See website/content/docs/divergences.md.
+// remark classifies one UTF-16 unit; Sätteri classifies the whole preceding Unicode scalar.
 describe("divergence: astral characters before a GFM autolink", () => {
-  // The categories the classifier lets through, so satteri links and remark
-  // does not.
   const ACCEPTED = [
     { prefix: "\u{10101}", name: "U+10101 AEGEAN WORD SEPARATOR DOT (Po)" },
     { prefix: "\u{1F600}", name: "U+1F600 GRINNING FACE (So)" },
@@ -175,11 +148,8 @@ describe("divergence: astral characters before a GFM autolink", () => {
     { prefix: "\u{1F468}\u{200d}\u{1F4BB}", name: "a ZWJ sequence ending in U+1F4BB (So)" },
   ];
 
-  // `Nd`, so both sides reject it, for different reasons, which is the point.
   const REJECTED = [{ prefix: "\u{1FBF0}", name: "U+1FBF0 SEGMENTED DIGIT ZERO (Nd)" }];
 
-  // The overlapping trigger is left out: remark's find-and-replace finds the
-  // email inside it whatever precedes the `www.`, so it is pinned below.
   const BLOCKED = TRIGGERS.filter((trigger) => trigger !== "www.x@y.zz");
 
   test.each([...ACCEPTED, ...REJECTED])("$name starts nothing in remark", ({ prefix }) => {
@@ -201,7 +171,6 @@ describe("divergence: astral characters before a GFM autolink", () => {
     expect(collectUrls(referenceMdast(md))).toEqual(["mailto:x@y.zz"]);
   });
 
-  // The span has to stop at the trigger, not swallow the character before it.
   test.each(ACCEPTED)("$name: satteri links, starting at the trigger", ({ prefix }) => {
     const md = `${prefix}www.example.com`;
     expect(linkUrls(md)).toEqual(["http://www.example.com"]);
@@ -211,8 +180,6 @@ describe("divergence: astral characters before a GFM autolink", () => {
     expect(md.slice(start.offset, end.offset)).toBe("www.example.com");
   });
 
-  // Only the `www` trigger diverges: the other two accept the character on
-  // both sides.
   test.each([
     ["\u{1F600}user@example.com\n", ["mailto:user@example.com"]],
     ["\u{1F600}http://example.com\n", ["http://example.com"]],

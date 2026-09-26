@@ -1,78 +1,4 @@
-import { LEAF_TYPES, isCustomLeaf, materializeNode } from "./mdast-materializer.js";
-import { MdastReader } from "./mdast-reader.js";
-import {
-  acquireCommandBuffer,
-  releaseCommandBuffer,
-  classifyReturn,
-  CommandBuffer,
-  STRUCTURAL_CMD,
-  type StructuralOp,
-} from "../command-buffer.js";
-import { CMD_SET_CHILDREN } from "../generated/wire-constants.js";
-import { ru32, rstr, readPosition } from "../wire-read.js";
-import { decodeMdastTypeData } from "./generated/layout.js";
-import {
-  TYPE_NAMES,
-  NAME_TO_TYPE,
-  VISITOR_KEYS,
-  MDAST_OPSTREAM_TYPES,
-} from "./generated/node-types.js";
-import {
-  OpWriter,
-  OF_VALUE,
-  OF_URL,
-  OF_TITLE,
-  OF_ALT,
-  OF_LANG,
-  OF_META,
-  OF_IDENTIFIER,
-  OF_LABEL,
-  OF_NAME,
-  OF_REFERENCE_TYPE,
-  OF_DEPTH,
-  OF_CHECKED,
-  OF_START,
-  OF_ORDERED,
-  OF_SPREAD,
-  OF_EXPLICIT,
-  PROP_STRING,
-  emitMdxAttr,
-} from "../op-stream.js";
-import type {
-  MdastNode,
-  Toml,
-  MathNode,
-  InlineMath,
-  Superscript,
-  Subscript,
-  DescriptionList,
-  DescriptionTerm,
-  DescriptionDetails,
-  Custom,
-  Data,
-  SourceFormat,
-} from "../types.js";
-import { walkMdastHandle, mdastTextContentHandle } from "#binding";
-import {
-  asArray,
-  makeRequireNid,
-  mergeAndReset,
-  crossPipelineForeign,
-  FOREIGN_REF,
-  type NodeRefs,
-  type PluginOptions,
-  ROOT_NODE_ID,
-  requireRootReplacement,
-  rootReplacementError,
-  unencodableContentError,
-} from "../visitor-shared.js";
-import {
-  LazyChildResolver,
-  registerEpochCacheSlot,
-  type EpochCache,
-} from "../lazy-child-resolver.js";
-import { MdastChildStub } from "./child-stub.js";
-import type { AnyHandle, MdastHandle } from "../handles.js";
+import { mdastTextContentHandle, walkMdastHandle } from "#binding";
 import type {
   Blockquote,
   Break,
@@ -91,21 +17,87 @@ import type {
   LinkReference,
   List,
   ListItem,
+  Parents as MdastParents,
+  Root as MdastRoot,
   Paragraph,
   Strong,
   Table,
-  TableRow,
   TableCell,
+  TableRow,
   Text,
   ThematicBreak,
   Yaml,
-  Parents as MdastParents,
-  Root as MdastRoot,
 } from "mdast";
-import type { MdxJsxFlowElement, MdxJsxTextElement } from "../mdx-types.js";
-import type { MdxFlowExpression, MdxTextExpression } from "../mdx-types.js";
-import type { MdxjsEsm } from "../mdx-types.js";
+import {
+  acquireCommandBuffer,
+  classifyReturn,
+  CommandBuffer,
+  STRUCTURAL_CMD,
+  type StructuralOp,
+} from "../command-buffer.js";
 import type { ContainerDirective, LeafDirective, TextDirective } from "../directive-types.js";
+import { CMD_SET_CHILDREN } from "../generated/wire-constants.js";
+import type { MdastHandle } from "../handles.js";
+import { LazyChildResolver } from "../lazy-child-resolver.js";
+import type {
+  MdxFlowExpression,
+  MdxjsEsm,
+  MdxJsxFlowElement,
+  MdxJsxTextElement,
+  MdxTextExpression,
+} from "../mdx-types.js";
+import {
+  emitMdxAttr,
+  OF_ALT,
+  OF_CHECKED,
+  OF_DEPTH,
+  OF_EXPLICIT,
+  OF_IDENTIFIER,
+  OF_LABEL,
+  OF_LANG,
+  OF_META,
+  OF_NAME,
+  OF_ORDERED,
+  OF_REFERENCE_TYPE,
+  OF_SPREAD,
+  OF_START,
+  OF_TITLE,
+  OF_URL,
+  OF_VALUE,
+  OpWriter,
+  PROP_STRING,
+} from "../op-stream.js";
+import type {
+  Custom,
+  Data,
+  DescriptionDetails,
+  DescriptionList,
+  DescriptionTerm,
+  InlineMath,
+  MathNode,
+  MdastNode,
+  SourceFormat,
+  Subscript,
+  Superscript,
+  Toml,
+} from "../types.js";
+import {
+  asArray,
+  collectCommands,
+  FOREIGN_REF,
+  makeRequireNid,
+  requireRootReplacement,
+  ROOT_NODE_ID,
+  rootReplacementError,
+  unencodableContentError,
+  type NodeRefs,
+  type PluginOptions,
+} from "../visitor-shared.js";
+import { ru32 } from "../wire-read.js";
+import { MDAST_OPSTREAM_TYPES, NAME_TO_TYPE, VISITOR_KEYS } from "./generated/node-types.js";
+import { LEAF_TYPES } from "./mdast-materializer.js";
+import { MdastReader } from "./mdast-reader.js";
+import { getNodeId, MdastLazyChildResolver, readMdastMatchedNode } from "./mdast-walk.js";
 
 /** A string spliced into the tree, re-parsed as Markdown. Set `mdxExpressions:
  *  false` to keep MDX `{…}` literal, needed when injecting generated HTML
@@ -142,21 +134,7 @@ export interface MdastDiagnostic {
   severity: "error" | "warning" | "info";
 }
 
-function nid(node: MdastNode, refs: NodeRefs): number | undefined {
-  // Genuine stubs carry their id as a plain field; a spread copy is not
-  // `instanceof` and has no `_nodeId`, so it correctly reads as new content.
-  if (node instanceof MdastChildStub) return node._refs === refs ? node._id : FOREIGN_REF;
-  const id = refs.get(node as object);
-  if (id !== undefined) return id;
-  // Plain objects are trusted only via this tree's refs or a NON-enumerable
-  // `_nodeId` (the materializer's convention, which spread cannot copy) — an
-  // enumerable one rode in on a copy and must read as new content.
-  const d = Object.getOwnPropertyDescriptor(node, "_nodeId");
-  if (d !== undefined && !d.enumerable) return FOREIGN_REF;
-  return crossPipelineForeign(node);
-}
-
-const requireNid = makeRequireNid(nid);
+const requireNid = makeRequireNid(getNodeId);
 
 export class MdastVisitorContext {
   readonly #commandBuffer: CommandBuffer = acquireCommandBuffer();
@@ -165,9 +143,6 @@ export class MdastVisitorContext {
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
   readonly #refs: NodeRefs;
-  /** One canonical object per parent id, so visitors can dedupe by identity.
-   *  Null until the first `parent()` call; most passes never make one. */
-  #parentsById: Map<number, MdastNode> | null = null;
   /**
    * The URL of the document being processed (the compile `fileURL` option),
    * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
@@ -220,12 +195,14 @@ export class MdastVisitorContext {
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "insertBefore", this.#refs);
-    for (const n of asArray(newNode)) emitMdastTree(this.#commandBuffer, "insertBefore", id, n, false, this.#refs);
+    for (const n of asArray(newNode))
+      emitMdastTree(this.#commandBuffer, "insertBefore", id, n, false, this.#refs);
   }
 
   insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "insertAfter", this.#refs);
-    for (const n of asArray(newNode)) emitMdastTree(this.#commandBuffer, "insertAfter", id, n, false, this.#refs);
+    for (const n of asArray(newNode))
+      emitMdastTree(this.#commandBuffer, "insertAfter", id, n, false, this.#refs);
   }
 
   /**
@@ -247,12 +224,14 @@ export class MdastVisitorContext {
 
   prependChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "prependChild", this.#refs);
-    for (const n of asArray(childNode)) emitMdastTree(this.#commandBuffer, "prependChild", id, n, false, this.#refs);
+    for (const n of asArray(childNode))
+      emitMdastTree(this.#commandBuffer, "prependChild", id, n, false, this.#refs);
   }
 
   appendChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "appendChild", this.#refs);
-    for (const n of asArray(childNode)) emitMdastTree(this.#commandBuffer, "appendChild", id, n, false, this.#refs);
+    for (const n of asArray(childNode))
+      emitMdastTree(this.#commandBuffer, "appendChild", id, n, false, this.#refs);
   }
 
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -287,7 +266,7 @@ export class MdastVisitorContext {
     const id = requireNid(node as MdastNode, "replaceNode", this.#refs);
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // The last node carries the `replace` so refs back to the target still splice.
+      // Replace last so earlier insertions can still reference the target node.
       let previous: MdastContent | undefined;
       for (const n of newNode) {
         if (previous !== undefined) {
@@ -296,7 +275,6 @@ export class MdastVisitorContext {
         previous = n;
       }
       if (previous === undefined) {
-        // Replacing with nothing drops the node, like removeNode.
         this.removeNode(node);
       } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
         emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
@@ -329,29 +307,15 @@ export class MdastVisitorContext {
     value: Record<string, unknown> | null,
   ): void;
   setProperty(node: Readonly<MdastTarget>, key: string, value: unknown): void {
+    const id = requireNid(node as MdastNode, "setProperty", this.#refs);
     if (key === "children") {
-      // children is structural: set-children keeps the node and swaps only its
-      // child list (reused children keep their id).
-      const id = requireNid(node as MdastNode, "setProperty", this.#refs);
       if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
       return;
     }
-    if (key === "data") {
-      // data is stored as JSON in the arena, serialize it for the command buffer
-      this.#commandBuffer.setProperty(
-        requireNid(node as MdastNode, "setProperty", this.#refs),
-        key,
-        value != null ? JSON.stringify(value) : null,
-      );
-      return;
-    }
-    this.#commandBuffer.setProperty(
-      requireNid(node as MdastNode, "setProperty", this.#refs),
-      key,
-      value,
-    );
+    if (key === "data") value = value != null ? JSON.stringify(value) : null;
+    this.#commandBuffer.setProperty(id, key, value);
   }
 
   /** Collect the concatenated text of all descendant text nodes (like mdast-util-to-string). */
@@ -374,17 +338,9 @@ export class MdastVisitorContext {
   parent<N extends Exclude<MdastNode, MdastRoot>>(node: Readonly<N>): Readonly<MdastParents>;
   parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined;
   parent(node: Readonly<MdastTarget>): Readonly<MdastParents> | undefined {
-    const parentId = this.#resolver.parentIdOf(
-      requireNid(node as MdastNode, "parent", this.#refs),
-    );
+    const parentId = this.#resolver.parentIdOf(requireNid(node as MdastNode, "parent", this.#refs));
     if (parentId === undefined) return undefined;
-    const byId = (this.#parentsById ??= new Map());
-    let parent = byId.get(parentId);
-    if (parent === undefined) {
-      parent = this.#resolver.materializeOne(parentId);
-      byId.set(parentId, parent);
-    }
-    return parent as MdastParents;
+    return this.#resolver.materializeOne(parentId) as MdastParents;
   }
 
   /**
@@ -404,7 +360,7 @@ export class MdastVisitorContext {
     node?: Readonly<MdastTarget>;
     severity?: "error" | "warning" | "info";
   }): void {
-    const id = node ? nid(node as MdastNode, this.#refs) : undefined;
+    const id = node ? getNodeId(node as MdastNode, this.#refs) : undefined;
     this.#diagnostics.push({
       message,
       nodeId: id === FOREIGN_REF ? undefined : id,
@@ -413,7 +369,6 @@ export class MdastVisitorContext {
     });
   }
 
-  /** Get the binary command buffer for all mutations recorded via context methods. */
   getCommandBuffer(): CommandBuffer {
     return this.#commandBuffer;
   }
@@ -506,12 +461,10 @@ export type { MdastHandle };
 
 interface MdastSubscription {
   nodeType: number;
-  visitFn: (node: MdastNode, context: MdastVisitorContext) => unknown;
+  visitFn: MdastVisitorFn;
 }
 
-/** Memoize derived subscriptions per plugin object identity. Reused plugin
- *  definitions skip the per-compile Object.entries walk plus rebuilding the
- *  NAPI subscription array. */
+// Cache subscriptions by plugin identity to avoid rebuilding them on every compile.
 type CachedMdastSubs = {
   subs: MdastSubscription[];
   rustSubs: { nodeType: number; tagFilter: string[] }[];
@@ -553,219 +506,21 @@ function buildMdastSubscriptions(plugin: MdastPluginInstance): CachedMdastSubs {
   return { subs, rustSubs };
 }
 
-const MDAST_EPOCH_CACHE = registerEpochCacheSlot(new WeakMap<AnyHandle, EpochCache<MdastReader>>());
-
-class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
-  protected override cacheSlot() {
-    return MDAST_EPOCH_CACHE;
-  }
-
-  protected override createReader(wire: Uint8Array): MdastReader {
-    return new MdastReader(wire);
-  }
-
-  protected override materializeNode(
-    reader: MdastReader,
-    nodeId: number,
-    refs: NodeRefs,
-  ): MdastNode {
-    return materializeNode(reader, nodeId, true, refs);
-  }
-
-  protected override readParentId(reader: MdastReader, nodeId: number): number {
-    return reader.getParentId(nodeId);
-  }
-
-  protected override readChildIds(reader: MdastReader, nodeId: number): number[] {
-    return reader.getChildIds(nodeId);
-  }
-}
-
-/** Build the child-stub list for a matched node from the wire's `[child_ids]
- *  [child_types]` blocks, no arena snapshot. Stale ids are caught at
- *  materialization: the resolver's epoch check refuses a snapshot once the
- *  arena has mutated or been dropped. */
-function readMdastChildStubs(
-  view: DataView,
-  buf: Uint8Array,
-  idsPos: number,
-  typesPos: number,
-  count: number,
-  resolver: MdastLazyChildResolver,
-): MdastNode[] {
-  // With a hot snapshot a stub's deferral buys nothing; real nodes skip its per-field getters.
-  if (resolver.hasHotSnapshot()) {
-    const nodes: MdastNode[] = new Array(count);
-    for (let i = 0; i < count; i++) {
-      nodes[i] = resolver.materializeOne(ru32(view, idsPos + i * 4));
-    }
-    return nodes;
-  }
-  const stubs: MdastNode[] = new Array(count);
-  for (let i = 0; i < count; i++) {
-    stubs[i] = new MdastChildStub(
-      resolver,
-      ru32(view, idsPos + i * 4),
-      buf[typesPos + i]!,
-    ) as unknown as MdastNode;
-  }
-  return stubs;
-}
-
-/** Install `children` as an own enumerable getter (spread must carry it),
- *  self-replacing with the one stable stub array on first read. One closure
- *  and one define per node — installing the wire locals as hidden slots
- *  instead measurably regressed every matching pipeline. */
-function makeLazyChildren(
-  node: object,
-  view: DataView,
-  buf: Uint8Array,
-  childIdsPos: number,
-  childTypesPos: number,
-  childCount: number,
-  resolver: MdastLazyChildResolver,
-): void {
-  Object.defineProperty(node, "children", {
-    get(this: object): MdastNode[] {
-      const val = readMdastChildStubs(view, buf, childIdsPos, childTypesPos, childCount, resolver);
-      Object.defineProperty(this, "children", {
-        value: val,
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
-      return val;
-    },
-    enumerable: true,
-    configurable: true,
-  });
-}
-
-/**
- * Read an MDAST node from the inline data in a match buffer entry.
- *
- * Inline format (from Rust serialize_mdast_node_inline):
- *   [node_data: u32+bytes][position: 6×u32 = 24B][child_count: u32][child_ids: N×u32]
- *   [child_types: N×u8][type-specific data]
- */
-function readMdastMatchedNode(
-  view: DataView,
-  buf: Uint8Array,
-  dataOffset: number,
-  nodeId: number,
-  nodeType: number,
-  resolver: MdastLazyChildResolver,
-): MdastNode {
-  let pos = dataOffset;
-
-  const dataJsonLen = ru32(view, pos);
-  pos += 4;
-  let initialData: Record<string, unknown> | null = null;
-  if (dataJsonLen > 0) {
-    const jsonStr = rstr(buf, pos, dataJsonLen);
-    try {
-      initialData = JSON.parse(jsonStr);
-    } catch (err) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(`readMdastMatchedNode: malformed node_data for nodeId=${nodeId}`, err);
-      }
-    }
-    pos += dataJsonLen;
-  }
-
-  const position = readPosition(view, pos);
-  pos += 24;
-
-  const childCount = ru32(view, pos);
-  pos += 4;
-  // Ids/types decode lazily with `.children` — most matched nodes never read them.
-  const childIdsPos = pos;
-  pos += childCount * 4;
-  const childTypesPos = pos;
-  pos += childCount;
-
-  const typeName = TYPE_NAMES[nodeType] ?? `unknown(${nodeType})`;
-
-  const node: Record<string, unknown> = { type: typeName };
-  if (position !== undefined) node.position = position;
-  if (childCount > 0) {
-    makeLazyChildren(node, view, buf, childIdsPos, childTypesPos, childCount, resolver);
-  }
-
-  // Fixed-field types decode from the generated layout table; the rest
-  // (variable-length / cross-field) stay in the hand-written switch.
-  if (!decodeMdastTypeData(view, buf, pos, nodeType, node)) {
-    switch (nodeType) {
-      case 5: {
-        // list
-        node.start = ru32(view, pos);
-        node.ordered = buf[pos + 4]! !== 0;
-        node.spread = buf[pos + 5]! !== 0;
-        if (!node.ordered) node.start = null;
-        break;
-      }
-      case 6: {
-        // listItem
-        const checked = buf[pos]!;
-        node.checked = checked === 2 ? null : checked === 1;
-        node.spread = buf[pos + 1]! !== 0;
-        break;
-      }
-      case 37: {
-        // descriptionDetails
-        node.spread = buf[pos]! !== 0;
-        break;
-      }
-      // table (21), directives (30/31/32) and mdxJsx elements (100/101) are
-      // decoded by the generated `decodeMdastTypeData` from their tails.
-      // root(0), paragraph(1), thematicBreak(3), blockquote(4), emphasis(11),
-      // strong(12), break(14), tableRow(22), tableCell(23), delete(24): no extra data
-    }
-  }
-
-  // User-defined node: the stored `name` field holds the author's public type
-  // string. Surface it as `node.type` (open type string) instead of the
-  // internal `"custom"`, drop the redundant `name`, and drop an empty `value`
-  // so a parent node isn't given a spurious leaf field.
-  if (nodeType === MDAST_CUSTOM) {
-    node.type = node.name as string;
-    delete node.name;
-    if (node.value === "") delete node.value;
-  }
-
-  const leafCustom =
-    nodeType === MDAST_CUSTOM && isCustomLeaf({ value: node.value, data: initialData }, childCount);
-
-  if (childCount === 0 && !LEAF_TYPES.has(nodeType) && !leafCustom) {
-    node.children = [];
-  }
-
-  resolver.refs.set(node as object, nodeId);
-
-  if (initialData) {
-    (node as Record<string, unknown>).data = initialData;
-  }
-
-  return node as unknown as MdastNode;
-}
-
 const MDAST_ROOT = NAME_TO_TYPE.root!;
-/** Internal tag for user-defined nodes. The stored `name` field holds the
- *  author's public `type` string; the read paths surface it as `node.type`
- *  and the emit path routes any unrecognized `type` here. */
 const MDAST_CUSTOM = NAME_TO_TYPE.custom!;
 
-/** The arena id of a node if it is an existing (materialized) node, else
- *  undefined for a freshly-built one. */
 function reusedId(node: unknown, refs: NodeRefs): number | undefined {
   if (node === null || typeof node !== "object") return undefined;
-  const id = nid(node as MdastNode, refs);
+  const id = getNodeId(node as MdastNode, refs);
   return id !== undefined && id !== FOREIGN_REF ? id : undefined;
 }
 
-/** Emit a set-children command in place: a root-wrapped child list, the shape
- *  `Patch::SetChildren` splices in. Reused children become refs. */
-function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: unknown, refs: NodeRefs): boolean {
+function emitMdastChildrenCommand(
+  buffer: CommandBuffer,
+  id: number,
+  children: unknown,
+  refs: NodeRefs,
+): boolean {
   if (!Array.isArray(children)) return false;
   return buffer.emitOpstreamCommand(CMD_SET_CHILDREN, id, () => {
     buffer.open(MDAST_ROOT);
@@ -777,7 +532,7 @@ function emitMdastChildrenCommand(buffer: CommandBuffer, id: number, children: u
   });
 }
 
-/** Separate from the per-node encoder, which rejects a `root` payload. */
+// Root replacement needs a separate encoder because per-node encoding rejects root payloads.
 function emitMdastRootReplace(buffer: CommandBuffer, root: MdastContent, refs: NodeRefs): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
     emitMdastRootOp(buffer, root as unknown as Record<string, unknown>, refs),
@@ -800,7 +555,13 @@ function emitMdastRootOp(w: OpWriter, n: Record<string, unknown>, refs: NodeRefs
   return true;
 }
 
-function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: boolean, refs: NodeRefs): boolean {
+function emitMdastOp(
+  w: OpWriter,
+  node: unknown,
+  isRoot: boolean,
+  forReplace: boolean,
+  refs: NodeRefs,
+): boolean {
   if (node === null || typeof node !== "object") return false;
   if (!isRoot) {
     const id = reusedId(node, refs);
@@ -810,22 +571,15 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
     }
   }
   const n = node as Record<string, unknown>;
-  // Any `type` outside the built-in set is a user-defined node: route it to the
-  // internal `custom` tag and carry the author's `type` string as the name.
   let type = MDAST_OPSTREAM_TYPES[n.type as string];
   let isCustom = false;
   if (type === undefined) {
     if (typeof n.type !== "string" || n.type.length === 0) return false;
-    // A known built-in that just isn't op-stream-encodable (e.g. `root`) is a
-    // real type used wrong, so fail loudly rather than reinterpreting it as a
-    // user-defined node. Only genuinely-unknown type strings become custom.
+    // Unsupported built-in types must fail rather than silently becoming custom nodes.
     if (NAME_TO_TYPE[n.type] !== undefined) return false;
     type = MDAST_CUSTOM;
     isCustom = true;
   } else if (type === MDAST_CUSTOM) {
-    // `"custom"` is the internal tag's own public name, so it resolves here
-    // instead of falling through as unknown. Still a user-defined node, so carry
-    // the `type` string as the name so it round-trips rather than vanishing.
     isCustom = true;
   }
   w.open(type);
@@ -839,8 +593,7 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   if (typeof n.identifier === "string") w.str(OF_IDENTIFIER, n.identifier);
   if (typeof n.label === "string") w.str(OF_LABEL, n.label);
   if (typeof n.referenceType === "string") w.str(OF_REFERENCE_TYPE, n.referenceType);
-  // Out-of-range numbers compile to null and the caller throws — a visible
-  // error instead of silently masking the bits.
+  // Reject out-of-range values before integer writes can truncate them.
   if (typeof n.depth === "number") {
     if (!Number.isInteger(n.depth) || n.depth < 0 || n.depth > 255) return false;
     w.u8(OF_DEPTH, n.depth);
@@ -857,8 +610,6 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   if (Array.isArray(attrs)) {
     for (const a of attrs) emitMdxAttr(w, a as Record<string, unknown>);
   } else if (attrs !== null && typeof attrs === "object") {
-    // Directive attributes: a string→string map; non-string values are
-    // dropped, since the stored form holds only strings.
     for (const key in attrs as Record<string, unknown>) {
       const v = (attrs as Record<string, unknown>)[key];
       if (typeof v === "string") w.prop(key, PROP_STRING, v);
@@ -870,12 +621,9 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   }
   if (n.data != null) w.data(n.data);
   if (isRoot && forReplace && n._keepChildren === true) {
-    // Replace splices the target's original children, discarding any the
-    // replacement declares.
     w.keepChildren();
   } else {
-    // `_keepChildren` only applies to replace; other ops ignore the marker
-    // and emit the declared children.
+    // Only replacement can reuse the target’s original children.
     const children = n.children;
     if (Array.isArray(children)) {
       for (const c of children) if (!emitMdastOp(w, c, false, forReplace, refs)) return false;
@@ -885,14 +633,10 @@ function emitMdastOp(w: OpWriter, node: unknown, isRoot: boolean, forReplace: bo
   return true;
 }
 
-/** Map a table `align` entry to its arena code (none=0). */
 function alignCode(a: unknown): number {
   return a === "left" ? 1 : a === "right" ? 2 : a === "center" ? 3 : 0;
 }
 
-/** True for the `{raw}` / `{rawHtml}` escape hatches — re-parsed by Rust rather
- *  than compiled to an op-stream, so they ride the RAW_MARKDOWN / RAW_HTML
- *  payloads instead of the declarative encoder. */
 function isRawMdastContent(
   content: MdastContent,
 ): content is RawMdastContent | RawHtmlMdastContent {
@@ -900,12 +644,7 @@ function isRawMdastContent(
   return typeof c.raw === "string" || typeof c.rawHtml === "string";
 }
 
-/** Encode `content` as the `op` structural command. Declarative nodes compile
- *  to the op-stream; the `{raw}`/`{rawHtml}` escape hatches ride the raw
- *  re-parse payloads. Anything that compiles to neither is a hard error — the
- *  op-stream is the only declarative encoding. The switches stay inline so the
- *  buffer calls are monomorphic (computed method names defeat inline caches on
- *  this warm path). */
+// Keep direct method calls so structural command dispatch stays monomorphic.
 function emitMdastTree(
   buffer: CommandBuffer,
   op: StructuralOp,
@@ -945,8 +684,6 @@ function assertMdastWrapParent(parentNode: MdastContent): void {
   const type = (parentNode as { type?: unknown }).type;
   const tag = typeof type === "string" ? NAME_TO_TYPE[type] : undefined;
   if (tag === undefined) {
-    // User-defined type: only the declared shape distinguishes a parent from
-    // a text leaf.
     if (Array.isArray((parentNode as Custom).children)) return;
     throw new Error(
       `wrapNode: a user-defined "${String(type)}" wrapper must declare a children array. ` +
@@ -961,9 +698,7 @@ function assertMdastWrapParent(parentNode: MdastContent): void {
   );
 }
 
-/** MDAST node types whose `value` Rust can set in place via setProperty. A
- *  visitor returning one of these as `{type, value}` with no other fields
- *  skips a full arena rebuild. */
+// Updating only value avoids an arena rebuild for these node types.
 const MDAST_VALUE_ONLY_TYPES = new Set<string>([
   "text",
   "html",
@@ -973,9 +708,7 @@ const MDAST_VALUE_ONLY_TYPES = new Set<string>([
   "inlineMath",
 ]);
 
-/** True when the visitor returned a same-type MDAST node carrying only `type`
- *  + `value`. Any other field present (children, position, data, lang, meta)
- *  falls back to the full replace path so nothing is silently dropped. */
+// Extra fields require full replacement so the value-only fast path cannot discard them.
 function isMdastTextValueSwap(
   result: MdastNode,
   original: MdastNode | undefined,
@@ -994,8 +727,7 @@ function isMdastTextValueSwap(
   );
 }
 
-/** A result that is the same object as the input node is a no-op, so context
- *  mutations (e.g. setProperty) are not clobbered. */
+// Returning the input node must not overwrite mutations queued through the context.
 function applyMdastVisitResult(
   result: MdastVisitorResult,
   nodeId: number,
@@ -1027,7 +759,7 @@ function applyMdastVisitResult(
 
 /**
  * Walk an MDAST handle in Rust, dispatch matched nodes to JS visitor functions,
- * and apply mutations back to the handle. No arena buffers cross NAPI.
+ * and collect mutations for the caller to apply. No arena buffers cross NAPI.
  *
  * Returns MdastVisitResult synchronously if all visitors are sync,
  * or Promise<MdastVisitResult> if any visitor is async.
@@ -1084,32 +816,29 @@ export function visitMdastHandle(
       deferred ??= [];
       deferred.push({ nodeId, promise: result, originalNode: node });
     } else {
-      applyMdastVisitResult(result as MdastVisitorResult, nodeId, returnBuffer, resolver.refs, node);
+      applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, node);
     }
   }
 
   if (deferred) {
-    return Promise.all(
-      deferred.map((d) =>
-        d.promise.then((r) => ({ nodeId: d.nodeId, result: r, originalNode: d.originalNode })),
-      ),
-    ).then((results) => {
-      for (const { nodeId, result, originalNode } of results) {
-        applyMdastVisitResult(result, nodeId, returnBuffer, resolver.refs, originalNode);
+    const visits = deferred;
+    return Promise.all(visits.map((visit) => visit.promise)).then((results) => {
+      for (let i = 0; i < visits.length; i++) {
+        const { nodeId, originalNode } = visits[i]!;
+        applyMdastVisitResult(results[i], nodeId, returnBuffer, resolver.refs, originalNode);
       }
-      return finalizeMdastVisit(handle, context, returnBuffer);
+      return finalizeMdastVisit(context, returnBuffer);
     });
   }
 
-  return finalizeMdastVisit(handle, context, returnBuffer);
+  return finalizeMdastVisit(context, returnBuffer);
 }
 
 const MDAST_ROOT_SUBS: { nodeType: number; tagFilter: string[] }[] = [
   { nodeType: MDAST_ROOT, tagFilter: [] },
 ];
 
-/** Its own pass so the caller can apply what `before` queued before the
- *  visitors walk, and the visitors' mutations before `after` reads the tree. */
+/** Hooks run in separate passes so each sees mutations from the preceding pass. */
 export function visitMdastHook(
   handle: MdastHandle,
   plugin: MdastPluginInstance,
@@ -1134,7 +863,7 @@ export function visitMdastHook(
   const returnBuffer = acquireCommandBuffer();
   const matchBuf: Uint8Array = walkMdastHandle(handle, MDAST_ROOT_SUBS);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
-  if (ru32(matchView, 0) === 0) return finalizeMdastVisit(handle, context, returnBuffer);
+  if (ru32(matchView, 0) === 0) return finalizeMdastVisit(context, returnBuffer);
 
   const root = readMdastMatchedNode(
     matchView,
@@ -1147,19 +876,19 @@ export function visitMdastHook(
 
   const result = hook.call(plugin, root, context);
   if (result instanceof Promise) {
-    return result.then(() => finalizeMdastVisit(handle, context, returnBuffer));
+    return result.then(() => finalizeMdastVisit(context, returnBuffer));
   }
-  return finalizeMdastVisit(handle, context, returnBuffer);
+  return finalizeMdastVisit(context, returnBuffer);
 }
 
 function finalizeMdastVisit(
-  handle: MdastHandle,
   context: MdastVisitorContext,
   returnBuffer: CommandBuffer,
 ): MdastVisitResult {
-  const { merged, hasMutations } = mergeAndReset(returnBuffer, context);
-  // Return both buffers to the pool. Bytes were copied into `merged` above.
-  releaseCommandBuffer(returnBuffer);
-  releaseCommandBuffer(context.getCommandBuffer());
-  return { commandBuffer: merged, diagnostics: context.getDiagnostics(), hasMutations };
+  const commandBuffer = collectCommands(returnBuffer, context.getCommandBuffer());
+  return {
+    commandBuffer,
+    diagnostics: context.getDiagnostics(),
+    hasMutations: commandBuffer.length > 0,
+  };
 }

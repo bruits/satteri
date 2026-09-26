@@ -27,10 +27,10 @@ use oxc_syntax::node::NodeId;
 use rustc_hash::FxHashMap;
 use satteri_arena::mdx_types::{self as message, Location, MdxExpressionKind, Stop};
 use satteri_arena::{Arena, Hast};
-use satteri_ast::hast::HastNodeType;
 use satteri_ast::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
 };
+use satteri_ast::hast::{HastNodeType, RenderOptions};
 use satteri_ast::mdast::codec::{
     decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
     decode_mdx_jsx_explicit,
@@ -38,6 +38,7 @@ use satteri_ast::mdast::codec::{
 use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
     PROP_BOOL_TRUE, PROP_COMMA_SEP, PROP_COMMA_SEP_NUM, PROP_INT, PROP_SPACE_SEP, PROP_STRING,
+    PROP_TOKEN_LIST,
 };
 
 /// Get a Span from a HAST binary node's position data.
@@ -102,16 +103,9 @@ impl MdxProgram<'_> {
     }
 }
 
-/// Whether we're in HTML or SVG.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Space {
-    Html,
-    Svg,
-}
-
 /// Context used to compile hast into OXC's ES AST.
 struct Context<'a> {
-    space: Space,
+    render_options: RenderOptions,
     comments: Vec<MdxComment>,
     esm: Vec<Statement<'a>>,
     location: Option<&'a Location<'a>>,
@@ -143,7 +137,7 @@ pub fn hast_util_to_oxc<'a>(
         prepare_component_overrides(view, allocator, location, optimize_static)?;
 
     let mut context = Context {
-        space: Space::Html,
+        render_options: RenderOptions::default(),
         comments: vec![],
         esm: vec![],
         location,
@@ -407,9 +401,14 @@ fn is_text_node(view: &Arena<Hast>, node_id: u32) -> bool {
     )
 }
 
-fn render_static_group(view: &Arena<Hast>, node_ids: &[u32], out: &mut String, space: Space) {
+fn render_static_group(
+    view: &Arena<Hast>,
+    node_ids: &[u32],
+    out: &mut String,
+    options: RenderOptions,
+) {
     for &node_id in node_ids {
-        satteri_ast::hast::render_node(node_id, view, out, false, space == Space::Svg);
+        satteri_ast::hast::render_node_with_options(node_id, view, out, options);
     }
 }
 
@@ -523,7 +522,7 @@ fn all<'a>(
                         context.view,
                         &context.view.get_children(parent_id)[group_start..i],
                         &mut html_buf,
-                        context.space,
+                        context.render_options,
                     );
                     if !html_buf.is_empty() {
                         result.push(create_raw_html_jsx(context.allocator, &html_buf, config));
@@ -593,13 +592,11 @@ fn transform_element<'a>(
     let tag_ref = decode_element_tag(data);
     let tag_name = context.view.get_str(tag_ref);
 
-    let space = context.space;
-    if space == Space::Html && tag_name == "svg" {
-        context.space = Space::Svg;
-    }
+    let render_options = context.render_options;
+    context.render_options = render_options.for_children(tag_name);
 
     let children = all(context, node_id, explicit_jsxs)?;
-    context.space = space;
+    context.render_options = render_options;
 
     let alloc = context.allocator;
     let prop_count = decode_element_prop_count(data);
@@ -607,17 +604,28 @@ fn transform_element<'a>(
 
     // The schema switch covers the <svg> element's own attributes too, not
     // just its descendants (mirrors the HTML serializer in hast/render.rs).
-    let in_svg = space == Space::Svg || tag_name == "svg";
+    let in_svg = render_options.svg_schema || tag_name == "svg";
     let attr_case = context.element_attribute_name_case;
     let style_case = context.style_property_name_case;
     for i in 0..prop_count {
         let (name_ref, value_kind, value_ref) = decode_element_prop(data, i);
         let name = context.view.get_str(name_ref);
+        // JSX takes the string the HTML attribute would have held.
+        let joined_tokens = (value_kind == PROP_TOKEN_LIST).then(|| {
+            satteri_ast::hast::join_token_list(name, in_svg, context.view.get_str(value_ref))
+        });
 
         // `style="…"` parses into a JSX expression object regardless of
         // attribute-name casing; key casing is controlled separately.
-        if name == "style" && matches!(value_kind, PROP_STRING | PROP_SPACE_SEP | PROP_COMMA_SEP) {
-            let raw = context.view.get_str(value_ref);
+        if name == "style"
+            && matches!(
+                value_kind,
+                PROP_STRING | PROP_SPACE_SEP | PROP_COMMA_SEP | PROP_TOKEN_LIST
+            )
+        {
+            let raw = joined_tokens
+                .as_deref()
+                .unwrap_or_else(|| context.view.get_str(value_ref));
             let object = build_style_object(alloc, raw, style_case);
             attrs.push(JSXAttributeItem::Attribute(OxcBox::new_in(
                 JSXAttribute {
@@ -640,8 +648,11 @@ fn transform_element<'a>(
 
         let value = match value_kind {
             PROP_BOOL_TRUE => None,
-            PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP | PROP_COMMA_SEP_NUM => {
-                let v = context.view.get_str(value_ref);
+            PROP_STRING | PROP_INT | PROP_SPACE_SEP | PROP_COMMA_SEP | PROP_COMMA_SEP_NUM
+            | PROP_TOKEN_LIST => {
+                let v = joined_tokens
+                    .as_deref()
+                    .unwrap_or_else(|| context.view.get_str(value_ref));
                 Some(JSXAttributeValue::StringLiteral(OxcBox::new_in(
                     StringLiteral {
                         node_id: Cell::new(NodeId::DUMMY),
@@ -702,16 +713,13 @@ fn transform_mdx_jsx_element<'a>(
         Some(name_str)
     };
 
-    let space = context.space;
-    if let Some(n) = name
-        && space == Space::Html
-        && n == "svg"
-    {
-        context.space = Space::Svg;
+    let render_options = context.render_options;
+    if let Some(name) = name {
+        context.render_options = render_options.for_children(name);
     }
 
     let children = all(context, node_id, explicit_jsxs)?;
-    context.space = space;
+    context.render_options = render_options;
 
     let alloc = context.allocator;
     let attr_count = decode_mdx_jsx_attr_count(data);

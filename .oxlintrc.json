@@ -1,13 +1,38 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "perf": "error",
+    "suspicious": "error"
+  },
+  "rules": {
+    "no-await-in-loop": "off"
+  },
   "ignorePatterns": [
     "target",
     "crates/**/*",
     "node_modules",
     "dist",
     "satteri_napi.*",
-    "packages/satteri/",
+    "packages/satteri/bench/fixtures",
+    "packages/satteri/index.d.ts",
+    "packages/satteri/index.js",
+    "packages/satteri/browser.d.ts",
+    "packages/satteri/browser.js",
     "wasi-worker.mjs",
     "wasi-worker-browser.mjs"
+  ],
+  "overrides": [
+    {
+      "files": ["packages/satteri/src/**/*.ts"],
+      "rules": { "typescript/no-explicit-any": "error" }
+    },
+    {
+      "files": [
+        "packages/satteri/src/materializer-cache.ts",
+        "packages/satteri/src/*/*materializer.ts",
+        "packages/satteri/src/*/*walk.ts"
+      ],
+      "rules": { "unicorn/no-new-array": "off" }
+    }
   ]
 }

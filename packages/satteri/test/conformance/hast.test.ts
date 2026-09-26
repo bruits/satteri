@@ -240,11 +240,11 @@ describe("HAST conformance: edge cases", () => {
     assertHastConformance("- [x] k\n\n- [x] b16ibm247hrh\n- [ ]  a2cmlb\n\n*88i22p0bt8wy*");
   });
 
-  test("task list mixed items 1", () => {
+  test("checked task items mixed with a plain list item", () => {
     assertHastConformance("- [x] 0 ud\n- [x] 81h\n\n- b0fxcmh1q\n\n# svk");
   });
 
-  test("task list mixed items 2", () => {
+  test("unchecked and checked task items separated by a blank line", () => {
     assertHastConformance("- [ ] 7j3xbf\n- [ ] o4m\n\n- [x] 97p2 zwfnr\n- [x] 61fg");
   });
 
@@ -311,7 +311,6 @@ describe("HAST conformance: edge cases", () => {
   });
 });
 
-// One multibyte character shifts every string the reader slices after it.
 describe("HAST conformance: multibyte string pool", () => {
   test("curly quotes and emoji mid-text", () => {
     assertHastConformance("A “quoted” word, then 🎉 an emoji, then a plain tail.");

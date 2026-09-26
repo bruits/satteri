@@ -7,7 +7,6 @@ import type {
   Frontmatter,
   HastPluginList,
   MdastPluginList,
-  MdxCompileOptions,
   MdxOnlyOptions,
 } from "satteri";
 import { parse as parseYaml } from "yaml";
@@ -77,42 +76,23 @@ export default function vitePluginSatteri(options: VitePluginSatteriOptions = {}
       const filePath = id.replace(/\?.*$/, "");
       const fileURL = pathToFileURL(filePath);
 
+      const compileOptions: CompileOptions = { fileURL };
+      if (mdastPlugins) compileOptions.mdastPlugins = mdastPlugins;
+      if (hastPlugins) compileOptions.hastPlugins = hastPlugins;
+      if (features) compileOptions.features = features;
       if (isMdx) {
-        const isDev = mdxOptions.development ?? viteConfig?.command === "serve";
-        const opts: MdxCompileOptions = {
-          fileURL,
-          development: isDev,
-          ...(mdastPlugins ? { mdastPlugins } : {}),
-          ...(hastPlugins ? { hastPlugins } : {}),
-          ...(features ? { features } : {}),
-          ...(mdxOptions.optimizeStatic ? { optimizeStatic: mdxOptions.optimizeStatic } : {}),
-          ...(mdxOptions.jsxImportSource !== undefined
-            ? { jsxImportSource: mdxOptions.jsxImportSource }
-            : {}),
-          ...(mdxOptions.jsx !== undefined ? { jsx: mdxOptions.jsx } : {}),
-          ...(mdxOptions.jsxRuntime !== undefined ? { jsxRuntime: mdxOptions.jsxRuntime } : {}),
-          ...(mdxOptions.providerImportSource !== undefined
-            ? { providerImportSource: mdxOptions.providerImportSource }
-            : {}),
-          ...(mdxOptions.pragma !== undefined ? { pragma: mdxOptions.pragma } : {}),
-          ...(mdxOptions.pragmaFrag !== undefined ? { pragmaFrag: mdxOptions.pragmaFrag } : {}),
-          ...(mdxOptions.pragmaImportSource !== undefined
-            ? { pragmaImportSource: mdxOptions.pragmaImportSource }
-            : {}),
-        };
-        const { code: mdxCode, frontmatter } = await mdxToJs(source, opts);
+        const { code: mdxCode, frontmatter } = await mdxToJs(source, {
+          ...compileOptions,
+          ...mdxOptions,
+          development: mdxOptions.development ?? viteConfig?.command === "serve",
+          outputFormat: "program",
+        });
         const fm = parseFrontmatter(frontmatter);
         const code = `export const frontmatter = ${JSON.stringify(fm)};\n${mdxCode}`;
         return { code, map: null };
       }
 
-      const opts: CompileOptions = {
-        fileURL,
-        ...(mdastPlugins ? { mdastPlugins } : {}),
-        ...(hastPlugins ? { hastPlugins } : {}),
-        ...(features ? { features } : {}),
-      };
-      const { html, frontmatter } = await markdownToHtml(source, opts);
+      const { html, frontmatter } = await markdownToHtml(source, compileOptions);
       const fm = parseFrontmatter(frontmatter);
       const code =
         `const html = ${JSON.stringify(html)};\n` +

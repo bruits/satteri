@@ -41,6 +41,17 @@ import { markdownToJs } from "satteri";
 const { code } = markdownToJs("# Hello\n\n{not an expression}");
 ```
 
+### HAST to HTML
+
+`hastToHtml` serializes a HAST root, a single node, or an array of nodes without adding a trailing newline. Raw HTML nodes are emitted verbatim; MDX nodes are skipped.
+
+```ts
+import { hastToHtml, markdownToHast } from "satteri";
+
+const html = hastToHtml(markdownToHast("**Hello**"));
+// <p><strong>Hello</strong></p>
+```
+
 ### With plugins
 
 All three functions accept `mdastPlugins` (operate on the Markdown AST) and `hastPlugins` (operate on the HTML AST). A plugin is an object with a `name` and a visitor per node type; `defineMdastPlugin` / `defineHastPlugin` add type inference.

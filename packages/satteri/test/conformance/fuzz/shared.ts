@@ -41,23 +41,15 @@ const { remarkMarkAndUnravel } = await import(
 );
 
 export const NUM_RUNS = Number(process.env.FUZZ_RUNS) || 200;
-// MDX eval compiles + renders per run, so it's far heavier than parse-only
-// fuzzers. Keep its default low; override with FUZZ_RUNS_EVAL for a thorough
-// pass.
+// Compile-and-render fuzzing is costlier than parsing, so use a lower default run count.
 export const NUM_RUNS_EVAL = Number(process.env.FUZZ_RUNS_EVAL) || 50;
 
-// Set FUZZ_SEED to reproduce a previous failing run. Set VITEST_QUIET to
-// suppress the seed log.
 const FUZZ_SEED = Number(process.env.FUZZ_SEED) || Date.now();
 if (!process.env.VITEST_QUIET) {
   console.log(`[fuzz] seed=${FUZZ_SEED}`);
 }
 
-// Wall-clock cap for each fuzz test. Vitest's default is 5s, which large
-// `FUZZ_RUNS` values (e.g. 1_000_000 → ~12 min) blow past — and the timeout
-// then masks the assertion failure that actually matters. The work here is
-// bounded by `NUM_RUNS`, not this cap; we just need it generous enough for
-// the largest practical run.
+// Let FUZZ_RUNS bound the work; a timeout must not mask the conformance failure.
 export const FUZZ_TIMEOUT_MS = 60 * 60 * 1000;
 
 export const FC_OPTIONS: fc.Parameters<unknown> = {
@@ -72,8 +64,6 @@ export const FC_OPTIONS_EVAL: fc.Parameters<unknown> = {
   endOnFailure: false,
   verbose: fc.VerbosityLevel.None,
 };
-
-// Arbitraries — markdown building blocks
 
 export const INLINE_TEXT = fc.string({
   unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz 0123456789".split("")),
@@ -206,15 +196,7 @@ export const markdownBlock = fc.oneof(
 const MD_SIGNIFICANT_CHARS = "# *_~`[]()!<>|-\\{}@^+=$:/ \t\n\r".split("");
 const ALNUM = "abcdefghijklmnopqrstuvwxyz 0123456789".split("");
 
-// Spec-seeded arbitraries
-//
-// Pure random small inputs miss interactions between features (links inside
-// blockquotes inside lists, tight/loose list edge cases, fenced code with
-// info strings, …). Seeding fast-check with the CommonMark spec examples
-// means each fuzz draw can start from a realistic, complex input and (via
-// the mutator) explore variants of it. The reference parsers already
-// handle these inputs verbatim, so any divergence we find is a real bug
-// rather than noise from synthetic chaos.
+// Spec examples expose feature interactions that small random inputs rarely reach.
 const SPEC_DIR = fileURLToPath(
   new URL("../../../../../crates/satteri-pulldown-cmark/third_party/", import.meta.url),
 );
@@ -232,16 +214,9 @@ function loadSpecMarkdown(relPath: string): string[] {
 
 const COMMONMARK_EXAMPLES = loadSpecMarkdown("CommonMark/spec.json");
 
-/** A single CommonMark spec example, drawn at random. */
 export const commonmarkExample =
   COMMONMARK_EXAMPLES.length > 0 ? fc.constantFrom(...COMMONMARK_EXAMPLES) : fc.constant("");
 
-/**
- * A CommonMark spec example with 0–N small mutations applied: random
- * character insertions/deletions/substitutions, or splicing in a slice of
- * another example. Generates inputs that look like real markdown but
- * exercise edge cases the spec doesn't cover directly.
- */
 export const mutatedCommonmarkExample = fc
   .tuple(
     commonmarkExample,
@@ -253,15 +228,12 @@ export const mutatedCommonmarkExample = fc
           "replace" as const,
           "splice" as const,
         ),
-        // Position offset (0..1, scaled to string length at apply time).
         pos: fc.double({ min: 0, max: 1, noNaN: true, noDefaultInfinity: true }),
-        // For insert/replace: a small bit of MD-significant text.
         chunk: fc.string({
           unit: fc.constantFrom(...MD_SIGNIFICANT_CHARS, ...ALNUM),
           minLength: 1,
           maxLength: 6,
         }),
-        // For splice: another spec example to weave in.
         other: commonmarkExample,
       }),
       { minLength: 0, maxLength: 4 },
@@ -296,13 +268,7 @@ export const mutatedCommonmarkExample = fc
     return s;
   });
 
-// Curated MDX examples covering the syntactic surface (expressions, JSX,
-// ESM, comments, spreads, member/namespaced names, multi-line forms, mixed
-// inline content). Authored rather than scraped because mdx-js's own
-// fixtures aren't in a single load-friendly format, and a small focused
-// set catches the relevant interactions.
 const MDX_EXAMPLES: string[] = [
-  // Inline expressions
   "{1 + 2}",
   "value: {1 + 2}",
   "{`hello ${name}`}",
@@ -312,9 +278,7 @@ const MDX_EXAMPLES: string[] = [
   "{/* comment */}",
   "{/* one */ /* two */ x}",
   "{1 +\n2}",
-  // Flow expressions (own line)
   "before\n\n{1 + 2}\n\nafter",
-  // JSX inline
   "<Foo/>",
   "<Foo bar={1}/>",
   '<Foo bar={1} baz="two"/>',
@@ -325,47 +289,34 @@ const MDX_EXAMPLES: string[] = [
   "<>{1 + 2}</>",
   "<Check disabled/>",
   "<Foo $bar/>",
-  // Member / namespaced names
   "<Ui.Button>Click</Ui.Button>",
   "<svg:circle/>",
-  // Spread
   "<Tag {...props}/>",
   "<Tag {...{x: 'hi'}}/>",
-  // Multiline JSX
   '<Foo\n  bar={1}\n  baz="two"\n/>',
   "<Box>\n  child\n</Box>",
   "<Box>\n  - a list\n  - inside\n</Box>",
-  // Self-closing with newline
   "<Foo/>\n",
   "<br/>",
-  // Mixed inline (expressions are self-contained so render-time eval
-  // exercises real output rather than tripping on undefined identifiers).
   "before <Foo/> after",
   "before {1 + 2} after",
   "before <Foo {...{x: 1}}/> after {42}",
-  // Link with expression in text
   '[{"label"}](url)',
   '[hello {"name"}](url)',
-  // Image with expression body in alt
   "![{1+2}](u)",
-  // Multiple consecutive
   "<Foo/><Bar/><Box>c</Box>",
   "{1}{2}{3}",
-  // ESM (`export const` so we don't depend on a resolvable module).
+  // Export local bindings so evaluation does not depend on external module resolution.
   "export const y = 1\n\n{y}",
-  // Mixed with markdown
   '# Heading with {1 + 2}\n\n- list with <Foo/>\n- and {"other"}',
   "> blockquote with {1 + 2}",
   '**bold {"x"} bold**',
   '`code` and {"x"}',
-  // Children with markdown
   "<Box>\n  # heading inside\n\n  paragraph inside\n</Box>",
-  // Common patterns. Uses already-provided `Box`/`Tag` components so the
-  // seed exercises eval rather than tripping on module resolution.
+  // Use supplied components so fuzzing tests evaluation rather than module availability.
   '<Box>\n  <Tag name="a">first</Tag>\n  <Tag name="b">second</Tag>\n</Box>',
 ];
 
-/** A single curated MDX example. */
 export const mdxExample =
   MDX_EXAMPLES.length > 0 ? fc.constantFrom(...MDX_EXAMPLES) : fc.constant("");
 
@@ -381,8 +332,6 @@ export const mutatedMdxExample = fc
           "splice" as const,
         ),
         pos: fc.double({ min: 0, max: 1, noNaN: true, noDefaultInfinity: true }),
-        // Bias toward MDX-significant chars so mutations stress JSX/expr
-        // edges (broken tags, bare braces, etc.).
         chunk: fc.string({
           unit: fc.constantFrom("<", ">", "{", "}", "/", "=", '"', "'", " ", "\n", ...ALNUM),
           minLength: 1,
@@ -422,44 +371,32 @@ export const mutatedMdxExample = fc
     return s;
   });
 
-// Curated frontmatter examples covering YAML and TOML, simple and
-// nested values, edge cases (empty body, missing close, mixed delimiters,
-// content immediately after the close fence, frontmatter in the wrong
-// position, etc.).
 const FRONTMATTER_EXAMPLES: string[] = [
-  // Simple YAML
   "---\ntitle: Hello\n---\n",
   "---\ntitle: Hello\nauthor: Erika\n---\n\nbody",
   "---\n---\n\nbody",
-  // YAML with various value types
   "---\nnum: 42\nbool: true\nlist:\n  - a\n  - b\nmap:\n  k: v\n---\n",
   "---\nmulti: |\n  line one\n  line two\n---\n",
   '---\ntitle: "With: colon"\n---\n',
   "---\ndate: 2024-01-15\n---\n",
-  // Simple TOML
   '+++\ntitle = "Hello"\n+++\n',
   '+++\ntitle = "Hello"\nauthor = "Erika"\n+++\n\nbody',
   "+++\n+++\n\nbody",
   '+++\nnum = 42\nbool = true\nlist = ["a", "b"]\n[map]\nk = "v"\n+++\n',
-  // Adjacent content
   "---\ntitle: t\n---\n# heading right after",
   '+++\ntitle = "t"\n+++\n# heading right after',
-  // Edge cases
-  "---\n", // unclosed
-  "+++\n", // unclosed
-  "---\nbroken\n", // unclosed with content
-  "---\nkey: value\n", // unclosed with body
-  "---\n - not a list at start\n---\n", // weird YAML
-  "---\nkey: value\n+++\n", // mixed delimiters
+  "---\n",
+  "+++\n",
+  "---\nbroken\n",
+  "---\nkey: value\n",
+  "---\n - not a list at start\n---\n",
+  "---\nkey: value\n+++\n",
   '+++\nkey = "value"\n---\n',
-  // Frontmatter in wrong position (must be first)
-  "# heading\n\n---\nkey: value\n---\n", // not at start → not frontmatter
-  " ---\nkey: value\n---\n", // indented opener
-  // With surrounding whitespace
+  "# heading\n\n---\nkey: value\n---\n",
+  " ---\nkey: value\n---\n",
   "---\n  title: Hello  \n---\n",
 ];
 
-/** A single curated frontmatter example. */
 export const frontmatterExample =
   FRONTMATTER_EXAMPLES.length > 0 ? fc.constantFrom(...FRONTMATTER_EXAMPLES) : fc.constant("");
 
@@ -467,19 +404,12 @@ const generatedMarkdownDocument = fc
   .array(markdownBlock, { minLength: 1, maxLength: 12 })
   .map((blocks) => blocks.join("\n\n"));
 
-// Mix synthetic markdown with spec examples and mutated spec examples.
-// The weights bias toward spec-seeded inputs, since pure synthetic fuzz
-// already had thousands of iterations of coverage and the spec examples
-// are where most realistic complexity lives.
 export const markdownDocument = fc.oneof(
   { weight: 1, arbitrary: generatedMarkdownDocument },
   { weight: 2, arbitrary: commonmarkExample },
   { weight: 2, arbitrary: mutatedCommonmarkExample },
 );
 
-// Feature-biased chaos: alnum + markdown-significant chars + extra weight on
-// chars relevant to the suite's parser features. Same overall surface, biased
-// distribution so suites stress their own syntax more often.
 function makeChaos(extras: string): fc.Arbitrary<string> {
   const oneof: { weight: number; arbitrary: fc.Arbitrary<string> }[] = [
     { weight: 1, arbitrary: fc.constantFrom(...ALNUM) },
@@ -496,12 +426,6 @@ export const mathChaos = makeChaos("$\\");
 export const fmChaos = makeChaos("-+:");
 export const mdxChaos = makeChaos("<>{}/");
 
-// GFM autolink-literal arbitraries. Dense coverage of the dimensions the
-// hand-rolled scanner has to match micromark + mdast-util on: scheme case,
-// domain/path bytes (incl. `_`/`-`/non-ASCII), trailing-punctuation runs and
-// entities, preceding/following chars (which select construct vs FNR), and
-// the block/inline contexts whose precedence matters (blockquote, list, link
-// label, inside a `<…>` construct, code span).
 const AL_SCHEME = fc.constantFrom(
   "www.",
   "http://",
@@ -516,8 +440,8 @@ const AL_SCHEME = fc.constantFrom(
   "mailto:",
   "",
 );
-const AL_DOMAIN_UNIT = fc.constantFrom(...[..."abXYZ019"], "-", "_", ".", "點", "é");
-const AL_PATH_UNIT = fc.constantFrom(...[..."ab019"], ..."/()?#&=-_.[]~*!,:;'\"+%".split(""), "點");
+const AL_DOMAIN_UNIT = fc.constantFrom(..."abXYZ019", "-", "_", ".", "點", "é");
+const AL_PATH_UNIT = fc.constantFrom(..."ab019", ..."/()?#&=-_.[]~*!,:;'\"+%".split(""), "點");
 const AL_TRAIL = fc.constantFrom(
   "",
   ".",
@@ -538,10 +462,8 @@ const AL_TRAIL = fc.constantFrom(
   "&amp;",
   "&copy;",
   "&notreal",
-  // Only the `;` is trailing punctuation, so the URL ends mid-reference.
   "&#104;",
   "&#x68;",
-  // The escape and the link both want the byte after a URL-ending backslash.
   "\\,",
   "\\<a>",
   "?!",
@@ -553,35 +475,31 @@ const AL_TRAIL = fc.constantFrom(
   "(a)",
 );
 const AL_PREV = fc.constantFrom(
-  ...[
-    "",
-    "",
-    " ",
-    "(",
-    "[",
-    "*",
-    "_",
-    "~",
-    "a",
-    "5",
-    ".",
-    "/",
-    "@",
-    "é",
-    "點",
-    ")",
-    ">",
-    "x",
-    ":",
-    "<",
-    "!",
-    "\\",
-    "\\\\",
-  ],
+  "",
+  "",
+  " ",
+  "(",
+  "[",
+  "*",
+  "_",
+  "~",
+  "a",
+  "5",
+  ".",
+  "/",
+  "@",
+  "é",
+  "點",
+  ")",
+  ">",
+  "x",
+  ":",
+  "<",
+  "!",
+  "\\",
+  "\\\\",
 );
-const AL_POST = fc.constantFrom(
-  ...["", "", " ", "\n", ")", "]", ".", "x", " end\n", ">", "\t", "!"],
-);
+const AL_POST = fc.constantFrom("", "", " ", "\n", ")", "]", ".", "x", " end\n", ">", "\t", "!");
 
 const autolinkUrl = fc
   .tuple(
@@ -591,8 +509,8 @@ const autolinkUrl = fc
   )
   .map(([scheme, dom, path]) => scheme + dom.join("") + path.join(""));
 
-const EMAIL_LOCAL_UNIT = fc.constantFrom(...[..."ab019"], ".", "+", "-", "_");
-const EMAIL_DOMAIN_UNIT = fc.constantFrom(...[..."ab019"], ".", "-", "_", "點");
+const EMAIL_LOCAL_UNIT = fc.constantFrom(..."ab019", ".", "+", "-", "_");
+const EMAIL_DOMAIN_UNIT = fc.constantFrom(..."ab019", ".", "-", "_", "點");
 const autolinkEmail = fc
   .tuple(
     fc.array(EMAIL_LOCAL_UNIT, { minLength: 1, maxLength: 8 }),
@@ -601,7 +519,6 @@ const autolinkEmail = fc
   .map(([local, dom]) => `${local.join("")}@${dom.join("")}`);
 
 const autolinkLine = fc
-  // URLs twice as likely as emails.
   .tuple(AL_PREV, fc.oneof(autolinkUrl, autolinkUrl, autolinkEmail), AL_TRAIL, AL_POST)
   .map(([prev, core, trail, post]) => prev + core + trail + post);
 
@@ -642,8 +559,6 @@ export const autolinkDocument = fc
         return `text\n${line}\n`;
       case "img":
         return `![${line}](/i)\n`;
-      // A destination reaches the autolink tokenizer only when the bracket pair
-      // fails to resolve; these cover both outcomes.
       case "dest":
         return `[a](${line})x\n`;
       case "destUnresolved":
@@ -657,11 +572,7 @@ export const autolinkDocument = fc
 
 export const autolinkChaos = makeChaos("./:@~_-wWhHtTpP><&;()[]\\");
 
-// MDX arbitraries
-
-// Align with @mdx-js/mdx + remarkGfm. Disable satteri features that don't
-// have an easy remark equivalent in the MDX pipeline (heading attributes) or
-// that the math/frontmatter suites cover separately.
+// Keep parser features aligned with the remark reference; other suites cover math and frontmatter.
 const mdxParser = remark().use(remarkGfm).use(remarkMdx).use(remarkMarkAndUnravel);
 const MDX_FEATURES = {
   headingAttributes: false,
@@ -698,8 +609,7 @@ export function satteriMdxMdast(input: string): unknown {
   return stripPositionsAndEstree(mdxToMdast(input, { features: MDX_FEATURES }));
 }
 
-// Satteri drops directive nodes during mdast→hast; match that on the
-// reference with empty directive handlers.
+// Empty reference handlers match Sätteri’s omission of unhandled directives.
 const emptyDirectiveHandler = () => undefined;
 const REF_TO_HAST_OPTIONS = {
   allowDangerousHtml: true,
@@ -732,7 +642,6 @@ export const jsxComponents: Record<string, Function> = {
   Wrapper: (props: any) => createElement("div", null, props.children),
   Tag: (props: any) => createElement("span", null, `tag=${JSON.stringify(props)}`),
   Check: (props: any) => createElement("input", { type: "checkbox", ...props }),
-  // `<Ui.Button/>` resolves via member access on the components map.
   Ui: {
     Button: (props: any) => createElement("button", null, props.children),
   } as unknown as Function,
@@ -809,10 +718,6 @@ const generatedMdxDocument = fc
   .array(mdxBlock, { minLength: 1, maxLength: 8 })
   .map((blocks) => blocks.join("\n\n"));
 
-// MDX is a superset of CommonMark, so spec examples are valid input. Mix
-// them in alongside MDX-specific examples (curated for JSX/expressions/ESM)
-// and the synthetic blocks. Heavier weight on MDX-specific seeds since
-// those exercise the parser surface that's actually unique to MDX.
 export const mdxDocument = fc.oneof(
   { weight: 1, arbitrary: generatedMdxDocument },
   { weight: 2, arbitrary: commonmarkExample },
@@ -820,8 +725,6 @@ export const mdxDocument = fc.oneof(
   { weight: 3, arbitrary: mdxExample },
   { weight: 3, arbitrary: mutatedMdxExample },
 );
-
-// Math arbitraries
 
 const MATH_CONTENT = fc.string({
   unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789 +-=^_{}\\".split("")),
@@ -878,13 +781,8 @@ const mathBlock = fc.oneof(
   { weight: 1, arbitrary: table },
 );
 
-// Curated math examples. The synthetic generator only produces well-formed
-// `$x$` / `$$x$$`. The curated set covers things it doesn't: pandoc's
-// "no-digit-after-$" rule (so `$5 and $10` isn't math), escaped dollars,
-// unclosed delimiters, empty bodies, multi-line display math, math touching
-// word boundaries, math nested in lists/blockquotes/tables/headings.
+// Curated inputs cover malformed and boundary cases absent from the well-formed math generator.
 const MATH_EXAMPLES: string[] = [
-  // Inline basics
   "$x$",
   "$x = 1$",
   "$a + b$",
@@ -893,36 +791,28 @@ const MATH_EXAMPLES: string[] = [
   "$\\sqrt{x^2 + y^2}$",
   "$\\sum_{i=0}^{n} i$",
   "$\\int_0^1 f(x)\\, dx$",
-  // Display math
   "$$x$$",
   "$$x = 1$$",
   "$$\nx = 1\n$$",
   "$$\n\\frac{a}{b}\n$$",
   "$$\n\\begin{matrix}\n  a & b \\\\\n  c & d\n\\end{matrix}\n$$",
   "$$\n\\begin{aligned}\n  x &= 1 \\\\\n  y &= 2\n\\end{aligned}\n$$",
-  // Pandoc dollar-as-currency rule
   "It costs $5 and $10.",
   "$5 + $10 = $15",
   "Worth $1,000 today.",
-  // Escaped dollars
   "Use \\$ for currency, $x$ for math.",
   "Plain text \\$5 and math $5x$.",
-  // Math touching word boundaries
   "before$x$after",
   "($x$)",
   "[$x$]",
-  // Empty / odd
   "$$",
   "$$$$",
-  // Unclosed
   "$x",
   "$x = 1",
   "$$\nx = 1",
-  "$x and $y", // two opens with content between
-  // Math with `$` in body via escapes / commands
+  "$x and $y",
   "$\\$$",
   "$x \\text{ for } \\$y$",
-  // Math in markdown contexts
   "# Heading with $x$ math",
   "## $E = mc^2$",
   "- list item $x$\n- another $y$",
@@ -930,32 +820,23 @@ const MATH_EXAMPLES: string[] = [
   "> blockquote with $\\sum_i x_i$",
   "> $$\n> x = 1\n> $$",
   "| col | val |\n| --- | --- |\n| a   | $x$ |",
-  // Mixed inline + display
   "Define $f(x)$ as:\n\n$$\nf(x) = x^2\n$$\n\nThen $f(2) = 4$.",
-  // Multi-paragraph display
   "First paragraph with $a$.\n\n$$\n\\int_0^\\infty e^{-x^2}\\, dx = \\frac{\\sqrt\\pi}{2}\n$$\n\nSecond paragraph with $b$.",
-  // Math with subscripts/superscripts
   "$a_i$",
   "$x^2$",
   "$x_i^2$",
   "$\\sum_{i=1}^{n} x_i^2$",
-  // Math with matrices/vectors
   "$\\vec{v}$",
   "$\\mathbf{A}$",
-  // Math with fractions / nested
   "$\\frac{1}{1 + \\frac{1}{x}}$",
   "$\\binom{n}{k}$",
-  // Common identities
   "$e^{i\\pi} + 1 = 0$",
   "$\\cos^2\\theta + \\sin^2\\theta = 1$",
-  // Spaces around delimiters (CommonMark-significant)
   "$ x $",
   "$$ x $$",
-  // Newlines in inline math (illegal — should not parse as math)
   "$x\ny$",
 ];
 
-/** A single curated math example. */
 export const mathExample =
   MATH_EXAMPLES.length > 0 ? fc.constantFrom(...MATH_EXAMPLES) : fc.constant("");
 
@@ -971,8 +852,6 @@ export const mutatedMathExample = fc
           "splice" as const,
         ),
         pos: fc.double({ min: 0, max: 1, noNaN: true, noDefaultInfinity: true }),
-        // Bias toward math-significant chars so mutations stress `$`/`\`/
-        // brace boundaries.
         chunk: fc.string({
           unit: fc.constantFrom("$", "\\", "{", "}", "_", "^", " ", "\n", ...ALNUM),
           minLength: 1,
@@ -1022,10 +901,7 @@ export const mathDocument = fc.oneof(
   { weight: 2, arbitrary: mutatedMathExample },
 );
 
-// MDX x math interaction arbitraries. The other suites keep the two apart, so
-// the inline `$...$` x `{...}` surface (where the `{` math guard lives) is
-// never fuzzed. Expressions are kept self-contained so a guard failure shows as
-// an output mismatch (`{1 + 2}` text vs `3`), not a `ReferenceError`.
+// Self-contained expressions expose math/MDX misclassification as output differences, not ReferenceErrors.
 const MATH_INNER = fc.string({
   unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789".split("")),
   minLength: 1,
@@ -1058,8 +934,6 @@ const mathExprLine = fc
   )
   .map((parts) => parts.join(" "));
 
-// Curated, well-formed cases: braces inside `$...$` stay math text, those
-// outside are expressions.
 const MDX_MATH_EXAMPLES: string[] = [
   "$\\frac{-b}{2a}$ and {1 + 1}",
   "Price is $5 and {x} costs $10",
@@ -1083,8 +957,6 @@ export const mdxMathDocument = fc.oneof(
       .map((blocks) => blocks.join("\n\n")),
   },
 );
-
-// Frontmatter arbitraries
 
 const YAML_KEY = fc.string({
   unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz_".split("")),
@@ -1120,10 +992,6 @@ const generatedFmDocument = fc
   )
   .map(([fm, blocks]) => (blocks.length > 0 ? `${fm}\n\n${blocks.join("\n\n")}` : fm));
 
-// A curated frontmatter example optionally followed by markdown content.
-// Mixing the curated edge cases (unclosed fences, mixed delimiters,
-// frontmatter-in-wrong-position) is the main value here — synthetic
-// generation only produces well-formed frontmatter.
 const seededFmDocument = fc
   .tuple(frontmatterExample, fc.array(markdownBlock, { minLength: 0, maxLength: 4 }))
   .map(([fm, blocks]) => (blocks.length > 0 ? `${fm}\n${blocks.join("\n\n")}` : fm));
@@ -1133,8 +1001,6 @@ export const fmDocument = fc.oneof(
   { weight: 2, arbitrary: frontmatterExample },
   { weight: 2, arbitrary: seededFmDocument },
 );
-
-// Conformance harness
 
 export type FuzzLevel =
   | "mdast"
@@ -1155,7 +1021,6 @@ export interface FuzzIssue {
   input: string;
   level: FuzzLevel;
   source: FuzzSource;
-  /** "position-only" if trees match after stripping `position`; "content" otherwise. */
   kind: "content" | "position-only";
   expected: unknown;
   actual: unknown;
@@ -1163,100 +1028,51 @@ export interface FuzzIssue {
 
 const HTML_LEVELS = new Set<FuzzLevel>(["html", "math-html", "fm-html"]);
 
-// Divergences we deliberately don't try to match because they stem from
-// upstream behaviour we consider buggy or undesirable. Listing them here keeps
-// the fuzz signal focused on real regressions.
-//
-// Format: `${level}\0${input}` — direct equality, no patterns. Inputs come
-// straight from past fuzz reports.
+// Exclude exact known reference divergences so fuzz failures remain actionable.
 const KNOWN_DIVERGENCES = new Set<string>([
-  // remark-frontmatter quirk: when YAML/TOML detection fails for `---\n…`,
-  // the failed attempt prevents the next line from being recognized as a list
-  // marker. Reference: paragraph; satteri (and bare remark + GFM): list.
+  // Failed YAML detection in remark-frontmatter suppresses the following list marker.
   "fm-mdast\0---\n+",
   "fm-hast\0---\n+",
   "fm-html\0---\n+",
-  // Same root cause for `+...`: the failed YAML attempt also disables table
-  // detection on the subsequent line. Reference: paragraph + table; satteri:
-  // single paragraph.
+  // Failed YAML detection in remark-frontmatter changes table recognition on the following line.
   "fm-mdast\0+w*\n+-\n:-",
   "fm-hast\0+w*\n+-\n:-",
   "fm-html\0+w*\n+-\n:-",
-  // Same root cause again: `---` followed by content that almost looks like
-  // YAML disables block parsing on the next line.
+  // Failed YAML detection in remark-frontmatter changes block parsing on the following line.
   "fm-mdast\0---\n-",
   "fm-hast\0---\n-",
   "fm-html\0---\n-",
-  // `+++` analog for TOML frontmatter: failed TOML attempt leaves the next
-  // line as a paragraph instead of letting it open a blockquote.
+  // Failed TOML detection in remark-frontmatter suppresses the following blockquote marker.
   "fm-mdast\0+++\n>!*+-",
   "fm-hast\0+++\n>!*+-",
   "fm-html\0+++\n>!*+-",
-  // Same family of remark-frontmatter quirks: a `---` followed by an
-  // indented list marker disables list detection on the next line.
+  // Failed YAML detection in remark-frontmatter suppresses the following indented list marker.
   "fm-mdast\0---\n + (",
   "fm-hast\0---\n + (",
   "fm-html\0---\n + (",
-  // Same family: failed TOML detection (`+++` + trailing whitespace, no
-  // closing fence) leaves the following line as a paragraph in remark
-  // instead of opening a list.
+  // Failed TOML detection in remark-frontmatter suppresses the following list marker.
   "fm-mdast\0+++\t\n+ -",
   "fm-hast\0+++\t\n+ -",
   "fm-html\0+++\t\n+ -",
-  // Same family: `---` followed by a list marker line in remark-frontmatter
-  // suppresses list recognition.
+  // Failed YAML detection in remark-frontmatter suppresses the following list marker.
   "fm-mdast\0---\n- --:[",
   "fm-hast\0---\n- --:[",
   "fm-html\0---\n- --:[",
-  // Cosmetic divergence: tab-indented table-cell continuation differs in
-  // some position-only fields that aren't caught by the position-strip
-  // classifier. Tree shape (rows, cells, alignment, text) matches.
+  // Tab-indented table continuations differ only in position metadata.
   "fm-mdast\0+-:\n:-\n\t:p",
   "fm-hast\0+-:\n:-\n\t:p",
   "fm-html\0+-:\n:-\n\t:p",
-  // Intentional design divergence: Sätteri represents table-cell alignment
-  // as `style="text-align: …"` while remark-rehype uses the deprecated
-  // `align="…"` attribute. Both render correctly, but the hast properties
-  // differ.
+  // Sätteri uses CSS text-align where remark emits the deprecated align attribute.
   "mdx-hast\0x7} >=>\n-:",
-  // Same family: oxc accepts an expression body shape that acorn rejects.
-  // After tightening `try_parse_expression_body` to acorn-style strictness
-  // most cases are caught, but a few edge cases (e.g. unmatched braces in
-  // regex-vs-division contexts) still slip through.
-  // (oxc-vs-acorn expression-body divergences are now handled by
-  // isMdxOxcAcornRegexDivergence.)
-  // Same family as `+++\t\n+ -`: remark-frontmatter "poisoned line 1"
-  // suppresses list detection after a `+++` opener that doesn't close.
+  // Failed TOML detection in remark-frontmatter suppresses the following list marker.
   "fm-mdast\0+++\n- +i}(",
   "fm-hast\0+++\n- +i}(",
   "fm-html\0+++\n- +i}(",
 ]);
 
-// mdx-js enforces strict flow JSX scoping rules that Sätteri's pairing
-// pass treats more leniently. Two known patterns:
-//
-// 1. Trailing non-whitespace after a flow close tag (e.g. `</Box>"`):
-//    mdx-js throws `end-tag-mismatch` because the paragraph swallows
-//    the close tag as inline JSX, leaving the flow `<Box>` unclosed.
-//    Sätteri pairs the close anyway and emits the trailing text as a
-//    sibling.
-//
-// 2. Flow JSX that opens inside a container (blockquote / list item)
-//    but whose close tag falls outside it (e.g. `><Box>\n- a\n</Box>`):
-//    mdx-js throws "Expected a closing tag for `<Box>` before the end
-//    of `blockQuote`". Sätteri pairs across the container boundary,
-//    producing an empty `<Box>` followed by sibling content.
-//
-// Matching mdx-js exactly here would require cross-pass coordination
-// between firstpass (which tokenizes flow JSX line-by-line) and
-// arena_build (which performs open/close pairing).
+// Allow known differences in flow-JSX closing-tag placement and container scoping.
 
-// Intentional design divergence: Sätteri represents table-cell
-// alignment as `style="text-align: <align>"` while remark-rehype emits
-// the deprecated `align="<align>"` attribute. The trees differ in the
-// `properties` of `td` / `th` elements but render the same. Filter
-// any hast-level diff where the only meaningful difference matches
-// that swap.
+// Treat CSS text-align and the deprecated align attribute as equivalent table alignment.
 function isAlignAttributeDivergence(
   _input: string,
   level: FuzzLevel,
@@ -1374,13 +1190,7 @@ function compareSingle(input: string, level: FuzzLevel, source: FuzzSource): Fuz
     expect(actual).toEqual(expected);
     return null;
   } catch {
-    // Reference-bug filter for the frontmatter suite. remark-frontmatter has
-    // a known issue where loading it changes how non-frontmatter content
-    // gets tokenized after a `---`/`+++` line that isn't a real frontmatter
-    // block (e.g. `---\n\n- a\n- b` becomes a paragraph instead of a list).
-    // When the reference produces no actual frontmatter node and our output
-    // matches the no-frontmatter baseline, the divergence is the reference's
-    // fault, not ours.
+    // Failed frontmatter detection can distort remark’s block parsing; compare its plain-Markdown baseline.
     if (isFrontmatterReferenceBug(input, level, actual, expected)) {
       return null;
     }
@@ -1404,12 +1214,7 @@ function isFrontmatterReferenceBug(
   expected: unknown,
 ): boolean {
   if (level !== "fm-mdast" && level !== "fm-hast" && level !== "fm-html") return false;
-  // If the reference recognised frontmatter (its mdast contains a yaml/toml
-  // node), the divergence is real and we should report it.
   if (referenceContainsFrontmatter(expected)) return false;
-  // Otherwise, fall back to the no-frontmatter baseline reference. If we
-  // match it, the difference is purely remark-frontmatter affecting
-  // non-frontmatter content.
   let baseline: unknown;
   try {
     if (level === "fm-mdast") baseline = referenceMdast(input);
@@ -1426,15 +1231,7 @@ function isFrontmatterReferenceBug(
   }
 }
 
-// Narrow classifier for the remaining MDX strict-scanner edge cases that
-// the inline-JSX / inline-expression scanners don't fully reproduce. These
-// stem from satteri's inline scanners not propagating container_check on
-// every newline-crossing call: a `<Foo\n  bar={1}/>` tag inside a
-// blockquote continues without `>` prefixes, which mdx-js rejects
-// ("Unexpected lazy line in container"). Similar story for `<j/\n>`
-// crossing a container marker, which mdx-js reports as a self-closing
-// slash error. Threading container_check through the inline scanners
-// would fix it (see §J for the larger inline-resolve rewrite).
+// Sätteri’s inline scanners accept some cross-line JSX that mdx-js rejects at container boundaries.
 function isMdxStrictScannerDivergence(
   _input: string,
   level: FuzzLevel,
@@ -1452,37 +1249,21 @@ function isMdxStrictScannerDivergence(
   if (refError.includes("Unexpected end of file before name")) return true;
   if (refError.includes("Unexpected character `!`")) return true;
   if (refError.includes("Unexpected character `?`")) return true;
-  // mdx-js rejects an unclosed JSX fragment (`<>`) or named flow element
-  // when satteri silently drops/recovers.
+  // mdx-js rejects unclosed flow JSX that Sätteri can recover.
   if (refError.includes("Expected a closing tag for")) return true;
   if (refError.includes("Expected the closing tag")) return true;
-  // mdx-js's expression-body scanner rejects a `<` followed by a name
-  // char that doesn't form a valid JSX tag (`{a <foo}` etc.).
+  // mdx-js rejects incomplete JSX tag syntax inside expressions.
   if (/Unexpected character `.+?`(?: \(U\+[0-9A-Fa-f]+\))? (?:in name|before name)/.test(refError))
     return true;
-  // mdx-js's `{` scanner reaches across block boundaries (a blockquote
-  // interruption or a code-span closing backtick) looking for the matching
-  // `}`. Satteri respects block-level interrupts and tokenizes the `{`
-  // as text or as the body of a code span. Catch the resulting
-  // "Unexpected end of file in expression" mismatch when satteri's
-  // output has a code span / inline expression that contains the brace.
+  // mdx-js scans expressions across block boundaries that terminate Sätteri’s scan.
   if (refError.includes("Unexpected end of file in expression")) {
     if (treeContainsCodeSpanWithBraces(actual)) return true;
     if (treeContainsTextWithBraces(actual)) return true;
-    // mdx-js's `{` scanner requires container_check on every line — a lazy
-    // continuation inside a blockquote (no `>` prefix on a later line) is
-    // rejected. Satteri accepts lazy continuation, so the expression body
-    // spans multiple lines. Classify when our tree contains a multi-line
-    // mdxFlow/TextExpression body.
+    // mdx-js rejects lazy continuation lines that Sätteri accepts inside expressions.
     if (treeContainsMultilineMdxExpression(actual)) return true;
-    // mdx-js's `{` scan also fires when an unclosed `{` ends up inside a
-    // code span. Satteri's inline parser resolved the code span first, so
-    // the `{` ended up wrapped in `` `…` ``. The closing `}` need not be
-    // present (and often isn't, since that's why the reference errored).
+    // Code-span precedence can keep braces literal where mdx-js starts an expression.
     if (treeContainsCodeSpanWithOpenBrace(actual)) return true;
-    // mdx-js's `{` scan also rejects refdef labels whose multi-line label
-    // contains an unmatched `{` (e.g. `[d_5\n{oo]: /url "title"`). Satteri
-    // accepts the refdef and the `{` ends up in the label string.
+    // Sätteri accepts unmatched braces in reference labels that mdx-js scans as expressions.
     if (treeContainsDefinitionLabelWithBraces(actual)) return true;
   }
   return false;
@@ -1538,14 +1319,7 @@ function referenceContainsFrontmatter(node: unknown): boolean {
   return false;
 }
 
-// oxc accepts JS expression shapes that acorn (used by mdx-js) rejects.
-// Most relevant: regex syntax validation (`/+/` is invalid because `+`
-// has nothing to quantify) and ambiguous regex-vs-division parsing in
-// rare lexer states. When the reference threw and our output is a
-// single mdxFlowExpression / mdxTextExpression node, the divergence is
-// almost certainly this oxc-vs-acorn split rather than a genuine
-// structural bug. Tightening try_parse_expression_body to acorn's
-// exact strictness would require swapping engines, so document it.
+// Oxc accepts some regex and expression syntax that mdx-js’s Acorn parser rejects.
 function isMdxOxcAcornRegexDivergence(
   _input: string,
   level: FuzzLevel,
@@ -1557,22 +1331,10 @@ function isMdxOxcAcornRegexDivergence(
   if (expected !== "PARSE_ERROR") return false;
   if (typeof actual !== "object" || actual === null) return false;
   if (!refError) return false;
-  // Same root cause for two distinct acorn checks: expression-body
-  // validation (`Could not parse expression with acorn`) and ESM
-  // import/export validation (`Could not parse import/exports with
-  // acorn`). oxc is more permissive in both cases — for instance, with
-  // jsx enabled, oxc will accept `import X from 'x'<` (treating `<` as
-  // a JSX-element opener), while acorn-with-acorn-jsx rejects it.
+  // Acorn validates ESM and expression bodies separately; both can differ from Oxc.
   if (refError.includes("Could not parse expression with acorn")) {
-    // Direct case: satteri produced an mdxExpression node that acorn
-    // would reject.
     if (treeContainsMdxExpression(actual)) return true;
-    // Indirect case: mdx-js's `{` expression scan ran BEFORE code-span
-    // resolution and claimed the `{...}` body (which acorn then failed
-    // to parse). Satteri's inline parser resolved the code span first,
-    // so the `{` content ended up wrapped in `\`...\`` instead. The
-    // signal is a code span whose value contains `{` and `}` —
-    // mdx-js's scan would have grabbed those braces as an expression.
+    // Code-span precedence can keep braces literal where mdx-js starts an expression.
     if (treeContainsCodeSpanWithBraces(actual)) return true;
   }
   if (refError.includes("Could not parse import/exports with acorn")) {
@@ -1622,7 +1384,6 @@ function treeContainsMdxExpression(node: unknown): boolean {
     attributes?: unknown[];
   };
   if (n.type === "mdxFlowExpression" || n.type === "mdxTextExpression") return true;
-  // JSX expression attributes are body-validated the same way.
   if (n.type === "mdxJsxExpressionAttribute") return true;
   if (Array.isArray(n.children) && n.children.some((c) => treeContainsMdxExpression(c))) {
     return true;
@@ -1704,7 +1465,8 @@ function diffFingerprint(expected: unknown, actual: unknown, path = ""): string[
 function classifyDiff(expected: unknown, actual: unknown): string {
   const diffs = diffFingerprint(expected, actual);
   const patterns = diffs.map((d) => d.replace(/\[\d+\]/g, "[N]").replace(/\.\d+\./g, ".N."));
-  return patterns.sort().join(" | ");
+  patterns.sort();
+  return patterns.join(" | ");
 }
 
 export function deduplicateIssues(issues: FuzzIssue[]): FuzzIssue[] {
@@ -1737,8 +1499,6 @@ export function formatIssue(issue: FuzzIssue, index: number): string {
   ].join("\n");
 }
 
-// MDX eval harness
-
 function normalizeHtml(html: string): string {
   return html.replace(/>\s+</g, "><").replace(/\s+</g, "<").replace(/>\s+/g, ">").trim();
 }
@@ -1752,25 +1512,13 @@ export interface MdxEvalIssue {
   error?: string | undefined;
 }
 
-// MDX evaluation divergences we accept — the @mdx-js path rejects but
-// satteri's parser+runtime evaluates successfully. Each entry corresponds
-// to a documented divergence; lenient recovery vs strict rejection is a
-// deliberate satteri design choice.
 const KNOWN_MDX_EVAL_DIVERGENCES = new Set<string>([
-  // Multi-line code span containing `<`: satteri pairs the backticks across
-  // the newline and emits `<code>&lt;</code>`; mdx-js's tokenizer interprets
-  // the `<` as a JSX tag start before the second backtick closes the span.
-  // To fix in a follow-up pass.
+  // Code-span and JSX precedence differ when a multiline span contains a less-than sign.
   "`\n <`",
-  // Same shape as the `-\n\n  2. b\n\n    3. c\n` case in FUZZ-ISSUES.md
-  // (tracked as a pending md task): a top-level list-marker line followed
-  // by a blank line and an indented continuation gets nested by satteri
-  // and kept as siblings by mdx-js. Hit by the `*` variant too.
+  // List continuations can nest differently after an empty marker and a blank line.
   "*\n\n  2. b\n\n    3. c\n",
 ]);
 
-// Feature set for an eval-fuzzer run; lets it enable math on both pipelines
-// while reusing every divergence filter below. Defaults to GFM-only.
 export interface MdxEvalOptions {
   remarkPlugins: unknown[];
   features: Record<string, unknown>;
@@ -1822,9 +1570,7 @@ async function compareMdxEval(
     satErrorMessage = String(e?.message ?? e ?? "");
   }
 
-  // If both sides threw, suppress only when satteri's error looks like a
-  // legitimate rejection (parse error or a runtime exception from the
-  // compiled component). Rust-side panics surface so they don't hide.
+  // Surface Rust panics even when the reference also throws.
   if (refError && satError) {
     if (
       satErrorMessage &&
@@ -1843,11 +1589,7 @@ async function compareMdxEval(
   }
 
   if (refError !== satError) {
-    // Mirror compareSingle's classifiers for the satteri-succeeds case:
-    // when mdx-js rejects with a strict-scanner error (lazy line in
-    // container / self-closing slash / unexpected EOF before name) but
-    // satteri accepts, the divergence is the inline scanner not
-    // propagating container_check across newlines. See §J.
+    // Apply the same container-boundary divergence filters to parsing and evaluation.
     if (refError && !satError && refErrorMessage) {
       if (
         refErrorMessage.includes("Unexpected lazy line in container") ||
@@ -1859,10 +1601,7 @@ async function compareMdxEval(
         refErrorMessage.includes("Unexpected character `?`") ||
         refErrorMessage.includes("Expected a closing tag for") ||
         refErrorMessage.includes("Expected the closing tag") ||
-        // Backtick code-span content where mdx-js's `<` expression scan
-        // tries to treat the trailing backtick as a JSX name start. The
-        // message may include `(U+0060)` between the backtick and the
-        // "in name"/"before name" qualifier.
+        // Acorn may include a Unicode code-point annotation in this JSX-name error.
         /Unexpected character ``` .*?(?:in name|before name)/.test(refErrorMessage)
       ) {
         return null;
@@ -1881,10 +1620,7 @@ async function compareMdxEval(
   }
 
   if (refHtml !== satHtml) {
-    // Strikethrough phase-ordering: the find_match single-pass rule may
-    // reject a `~…~` match when an unmatched `*`/`_` opener exists earlier
-    // on the stack. The reference's two-pass resolve catches this; satteri
-    // doesn't yet (see §J).
+    // Strikethrough and emphasis resolution order can differ from the reference.
     if (typeof refHtml === "string" && typeof satHtml === "string") {
       if (/[_*][\s\S]*?[~^][\s\S]*?[~^]/.test(input)) {
         const refHasMark = /<(del|sub|sup)\b/.test(refHtml);
@@ -1915,8 +1651,6 @@ export async function collectMdxEvalIssues(
   return issues;
 }
 
-// Strip attribute values and text content so structurally-equivalent HTML
-// collapses to one fingerprint regardless of the specific chars in the input.
 function structuralHtml(html: string | undefined): string {
   if (html === undefined) return "(none)";
   return html.replace(/=("[^"]*"|'[^']*')/g, "=$A").replace(/>([^<>]+)</g, ">$T<");

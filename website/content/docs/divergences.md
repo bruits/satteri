@@ -136,6 +136,17 @@ a "_quoted_" word
 | `remark-smartypants`              | `a "*quoted*" word` |
 | Sätteri (with `smartPunctuation`) | `a “*quoted*” word` |
 
+### Text in raw-text elements other than `<script>` and `<style>`
+
+The HTML serialization algorithm leaves text unescaped when its parent is a `style`, `script`, `xmp`, `iframe`, `noembed`, `noframes`, or `plaintext` element. `hast-util-to-html` applies that to `script` and `style` only, so it escapes the rest.
+
+| Pipeline            | `hastToHtml(h("xmp", "a & b"))` |
+| ------------------- | ------------------------------- |
+| `hast-util-to-html` | `<xmp>a &#x26; b</xmp>`         |
+| Sätteri             | `<xmp>a & b</xmp>`              |
+
+Sätteri follows the spec here because the parser reads those elements back as raw text: an escaped `&#x26;` inside `<xmp>` parses as the literal characters `&#x26;`, so escaping breaks the round trip rather than protecting it. Text inside `<script>` and `<style>` is identical on both sides, and text under a nested element is escaped on both.
+
 ## MDX
 
 ### oxc vs acorn differences

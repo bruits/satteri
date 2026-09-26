@@ -1,34 +1,72 @@
 //! The first pass resolves all block structure, generating an AST. Within a block, items
 //! are in a linear chain with potential inline markup identified.
 
-use alloc::{string::String, vec::Vec};
-use core::{cmp::max, ops::Range};
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cmp::max;
+use core::ops::Range;
 
+#[cfg(target_arch = "x86_64")]
+use satteri_arena::byte_search::contains_ascii_byte_accelerated;
+use satteri_arena::byte_search::next_ascii_mask;
 use satteri_arena::line_ending_iter;
+#[cfg(feature = "mdx")]
+use satteri_arena::mdx_types::Location;
 use unicase::UniCase;
 
+use crate::linklabel::{LinkLabel, scan_link_label_rest};
 #[cfg(feature = "mdx")]
 use crate::mdx::*;
-use crate::{
-    HeadingLevel, LinkType, MetadataBlockKind, Options,
-    linklabel::{LinkLabel, scan_link_label_rest},
-    parse::{
-        Allocations, AutolinkCandidate, DirectiveAttrData, FootnoteDef, HeadingAttributes, Item,
-        ItemBody, LINK_MAX_NESTED_PARENS, LinkDef, scan_containers,
-    },
-    post_passes::{scan_autolink_literal, scan_email_autolink},
-    scanners::*,
-    strings::CowStr,
-    tree::{Tree, TreeIndex},
+use crate::parse::{
+    Allocations, AutolinkCandidate, AutolinkKind, DirectiveAttrData, FootnoteDef,
+    HeadingAttributes, Item, ItemBody, LINK_MAX_NESTED_PARENS, LinkDef, scan_containers,
 };
+use crate::post_passes::{
+    has_autolink_trigger, match_autolink_scheme, scan_autolink_literal, scan_email_autolink,
+    smart_dash_run,
+};
+use crate::scanners::*;
+use crate::strings::CowStr;
+use crate::tree::{Tree, TreeIndex};
+use crate::{HeadingLevel, MetadataBlockKind, Options};
 
 pub(crate) fn run_first_pass(
     text: &str,
     options: Options,
 ) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
+    run_first_pass_mode(text, options, false)
+}
+
+pub(crate) fn run_first_pass_mode(
+    text: &str,
+    options: Options,
+    compact_links: bool,
+) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
     // Measured: real-world Markdown yields ~1 tree item per 10 source bytes.
     let start_capacity = max(128, text.len() / 10);
-    let lookup_table = &create_lut(&options);
+    // Only gate raw construct triggers. Keep GFM enabled in `options`: the
+    // fallback must still discover URLs synthesized by entities and escapes.
+    // A document-wide check also remains valid when inline scanning skips over
+    // line boundaries (e.g. code spans and directive labels).
+    let mut allocs = Allocations::new();
+    allocs.raw_autolink_trigger =
+        options.contains(Options::ENABLE_GFM) && has_autolink_trigger(text.as_bytes());
+    // Escaped delimiter runs need a known end during tokenization. Without
+    // underscores, an ASCII-alphanumeric domain start guarantees acceptance:
+    // deferring its extent scan cannot introduce a marker for a rejected URL.
+    let link_mode = if !compact_links {
+        LinkMode::Expanded
+    } else if allocs.raw_autolink_trigger && memchr::memchr2(b'\\', b'_', text.as_bytes()).is_none()
+    {
+        LinkMode::DeferredProtocols
+    } else {
+        LinkMode::Compact
+    };
+    let mut lookup_options = options;
+    if !allocs.raw_autolink_trigger {
+        lookup_options.remove(Options::ENABLE_GFM);
+    }
+    let lookup_table = &create_lut(&lookup_options);
     let first_pass = FirstPass {
         text,
         tree: Tree::with_capacity(start_capacity),
@@ -36,7 +74,7 @@ pub(crate) fn run_first_pass(
         last_line_blank: false,
         list_interrupted_paragraph: false,
         refdef_interrupted_paragraph: false,
-        allocs: Allocations::new(),
+        allocs,
         options,
         lookup_table,
         brace_context_next: 0,
@@ -45,6 +83,11 @@ pub(crate) fn run_first_pass(
         #[cfg(feature = "mdx")]
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
         pending_lazy_blockquote_close: false,
+        autolink_prefix: AutolinkPrefix::default(),
+        plain_link_prefix: AutolinkPrefix::default(),
+        table_markers_present: None,
+        unresolved_code_seen: false,
+        link_mode,
     };
     first_pass.run()
 }
@@ -60,9 +103,19 @@ pub(crate) fn run_first_pass(
 // saturate, which is a better behavior.
 const MATH_BRACE_CONTEXT_MAX_NESTING: usize = 25;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkMode {
+    Expanded,
+    Compact,
+    DeferredProtocols,
+}
+
 /// State for the first parsing pass.
 pub(crate) struct FirstPass<'a, 'b> {
     pub(crate) text: &'a str,
+    link_mode: LinkMode,
+    // An earlier unresolved run can claim a later code pair.
+    unresolved_code_seen: bool,
     pub(crate) tree: Tree<Item>,
     begin_list_item: Option<usize>,
     last_line_blank: bool,
@@ -77,6 +130,12 @@ pub(crate) struct FirstPass<'a, 'b> {
     pub(crate) allocs: Allocations<'a>,
     pub(crate) options: Options,
     lookup_table: &'b LookupTable,
+    /// Shared across lines so multiline paragraphs do not rescan their prefix.
+    autolink_prefix: AutolinkPrefix,
+    // Unlike the raw autolink guard, this skips syntax owned by committed links.
+    plain_link_prefix: AutolinkPrefix,
+    // Needed only when an unindented root paragraph has another ordinary line.
+    table_markers_present: Option<bool>,
     /// Math environment brace nesting.
     brace_context_stack: Vec<u8>,
     brace_context_next: usize,
@@ -105,6 +164,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         while self.tree.spine_len() > 0 {
             self.pop(ix);
         }
+        // Speculative block parsing can visit the same source out of order.
+        self.allocs
+            .autolink_free_ranges
+            .sort_unstable_by_key(|range| range.start);
         (self.tree, self.allocs, self.mdx_errors)
     }
 
@@ -141,6 +204,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     /// Returns offset after block.
+    #[inline(always)]
     fn parse_block(&mut self, mut start_ix: usize) -> usize {
         let bytes = self.text.as_bytes();
         let mut line_start = LineStart::new(&bytes[start_ix..]);
@@ -864,7 +928,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 if !candidate.is_empty() {
                     use crate::mdx::EsmParseResult;
                     let mut allocator = oxc_allocator::Allocator::default();
-                    match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                    match try_parse_esm(candidate, &mut allocator) {
                         EsmParseResult::Complete => {}
                         EsmParseResult::Incomplete => {
                             let mut pos = ix + final_end;
@@ -895,7 +959,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                                 }
                                 final_end = pos - ix;
                                 let candidate = self.text[ix..ix + final_end].trim_end();
-                                match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                                match try_parse_esm(candidate, &mut allocator) {
                                     EsmParseResult::Complete => break,
                                     EsmParseResult::Incomplete => continue,
                                     EsmParseResult::Error => break,
@@ -1370,6 +1434,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
 
         let bytes = self.text.as_bytes();
+        let root_paragraph =
+            self.tree.spine_len() == 1 && !self.options.contains(Options::ENABLE_MDX);
         let mut ix = start_ix;
         loop {
             let scan_mode = if self.options.contains(Options::ENABLE_TABLES) && ix == start_ix {
@@ -1401,6 +1467,36 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
 
             ix = next_ix;
+            // An empty physical line or EOF ends a root paragraph without any
+            // container or block-interruption checks. A trailing backslash still
+            // needs the reconciliation below before its hard break is discarded.
+            if root_paragraph
+                && bytes.get(ix).is_none_or(|b| matches!(b, b'\n' | b'\r'))
+                && !matches!(
+                    brk,
+                    Some(Item {
+                        body: ItemBody::HardBreak(true),
+                        ..
+                    })
+                )
+            {
+                break;
+            }
+            // Without containers or MDX, an ASCII-letter start cannot open a
+            // block except a light table header. Tables require a raw ':' or
+            // '|'; cache that document-wide check only if continuation needs it.
+            if root_paragraph
+                && bytes.get(ix).is_some_and(u8::is_ascii_alphabetic)
+                && (!self.options.contains(Options::ENABLE_TABLES)
+                    || !*self
+                        .table_markers_present
+                        .get_or_insert_with(|| memchr::memchr2(b':', b'|', bytes).is_some()))
+            {
+                if let Some(item) = brk {
+                    self.tree.append(item);
+                }
+                continue;
+            }
             let mut line_start = LineStart::new(&bytes[ix..]);
             let tree_position = scan_containers(&self.tree, &mut line_start, self.options);
             let current_container = tree_position == self.tree.spine_len();
@@ -1740,19 +1836,32 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     /// Commit a detected autolink. Only sound when nothing can still block it.
-    fn append_autolink_link(&mut self, d: AutolinkDetection<'a>, begin_text: usize, escaped: bool) {
-        let link_ix = self
-            .allocs
-            .allocate_link(d.link_type, d.url, "".into(), "".into());
-        self.tree.append_text(begin_text, d.start, escaped);
+    fn append_autolink_link(
+        &mut self,
+        candidate: AutolinkCandidate,
+        begin_text: usize,
+        escaped: bool,
+    ) {
+        let AutolinkCandidate { start, end, kind } = candidate;
+        if self.link_mode != LinkMode::Expanded {
+            self.tree.append_text(begin_text, start, escaped);
+            self.tree.append(Item {
+                start,
+                end,
+                body: ItemBody::LiteralAutolink(kind),
+            });
+            return;
+        }
+        let link_ix = self.allocs.allocate_autolink(candidate, self.text);
+        self.tree.append_text(begin_text, start, escaped);
         let link_node_ix = self.tree.append(Item {
-            start: d.start,
-            end: d.end,
+            start,
+            end,
             body: ItemBody::Link(link_ix),
         });
         let text_child = self.tree.create_node(Item {
-            start: d.start,
-            end: d.end,
+            start,
+            end,
             body: ItemBody::Text {
                 backslash_escaped: false,
             },
@@ -1760,28 +1869,85 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree[link_node_ix].child = Some(text_child);
     }
 
+    // Keep link scanning out of parse_line's frame: most lines and table cells
+    // never contain an inline link.
+    #[inline(never)]
+    fn try_append_plain_link(
+        &mut self,
+        start: usize,
+        limit: usize,
+        begin_text: usize,
+        escaped: bool,
+        line_start: usize,
+    ) -> Option<usize> {
+        let floor = self
+            .tree
+            .peek_up()
+            .map(|parent| self.tree[parent].item.start)
+            .unwrap_or(line_start);
+        if self.plain_link_prefix.must_defer(
+            &self.text.as_bytes()[..limit],
+            floor,
+            start,
+            self.options,
+        ) {
+            return None;
+        }
+        let (end, label_end, url, title) = scan_plain_inline_link(self.text, limit, start)?;
+        let label_len = u16::try_from(label_end - start - 1).ok()?;
+        let dest_len = u16::try_from(url.len()).ok()?;
+        let title_len = u16::try_from(title.len()).ok()?;
+        u32::try_from(end).ok()?;
+        self.tree.append_text(begin_text, start, escaped);
+        self.tree.append(Item {
+            start,
+            end,
+            body: ItemBody::LiteralLink {
+                label_len,
+                dest_len,
+                title_len,
+                angle: self.text.as_bytes()[label_end + 2] == b'<',
+            },
+        });
+        self.plain_link_prefix.skip_committed_link(end);
+        Some(end)
+    }
+
     /// Record a detected autolink as a zero-width marker: no byte's
     /// tokenization changes, so the candidate can still be dropped.
     fn append_autolink_marker(
         &mut self,
-        d: AutolinkDetection<'a>,
+        candidate: AutolinkCandidate,
         begin_text: usize,
         escaped: bool,
     ) {
-        let link = self
-            .allocs
-            .allocate_link(d.link_type, d.url, "".into(), "".into());
-        let cand = self.allocs.allocate_autolink_candidate(AutolinkCandidate {
-            start: d.start,
-            end: d.end,
-            link,
-        });
-        self.tree.append_text(begin_text, d.start, escaped);
+        let start = candidate.start;
+        let cand = self.allocs.allocate_autolink_candidate(candidate);
+        self.tree.append_text(begin_text, start, escaped);
         self.tree.append(Item {
-            start: d.start,
-            end: d.start,
+            start,
+            end: start,
             body: ItemBody::MaybeAutolink(cand),
         });
+    }
+
+    // Only the arena consumer can replace explicit soft breaks with source text.
+    // Keep this proof out of parse_line: short, isolated paragraphs never need it.
+    #[inline(never)]
+    fn can_join_plain_lines(&mut self) -> bool {
+        self.link_mode != LinkMode::Expanded
+            && !self
+                .options
+                .intersects(Options::ENABLE_MDX | Options::ENABLE_DEFINITION_LIST)
+            && self.tree.spine_len() == 1
+            && self
+                .tree
+                .peek_up()
+                .is_some_and(|parent| matches!(self.tree[parent].item.body, ItemBody::Paragraph))
+            && (!self.options.contains(Options::ENABLE_TABLES)
+                || !*self.table_markers_present.get_or_insert_with(|| {
+                    memchr::memchr2(b':', b'|', self.text.as_bytes()).is_some()
+                }))
     }
 
     /// Parse a line of input, appending text and items to tree.
@@ -1800,6 +1966,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             None => bytes,
         };
         let bytes_len = bytes.len();
+        let mut join_plain_lines = None;
         let mut pipes = 0;
         let mut last_pipe_ix = start;
         let mut begin_text = start;
@@ -1815,738 +1982,923 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // Ends of deferred candidates still in play. Overlapping candidates are
         // possible, so this is a set; empty in every line without one.
         let mut deferred_ends: Vec<usize> = Vec::new();
+        // A deferred URL may own the opening bracket of a later apparent link.
+        let mut furthest_autolink_end = 0;
 
-        let (final_ix, brk) = iterate_special_bytes(self.lookup_table, bytes, start, |ix, byte| {
-            match byte {
-                b'\n' | b'\r' => {
-                    if let TableParseMode::Active = mode {
-                        return LoopInstruction::BreakAtWith(ix, None);
-                    }
-
-                    let mut i = ix;
-                    let eol_bytes = scan_eol(&bytes[ix..]).unwrap();
-
-                    let end_ix = ix + eol_bytes;
-                    // CommonMark hardbreak: an odd number of trailing source
-                    // `\` chars before `\n`. Bytes inside an inline-emitted
-                    // Link (e.g. GFM literal autolink consumed a `\` as URL
-                    // content) are NOT text-context backslashes — stop the
-                    // scan at `last_inline_emission_end` so those don't
-                    // count.
-                    let trailing_backslashes = {
-                        let mut p = ix;
-                        while p > last_inline_emission_end && bytes[p - 1] == b'\\' {
-                            p -= 1;
+        // Active table parsing can restart at each cell; scanning the rest of
+        // the physical line per cell would turn wide tables quadratic.
+        let lut = self.lookup_table;
+        let scan_start = if matches!(mode, TableParseMode::Active) {
+            start
+        } else {
+            let line_end = plain_inline_line_end(lut, bytes, start);
+            if self.allocs.raw_autolink_trigger
+                && let Some(end) = line_end
+            {
+                self.allocs.record_autolink_free_range(start..end);
+            }
+            line_end.unwrap_or(start)
+        };
+        let mut scan_ix = scan_start;
+        let (final_ix, brk) = 'scan: loop {
+            let ix = next_special_byte(lut, bytes, scan_ix);
+            if ix >= bytes.len() {
+                break (ix, None);
+            }
+            let byte = bytes[ix];
+            // Each marker yields the number of following bytes it consumed,
+            // or ends the scan at a line or block boundary.
+            let skip = 'marker: {
+                match byte {
+                    b'\n' | b'\r' => {
+                        if let TableParseMode::Active = mode {
+                            break 'scan (ix, None);
                         }
-                        ix - p
-                    };
 
-                    // GFM table detection: check if the next line is a valid
-                    // table delimiter. Runs before hard-break so that inputs
-                    // like `foo\\\n|-` resolve to a table (keeping the trailing
-                    // backslash in the header cell) rather than a paragraph
-                    // with a hard break. Headers without pipes are allowed
-                    // (`scan_table_head` still requires a pipe in the
-                    // delimiter, so setext headings are unaffected). We skip
-                    // delimiters that would also be a valid list-item marker,
-                    // since block-level lists take precedence over tables.
-                    if mode == TableParseMode::Scan {
-                        let next_line_ix = ix + eol_bytes;
-                        let mut line_start = LineStart::new(&bytes[next_line_ix..]);
-                        if scan_containers(&self.tree, &mut line_start, self.options)
-                            == self.tree.spine_len()
+                        let mut i = ix;
+                        let eol_bytes = scan_eol(&bytes[ix..]).unwrap();
+
+                        let end_ix = ix + eol_bytes;
+                        if byte == b'\n'
+                            && ix > start
+                            && !matches!(bytes[ix - 1], b' ' | b'\t' | b'\\' | b'\r')
+                            && bytes
+                                .get(end_ix)
+                                .is_some_and(|b| b.is_ascii_alphabetic() || !b.is_ascii())
+                            && end.is_none()
+                            && *join_plain_lines.get_or_insert_with(|| self.can_join_plain_lines())
                         {
-                            // In MDX, the delimiter row of a table nested inside
-                            // a list item may have extra leading whitespace
-                            // beyond the container continuation. No indented
-                            // code blocks, so consume it before scan_table_head.
-                            if self.options.contains(Options::ENABLE_MDX) {
-                                line_start.scan_all_space();
+                            break 'marker 0;
+                        }
+                        // CommonMark hardbreak: an odd number of trailing source
+                        // `\` chars before `\n`. Bytes inside an inline-emitted
+                        // Link (e.g. GFM literal autolink consumed a `\` as URL
+                        // content) are NOT text-context backslashes — stop the
+                        // scan at `last_inline_emission_end` so those don't
+                        // count.
+                        let trailing_backslashes = {
+                            let mut p = ix;
+                            while p > last_inline_emission_end && bytes[p - 1] == b'\\' {
+                                p -= 1;
                             }
-                            let table_head_ix = next_line_ix + line_start.bytes_scanned();
-                            let delim = &bytes[table_head_ix..];
-                            // Allow up to 3 spaces of leading indent: a line
-                            // like ` - …` is a valid bullet (and lists win
-                            // over table delimiter recognition).
-                            let leading_spaces =
-                                delim.iter().take(3).take_while(|&&b| b == b' ').count();
-                            let delim_is_list_item =
-                                scan_listitem(&delim[leading_spaces..]).is_some();
-                            let (table_head_bytes, alignment) = if delim_is_list_item {
-                                (0, vec![])
-                            } else {
-                                scan_table_head(delim)
-                            };
+                            ix - p
+                        };
 
-                            if table_head_bytes > 0 {
-                                let header_count =
-                                    count_header_cols(bytes, pipes, start, last_pipe_ix);
+                        // GFM table detection: check if the next line is a valid
+                        // table delimiter. Runs before hard-break so that inputs
+                        // like `foo\\\n|-` resolve to a table (keeping the trailing
+                        // backslash in the header cell) rather than a paragraph
+                        // with a hard break. Headers without pipes are allowed
+                        // (`scan_table_head` still requires a pipe in the
+                        // delimiter, so setext headings are unaffected). We skip
+                        // delimiters that would also be a valid list-item marker,
+                        // since block-level lists take precedence over tables.
+                        if mode == TableParseMode::Scan {
+                            let next_line_ix = ix + eol_bytes;
+                            let mut line_start = LineStart::new(&bytes[next_line_ix..]);
+                            if scan_containers(&self.tree, &mut line_start, self.options)
+                                == self.tree.spine_len()
+                            {
+                                // In MDX, the delimiter row of a table nested inside
+                                // a list item may have extra leading whitespace
+                                // beyond the container continuation. No indented
+                                // code blocks, so consume it before scan_table_head.
+                                if self.options.contains(Options::ENABLE_MDX) {
+                                    line_start.scan_all_space();
+                                }
+                                let table_head_ix = next_line_ix + line_start.bytes_scanned();
+                                let delim = &bytes[table_head_ix..];
+                                // Allow up to 3 spaces of leading indent: a line
+                                // like ` - …` is a valid bullet (and lists win
+                                // over table delimiter recognition).
+                                let leading_spaces =
+                                    delim.iter().take(3).take_while(|&&b| b == b' ').count();
+                                let delim_is_list_item =
+                                    scan_listitem(&delim[leading_spaces..]).is_some();
+                                let (table_head_bytes, alignment) = if delim_is_list_item {
+                                    (0, vec![])
+                                } else {
+                                    scan_table_head(delim)
+                                };
 
-                                if alignment.len() == header_count {
-                                    let alignment_ix = self.allocs.allocate_alignment(alignment);
-                                    let end_ix = table_head_ix + table_head_bytes;
-                                    return LoopInstruction::BreakAtWith(
-                                        end_ix,
-                                        Some(Item {
-                                            start: i,
-                                            end: end_ix, // must update later
-                                            body: ItemBody::Table(alignment_ix),
-                                        }),
-                                    );
+                                if table_head_bytes > 0 {
+                                    let header_count =
+                                        count_header_cols(bytes, pipes, start, last_pipe_ix);
+
+                                    if alignment.len() == header_count {
+                                        let alignment_ix =
+                                            self.allocs.allocate_alignment(alignment);
+                                        let end_ix = table_head_ix + table_head_bytes;
+                                        break 'scan (
+                                            end_ix,
+                                            Some(Item {
+                                                start: i,
+                                                end: end_ix, // must update later
+                                                body: ItemBody::Table(alignment_ix),
+                                            }),
+                                        );
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    if trailing_backslashes % 2 == 1 && end_ix < bytes_len {
-                        i -= 1;
-                        self.tree.append_text(begin_text, i, backslash_escaped);
+                        if trailing_backslashes % 2 == 1 && end_ix < bytes_len {
+                            i -= 1;
+                            self.tree.append_text(begin_text, i, backslash_escaped);
+                            backslash_escaped = false;
+                            break 'scan (
+                                end_ix,
+                                Some(Item {
+                                    start: i,
+                                    end: end_ix,
+                                    body: ItemBody::HardBreak(true),
+                                }),
+                            );
+                        }
+
+                        let trailing_spaces = scan_rev_while(&bytes[..ix], |c| c == b' ');
+                        let has_tab_before_spaces = trailing_spaces > 0
+                            && ix > trailing_spaces
+                            && bytes[ix - trailing_spaces - 1] == b'\t';
+                        if trailing_spaces >= 2 && !has_tab_before_spaces {
+                            i -= trailing_spaces;
+                            self.tree.append_text(begin_text, i, backslash_escaped);
+                            backslash_escaped = false;
+                            break 'scan (
+                                end_ix,
+                                Some(Item {
+                                    start: i,
+                                    end: end_ix,
+                                    body: ItemBody::HardBreak(false),
+                                }),
+                            );
+                        }
+
+                        let trailing_whitespace = scan_rev_while(&bytes[..ix], is_space_or_tab);
+                        self.tree.append_text(
+                            begin_text,
+                            ix - trailing_whitespace,
+                            backslash_escaped,
+                        );
                         backslash_escaped = false;
-                        return LoopInstruction::BreakAtWith(
+
+                        break 'scan (
                             end_ix,
                             Some(Item {
                                 start: i,
                                 end: end_ix,
-                                body: ItemBody::HardBreak(true),
+                                body: ItemBody::SoftBreak,
                             }),
                         );
                     }
-
-                    let trailing_spaces = scan_rev_while(&bytes[..ix], |c| c == b' ');
-                    let has_tab_before_spaces = trailing_spaces > 0
-                        && ix > trailing_spaces
-                        && bytes[ix - trailing_spaces - 1] == b'\t';
-                    if trailing_spaces >= 2 && !has_tab_before_spaces {
-                        i -= trailing_spaces;
-                        self.tree.append_text(begin_text, i, backslash_escaped);
-                        backslash_escaped = false;
-                        return LoopInstruction::BreakAtWith(
-                            end_ix,
-                            Some(Item {
-                                start: i,
-                                end: end_ix,
-                                body: ItemBody::HardBreak(false),
-                            }),
-                        );
+                    b'\\' if bytes.get(ix + 1).copied().is_some_and(is_ascii_punctuation) => {
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        if bytes[ix + 1] == b'`' {
+                            let count = 1 + scan_ch_repeat(&bytes[(ix + 2)..], b'`');
+                            self.unresolved_code_seen = true;
+                            self.tree.append(Item {
+                                start: ix + 1,
+                                end: ix + count + 1,
+                                body: ItemBody::MaybeCode(count as u32, true),
+                            });
+                            begin_text = ix + 1 + count;
+                            backslash_escaped = false;
+                            count
+                        } else if bytes[ix + 1] == b'|' && TableParseMode::Active == mode {
+                            // Yeah, it's super weird that backslash escaped pipes in tables aren't "real"
+                            // backslash escapes.
+                            //
+                            // This tree structure is intended for the benefit of inline analysis, and it
+                            // is supposed to operate as-if backslash escaped pipes were stripped out in a
+                            // separate pass.
+                            begin_text = ix + 1;
+                            // The `\` isn't content, but the span still covers it.
+                            backslash_escaped = true;
+                            1
+                        } else if bytes[ix + 1] == b'<' {
+                            // Still emit the marker: a deferred autolink may end on
+                            // this `\`, in which case the link owns it and the
+                            // inline HTML opens after all.
+                            self.tree.append(Item {
+                                start: ix + 1,
+                                end: ix + 2,
+                                body: ItemBody::MaybeHtml(true),
+                            });
+                            begin_text = ix + 2;
+                            backslash_escaped = false;
+                            1
+                        } else if bytes[ix + 1] == b'$' && self.options.has_math() {
+                            // In math context, \$ should still produce a MaybeMath
+                            // delimiter so it can close a math span. The backslash
+                            // only prevents opening.
+                            begin_text = ix + 1;
+                            backslash_escaped = true;
+                            0
+                        } else if let Some((count, fired)) = (deferred_ends.contains(&(ix + 1)))
+                            .then(|| escaped_delim_run(self.text, start, ix, mode, self.options))
+                            .flatten()
+                        {
+                            // A deferred candidate's URL ends on this `\`, so the
+                            // run after it is the link's to unblock. Emitted in the
+                            // shape the link firing wants; `MaybeEmphasisEscaped`
+                            // holds it back until the splice says so.
+                            let blocked = delim_run_flags(
+                                self.text,
+                                start,
+                                ix + 2,
+                                count - 1,
+                                mode,
+                                self.options,
+                            );
+                            self.tree.append(Item {
+                                start: ix + 1,
+                                end: ix + 2,
+                                body: ItemBody::MaybeEmphasisEscaped(
+                                    count as u32,
+                                    fired.0,
+                                    fired.1,
+                                ),
+                            });
+                            for i in 1..count {
+                                self.tree.append(Item {
+                                    start: ix + 1 + i,
+                                    end: ix + 2 + i,
+                                    body: ItemBody::MaybeEmphasis(
+                                        (count - i) as u32,
+                                        blocked.0,
+                                        blocked.1,
+                                    ),
+                                });
+                            }
+                            begin_text = ix + 1 + count;
+                            backslash_escaped = false;
+                            count
+                        } else {
+                            begin_text = ix + 1;
+                            backslash_escaped = true;
+                            1
+                        }
                     }
-
-                    let trailing_whitespace = scan_rev_while(&bytes[..ix], is_space_or_tab);
-                    self.tree
-                        .append_text(begin_text, ix - trailing_whitespace, backslash_escaped);
-                    backslash_escaped = false;
-
-                    LoopInstruction::BreakAtWith(
-                        end_ix,
-                        Some(Item {
-                            start: i,
-                            end: end_ix,
-                            body: ItemBody::SoftBreak,
-                        }),
-                    )
-                }
-                b'\\' if bytes.get(ix + 1).copied().is_some_and(is_ascii_punctuation) => {
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    if bytes[ix + 1] == b'`' {
-                        let count = 1 + scan_ch_repeat(&bytes[(ix + 2)..], b'`');
-                        self.tree.append(Item {
-                            start: ix + 1,
-                            end: ix + count + 1,
-                            body: ItemBody::MaybeCode(count as u32, true),
-                        });
-                        begin_text = ix + 1 + count;
-                        backslash_escaped = false;
-                        LoopInstruction::ContinueAndSkip(count)
-                    } else if bytes[ix + 1] == b'|' && TableParseMode::Active == mode {
-                        // Yeah, it's super weird that backslash escaped pipes in tables aren't "real"
-                        // backslash escapes.
-                        //
-                        // This tree structure is intended for the benefit of inline analysis, and it
-                        // is supposed to operate as-if backslash escaped pipes were stripped out in a
-                        // separate pass.
-                        begin_text = ix + 1;
-                        // The `\` isn't content, but the span still covers it.
-                        backslash_escaped = true;
-                        LoopInstruction::ContinueAndSkip(1)
-                    } else if bytes[ix + 1] == b'<' {
-                        // Still emit the marker: a deferred autolink may end on
-                        // this `\`, in which case the link owns it and the
-                        // inline HTML opens after all.
-                        self.tree.append(Item {
-                            start: ix + 1,
-                            end: ix + 2,
-                            body: ItemBody::MaybeHtml(true),
-                        });
-                        begin_text = ix + 2;
-                        backslash_escaped = false;
-                        LoopInstruction::ContinueAndSkip(1)
-                    } else if bytes[ix + 1] == b'$' && self.options.has_math() {
-                        // In math context, \$ should still produce a MaybeMath
-                        // delimiter so it can close a math span. The backslash
-                        // only prevents opening.
-                        begin_text = ix + 1;
-                        backslash_escaped = true;
-                        LoopInstruction::ContinueAndSkip(0)
-                    } else if let Some((count, fired)) = (deferred_ends.contains(&(ix + 1)))
-                        .then(|| escaped_delim_run(self.text, start, ix, mode, self.options))
-                        .flatten()
-                    {
-                        // A deferred candidate's URL ends on this `\`, so the
-                        // run after it is the link's to unblock. Emitted in the
-                        // shape the link firing wants; `MaybeEmphasisEscaped`
-                        // holds it back until the splice says so.
-                        let blocked = delim_run_flags(
-                            self.text,
-                            start,
-                            ix + 2,
-                            count - 1,
+                    c @ b'*' | c @ b'_' | c @ b'~' | c @ b'^' => {
+                        // GFM precedence: an email literal starting at this `_`
+                        // wins over the attention sequence; skipping MaybeEmphasis
+                        // keeps `_-_@…` from forming a pair that hides the email.
+                        if c == b'_' && self.options.contains(Options::ENABLE_GFM) {
+                            let paragraph_floor = self
+                                .tree
+                                .peek_up()
+                                .map(|nix| self.tree[nix].item.start)
+                                .unwrap_or(start);
+                            if let Some((email_start, email_end)) = scan_email_forward_from_atext(
+                                bytes,
+                                ix,
+                                begin_text,
+                                paragraph_floor,
+                            ) && email_start >= candidate_floor
+                            {
+                                let d = AutolinkCandidate {
+                                    start: email_start,
+                                    end: email_end,
+                                    kind: AutolinkKind::Email,
+                                };
+                                if self.autolink_prefix.must_defer(
+                                    bytes,
+                                    paragraph_floor,
+                                    ix,
+                                    self.options,
+                                ) {
+                                    candidate_floor = email_start + 1;
+                                    furthest_autolink_end = furthest_autolink_end.max(email_end);
+                                    // Fall through to attention handling: a
+                                    // marker that fires splices those
+                                    // delimiters away, and a blocked one
+                                    // wanted them.
+                                    self.append_autolink_marker(d, begin_text, backslash_escaped);
+                                    if email_start > begin_text {
+                                        backslash_escaped = false;
+                                    }
+                                    begin_text = email_start;
+                                } else {
+                                    candidate_floor = email_end;
+                                    self.append_autolink_link(d, begin_text, backslash_escaped);
+                                    backslash_escaped = false;
+                                    begin_text = email_end;
+                                    last_inline_emission_end = email_end;
+                                    let skip = email_end.saturating_sub(ix + 1);
+                                    break 'marker skip;
+                                }
+                            }
+                        }
+                        let string_suffix = &self.text[ix..];
+                        let count = 1 + scan_ch_repeat(&string_suffix.as_bytes()[1..], c);
+                        let (can_open, can_close) = classify_delimiter_run(
+                            &self.text[start..],
+                            string_suffix,
+                            count,
+                            ix - start,
                             mode,
                             self.options,
                         );
-                        self.tree.append(Item {
-                            start: ix + 1,
-                            end: ix + 2,
-                            body: ItemBody::MaybeEmphasisEscaped(count as u32, fired.0, fired.1),
-                        });
-                        for i in 1..count {
-                            self.tree.append(Item {
-                                start: ix + 1 + i,
-                                end: ix + 2 + i,
-                                body: ItemBody::MaybeEmphasis(
-                                    (count - i) as u32,
-                                    blocked.0,
-                                    blocked.1,
-                                ),
-                            });
-                        }
-                        begin_text = ix + 1 + count;
-                        backslash_escaped = false;
-                        LoopInstruction::ContinueAndSkip(count)
-                    } else {
-                        begin_text = ix + 1;
-                        backslash_escaped = true;
-                        LoopInstruction::ContinueAndSkip(1)
-                    }
-                }
-                c @ b'*' | c @ b'_' | c @ b'~' | c @ b'^' => {
-                    // GFM precedence: an email literal starting at this `_`
-                    // wins over the attention sequence; skipping MaybeEmphasis
-                    // keeps `_-_@…` from forming a pair that hides the email.
-                    if c == b'_' && self.options.contains(Options::ENABLE_GFM) {
-                        let paragraph_floor = self
-                            .tree
-                            .peek_up()
-                            .map(|nix| self.tree[nix].item.start)
-                            .unwrap_or(start);
-                        if let Some((email_start, email_end, full_url)) =
-                            scan_email_forward_from_atext(bytes, ix, begin_text, paragraph_floor)
-                            && email_start >= candidate_floor
+                        // A non-dual-purpose pair around inert text cannot compete
+                        // with another attention run. A deferred autolink can still
+                        // consume part of it, so only resolve pairs beyond its reach.
+                        if c == b'*'
+                            && count == 2
+                            && can_open
+                            && !can_close
+                            && ix >= furthest_autolink_end
                         {
-                            let d = AutolinkDetection {
-                                start: email_start,
-                                end: email_end,
-                                link_type: LinkType::Email,
-                                url: email_addr(full_url),
-                            };
-                            if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
-                                candidate_floor = email_start + 1;
-                                // Fall through to attention handling: a
-                                // marker that fires splices those
-                                // delimiters away, and a blocked one
-                                // wanted them.
-                                self.append_autolink_marker(d, begin_text, backslash_escaped);
-                                if email_start > begin_text {
-                                    backslash_escaped = false;
+                            let content_start = ix + count;
+                            let mut close = content_start;
+                            while close < bytes.len()
+                                && (bytes[close].is_ascii_alphanumeric()
+                                    || matches!(bytes[close], b' ' | b'\t'))
+                            {
+                                close += 1;
+                            }
+                            if close > content_start
+                                && bytes.get(close..close + 2) == Some(b"**")
+                                && bytes.get(close + 2) != Some(&b'*')
+                                && classify_delimiter_run(
+                                    &self.text[start..],
+                                    &self.text[close..],
+                                    2,
+                                    close - start,
+                                    mode,
+                                    self.options,
+                                ) == (false, true)
+                            {
+                                self.tree.append_text(begin_text, ix, backslash_escaped);
+                                if self.link_mode != LinkMode::Expanded {
+                                    self.tree.append(Item {
+                                        start: ix,
+                                        end: close + 2,
+                                        body: ItemBody::SourceStrong,
+                                    });
+                                } else {
+                                    let strong = self.tree.append(Item {
+                                        start: ix,
+                                        end: close + 2,
+                                        body: ItemBody::Strong,
+                                    });
+                                    let child = self.tree.create_node(Item {
+                                        start: content_start,
+                                        end: close,
+                                        body: ItemBody::Text {
+                                            backslash_escaped: false,
+                                        },
+                                    });
+                                    self.tree[strong].child = Some(child);
                                 }
-                                begin_text = email_start;
-                            } else {
-                                candidate_floor = email_end;
-                                self.append_autolink_link(d, begin_text, backslash_escaped);
                                 backslash_escaped = false;
-                                begin_text = email_end;
-                                last_inline_emission_end = email_end;
-                                let skip = email_end.saturating_sub(ix + 1);
-                                return LoopInstruction::ContinueAndSkip(skip);
+                                begin_text = close + 2;
+                                last_inline_emission_end = begin_text;
+                                break 'marker begin_text - ix - 1;
                             }
                         }
-                    }
-                    let string_suffix = &self.text[ix..];
-                    let count = 1 + scan_ch_repeat(&string_suffix.as_bytes()[1..], c);
-                    let can_open = delim_run_can_open(
-                        &self.text[start..],
-                        string_suffix,
-                        count,
-                        ix - start,
-                        mode,
-                        self.options,
-                    );
-                    let can_close = delim_run_can_close(
-                        &self.text[start..],
-                        string_suffix,
-                        count,
-                        ix - start,
-                        mode,
-                        self.options,
-                    );
-                    let is_valid_seq = delim_run_is_valid(c, count, self.options);
+                        let is_valid_seq = delim_run_is_valid(c, count, self.options);
 
-                    if (can_open || can_close) && is_valid_seq {
-                        self.tree.append_text(begin_text, ix, backslash_escaped);
-                        backslash_escaped = false;
-                        for i in 0..count {
-                            self.tree.append(Item {
-                                start: ix + i,
-                                end: ix + i + 1,
-                                body: ItemBody::MaybeEmphasis(
-                                    (count - i) as u32,
-                                    can_open,
-                                    can_close,
-                                ),
-                            });
-                        }
-                        begin_text = ix + count;
-                    }
-                    LoopInstruction::ContinueAndSkip(count - 1)
-                }
-                b'$' => {
-                    let brace_context =
-                        if self.brace_context_stack.len() > MATH_BRACE_CONTEXT_MAX_NESTING {
-                            self.brace_context_next as u8
-                        } else {
-                            self.brace_context_stack.last().copied().unwrap_or_else(|| {
-                                self.brace_context_stack.push(!0);
-                                !0
-                            })
-                        };
-
-                    // `backslash_escaped` applies to the `$` itself only when
-                    // the escape sits directly before it (`\$`, pending text
-                    // run empty). For `\\$` or `\X$` the escape is consumed by
-                    // the earlier char and must not bleed into the delimiter.
-                    let dollar_escaped = backslash_escaped && begin_text == ix;
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + 1,
-                        body: ItemBody::MaybeMath(dollar_escaped, brace_context),
-                    });
-                    begin_text = ix + 1;
-                    backslash_escaped = false;
-                    LoopInstruction::ContinueAndSkip(0)
-                }
-                #[cfg(feature = "mdx")]
-                b'{' if self.options.contains(Options::ENABLE_MDX) => {
-                    // If `{` sits inside a pair of matching backtick runs on
-                    // the current line, it's part of a code span's text —
-                    // code spans take priority over MDX expressions in
-                    // remark. Skip inline-expression detection so the `{` is
-                    // consumed as literal text (the enclosing code span will
-                    // pick it up when backtick pairing resolves).
-                    //
-                    // Same treatment for `{` inside a CommonMark link URL
-                    // `[...](...)`: mdx-js does not evaluate expressions in
-                    // URLs (`[a]({x})` round-trips with URL "{x}", literal),
-                    // so treat the `{` as plain text and let the link
-                    // resolver claim the bytes. This also avoids a hard
-                    // parse error on unmatched `{` like `[a]({)`.
-                    //
-                    // Inline math `$...$` owns its content too: braces in
-                    // LaTeX (`\frac{-b}{2a}`) are math text, not expressions —
-                    // matching block `$$` and the autolink math-span check.
-                    if is_inside_code_span(bytes, ix)
-                        || is_inside_link_url_parens(bytes, ix, scope_start)
-                        || is_inside_open_inline_jsx_tag(bytes, ix)
-                        || (self.options.has_math() && is_inside_math_span(bytes, ix))
-                    {
-                        LoopInstruction::ContinueAndSkip(0)
-                    } else {
-                        // MDX inline expression: try to scan balanced braces.
-                        // Lazy-paragraph continuation rules differ between
-                        // text- and flow-position `{`. mdx-js's text
-                        // tokenizer (`{` after content on a paragraph line)
-                        // sets `allowLazy: true`, so body chars on a lazy
-                        // line are kept. Its flow tokenizer (`{` first on a
-                        // line in a container) sets `allowLazy: false` and
-                        // errors. The block-level pass already tried flow;
-                        // fall-through here means the flow scan failed, but
-                        // we still need to reproduce its strict-lazy
-                        // behavior for `{` at line start.
-                        let scan_result = if self.tree.spine_len() > 0 {
-                            let check = self.make_container_line_check();
-                            let allow_lazy_body = !is_at_paragraph_line_start(bytes, ix);
-                            scan_mdx_inline_expression_in_container(
-                                &bytes[ix..],
-                                &check,
-                                allow_lazy_body,
-                            )
-                        } else {
-                            scan_mdx_inline_expression(&bytes[ix..])
-                        };
-                        if let Some((content_start, content_end, total_len)) = scan_result {
+                        if (can_open || can_close) && is_valid_seq {
                             self.tree.append_text(begin_text, ix, backslash_escaped);
                             backslash_escaped = false;
-                            // Strip container prefixes (e.g. blockquote `>`)
-                            // from continuation lines and apply the 2-col
-                            // indent dedent. Combined in one walk so the
-                            // tab-stop math sees the correct per-line
-                            // starting column (lazy lines start at col 0;
-                            // strict lines start at the post-prefix column).
-                            let (normalized, offset_map) =
-                                self.inline_expression_value(ix + content_start, ix + content_end);
-                            // Validate the expression body as JS via oxc.
-                            // Without this, `{h<}` etc. silently produce a
-                            // phantom mdxTextExpression and only error at
-                            // JS emit. Allocator is reused across calls.
-                            if let Some((err_offset, detail)) =
-                                crate::mdx::try_parse_expression_body(
+                            for i in 0..count {
+                                self.tree.append(Item {
+                                    start: ix + i,
+                                    end: ix + i + 1,
+                                    body: ItemBody::MaybeEmphasis(
+                                        (count - i) as u32,
+                                        can_open,
+                                        can_close,
+                                    ),
+                                });
+                            }
+                            begin_text = ix + count;
+                        }
+                        count - 1
+                    }
+                    b'$' => {
+                        let brace_context =
+                            if self.brace_context_stack.len() > MATH_BRACE_CONTEXT_MAX_NESTING {
+                                self.brace_context_next as u8
+                            } else {
+                                self.brace_context_stack.last().copied().unwrap_or_else(|| {
+                                    self.brace_context_stack.push(!0);
+                                    !0
+                                })
+                            };
+
+                        // `backslash_escaped` applies to the `$` itself only when
+                        // the escape sits directly before it (`\$`, pending text
+                        // run empty). For `\\$` or `\X$` the escape is consumed by
+                        // the earlier char and must not bleed into the delimiter.
+                        let dollar_escaped = backslash_escaped && begin_text == ix;
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        self.tree.append(Item {
+                            start: ix,
+                            end: ix + 1,
+                            body: ItemBody::MaybeMath(dollar_escaped, brace_context),
+                        });
+                        begin_text = ix + 1;
+                        backslash_escaped = false;
+                        0
+                    }
+                    #[cfg(feature = "mdx")]
+                    b'{' if self.options.contains(Options::ENABLE_MDX) => {
+                        // If `{` sits inside a pair of matching backtick runs on
+                        // the current line, it's part of a code span's text —
+                        // code spans take priority over MDX expressions in
+                        // remark. Skip inline-expression detection so the `{` is
+                        // consumed as literal text (the enclosing code span will
+                        // pick it up when backtick pairing resolves).
+                        //
+                        // Same treatment for `{` inside a CommonMark link URL
+                        // `[...](...)`: mdx-js does not evaluate expressions in
+                        // URLs (`[a]({x})` round-trips with URL "{x}", literal),
+                        // so treat the `{` as plain text and let the link
+                        // resolver claim the bytes. This also avoids a hard
+                        // parse error on unmatched `{` like `[a]({)`.
+                        //
+                        // Inline math `$...$` owns its content too: braces in
+                        // LaTeX (`\frac{-b}{2a}`) are math text, not expressions —
+                        // matching block `$$` and the autolink math-span check.
+                        if is_inside_code_span(bytes, ix)
+                            || is_inside_link_url_parens(bytes, ix, scope_start)
+                            || is_inside_open_inline_jsx_tag(bytes, ix)
+                            || (self.options.has_math() && is_inside_math_span(bytes, ix))
+                        {
+                            0
+                        } else {
+                            // MDX inline expression: try to scan balanced braces.
+                            // Lazy-paragraph continuation rules differ between
+                            // text- and flow-position `{`. mdx-js's text
+                            // tokenizer (`{` after content on a paragraph line)
+                            // sets `allowLazy: true`, so body chars on a lazy
+                            // line are kept. Its flow tokenizer (`{` first on a
+                            // line in a container) sets `allowLazy: false` and
+                            // errors. The block-level pass already tried flow;
+                            // fall-through here means the flow scan failed, but
+                            // we still need to reproduce its strict-lazy
+                            // behavior for `{` at line start.
+                            let scan_result = if self.tree.spine_len() > 0 {
+                                let check = self.make_container_line_check();
+                                let allow_lazy_body = !is_at_paragraph_line_start(bytes, ix);
+                                scan_mdx_inline_expression_in_container(
+                                    &bytes[ix..],
+                                    &check,
+                                    allow_lazy_body,
+                                )
+                            } else {
+                                scan_mdx_inline_expression(&bytes[ix..])
+                            };
+                            if let Some((content_start, content_end, total_len)) = scan_result {
+                                self.tree.append_text(begin_text, ix, backslash_escaped);
+                                backslash_escaped = false;
+                                // Strip container prefixes (e.g. blockquote `>`)
+                                // from continuation lines and apply the 2-col
+                                // indent dedent. Combined in one walk so the
+                                // tab-stop math sees the correct per-line
+                                // starting column (lazy lines start at col 0;
+                                // strict lines start at the post-prefix column).
+                                let (normalized, offset_map) = self
+                                    .inline_expression_value(ix + content_start, ix + content_end);
+                                // Validate the expression body as JS via oxc.
+                                // Without this, `{h<}` etc. silently produce a
+                                // phantom mdxTextExpression and only error at
+                                // JS emit. Allocator is reused across calls.
+                                if let Some((err_offset, detail)) = try_parse_expression_body(
                                     &normalized,
                                     &mut self.mdx_expr_allocator,
-                                )
-                            {
-                                // For single-line bodies the map is empty and
-                                // the normalized text is a verbatim slice, so a
-                                // direct offset is exact; multi-line bodies
-                                // resolve through the map.
-                                let source_offset =
-                                    satteri_arena::mdx_types::Location::relative_to_absolute(
-                                        &offset_map,
-                                        err_offset,
-                                    )
-                                    .unwrap_or(ix + content_start + err_offset);
+                                ) {
+                                    // For single-line bodies the map is empty and
+                                    // the normalized text is a verbatim slice, so a
+                                    // direct offset is exact; multi-line bodies
+                                    // resolve through the map.
+                                    let source_offset =
+                                        Location::relative_to_absolute(&offset_map, err_offset)
+                                            .unwrap_or(ix + content_start + err_offset);
+                                    self.mdx_errors.push((
+                                        source_offset,
+                                        format!("Could not parse expression with oxc: {detail}"),
+                                    ));
+                                }
+                                let cow_ix = self.allocs.allocate_cow(normalized.into());
+                                self.tree.append(Item {
+                                    start: ix,
+                                    end: ix + total_len,
+                                    body: ItemBody::MdxTextExpression(cow_ix),
+                                });
+                                begin_text = ix + total_len;
+                                total_len - 1
+                            } else {
+                                // Unclosed expression.
                                 self.mdx_errors.push((
-                                    source_offset,
-                                    format!("Could not parse expression with oxc: {detail}"),
-                                ));
-                            }
-                            let cow_ix = self.allocs.allocate_cow(normalized.into());
-                            self.tree.append(Item {
-                                start: ix,
-                                end: ix + total_len,
-                                body: ItemBody::MdxTextExpression(cow_ix),
-                            });
-                            begin_text = ix + total_len;
-                            LoopInstruction::ContinueAndSkip(total_len - 1)
-                        } else {
-                            // Unclosed expression.
-                            self.mdx_errors.push((
                                 ix,
                                 "Unexpected end of file in expression, expected a corresponding \
                              closing brace for `{`"
                                     .to_string(),
                             ));
-                            LoopInstruction::ContinueAndSkip(0)
-                        }
-                    }
-                }
-                b'{' => {
-                    if self.brace_context_stack.len() == MATH_BRACE_CONTEXT_MAX_NESTING {
-                        self.brace_context_stack.push(self.brace_context_next as u8);
-                        self.brace_context_next = MATH_BRACE_CONTEXT_MAX_NESTING;
-                    } else if self.brace_context_stack.len() > MATH_BRACE_CONTEXT_MAX_NESTING {
-                        // When we reach the limit of nesting, switch from actually matching
-                        // braces to just counting them.
-                        self.brace_context_next += 1;
-                    } else if !self.brace_context_stack.is_empty() {
-                        // Store nothing if no math environment has been reached yet.
-                        self.brace_context_stack.push(self.brace_context_next as u8);
-                        self.brace_context_next += 1;
-                    }
-                    LoopInstruction::ContinueAndSkip(0)
-                }
-                b'}' => {
-                    if let &mut [ref mut top_level_context] = &mut self.brace_context_stack[..] {
-                        // Unbalanced Braces
-                        //
-                        // The initial, root top-level brace context is -1, but this is changed whenever an unbalanced
-                        // close brace is encountered:
-                        //
-                        //     This is not a math environment: $}$
-                        //     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^|^
-                        //     -1                               |-2
-                        //
-                        // To ensure this can't get parsed as math, each side of the unbalanced
-                        // brace is an irreversibly separate brace context. As long as the math
-                        // environment itself contains balanced braces, they should share a top level context.
-                        //
-                        //     Math environment contains 2+2: $}$2+2$
-                        //                                       ^^^ this is a math environment
-                        *top_level_context = top_level_context.wrapping_sub(1);
-                    } else if self.brace_context_stack.len() > MATH_BRACE_CONTEXT_MAX_NESTING {
-                        // When we exceed 25 levels of nesting, switch from accurately balancing braces
-                        // to just counting them. When we dip back below the limit, switch back.
-                        if self.brace_context_next <= MATH_BRACE_CONTEXT_MAX_NESTING {
-                            self.brace_context_stack.pop();
-                        } else {
-                            self.brace_context_next -= 1;
-                        }
-                    } else {
-                        self.brace_context_stack.pop();
-                    }
-                    LoopInstruction::ContinueAndSkip(0)
-                }
-                b'`' => {
-                    let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'`');
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    backslash_escaped = false;
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + count,
-                        body: ItemBody::MaybeCode(count as u32, false),
-                    });
-                    begin_text = ix + count;
-                    LoopInstruction::ContinueAndSkip(count - 1)
-                }
-                b'<' if self.options.contains(Options::ENABLE_MDX)
-                    || bytes.get(ix + 1) != Some(&b'\\') =>
-                {
-                    // In MDX mode `<\…` is not a CommonMark backslash escape;
-                    // the MaybeHtml resolver below validates it (and rejects
-                    // `<\>` as an invalid JSX tag start).
-                    // Note: could detect some non-HTML cases and early escape here, but not
-                    // clear that's a win.
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    backslash_escaped = false;
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + 1,
-                        body: ItemBody::MaybeHtml(false),
-                    });
-                    begin_text = ix + 1;
-                    LoopInstruction::ContinueAndSkip(0)
-                }
-                b'!' if bytes.get(ix + 1) == Some(&b'[') => {
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    backslash_escaped = false;
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + 2,
-                        body: ItemBody::MaybeImage,
-                    });
-                    begin_text = ix + 2;
-                    LoopInstruction::ContinueAndSkip(1)
-                }
-                b'[' => {
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    backslash_escaped = false;
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + 1,
-                        body: ItemBody::MaybeLinkOpen,
-                    });
-                    begin_text = ix + 1;
-                    LoopInstruction::ContinueAndSkip(0)
-                }
-                b']' => {
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    backslash_escaped = false;
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + 1,
-                        body: ItemBody::MaybeLinkClose(true),
-                    });
-                    begin_text = ix + 1;
-                    LoopInstruction::ContinueAndSkip(0)
-                }
-                b'&' => match scan_entity(&bytes[ix..]) {
-                    (n, Some(value)) => {
-                        self.tree.append_text(begin_text, ix, backslash_escaped);
-                        backslash_escaped = false;
-                        self.tree.append(Item {
-                            start: ix,
-                            end: ix + n,
-                            body: ItemBody::SynthesizeText(self.allocs.allocate_cow(value)),
-                        });
-                        begin_text = ix + n;
-                        LoopInstruction::ContinueAndSkip(n - 1)
-                    }
-                    _ => LoopInstruction::ContinueAndSkip(0),
-                },
-                b':' if self.options.contains(Options::ENABLE_DIRECTIVE) => {
-                    // Text directive: :name[label]{attrs}
-                    // Must not be preceded by another colon (to avoid ::, :::)
-                    if ix > 0 && bytes[ix - 1] == b':' {
-                        LoopInstruction::ContinueAndSkip(0)
-                    } else if is_inside_code_span(bytes, ix) {
-                        // Code spans bind tighter: a `:` inside one is literal, not
-                        // a directive whose label scan would reach past the span's
-                        // backticks and swallow them (issue #158).
-                        LoopInstruction::ContinueAndSkip(0)
-                    } else if let Some((dir_data, end_pos)) =
-                        parse_directive_after_colons(self.text, bytes, ix + 1)
-                    {
-                        // :name: (followed by colon) is NOT a directive (emoji compat)
-                        if end_pos < bytes.len() && bytes[end_pos] == b':' {
-                            let name_end = ix + 1 + dir_data.name.len();
-                            if name_end == end_pos {
-                                // bare :name: with no label/attrs
-                                return LoopInstruction::ContinueAndSkip(0);
+                                0
                             }
                         }
-                        self.tree.append_text(begin_text, ix, backslash_escaped);
-                        backslash_escaped = false;
-                        let label_start = dir_data.label_start;
-                        let label_end = dir_data.label_end;
-                        let dir_ix = self.allocs.allocate_directive(dir_data);
-                        let consumed = end_pos - ix;
-                        self.tree.append(Item {
-                            start: ix,
-                            end: end_pos,
-                            body: ItemBody::TextDirective(dir_ix),
-                        });
-                        // Tokenize the label inline as the directive's children,
-                        // re-entering the inline scanner over the `[…]` span.
-                        if label_start < label_end {
-                            self.tree.push();
-                            self.parse_line(
-                                label_start,
-                                Some(label_end),
-                                TableParseMode::Disabled,
-                                label_start,
-                            );
-                            self.tree.pop();
+                    }
+                    b'{' => {
+                        if self.brace_context_stack.len() == MATH_BRACE_CONTEXT_MAX_NESTING {
+                            self.brace_context_stack.push(self.brace_context_next as u8);
+                            self.brace_context_next = MATH_BRACE_CONTEXT_MAX_NESTING;
+                        } else if self.brace_context_stack.len() > MATH_BRACE_CONTEXT_MAX_NESTING {
+                            // When we reach the limit of nesting, switch from actually matching
+                            // braces to just counting them.
+                            self.brace_context_next += 1;
+                        } else if !self.brace_context_stack.is_empty() {
+                            // Store nothing if no math environment has been reached yet.
+                            self.brace_context_stack.push(self.brace_context_next as u8);
+                            self.brace_context_next += 1;
                         }
-                        begin_text = end_pos;
-                        LoopInstruction::ContinueAndSkip(consumed - 1)
-                    } else {
-                        LoopInstruction::ContinueAndSkip(0)
+                        0
                     }
-                }
-                b'|' => {
-                    // Only escaped when an odd number of backslashes precedes
-                    // the pipe. `\|` → escaped; `\\|` → literal `\` then
-                    // separator pipe.
-                    let preceding_backslashes = scan_rev_while(&bytes[..ix], |b| b == b'\\');
-                    if preceding_backslashes % 2 == 1 {
-                        LoopInstruction::ContinueAndSkip(0)
-                    } else if let TableParseMode::Active = mode {
-                        LoopInstruction::BreakAtWith(ix, None)
-                    } else {
-                        last_pipe_ix = ix;
-                        pipes += 1;
-                        LoopInstruction::ContinueAndSkip(0)
-                    }
-                }
-                b'.' if matches!(bytes.get(ix + 1..), Some(&[b'.', b'.', ..])) => {
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    backslash_escaped = false;
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + 3,
-                        body: ItemBody::SynthesizeChar('…'),
-                    });
-                    begin_text = ix + 3;
-                    LoopInstruction::ContinueAndSkip(2)
-                }
-                b'-' => {
-                    let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'-');
-                    if count == 1 {
-                        LoopInstruction::ContinueAndSkip(0)
-                    } else {
-                        let itembody = if count == 2 {
-                            ItemBody::SynthesizeChar('–')
-                        } else if count == 3 {
-                            ItemBody::SynthesizeChar('—')
+                    b'}' => {
+                        if let &mut [ref mut top_level_context] = &mut self.brace_context_stack[..]
+                        {
+                            // Unbalanced Braces
+                            //
+                            // The initial, root top-level brace context is -1, but this is changed whenever an unbalanced
+                            // close brace is encountered:
+                            //
+                            //     This is not a math environment: $}$
+                            //     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^|^
+                            //     -1                               |-2
+                            //
+                            // To ensure this can't get parsed as math, each side of the unbalanced
+                            // brace is an irreversibly separate brace context. As long as the math
+                            // environment itself contains balanced braces, they should share a top level context.
+                            //
+                            //     Math environment contains 2+2: $}$2+2$
+                            //                                       ^^^ this is a math environment
+                            *top_level_context = top_level_context.wrapping_sub(1);
+                        } else if self.brace_context_stack.len() > MATH_BRACE_CONTEXT_MAX_NESTING {
+                            // When we exceed 25 levels of nesting, switch from accurately balancing braces
+                            // to just counting them. When we dip back below the limit, switch back.
+                            if self.brace_context_next <= MATH_BRACE_CONTEXT_MAX_NESTING {
+                                self.brace_context_stack.pop();
+                            } else {
+                                self.brace_context_next -= 1;
+                            }
                         } else {
-                            let buf = crate::post_passes::smart_dash_run(count);
-                            ItemBody::SynthesizeText(self.allocs.allocate_cow(buf.into()))
-                        };
-
+                            self.brace_context_stack.pop();
+                        }
+                        0
+                    }
+                    b'`' => {
+                        let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'`');
+                        // An earlier unresolved run can enclose this apparent pair
+                        // (e.g. ` open ``two`` then `). Without one, equal-width
+                        // runs around ASCII alphanumerics need no normalization.
+                        if !self.unresolved_code_seen {
+                            let mut close = ix + count;
+                            while close < bytes.len() && bytes[close].is_ascii_alphanumeric() {
+                                close += 1;
+                            }
+                            if close > ix + count
+                                && bytes.get(close) == Some(&b'`')
+                                && scan_ch_repeat(&bytes[close..], b'`') == count
+                            {
+                                self.tree.append_text(begin_text, ix, backslash_escaped);
+                                self.tree.append(Item {
+                                    start: ix,
+                                    end: close + count,
+                                    body: ItemBody::SourceCode(count as u32),
+                                });
+                                begin_text = close + count;
+                                last_inline_emission_end = begin_text;
+                                backslash_escaped = false;
+                                break 'marker begin_text - ix - 1;
+                            }
+                        }
+                        self.unresolved_code_seen = true;
                         self.tree.append_text(begin_text, ix, backslash_escaped);
                         backslash_escaped = false;
                         self.tree.append(Item {
                             start: ix,
                             end: ix + count,
-                            body: itembody,
+                            body: ItemBody::MaybeCode(count as u32, false),
                         });
                         begin_text = ix + count;
-                        LoopInstruction::ContinueAndSkip(count - 1)
+                        count - 1
                     }
-                }
-                c @ b'\'' | c @ b'"' => {
-                    let string_suffix = &self.text[ix..];
-                    let can_open = delim_run_can_open(
-                        &self.text[start..],
-                        string_suffix,
-                        1,
-                        ix - start,
-                        mode,
-                        self.options,
-                    );
-                    let can_close = delim_run_can_close(
-                        &self.text[start..],
-                        string_suffix,
-                        1,
-                        ix - start,
-                        mode,
-                        self.options,
-                    );
-
-                    self.tree.append_text(begin_text, ix, backslash_escaped);
-                    backslash_escaped = false;
-                    self.tree.append(Item {
-                        start: ix,
-                        end: ix + 1,
-                        body: ItemBody::MaybeSmartQuote(c, can_open, can_close),
-                    });
-                    begin_text = ix + 1;
-
-                    LoopInstruction::ContinueAndSkip(0)
-                }
-                b'h' | b'H' | b'w' | b'W' | b'@' if self.options.contains(Options::ENABLE_GFM) => {
-                    // GFM literal autolink. Only the construct path lands here;
-                    // `gfm_autolink_literal_pass` is the backstop for the rest.
-                    //
-                    // `start` is the current *line* start, so take the floor
-                    // from the Paragraph on the spine: a `[` on an earlier
-                    // line still has to count.
-                    let paragraph_floor = self
-                        .tree
-                        .peek_up()
-                        .map(|ix| self.tree[ix].item.start)
-                        .unwrap_or(start);
-                    let detection = detect_gfm_autolink(
-                        self.text,
-                        bytes,
-                        ix,
-                        byte,
-                        paragraph_floor,
-                        begin_text,
-                    )
-                    .filter(|d| d.start >= candidate_floor);
-                    if let Some(d) = detection {
-                        let (cand_start, cand_end) = (d.start, d.end);
-                        if defer_autolink_decision(bytes, paragraph_floor, ix, self.options) {
-                            candidate_floor = cand_start + 1;
-                            // The scan only moves forward, so ends behind it can
-                            // never be probed again; dropping them here keeps the
-                            // probe in the escape arm off a growing list.
-                            deferred_ends.retain(|&e| e > ix);
-                            deferred_ends.push(cand_end);
-                            // Leave `begin_text` at the candidate's start: its
-                            // bytes stay ordinary text unless the marker fires.
-                            self.append_autolink_marker(d, begin_text, backslash_escaped);
-                            if cand_start > begin_text {
-                                backslash_escaped = false;
-                            }
-                            begin_text = cand_start;
-                            LoopInstruction::ContinueAndSkip(0)
-                        } else {
-                            candidate_floor = cand_end;
-                            self.append_autolink_link(d, begin_text, backslash_escaped);
-                            begin_text = cand_end;
-                            last_inline_emission_end = cand_end;
+                    b'<' if self.options.contains(Options::ENABLE_MDX)
+                        || bytes.get(ix + 1) != Some(&b'\\') =>
+                    {
+                        // In MDX mode `<\…` is not a CommonMark backslash escape;
+                        // the MaybeHtml resolver below validates it (and rejects
+                        // `<\>` as an invalid JSX tag start).
+                        // Note: could detect some non-HTML cases and early escape here, but not
+                        // clear that's a win.
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        backslash_escaped = false;
+                        self.tree.append(Item {
+                            start: ix,
+                            end: ix + 1,
+                            body: ItemBody::MaybeHtml(false),
+                        });
+                        begin_text = ix + 1;
+                        0
+                    }
+                    b'!' if bytes.get(ix + 1) == Some(&b'[') => {
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        backslash_escaped = false;
+                        self.tree.append(Item {
+                            start: ix,
+                            end: ix + 2,
+                            body: ItemBody::MaybeImage,
+                        });
+                        begin_text = ix + 2;
+                        1
+                    }
+                    b'[' => {
+                        if self.link_mode != LinkMode::Expanded
+                            && ix >= furthest_autolink_end
+                            && !self.tree.is_in_table()
+                            && let Some(end) = self.try_append_plain_link(
+                                ix,
+                                bytes.len(),
+                                begin_text,
+                                backslash_escaped,
+                                start,
+                            )
+                        {
+                            begin_text = end;
+                            last_inline_emission_end = end;
+                            candidate_floor = end;
                             backslash_escaped = false;
-                            // Skip the URL bytes so later callbacks don't
-                            // re-trigger inside it; ContinueAndSkip(N) advances
-                            // by N then +1.
-                            LoopInstruction::ContinueAndSkip(cand_end.saturating_sub(ix + 1))
+                            break 'marker end - ix - 1;
                         }
-                    } else {
-                        LoopInstruction::ContinueAndSkip(0)
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        backslash_escaped = false;
+                        self.tree.append(Item {
+                            start: ix,
+                            end: ix + 1,
+                            body: ItemBody::MaybeLinkOpen,
+                        });
+                        begin_text = ix + 1;
+                        0
                     }
+                    b']' => {
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        backslash_escaped = false;
+                        self.tree.append(Item {
+                            start: ix,
+                            end: ix + 1,
+                            body: ItemBody::MaybeLinkClose(true),
+                        });
+                        begin_text = ix + 1;
+                        0
+                    }
+                    b'&' => match scan_entity(&bytes[ix..]) {
+                        (n, Some(value)) => {
+                            self.tree.append_text(begin_text, ix, backslash_escaped);
+                            backslash_escaped = false;
+                            self.tree.append(Item {
+                                start: ix,
+                                end: ix + n,
+                                body: ItemBody::SynthesizeText(self.allocs.allocate_cow(value)),
+                            });
+                            begin_text = ix + n;
+                            n - 1
+                        }
+                        _ => 0,
+                    },
+                    b':' if self.options.contains(Options::ENABLE_DIRECTIVE) => {
+                        // Text directive: :name[label]{attrs}
+                        // Must not be preceded by another colon (to avoid ::, :::)
+                        if ix > 0 && bytes[ix - 1] == b':' {
+                            0
+                        } else if is_inside_code_span(bytes, ix) {
+                            // Code spans bind tighter: a `:` inside one is literal, not
+                            // a directive whose label scan would reach past the span's
+                            // backticks and swallow them (issue #158).
+                            0
+                        } else if let Some((dir_data, end_pos)) =
+                            parse_directive_after_colons(self.text, bytes, ix + 1)
+                        {
+                            // :name: (followed by colon) is NOT a directive (emoji compat)
+                            if end_pos < bytes.len() && bytes[end_pos] == b':' {
+                                let name_end = ix + 1 + dir_data.name.len();
+                                if name_end == end_pos {
+                                    // bare :name: with no label/attrs
+                                    break 'marker 0;
+                                }
+                            }
+                            self.tree.append_text(begin_text, ix, backslash_escaped);
+                            backslash_escaped = false;
+                            let label_start = dir_data.label_start;
+                            let label_end = dir_data.label_end;
+                            let dir_ix = self.allocs.allocate_directive(dir_data);
+                            let consumed = end_pos - ix;
+                            self.tree.append(Item {
+                                start: ix,
+                                end: end_pos,
+                                body: ItemBody::TextDirective(dir_ix),
+                            });
+                            // Tokenize the label inline as the directive's children,
+                            // re-entering the inline scanner over the `[…]` span.
+                            if label_start < label_end {
+                                self.tree.push();
+                                self.parse_line(
+                                    label_start,
+                                    Some(label_end),
+                                    TableParseMode::Disabled,
+                                    label_start,
+                                );
+                                self.tree.pop();
+                            }
+                            begin_text = end_pos;
+                            consumed - 1
+                        } else {
+                            0
+                        }
+                    }
+                    b'|' => {
+                        // Only escaped when an odd number of backslashes precedes
+                        // the pipe. `\|` → escaped; `\\|` → literal `\` then
+                        // separator pipe.
+                        let preceding_backslashes = scan_rev_while(&bytes[..ix], |b| b == b'\\');
+                        if preceding_backslashes % 2 == 1 {
+                            0
+                        } else if let TableParseMode::Active = mode {
+                            break 'scan (ix, None);
+                        } else {
+                            last_pipe_ix = ix;
+                            pipes += 1;
+                            0
+                        }
+                    }
+                    b'.' if matches!(bytes.get(ix + 1..), Some(&[b'.', b'.', ..])) => {
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        backslash_escaped = false;
+                        self.tree.append(Item {
+                            start: ix,
+                            end: ix + 3,
+                            body: ItemBody::SynthesizeChar('…'),
+                        });
+                        begin_text = ix + 3;
+                        2
+                    }
+                    b'-' => {
+                        let count = 1 + scan_ch_repeat(&bytes[(ix + 1)..], b'-');
+                        if count == 1 {
+                            0
+                        } else {
+                            let itembody = if count == 2 {
+                                ItemBody::SynthesizeChar('–')
+                            } else if count == 3 {
+                                ItemBody::SynthesizeChar('—')
+                            } else {
+                                let buf = smart_dash_run(count);
+                                ItemBody::SynthesizeText(self.allocs.allocate_cow(buf.into()))
+                            };
+
+                            self.tree.append_text(begin_text, ix, backslash_escaped);
+                            backslash_escaped = false;
+                            self.tree.append(Item {
+                                start: ix,
+                                end: ix + count,
+                                body: itembody,
+                            });
+                            begin_text = ix + count;
+                            count - 1
+                        }
+                    }
+                    c @ b'\'' | c @ b'"' => {
+                        let string_suffix = &self.text[ix..];
+                        let (can_open, can_close) = classify_delimiter_run(
+                            &self.text[start..],
+                            string_suffix,
+                            1,
+                            ix - start,
+                            mode,
+                            self.options,
+                        );
+
+                        self.tree.append_text(begin_text, ix, backslash_escaped);
+                        backslash_escaped = false;
+                        self.tree.append(Item {
+                            start: ix,
+                            end: ix + 1,
+                            body: ItemBody::MaybeSmartQuote(c, can_open, can_close),
+                        });
+                        begin_text = ix + 1;
+
+                        0
+                    }
+                    b'h' | b'H' | b'w' | b'W' | b'@'
+                        if self.options.contains(Options::ENABLE_GFM) =>
+                    {
+                        // GFM literal autolink. Only the construct path lands here;
+                        // `gfm_autolink_literal_pass` is the backstop for the rest.
+                        //
+                        // `start` is the current *line* start, so take the floor
+                        // from the Paragraph on the spine: a `[` on an earlier
+                        // line still has to count.
+                        let paragraph_floor = self
+                            .tree
+                            .peek_up()
+                            .map(|ix| self.tree[ix].item.start)
+                            .unwrap_or(start);
+                        // A cached blocker is only a hint: must_defer checks the
+                        // current scope again. Isolated URLs avoid a second probe.
+                        if self.link_mode == LinkMode::DeferredProtocols
+                            && self.autolink_prefix.has_blocker
+                            && matches!(byte, b'h' | b'H')
+                        {
+                            let Some((prefix_len, _)) = match_autolink_scheme(bytes, ix) else {
+                                break 'marker 0;
+                            };
+                            let content_start = ix == paragraph_floor;
+                            if bytes
+                                .get(ix + prefix_len)
+                                .is_some_and(u8::is_ascii_alphanumeric)
+                                && ix >= candidate_floor
+                                && (content_start
+                                    || ix == 0
+                                    || !bytes[ix - 1].is_ascii_alphabetic())
+                                && let Ok(limit) = u32::try_from(bytes.len())
+                                && self.autolink_prefix.must_defer(
+                                    bytes,
+                                    paragraph_floor,
+                                    ix,
+                                    self.options,
+                                )
+                            {
+                                furthest_autolink_end = usize::MAX;
+                                self.tree.append_text(begin_text, ix, backslash_escaped);
+                                self.tree.append(Item {
+                                    start: ix,
+                                    end: ix,
+                                    body: ItemBody::MaybeProtocolAutolink {
+                                        limit,
+                                        content_start,
+                                    },
+                                });
+                                if ix > begin_text {
+                                    backslash_escaped = false;
+                                }
+                                begin_text = ix;
+                                candidate_floor = ix + 1;
+                                break 'marker 0;
+                            }
+                        }
+                        let detection = detect_gfm_autolink(
+                            self.text,
+                            bytes,
+                            ix,
+                            byte,
+                            paragraph_floor,
+                            begin_text,
+                        )
+                        .filter(|d| d.start >= candidate_floor);
+                        if let Some(d) = detection {
+                            let (cand_start, cand_end) = (d.start, d.end);
+                            if self.autolink_prefix.must_defer(
+                                bytes,
+                                paragraph_floor,
+                                ix,
+                                self.options,
+                            ) {
+                                candidate_floor = cand_start + 1;
+                                // The scan only moves forward, so ends behind it can
+                                // never be probed again; dropping them here keeps the
+                                // probe in the escape arm off a growing list.
+                                deferred_ends.retain(|&e| e > ix);
+                                deferred_ends.push(cand_end);
+                                furthest_autolink_end = furthest_autolink_end.max(cand_end);
+                                // Leave `begin_text` at the candidate's start: its
+                                // bytes stay ordinary text unless the marker fires.
+                                self.append_autolink_marker(d, begin_text, backslash_escaped);
+                                if cand_start > begin_text {
+                                    backslash_escaped = false;
+                                }
+                                begin_text = cand_start;
+                                0
+                            } else {
+                                candidate_floor = cand_end;
+                                self.append_autolink_link(d, begin_text, backslash_escaped);
+                                begin_text = cand_end;
+                                last_inline_emission_end = cand_end;
+                                backslash_escaped = false;
+                                // Skip the URL bytes so later callbacks don't
+                                // re-trigger inside it; ContinueAndSkip(N) advances
+                                // by N then +1.
+                                cand_end.saturating_sub(ix + 1)
+                            }
+                        } else {
+                            0
+                        }
+                    }
+                    _ => 0,
                 }
-                _ => LoopInstruction::ContinueAndSkip(0),
-            }
-        });
+            };
+            scan_ix = ix + skip + 1;
+        };
 
         if brk.is_none() {
             let trailing_whitespace = scan_rev_while(&bytes[begin_text..final_ix], is_space_or_tab);
@@ -3701,20 +4053,23 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return false;
         }
 
-        // Cheap pre-filter: a delimiter row must contain at least one `-`.
-        // Container paragraphs hit this path on every continuation line, so
-        // skipping `scan_table_head` when the next line obviously can't be a
-        // delimiter row matters for parse perf.
-        // Use SIMD-backed `memchr` rather than a `position` closure — this
-        // path runs on every paragraph continuation line.
         let Some(eol_off) = memchr::memchr2(b'\n', b'\r', bytes) else {
             return false;
         };
         let next_line_ix = eol_off + scan_eol(&bytes[eol_off..]).unwrap();
-        // One pass: a `-` reached before any line ending is a `-` on the next line.
-        if memchr::memchr3(b'-', b'\n', b'\r', &bytes[next_line_ix..])
-            .is_none_or(|p| bytes[next_line_ix + p] != b'-')
-        {
+        // A delimiter row plus any continuation-line container prefix holds only `|-:> \t`, so the first other byte disqualifies the line.
+        let mut has_hyphen = false;
+        let mut j = next_line_ix;
+        loop {
+            match bytes.get(j) {
+                None | Some(b'\n' | b'\r') => break,
+                Some(b'-') => has_hyphen = true,
+                Some(b'|' | b':' | b' ' | b'\t' | b'>') => {}
+                Some(_) => return false,
+            }
+            j += 1;
+        }
+        if !has_hyphen {
             return false;
         }
 
@@ -3805,7 +4160,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if self.options.contains(Options::ENABLE_MDX) {
             let inner_start = header_start + range.start;
             let inner_end = header_start + range.end;
-            crate::mdx::try_parse_expression_body(
+            try_parse_expression_body(
                 &self.text[inner_start..inner_end],
                 &mut self.mdx_expr_allocator,
             )?;
@@ -4955,7 +5310,7 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize, has_math: bool) -> boo
             offset = i + 1;
             continue;
         }
-        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[pos..])
+        if let Some(len) = scan_mdx_inline_jsx(&bytes[pos..])
             && pos + len > ix
         {
             return true;
@@ -5013,7 +5368,7 @@ fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
             i = j + 2;
             continue;
         }
-        if let Some(len) = crate::mdx::scan_mdx_inline_jsx(&bytes[j..])
+        if let Some(len) = scan_mdx_inline_jsx(&bytes[j..])
             && j + len > pos
         {
             return true;
@@ -5025,14 +5380,14 @@ fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
 
 /// Walk forward from `start_ix` (an atext-class char like `_`) through
 /// `+`/`-`/`.`/`_`/alphanumeric to find an `@`, then check whether an
-/// email autolink tokenizes exactly at `start_ix..`. Returns `(start, end,
-/// "mailto:..")` on success.
+/// email autolink tokenizes exactly at `start_ix..`. Returns `(start, end)`
+/// on success.
 fn scan_email_forward_from_atext(
     bytes: &[u8],
     underscore_ix: usize,
     begin_text: usize,
     paragraph_start: usize,
-) -> Option<(usize, usize, String)> {
+) -> Option<(usize, usize)> {
     // Walk forward from the `_` through local-part chars to the `@`.
     let mut at_ix = underscore_ix;
     while at_ix < bytes.len() && is_email_local_char(bytes[at_ix]) {
@@ -5046,7 +5401,7 @@ fn scan_email_forward_from_atext(
     // The email construct wins over the emphasis as long as that start is at
     // or after the pending text boundary; otherwise an already-emitted
     // Maybe* token covers it and we must defer to the post-pass.
-    let (sc_start, sc_end, full_url, retry_needed) = scan_email_autolink(bytes, at_ix, true)?;
+    let (sc_start, sc_end, _, retry_needed) = scan_email_autolink(bytes, at_ix, true)?;
     if retry_needed
         || sc_start > underscore_ix
         || sc_start < begin_text
@@ -5054,32 +5409,59 @@ fn scan_email_forward_from_atext(
     {
         return None;
     }
-    Some((sc_start, sc_end, full_url))
+    Some((sc_start, sc_end))
 }
 
 fn is_email_local_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'_')
 }
 
-/// True when a candidate at `pos` must go through `handle_inline_pass1`
-/// instead of being committed on the spot.
-///
-/// True whenever an earlier byte in the block could open a construct that ends
-/// up owning the trigger's bytes: `[` a bracket opener, `<` a pointed autolink
-/// or inline HTML, `` ` `` a code span, `$` a math span.
-fn defer_autolink_decision(bytes: &[u8], block_start: usize, pos: usize, options: Options) -> bool {
-    let before = &bytes[block_start..pos];
-    memchr::memchr3(b'[', b'<', b'`', before).is_some()
-        || (options.has_math() && memchr::memchr(b'$', before).is_some())
+/// Cache of possible inline owners in the prefix of the current block.
+/// Source bytes and options are immutable during a first pass, so extending a
+/// checked prefix is sufficient; rescanning it per candidate would be quadratic.
+/// The plain-link cache can skip syntax already owned by a committed link.
+#[derive(Default)]
+struct AutolinkPrefix {
+    block_start: usize,
+    checked_to: usize,
+    has_blocker: bool,
 }
 
-/// A GFM autolink literal the scanner accepted, before anything is committed
-/// to the tree.
-struct AutolinkDetection<'a> {
-    start: usize,
-    end: usize,
-    link_type: LinkType,
-    url: CowStr<'a>,
+impl AutolinkPrefix {
+    /// A complete link owns its delimiters; they cannot block subsequent links.
+    fn skip_committed_link(&mut self, end: usize) {
+        debug_assert!(!self.has_blocker && end >= self.checked_to);
+        self.checked_to = end;
+    }
+
+    /// A candidate must be deferred to `handle_inline_pass1` when an earlier
+    /// `[`, `<`, backtick, or enabled `$` could open a construct owning its bytes.
+    fn must_defer(
+        &mut self,
+        bytes: &[u8],
+        block_start: usize,
+        pos: usize,
+        options: Options,
+    ) -> bool {
+        // Table reparsing and nested directive labels can change scope or rewind.
+        // Key by the exact source floor, not by a tree index that may be reused.
+        if self.block_start != block_start || pos < self.checked_to {
+            *self = Self {
+                block_start,
+                checked_to: block_start,
+                has_blocker: false,
+            };
+        }
+        if !self.has_blocker {
+            // Include skipped bytes (e.g. committed URLs), not just scanner stops:
+            // delimiters there can still require deferring later autolinks.
+            let before = &bytes[self.checked_to..pos];
+            self.has_blocker = memchr::memchr3(b'[', b'<', b'`', before).is_some()
+                || (options.has_math() && memchr::memchr(b'$', before).is_some());
+            self.checked_to = pos;
+        }
+        self.has_blocker
+    }
 }
 
 /// `(can_open, can_close)` for the run of `run_len` delimiters at `at`.
@@ -5096,10 +5478,7 @@ fn delim_run_flags(
     }
     let s = &text[start..];
     let suffix = &text[at..];
-    (
-        delim_run_can_open(s, suffix, run_len, at - start, mode, options),
-        delim_run_can_close(s, suffix, run_len, at - start, mode, options),
-    )
+    classify_delimiter_run(s, suffix, run_len, at - start, mode, options)
 }
 
 /// Only GFM strikethrough ever adds `~` to micromark's attention markers.
@@ -5143,21 +5522,20 @@ fn escaped_delim_run(
 /// GFM resolves in the email construct's favour. `www_end` bounds the search to
 /// the www span, which the committed path skips outright and the deferred path
 /// was already rescanning.
-fn detect_email_inside_www<'a>(
+fn detect_email_inside_www(
     bytes: &[u8],
     ix: usize,
     www_end: usize,
     paragraph_start: usize,
     begin_text: usize,
-) -> Option<AutolinkDetection<'a>> {
+) -> Option<AutolinkCandidate> {
     // `_` is the one atext byte that can precede a www literal, and the
     // attention arm's own email hook already owns that case.
     if ix > 0 && bytes[ix - 1] == b'_' {
         return None;
     }
     let at_ix = ix + memchr::memchr(b'@', &bytes[ix..www_end])?;
-    let (email_start, email_end, full_url, retry_needed) =
-        crate::post_passes::scan_email_autolink(bytes, at_ix, true)?;
+    let (email_start, email_end, _, retry_needed) = scan_email_autolink(bytes, at_ix, true)?;
     // Opening past the trigger is the `@` hook's; opening before it needs an
     // atext predecessor, and `_` is the only one a www literal takes.
     if email_start != ix {
@@ -5171,44 +5549,27 @@ fn detect_email_inside_www<'a>(
         email_start >= begin_text && email_start >= paragraph_start,
         "the trigger is inside the current text run"
     );
-    Some(AutolinkDetection {
+    Some(AutolinkCandidate {
         start: email_start,
         end: email_end,
-        link_type: LinkType::Email,
-        url: email_addr(full_url),
+        kind: AutolinkKind::Email,
     })
-}
-
-/// Out of line: allocating URLs is rare enough that inlining only bloats the loop.
-#[inline(never)]
-fn www_url<'a>(span: &str) -> CowStr<'a> {
-    format!("http://{span}").into()
-}
-
-/// `scan_email_autolink` returns `mailto:<addr>`; arena_build's Email-link path
-/// prepends `mailto:` again, so strip it here.
-#[inline(never)]
-fn email_addr<'a>(mut full_url: String) -> CowStr<'a> {
-    if full_url.starts_with("mailto:") {
-        full_url.drain(.."mailto:".len());
-    }
-    full_url.into()
 }
 
 /// Detect a GFM autolink literal at a `h`/`H`/`w`/`W`/`@` trigger. Detection
 /// only: committing or deferring is the caller's call, since it turns on
 /// state this function cannot see.
-fn detect_gfm_autolink<'a>(
-    text: &'a str,
+fn detect_gfm_autolink(
+    text: &str,
     bytes: &[u8],
     ix: usize,
     byte: u8,
     paragraph_start: usize,
     begin_text: usize,
-) -> Option<AutolinkDetection<'a>> {
+) -> Option<AutolinkCandidate> {
     // Cheap reject first: most triggers in prose can't start an autolink.
     let is_www = match byte {
-        b'h' | b'H' | b'w' | b'W' => crate::post_passes::match_autolink_scheme(bytes, ix)?.1,
+        b'h' | b'H' | b'w' | b'W' => match_autolink_scheme(bytes, ix)?.1,
         b'@' => {
             // Email requires at least one atext char immediately before @.
             if ix == 0 || !is_email_local_char(bytes[ix - 1]) {
@@ -5236,15 +5597,14 @@ fn detect_gfm_autolink<'a>(
             {
                 return Some(email);
             }
-            let span = text.get(ix..end)?;
-            Some(AutolinkDetection {
+            text.get(ix..end)?;
+            Some(AutolinkCandidate {
                 start,
                 end,
-                link_type: LinkType::Autolink,
-                url: if is_www {
-                    www_url(span)
+                kind: if is_www {
+                    AutolinkKind::Www
                 } else {
-                    CowStr::Borrowed(span)
+                    AutolinkKind::Url
                 },
             })
         }
@@ -5252,8 +5612,7 @@ fn detect_gfm_autolink<'a>(
             // The local-part walkback can start the link before `ix`. If it
             // would cross an already-emitted Maybe* item, that construct owns
             // the bytes, so leave the email to the post-pass.
-            let (email_start, email_end, full_url, retry_needed) =
-                scan_email_autolink(bytes, ix, true)?;
+            let (email_start, email_end, _, retry_needed) = scan_email_autolink(bytes, ix, true)?;
             if retry_needed {
                 return None;
             }
@@ -5272,11 +5631,10 @@ fn detect_gfm_autolink<'a>(
             {
                 return None;
             }
-            Some(AutolinkDetection {
+            Some(AutolinkCandidate {
                 start: email_start,
                 end: email_end,
-                link_type: LinkType::Email,
-                url: email_addr(full_url),
+                kind: AutolinkKind::Email,
             })
         }
         _ => None,
@@ -5422,6 +5780,56 @@ fn scan_directive_name(bytes: &[u8]) -> Option<(usize, usize)> {
         return None;
     }
     Some((0, len))
+}
+
+/// Recognize a plain ASCII label and a destination, optionally with a simple
+/// quoted title. Everything else stays with the normal inline resolver.
+/// Destination and title syntax stay with the shared scanners.
+fn scan_plain_inline_link(
+    text: &str,
+    limit: usize,
+    start: usize,
+) -> Option<(usize, usize, &str, &str)> {
+    let bytes = &text.as_bytes()[..limit];
+    let label_start = start + 1;
+    let mut label_end = label_start;
+    while bytes
+        .get(label_end)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b' ')
+    {
+        label_end += 1;
+    }
+    if label_end == label_start || bytes.get(label_end..label_end + 2) != Some(b"](") {
+        return None;
+    }
+    let dest_start = label_end + 2;
+    if bytes.get(dest_start).is_some_and(|&b| is_space_or_tab(b)) {
+        return None;
+    }
+    let (len, dest) = scan_link_dest(text, dest_start, LINK_MAX_NESTED_PARENS)?;
+    let dest_end = dest_start + len;
+    if dest_end > limit {
+        return None;
+    }
+    let mut close = dest_end;
+    close += scan_while(&bytes[close..], is_space_or_tab);
+    let mut title = "";
+    if close > dest_end && bytes.get(close) != Some(&b')') {
+        let (length, value) = scan_plain_link_title(text, close)?;
+        close += length;
+        if close > limit {
+            return None;
+        }
+        close += scan_while(&bytes[close..], is_space_or_tab);
+        title = value;
+    }
+    // The line may still become a table header. Its raw pipes must reach the
+    // ordinary tokenizer even though the destination itself accepts them.
+    if bytes.get(close) != Some(&b')') || memchr::memchr(b'|', &bytes[dest_start..close]).is_some()
+    {
+        return None;
+    }
+    Some((close + 1, label_end, dest, title))
 }
 
 /// Parse a directive label `[content]`. Returns (label_start, label_end, total_consumed).
@@ -5739,195 +6147,127 @@ fn fixup_end_of_definition_list(tree: &mut Tree<Item>, list_ix: TreeIndex) {
     }
 }
 
-/// Determines whether the delimiter run starting at given index is
-/// left-flanking, as defined by the commonmark spec (and isn't intraword
-/// for _ delims).
-/// suffix is &s[ix..], which is passed in as an optimization, since taking
-/// a string subslice is O(n).
-fn delim_run_can_open(
+/// Classify opening and closing eligibility together, decoding each neighboring
+/// character once. `suffix` is `&s[ix..]`; table edges act as word boundaries.
+fn classify_delimiter_run(
     s: &str,
     suffix: &str,
     run_len: usize,
     ix: usize,
     mode: TableParseMode,
     options: Options,
-) -> bool {
-    let next_char = if let Some(c) = suffix[run_len..].chars().next() {
-        c
+) -> (bool, bool) {
+    let prev = s[..ix].chars().next_back();
+    let next = suffix[run_len..].chars().next();
+    let prev_ws = prev.is_some_and(char::is_whitespace);
+    let next_ws = next.is_some_and(char::is_whitespace);
+    let prev_punct = !prev_ws && prev.is_some_and(is_punctuation);
+    let next_punct = !next_ws && next.is_some_and(is_punctuation);
+    let delim = suffix.as_bytes()[0];
+    let table = mode == TableParseMode::Active;
+    let left_edge =
+        table && s.as_bytes()[..ix].ends_with(b"|") && !s.as_bytes()[..ix].ends_with(br"\|");
+    let right_edge = table && next == Some('|');
+    let loose_strike =
+        delim == b'~' && run_len == 1 && options.contains(Options::ENABLE_STRIKETHROUGH);
+    // Subscript permits intraword markers (H~2~O); strikethrough uses flanking rules.
+    let subscript = delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT);
+    let symmetric = delim == b'*' || delim == b'^' || (delim == b'~' && run_len > 1);
+    let can_open = if next.is_none() || next_ws {
+        false
+    } else if prev.is_none() || left_edge {
+        true
+    } else if right_edge {
+        false
+    } else if delim == b'*' && next.is_some_and(|c| is_attention_marker(c, options))
+        || (symmetric || subscript || loose_strike) && !next_punct
+    {
+        true
+    } else if loose_strike {
+        prev_ws || prev_punct
+    } else if delim == b'"' {
+        // Quotes may adjoin words, but after an ASCII digit they are inch marks.
+        !next_punct && !prev.is_some_and(|c| c.is_ascii_digit()) || prev_ws || prev_punct
     } else {
-        return false;
+        prev_ws || prev_punct && (delim != b'\'' || !matches!(prev, Some(']' | ')')))
     };
-    if next_char.is_whitespace() {
-        return false;
-    }
-    if ix == 0 {
-        return true;
-    }
-    if mode == TableParseMode::Active {
-        if s.as_bytes()[..ix].ends_with(b"|") && !s.as_bytes()[..ix].ends_with(br"\|") {
-            return true;
-        }
-        if next_char == '|' {
-            return false;
-        }
-    }
-    let delim = suffix.bytes().next().unwrap();
-    if delim == b'*' && is_attention_marker(next_char, options) {
-        return true;
-    }
-    if (delim == b'*' || delim == b'^') && !is_punctuation(next_char) {
-        return true;
-    }
-    // GFM holds `~~` to the same flanking rules as `**`, so `a~~/foo~~` must not open.
-    if delim == b'~' && run_len > 1 && !is_punctuation(next_char) {
-        return true;
-    }
-    let prev_char = s[..ix].chars().last().unwrap();
-    // Subscript is intraword by design (`H~2~O`), unlike GFM strikethrough.
-    if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) && !is_punctuation(next_char) {
-        return true;
-    }
-    if delim == b'~' && options.contains(Options::ENABLE_STRIKETHROUGH) && run_len == 1 {
-        return !is_punctuation(next_char)
-            || (is_punctuation(next_char)
-                && (prev_char.is_whitespace() || is_punctuation(prev_char)));
-    }
-
-    // Double quotes can open after a non-space word character. For example, `에"About Me"` has
-    // quoted text attached directly after Korean text. Digits are excluded: a
-    // quote after a digit is an inch mark (`24"x36"`), not an opening quote.
-    if delim == b'"' {
-        return (!is_punctuation(next_char) && !prev_char.is_ascii_digit())
-            || prev_char.is_whitespace()
-            || is_punctuation(prev_char);
-    }
-
-    prev_char.is_whitespace()
-        || is_punctuation(prev_char) && (delim != b'\'' || ![']', ')'].contains(&prev_char))
-}
-
-fn delim_run_can_close(
-    s: &str,
-    suffix: &str,
-    run_len: usize,
-    ix: usize,
-    mode: TableParseMode,
-    options: Options,
-) -> bool {
-    if ix == 0 {
-        return false;
-    }
-    let prev_char = s[..ix].chars().last().unwrap();
-    if prev_char.is_whitespace() {
-        return false;
-    }
-    let next_char = if let Some(c) = suffix[run_len..].chars().next() {
-        c
+    let can_close = if prev.is_none() || prev_ws {
+        false
+    } else if next.is_none() {
+        true
+    } else if left_edge {
+        false
+    } else if right_edge
+        || subscript
+        || delim == b'*' && prev.is_some_and(|c| is_attention_marker(c, options))
+        || (symmetric || loose_strike || delim == b'"') && !prev_punct
+    {
+        true
     } else {
-        return true;
+        next_ws || next_punct
     };
-    if mode == TableParseMode::Active {
-        if s.as_bytes()[..ix].ends_with(b"|") && !s.as_bytes()[..ix].ends_with(br"\|") {
-            return false;
-        }
-        if next_char == '|' {
-            return true;
-        }
-    }
-    let delim = suffix.bytes().next().unwrap();
-    if delim == b'*' && is_attention_marker(prev_char, options) {
-        return true;
-    }
-    if (delim == b'*' || delim == b'^') && !is_punctuation(prev_char) {
-        return true;
-    }
-    if delim == b'~' && run_len > 1 && !is_punctuation(prev_char) {
-        return true;
-    }
-    // Subscript is intraword by design (`H~2~O`), unlike GFM strikethrough.
-    if delim == b'~' && options.contains(Options::ENABLE_SUBSCRIPT) {
-        return true;
-    }
-    if delim == b'~' && options.contains(Options::ENABLE_STRIKETHROUGH) && run_len == 1 {
-        return !is_punctuation(prev_char)
-            || (is_punctuation(prev_char)
-                && (next_char.is_whitespace() || is_punctuation(next_char)));
-    }
-
-    // Double quotes can close before a non-space word character. For example, `"About Me"로` has
-    // Korean text attached directly after the quoted phrase.
-    if delim == b'"' {
-        return !is_punctuation(prev_char)
-            || next_char.is_whitespace()
-            || is_punctuation(next_char);
-    }
-
-    next_char.is_whitespace() || is_punctuation(next_char)
+    (can_open, can_close)
 }
 
 fn create_lut(options: &Options) -> LookupTable {
-    special_bytes(options)
-}
-
-fn special_bytes(options: &Options) -> [bool; 256] {
-    let mut bytes = [false; 256];
+    let mut table = LookupTable {
+        bytes: [false; 256],
+        low: [0; 16],
+    };
+    let mut insert = |byte: u8| {
+        table.bytes[byte as usize] = true;
+        table.low[(byte & 15) as usize] |= 1 << (byte >> 4);
+    };
     let standard_bytes = [
         b'\n', b'\r', b'*', b'_', b'&', b'\\', b'[', b']', b'<', b'!', b'`',
     ];
 
     for &byte in &standard_bytes {
-        bytes[byte as usize] = true;
+        insert(byte);
     }
     if options.contains(Options::ENABLE_TABLES) {
-        bytes[b'|' as usize] = true;
+        insert(b'|');
     }
     if tilde_is_delimiter(*options) {
-        bytes[b'~' as usize] = true;
+        insert(b'~');
     }
     if options.contains(Options::ENABLE_SUPERSCRIPT) {
-        bytes[b'^' as usize] = true;
+        insert(b'^');
     }
     if options.has_math() {
-        bytes[b'$' as usize] = true;
-        bytes[b'{' as usize] = true;
-        bytes[b'}' as usize] = true;
+        insert(b'$');
+        insert(b'{');
+        insert(b'}');
     }
     if options.contains(Options::ENABLE_MDX) {
-        bytes[b'{' as usize] = true;
-        bytes[b'}' as usize] = true;
+        insert(b'{');
+        insert(b'}');
     }
     if options.has_smart_ellipses() {
-        bytes[b'.' as usize] = true;
+        insert(b'.');
     }
     if options.has_smart_dashes() {
-        bytes[b'-' as usize] = true;
+        insert(b'-');
     }
     if options.has_smart_quotes() {
-        bytes[b'"' as usize] = true;
-        bytes[b'\'' as usize] = true;
+        insert(b'"');
+        insert(b'\'');
     }
     if options.contains(Options::ENABLE_DIRECTIVE) {
-        bytes[b':' as usize] = true;
+        insert(b':');
     }
     if options.contains(Options::ENABLE_GFM) {
         // GFM literal autolinks: protocol (h/H), www (w/W), email (@).
         // Fires during inline tokenization so URL bytes are consumed
         // before the bracket/emphasis/code-span resolvers see them.
-        bytes[b'h' as usize] = true;
-        bytes[b'H' as usize] = true;
-        bytes[b'w' as usize] = true;
-        bytes[b'W' as usize] = true;
-        bytes[b'@' as usize] = true;
+        insert(b'h');
+        insert(b'H');
+        insert(b'w');
+        insert(b'W');
+        insert(b'@');
     }
 
-    bytes
-}
-
-enum LoopInstruction<T> {
-    /// Continue looking for more special bytes, but skip next few bytes.
-    ContinueAndSkip(usize),
-    /// Break looping immediately, returning with the given index and value.
-    BreakAtWith(usize, T),
+    table
 }
 
 /// Result of `extend_indented_code_block`: the position end the block
@@ -6362,70 +6702,119 @@ fn fence_keeps_trailing_terminator(
         }
 }
 
-type LookupTable = [bool; 256];
-
-/// This function walks the byte slices from the given index and
-/// calls the callback function on all bytes (and their indices) that are in the following set:
-/// `` ` ``, `\`, `&`, `*`, `_`, `~`, `!`, `<`, `[`, `]`, `|`, `\r`, `\n`
-/// It is guaranteed not call the callback on other bytes.
-/// Whenever `callback(ix, byte)` returns a `ContinueAndSkip(n)` value, the callback
-/// will not be called with an index that is less than `ix + n + 1`.
-/// When the callback returns a `BreakAtWith(end_ix, opt+val)`, no more callbacks will be
-/// called and the function returns immediately with the return value `(end_ix, opt_val)`.
-/// If `BreakAtWith(..)` is never returned, this function will return the first
-/// index that is outside the byteslice bound and a `None` value.
-fn iterate_special_bytes<F, T>(
-    lut: &LookupTable,
-    bytes: &[u8],
-    ix: usize,
-    callback: F,
-) -> (usize, Option<T>)
-where
-    F: FnMut(usize, u8) -> LoopInstruction<Option<T>>,
-{
-    scalar_iterate_special_bytes(lut, bytes, ix, callback)
+struct LookupTable {
+    bytes: [bool; 256],
+    low: [u8; 16],
 }
 
-const SCAN_BLOCK: usize = 16;
+impl core::ops::Deref for LookupTable {
+    type Target = [bool; 256];
 
-fn scalar_iterate_special_bytes<F, T>(
-    lut: &[bool; 256],
-    bytes: &[u8],
-    mut ix: usize,
-    mut callback: F,
-) -> (usize, Option<T>)
-where
-    F: FnMut(usize, u8) -> LoopInstruction<Option<T>>,
-{
+    fn deref(&self) -> &Self::Target {
+        &self.bytes
+    }
+}
+
+#[inline(always)]
+fn next_special_byte(lut: &LookupTable, bytes: &[u8], mut ix: usize) -> usize {
     while ix < bytes.len() {
-        let b = bytes[ix];
-        if lut[b as usize] {
-            match callback(ix, b) {
-                LoopInstruction::ContinueAndSkip(skip) => {
-                    ix += skip;
-                }
-                LoopInstruction::BreakAtWith(ix, val) => {
-                    return (ix, val);
+        if lut[bytes[ix] as usize] {
+            return ix;
+        }
+        ix += 1;
+        'skip: while ix + SCAN_BLOCK <= bytes.len() {
+            for offset in 0..SCAN_BLOCK {
+                if lut[bytes[ix + offset] as usize] {
+                    ix += offset;
+                    break 'skip;
                 }
             }
-            ix += 1;
-        } else {
-            ix += 1;
-            // Byte by byte the callback's live state spills `lut`; a block keeps it in a register.
-            'skip: while ix + SCAN_BLOCK <= bytes.len() {
-                for offset in 0..SCAN_BLOCK {
-                    if lut[bytes[ix + offset] as usize] {
-                        ix += offset;
-                        break 'skip;
-                    }
+            ix += SCAN_BLOCK;
+            // Dense delimiters never incur vector dispatch or table loads.
+            if bytes.len() - ix >= 64
+                && !lut[bytes[ix] as usize]
+                && let Some((offset, mask)) = next_ascii_mask(&bytes[ix..], &lut.low)
+            {
+                ix += offset;
+                if mask != 0 {
+                    ix += mask.trailing_zeros() as usize;
                 }
-                ix += SCAN_BLOCK;
+                break 'skip;
             }
         }
     }
-
-    (ix, None)
+    ix
 }
+
+// Short lines stay with the tokenizer: their preflight scan would duplicate work.
+const PLAIN_LINE_MIN_LEN: usize = 128;
+
+/// Skip only a whole, marker-free physical line. The tokenizer still handles
+/// its terminator, including hard breaks, tables and continuations.
+/// Unlike repeated lookahead from each inline candidate, this costs at most a
+/// constant number of linear scans per line, including mixed prose documents.
+fn plain_inline_line_end(lut: &LookupTable, bytes: &[u8], start: usize) -> Option<usize> {
+    let rest = bytes.get(start..)?;
+    if rest.len() < PLAIN_LINE_MIN_LEN {
+        return None;
+    }
+    let len = memchr::memchr2(b'\n', b'\r', rest).unwrap_or(rest.len());
+    if len < PLAIN_LINE_MIN_LEN {
+        return None;
+    }
+    let line = &rest[..len];
+    if lut[b'h' as usize] && has_autolink_trigger(line) {
+        return None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if let Some(found) = contains_inline_marker_accelerated(lut, line) {
+        return (!found).then_some(start + len);
+    }
+    (!contains_inline_marker_portable(lut, line)).then_some(start + len)
+}
+
+// Non-autolink inline markers, grouped for the portable memchr search.
+// Both search implementations filter this same set through the active lookup table.
+const INLINE_MARKER_GROUPS: [[u8; 3]; 7] = [
+    *b"*_&", *b"\\[]", *b"<!`", *b"|~^", *b"${}", *b".-:", *b"\"'\0",
+];
+
+fn contains_inline_marker_portable(lut: &LookupTable, line: &[u8]) -> bool {
+    // Disabled markers must not turn ordinary prose into scalar work.
+    for group in &INLINE_MARKER_GROUPS {
+        if let Some(&first) = group.iter().find(|&&b| lut[b as usize]) {
+            let second = if lut[group[1] as usize] {
+                group[1]
+            } else {
+                first
+            };
+            let third = if lut[group[2] as usize] {
+                group[2]
+            } else {
+                first
+            };
+            if memchr::memchr3(first, second, third, line).is_some() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Keep vector-table construction out of the tokenizer's hot stack frame.
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+fn contains_inline_marker_accelerated(lut: &LookupTable, line: &[u8]) -> Option<bool> {
+    let mut low = [0u8; 16];
+    for &byte in INLINE_MARKER_GROUPS.as_flattened() {
+        if lut[byte as usize] {
+            low[(byte & 0x0f) as usize] |= 1 << (byte >> 4);
+        }
+    }
+    contains_ascii_byte_accelerated(line, &low)
+}
+
+const SCAN_BLOCK: usize = 16;
 
 /// Split the usual heading content range and the content inside the trailing attribute block.
 ///
@@ -6581,4 +6970,109 @@ fn unquote_attribute_value(value: &str) -> &str {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod inline_scan_tests {
+    use super::*;
+
+    #[test]
+    fn streaming_scan_finds_the_next_enabled_marker() {
+        for options in [Options::empty(), Options::all()]
+            .into_iter()
+            .chain(Options::all().iter())
+        {
+            let lut = create_lut(&options);
+            for len in [0, 1, 31, 32, 33, 63, 64, 65, 127, 128, 129, 257] {
+                for byte in 0..=255u8 {
+                    let mut bytes = vec![byte; len];
+                    // Test both dense markers and plain runs long enough for SIMD.
+                    for spacing in [17, 97] {
+                        for at in (0..len).step_by(spacing) {
+                            bytes[at] = b'*';
+                        }
+                        for start in 0..=len + 1 {
+                            let expected = (start..len)
+                                .find(|&at| lut[bytes[at] as usize])
+                                .unwrap_or(start.max(len));
+                            assert_eq!(
+                                next_special_byte(&lut, &bytes, start),
+                                expected,
+                                "options={options:?} len={len} byte={byte} start={start}"
+                            );
+                        }
+                        bytes.fill(byte);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plain_line_gate_respects_boundaries_offsets_and_individual_options() {
+        for options in [Options::empty(), Options::all()]
+            .into_iter()
+            .chain(Options::all().iter())
+        {
+            let lut = create_lut(&options);
+            for len in [1, 31, 32, 127, 128, 129, 159, 160, 161, 255, 256, 257] {
+                for start in [0, 1, 15, 31] {
+                    let mut bytes = vec![b'*'; start];
+                    bytes.extend(vec![b'a'; len]);
+                    // Markup beyond the physical line must not block the fast path.
+                    bytes.extend_from_slice(b"\r\n*next* https://example.com");
+                    for at in [0, len / 2, len - 1] {
+                        for byte in 0..=255u8 {
+                            bytes[start + at] = byte;
+                            let rest = &bytes[start..];
+                            let end = rest
+                                .iter()
+                                .position(|b| matches!(b, b'\r' | b'\n'))
+                                .unwrap();
+                            let line = &rest[..end];
+                            let blocked = line.iter().any(|&b| {
+                                lut[b as usize] && !matches!(b, b'h' | b'H' | b'w' | b'W' | b'@')
+                            });
+                            let autolink = lut[b'h' as usize] && has_autolink_trigger(line);
+                            assert_eq!(contains_inline_marker_portable(&lut, line), blocked);
+                            assert_eq!(
+                                plain_inline_line_end(&lut, &bytes, start),
+                                (end >= PLAIN_LINE_MIN_LEN && !blocked && !autolink)
+                                    .then_some(start + end),
+                                "options={options:?}, len={len}, start={start}, at={at}, byte={byte}"
+                            );
+                        }
+                        bytes[start + at] = b'a';
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plain_line_gate_covers_every_configured_marker() {
+        for options in [Options::empty(), Options::ENABLE_GFM, Options::all()] {
+            let lut = create_lut(&options);
+            for byte in 0..=255u8 {
+                let mut bytes = vec![b'a'; 128];
+                bytes.push(byte);
+                bytes.extend_from_slice(&[b'a'; 32]);
+                let end = bytes
+                    .iter()
+                    .position(|b| matches!(b, b'\n' | b'\r'))
+                    .unwrap_or(bytes.len());
+                let line = &bytes[..end];
+                let autolink = options.contains(Options::ENABLE_GFM) && has_autolink_trigger(line);
+                let marker = line
+                    .iter()
+                    .any(|&b| lut[b as usize] && !matches!(b, b'h' | b'H' | b'w' | b'W' | b'@'));
+                assert_eq!(contains_inline_marker_portable(&lut, line), marker);
+                assert_eq!(
+                    plain_inline_line_end(&lut, &bytes, 0),
+                    (!autolink && !marker).then_some(end),
+                    "options={options:?}, byte={byte}"
+                );
+            }
+        }
+    }
 }

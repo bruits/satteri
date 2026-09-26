@@ -9,18 +9,6 @@ import { markdownToHtml, defineMdastPlugin } from "../../src/index.js";
 import type { MdastPluginInstance } from "../../src/mdast/mdast-visitor.js";
 import type { MdastNode } from "../../src/types.js";
 
-// Custom (user-defined) mdast nodes are modeled on mdast-util-to-hast's
-// `defaultUnknownHandler`: a `value` leaf with no children/`data.h*` becomes a
-// hast text node, anything else becomes a `<div>` (renamed via `data.hName`,
-// merged with `data.hProperties`) whose children are recursed. These tests
-// inject the *same* custom node into a remark-rehype reference pipeline and
-// into satteri, and assert the HTML matches, so the mainline paths stay
-// observably identical to remark rather than to hand-written expectations.
-//
-// Behaviors that are satteri's own call (the reserved `"custom"` type string,
-// an empty or children-shadowed `value`) stay as unit tests in the sibling
-// `test/custom-node.test.ts`.
-
 function referenceHtml(md: string, transform: (tree: MdastRoot) => void): string {
   const processor = unified()
     .use(remarkParse)
@@ -40,11 +28,7 @@ async function satteriHtml(md: string, plugin: MdastPluginInstance): Promise<str
 }
 
 function normalize(html: string): string {
-  // Canonicalize entity encoding style: remark+rehype favours hex (`&#x26;`)
-  // while satteri uses named entities. Then collapse `&gt;`/`&quot;` to their
-  // raw forms (rehype-stringify doesn't encode `>` or `"` outside contexts
-  // that require it). All produce semantically identical HTML. Same
-  // normalization as `commonmark-spec-json.test.ts`.
+  // Normalize equivalent entity spellings before comparing HTML serializers.
   return html
     .replace(/<br>/g, "<br />")
     .replace(/<hr>/g, "<hr />")
@@ -59,8 +43,6 @@ function normalize(html: string): string {
 
 type Build = (node: MdastNodes) => MdastNodes;
 
-/** Splice `build(node)` in place of every node matching `predicate`, the
- *  remark idiom of mutating the shared tree. */
 function replaceOnRemark(
   predicate: (node: MdastNodes) => boolean,
   build: Build,
@@ -79,7 +61,6 @@ function replaceOnRemark(
   return (tree) => walk(tree.children as MdastNodes[]);
 }
 
-/** The satteri equivalent: one visitor that returns `build(node)`. */
 function replacePlugin(type: keyof MdastPluginInstance, build: Build): MdastPluginInstance {
   return {
     [type]: ((node: MdastNode, ctx: { replaceNode: (n: MdastNode, r: unknown) => void }) => {
@@ -93,14 +74,12 @@ function childrenOf(node: MdastNodes): MdastNodes[] {
   return [];
 }
 
-/** A custom parent node carrying the original node's children. */
 function parent(data: Record<string, unknown> | undefined, node: MdastNodes): MdastNodes {
   const n: Record<string, unknown> = { type: "section", children: childrenOf(node) };
   if (data !== undefined) n.data = data;
   return n as unknown as MdastNodes;
 }
 
-/** A custom leaf node carrying a text value. */
 function leaf(value: string): MdastNodes {
   return { type: "token", value } as unknown as MdastNodes;
 }

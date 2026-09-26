@@ -59,9 +59,6 @@ describe("Directive MDAST conformance", () => {
     });
 
     test("closing fence closes through open list", () => {
-      // Regression: the closing `:::` used to bail at any non-directive
-      // ancestor (list, blockquote, …), trapping every subsequent block
-      // inside the directive.
       assertExtMdastConformance(
         ":::tip\nintro\n\n- item a\n- item b\n:::\n\n## next\n\nafter\n",
         DIR,
@@ -74,9 +71,6 @@ describe("Directive MDAST conformance", () => {
   });
 
   describe("directive names: unicode", () => {
-    // Regression: the name scanner used to treat every non-ASCII byte as a
-    // valid name character, swallowing Japanese `。` and similar punctuation
-    // into the name. Now uses unicode_id_continue, which rejects Po/Ps/etc.
     test("CJK letters in textDirective name", () => {
       assertExtMdastConformance("text :API를 more", DIR);
     });
@@ -91,9 +85,6 @@ describe("Directive MDAST conformance", () => {
   });
 
   describe("directive labels: inline code", () => {
-    // Regression: directive labels used to be stored as a single raw Text
-    // node. Post-pass now splits on backtick pairs so `:::tip[Set a \`x\`]`
-    // renders an `inlineCode` child.
     test("inline code inside container directive label", () => {
       assertExtMdastConformance(":::tip[Set a `baseUrl`]\ncontent\n:::", DIR);
     });
@@ -112,8 +103,6 @@ describe("Directive MDAST conformance", () => {
   });
 
   describe("directive labels: emphasis, strong, links", () => {
-    // Regression (Issue 3): labels are inline-parsed in full, not just for
-    // backticks, so emphasis/strong/links resolve the way remark renders them.
     test("strong with nested emphasis in container label", () => {
       assertExtMdastConformance(":::note[Custom **strong with _emphasis_** Label]\nx\n:::", DIR);
     });
@@ -202,16 +191,10 @@ describe("Directive MDAST conformance", () => {
     });
 
     test("a reference label ending inside a directive's attributes", () => {
-      // The label scan walks raw source, so it can stop on a `]` the directive
-      // holds; the bytes past that `]` are literal text.
       assertExtMdastConformance('[a][:x{k="]"}]\n\n[:x{k="]: /u\n', DIR);
     });
 
     test("directive attached to preceding word with no space", () => {
-      // Regression: prose like `is:inline` (an Astro attribute name written
-      // bare, not in backticks) parses as text + textDirective `:inline`.
-      // Both remark and satteri must agree, so plugin payloads carrying this
-      // directive round-trip through the JS<->Rust JSON boundary.
       assertExtMdastConformance("Add is:inline to the slot.", DIR);
     });
   });
@@ -277,12 +260,6 @@ describe("Directive MDAST conformance", () => {
   });
 
   describe("closing fence indentation and context", () => {
-    // Regressions for remark-directive's fence-closing rules:
-    //   * up to 3 spaces of leading whitespace on the closing fence line
-    //   * closing works across intervening list/listItem containers
-    //   * a `:::` that is also valid blockquote content (prefixed by `>`)
-    //     does NOT close an outer directive.
-
     test("closing fence indented 2 spaces inside a list", () => {
       assertExtMdastConformance(
         ":::caution[Slugs]\ntext\n\n- one\n- two\n  :::\n\n## After\n",
@@ -303,13 +280,6 @@ describe("Directive MDAST conformance", () => {
     });
   });
 
-  // The character class around a `:` decides whether it begins a text
-  // directive. This matters for downstream slug/anchor generation: a
-  // textDirective's `name` is metadata, not a Text child, so heading slugs
-  // computed from `textContent` will silently truncate when a colon is
-  // (mis)read as starting a directive. A real-world hit was a Japanese
-  // heading where `:GatsbyレイアウトをAstro…` was consumed as a directive
-  // named `GatsbyレイアウトをAstro…`, leaving the slug as just `ガイド付き例`.
   describe("text directives: colon boundary in headings", () => {
     test("ASCII colon + CJK id_start consumes rest as directive name", () => {
       assertExtMdastConformance("## ガイド付き例:GatsbyレイアウトをAstroへ変換する", DIR);
@@ -340,9 +310,6 @@ describe("Directive MDAST conformance", () => {
     });
   });
 
-  // MDX: JSX inside a directive label is tokenized by the parser (no remark
-  // reference here since it lacks remark-directive), and source-parsed JSX must
-  // keep its `_mdxExplicitJsx` marking, as the deleted label pass used to set.
   describe("MDX JSX inside directive labels", () => {
     const labelChildren = (md: string, depth: number): any[] => {
       let node: any = mdxToMdast(md, { features: { directive: true } });
@@ -358,7 +325,6 @@ describe("Directive MDAST conformance", () => {
     });
 
     test("text directive label", () => {
-      // root > paragraph > [text, textDirective[text, jsx, text], text]
       const directive = labelChildren("see :abbr[a <b>c</b> d] end", 1)[1];
       const jsx = directive.children[1];
       expect(directive.type).toBe("textDirective");

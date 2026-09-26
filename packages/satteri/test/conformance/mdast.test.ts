@@ -126,11 +126,11 @@ describe("MDAST conformance: lists", () => {
     assertMdastConformance("*  \n ");
   });
 
-  test("spec 259: nested blockquote ordered list with blank continuation", () => {
+  test("nested blockquote ordered list with blank continuation", () => {
     assertMdastConformance("   > > 1.  one\n>>\n>>     two\n");
   });
 
-  test("spec 325: list item with sublist and trailing content becomes loose", () => {
+  test("list item with sublist and trailing content becomes loose", () => {
     assertMdastConformance("* foo\n  * bar\n\n  baz\n");
   });
 });
@@ -161,9 +161,6 @@ describe("MDAST conformance: images", () => {
   });
 });
 
-// A hard break inside an image label carries no visible content, so it adds
-// nothing to the flattened alt text; a soft break contributes the source's own
-// line ending.
 describe("MDAST conformance: line breaks in image alt text", () => {
   test("backslash hard break", () => {
     assertMdastConformance("![a\\\nb](c.png)");
@@ -420,8 +417,7 @@ describe("MDAST conformance: edge cases", () => {
   });
 
   test.skip("task list followed by blank then content", () => {
-    // Tree structure and text value match remark; only paragraph/text
-    // start.line and start.column differ due to a remark quirk
+    // Compare without positions because remark reports different paragraph and text starts here.
     assertMdastConformance("- [x]\t\t\n\\\n-");
   });
 
@@ -449,7 +445,6 @@ describe("MDAST conformance: edge cases", () => {
 });
 
 describe("MDAST conformance: GFM autolink literal", () => {
-  // Bare URLs in text are promoted to `link` nodes (remark-gfm behavior).
   test("https:// URL in paragraph", () => {
     assertMdastConformance("Visit https://example.com today");
   });
@@ -479,7 +474,6 @@ describe("MDAST conformance: GFM autolink literal", () => {
   });
 
   test("bare URL is NOT matched when preceded by letter", () => {
-    // GFM: URL must be preceded by whitespace, (, *, _, ~, or start of line.
     assertMdastConformance("abchttps://example.com");
   });
 
@@ -488,17 +482,10 @@ describe("MDAST conformance: GFM autolink literal", () => {
   });
 
   test("URL with port preserved when directive is enabled", () => {
-    // When both GFM autolink and remark-directive are enabled, `:4321` in
-    // `http://host:4321` must stay inside the URL. In remark this happens
-    // because autolink tokenization beats directive detection; we achieve
-    // the same effect by merging the `text + textDirective + text` split
-    // back together before the autolink scan runs.
     assertExtMdastConformance("Navigate to http://localhost:4321/ now", ["directive"]);
   });
 
   test("URL with port inside bracketed link keeps directive (not merged)", () => {
-    // Inverse of the above: inside a `[label](...)` bracketed link, remark
-    // keeps the directive split. The merge must skip link children.
     assertExtMdastConformance("See [http://localhost:4321/](http://localhost:4321/)", [
       "directive",
     ]);
@@ -506,10 +493,6 @@ describe("MDAST conformance: GFM autolink literal", () => {
 });
 
 describe("MDAST conformance: entity decoding merges text", () => {
-  // Regression: decoded entities used to emit a standalone Text node
-  // that broke adjacent text runs into multiple siblings. remark merges
-  // them into a single Text; satteri now matches via emit_text_merging.
-
   test("&lt; and &gt; around plain text", () => {
     assertMdastConformance("Promise&lt;string&gt;");
   });
@@ -540,11 +523,6 @@ describe("MDAST conformance: entity decoding merges text", () => {
 });
 
 describe("MDAST conformance: softbreak preserves CRLF", () => {
-  // Regression: inline SoftBreak was hard-coded to emit "\n" when merging into
-  // an adjacent Text node, collapsing `\r\n` line endings to `\n`. The line
-  // ending must be taken from the source span to keep CRLF source round-
-  // tripping through text nodes.
-
   test("plain text across CRLF softbreak", () => {
     assertMdastConformance("a\r\nb");
   });
@@ -562,9 +540,6 @@ describe("MDAST conformance: softbreak preserves CRLF", () => {
   });
 });
 
-// CommonMark counts `\n`, `\r` and `\r\n` alike as line endings. The line
-// table was built by scanning for `\n` only, so a lone `\r` left every later
-// node on the previous line (offsets were unaffected).
 describe("MDAST conformance: standalone CR positions", () => {
   test("paragraph across a lone CR", () => {
     assertMdastConformance("a\rb");
@@ -603,8 +578,6 @@ describe("MDAST conformance: standalone CR positions", () => {
   });
 });
 
-// Block structure was decided by scanning for `\n` only, so a document whose
-// line endings are all lone `\r` was read as a single line.
 describe("MDAST conformance: standalone CR block structure", () => {
   test("blank line between list items makes the list loose", () => {
     assertMdastConformance("- a\r\r- b");
@@ -667,8 +640,6 @@ describe("MDAST conformance: standalone CR block structure", () => {
   });
 });
 
-// Values carry the document's own line endings byte for byte; only the
-// matching `identifier` of a definition is normalized.
 describe("MDAST conformance: line endings inside values", () => {
   const FLAVORS: [string, string][] = [
     ["LF", "\n"],
@@ -720,10 +691,6 @@ describe("MDAST conformance: line endings inside values", () => {
 });
 
 describe("MDAST conformance: closing code fence whitespace", () => {
-  // Regression: CommonMark/remark allow tabs as well as spaces after the
-  // closing fence. Satteri previously only consumed spaces, leaving the
-  // `\`\`\`\t` line as literal content of the code block.
-
   test("closing fence followed by a tab", () => {
     assertMdastConformance("```js\nfoo\n```\t\n");
   });
@@ -737,10 +704,7 @@ describe("MDAST conformance: closing code fence whitespace", () => {
   });
 });
 
-// Astral characters are a single code point but two UTF-16 units, and
-// `position` counts UTF-16 units, so both columns and offsets advance by
-// two. BMP multibyte text can't catch a regression back to code points;
-// only these can.
+// Astral characters distinguish UTF-16 positions from code-point counts.
 describe("MDAST conformance: astral characters in positions", () => {
   test("astral before a link", () => {
     assertMdastConformance("😀 [a](/x)");
@@ -763,7 +727,6 @@ describe("MDAST conformance: astral characters in positions", () => {
   });
 });
 
-// One multibyte character shifts every string the reader slices after it.
 describe("MDAST conformance: multibyte string pool", () => {
   test("curly quotes and emoji mid-text", () => {
     assertMdastConformance("A “quoted” word, then 🎉 an emoji, then a plain tail.");
@@ -803,35 +766,20 @@ describe("MDAST conformance: multibyte string pool", () => {
   });
 });
 
-describe("MDAST conformance: fuzz regressions", () => {
-  // GFM strikethrough requires the opening `~~` to be left-flanking per
-  // CommonMark emphasis rules: a `~~` preceded by an alphanumeric and
-  // followed by punctuation isn't left-flanking and shouldn't open.
+describe("MDAST conformance: parsing edge cases", () => {
   test("strikethrough flanking: alnum before, punct after rejects", () => {
     assertMdastConformance("=l0u~~!~~");
   });
 
-  // Strikethrough/emphasis interleaving: `_/~z)*~*nf` should parse as
-  // `_/~z)` text + `*~*` emphasis. Our single-pass inline resolver
-  // mimics micromark's phase ordering (emphasis first, then strikethrough)
-  // by refusing to match `~`/`^` across an unmatched `*`/`_` opener on
-  // the stack — that way the `*…*` pair claims its span before the
-  // strikethrough pairer sees the inner `~`.
   test("strikethrough/emphasis nesting crossing", () => {
     assertMdastConformance("_/~z)*~*nf");
   });
 
-  // Underscore emphasis nesting: in `\\ \`_@_b__=` the reference parses
-  // `_@_b_` as an outer emphasis containing inner `_b_`. Used to be a known
-  // bug; fixed when the emphasis pairer learned to re-check rule 9 with
-  // remaining run lengths (one `<strong>`/`<em>` per inner-loop pass).
   test("nested underscore emphasis around intraword", () => {
     assertMdastConformance("\\ `_@_b__=");
   });
 });
 
-// Only spaces and tabs make up block structure and line-end padding, so VT and
-// FF are content wherever they appear.
 describe("MDAST conformance: control and format characters at a text-node edge", () => {
   test("trailing VT ends a paragraph", () => {
     assertMdastConformance("abc\u{b}\n");
@@ -864,7 +812,6 @@ describe("MDAST conformance: control and format characters at a text-node edge",
   test("only the spaces and tabs around a VT are stripped", () => {
     assertMdastConformance("abc \u{b} \n");
     assertMdastConformance("abc\t\u{b}\t\n");
-    // Two trailing spaces after the VT still make a hard break.
     assertMdastConformance("abc\u{b}  \ndef\n");
   });
 
@@ -888,7 +835,6 @@ describe("MDAST conformance: control and format characters at a text-node edge",
   test("a BOM opening a text node is kept", () => {
     assertMdastConformance("*a*\u{feff}x\n");
     assertMdastConformance("user@example.com\u{feff}\n");
-    // The drop was general to any value starting on one, not inline-only.
     assertMdastConformance("x\n\n\u{feff}y\n");
     assertMdastConformance("# \u{feff}h\n");
     assertMdastConformance("[a](b)\u{feff}y\n");
@@ -986,7 +932,6 @@ describe("MDAST conformance: table cell with an escaped pipe", () => {
   });
 });
 
-// Only GFM makes a `~` force an adjacent `*` run open or closed.
 describe("MDAST conformance: `~` beside a `*` run without GFM", () => {
   test("a `*` run stays text when only the `~` could open it", () => {
     assertCommonMarkMdastConformance("a*~*");

@@ -4,7 +4,6 @@ import { ru16, ru32, rstr } from "../../wire-read.js";
 import { restorePhantomSpaces } from "../../phantom.js";
 import { decodeMdxJsxAttr } from "../../mdx-attr.js";
 import { decodeColumnAlign } from "../column-align.js";
-import type { MdastReader } from "../mdast-reader.js";
 
 type FieldKind = "str16" | "str32" | "u8";
 
@@ -19,7 +18,6 @@ interface LayoutField {
   readonly phantom?: boolean;
 }
 
-/** Walk-wire fields per node-type tag (see Rust `write_mdast_type_data_inline`). */
 const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {
   2: [{ js: "depth", offset: 0, kind: "u8", default: 1 }],
   7: [{ js: "value", offset: 0, kind: "str32" }],
@@ -81,8 +79,6 @@ const MDAST_LAYOUTS: Readonly<Record<number, readonly LayoutField[]>> = {
   104: [{ js: "value", offset: 0, kind: "str32", phantom: true }],
 };
 
-/** Materialized property names per tag (the non-skip `js` names above),
- *  exported for the child-stub field tables. */
 export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
   2: ["depth"],
   7: ["value"],
@@ -106,10 +102,6 @@ export const MDAST_LAYOUT_KEYS: Readonly<Record<number, readonly string[]>> = {
   104: ["value"],
 };
 
-/** Walk-wire tail descriptors (a name head, then a counted item list) for
- *  the variable-length attribute types the generic decoder below handles
- *  without a hand-written case: `map` is a string key/value object
- *  (directives), `jsx` a typed MDX-JSX attribute array. */
 const MDAST_TAILS: Readonly<Record<number, TailDescriptor>> = {
   21: { head: [], item: [{ js: "align", kind: "u8" }], bytes: { attrsKey: "align" } },
   30: {
@@ -165,20 +157,12 @@ interface TailField {
 interface TailDescriptor {
   readonly head: readonly TailField[];
   readonly item: readonly TailField[];
-  // Exactly one assembly is present: `map` for a string key/value object,
-  // `jsx` for a typed MDX-JSX attribute array (kind-dispatched per item),
-  // `bytes` for an enum-byte array (table column alignment).
+  // The schema guarantees exactly one assembly kind per tail.
   readonly map?: { readonly attrsKey: string; readonly key: string; readonly value: string };
   readonly jsx?: { readonly attrsKey: string };
   readonly bytes?: { readonly attrsKey: string };
 }
 
-/**
- * Decode a node's type-specific `type_data` from the walk buffer onto `node`,
- * driven by `MDAST_LAYOUTS` (fixed-field types) and `MDAST_TAILS` (counted
- * attribute lists). Returns `false` for tags in neither, so the caller falls
- * through to the remaining hand-written cases (list, listItem).
- */
 export function decodeMdastTypeData(
   view: DataView,
   buf: Uint8Array,
@@ -186,6 +170,11 @@ export function decodeMdastTypeData(
   nodeType: number,
   node: Record<string, unknown>,
 ): boolean {
+  if (nodeType === 7 || nodeType === 10 || nodeType === 13 || nodeType === 25 || nodeType === 26) {
+    const len = ru32(view, start);
+    node.value = rstr(buf, start + 4, len);
+    return true;
+  }
   const fields = MDAST_LAYOUTS[nodeType];
   if (fields !== undefined) {
     let pos = start;
@@ -210,9 +199,7 @@ export function decodeMdastTypeData(
   const tail = MDAST_TAILS[nodeType];
   if (tail !== undefined) {
     let pos = start;
-    // Reads are inlined and advance `pos` in place (no per-field tuple): this
-    // runs per attribute item in the matched-node decode path, and the
-    // unoptimized tiers CodSpeed measures won't elide the allocation.
+    // Inline reads avoid allocating a tuple per attribute field in unoptimized V8 tiers.
     for (const f of tail.head) {
       let value: string | number;
       if (f.kind === "u8") {
@@ -225,7 +212,6 @@ export function decodeMdastTypeData(
         pos += len;
         value = f.phantom ? restorePhantomSpaces(raw) : raw;
       }
-      // MDX JSX elements carry a nullable name (empty → null); map heads keep it.
       node[f.js] = tail.jsx !== undefined && value === "" ? null : value;
     }
     const count = ru16(view, pos);
@@ -274,37 +260,4 @@ export function decodeMdastTypeData(
   }
 
   return false;
-}
-
-/**
- * Attach a node's fixed `type_data` fields, materialized from the arena
- * snapshot, driven by `MDAST_LAYOUTS`. Returns `false` for tags with no entry,
- * so the materializer falls through to its hand-written cases (list, table,
- * directives, MDX JSX). Fields are eager plain stores.
- */
-export function materializeMdastFields(
-  reader: MdastReader,
-  node: object,
-  nodeId: number,
-  nodeType: number,
-): boolean {
-  const fields = MDAST_LAYOUTS[nodeType];
-  if (fields === undefined) return false;
-  const out = node as Record<string, unknown>;
-  for (const f of fields) {
-    if (f.skip) continue;
-    if (f.kind === "u8") {
-      // Short type_data falls back to the layout's declared default,
-      // matching the Rust walk serializer.
-      const b = reader.fieldU8(nodeId, f.offset, f.default ?? 0);
-      out[f.js] = f.values ? (f.values[b] ?? f.values[0]) : b;
-    } else {
-      // Short type_data (e.g. a 20-byte ReferenceData-only imageReference)
-      // reads as empty, mirroring the Rust decoders' bounds checks.
-      const raw = reader.fieldString(nodeId, f.offset);
-      const s = f.nullable && raw === "" ? null : raw;
-      out[f.js] = f.phantom && typeof s === "string" ? restorePhantomSpaces(s) : s;
-    }
-  }
-  return true;
 }

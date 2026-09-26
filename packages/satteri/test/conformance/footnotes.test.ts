@@ -89,7 +89,6 @@ describe("GFM footnote options conformance (vs remark-rehype)", () => {
   });
 });
 
-// Identifiers reach `href`/`id` through micromark's `normalizeUri` safe set.
 const IDENTIFIERS = [
   "plain",
   'a"b',
@@ -122,7 +121,7 @@ const IDENTIFIERS = [
   "🎉",
 ];
 
-// Escaped so the precomposed and combining forms of "café" get distinct titles.
+// Keep precomposed and combining forms distinct so Unicode normalization cannot hide a mismatch.
 const title = (id: string): string =>
   id.replace(/[^\x20-\x7e]/g, (c) => `\\u${c.codePointAt(0)!.toString(16).padStart(4, "0")}`);
 
@@ -152,9 +151,6 @@ describe("GFM footnote identifier conformance (vs remark-rehype)", () => {
     assertFootnoteHastConformance("*Once[^a*b] and twice[^a*b]*.\n\n[^a*b]: Note.\n");
   });
 
-  // Divergence: CommonMark gives code spans precedence, so the backticks pair and
-  // satteri emits `Once[^a<code>b] and twice[^a</code>b].` — GitHub also produces no
-  // reference here. remark scans footnote calls before code spans, so it keeps both.
   test.fails("two backtick identifiers on one line keep both references", () => {
     assertFootnoteHastConformance("Once[^a`b] and twice[^a`b].\n\n[^a`b]: Note.\n");
   });
@@ -222,9 +218,7 @@ describe("GFM footnote semantics conformance (vs remark-rehype)", () => {
     assertFootnoteHastConformance("Text[^a] and[^a].\n\n[^a]: Body.\n\n    > quote\n");
   });
 
-  // Divergences below are `position`-only; the elements and backrefs already match.
-  // remark stretches a definition's blocks over the indent it stripped, satteri ends
-  // them at their own last byte.
+  // Only positions differ: remark extends definition blocks over stripped indentation.
   test.fails("a multi-item list in a definition positions its items like remark", () => {
     assertFootnoteHastConformance("Text[^a].\n\n[^a]: Body.\n\n    - one\n    - two\n");
   });

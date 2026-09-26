@@ -2,12 +2,6 @@ import { describe, test, expect } from "vitest";
 import { markdownToHtml, mdxToJs, defineHastPlugin } from "../../src/index.js";
 import type { Element, ElementContent, Text } from "hast";
 
-// Plugin-to-plugin signaling on hast nodes via the free-form `data` field.
-// All cases must round-trip identically whether `data` was set on an existing
-// node via `ctx.setProperty` or carried in on a freshly emitted node.
-
-// hast declares `ElementData` as an empty interface; module-augmenting it with
-// the test's signal fields lets us write/read them without per-callsite casts.
 declare module "hast" {
   interface ElementData {
     origin?: string;
@@ -263,9 +257,6 @@ describe("HAST plugin data round-trip (fresh-node path)", () => {
   });
 });
 
-// Walk-path data exposure for non-element node types. The inline buffer now
-// always carries `data`, so `text` and `mdxJsx*` visitors should see whatever
-// an upstream plugin attached.
 describe("HAST walk-path data exposure (non-element node types)", () => {
   test("data set on a text node is visible to a downstream text() visitor", () => {
     let received: SignalData | undefined;

@@ -31,7 +31,7 @@ async function runTransform(
     fn = t.handler as unknown as (src: string, id: string) => unknown;
   }
   if (!fn) return null;
-  const result = await fn.call(undefined, source, id);
+  const result = await fn(source, id);
   return result as { code: string; map: null } | null;
 }
 
@@ -64,7 +64,6 @@ describe("vite-plugin-satteri", () => {
     test("escapes backticks and `${}` safely via JSON.stringify", async () => {
       const plugin = makePlugin();
       const code = await compile(plugin, "use `code` and ${expr}", "/src/x.md");
-      // Output is a quoted JSON string, not a template literal
       expect(code).toMatch(/const html = "/);
       expect(code).not.toContain("`<p>");
     });
@@ -195,6 +194,30 @@ tags = ["one", "two"]
       const code = await compile(plugin, "# Hello", "/src/x.mdx");
       expect(code).toContain('"preact/jsx-runtime"');
       expect(code).not.toContain('"react/jsx-runtime"');
+    });
+
+    test("forwards attribute and style casing options for plugin-created elements", async () => {
+      const plugin = makePlugin({
+        mdx: { elementAttributeNameCase: "html", stylePropertyNameCase: "css" },
+        hastPlugins: [
+          {
+            name: "styled-element",
+            after(root, ctx) {
+              ctx.appendChild(root, {
+                type: "element",
+                tagName: "div",
+                properties: { className: ["box"], style: "background-color: red" },
+                children: [],
+              });
+            },
+          },
+        ],
+      });
+      const code = await compile(plugin, "# Hello", "/src/x.mdx");
+      expect(code).toMatch(/class: "box"/);
+      expect(code).toContain('"background-color": "red"');
+      expect(code).not.toContain("className:");
+      expect(code).not.toContain("backgroundColor:");
     });
 
     test("infers `development: true` from Vite serve command", async () => {

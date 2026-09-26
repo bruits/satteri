@@ -16,7 +16,7 @@ export declare function applyCommandsAndConvertToHastHandle(handle: MdastHandle,
  * Fused tail step for `markdownToHtml` with a HAST plugin: apply the plugin's
  * command buffer, render the resulting HAST to HTML, and leave the handle
  * drained, all in one NAPI roundtrip. Saves the `apply` + `render` + `drop`
- * crossings the old path made separately.
+ * crossings of the handle-based pipeline.
  *
  * The handle keeps existing (callers can still `dropHandle` it on the JS
  * side if they want explicit cleanup), but the arena inside is left empty so
@@ -47,12 +47,8 @@ export declare function applyCommandsToMdastHandle(handle: MdastHandle, commandB
 export declare function applyMdastCommandsAndConvertAndCompile(handle: MdastHandle, commandBuf: Uint8Array, options?: JsMdxOptions | undefined | null, convertOptions?: JsConvertOptions | undefined | null): MdxJsOneShot
 
 /**
- * Fused tail for `markdownToHtml` when there's an MDAST plugin but no HAST
- * plugin: apply the MDAST commands, extract frontmatter from the (now
- * possibly-mutated) MDAST, convert MDAST → HAST, render to HTML. All in one
- * NAPI roundtrip. Saves the convert + render + drop + frontmatter crossings
- * the old path made separately, and reads frontmatter *after* mutations so a
- * plugin that rewrites yaml/toml is observed correctly.
+ * Apply MDAST commands, extract frontmatter, convert to HAST, and render HTML
+ * in one NAPI call. Frontmatter reflects plugin edits to YAML/TOML nodes.
  */
 export declare function applyMdastCommandsAndConvertAndRender(handle: MdastHandle, commandBuf: Uint8Array, convertOptions?: JsConvertOptions | undefined | null): MarkdownHtmlOneShot
 
@@ -300,11 +296,24 @@ export declare function parseEsm(source: string): string | null
  */
 export declare function parseExpression(source: string): string | null
 
+/** One-crossing parse + convert + serialize for the no-plugin hast tree functions. */
+export declare function parseHastWire(source: string, parseOptions: number, convertOptions: JsConvertOptions | undefined | null, mdx: boolean, trackPositions?: boolean | undefined | null): Buffer | Uint8Array
+
+/** One boundary crossing instead of create + serialize + drop; only the plugin path needs a live handle. */
+export declare function parseMdastWire(source: string, parseOptions: number, mdx: boolean, trackPositions?: boolean | undefined | null): Buffer | Uint8Array
+
 /** Parse Markdown source and return HTML string directly. */
 export declare function parseToHtml(source: string, parseOptions: number, convertOptions?: JsConvertOptions | undefined | null): string
 
 /** Render a HAST handle's arena to HTML. Does not consume the handle. */
 export declare function renderHandle(handle: HastHandle): string
+
+/**
+ * Render a JS-built HAST tree, encoded as an op-stream document, to HTML.
+ * Backs `hastToHtml`: no handle is involved, and the output is the exact
+ * serialization, without the trailing newline a rendered document carries.
+ */
+export declare function renderHastOpstream(ops: Uint8Array): string
 
 /**
  * Result of the fused apply + render tail. `dropped_transforms` mirrors the
@@ -322,7 +331,7 @@ export interface RenderHtmlOneShot {
  * reader from. The kind tag in the header tells the JS side whether to
  * pick `MdastReader` or `HastReader`.
  */
-export declare function serializeHandle(handle: AnyHandle): Uint8Array
+export declare function serializeHandle(handle: AnyHandle): Buffer | Uint8Array
 
 /**
  * Set the `data` blob (JSON bytes) for a node. Works for both MDAST and
@@ -338,7 +347,7 @@ export declare function setNodeData(handle: AnyHandle, nodeId: number, json: Uin
 export declare function textContentHandle(handle: HastHandle, nodeId: number): string
 
 /** Walk a HAST handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkHandle(handle: HastHandle, subscriptions: Array<JsSubscription>): Uint8Array
+export declare function walkHandle(handle: HastHandle, subscriptions: Array<JsSubscription>): Buffer | Uint8Array
 
 /** Walk an MDAST handle's arena and return matched nodes as a flat binary buffer. */
-export declare function walkMdastHandle(handle: MdastHandle, subscriptions: Array<JsSubscription>): Uint8Array
+export declare function walkMdastHandle(handle: MdastHandle, subscriptions: Array<JsSubscription>): Buffer | Uint8Array

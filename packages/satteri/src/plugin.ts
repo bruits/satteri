@@ -44,20 +44,16 @@ export type MdastPluginList = readonly MdastPluginEntry[];
 /** Value accepted by the `hastPlugins` option. */
 export type HastPluginList = readonly HastPluginEntry[];
 
-/** Older name for {@link MdastPluginEntry}. */
+/** Alias for {@link MdastPluginEntry}. */
 export type MdastPluginInput = MdastPluginEntry;
 
-/** Older name for {@link HastPluginEntry}. */
+/** Alias for {@link HastPluginEntry}. */
 export type HastPluginInput = HastPluginEntry;
 
-/** Bounds factory-in-factory nesting. Real presets nest one level; anything
- *  deeper is a factory that leads back to itself, which would otherwise recurse
- *  until the stack overflows. */
+// Bound recursive factories so a self-referential preset cannot overflow the stack.
 const MAX_FACTORY_DEPTH = 10;
 
-/** The one place a plugin option becomes the definition array the pipeline
- *  runs. Factories resolve here and nowhere else, so each is called once per
- *  compile no matter how deeply it is nested. */
+/** Resolve nested entries and invoke each factory once per compile. */
 export function normalizePlugins<D>(
   entries: readonly PluginEntry<D>[],
   option: string,
@@ -108,9 +104,7 @@ export function normalizePlugins<D>(
   return out;
 }
 
-// Generic so the inferred plugin type preserves each visitor's *actual* return
-// type. That lets the compile entry points distinguish sync plugins from async
-// ones in their conditional return type.
+// Preserve each visitor’s inferred return type so compile results can distinguish sync from async plugins.
 export function defineMdastPlugin<P extends MdastPluginDefinition>(definition: P): P {
   if (!definition.name) {
     throw new Error("Plugin definition must have a name");

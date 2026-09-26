@@ -128,8 +128,7 @@ test("children survives reassignment, so callers can rewrite the tree", () => {
   expect(root.children).toHaveLength(1);
 });
 
-// Past Node's ~12.5k frame limit, so a materializer that recursed per level
-// would overflow here. Generous timeout: CI parses with a debug Rust build.
+// Exceed Node’s recursion limit; the generous timeout accommodates debug Rust builds.
 test("a deeply nested document materializes without overflowing the stack", () => {
   const depth = 15_000;
   const handle = createMdastHandle(">".repeat(depth) + " hi\n");
@@ -143,8 +142,6 @@ test("a deeply nested document materializes without overflowing the stack", () =
   }
   expect(seen).toBeGreaterThanOrEqual(depth);
 }, 30_000);
-
-// MDX JSX attribute tests
 
 function mdxSetup(source: string) {
   const buf = serializeHandle(createMdxMdastHandle(source)) as Uint8Array;

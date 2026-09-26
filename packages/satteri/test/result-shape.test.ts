@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { markdownToHtml, markdownToJs, mdxToJs } from "../src/compile.js";
 import { defineMdastPlugin, defineHastPlugin } from "../src/plugin.js";
 
+const fn = () => 42;
+
 describe("result.data", () => {
   it("is an empty object when no plugin writes to ctx.data", () => {
     const out = markdownToHtml("# hi");
@@ -15,7 +17,6 @@ describe("result.data", () => {
         this.n = n;
       }
     }
-    const fn = () => 42;
     const plugin = defineMdastPlugin({
       name: "writer",
       paragraph(_node, ctx) {

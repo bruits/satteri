@@ -2,7 +2,6 @@ import { describe, test, expect } from "vitest";
 import { markdownToHtml, markdownToJs, mdxToJs, defineMdastPlugin } from "../src/index.js";
 import type { PluginFactoryContext } from "../src/index.js";
 
-/** Records its name on each heading, making run order observable. */
 function recordMdast(order: string[], name: string) {
   return defineMdastPlugin({
     name,
@@ -65,7 +64,6 @@ describe("plugin factory context", () => {
     expect(formats).toEqual(["markdown", "markdown", "mdx"]);
   });
 
-  // markdownToJs runs the MDX pipeline with a different parser, so it could plausibly report "mdx".
   test("hast factories see the entry point's sourceFormat", () => {
     const formats: string[] = [];
     const probe = (ctx: PluginFactoryContext) => {

@@ -1,30 +1,17 @@
-/**
- * Little-endian primitives for reading the walk/snapshot wire buffers. Shared by
- * the hand-written decoders and the generated layout decoder so both interpret
- * the bytes identically.
- */
-
 import type { Position } from "unist";
 
-// `ignoreBOM` keeps a value-initial U+FEFF: each string is decoded from its
-// own byte range, so the default BOM strip would eat it as content.
+// A leading U+FEFF is string content here, not a transport BOM.
 const textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
-/** Read a u16 (LE) at `off`. */
 export function ru16(view: DataView, off: number): number {
   return view.getUint16(off, true);
 }
 
-/** Read a u32 (LE) at `off`. */
 export function ru32(view: DataView, off: number): number {
   return view.getUint32(off, true);
 }
 
-/** Read a UTF-8 string of `len` bytes at `off`. Very short ASCII runs decode
- *  with a charCode loop — TextDecoder's per-call overhead dominates there. The
- *  threshold is lower than the encode-side `INLINE_STR_MAX`: decoding builds a
- *  JS string by concatenation, which costs more per char than storing bytes.
- *  Measured crossover ~8-12 bytes (Node 24: 8B 30 vs 57 ns, 16B 64 vs 57). */
+// Short ASCII strings avoid TextDecoder overhead; its crossover is around 8–12 bytes.
 export function rstr(buf: Uint8Array, off: number, len: number): string {
   if (len === 0) return "";
   if (len <= 8) {
@@ -44,16 +31,7 @@ export function rstr(buf: Uint8Array, off: number, len: number): string {
   return textDecoder.decode(buf.subarray(off, off + len));
 }
 
-/**
- * Decode the 24-byte position block ([startOffset, endOffset, startLine,
- * startColumn, endLine, endColumn], u32 LE each) shared by the walk prefixes
- * and the snapshot node structs. A zero start line is the sentinel for
- * synthesized nodes with no source range (e.g. GFM autolink-literal nodes, or a
- * plugin-built replacement spliced by the rebuild): unist lines are 1-based, so
- * line 0 always means "no source position" — even when the rebuild has rebased
- * the (otherwise zero) offset by the spliced subtree's source base. Surfaced as
- * `undefined` so a node reads the same however it's reached.
- */
+// Unist lines are 1-based; a zero start line marks a synthesized node without a source position.
 export function readPosition(view: DataView, off: number): Position | undefined {
   const startLine = ru32(view, off + 8);
   if (startLine === 0) return undefined;

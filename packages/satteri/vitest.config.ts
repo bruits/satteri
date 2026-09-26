@@ -6,8 +6,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/**/*.test.ts"],
-    // Fuzz properties seed from the clock, so a CI failure isn't reproducible;
-    // their finds are pinned in fuzz-regressions.test.ts instead.
+    // Clock-seeded fuzz tests are not reproducible; CI runs their fixed regression cases instead.
     exclude: [
       ...configDefaults.exclude,
       ...(process.env.SKIP_FUZZ ? ["test/conformance/fuzz/**"] : []),
