@@ -85,13 +85,13 @@ import {
   asArray,
   collectCommands,
   FOREIGN_REF,
+  foreignContentError,
   makeRequireNid,
   requireRootReplacement,
   ROOT_NODE_ID,
   rootReplacementError,
-  REUSE_SCAN_BUDGET,
-  reuseAncestorError,
-  reuseCycleError,
+  ReuseTracker,
+  STRUCTURAL_LABELS,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -149,8 +149,7 @@ export class MdastVisitorContext {
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
   readonly #refs: NodeRefs;
-  /** Anchor id → existing nodes spliced there; null until a visitor reuses one. */
-  #reuseEdges: Map<number, Set<number>> | null = null;
+  readonly #reuseTracker: ReuseTracker;
   /**
    * The URL of the document being processed (the compile `fileURL` option),
    * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
@@ -186,6 +185,9 @@ export class MdastVisitorContext {
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.#refs = resolver.refs;
+    this.#reuseTracker = new ReuseTracker((id) => resolver.parentIdOf(id));
+    this.#commandBuffer.onReferences = (cmd, id, refs) =>
+      this.#reuseTracker.record(cmd, id, refs, STRUCTURAL_LABELS[cmd] ?? "setField");
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;
@@ -208,64 +210,17 @@ export class MdastVisitorContext {
       requireNid(node as MdastNode, "insertBefore", this.#refs),
       newNode,
       "insertBefore",
-      "insertBefore",
     );
   }
 
   insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    this.#splice(
-      requireNid(node as MdastNode, "insertAfter", this.#refs),
-      newNode,
-      "insertAfter",
-      "insertAfter",
-    );
+    this.#splice(requireNid(node as MdastNode, "insertAfter", this.#refs), newNode, "insertAfter");
   }
 
-  #splice(
-    anchorId: number,
-    content: MdastContent | MdastContent[],
-    op: StructuralOp,
-    label: string,
-  ): void {
-    const intoSelf = op === "prependChild" || op === "appendChild";
+  #splice(anchorId: number, content: MdastContent | MdastContent[], op: StructuralOp): void {
     for (const n of asArray(content)) {
-      this.#trackReuse(anchorId, n, label, intoSelf);
       emitMdastTree(this.#commandBuffer, op, anchorId, n, false, this.#refs, true);
     }
-  }
-
-  /** Rejects the two reuse shapes that can't be spliced by id, at the call site rather than at the end of the compile. */
-  #trackReuse(anchorId: number, content: MdastContent, op: string, intoSelf: boolean): void {
-    forEachMdastReusedId(content, this.#refs, (targetId) => {
-      // A node is an ancestor of itself, so it cannot become its own child.
-      // Replacement content may deliberately wrap the node being replaced.
-      if (targetId === anchorId) {
-        if (intoSelf) throw reuseAncestorError(op);
-        return;
-      }
-      for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
-        if (cur === targetId) throw reuseAncestorError(op);
-        cur = this.#resolver.parentIdOf(cur);
-      }
-      const edges = (this.#reuseEdges ??= new Map());
-      const seen = new Set<number>([targetId]);
-      const queue = [targetId];
-      let budget = REUSE_SCAN_BUDGET;
-      while (queue.length > 0 && budget > 0) {
-        const next = edges.get(queue.pop()!);
-        if (next === undefined) continue;
-        for (const id of next) {
-          if (id === anchorId) throw reuseCycleError(op);
-          if (seen.add(id)) {
-            queue.push(id);
-            budget--;
-          }
-        }
-      }
-      let targets = edges.get(anchorId);
-      if (targets === undefined) edges.set(anchorId, (targets = new Set()));
-      targets.add(targetId);
-    });
   }
 
   /**
@@ -290,7 +245,6 @@ export class MdastVisitorContext {
       requireNid(node as MdastNode, "prependChild", this.#refs),
       childNode,
       "prependChild",
-      "prependChild",
     );
   }
 
@@ -298,7 +252,6 @@ export class MdastVisitorContext {
     this.#splice(
       requireNid(node as MdastNode, "appendChild", this.#refs),
       childNode,
-      "appendChild",
       "appendChild",
     );
   }
@@ -316,12 +269,7 @@ export class MdastVisitorContext {
         : index >= children.length
           ? ([node, "appendChild"] as const)
           : ([children[index]!, "insertBefore"] as const);
-    this.#splice(
-      requireNid(anchor as MdastNode, "insertChildAt", this.#refs),
-      childNode,
-      op,
-      "insertChildAt",
-    );
+    this.#splice(requireNid(anchor as MdastNode, "insertChildAt", this.#refs), childNode, op);
   }
 
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
@@ -361,7 +309,6 @@ export class MdastVisitorContext {
       let previous: MdastContent | undefined;
       for (const n of newNode) {
         if (previous !== undefined) {
-          this.#trackReuse(id, previous, "replaceNode", false);
           emitMdastTree(this.#commandBuffer, "insertBefore", id, previous, false, this.#refs, true);
         }
         previous = n;
@@ -371,7 +318,6 @@ export class MdastVisitorContext {
       } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
         emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
       } else {
-        this.#trackReuse(id, previous, "replaceNode", false);
         emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs, true);
       }
       if (previous !== undefined && !isRawMdastContent(previous)) {
@@ -387,7 +333,6 @@ export class MdastVisitorContext {
     }
     if (isRawMdastContent(newNode)) this.#pendingNodes.delete(id);
     else this.#pendingNodes.set(id, newNode);
-    this.#trackReuse(id, newNode, "replaceNode", false);
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
   }
 
@@ -692,41 +637,6 @@ function reusedId(node: unknown, refs: NodeRefs): number | undefined {
   return id !== undefined && id !== FOREIGN_REF ? id : undefined;
 }
 
-/** Visit refs encoded by this content, including refs nested in newly built wrappers. */
-function forEachMdastReusedId(
-  content: MdastContent,
-  refs: NodeRefs,
-  visit: (id: number) => void,
-): void {
-  const directId = reusedId(content, refs);
-  if (directId !== undefined) {
-    visit(directId);
-    return;
-  }
-  const rootChildren = (content as { children?: unknown }).children;
-  if (!Array.isArray(rootChildren) || rootChildren.length === 0) return;
-
-  const pending: unknown[] = [];
-  for (const child of rootChildren) pending.push(child);
-  const seen = new WeakSet<object>();
-  seen.add(content);
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (node === null || typeof node !== "object") continue;
-    const id = reusedId(node, refs);
-    if (id !== undefined) {
-      visit(id);
-      continue;
-    }
-    if (seen.has(node)) continue;
-    seen.add(node);
-    const children = (node as { children?: unknown }).children;
-    if (Array.isArray(children)) {
-      for (const child of children) pending.push(child);
-    }
-  }
-}
-
 function emitMdastChildrenCommand(
   buffer: CommandBuffer,
   id: number,
@@ -800,12 +710,11 @@ function emitMdastOp(
   allowRootRef = false,
 ): boolean {
   if (node === null || typeof node !== "object") return false;
-  if (!isRoot || allowRootRef) {
-    const id = reusedId(node, refs);
-    if (id !== undefined) {
-      w.ref(id);
-      return true;
-    }
+  const id = getNodeId(node as MdastNode, refs);
+  if (id === FOREIGN_REF) throw foreignContentError();
+  if ((!isRoot || allowRootRef) && id !== undefined) {
+    w.ref(id);
+    return true;
   }
   const n = node as Record<string, unknown>;
   let type = MDAST_OPSTREAM_TYPES[n.type as string];

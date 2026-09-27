@@ -361,7 +361,7 @@ defineHastPlugin({
 });
 ```
 
-Use `structuredClone(node)` for a deep, fully independent copy of the node and its subtree, or `{ ...node }` for a cheaper shallow copy when you only need this node's own fields.
+Use `structuredClone(node)` for a deep, fully independent copy of the node and its subtree, or `{ ...node }` for a cheaper shallow copy when you only need this node's own fields. A shallow copy's `children` still contain references to the original tree. Nested references resolve with edits from the current pass; references from another document or an earlier pass cannot be inserted. Make a detached copy **during the original pass** if you need to reuse content later (an unread lazy node may no longer be readable after the tree changes).
 
 To get a plain JavaScript tree of the whole document, use [`markdownToMdast` or `markdownToHast`](/docs/entry-points/#trees-without-compiling):
 

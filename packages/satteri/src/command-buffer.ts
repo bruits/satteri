@@ -82,6 +82,14 @@ export const STRUCTURAL_CMD: Record<StructuralOp, number> = {
 export class CommandBuffer extends OpWriter {
   // Commands must not interleave bytes while a structural payload is being emitted.
   #inOpstream = false;
+  #emittedRefs: number[] | null = null;
+  /** Called only for successfully encoded structural commands that contain references. */
+  onReferences: ((cmd: number, nodeId: number, refs: readonly number[]) => void) | undefined;
+
+  override ref(id: number): void {
+    if (this.#inOpstream && this.onReferences) (this.#emittedRefs ??= []).push(id);
+    super.ref(id);
+  }
 
   constructor() {
     super(INITIAL_SIZE);
@@ -89,6 +97,8 @@ export class CommandBuffer extends OpWriter {
 
   override reset(): void {
     this.#inOpstream = false;
+    this.#emittedRefs = null;
+    this.onReferences = undefined;
     super.reset();
   }
 
@@ -104,11 +114,14 @@ export class CommandBuffer extends OpWriter {
   emitOpstreamCommand(cmd: number, nodeId: number, emit: () => boolean): boolean {
     const commandStart = this.n;
     const lenPos = this.#beginOpstream(cmd, nodeId);
-    // ok starts false so a throwing emit still hits the abort in finally
+    // Collect only refs actually encoded, without allocating for ref-free payloads.
     let ok = false;
     try {
-      ok = emit();
+      const emitted = emit();
+      if (emitted && this.#emittedRefs?.length) this.onReferences?.(cmd, nodeId, this.#emittedRefs);
+      ok = emitted;
     } finally {
+      this.#emittedRefs = null;
       if (!ok) this.#abortOpstream(commandStart);
     }
     if (ok) this.#endOpstream(lenPos);

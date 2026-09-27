@@ -55,13 +55,13 @@ import {
   asArray,
   collectCommands,
   FOREIGN_REF,
+  foreignContentError,
   makeRequireNid,
   requireRootReplacement,
   ROOT_NODE_ID,
   rootReplacementError,
-  REUSE_SCAN_BUDGET,
-  reuseAncestorError,
-  reuseCycleError,
+  ReuseTracker,
+  STRUCTURAL_LABELS,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -227,41 +227,6 @@ function hastReusedId(node: unknown, refs: NodeRefs): number | undefined {
   return id !== undefined && id !== FOREIGN_REF ? id : undefined;
 }
 
-/** Visit refs encoded by this content, including refs nested in newly built wrappers. */
-function forEachHastReusedId(
-  content: HastContent,
-  refs: NodeRefs,
-  visit: (id: number) => void,
-): void {
-  const directId = hastReusedId(content, refs);
-  if (directId !== undefined) {
-    visit(directId);
-    return;
-  }
-  const rootChildren = (content as { children?: unknown }).children;
-  if (!Array.isArray(rootChildren) || rootChildren.length === 0) return;
-
-  const pending: unknown[] = [];
-  for (const child of rootChildren) pending.push(child);
-  const seen = new WeakSet<object>();
-  seen.add(content);
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (node === null || typeof node !== "object") continue;
-    const id = hastReusedId(node, refs);
-    if (id !== undefined) {
-      visit(id);
-      continue;
-    }
-    if (seen.has(node)) continue;
-    seen.add(node);
-    const children = (node as { children?: unknown }).children;
-    if (Array.isArray(children)) {
-      for (const child of children) pending.push(child);
-    }
-  }
-}
-
 function emitHastChildrenCommand(
   buffer: CommandBuffer,
   id: number,
@@ -369,12 +334,11 @@ function emitHastOp(
   allowRootRef = false,
 ): boolean {
   if (node === null || typeof node !== "object") return false;
-  if (!isRoot || allowRootRef) {
-    const id = hastReusedId(node, refs);
-    if (id !== undefined) {
-      w.ref(id);
-      return true;
-    }
+  const id = getNodeId(node as HastNode, refs);
+  if (id === FOREIGN_REF && !document) throw foreignContentError();
+  if ((!isRoot || allowRootRef) && id !== undefined && id !== FOREIGN_REF) {
+    w.ref(id);
+    return true;
   }
   const n = node as Record<string, unknown>;
   const type = HAST_OPSTREAM_TYPES[n.type as string];
@@ -430,8 +394,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
   readonly #refs: NodeRefs;
-  /** Anchor id → existing nodes spliced there; null until a visitor reuses one. */
-  #reuseEdges: Map<number, Set<number>> | null = null;
+  readonly #reuseTracker: ReuseTracker;
   readonly fileURL: URL | undefined;
   readonly data: Data;
   readonly sourceFormat: SourceFormat;
@@ -450,6 +413,9 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.#refs = resolver.refs;
+    this.#reuseTracker = new ReuseTracker((id) => resolver.parentIdOf(id));
+    this.#commandBuffer.onReferences = (cmd, id, refs) =>
+      this.#reuseTracker.record(cmd, id, refs, STRUCTURAL_LABELS[cmd] ?? "setField");
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;
@@ -501,7 +467,6 @@ class HastVisitorContextImpl implements HastVisitorContext {
       } else if (id === ROOT_NODE_ID) {
         emitHastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
       } else {
-        this.#trackReuse(id, previous, "replaceNode", false);
         emitHastTree(this.#commandBuffer, "replace", id, previous, this.#refs, true);
       }
       if (previous === undefined) this.#pendingNodes.delete(id);
@@ -512,74 +477,22 @@ class HastVisitorContextImpl implements HastVisitorContext {
       emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
       return;
     }
-    this.#trackReuse(id, newNode, "replaceNode", false);
     emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true);
     this.#pendingNodes.set(id, newNode);
   }
 
-  #splice(
-    anchorId: number,
-    content: HastContent | HastContent[],
-    op: StructuralOp,
-    label: string,
-  ): void {
-    const intoSelf = op === "prependChild" || op === "appendChild";
+  #splice(anchorId: number, content: HastContent | HastContent[], op: StructuralOp): void {
     for (const n of asArray(content)) {
-      this.#trackReuse(anchorId, n, label, intoSelf);
       emitHastTree(this.#commandBuffer, op, anchorId, n, this.#refs, true);
     }
   }
 
-  /** Rejects the two reuse shapes that can't be spliced by id, at the call site rather than at the end of the compile. */
-  #trackReuse(anchorId: number, content: HastContent, op: string, intoSelf: boolean): void {
-    forEachHastReusedId(content, this.#refs, (targetId) => {
-      // A node is an ancestor of itself, so it cannot become its own child.
-      // Replacement content may deliberately wrap the node being replaced.
-      if (targetId === anchorId) {
-        if (intoSelf) throw reuseAncestorError(op);
-        return;
-      }
-      for (let cur = this.#resolver.parentIdOf(anchorId); cur !== undefined; ) {
-        if (cur === targetId) throw reuseAncestorError(op);
-        cur = this.#resolver.parentIdOf(cur);
-      }
-      const edges = (this.#reuseEdges ??= new Map());
-      const seen = new Set<number>([targetId]);
-      const queue = [targetId];
-      let budget = REUSE_SCAN_BUDGET;
-      while (queue.length > 0 && budget > 0) {
-        const next = edges.get(queue.pop()!);
-        if (next === undefined) continue;
-        for (const id of next) {
-          if (id === anchorId) throw reuseCycleError(op);
-          if (seen.add(id)) {
-            queue.push(id);
-            budget--;
-          }
-        }
-      }
-      let targets = edges.get(anchorId);
-      if (targets === undefined) edges.set(anchorId, (targets = new Set()));
-      targets.add(targetId);
-    });
-  }
-
   insertBefore(node: HastNode, newNode: HastContent | HastContent[]): void {
-    this.#splice(
-      requireNid(node, "insertBefore", this.#refs),
-      newNode,
-      "insertBefore",
-      "insertBefore",
-    );
+    this.#splice(requireNid(node, "insertBefore", this.#refs), newNode, "insertBefore");
   }
 
   insertAfter(node: HastNode, newNode: HastContent | HastContent[]): void {
-    this.#splice(
-      requireNid(node, "insertAfter", this.#refs),
-      newNode,
-      "insertAfter",
-      "insertAfter",
-    );
+    this.#splice(requireNid(node, "insertAfter", this.#refs), newNode, "insertAfter");
   }
 
   wrapNode(
@@ -599,21 +512,11 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 
   prependChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    this.#splice(
-      requireNid(node, "prependChild", this.#refs),
-      childNode,
-      "prependChild",
-      "prependChild",
-    );
+    this.#splice(requireNid(node, "prependChild", this.#refs), childNode, "prependChild");
   }
 
   appendChild(node: HastNode, childNode: HastContent | HastContent[]): void {
-    this.#splice(
-      requireNid(node, "appendChild", this.#refs),
-      childNode,
-      "appendChild",
-      "appendChild",
-    );
+    this.#splice(requireNid(node, "appendChild", this.#refs), childNode, "appendChild");
   }
 
   insertChildAt(node: HastNode, index: number, childNode: HastContent | HastContent[]): void {
@@ -624,7 +527,7 @@ class HastVisitorContextImpl implements HastVisitorContext {
         : index >= children.length
           ? ([node, "appendChild"] as const)
           : ([children[index]!, "insertBefore"] as const);
-    this.#splice(requireNid(anchor, "insertChildAt", this.#refs), childNode, op, "insertChildAt");
+    this.#splice(requireNid(anchor, "insertChildAt", this.#refs), childNode, op);
   }
 
   removeChildAt(node: HastNode, index: number): void {

@@ -1,4 +1,6 @@
 import { test, expect } from "vitest";
+import type { Blockquote } from "mdast";
+import type { Element } from "hast";
 import { markdownToHtml, defineMdastPlugin, defineHastPlugin } from "../src/index.js";
 
 // Structural ops splice a reused tree node by id, so it resolves to whatever that node ends up as.
@@ -268,6 +270,77 @@ test("hast: an element replaced by several elements is reused as all of them", (
   expect(html).toContain("<section><b></b><i></i></section>");
 });
 
+test("foreign references must be detached before insertion", () => {
+  let saved: Blockquote | undefined;
+  let detached: Blockquote | undefined;
+  markdownToHtml("> first\n", {
+    mdastPlugins: [
+      defineMdastPlugin({
+        name: "save-reference",
+        blockquote(node) {
+          saved = node;
+          detached = structuredClone(node);
+        },
+      }),
+    ],
+  });
+  const foreign = saved!;
+  const insert = (child: typeof foreign) =>
+    defineMdastPlugin({
+      name: "insert-reference",
+      blockquote(node, ctx) {
+        ctx.insertAfter(node, { type: "blockquote", children: [child] });
+      },
+    });
+  expect(() => markdownToHtml("> second\n", { mdastPlugins: [insert(foreign)] })).toThrow(
+    /another tree or pass/,
+  );
+  expect(markdownToHtml("> second\n", { mdastPlugins: [insert(detached!)] }).html).toContain(
+    "<blockquote>\n<blockquote>\n<p>first</p>",
+  );
+});
+
+test("hast: foreign references must be detached before insertion", () => {
+  let saved: Element | undefined;
+  markdownToHtml("a *b* c\n", {
+    hastPlugins: [
+      defineHastPlugin({
+        name: "save-element",
+        element: {
+          filter: ["em"],
+          visit(node) {
+            saved = node;
+          },
+        },
+      }),
+    ],
+  });
+  const foreign = saved!;
+  const plugin = defineHastPlugin({
+    name: "insert-foreign-element",
+    element: {
+      filter: ["p"],
+      visit(node, ctx) {
+        ctx.appendChild(node, foreign);
+      },
+    },
+  });
+  expect(() => markdownToHtml("text\n", { hastPlugins: [plugin] })).toThrow(/another tree or pass/);
+});
+
+test("a caught invalid reuse does not leave a partial command or stale dependency", () => {
+  const plugin = defineMdastPlugin({
+    name: "recover-from-invalid-reuse",
+    blockquote(node, ctx) {
+      expect(() => ctx.appendChild(node, { type: "blockquote", children: [node] })).toThrow(
+        /content that contains the target node/,
+      );
+      ctx.appendChild(node, { type: "paragraph", children: [{ type: "text", value: "safe" }] });
+    },
+  });
+  expect(markdownToHtml("> x\n", { mdastPlugins: [plugin] }).html).toContain("<p>safe</p>");
+});
+
 test("a node cannot be made its own child", () => {
   const asChild = (op: "appendChild" | "prependChild") =>
     defineMdastPlugin({
@@ -304,6 +377,18 @@ test("replacement content can wrap the node being replaced", () => {
   });
   const { html } = markdownToHtml("> x\n", { mdastPlugins: [plugin] });
   expect((html.match(/<blockquote>/g) ?? []).length).toBe(2);
+});
+
+test("replacement root cannot contain a reference to itself", () => {
+  const plugin = defineMdastPlugin({
+    name: "root-cycle",
+    before(root, ctx) {
+      ctx.replaceNode(root, { type: "root", children: [root] });
+    },
+  });
+  expect(() => markdownToHtml("text\n", { mdastPlugins: [plugin] })).toThrow(
+    /content that contains the target node/,
+  );
 });
 
 test("the root cannot be made its own child", () => {
