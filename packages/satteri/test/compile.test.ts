@@ -2220,6 +2220,22 @@ describe("markdownToJs", () => {
       expect(js).toContain('b: "b"');
     });
 
+    test.each(["raw", "rawHtml"] as const)(
+      "%s replacing inline text does not add a paragraph wrapper",
+      (kind) => {
+        const replace = defineMdastPlugin({
+          name: `replace-inline-text-with-${kind}`,
+          text(node) {
+            const value = `<mark>${node.value}</mark>`;
+            return kind === "raw" ? { raw: value } : { rawHtml: value };
+          },
+        });
+
+        const { html } = markdownToHtml("before target after", { mdastPlugins: [replace] });
+        expect(html).toBe("<p><mark>before target after</mark></p>\n");
+      },
+    );
+
     test("the mdxToJs error points at both escape hatches", () => {
       const injectHtml = defineMdastPlugin({
         name: "inject-html",

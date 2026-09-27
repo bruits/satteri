@@ -1644,7 +1644,7 @@ pub fn apply_mdast_commands_lenient_with_options(
 
             CMD_REPLACE => {
                 let node_id = reader.read_anchor(original_len)?;
-                let (new_tree, keep_children) = read_mdast_payload(
+                let (mut new_tree, keep_children) = read_mdast_payload(
                     &mut reader,
                     parse_markdown,
                     &mut builder,
@@ -1652,6 +1652,19 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
+                // Raw Markdown parses as a document, but a text replacement occupies an inline slot.
+                if builder.arena_mut().get_node(node_id).node_type == MdastNodeType::Text as u8
+                    && let PatchContent::Tree(tree) = &mut new_tree
+                {
+                    let root_children = tree.get_children(0);
+                    if root_children.len() == 1
+                        && tree.get_node(root_children[0]).node_type
+                            == MdastNodeType::Paragraph as u8
+                    {
+                        let paragraph_children = tree.get_children(root_children[0]).to_vec();
+                        tree.set_children(0, &paragraph_children);
+                    }
+                }
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
