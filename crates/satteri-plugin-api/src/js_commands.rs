@@ -347,7 +347,7 @@ fn emit_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u3
 /// A `keep_children` expansion names each child's *position*, so it must carry
 /// whatever else was spliced there rather than the child alone.
 fn emit_slot_ref_node<K: ArenaKind>(ref_id: u32, builder: &mut ArenaBuilder<K>) -> u32 {
-    let id = builder.open_node_raw(REF_NODE_TYPE);
+    let id = builder.open_node(REF_NODE_TYPE);
     let mut data = ref_id.to_le_bytes().to_vec();
     data.push(satteri_ast::patch::REF_KIND_SLOT);
     builder.set_data_current(&data);

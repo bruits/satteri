@@ -510,11 +510,10 @@ class HastVisitorContextImpl implements HastVisitorContext {
     }
     if (id === ROOT_NODE_ID) {
       emitHastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
-    } else {
-      emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs);
+      return;
     }
     this.#trackReuse(id, newNode, "replaceNode", false);
-      emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true);
+    emitHastTree(this.#commandBuffer, "replace", id, newNode, this.#refs, true);
     this.#pendingNodes.set(id, newNode);
   }
 

@@ -2736,7 +2736,7 @@ fn set_children_keeps_a_sibling_insert_on_a_retained_child() {
     sub.open_node(MdastNodeType::Root as u8);
     sub.open_node(MdastNodeType::ThematicBreak as u8);
     sub.close_node();
-    sub.open_node_raw(REF_NODE_TYPE);
+    sub.open_node(REF_NODE_TYPE);
     sub.set_data_current(&paragraph.to_le_bytes());
     sub.close_node();
     sub.close_node();
@@ -2785,7 +2785,7 @@ fn a_sibling_insert_survives_a_later_set_children_on_its_parent() {
 
     let mut sub = ArenaBuilder::<Mdast>::new(String::new());
     sub.open_node(MdastNodeType::Root as u8);
-    sub.open_node_raw(REF_NODE_TYPE);
+    sub.open_node(REF_NODE_TYPE);
     sub.set_data_current(&text_in_paragraph.to_le_bytes());
     sub.close_node();
     sub.close_node();

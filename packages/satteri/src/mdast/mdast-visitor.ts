@@ -383,8 +383,7 @@ export class MdastVisitorContext {
     }
     if (id === ROOT_NODE_ID && !isRawMdastContent(newNode)) {
       emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
-    } else {
-      emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs);
+      return;
     }
     if (isRawMdastContent(newNode)) this.#pendingNodes.delete(id);
     else this.#pendingNodes.set(id, newNode);
