@@ -1,4 +1,5 @@
 import { describe, test, expect } from "vitest";
+import type { Root } from "mdast";
 import {
   assertMdastConformance,
   assertMdastConformanceNoPosition,
@@ -14,7 +15,7 @@ import {
 const MATH: ["math"] = ["math"];
 
 function assertFinalList(input: string, ordered: boolean, start?: number) {
-  const list = satteriMdast(input).children.at(-1);
+  const list = (satteriMdast(input) as Root).children.at(-1);
   expect(list).toMatchObject({
     type: "list",
     ordered,
