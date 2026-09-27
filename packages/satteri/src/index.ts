@@ -76,6 +76,10 @@ export type {
   MdxFlowExpressionHast,
   MdxTextExpressionHast,
   MdxjsEsmHast,
+  ContainerDirective,
+  LeafDirective,
+  TextDirective,
+  DirectiveAttributes,
 } from "./types.js";
 
 export { normalizePlugins } from "./plugin.js";
