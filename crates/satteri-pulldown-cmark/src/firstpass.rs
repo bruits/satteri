@@ -670,7 +670,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         self.tree.push();
                         // Emit the label as a real inline-tokenized child so the
                         // normal inline pass resolves emphasis/strong/links/code.
-                        if label_start != 0 || label_end != 0 {
+                        if label_start < label_end {
                             self.append_container_directive_label(label_start, label_end);
                         }
                         return line_end;
