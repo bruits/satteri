@@ -3217,15 +3217,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.tree[child].item.end = last_nonblank_ix;
         }
         self.pop(end_ix);
-        // Set `interrupt`-equivalent state ONLY when this code block wasn't a
-        // one-line lazy block opened immediately after a popped blockquote.
-        // For `>\n\t9\n+` micromark's `interrupt` is false at `+` (the bq's
-        // blank-line state propagates through the lazy code), so the empty
-        // marker is allowed to open a list. For `\t9\n+` and `code\n\n2.b`,
-        // the code wasn't lazy and the suppression should fire.
-        if !lazy_one_line {
-            self.list_interrupted_paragraph = true;
-        }
         ix
     }
 
