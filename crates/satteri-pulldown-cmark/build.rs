@@ -193,11 +193,8 @@ fn base_options_for_spec(spec_name: &str) -> u32 {
         }
 
         // Specs that use per-example suffix flags only
-        "container_extensions"
-        | "definition_list"
-        | "metadata_blocks"
-        | "smartypants"
-        | "wikilinks" => 0,
+        "container_extensions" => TABLES,
+        "definition_list" | "metadata_blocks" | "smartypants" | "wikilinks" => 0,
 
         other => panic!("Unknown spec file: {other}"),
     }

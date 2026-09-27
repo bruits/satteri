@@ -16,7 +16,7 @@ content
 <p>:::</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -30,7 +30,7 @@ Hi
 :::</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -41,7 +41,7 @@ Content here
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -52,7 +52,7 @@ Content
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -63,7 +63,7 @@ Be careful!
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -76,7 +76,7 @@ Content
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn container_extensions_test_7() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn container_extensions_test_8() {
     let expected = r##"<p>A  example.</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn container_extensions_test_9() {
     let expected = r##"<p>This  is text.</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn container_extensions_test_10() {
     let expected = r##"<p>Hello :smile: world</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -128,7 +128,7 @@ Paragraph 2
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn container_extensions_test_12() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
@@ -151,11 +151,27 @@ Content
     let expected = r##"<p><strong>bold after</strong></p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
 fn container_extensions_test_14() {
+    let original = r##":::note
+| header 1 | header 2 |
+| -------- | -------- |
+| value 1  | value 2  |
+:::
+
+After
+"##;
+    let expected = r##"<p>After</p>
+"##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_15() {
     let original = r##":::::foo
 Hi
 :::
@@ -163,11 +179,11 @@ Hi
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_15() {
+fn container_extensions_test_16() {
     let original = r##"> :::foo
 > Hi
 "##;
@@ -175,22 +191,22 @@ fn container_extensions_test_15() {
 </blockquote>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_16() {
+fn container_extensions_test_17() {
     let original = r##":::c_d
 Hi
 :::
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_17() {
+fn container_extensions_test_18() {
     let original = r##":::container
 > shouldn't close, right?
 > :::
@@ -199,11 +215,11 @@ fn container_extensions_test_17() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_18() {
+fn container_extensions_test_19() {
     let original = r##":::a
 ::::b
 :::::c
@@ -212,21 +228,21 @@ x
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_19() {
+fn container_extensions_test_20() {
     let original = r##":::a
 content :::
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_20() {
+fn container_extensions_test_21() {
     let original = r##":::a
 :::b
 
@@ -236,11 +252,11 @@ fn container_extensions_test_20() {
     let expected = r##"<p>:::</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_21() {
+fn container_extensions_test_22() {
     let original = r##"::::a
 :::b
 
@@ -249,11 +265,11 @@ fn container_extensions_test_21() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_22() {
+fn container_extensions_test_23() {
     let original = r##":::a
 ::::b
 
@@ -262,11 +278,11 @@ fn container_extensions_test_22() {
 "##;
     let expected = r##""##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_23() {
+fn container_extensions_test_24() {
     let original = r##"::: note
 Hi
 :::
@@ -276,34 +292,34 @@ Hi
 :::</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
-}
-
-#[test]
-fn container_extensions_test_24() {
-    let original = r##"::break
-"##;
-    let expected = r##""##;
-
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
 fn container_extensions_test_25() {
+    let original = r##"::break
+"##;
+    let expected = r##""##;
+
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
+}
+
+#[test]
+fn container_extensions_test_26() {
     let original = r##"`:foo[` and `bar]`
 "##;
     let expected = r##"<p><code>:foo[</code> and <code>bar]</code></p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }
 
 #[test]
-fn container_extensions_test_26() {
+fn container_extensions_test_27() {
     let original = r##"text `:link[` more `code]` after
 "##;
     let expected = r##"<p>text <code>:link[</code> more <code>code]</code> after</p>
 "##;
 
-    test_markdown_html(original, expected, 0, false, false, false, false, false, true);
+    test_markdown_html(original, expected, 2, false, false, false, false, false, true);
 }

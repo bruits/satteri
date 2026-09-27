@@ -127,6 +127,20 @@ Content
 <p><strong>bold after</strong></p>
 ````````````````````````````````
 
+Closing directive fence immediately after a table:
+
+```````````````````````````````` example_container_extensions
+:::note
+| header 1 | header 2 |
+| -------- | -------- |
+| value 1  | value 2  |
+:::
+
+After
+.
+<p>After</p>
+````````````````````````````````
+
 Longer fence nesting:
 
 ```````````````````````````````` example_container_extensions
