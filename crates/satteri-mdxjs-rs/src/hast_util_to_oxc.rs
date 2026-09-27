@@ -30,6 +30,7 @@ use satteri_arena::{Arena, Hast};
 use satteri_ast::hast::codec::{
     decode_element_prop, decode_element_prop_count, decode_element_tag, decode_text_data,
 };
+use satteri_ast::hast::properties::{is_known_property, property_to_attribute};
 use satteri_ast::hast::{HastNodeType, RenderOptions};
 use satteri_ast::mdast::codec::{
     decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
@@ -670,10 +671,8 @@ fn transform_element<'a>(
         // Keep the Cow borrowed where possible: create_jsx_attr_name_from_str
         // arena-copies from &str, so an intermediate String is pure waste.
         let attr_name = match attr_case {
-            ElementAttributeNameCase::React => Cow::Owned(prop_to_attr_name(name)),
-            ElementAttributeNameCase::Html => {
-                satteri_ast::hast::properties::property_to_attribute(name, in_svg)
-            }
+            ElementAttributeNameCase::React => Cow::Owned(prop_to_attr_name(name, in_svg)),
+            ElementAttributeNameCase::Html => property_to_attribute(name, in_svg),
         };
         attrs.push(JSXAttributeItem::Attribute(OxcBox::new_in(
             JSXAttribute {
@@ -1065,9 +1064,11 @@ fn create_fragment<'a>(
 }
 
 /// Turn a hast property into something that particularly React understands.
-fn prop_to_attr_name(prop: &str) -> String {
-    // Arbitrary data props, kebab case them.
-    if prop.len() > 4 && prop.starts_with("data") {
+fn prop_to_attr_name(prop: &str, in_svg: bool) -> String {
+    // Arbitrary data props, kebab case them. The schema wins first, as in
+    // `property_to_attribute`: `dataType` is a real SVG attribute whose React
+    // name is `datatype`, not a custom `data-type` (issue #250).
+    if prop.len() > 4 && prop.starts_with("data") && !is_known_property(prop, in_svg) {
         let mut result = String::with_capacity(prop.len() + 2);
         let bytes = prop.as_bytes();
         let mut index = 4;
@@ -1396,5 +1397,25 @@ mod tests {
                 ("color".to_string(), "red".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn prop_to_attr_name_data_props_respect_the_schema() {
+        // Issue #250: `dataType` is a real SVG property whose React name is
+        // `datatype`; only outside SVG is it a custom `data-type` attribute.
+        assert_eq!(prop_to_attr_name("dataType", true), "datatype");
+        assert_eq!(prop_to_attr_name("dataType", false), "data-type");
+        assert_eq!(prop_to_attr_name("dataFooBar", true), "data-foo-bar");
+        assert_eq!(prop_to_attr_name("dataFooBar", false), "data-foo-bar");
+        // `<object data>` is a plain HTML attribute, not a `data-*` prefix.
+        assert_eq!(prop_to_attr_name("data", false), "data");
+    }
+
+    #[test]
+    fn prop_to_attr_name_react_map_and_aria() {
+        assert_eq!(prop_to_attr_name("strokeLineCap", true), "strokeLinecap");
+        assert_eq!(prop_to_attr_name("xLinkHref", true), "xlinkHref");
+        assert_eq!(prop_to_attr_name("className", false), "className");
+        assert_eq!(prop_to_attr_name("ariaHidden", false), "aria-hidden");
     }
 }
