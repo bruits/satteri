@@ -13,6 +13,15 @@ import {
 
 const MATH: ["math"] = ["math"];
 
+function assertFinalList(input: string, ordered: boolean, start?: number) {
+  const list = satteriMdast(input).children.at(-1);
+  expect(list).toMatchObject({
+    type: "list",
+    ordered,
+    ...(start === undefined ? {} : { start }),
+  });
+}
+
 describe("HTML block in list item", () => {
   test("`<textarea>` in list item keeps trailing newline on close", () => {
     assertMdastConformance("+\t<textarea>\n\nfoo");
@@ -1035,12 +1044,12 @@ describe("fenced code block trailing whitespace at EOF", () => {
 });
 
 describe("ordered list start≠1 after indented code", () => {
-  test("`    code\\n\\n2. b` → [code, paragraph]", () => {
-    assertMdastConformance("    code\n\n2. b");
+  test("`    code\\n\\n2. b` opens a list", () => {
+    assertFinalList("    code\n\n2. b", true, 2);
   });
 
-  test("multiple blank lines don't reset (still paragraph)", () => {
-    assertMdastConformance("    code\n\n\n\n2. b");
+  test("multiple blank lines still allow the list", () => {
+    assertFinalList("    code\n\n\n\n2. b", true, 2);
   });
 
   test("intervening paragraph clears the suppression", () => {
@@ -1051,8 +1060,8 @@ describe("ordered list start≠1 after indented code", () => {
     assertMdastConformance("    code\n\n1. b");
   });
 
-  test("`)` delimiter form also suppressed", () => {
-    assertMdastConformance("    code\n\n2) b");
+  test("`)` delimiter form also opens a list", () => {
+    assertFinalList("    code\n\n2) b", true, 2);
   });
 });
 
@@ -1438,16 +1447,12 @@ describe("lazy indented code after empty blockquote doesn't suppress next list",
     assertMdastConformance(">\n\t9^\n+\np");
   });
 
-  test("`\\t9\\n+` (no preceding bq) keeps suppression: paragraph '+'", () => {
-    assertMdastConformance("\t9\n+");
+  test("`\\t9\\n+` (no preceding bq) opens a list", () => {
+    assertFinalList("\t9\n+", false);
   });
 
-  test("`>\\n\\n\\t9\\n+` (blank line between bq and code) keeps suppression", () => {
-    assertMdastConformance(">\n\n\t9\n+");
-  });
-
-  test("`    code\\n\\n2. b` still becomes [code, paragraph]", () => {
-    assertMdastConformance("    code\n\n2. b");
+  test("`>\\n\\n\\t9\\n+` opens a list after the code", () => {
+    assertFinalList(">\n\n\t9\n+", false);
   });
 });
 
