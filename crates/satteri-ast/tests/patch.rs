@@ -1779,12 +1779,33 @@ fn wrap_applies_prepend_and_append_child_on_wrapped_node() {
 // In-place coverage for shapes the original rebuild tests don't exercise.
 
 fn ref_payload_mdast(target: u32) -> Arena<Mdast> {
-    use satteri_ast::patch::REF_NODE_TYPE;
     let mut b = ArenaBuilder::<Mdast>::new(String::new());
     b.open_node(REF_NODE_TYPE);
     b.set_data_current(&target.to_le_bytes());
     b.close_node();
     b.finish()
+}
+
+fn root_with_ref(target: u32, prefix: Option<MdastNodeType>) -> Arena<Mdast> {
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(MdastNodeType::Root as u8);
+    if let Some(prefix) = prefix {
+        b.open_node(prefix as u8);
+        b.close_node();
+    }
+    b.open_node(REF_NODE_TYPE);
+    b.set_data_current(&target.to_le_bytes());
+    b.close_node();
+    b.close_node();
+    b.finish()
+}
+
+fn child_types(arena: &Arena<Mdast>, parent: u32) -> Vec<u8> {
+    arena
+        .get_children(parent)
+        .iter()
+        .map(|&id| arena.get_node(id).node_type)
+        .collect()
 }
 
 /// Lenient apply: returns the arena plus the dropped-anchor list.
@@ -1963,11 +1984,7 @@ fn grafted_self_child_ref_is_rejected_without_mutating_the_arena() {
     let orig = build_hello_world();
     let heading_id = orig.get_children(0)[0];
     let mut arena = orig.clone();
-    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
-    builder.open_node(REF_NODE_TYPE);
-    builder.set_data_current(&heading_id.to_le_bytes());
-    builder.close_node();
-    let payload = builder.finish();
+    let payload = ref_payload_mdast(heading_id);
     let roots = graft_tree_for_test(&mut arena, &payload);
     let before = arena.to_raw_buffer();
     assert!(matches!(
@@ -2758,19 +2775,8 @@ fn ref_to_a_removed_node_ignores_what_took_its_place() {
 /// queued on a child that survives into the new list must still land.
 #[test]
 fn set_children_keeps_a_sibling_insert_on_a_retained_child() {
-    use satteri_ast::patch::REF_NODE_TYPE;
-
     let orig = build_hello_world();
     let paragraph = orig.get_children(0)[1];
-
-    let mut sub = ArenaBuilder::<Mdast>::new(String::new());
-    sub.open_node(MdastNodeType::Root as u8);
-    sub.open_node(MdastNodeType::ThematicBreak as u8);
-    sub.close_node();
-    sub.open_node(REF_NODE_TYPE);
-    sub.set_data_current(&paragraph.to_le_bytes());
-    sub.close_node();
-    sub.close_node();
 
     let mut arena = orig.clone();
     apply_patches_in_place(
@@ -2778,7 +2784,10 @@ fn set_children_keeps_a_sibling_insert_on_a_retained_child() {
         &[
             Patch::SetChildren {
                 node_id: 0,
-                new_children: PatchContent::Tree(sub.finish()),
+                new_children: PatchContent::Tree(root_with_ref(
+                    paragraph,
+                    Some(MdastNodeType::ThematicBreak),
+                )),
             },
             Patch::InsertAfter {
                 node_id: paragraph,
@@ -2788,13 +2797,8 @@ fn set_children_keeps_a_sibling_insert_on_a_retained_child() {
     )
     .expect("apply failed");
 
-    let types: Vec<u8> = arena
-        .get_children(0)
-        .iter()
-        .map(|&k| arena.get_node(k).node_type)
-        .collect();
     assert_eq!(
-        types,
+        child_types(&arena, 0),
         vec![
             MdastNodeType::ThematicBreak as u8,
             MdastNodeType::Paragraph as u8,
@@ -2808,18 +2812,9 @@ fn set_children_keeps_a_sibling_insert_on_a_retained_child() {
 /// that rebuild rather than be overwritten by it.
 #[test]
 fn a_sibling_insert_survives_a_later_set_children_on_its_parent() {
-    use satteri_ast::patch::REF_NODE_TYPE;
-
     let orig = build_hello_world();
     let paragraph = orig.get_children(0)[1];
     let text_in_paragraph = orig.get_children(paragraph)[0];
-
-    let mut sub = ArenaBuilder::<Mdast>::new(String::new());
-    sub.open_node(MdastNodeType::Root as u8);
-    sub.open_node(REF_NODE_TYPE);
-    sub.set_data_current(&text_in_paragraph.to_le_bytes());
-    sub.close_node();
-    sub.close_node();
 
     let mut arena = orig.clone();
     apply_patches_in_place(
@@ -2831,19 +2826,14 @@ fn a_sibling_insert_survives_a_later_set_children_on_its_parent() {
             },
             Patch::SetChildren {
                 node_id: paragraph,
-                new_children: PatchContent::Tree(sub.finish()),
+                new_children: PatchContent::Tree(root_with_ref(text_in_paragraph, None)),
             },
         ],
     )
     .expect("apply failed");
 
-    let types: Vec<u8> = arena
-        .get_children(paragraph)
-        .iter()
-        .map(|&k| arena.get_node(k).node_type)
-        .collect();
     assert_eq!(
-        types,
+        child_types(&arena, paragraph),
         vec![MdastNodeType::Text as u8, MdastNodeType::InlineCode as u8],
         "the insert queued on the retained text must survive the parent's rebuild"
     );

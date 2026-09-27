@@ -328,21 +328,6 @@ test("hast: foreign references must be detached before insertion", () => {
   expect(() => markdownToHtml("text\n", { hastPlugins: [plugin] })).toThrow(/another tree or pass/);
 });
 
-test("an invalid reference fails at apply time, not inside the visitor", () => {
-  let returned = false;
-  const plugin = defineMdastPlugin({
-    name: "deferred-invalid-reuse",
-    blockquote(node, ctx) {
-      ctx.appendChild(node, { type: "blockquote", children: [node] });
-      returned = true;
-    },
-  });
-  expect(() => markdownToHtml("> x\n", { mdastPlugins: [plugin] })).toThrow(
-    /payload ref would contain its anchor/,
-  );
-  expect(returned).toBe(true);
-});
-
 test("a node cannot be made its own child", () => {
   const asChild = (op: "appendChild" | "prependChild") =>
     defineMdastPlugin({
@@ -358,16 +343,19 @@ test("a node cannot be made its own child", () => {
   }
 });
 
-test("a node cannot be nested inside new content appended to itself", () => {
+test("a nested self-child fails after the visitor returns", () => {
+  let returned = false;
   const plugin = defineMdastPlugin({
     name: "nested-self-child",
     blockquote(node, ctx) {
       ctx.appendChild(node, { type: "blockquote", children: [node] });
+      returned = true;
     },
   });
   expect(() => markdownToHtml("> x\n", { mdastPlugins: [plugin] })).toThrow(
     /payload ref would contain its anchor/,
   );
+  expect(returned).toBe(true);
 });
 
 test("replacement content can wrap the node being replaced", () => {
