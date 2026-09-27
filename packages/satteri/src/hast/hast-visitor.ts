@@ -60,8 +60,6 @@ import {
   requireRootReplacement,
   ROOT_NODE_ID,
   rootReplacementError,
-  ReuseTracker,
-  STRUCTURAL_LABELS,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -394,7 +392,6 @@ class HastVisitorContextImpl implements HastVisitorContext {
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<HastReader, HastNode>;
   readonly #refs: NodeRefs;
-  readonly #reuseTracker: ReuseTracker;
   readonly fileURL: URL | undefined;
   readonly data: Data;
   readonly sourceFormat: SourceFormat;
@@ -413,9 +410,6 @@ class HastVisitorContextImpl implements HastVisitorContext {
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.#refs = resolver.refs;
-    this.#reuseTracker = new ReuseTracker((id) => resolver.parentIdOf(id));
-    this.#commandBuffer.onReferences = (cmd, id, refs) =>
-      this.#reuseTracker.record(cmd, id, refs, STRUCTURAL_LABELS[cmd] ?? "setField");
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;

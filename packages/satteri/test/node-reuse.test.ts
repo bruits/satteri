@@ -55,7 +55,7 @@ test("insertAfter with the node itself duplicates it exactly once", () => {
   expect((html.match(/<blockquote>/g) ?? []).length).toBe(2);
 });
 
-test("inserting a node inside itself is rejected at the call site", () => {
+test("inserting a node inside itself is rejected when commands are applied", () => {
   const plugin = defineMdastPlugin({
     name: "insert-parent-after-child",
     paragraph(node, ctx) {
@@ -65,11 +65,11 @@ test("inserting a node inside itself is rejected at the call site", () => {
     },
   });
   expect(() => markdownToHtml("> a\n", { mdastPlugins: [plugin] })).toThrow(
-    /content that contains the target node/,
+    /payload ref targets an ancestor of its anchor/,
   );
 });
 
-test("two inserts that each reuse the other's node are rejected at the call site", () => {
+test("two inserts that each reuse the other's node are rejected when commands are applied", () => {
   let paired = false;
   const plugin = defineMdastPlugin({
     name: "mutual-insert",
@@ -83,7 +83,7 @@ test("two inserts that each reuse the other's node are rejected at the call site
     },
   });
   expect(() => markdownToHtml(twoQuotes, { mdastPlugins: [plugin] })).toThrow(
-    /closes a cycle of inserts/,
+    /ref-dependency cycle/,
   );
 });
 
@@ -144,7 +144,7 @@ test("hast: insertAfter with the element itself duplicates it exactly once", () 
   expect((html.match(/<h1>one<\/h1>/g) ?? []).length).toBe(2);
 });
 
-test("hast: inserting an element inside itself is rejected at the call site", () => {
+test("hast: inserting an element inside itself is rejected when commands are applied", () => {
   const plugin = defineHastPlugin({
     name: "insert-parent-after-child",
     element: {
@@ -157,7 +157,7 @@ test("hast: inserting an element inside itself is rejected at the call site", ()
     },
   });
   expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
-    /content that contains the target node/,
+    /payload ref targets an ancestor of its anchor/,
   );
 });
 
@@ -328,17 +328,19 @@ test("hast: foreign references must be detached before insertion", () => {
   expect(() => markdownToHtml("text\n", { hastPlugins: [plugin] })).toThrow(/another tree or pass/);
 });
 
-test("a caught invalid reuse does not leave a partial command or stale dependency", () => {
+test("an invalid reference fails at apply time, not inside the visitor", () => {
+  let returned = false;
   const plugin = defineMdastPlugin({
-    name: "recover-from-invalid-reuse",
+    name: "deferred-invalid-reuse",
     blockquote(node, ctx) {
-      expect(() => ctx.appendChild(node, { type: "blockquote", children: [node] })).toThrow(
-        /content that contains the target node/,
-      );
-      ctx.appendChild(node, { type: "paragraph", children: [{ type: "text", value: "safe" }] });
+      ctx.appendChild(node, { type: "blockquote", children: [node] });
+      returned = true;
     },
   });
-  expect(markdownToHtml("> x\n", { mdastPlugins: [plugin] }).html).toContain("<p>safe</p>");
+  expect(() => markdownToHtml("> x\n", { mdastPlugins: [plugin] })).toThrow(
+    /payload ref would contain its anchor/,
+  );
+  expect(returned).toBe(true);
 });
 
 test("a node cannot be made its own child", () => {
@@ -351,7 +353,7 @@ test("a node cannot be made its own child", () => {
     });
   for (const op of ["appendChild", "prependChild"] as const) {
     expect(() => markdownToHtml("> x\n", { mdastPlugins: [asChild(op)] })).toThrow(
-      /content that contains the target node/,
+      /payload ref would contain its anchor/,
     );
   }
 });
@@ -364,7 +366,7 @@ test("a node cannot be nested inside new content appended to itself", () => {
     },
   });
   expect(() => markdownToHtml("> x\n", { mdastPlugins: [plugin] })).toThrow(
-    /content that contains the target node/,
+    /payload ref would contain its anchor/,
   );
 });
 
@@ -387,7 +389,7 @@ test("replacement root cannot contain a reference to itself", () => {
     },
   });
   expect(() => markdownToHtml("text\n", { mdastPlugins: [plugin] })).toThrow(
-    /content that contains the target node/,
+    /payload ref would contain its anchor/,
   );
 });
 
@@ -400,7 +402,7 @@ test("the root cannot be made its own child", () => {
     },
   });
   expect(() => markdownToHtml("x\n", { mdastPlugins: [plugin] })).toThrow(
-    /content that contains the target node/,
+    /payload ref would contain its anchor/,
   );
 });
 
@@ -415,7 +417,7 @@ test("hast: an element cannot be made its own child", () => {
     },
   });
   expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
-    /content that contains the target node/,
+    /payload ref would contain its anchor/,
   );
 });
 
@@ -435,7 +437,7 @@ test("hast: an element cannot be nested inside new content appended to itself", 
     },
   });
   expect(() => markdownToHtml("a *b* c\n", { hastPlugins: [plugin] })).toThrow(
-    /content that contains the target node/,
+    /payload ref would contain its anchor/,
   );
 });
 

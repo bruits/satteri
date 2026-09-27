@@ -90,8 +90,6 @@ import {
   requireRootReplacement,
   ROOT_NODE_ID,
   rootReplacementError,
-  ReuseTracker,
-  STRUCTURAL_LABELS,
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
@@ -149,7 +147,6 @@ export class MdastVisitorContext {
   readonly #getSource: () => string;
   readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
   readonly #refs: NodeRefs;
-  readonly #reuseTracker: ReuseTracker;
   /**
    * The URL of the document being processed (the compile `fileURL` option),
    * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
@@ -185,9 +182,6 @@ export class MdastVisitorContext {
     this.fileURL = fileURL;
     this.#resolver = resolver;
     this.#refs = resolver.refs;
-    this.#reuseTracker = new ReuseTracker((id) => resolver.parentIdOf(id));
-    this.#commandBuffer.onReferences = (cmd, id, refs) =>
-      this.#reuseTracker.record(cmd, id, refs, STRUCTURAL_LABELS[cmd] ?? "setField");
     this.data = data;
     this.sourceFormat = sourceFormat;
     this.#diagnostics = diagnostics;

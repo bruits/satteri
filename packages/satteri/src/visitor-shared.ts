@@ -1,11 +1,6 @@
 // Keep hot decoders separate so MDAST and HAST objects do not make their call sites polymorphic.
 
-import { releaseCommandBuffer, STRUCTURAL_CMD, type CommandBuffer } from "./command-buffer.js";
-import {
-  CMD_APPEND_CHILD,
-  CMD_PREPEND_CHILD,
-  CMD_SET_CHILDREN,
-} from "./generated/wire-constants.js";
+import { releaseCommandBuffer, type CommandBuffer } from "./command-buffer.js";
 import type { MdxJsxAttributeUnion } from "./types.js";
 
 /** Node fields representable by the named-value command. Container fields use dedicated commands. */
@@ -54,60 +49,6 @@ const EMPTY_BYTES = new Uint8Array(0);
 
 export const ROOT_NODE_ID = 0;
 
-export const STRUCTURAL_LABELS: Record<number, string> = Object.fromEntries(
-  Object.entries(STRUCTURAL_CMD).map(([op, cmd]) => [cmd, op === "replace" ? "replaceNode" : op]),
-);
-
-/** Past this many nodes the reuse graph is big enough that the engine's own
- *  cycle check is the cheaper place to catch it. */
-export const REUSE_SCAN_BUDGET = 256;
-
-/** Validate the references emitted by a command, without walking its JS payload a second time. */
-export class ReuseTracker {
-  #edges: Map<number, Set<number>> | null = null;
-
-  readonly #parentIdOf: (id: number) => number | undefined;
-
-  constructor(parentIdOf: (id: number) => number | undefined) {
-    this.#parentIdOf = parentIdOf;
-  }
-
-  record(cmd: number, anchorId: number, refs: readonly number[], op: string): void {
-    const intoSelf =
-      cmd === CMD_PREPEND_CHILD || cmd === CMD_APPEND_CHILD || cmd === CMD_SET_CHILDREN;
-    const edges = this.#edges;
-    // Validate the whole command before committing edges (a plugin can catch an error).
-    for (const targetId of refs) {
-      if (targetId === anchorId) {
-        if (intoSelf || anchorId === ROOT_NODE_ID) throw reuseAncestorError(op);
-        continue;
-      }
-      for (let cur = this.#parentIdOf(anchorId); cur !== undefined; cur = this.#parentIdOf(cur)) {
-        if (cur === targetId) throw reuseAncestorError(op);
-      }
-      if (edges === null) continue;
-      const seen = new Set<number>([targetId]);
-      const queue = [targetId];
-      let budget = REUSE_SCAN_BUDGET;
-      while (queue.length > 0 && budget > 0) {
-        const next = edges.get(queue.pop()!);
-        if (next === undefined) continue;
-        for (const id of next) {
-          if (id === anchorId) throw reuseCycleError(op);
-          if (seen.add(id)) {
-            queue.push(id);
-            budget--;
-          }
-        }
-      }
-    }
-    const targets = (this.#edges ??= new Map());
-    let existing = targets.get(anchorId);
-    if (existing === undefined) targets.set(anchorId, (existing = new Set()));
-    for (const id of refs) if (id !== anchorId) existing.add(id);
-  }
-}
-
 export function rootReplacementError(content: unknown): Error {
   const type = (content as { type?: unknown } | null)?.type;
   return new Error(
@@ -122,22 +63,6 @@ export function rootReplacementError(content: unknown): Error {
 export function requireRootReplacement<T>(content: T): T {
   if ((content as { type?: unknown } | null)?.type === "root") return content;
   throw rootReplacementError(content);
-}
-
-/** A splice by id has no answer when the content would have to contain itself. */
-export function reuseAncestorError(op: string): Error {
-  return new Error(
-    `satteri: ${op} was passed content that contains the target node, so the content would end ` +
-      "up inside itself. Wrap the content in structuredClone() to insert a detached copy instead.",
-  );
-}
-
-export function reuseCycleError(op: string): Error {
-  return new Error(
-    `satteri: ${op} closes a cycle of inserts: this call and earlier ones each name a node ` +
-      "another insert is placing, so none of them can resolve. To reorder siblings, hand the " +
-      'parent the order you want with setProperty(parent, "children", [...]).',
-  );
 }
 
 export function asArray<T>(value: T | T[]): T[] {

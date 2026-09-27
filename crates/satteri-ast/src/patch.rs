@@ -877,6 +877,23 @@ fn apply_patches_impl<K: ArenaKind>(
         }
     }
 
+    // A child edit cannot splice its own anchor into the payload. Replacing a
+    // non-root node with a wrapper around itself is different: it copies the
+    // original subtree before the replacement is spliced in.
+    for (&pi, refs) in ref_positions.iter().chain(&ref_placeholders) {
+        let patch = &patches[pi];
+        let anchor = patch_anchor(patch);
+        if (anchor == 0
+            || matches!(
+                patch,
+                Patch::PrependChild { .. } | Patch::AppendChild { .. } | Patch::SetChildren { .. }
+            ))
+            && refs.iter().any(|&(_, target, _)| target == anchor)
+        {
+            return Err(unsupported("payload ref would contain its anchor"));
+        }
+    }
+
     // A node's fate follows its decider chain, nearest ancestor first: a ref
     // target rescues the region only if some LIVE anchor splices it, so
     // rescues cascade and must settle by fixpoint. With no refs there is
@@ -2742,6 +2759,45 @@ mod tests {
         match rebuild(&orig, &patches) {
             Err(CommandError::UnsupportedPatchShape(_)) => {}
             other => panic!("expected UnsupportedPatchShape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn child_edits_cannot_reference_their_own_anchor() {
+        let orig = build_hello_world();
+        let heading_id = orig.get_children(0)[0];
+        for patch in [
+            Patch::AppendChild {
+                node_id: heading_id,
+                child_tree: PatchContent::Tree(ref_arena(heading_id, None)),
+            },
+            Patch::PrependChild {
+                node_id: heading_id,
+                child_tree: PatchContent::Tree(ref_arena(heading_id, None)),
+            },
+            Patch::SetChildren {
+                node_id: heading_id,
+                new_children: PatchContent::Tree(ref_arena(heading_id, Some(MdastNodeType::Root))),
+            },
+            Patch::Replace {
+                node_id: 0,
+                new_tree: PatchContent::Tree(ref_arena(0, Some(MdastNodeType::Root))),
+                keep_children: false,
+            },
+        ] {
+            let mut arena = orig.clone();
+            let before = arena.to_raw_buffer();
+            assert!(matches!(
+                apply_patches_strict(&mut arena, &[patch]),
+                Err(CommandError::UnsupportedPatchShape(
+                    "payload ref would contain its anchor"
+                ))
+            ));
+            assert_eq!(
+                arena.to_raw_buffer(),
+                before,
+                "validation must not mutate the arena"
+            );
         }
     }
 

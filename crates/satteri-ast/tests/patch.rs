@@ -1,9 +1,12 @@
 //! Integration tests for in-place arena patching, over the "# Hello\n\nWorld" arena.
 
 use satteri_arena::{Arena, ArenaBuilder, ArenaKind, Hast, Mdast, NodePosition};
+use satteri_ast::commands::CommandError;
 use satteri_ast::hast::HastNodeType;
 use satteri_ast::mdast::MdastNodeType;
-use satteri_ast::patch::{Patch, PatchContent, apply_patches_in_place, apply_patches_strict};
+use satteri_ast::patch::{
+    Patch, PatchContent, REF_NODE_TYPE, apply_patches_in_place, apply_patches_strict,
+};
 
 /// Compare the reachable trees of two arenas: shapes, positions, node_data.
 fn assert_skeleton_eq<K: ArenaKind>(a: &Arena<K>, b: &Arena<K>, ida: u32, idb: u32, path: &str) {
@@ -1935,7 +1938,6 @@ fn root_wrap_in_place() {
 /// Sibling inserts on the root have no defined position and stay errors.
 #[test]
 fn root_sibling_insert_errors() {
-    use satteri_ast::commands::CommandError;
     let orig = build_hello_world();
     let mut arena = orig.clone();
     let err = apply_patches_strict(
@@ -1952,6 +1954,35 @@ fn root_sibling_insert_errors() {
     }
     // Untouched on error.
     assert_eq!(arena.len(), orig.len());
+}
+
+/// JS op-stream commands graft their payload into the arena before the patch
+/// runs. A self-reference in that payload must still fail before patching.
+#[test]
+fn grafted_self_child_ref_is_rejected_without_mutating_the_arena() {
+    let orig = build_hello_world();
+    let heading_id = orig.get_children(0)[0];
+    let mut arena = orig.clone();
+    let mut builder = ArenaBuilder::<Mdast>::new(String::new());
+    builder.open_node(REF_NODE_TYPE);
+    builder.set_data_current(&heading_id.to_le_bytes());
+    builder.close_node();
+    let payload = builder.finish();
+    let roots = graft_tree_for_test(&mut arena, &payload);
+    let before = arena.to_raw_buffer();
+    assert!(matches!(
+        apply_patches_strict(
+            &mut arena,
+            &[Patch::AppendChild {
+                node_id: heading_id,
+                child_tree: PatchContent::Grafted(roots),
+            }]
+        ),
+        Err(CommandError::UnsupportedPatchShape(
+            "payload ref would contain its anchor"
+        ))
+    ));
+    assert_eq!(arena.to_raw_buffer(), before);
 }
 
 /// Root Replace via a *grafted* payload (the opstream shape JS plugins use).
