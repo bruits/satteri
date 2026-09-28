@@ -4,4 +4,4 @@ cargo/satteri-napi: patch
 npm/satteri: patch
 ---
 
-Fixed raw MDAST replacements of inline text adding paragraph wrappers.
+Fixed raw MDAST content adding paragraph wrappers in phrasing-content mutations. Raw block content is rejected in phrasing slots instead of creating invalid trees.

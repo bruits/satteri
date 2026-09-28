@@ -2236,6 +2236,108 @@ describe("markdownToJs", () => {
       },
     );
 
+    test.each([
+      ["heading", "# target", "<h1><mark>target</mark></h1>\n"],
+      ["emphasis", "*target*", "<p><em><mark>target</mark></em></p>\n"],
+      ["strong", "**target**", "<p><strong><mark>target</mark></strong></p>\n"],
+      [
+        "link",
+        "[target](https://example.com)",
+        '<p><a href="https://example.com"><mark>target</mark></a></p>\n',
+      ],
+    ])("raw text replacement stays inline in a %s", (_parent, source, expected) => {
+      const replace = defineMdastPlugin({
+        name: "replace-inline-text-with-raw",
+        text(node) {
+          return node.value === "target" ? { raw: `<mark>${node.value}</mark>` } : undefined;
+        },
+      });
+
+      const { html } = markdownToHtml(source, { mdastPlugins: [replace] });
+      expect(html).toBe(expected);
+    });
+
+    test.each(["insertBefore", "insertAfter"] as const)(
+      "raw %s in phrasing content does not add a paragraph wrapper",
+      (operation) => {
+        const insert = defineMdastPlugin({
+          name: `insert-raw-${operation}`,
+          text(node, context) {
+            if (node.value === "target") context[operation](node, { raw: "<mark>x</mark>" });
+          },
+        });
+
+        const { html } = markdownToHtml("**target**", { mdastPlugins: [insert] });
+        const mark = operation === "insertBefore" ? "<mark>x</mark>target" : "target<mark>x</mark>";
+        expect(html).toBe(`<p><strong>${mark}</strong></p>\n`);
+      },
+    );
+
+    test.each(["raw", "rawHtml"] as const)(
+      "%s appendChild in phrasing content does not add a paragraph wrapper",
+      (kind) => {
+        const append = defineMdastPlugin({
+          name: `append-${kind}-to-paragraph`,
+          paragraph(node, context) {
+            const content = "<mark>x</mark>";
+            context.appendChild(node, kind === "raw" ? { raw: content } : { rawHtml: content });
+          },
+        });
+
+        const { html } = markdownToHtml("before", { mdastPlugins: [append] });
+        expect(html).toBe("<p>before<mark>x</mark></p>\n");
+      },
+    );
+
+    test("raw prependChild in phrasing content does not add a paragraph wrapper", () => {
+      const prepend = defineMdastPlugin({
+        name: "prepend-raw-to-paragraph",
+        paragraph(node, context) {
+          context.prependChild(node, { raw: "<mark>x</mark>" });
+        },
+      });
+
+      const { html } = markdownToHtml("before", { mdastPlugins: [prepend] });
+      expect(html).toBe("<p><mark>x</mark>before</p>\n");
+    });
+
+    test("raw insertChildAt in phrasing content does not add a paragraph wrapper", () => {
+      const insert = defineMdastPlugin({
+        name: "insert-raw-at-index-in-paragraph",
+        paragraph(node, context) {
+          context.insertChildAt(node, 0, { raw: "<mark>x</mark>" });
+        },
+      });
+
+      const { html } = markdownToHtml("before", { mdastPlugins: [insert] });
+      expect(html).toBe("<p><mark>x</mark>before</p>\n");
+    });
+
+    test("raw block content is rejected in phrasing content", () => {
+      const insert = defineMdastPlugin({
+        name: "insert-blocks-into-phrasing-content",
+        text(node, context) {
+          if (node.value === "target") context.insertBefore(node, { raw: "one\n\ntwo" });
+        },
+      });
+
+      expect(() => markdownToHtml("**target**", { mdastPlugins: [insert] })).toThrow(
+        /phrasing slot/,
+      );
+    });
+
+    test("raw appendChild in flow content keeps its paragraph wrapper", () => {
+      const append = defineMdastPlugin({
+        name: "append-raw-to-blockquote",
+        blockquote(node, context) {
+          context.appendChild(node, { raw: "<mark>x</mark>" });
+        },
+      });
+
+      const { html } = markdownToHtml("> before", { mdastPlugins: [append] });
+      expect(html).toBe("<blockquote>\n<p>before</p>\n<p><mark>x</mark></p>\n</blockquote>\n");
+    });
+
     test("the mdxToJs error points at both escape hatches", () => {
       const injectHtml = defineMdastPlugin({
         name: "inject-html",
