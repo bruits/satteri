@@ -10,6 +10,34 @@ Typically, differences are unwanted and are bugs to be fixed. However, in certai
 
 ## AST
 
+### Lists after indented code blocks
+
+`remark-parse` + `remark-gfm` incorrectly continue applying the ordered-list interruption rule after an indented code block. CommonMark restricts ordered lists starting with a number other than `1` only when they interrupt a paragraph ([§5.2–5.3](https://spec.commonmark.org/0.31.2/#list-items)); a non-blank line with fewer than four spaces ends an indented code block ([§4.4](https://spec.commonmark.org/0.31.2/#indented-code-blocks)). Since a code block is not a paragraph, the following marker starts a list.
+
+```markdown
+    code
+
+2. item
+```
+
+| Parser                        | Output                                                               |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `remark-parse` + `remark-gfm` | code + paragraph (`2. item`); `<p>2. item</p>`                       |
+| Sätteri                       | code + ordered list (`start: 2`); `<ol start="2"><li>item</li></ol>` |
+
+The same applies to `2) item`, and to any number of intervening blank lines. A following unordered marker is also a list, even when its item is empty: CommonMark permits empty list items when they do not interrupt a paragraph.
+
+```markdown
+\t9
+
+-
+```
+
+| Parser                        | Output                                                 |
+| ----------------------------- | ------------------------------------------------------ |
+| `remark-parse` + `remark-gfm` | code + paragraph (`-`); `<p>-</p>`                     |
+| Sätteri                       | code + empty unordered list item; `<ul><li></li></ul>` |
+
 ### Unclosed frontmatter delimiters
 
 When `remark-frontmatter` sees `---` or `+++` at line 1 and can't find a matching close, it suppresses list and blockquote detection for the rest of the document. Sätteri doesn't.
