@@ -2,4 +2,4 @@
 npm/satteri: patch
 ---
 
-Export all custom MDAST, HAST, and MDX node types from the public entry point.
+Fixes missing exports for custom MDAST, HAST, and MDX node types.
