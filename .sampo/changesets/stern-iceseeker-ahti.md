@@ -3,4 +3,4 @@ npm/satteri: patch
 cargo/satteri-pulldown-cmark: patch
 ---
 
-Treat empty container directive labels like missing labels
+Fixes empty titles appearing in rendered output when a directive has an empty label.
