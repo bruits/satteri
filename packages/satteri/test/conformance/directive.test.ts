@@ -17,11 +17,15 @@ describe("Directive MDAST conformance", () => {
     test("empty container label does not add a title child", () => {
       const tree = mdxToMdast(":::note[]\nContent\n:::", {
         features: { directive: true },
-      }) as unknown as { children: Array<{ type: string; children: unknown[] }> };
-      const directive = tree.children[0];
+      });
+      if (tree.type !== "root") throw new Error("Expected a root node");
 
+      const directive = tree.children[0];
       expect(directive?.type).toBe("containerDirective");
-      expect(directive?.children).toHaveLength(1);
+      if (directive?.type !== "containerDirective") {
+        throw new Error("Expected a container directive");
+      }
+      expect(directive.children).toHaveLength(1);
     });
 
     test("container with attributes", () => {
