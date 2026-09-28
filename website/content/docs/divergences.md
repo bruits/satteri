@@ -12,7 +12,7 @@ Typically, differences are unwanted and are bugs to be fixed. However, in certai
 
 ### Lists after indented code blocks
 
-`remark` incorrectly continues applying the ordered-list interruption rule after an indented code block. CommonMark restricts ordered lists starting with a number other than `1` only when they interrupt a paragraph ([§5.2–5.3](https://spec.commonmark.org/0.31.2/#list-items)); a non-blank line with fewer than four spaces ends an indented code block ([§4.4](https://spec.commonmark.org/0.31.2/#indented-code-blocks)). Since a code block is not a paragraph, the following marker starts a list.
+After an indented code block, remark treats a following ordered list that starts with a number other than `1` as plain text. CommonMark treats it as a list: the restriction to start at `1` applies only when a list interrupts a paragraph, and a code block is not a paragraph ([§5.2–5.3](https://spec.commonmark.org/0.31.2/#list-items)).
 
 ```markdown
     code
