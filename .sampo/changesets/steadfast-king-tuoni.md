@@ -3,4 +3,4 @@ cargo/satteri: patch
 npm/satteri: patch
 ---
 
-Fixed ordered lists after indented code blocks
+Numbered instructions after indented code examples now display as a list, even when numbering starts above 1.
