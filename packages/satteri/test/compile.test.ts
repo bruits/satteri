@@ -2289,6 +2289,37 @@ describe("markdownToJs", () => {
       },
     );
 
+    test("appendChild adds text to the existing paragraph", () => {
+      const append = defineMdastPlugin({
+        name: "append-text-to-paragraph",
+        paragraph(node, context) {
+          context.appendChild(node, { type: "text", value: " and more" });
+        },
+      });
+
+      const { html } = markdownToHtml("Existing", { mdastPlugins: [append] });
+      expect(html).toBe("<p>Existing and more</p>\n");
+    });
+
+    test.each(["insertBefore", "insertAfter"] as const)(
+      "raw %s on a paragraph inserts a sibling paragraph",
+      (operation) => {
+        const insert = defineMdastPlugin({
+          name: `insert-raw-paragraph-${operation}`,
+          paragraph(node, context) {
+            context[operation](node, { raw: "Some Sentence" });
+          },
+        });
+
+        const { html } = markdownToHtml("Existing", { mdastPlugins: [insert] });
+        const expected =
+          operation === "insertBefore"
+            ? "<p>Some Sentence</p>\n<p>Existing</p>\n"
+            : "<p>Existing</p>\n<p>Some Sentence</p>\n";
+        expect(html).toBe(expected);
+      },
+    );
+
     test("raw prependChild in phrasing content does not add a paragraph wrapper", () => {
       const prepend = defineMdastPlugin({
         name: "prepend-raw-to-paragraph",
