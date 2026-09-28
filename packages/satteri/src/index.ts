@@ -80,6 +80,15 @@ export type {
   LeafDirective,
   TextDirective,
   DirectiveAttributes,
+  Toml,
+  MathNode,
+  InlineMath,
+  Superscript,
+  Subscript,
+  DescriptionList,
+  DescriptionTerm,
+  DescriptionDetails,
+  HastRaw,
 } from "./types.js";
 
 export { normalizePlugins } from "./plugin.js";

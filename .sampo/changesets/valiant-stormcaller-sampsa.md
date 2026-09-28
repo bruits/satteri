@@ -2,4 +2,4 @@
 npm/satteri: patch
 ---
 
-Added directive node types to the public exports.
+Export all custom MDAST, HAST, and MDX node types from the public entry point.
