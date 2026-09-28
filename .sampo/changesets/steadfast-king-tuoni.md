@@ -3,4 +3,4 @@ cargo/satteri: patch
 npm/satteri: patch
 ---
 
-Numbered instructions after indented code examples now display as a list, even when numbering starts above 1.
+Fixes numbered instructions after indented code examples rendering as plain text when numbering starts above 1.
