@@ -1189,60 +1189,21 @@ fn mdast_parent_accepts_phrasing_content(node_type: u8) -> bool {
     )
 }
 
-fn mdast_node_is_phrasing_content(node_type: u8) -> bool {
-    use MdastNodeType::*;
-    matches!(
-        MdastNodeType::from_u8(node_type),
-        Some(
-            Text | Emphasis
-                | Strong
-                | InlineCode
-                | Break
-                | Link
-                | Image
-                | LinkReference
-                | ImageReference
-                | FootnoteReference
-                | Html
-                | Delete
-                | InlineMath
-                | TextDirective
-                | Superscript
-                | Subscript
-                | MdxJsxTextElement
-                | MdxTextExpression
-        )
-    )
-}
-
 /// Raw Markdown is parsed as a document. When it is spliced into a phrasing
-/// slot, remove its single document paragraph; reject block-shaped results
-/// rather than constructing invalid phrasing content.
-fn normalize_mdast_raw_payload_for_parent(
-    content: &mut PatchContent<Mdast>,
-    parent_type: u8,
-) -> Result<(), CommandError> {
+/// slot, remove its single document paragraph. Other parsed shapes pass through
+/// unchanged, leaving structural validity to the plugin author.
+fn normalize_mdast_raw_payload_for_parent(content: &mut PatchContent<Mdast>, parent_type: u8) {
     if !mdast_parent_accepts_phrasing_content(parent_type) {
-        return Ok(());
+        return;
     }
     let PatchContent::Tree(tree) = content else {
-        return Ok(());
+        return;
     };
     let roots = tree.get_children(0).to_vec();
     if roots.len() == 1 && tree.get_node(roots[0]).node_type == MdastNodeType::Paragraph as u8 {
         let children = tree.get_children(roots[0]).to_vec();
         tree.set_children(0, &children);
-        return Ok(());
     }
-    if roots
-        .iter()
-        .any(|&node_id| !mdast_node_is_phrasing_content(tree.get_node(node_id).node_type))
-    {
-        return Err(CommandError::UnsupportedPatchShape(
-            "raw block content in phrasing slot",
-        ));
-    }
-    Ok(())
 }
 
 /// HAST op-stream replay (mirrors the MDAST version). Builds element type_data
@@ -1660,7 +1621,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type)?;
+                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 patches.push(Patch::InsertBefore { node_id, new_tree });
             }
 
@@ -1675,7 +1636,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type)?;
+                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 patches.push(Patch::InsertAfter { node_id, new_tree });
             }
 
@@ -1690,7 +1651,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type)?;
+                normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type);
                 patches.push(Patch::PrependChild {
                     node_id,
                     child_tree,
@@ -1708,7 +1669,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type)?;
+                normalize_mdast_raw_payload_for_parent(&mut child_tree, parent_type);
                 patches.push(Patch::AppendChild {
                     node_id,
                     child_tree,
@@ -1748,7 +1709,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type)?;
+                normalize_mdast_raw_payload_for_parent(&mut new_tree, parent_type);
                 patches.push(Patch::Replace {
                     node_id,
                     new_tree,
@@ -1767,7 +1728,7 @@ pub fn apply_mdast_commands_lenient_with_options(
                     node_id,
                     options,
                 )?;
-                normalize_mdast_raw_payload_for_parent(&mut new_children, parent_type)?;
+                normalize_mdast_raw_payload_for_parent(&mut new_children, parent_type);
                 patches.push(Patch::SetChildren {
                     node_id,
                     new_children,

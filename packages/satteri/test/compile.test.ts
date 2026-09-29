@@ -2344,7 +2344,7 @@ describe("markdownToJs", () => {
       expect(html).toBe("<p><mark>x</mark>before</p>\n");
     });
 
-    test("raw block content is rejected in phrasing content", () => {
+    test("raw block content passes through in phrasing content", () => {
       const insert = defineMdastPlugin({
         name: "insert-blocks-into-phrasing-content",
         text(node, context) {
@@ -2352,9 +2352,8 @@ describe("markdownToJs", () => {
         },
       });
 
-      expect(() => markdownToHtml("**target**", { mdastPlugins: [insert] })).toThrow(
-        /phrasing slot/,
-      );
+      const { html } = markdownToHtml("**target**", { mdastPlugins: [insert] });
+      expect(html).toBe("<p><strong><p>one</p><p>two</p>target</strong></p>\n");
     });
 
     test("raw appendChild in flow content keeps its paragraph wrapper", () => {
