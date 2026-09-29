@@ -5868,15 +5868,26 @@ fn scan_directive_attributes(bytes: &[u8]) -> Option<(Vec<(CowStr<'_>, CowStr<'_
         return None;
     }
     let mut i = 1;
+    let mut quote = None;
     let end = loop {
         if i >= bytes.len() {
             return None;
         }
-        match bytes[i] {
-            b'}' => break i,
-            b'\n' | b'\r' => return None,
-            b'\\' if i + 1 < bytes.len() => i += 2,
-            _ => i += 1,
+        match (quote, bytes[i]) {
+            (Some(_), b'\\') if i + 1 < bytes.len() => i += 2,
+            (Some(q), c) if c == q => {
+                quote = None;
+                i += 1;
+            }
+            (Some(_), _) => i += 1,
+            (None, b'\'') | (None, b'"') => {
+                quote = Some(bytes[i]);
+                i += 1;
+            }
+            (None, b'}') => break i,
+            (None, b'\n' | b'\r') => return None,
+            (None, b'\\') if i + 1 < bytes.len() => i += 2,
+            (None, _) => i += 1,
         }
     };
     let inner = &bytes[1..end];
