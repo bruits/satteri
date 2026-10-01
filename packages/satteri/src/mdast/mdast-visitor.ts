@@ -430,6 +430,11 @@ export class MdastVisitorContext {
       }
       return;
     }
+    const target = this.#pendingNodes.get(id) ?? node;
+    if (key === "attributes" && isMdxJsxElement(target)) {
+      this.replaceNode(node, { ...target, attributes: value } as MdastTarget);
+      return;
+    }
     if (key === "data") value = value != null ? JSON.stringify(value) : null;
     this.#commandBuffer.setProperty(id, key, value);
   }

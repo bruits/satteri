@@ -6,6 +6,32 @@ import type { Root as MdastRoot } from "mdast";
 import type { Root as HastRoot, Element } from "hast";
 
 describe("mdast lifecycle hooks", () => {
+  test("setProperty replaces MDX JSX attributes", () => {
+    const { code } = mdxToJs('<Button title="hello" />', {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "replace-mdx-attributes",
+          mdxJsxFlowElement(node, ctx) {
+            ctx.setProperty(node, "attributes", []);
+          },
+        }),
+      ],
+    });
+    expect(code).not.toContain("title");
+
+    const inline = mdxToJs('Before <Button title="hello" /> after', {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "replace-inline-mdx-attributes",
+          mdxJsxTextElement(node, ctx) {
+            ctx.setProperty(node, "attributes", []);
+          },
+        }),
+      ],
+    });
+    expect(inline.code).not.toContain("title");
+  });
+
   test("after fires exactly once on an empty document", () => {
     let calls = 0;
     let seen: MdastRoot | undefined;
