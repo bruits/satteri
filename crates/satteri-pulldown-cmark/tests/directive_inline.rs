@@ -3,6 +3,10 @@
 
 use satteri_arena::{Arena, Mdast, StringRef};
 use satteri_ast::mdast::MdastNodeType;
+#[cfg(feature = "mdx")]
+use satteri_ast::mdast::codec::{decode_directive_attr, decode_directive_attr_count};
+#[cfg(feature = "mdx")]
+use satteri_pulldown_cmark::MDX_OPTIONS;
 use satteri_pulldown_cmark::Options;
 use satteri_pulldown_cmark::arena_build::{DEFAULT_OPTIONS, parse};
 
@@ -240,4 +244,43 @@ fn a_linkable_host_still_swallows_the_port() {
         node_value(&arena, arena.get_children(para)[0]),
         "http://example.com:3000/x"
     );
+}
+
+#[cfg(feature = "mdx")]
+#[test]
+fn quoted_braces_in_directive_attribute_are_not_mdx_expressions() {
+    for (input, expected_key, expected_value) in [
+        ("::component{obj='{}'}", "obj", "{}"),
+        (
+            "::directive{attr=\"value{with}braces\"}",
+            "attr",
+            "value{with}braces",
+        ),
+    ] {
+        let (arena, _) = parse(input, MDX_OPTIONS | Options::ENABLE_DIRECTIVE);
+
+        let roots = arena.get_children(0);
+        assert_eq!(roots.len(), 1, "expected one leaf directive for {input:?}");
+        let directive = roots[0];
+        assert_eq!(
+            arena.get_node(directive).node_type,
+            MdastNodeType::LeafDirective as u8,
+            "{input:?} should not be parsed as an MDX expression"
+        );
+        let data = arena.get_type_data(directive);
+        let attrs: Vec<_> = (0..decode_directive_attr_count(data))
+            .map(|i| {
+                let (key, value) = decode_directive_attr(data, i);
+                (
+                    arena.get_str(key).to_string(),
+                    arena.get_str(value).to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            attrs,
+            vec![(expected_key.to_string(), expected_value.to_string())],
+            "directive attributes differ for {input:?}"
+        );
+    }
 }
