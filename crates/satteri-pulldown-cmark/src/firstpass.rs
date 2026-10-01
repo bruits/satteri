@@ -1356,6 +1356,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
         }
         ix += line_start.bytes_scanned();
+        if self.at_closing_directive_fence(&line_start) {
+            return None;
+        }
         if scan_paragraph_interrupt_no_table(
             &bytes[ix..],
             current_container,
@@ -2942,7 +2945,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         }
                     }
                 }
-                ItemBody::HtmlBlock(..) | ItemBody::List(..) | ItemBody::ListItem(..) => {}
+                ItemBody::HtmlBlock(..)
+                | ItemBody::List(..)
+                | ItemBody::ListItem(..)
+                | ItemBody::Table(..)
+                | ItemBody::TableHead
+                | ItemBody::TableRow
+                | ItemBody::TableCell => {}
                 _ => break,
             }
         }
