@@ -330,7 +330,7 @@ export class MdastVisitorContext {
     emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
   }
 
-  setField<N extends MdastTarget, K extends SettableScalarFieldKey<N>>(
+  setField<N extends MdastTarget, K extends SettableScalarFieldKey<N, true>>(
     node: Readonly<N>,
     key: K,
     value: Exclude<N[K], undefined>,
@@ -346,6 +346,11 @@ export class MdastVisitorContext {
       if (!emitMdastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
+      return;
+    }
+    if (key === "attributes" && isMdxJsxElement(node)) {
+      // Attributes are a typed node tail, so re-encode the node rather than a scalar command.
+      this.replaceNode(node, { ...node, attributes: value } as MdastTarget);
       return;
     }
     if (key === "data") value = value != null ? JSON.stringify(value) : null;

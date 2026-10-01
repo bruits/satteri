@@ -2,18 +2,20 @@ import type { Element } from "hast";
 import type { Table } from "mdast";
 import type { HastVisitorContext } from "../src/hast/hast-visitor.js";
 import type { MdastVisitorContext } from "../src/mdast/mdast-visitor.js";
-import type { LeafDirective, MdxJsxFlowElementHast } from "../src/types.js";
+import type { LeafDirective, MdxJsxFlowElement, MdxJsxFlowElementHast } from "../src/types.js";
 
 declare const hast: HastVisitorContext;
 declare const mdast: MdastVisitorContext;
 declare const element: Element;
 declare const jsx: MdxJsxFlowElementHast;
+declare const mdxJsx: MdxJsxFlowElement;
 declare const table: Table;
 declare const directive: LeafDirective;
 
 hast.setField(element, "tagName", "span");
 hast.setField(jsx, "name", null);
 mdast.setField(directive, "name", "warning");
+mdast.setField(mdxJsx, "attributes", []);
 
 // Container-shaped fields use dedicated mutation methods or a full replacement.
 // @ts-expect-error table align is not representable by the scalar setField command

@@ -6,6 +6,54 @@ import type { Root as MdastRoot } from "mdast";
 import type { Root as HastRoot, Element } from "hast";
 
 describe("mdast lifecycle hooks", () => {
+  test("setField replaces MDX JSX attributes", () => {
+    const flow = mdxToJs('<Button title="hello">content</Button>', {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "replace-mdx-attributes-with-set-field",
+          mdxJsxFlowElement(node, ctx) {
+            ctx.setField(node, "attributes", []);
+          },
+        }),
+      ],
+    });
+    expect(flow.code).not.toContain("title");
+    expect(flow.code).toContain("content");
+
+    const text = mdxToJs('Before <Button title="hello">inside</Button> after', {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "replace-inline-mdx-attributes-with-set-field",
+          mdxJsxTextElement(node, ctx) {
+            ctx.setField(node, "attributes", []);
+          },
+        }),
+      ],
+    });
+    expect(text.code).not.toContain("title");
+    expect(text.code).toContain("Before");
+    expect(text.code).toContain("inside");
+    expect(text.code).toContain("after");
+  });
+
+  test("setField encodes replacement MDX JSX attributes", () => {
+    const { code } = mdxToJs('<Button title="hello" />', {
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "set-mdx-attributes-with-set-field",
+          mdxJsxFlowElement(node, ctx) {
+            ctx.setField(node, "attributes", [
+              { type: "mdxJsxAttribute", name: "role", value: "status" },
+            ]);
+          },
+        }),
+      ],
+    });
+    expect(code).toContain("role");
+    expect(code).toContain("status");
+    expect(code).not.toContain("title");
+  });
+
   test("setProperty replaces MDX JSX attributes", () => {
     const { code } = mdxToJs('<Button title="hello" />', {
       mdastPlugins: [
