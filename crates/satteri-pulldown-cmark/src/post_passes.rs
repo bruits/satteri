@@ -147,17 +147,14 @@ pub(crate) fn match_autolink_scheme(bytes: &[u8], ix: usize) -> Option<(usize, b
     }
 }
 
-/// True when `bytes[i..end]` is entirely "trail" per micromark's
-/// `tokenizeTrail`: regular punctuation (`!"'*,.:;?_~`), `]`, `)`, or whole
-/// `&[a-zA-Z]+;` entities. Such a run is not part of the link, so when it
-/// reaches the body boundary (`end`, always whitespace/`<`/EOF) the link
-/// ends where the run starts.
-fn trail_is_all(bytes: &[u8], mut i: usize, end: usize) -> bool {
+/// First byte not accepted by micromark's `tokenizeTrail`: punctuation or
+/// whole `&[a-zA-Z]+;` tokens. `end` means the whole suffix is trail. Keeping
+/// the failure offset lets callers skip retries within an already failed run.
+fn scan_construct_trail(bytes: &[u8], mut i: usize, end: usize) -> usize {
     while i < end {
         match bytes[i] {
             b'!' | b'"' | b'\'' | b')' | b'*' | b',' | b'.' | b':' | b';' | b'?' | b']' | b'_'
             | b'~' => i += 1,
-            // `&[a-zA-Z]+;` (micromark's `trailCharacterReference`).
             b'&' => {
                 let mut j = i + 1;
                 while j < end && bytes[j].is_ascii_alphabetic() {
@@ -166,13 +163,13 @@ fn trail_is_all(bytes: &[u8], mut i: usize, end: usize) -> bool {
                 if j > i + 1 && j < end && bytes[j] == b';' {
                     i = j + 1;
                 } else {
-                    return false;
+                    return i;
                 }
             }
-            _ => return false,
+            _ => return i,
         }
     }
-    true
+    end
 }
 
 /// Find where a `http(s)`/`www` URL body ends, replicating micromark's
@@ -183,7 +180,13 @@ fn trail_is_all(bytes: &[u8], mut i: usize, end: usize) -> bool {
 /// right-to-left trim) is what gets `(b.)` right: once a trail starts at the
 /// `.`, the balanced `)` is part of the trail and trimmed too.
 fn construct_url_end(bytes: &[u8], start: usize, raw_end: usize) -> usize {
+    // No accepted trail token ends in an alphanumeric. This also avoids
+    // scanning parentheses on ordinary URLs whose boundary cannot change.
+    if raw_end > start && bytes[raw_end - 1].is_ascii_alphanumeric() {
+        return raw_end;
+    }
     let (mut size_open, mut size_close) = (0usize, 0usize);
+    let mut failed_trail_until = start;
     let mut i = start;
     while i < raw_end {
         let b = bytes[i];
@@ -207,8 +210,13 @@ fn construct_url_end(bytes: &[u8], start: usize, raw_end: usize) -> usize {
                 | b'_'
                 | b'~'
         ) {
-            if trail_is_all(bytes, i, raw_end) {
-                return i;
+            // Every earlier start in this failed trail would hit the same
+            // non-trail byte. Retry only after it, making suffix scans disjoint.
+            if i >= failed_trail_until {
+                failed_trail_until = scan_construct_trail(bytes, i, raw_end);
+                if failed_trail_until == raw_end {
+                    return i;
+                }
             }
             if b == b')' {
                 size_close += 1;
@@ -1806,7 +1814,96 @@ pub(crate) fn mdx_mark_and_unravel(arena: &mut SourceDocument<'_>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RawMap, Smart, build_raw_map, has_autolink_trigger, trigger_at};
+    use super::{
+        RawMap, Smart, build_raw_map, construct_url_end, has_autolink_trigger, trigger_at,
+    };
+
+    /// The original forward tokenizer model, deliberately slow and test-only.
+    fn reference_url_end(bytes: &[u8], start: usize, raw_end: usize) -> usize {
+        let is_trail = |b| {
+            matches!(
+                b,
+                b'!' | b'"'
+                    | b'\''
+                    | b')'
+                    | b'*'
+                    | b','
+                    | b'.'
+                    | b':'
+                    | b';'
+                    | b'?'
+                    | b']'
+                    | b'_'
+                    | b'~'
+            )
+        };
+        let trail_is_all = |mut i: usize| {
+            while i < raw_end {
+                if is_trail(bytes[i]) {
+                    i += 1;
+                } else if bytes[i] == b'&' {
+                    let mut j = i + 1;
+                    while j < raw_end && bytes[j].is_ascii_alphabetic() {
+                        j += 1;
+                    }
+                    if j == i + 1 || j == raw_end || bytes[j] != b';' {
+                        return false;
+                    }
+                    i = j + 1;
+                } else {
+                    return false;
+                }
+            }
+            true
+        };
+        let (mut opens, mut closes) = (0, 0);
+        for (i, &b) in bytes.iter().enumerate().take(raw_end).skip(start) {
+            if b == b'(' {
+                opens += 1;
+            } else if b == b')' && closes < opens {
+                closes += 1;
+            } else if is_trail(b) || b == b'&' {
+                if trail_is_all(i) {
+                    return i;
+                }
+                if b == b')' {
+                    closes += 1;
+                }
+            }
+        }
+        raw_end
+    }
+
+    #[test]
+    fn url_trails_match_forward_tokenization() {
+        for body in [
+            "(b.)", "(b&amp;)", "(b)", ")a(b))", "&a;&b;;", "&;", "&#1;", "&a;&bad", "!a!", "!!a!",
+            "&a;!a!", "(a))!", "é!", "😀)",
+        ] {
+            assert_eq!(
+                construct_url_end(body.as_bytes(), 0, body.len()),
+                reference_url_end(body.as_bytes(), 0, body.len()),
+                "{body:?}"
+            );
+        }
+        let mut seed = 1u64;
+        let alphabet = b"abAZ19&;!?'*.,:)]_~(/";
+        for _ in 0..30000 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let len = (seed >> 32) as usize % 128;
+            let mut bytes = Vec::with_capacity(len);
+            for _ in 0..len {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                bytes.push(alphabet[(seed >> 32) as usize % alphabet.len()]);
+            }
+            let start = len / 3;
+            assert_eq!(
+                construct_url_end(&bytes, start, len),
+                reference_url_end(&bytes, start, len),
+                "{bytes:?}"
+            );
+        }
+    }
 
     const OFF: Smart = Smart {
         quotes: false,
