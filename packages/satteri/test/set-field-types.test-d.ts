@@ -16,16 +16,14 @@ hast.setField(element, "tagName", "span");
 hast.setField(jsx, "name", null);
 mdast.setField(directive, "name", "warning");
 mdast.setField(mdxJsx, "attributes", []);
-
-// Container-shaped fields use dedicated mutation methods or a full replacement.
-// @ts-expect-error table align is not representable by the scalar setField command
+mdast.setField(directive, "attributes", { id: "intro" });
 mdast.setField(table, "align", ["right", null]);
-// @ts-expect-error HAST properties entries must be changed with setProperty
 hast.setField(element, "properties", {});
-// @ts-expect-error MDX JSX attributes entries must be changed with setAttribute
 hast.setField(jsx, "attributes", []);
 // @ts-expect-error the discriminant cannot be changed in place
 hast.setField(element, "type", "text");
+// @ts-expect-error source positions are node metadata, not settable fields
+hast.setField(element, "position", null);
 
 mdast.setAttribute(directive, "id", "intro");
 // @ts-expect-error directive attributes only accept strings

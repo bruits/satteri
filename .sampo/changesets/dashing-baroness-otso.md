@@ -2,4 +2,4 @@
 npm/satteri: patch
 ---
 
-Fixed setField for MDX JSX attributes
+Support setField for structured node fields

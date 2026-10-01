@@ -63,7 +63,7 @@ import {
   unencodableContentError,
   type NodeRefs,
   type PluginOptions,
-  type SettableScalarFieldKey,
+  type SettableFieldKey,
   withMdxJsxAttribute,
 } from "../visitor-shared.js";
 
@@ -132,8 +132,8 @@ export interface HastVisitorContext {
   ): void;
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
   removeChildAt(node: Readonly<HastNode>, index: number): void;
-  /** Replace a scalar field on the node itself, such as `tagName`, `name`, or `value`. */
-  setField<N extends HastNode, K extends SettableScalarFieldKey<N>>(
+  /** Replace a supported field on the node, including scalars and structured fields. */
+  setField<N extends HastNode, K extends SettableFieldKey<N>>(
     node: Readonly<N>,
     key: K,
     value: Exclude<N[K], undefined>,
@@ -566,6 +566,15 @@ class HastVisitorContextImpl implements HastVisitorContext {
       if (!emitHastChildrenCommand(this.#commandBuffer, id, value, this.#refs)) {
         throw unencodableContentError(value);
       }
+      return;
+    }
+    if (
+      (key === "attributes" &&
+        (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement")) ||
+      (key === "properties" && node.type === "element")
+    ) {
+      // These are structured fields, so re-encode the node rather than a scalar command.
+      this.replaceNode(node, { ...node, [key]: value } as HastContent);
       return;
     }
     if (key === "data") {

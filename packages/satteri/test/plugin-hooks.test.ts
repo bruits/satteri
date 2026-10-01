@@ -54,6 +54,75 @@ describe("mdast lifecycle hooks", () => {
     expect(code).not.toContain("title");
   });
 
+  test("setField replaces directive attributes and table alignment", () => {
+    const directive = markdownToHtml(':::warning{id="old"}\ncontent\n:::', {
+      features: { directive: true },
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "replace-directive-attributes-with-set-field",
+          containerDirective(node, ctx) {
+            ctx.setField(node, "attributes", { id: "new" });
+          },
+        }),
+        defineMdastPlugin({
+          name: "observe-replaced-directive-attributes",
+          containerDirective(node, ctx) {
+            expect(node.attributes).toEqual({ id: "new" });
+            expect(ctx.textContent(node)).toContain("content");
+          },
+        }),
+      ],
+    });
+    expect(directive.html).toBe("");
+    const table = mdxToJs("| a | b |\n| --- | --- |\n| 1 | 2 |", {
+      features: { gfm: true },
+      mdastPlugins: [
+        defineMdastPlugin({
+          name: "replace-table-alignment-with-set-field",
+          table(node, ctx) {
+            ctx.setField(node, "align", ["right", null]);
+          },
+        }),
+      ],
+    });
+    expect(table.code).toContain('style: { textAlign: "right" }');
+  });
+
+  test("setField replaces HAST properties and MDX JSX attributes", () => {
+    const properties = markdownToHtml("# Heading", {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "replace-hast-properties-with-set-field",
+          element: {
+            filter: ["h1"],
+            visit(node, ctx) {
+              ctx.setField(node, "properties", { id: "replacement" });
+            },
+          },
+        }),
+      ],
+    });
+    expect(properties.html).toContain('id="replacement"');
+    expect(properties.html).not.toContain('<h1 id="heading">');
+    expect(properties.html).toContain(">Heading</h1>");
+
+    const attributes = mdxToJs('<Button title="hello">inside</Button>', {
+      hastPlugins: [
+        defineHastPlugin({
+          name: "replace-hast-mdx-attributes-with-set-field",
+          mdxJsxFlowElement: {
+            filter: ["Button"],
+            visit(node, ctx) {
+              ctx.setField(node, "attributes", []);
+            },
+          },
+        }),
+      ],
+    });
+    expect(attributes.code).not.toContain("title");
+    expect(attributes.code).toContain("inside");
+  });
+
   test("setProperty replaces MDX JSX attributes", () => {
     const { code } = mdxToJs('<Button title="hello" />', {
       mdastPlugins: [
